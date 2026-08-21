@@ -1,0 +1,5219 @@
+{
+	"warmupFrames": 64,
+	"viewport": {
+		"width": 800,
+		"height": 500
+	},
+	"deviceScaleFactor": 2,
+	"definitions": {
+		"golden/moving-head.qxf": {
+			"Manufacturer": "Golden",
+			"Model": "Mover",
+			"Type": "Moving Head",
+			"Channel": [],
+			"Mode": [
+				{
+					"@Name": "Default",
+					"Channel": [],
+					"Head": []
+				}
+			],
+			"Physical": {
+				"Dimensions": {
+					"@Weight": 10,
+					"@Width": 302,
+					"@Height": 302,
+					"@Depth": 361
+				},
+				"Layout": null,
+				"Bulb": null,
+				"Lens": {
+					"@Name": "Other",
+					"@DegreesMin": 11,
+					"@DegreesMax": 58
+				},
+				"Focus": null,
+				"Technical": null
+			}
+		},
+		"golden/par.qxf": {
+			"Manufacturer": "Golden",
+			"Model": "Par",
+			"Type": "Color Changer",
+			"Channel": [],
+			"Mode": [
+				{
+					"@Name": "Default",
+					"Channel": [],
+					"Head": []
+				}
+			],
+			"Physical": {
+				"Dimensions": {
+					"@Weight": 10,
+					"@Width": 265,
+					"@Height": 245,
+					"@Depth": 115
+				},
+				"Layout": null,
+				"Bulb": null,
+				"Lens": {
+					"@Name": "Other",
+					"@DegreesMin": 40,
+					"@DegreesMax": 40
+				},
+				"Focus": null,
+				"Technical": null
+			}
+		},
+		"golden/strobe.qxf": {
+			"Manufacturer": "Golden",
+			"Model": "Strobe",
+			"Type": "Strobe",
+			"Channel": [],
+			"Mode": [
+				{
+					"@Name": "Default",
+					"Channel": [],
+					"Head": []
+				}
+			],
+			"Physical": {
+				"Dimensions": {
+					"@Weight": 10,
+					"@Width": 425,
+					"@Height": 240,
+					"@Depth": 245
+				},
+				"Layout": null,
+				"Bulb": null,
+				"Lens": {
+					"@Name": "Other",
+					"@DegreesMin": 0,
+					"@DegreesMax": 0
+				},
+				"Focus": null,
+				"Technical": null
+			}
+		},
+		"golden/led-bar.qxf": {
+			"Manufacturer": "Golden",
+			"Model": "Bar",
+			"Type": "LED Bar (Pixels)",
+			"Channel": [],
+			"Mode": [
+				{
+					"@Name": "Pixels",
+					"Channel": [],
+					"Head": [
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						},
+						{
+							"Channel": []
+						}
+					]
+				}
+			],
+			"Physical": {
+				"Dimensions": {
+					"@Weight": 10,
+					"@Width": 1064,
+					"@Height": 65,
+					"@Depth": 88
+				},
+				"Layout": {
+					"@Width": 8,
+					"@Height": 1
+				},
+				"Bulb": null,
+				"Lens": {
+					"@Name": "Other",
+					"@DegreesMin": 30,
+					"@DegreesMax": 30
+				},
+				"Focus": null,
+				"Technical": null
+			}
+		},
+		"golden/hazer.qxf": {
+			"Manufacturer": "Golden",
+			"Model": "Hazer",
+			"Type": "Smoke",
+			"Channel": [],
+			"Mode": [
+				{
+					"@Name": "Default",
+					"Channel": [],
+					"Head": []
+				}
+			],
+			"Physical": {
+				"Dimensions": {
+					"@Weight": 10,
+					"@Width": 246,
+					"@Height": 350,
+					"@Depth": 419
+				},
+				"Layout": null,
+				"Bulb": null,
+				"Lens": {
+					"@Name": "Other",
+					"@DegreesMin": 0,
+					"@DegreesMax": 0
+				},
+				"Focus": null,
+				"Technical": null
+			}
+		}
+	},
+	"scenes": [
+		{
+			"id": "single-mover",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					5.5,
+					2.2,
+					5.5
+				],
+				"target": [
+					0,
+					1.5,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": true,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0.8,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "mover",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "hazer",
+					"fixturePath": "golden/hazer.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						8,
+						0.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [],
+			"state": {
+				"mover:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						30
+					],
+					"speed": 0
+				},
+				"hazer:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "mover-fan",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					0,
+					3.4,
+					13
+				],
+				"target": [
+					0,
+					1.6,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": true,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0.8,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "mover-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "mover-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						0,
+						4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "hazer",
+					"fixturePath": "golden/hazer.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						8,
+						0.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [],
+			"state": {
+				"hazer:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"mover-0:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-42,
+						28
+					],
+					"speed": 0
+				},
+				"mover-1:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						44
+					],
+					"speed": 0
+				},
+				"mover-2:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						28
+					],
+					"speed": 0
+				},
+				"mover-3:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						44
+					],
+					"speed": 0
+				},
+				"mover-4:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						28
+					],
+					"speed": 0
+				},
+				"mover-5:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						44
+					],
+					"speed": 0
+				},
+				"mover-6:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						30,
+						28
+					],
+					"speed": 0
+				},
+				"mover-7:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						42,
+						44
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "par-occlusion",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					4.5,
+					1.8,
+					5.5
+				],
+				"target": [
+					0,
+					1,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": true,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0.8,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "par",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						-1.2,
+						3.6
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "hazer",
+					"fixturePath": "golden/hazer.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						8,
+						0.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [
+				{
+					"id": "deck",
+					"meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+					"kind": "floor",
+					"pos": [
+						-1,
+						-1.2,
+						1.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					],
+					"scale": 1
+				}
+			],
+			"state": {
+				"par:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"hazer:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "led-bar",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					3.2,
+					1.9,
+					5
+				],
+				"target": [
+					0,
+					1.2,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": true,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0.8,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "bar",
+					"fixturePath": "golden/led-bar.qxf",
+					"modeName": "Pixels",
+					"pos": [
+						0,
+						0,
+						2.6
+					],
+					"rot": [
+						1.5707963267948966,
+						0,
+						0
+					]
+				},
+				{
+					"id": "hazer",
+					"fixturePath": "golden/hazer.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						8,
+						0.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [],
+			"state": {
+				"hazer:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.2500000000000001,
+						0.24999999999999978
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:1": {
+					"dimmer": 1,
+					"color": [
+						0.8535533905932737,
+						0.0170370868554659,
+						0.6294095225512601
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:2": {
+					"dimmer": 1,
+					"color": [
+						0.5,
+						0.06698729810778048,
+						0.9330127018922192
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:3": {
+					"dimmer": 1,
+					"color": [
+						0.14644660940672627,
+						0.37059047744873924,
+						0.9829629131445343
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:4": {
+					"dimmer": 1,
+					"color": [
+						0,
+						0.7499999999999997,
+						0.7500000000000007
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:5": {
+					"dimmer": 1,
+					"color": [
+						0.14644660940672616,
+						0.9829629131445341,
+						0.3705904774487399
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:6": {
+					"dimmer": 1,
+					"color": [
+						0.4999999999999999,
+						0.9330127018922195,
+						0.06698729810778103
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"bar:7": {
+					"dimmer": 1,
+					"color": [
+						0.8535533905932737,
+						0.6294095225512608,
+						0.01703708685546579
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "stage-builder",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					5,
+					3.5,
+					6
+				],
+				"target": [
+					0,
+					0.8,
+					0
+				]
+			},
+			"editing": true,
+			"render": {
+				"darkStage": false,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0.8,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [
+				"sb-mover-l"
+			],
+			"fixtures": [
+				{
+					"id": "sb-mover-l",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						0,
+						3.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "sb-mover-r",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						0,
+						3.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [
+				{
+					"id": "deck-l",
+					"meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+					"kind": "floor",
+					"pos": [
+						-1,
+						0,
+						0
+					],
+					"rot": [
+						0,
+						0,
+						0
+					],
+					"scale": 1
+				},
+				{
+					"id": "deck-r",
+					"meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+					"kind": "floor",
+					"pos": [
+						1,
+						0,
+						0
+					],
+					"rot": [
+						0,
+						0,
+						0
+					],
+					"scale": 1
+				},
+				{
+					"id": "truss-a",
+					"meshPath": "stage_lab/truss_q40_1.83m.glb",
+					"kind": "truss",
+					"pos": [
+						0,
+						-1.6,
+						0
+					],
+					"rot": [
+						0,
+						0,
+						0
+					],
+					"scale": 1
+				},
+				{
+					"id": "speaker",
+					"meshPath": "stage_lab/speaker_dbr15.glb",
+					"kind": "speaker",
+					"pos": [
+						2.2,
+						0,
+						0
+					],
+					"rot": [
+						0,
+						0,
+						0
+					],
+					"scale": 1
+				}
+			],
+			"state": {
+				"sb-mover-l:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-20,
+						35
+					],
+					"speed": 0
+				},
+				"sb-mover-r:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						20,
+						35
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "strobe-duty",
+			"times": [
+				0.02,
+				0.07,
+				1.37
+			],
+			"camera": {
+				"position": [
+					3.6,
+					1.8,
+					4.6
+				],
+				"target": [
+					0,
+					1.4,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": true,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0.8,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "strobe",
+					"fixturePath": "golden/strobe.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						0,
+						3.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "hazer",
+					"fixturePath": "golden/hazer.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						8,
+						0.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [],
+			"state": {
+				"strobe:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0.5,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"hazer:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "venue-no-haze",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					0,
+					3.2,
+					10
+				],
+				"target": [
+					0,
+					1.4,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": false,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 0,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "v-mover-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4,
+						1.5,
+						4.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-mover-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.4,
+						1.5,
+						4.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-mover-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.7999999999999998,
+						1.5,
+						4.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-mover-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.8000000000000007,
+						1.5,
+						4.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-mover-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.4000000000000004,
+						1.5,
+						4.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-mover-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4,
+						1.5,
+						4.2
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-par-0",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4,
+						-1.5,
+						3.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-par-1",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.4,
+						-1.5,
+						3.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-par-2",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.7999999999999998,
+						-1.5,
+						3.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-par-3",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.8000000000000007,
+						-1.5,
+						3.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-par-4",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.4000000000000004,
+						-1.5,
+						3.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-par-5",
+					"fixturePath": "golden/par.qxf",
+					"modeName": "Default",
+					"pos": [
+						4,
+						-1.5,
+						3.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "v-bar",
+					"fixturePath": "golden/led-bar.qxf",
+					"modeName": "Pixels",
+					"pos": [
+						0,
+						0.5,
+						0.15
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [],
+			"state": {
+				"v-mover-0:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						34
+					],
+					"speed": 0
+				},
+				"v-mover-1:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						34
+					],
+					"speed": 0
+				},
+				"v-mover-2:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						34
+					],
+					"speed": 0
+				},
+				"v-mover-3:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						34
+					],
+					"speed": 0
+				},
+				"v-mover-4:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						34
+					],
+					"speed": 0
+				},
+				"v-mover-5:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						30,
+						34
+					],
+					"speed": 0
+				},
+				"v-par-0:0": {
+					"dimmer": 0.8,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-par-1:0": {
+					"dimmer": 0.8,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-par-2:0": {
+					"dimmer": 0.8,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-par-3:0": {
+					"dimmer": 0.8,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-par-4:0": {
+					"dimmer": 0.8,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-par-5:0": {
+					"dimmer": 0.8,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:1": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:2": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:3": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:4": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:5": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:6": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"v-bar:7": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				}
+			}
+		},
+		{
+			"id": "dense-venue",
+			"times": [
+				0,
+				1.37,
+				4.2
+			],
+			"camera": {
+				"position": [
+					0,
+					7.5,
+					19
+				],
+				"target": [
+					0,
+					1,
+					0
+				]
+			},
+			"editing": false,
+			"render": {
+				"darkStage": true,
+				"volumetricHaze": true,
+				"hazeSteps": 8,
+				"hazeResolution": 1,
+				"hazeDensity": 1,
+				"hazeDenoise": true,
+				"fixtureSpotlights": true,
+				"bloom": false,
+				"maxDpr": 2,
+				"fov": 50
+			},
+			"selectedFixtureIds": [],
+			"fixtures": [
+				{
+					"id": "hazer",
+					"fixturePath": "golden/hazer.qxf",
+					"modeName": "Default",
+					"pos": [
+						0,
+						8,
+						0.4
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-9.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-8.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-7.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-6.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-5.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-8",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-9",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-10",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-11",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-12",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-13",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-14",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-15",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						5.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-16",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						6.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-17",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						7.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-18",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						8.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-0-19",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						9.5,
+						-2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-9.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-8.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-7.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-6.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-5.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-8",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-9",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-10",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-11",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-12",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-13",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-14",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-15",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						5.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-16",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						6.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-17",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						7.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-18",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						8.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-1-19",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						9.5,
+						-1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-9.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-8.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-7.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-6.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-5.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-8",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-9",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-10",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-11",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-12",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-13",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-14",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-15",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						5.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-16",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						6.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-17",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						7.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-18",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						8.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-2-19",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						9.5,
+						-0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-9.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-8.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-7.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-6.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-5.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-8",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-9",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-10",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-11",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-12",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-13",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-14",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-15",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						5.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-16",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						6.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-17",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						7.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-18",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						8.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-3-19",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						9.5,
+						0.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-9.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-8.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-7.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-6.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-5.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-8",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-9",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-10",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-11",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-12",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-13",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-14",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-15",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						5.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-16",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						6.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-17",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						7.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-18",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						8.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-4-19",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						9.5,
+						1.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-0",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-9.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-1",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-8.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-2",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-7.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-3",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-6.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-4",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-5.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-5",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-4.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-6",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-3.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-7",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-2.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-8",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-1.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-9",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						-0.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-10",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						0.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-11",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						1.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-12",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						2.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-13",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						3.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-14",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						4.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-15",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						5.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-16",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						6.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-17",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						7.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-18",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						8.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				},
+				{
+					"id": "d-5-19",
+					"fixturePath": "golden/moving-head.qxf",
+					"modeName": "Default",
+					"pos": [
+						9.5,
+						2.5,
+						4.5
+					],
+					"rot": [
+						0,
+						0,
+						0
+					]
+				}
+			],
+			"pieces": [],
+			"state": {
+				"hazer:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"d-0-0:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-1:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-27,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-2:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-24,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-3:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-21,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-4:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-5:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-15,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-6:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-12,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-7:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-9,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-8:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-9:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-3,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-10:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-11:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						3,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-12:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-13:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						9,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-14:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						12,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-15:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						15,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-16:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-17:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						21,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-18:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						24,
+						20
+					],
+					"speed": 0
+				},
+				"d-0-19:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						27,
+						20
+					],
+					"speed": 0
+				},
+				"d-1-0:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-1:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-27,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-2:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-24,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-3:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-21,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-4:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-5:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-15,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-6:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-12,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-7:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-9,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-8:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-9:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-3,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-10:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-11:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						3,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-12:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-13:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						9,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-14:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						12,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-15:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						15,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-16:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-17:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						21,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-18:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						24,
+						26
+					],
+					"speed": 0
+				},
+				"d-1-19:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						27,
+						26
+					],
+					"speed": 0
+				},
+				"d-2-0:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-1:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-27,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-2:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-24,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-3:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-21,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-4:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-5:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-15,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-6:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-12,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-7:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-9,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-8:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-9:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-3,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-10:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-11:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						3,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-12:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-13:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						9,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-14:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						12,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-15:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						15,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-16:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-17:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						21,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-18:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						24,
+						32
+					],
+					"speed": 0
+				},
+				"d-2-19:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						27,
+						32
+					],
+					"speed": 0
+				},
+				"d-3-0:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-1:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-27,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-2:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-24,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-3:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-21,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-4:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-5:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-15,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-6:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-12,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-7:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-9,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-8:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-9:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-3,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-10:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-11:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						3,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-12:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-13:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						9,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-14:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						12,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-15:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						15,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-16:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-17:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						21,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-18:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						24,
+						38
+					],
+					"speed": 0
+				},
+				"d-3-19:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						27,
+						38
+					],
+					"speed": 0
+				},
+				"d-4-0:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-1:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-27,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-2:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-24,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-3:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-21,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-4:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-5:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-15,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-6:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-12,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-7:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-9,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-8:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-9:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-3,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-10:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-11:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						3,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-12:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-13:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						9,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-14:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						12,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-15:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						15,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-16:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-17:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						21,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-18:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						24,
+						44
+					],
+					"speed": 0
+				},
+				"d-4-19:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						27,
+						44
+					],
+					"speed": 0
+				},
+				"d-5-0:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-30,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-1:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-27,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-2:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-24,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-3:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-21,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-4:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-18,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-5:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-15,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-6:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						-12,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-7:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-9,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-8:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						-6,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-9:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						-3,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-10:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-11:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						3,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-12:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						6,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-13:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						9,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-14:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						12,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-15:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						15,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-16:0": {
+					"dimmer": 1,
+					"color": [
+						0.05,
+						1,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						18,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-17:0": {
+					"dimmer": 1,
+					"color": [
+						0.1,
+						0.2,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						21,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-18:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.1,
+						0.8
+					],
+					"strobe": 0,
+					"position": [
+						24,
+						50
+					],
+					"speed": 0
+				},
+				"d-5-19:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						0.05,
+						0.05
+					],
+					"strobe": 0,
+					"position": [
+						27,
+						50
+					],
+					"speed": 0
+				}
+			}
+		}
+	]
+}

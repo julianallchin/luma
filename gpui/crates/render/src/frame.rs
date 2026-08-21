@@ -1,0 +1,585 @@
+//! One golden frame's inputs, resolved from the scene description into
+//! world-space draws and lights.
+//!
+//! Everything the three.js renderer computed per frame in TypeScript —
+//! model-kind resolution, physical-dimension scaling, cone geometry, beam axes,
+//! strobe gating — happens once here, against pre-resolved data.
+
+use std::collections::HashMap;
+
+use glam::{Mat3, Mat4, Vec3};
+
+use crate::assets::{Image, Library, Material, Vertex};
+use crate::coords::{euler_xyz, hex_srgb, three_to_world_basis, world_from_three};
+use crate::luminaire::{cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL};
+use crate::overlay::Overlay;
+use crate::scene_desc::{Definition, PrimitiveState, Scene};
+
+/// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
+pub type Definitions = std::collections::BTreeMap<String, Definition>;
+
+/// Shader cap on the haze light array.
+pub const MAX_LIGHTS: usize = 256;
+
+/// One uploadable triangle list.
+pub struct MeshData {
+    /// Interleaved vertex data.
+    pub vertices: Vec<Vertex>,
+    /// Triangle list into `vertices`.
+    pub indices: Vec<u32>,
+}
+
+/// One mesh instance: what to draw, where, and with which material.
+pub struct Draw {
+    /// Index into [`Frame::meshes`].
+    pub mesh: usize,
+    /// Model-to-world transform.
+    pub model: Mat4,
+    /// Resolved material, after any per-fixture override.
+    pub material: Material,
+    /// Index into [`Frame::images`] of the base-colour texture, if any.
+    pub image: Option<usize>,
+}
+
+/// A cone in the haze pass. Field order mirrors the two `SoA` storage buffers the
+/// shader binds: the `position`/`range` pair alone drives the sphere reject.
+#[derive(Debug, Clone, Copy)]
+pub struct HazeLight {
+    /// Apex of the cone, in world space.
+    pub position: Vec3,
+    /// Cull radius; the beam tapers to nothing over its last 30%.
+    pub range: f32,
+    /// Unit beam axis.
+    pub direction: Vec3,
+    /// Cosine of the half-angle at which intensity falls to 50%.
+    pub cos_beam: f32,
+    /// Emitted colour, linear.
+    pub color: Vec3,
+    /// Dimmer times cone gain.
+    pub intensity: f32,
+    /// Cosine of the half-angle where the profile reaches zero.
+    pub cos_field: f32,
+    /// 0 for a hard beam, 1 for a near-isotropic wash.
+    pub wash: f32,
+}
+
+/// A fixture's face light: lights its own housing from behind the lens and
+/// nothing else. Three's punctual falloff with `decay = 2`.
+#[derive(Debug, Clone, Copy)]
+pub struct PointLight {
+    /// World position, just behind the lens.
+    pub position: Vec3,
+    /// Emitted colour, linear.
+    pub color: Vec3,
+    /// three's `light.intensity`.
+    pub intensity: f32,
+    /// three's `light.distance`; the falloff is cut to zero here.
+    pub cutoff_distance: f32,
+}
+
+/// Everything one output frame needs, resolved to world space.
+pub struct Frame {
+    /// Deduplicated geometry referenced by [`Draw::mesh`].
+    pub meshes: Vec<MeshData>,
+    /// Deduplicated base-colour textures referenced by [`Draw::image`].
+    pub images: Vec<Image>,
+    /// Opaque draws first, then the trailing `grid_draws` transparent ones.
+    /// Depth-only passes take the opaque prefix; the grid never writes depth.
+    pub draws: Vec<Draw>,
+    /// Count of trailing `Grid`-material draws in `draws` (0 or 1 today).
+    pub grid_draws: usize,
+    /// Editor affordances, in paint order, after every lit draw.
+    pub overlays: Vec<Overlay>,
+    /// Fixture face lights, in submission order.
+    pub point_lights: Vec<PointLight>,
+    /// Cones the haze pass integrates, capped at [`MAX_LIGHTS`].
+    pub haze_lights: Vec<HazeLight>,
+    /// Linear, the `<color attach="background">` value.
+    pub clear_color: Vec3,
+    /// `<ambientLight intensity>`; zero on a dark stage.
+    pub ambient: f32,
+    /// `(world position, colour * intensity)` of the one shadow-casting
+    /// directional light, present only on a lit stage.
+    pub directional: Option<(Vec3, Vec3)>,
+    /// Effective density after the hazer-dimmer scaling; zero disables the pass.
+    pub haze_density: f32,
+    /// Equiangular samples per beam.
+    pub haze_steps: u32,
+    /// The clock the golden was captured at; drives noise drift and strobe.
+    pub time: f32,
+    /// Where the frame is seen from.
+    pub camera: Camera,
+}
+
+/// A look-at camera. The orbit parameterisation of spec §2.4 belongs in
+/// `luma-scene`; this is only what the projection needs.
+pub struct Camera {
+    /// Eye position, world space.
+    pub eye: Vec3,
+    /// Look-at point, world space.
+    pub target: Vec3,
+    /// Vertical field of view in degrees.
+    pub fov_y_deg: f32,
+}
+
+/// Deduplicating upload bank: one copy per (asset, primitive) and per (asset,
+/// image), however many fixtures reference it.
+#[derive(Default)]
+pub(crate) struct Bank {
+    meshes: Vec<MeshData>,
+    images: Vec<Image>,
+    mesh_keys: HashMap<String, usize>,
+    image_keys: HashMap<String, usize>,
+}
+
+impl Bank {
+    pub(crate) fn insert(&mut self, key: String, build: impl FnOnce() -> MeshData) -> usize {
+        intern(&mut self.meshes, &mut self.mesh_keys, key, build)
+    }
+
+    fn insert_image(&mut self, key: String, build: impl FnOnce() -> Image) -> usize {
+        intern(&mut self.images, &mut self.image_keys, key, build)
+    }
+}
+
+/// Intern one glTF primitive's geometry and base-colour texture, and emit the
+/// draw that references them. `material` is the caller's chance to override the
+/// asset's own constants (the near-black fixture housing).
+fn glb_draw(
+    bank: &mut Bank,
+    asset: &str,
+    glb: &crate::assets::Glb,
+    p: usize,
+    model: Mat4,
+    material: impl FnOnce(Material) -> Material,
+) -> Draw {
+    let prim = &glb.primitives[p];
+    let mesh = bank.insert(format!("{asset}#{p}"), || MeshData {
+        vertices: prim.vertices.clone(),
+        indices: prim.indices.clone(),
+    });
+    let image = prim.base_color_image.map(|i| {
+        bank.insert_image(format!("{asset}#img{i}"), || Image {
+            width: glb.images[i].width,
+            height: glb.images[i].height,
+            rgba: glb.images[i].rgba.clone(),
+        })
+    });
+    Draw {
+        mesh,
+        model,
+        material: material(prim.material),
+        image,
+    }
+}
+
+fn intern<T>(
+    store: &mut Vec<T>,
+    keys: &mut HashMap<String, usize>,
+    key: String,
+    build: impl FnOnce() -> T,
+) -> usize {
+    if let Some(&i) = keys.get(&key) {
+        return i;
+    }
+    let i = store.len();
+    store.push(build());
+    keys.insert(key, i);
+    i
+}
+
+/// Strobe duty gate. `PrimitiveState.strobe` is a 0..1 rate; the display clock
+/// turns it into on/off at 50% duty.
+///
+/// The two rate constants are the three.js ones — 20 Hz/unit for lensed
+/// fixtures, 10 Hz/unit for bar pixels. That is two answers for one concept
+/// (spec §3.2 flags it); they are kept apart here only so the goldens
+/// reproduce, and should collapse to one when the port lands in the app.
+fn strobe_gate(state: PrimitiveState, time: f32, hz_per_unit: f32) -> f32 {
+    if state.strobe <= 0.0 {
+        return state.dimmer;
+    }
+    let hz = state.strobe * hz_per_unit;
+    if hz <= 0.0 {
+        return state.dimmer;
+    }
+    let period = 1.0 / hz;
+    if time.rem_euclid(period) > period * 0.5 {
+        0.0
+    } else {
+        state.dimmer
+    }
+}
+
+/// Pixel centres of a procedural bar/matrix, in fixture-local three space.
+fn pixel_positions(def: &Definition, head_count: usize) -> Vec<Vec3> {
+    let phys = def.physical.as_ref();
+    // 200 mm here vs `extractPhysicalDimensions`'s 300 mm: two defaults for one
+    // concept, ported as-is because the goldens pin real dimensions anyway.
+    let dim = |get: fn(&crate::scene_desc::Dimensions) -> f32| {
+        phys.and_then(|p| p.dimensions.as_ref())
+            .map_or(0.2, |d| get(d).max(1.0) / 1000.0)
+    };
+    let (width, height, depth) = (dim(|d| d.width), dim(|d| d.height), dim(|d| d.depth));
+
+    let layout = phys.and_then(|p| p.layout.as_ref());
+    let (mut lw, mut lh) = layout.map_or((1, 1), |l| (l.width.max(1), l.height.max(1)));
+    if lw == 1 && lh == 1 && head_count > 1 {
+        lw = head_count as u32;
+        lh = 1;
+    }
+    let (hw, hh) = (width / lw as f32, height / lh as f32);
+    let (start_x, start_y) = (-width / 2.0 + hw / 2.0, height / 2.0 - hh / 2.0);
+    let mut out = Vec::new();
+    for y in 0..lh {
+        for x in 0..lw {
+            out.push(Vec3::new(
+                start_x + x as f32 * hw,
+                start_y - y as f32 * hh,
+                depth / 2.0 + 0.001,
+            ));
+        }
+    }
+    out
+}
+
+/// Axis-aligned box, six quads, flat normals.
+fn box_mesh(size: Vec3) -> MeshData {
+    let h = size / 2.0;
+    let faces: [(Vec3, Vec3, Vec3); 6] = [
+        (Vec3::X, Vec3::Y, Vec3::Z),
+        (-Vec3::X, Vec3::Y, -Vec3::Z),
+        (Vec3::Y, -Vec3::X, Vec3::Z),
+        (-Vec3::Y, Vec3::X, Vec3::Z),
+        (Vec3::Z, Vec3::X, Vec3::Y),
+        (-Vec3::Z, -Vec3::X, Vec3::Y),
+    ];
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (n, u, v) in faces {
+        let centre = n * h.dot(n.abs());
+        let (du, dv) = (u * h.dot(u.abs()), v * h.dot(v.abs()));
+        let base = vertices.len() as u32;
+        for (su, sv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            vertices.push(Vertex {
+                position: (centre + du * su + dv * sv).to_array(),
+                normal: n.to_array(),
+                uv: [0.0, 0.0],
+            });
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    MeshData { vertices, indices }
+}
+
+/// XY quad centred on the origin, normal +Z — a three `PlaneGeometry` before
+/// any rotation.
+pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
+    let (w, h) = (width / 2.0, height / 2.0);
+    let corners = [(-w, -h), (w, -h), (w, h), (-w, h)];
+    MeshData {
+        vertices: corners
+            .iter()
+            .map(|&(x, y)| Vertex {
+                position: [x, y, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0, 0.0],
+            })
+            .collect(),
+        indices: vec![0, 1, 2, 0, 2, 3],
+    }
+}
+
+/// Resolve a scene at one instant into draws and lights.
+///
+/// # Errors
+/// Fails if a referenced mesh is missing from the asset library.
+pub fn build(
+    scene: &Scene,
+    definitions: &Definitions,
+    time: f32,
+    lib: &mut Library,
+) -> anyhow::Result<Frame> {
+    let r = three_to_world_basis();
+    let mut bank = Bank::default();
+    let mut draws = Vec::new();
+    let mut point_lights = Vec::new();
+    let mut haze_lights = Vec::new();
+
+    // --- floor -------------------------------------------------------------
+    // `<mesh rotation={[-PI/2,0,0]}><planeGeometry args={[200,200]}/>`. Model
+    // space stays three-space throughout: every model matrix below is
+    // `to_world · (whatever three.js composed)`, so mesh data and local offsets
+    // need no per-vertex conversion.
+    let to_world = Mat4::from_mat3(r);
+    let floor = bank.insert("::floor".into(), || plane_mesh(200.0, 200.0));
+    draws.push(Draw {
+        mesh: floor,
+        image: None,
+        model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+        material: Material {
+            base_color: hex_srgb(0x03_03_03),
+            metallic: 0.0,
+            roughness: 0.95,
+            emissive: Vec3::ZERO,
+            flat_shading: false,
+        },
+    });
+
+    // --- global haze density ----------------------------------------------
+    // Scaled by the strongest hazer's dimmer, with a 0.3 floor.
+    let mut hazer_level: f32 = 0.0;
+    for f in &scene.fixtures {
+        let Some(def) = definitions.get(&f.fixture_path) else {
+            continue;
+        };
+        if model_kind(def).is_some_and(|k| !k.emits_beam()) {
+            if let Some(s) = scene.primitive(&f.id, 0) {
+                hazer_level = hazer_level.max(s.dimmer);
+            }
+        }
+    }
+    let haze_density = scene.render.haze_density * (0.3 + 0.7 * hazer_level);
+
+    // --- fixtures ----------------------------------------------------------
+    for fixture in &scene.fixtures {
+        let Some(def) = definitions.get(&fixture.fixture_path) else {
+            continue;
+        };
+        let pos_three = Vec3::new(fixture.pos[0], fixture.pos[2], fixture.pos[1]);
+        let rot_three = euler_xyz(fixture.rot[0], fixture.rot[2], fixture.rot[1]);
+        let base = to_world * Mat4::from_translation(pos_three) * Mat4::from_mat3(rot_three);
+
+        if is_procedural(def) {
+            let head_count = def.head_count(&fixture.mode_name).max(1);
+            let pixels = pixel_positions(def, head_count);
+            let dims = def.dimensions_m();
+            let body = bank.insert(format!("::bar-body:{}", fixture.fixture_path), || {
+                box_mesh(Vec3::from(dims))
+            });
+            draws.push(Draw {
+                mesh: body,
+                image: None,
+                model: base,
+                material: Material {
+                    base_color: hex_srgb(0x05_05_05),
+                    ..Material::default()
+                },
+            });
+
+            let pixels_per_head = pixels.len() as f32 / head_count as f32;
+            let (layout_w, layout_h) = layout_of(def, head_count);
+            let quad = bank.insert(format!("::bar-pixel:{}", fixture.fixture_path), || {
+                plane_mesh(
+                    dims[0] / layout_w as f32 * 0.9,
+                    dims[1] / layout_h as f32 * 0.9,
+                )
+            });
+
+            for (i, local) in pixels.iter().enumerate() {
+                let head = ((i as f32 / pixels_per_head) as usize).min(head_count - 1);
+                let state = scene.primitive(&fixture.id, head).unwrap_or(DARK);
+                let intensity = strobe_gate(state, time, 10.0);
+                draws.push(Draw {
+                    mesh: quad,
+                    image: None,
+                    model: base * Mat4::from_translation(*local),
+                    material: Material {
+                        base_color: Vec3::ZERO,
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        emissive: Vec3::from(state.color) * intensity * 5.0,
+                        flat_shading: false,
+                    },
+                });
+            }
+
+            // One haze cone per *head* (not per pixel), fired from the middle
+            // pixel of that head's run.
+            let cone = cone_from_opening(PIXEL);
+            let dir = (r * (rot_three * Vec3::Z)).normalize();
+            for head in 0..head_count {
+                if haze_lights.len() >= MAX_LIGHTS {
+                    break;
+                }
+                let state = scene.primitive(&fixture.id, head).unwrap_or(DARK);
+                let intensity = strobe_gate(state, time, 10.0);
+                if intensity < 0.01 {
+                    continue;
+                }
+                let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
+                    .min(pixels.len() - 1);
+                haze_lights.push(HazeLight {
+                    position: base.transform_point3(pixels[idx]),
+                    range: cone.range,
+                    direction: dir,
+                    cos_beam: cone.cos_beam,
+                    color: Vec3::from(state.color),
+                    // Normalise by sqrt(emitter count) so a 16-pixel bar isn't
+                    // 16x a spot: overlapping pixel cones sum in the haze.
+                    intensity: intensity * cone.gain / (head_count as f32).sqrt(),
+                    cos_field: cone.cos_field,
+                    wash: cone.wash,
+                });
+            }
+            continue;
+        }
+
+        let Some(kind) = model_kind(def) else {
+            continue;
+        };
+        let state = scene.primitive(&fixture.id, 0).unwrap_or(DARK);
+        let intensity = strobe_gate(state, time, 20.0);
+        let mesh_rel = format!("qlc/{}", kind.mesh());
+        let glb = lib.get(&mesh_rel)?;
+
+        // Per-axis scale to the definition's physical dimensions, measured on
+        // the unscaled mesh exactly as `applyPhysicalDimensionScaling` does.
+        let extents = {
+            let (lo, hi) = glb.bounds();
+            hi - lo
+        };
+        let desired = Vec3::from(def.dimensions_m());
+        let axis = |d: f32, e: f32| if e > 0.0 { d / e } else { 1.0 };
+        let scale = Vec3::new(
+            axis(desired.x, extents.x),
+            axis(desired.y, extents.y),
+            axis(desired.z, extents.z),
+        );
+
+        // Pan/tilt do not move the mesh here: the goldens pin `speed = 0`, and
+        // `static-fixture.tsx` freezes articulation when speed is zero.
+        let worlds = glb.world_matrices(base * Mat4::from_scale(scale), &HashMap::new());
+
+        for (node, world) in glb.nodes.iter().zip(&worlds) {
+            for &p in &node.primitives {
+                // Every fixture body is forced near-black so only beams and
+                // emissives read (`static-fixture.tsx`). `setRGB` is in the
+                // linear working space, so no sRGB decode here.
+                draws.push(glb_draw(&mut bank, &mesh_rel, glb, p, *world, |m| {
+                    Material {
+                        base_color: Vec3::splat(0.08),
+                        ..m
+                    }
+                }));
+            }
+        }
+
+        if kind.emits_beam() {
+            // Face light, parented to `head` when the mesh has one.
+            let host = glb.node_index("head").unwrap_or(0);
+            let local = Vec3::new(0.0, -kind.face_light_offset(), 0.0);
+            point_lights.push(PointLight {
+                position: worlds[host].transform_point3(local),
+                color: Vec3::from(state.color),
+                intensity: intensity * kind.face_light_intensity(),
+                cutoff_distance: (def.dimensions_m()[1] * 0.9).max(0.12),
+            });
+        }
+
+        if !kind.emits_beam() || intensity < 0.01 || haze_lights.len() >= MAX_LIGHTS {
+            continue;
+        }
+        let cone = cone_from_opening(luminaire_for(def, Some(kind)));
+        let dir_three = rot_three
+            * Mat3::from_rotation_y(state.position[0].to_radians())
+            * Mat3::from_rotation_x(-state.position[1].to_radians())
+            * Vec3::NEG_Y;
+        haze_lights.push(HazeLight {
+            position: base.transform_point3(Vec3::ZERO),
+            range: cone.range,
+            direction: (r * dir_three).normalize(),
+            cos_beam: cone.cos_beam,
+            color: Vec3::from(state.color),
+            intensity: intensity * cone.gain,
+            cos_field: cone.cos_field,
+            wash: cone.wash,
+        });
+    }
+
+    // --- stage pieces ------------------------------------------------------
+    for piece in &scene.pieces {
+        let glb = lib.get(&piece.mesh_path)?;
+        let root = to_world
+            * Mat4::from_translation(Vec3::new(piece.pos[0], piece.pos[2], piece.pos[1]))
+            * Mat4::from_mat3(euler_xyz(piece.rot[0], piece.rot[2], piece.rot[1]))
+            * Mat4::from_scale(Vec3::splat(piece.scale));
+        let worlds = glb.world_matrices(root, &HashMap::new());
+        for (node, world) in glb.nodes.iter().zip(&worlds) {
+            for &p in &node.primitives {
+                draws.push(glb_draw(&mut bank, &piece.mesh_path, glb, p, *world, |m| m));
+            }
+        }
+    }
+
+    let camera = Camera {
+        eye: world_from_three(Vec3::from(scene.camera.position)),
+        target: world_from_three(Vec3::from(scene.camera.target)),
+        fov_y_deg: scene.render.fov,
+    };
+
+    // The fading grid is an editor affordance on the lit stage only, and it is
+    // transparent — hence the tail slot, after every opaque draw.
+    let dark = scene.render.dark_stage;
+    let grid_draws = usize::from(!dark);
+    if !dark {
+        draws.push(Draw {
+            mesh: floor,
+            image: None,
+            model: to_world
+                * Mat4::from_translation(Vec3::new(0.0, 0.002, 0.0))
+                * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            material: Material::default(),
+        });
+    }
+
+    let overlays = crate::overlay::build(scene, definitions, &camera, to_world, &mut bank);
+
+    Ok(Frame {
+        meshes: bank.meshes,
+        images: bank.images,
+        draws,
+        grid_draws,
+        point_lights,
+        haze_lights,
+        clear_color: if dark {
+            Vec3::ZERO
+        } else {
+            hex_srgb(0x19_19_19)
+        },
+        ambient: if dark { 0.0 } else { 0.2 },
+        directional: (!dark).then(|| {
+            (
+                world_from_three(Vec3::new(8.0, 12.0, 6.0)),
+                Vec3::splat(1.4),
+            )
+        }),
+        // `volumetricHaze && darkStage` — a lit stage has no haze pass at all.
+        haze_density: if dark && scene.render.volumetric_haze {
+            haze_density
+        } else {
+            0.0
+        },
+        haze_steps: scene.render.haze_steps,
+        time,
+        camera,
+        overlays,
+    })
+}
+
+const DARK: PrimitiveState = PrimitiveState {
+    dimmer: 0.0,
+    color: [0.0; 3],
+    strobe: 0.0,
+    position: [0.0; 2],
+};
+
+fn layout_of(def: &Definition, head_count: usize) -> (u32, u32) {
+    let layout = def.physical.as_ref().and_then(|p| p.layout.as_ref());
+    let (w, h) = layout.map_or((1, 1), |l| (l.width.max(1), l.height.max(1)));
+    if w == 1 && h == 1 && head_count > 1 {
+        (head_count as u32, 1)
+    } else {
+        (w, h)
+    }
+}
