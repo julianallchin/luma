@@ -26,9 +26,9 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![ParamDef {
                 id: "operation".into(),
                 name: "Operation".into(),
-                param_type: ParamType::Text,
+                param_type: ParamType::enum_of(crate::eval::ops::math::MATH_OPS),
                 default_number: None,
-                default_text: Some("add".into()), // add, subtract, multiply, divide, max, min, abs_diff, abs, modulo, circular_distance
+                default_text: Some("add".into()),
             }],
         },
         NodeTypeDef {
@@ -49,9 +49,9 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![ParamDef {
                 id: "operation".into(),
                 name: "Operation".into(),
-                param_type: ParamType::Text,
+                param_type: ParamType::enum_of(crate::eval::ops::math::ROUND_OPS),
                 default_number: None,
-                default_text: Some("round".into()), // round, floor, ceil
+                default_text: Some("round".into()),
             }],
         },
         NodeTypeDef {

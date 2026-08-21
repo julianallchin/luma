@@ -43,9 +43,6 @@ pub struct ResidentContext {
     /// Per-stem decoded audio (key = `drums|bass|vocals|other`), same timeline as
     /// `audio`. Consumed by `StemSplit`; populated by the compiler from the stem cache.
     pub stems: std::collections::HashMap<String, ResidentAudio>,
-    /// Per-primitive fixture attributes (key = attribute name, value length `n`).
-    /// Consumed by `get_attribute`; populated by the compiler from fixture defs.
-    pub attributes: std::collections::HashMap<String, Vec<f32>>,
     /// Drum-onset times per class (`kick|snare|hat|cymbal`), from the track's
     /// detected onsets. Consumed at compile by `drum_events`-fed `adsr` /
     /// `random_select_mask` (baked into `pulse_starts`, like beat-grid pulses).

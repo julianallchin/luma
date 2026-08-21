@@ -737,4 +737,93 @@ mod tests {
             }
         }
     }
+
+    /// Lower `definition` alone, with `param` forced to `value` and every other
+    /// param at its default. Signal inputs are fed a scalar so a node that
+    /// requires one still reaches its param handling.
+    fn lower_alone(
+        definition: &crate::models::node_graph::NodeTypeDef,
+        param: &str,
+        value: &str,
+    ) -> Result<(), CompileError> {
+        use crate::models::node_graph::{ParamType, PortType};
+
+        let params: Vec<(&str, Value)> = definition
+            .params
+            .iter()
+            .map(|p| {
+                let v = if p.id == param {
+                    Value::from(value)
+                } else {
+                    match &p.param_type {
+                        ParamType::Number => Value::from(p.default_number.unwrap_or(0.0)),
+                        ParamType::Text | ParamType::Enum { .. } => {
+                            Value::from(p.default_text.clone().unwrap_or_default())
+                        }
+                    }
+                };
+                (p.id.as_str(), v)
+            })
+            .collect();
+
+        let mut nodes = vec![node("subject", &definition.id, &params)];
+        let mut edges = Vec::new();
+        for (i, port) in definition.inputs.iter().enumerate() {
+            if !matches!(port.port_type, PortType::Signal) {
+                continue;
+            }
+            let feed = format!("feed{i}");
+            nodes.push(node(&feed, "scalar", &[("value", Value::from(1.0))]));
+            edges.push(edge(&feed, "out", "subject", &port.id));
+        }
+
+        let ctx = ResidentContext {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]],
+            span: (0.0, 1.0),
+            ..Default::default()
+        };
+        let ids = vec!["p0".to_string(), "p1".to_string()];
+        compile_pattern(&nodes, &edges, &HashMap::new(), ctx, ids).map(|_| ())
+    }
+
+    /// The picker and the compiler are one list. Every option a node definition
+    /// offers must lower, and a string outside the option set must not — so a
+    /// new op or attribute cannot ship half-wired in either direction, and a
+    /// hand-authored option list added later fails here rather than in a user's
+    /// graph.
+    #[test]
+    fn enum_options_are_exactly_what_lowers() {
+        use crate::models::node_graph::ParamType;
+
+        let mut checked = 0;
+        for definition in crate::node_graph::nodes::get_node_types() {
+            for param in &definition.params {
+                let ParamType::Enum { options } = &param.param_type else {
+                    continue;
+                };
+                assert!(
+                    !options.is_empty(),
+                    "{}.{}: empty option set",
+                    definition.id,
+                    param.id
+                );
+                for option in options {
+                    if let Err(e) = lower_alone(&definition, &param.id, &option.id) {
+                        panic!(
+                            "{}.{} offers '{}' but it does not lower: {e:?}",
+                            definition.id, param.id, option.id
+                        );
+                    }
+                }
+                assert!(
+                    lower_alone(&definition, &param.id, "__no_such_option__").is_err(),
+                    "{}.{} accepts a value no picker offers",
+                    definition.id,
+                    param.id
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no Enum params found — the guard is vacuous");
+    }
 }

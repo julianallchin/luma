@@ -19,9 +19,9 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![ParamDef {
                 id: "attribute".into(),
                 name: "Attribute".into(),
-                param_type: ParamType::Text,
+                param_type: ParamType::enum_of(crate::eval::ops::spatial::ATTRIBUTES),
                 default_number: None,
-                default_text: Some("index".into()), // index, normalized_index, count, pos_x/y/z, rel_x/y/z, u, v, rel_major_span/count, circle_radius, angular_position, angular_index
+                default_text: Some("index".into()),
             }],
         },
         NodeTypeDef {
@@ -114,7 +114,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
             params: vec![ParamDef {
                 id: "axis".into(),
                 name: "Axis".into(),
-                param_type: ParamType::Text,
+                param_type: ParamType::enum_of(crate::eval::ops::spatial::AXES),
                 default_number: None,
                 default_text: Some("x".into()),
             }],

@@ -17,11 +17,47 @@ pub enum PortType {
     Stops,
 }
 
+/// One choice in a [`ParamType::Enum`]: the string stored in the graph, and the
+/// label a picker shows for it.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ParamOption {
+    pub id: String,
+    pub label: String,
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum ParamType {
     Number,
     Text,
+    /// A closed set of strings, in menu order. The options are a projection of
+    /// the lowering vocabulary itself (`eval::ops::math::MATH_OPS` and
+    /// friends), so a picker cannot offer a value that will not compile — the
+    /// whole point of the variant. Anything a picker should *not* constrain
+    /// stays [`ParamType::Text`].
+    Enum {
+        options: Vec<ParamOption>,
+    },
+}
+
+impl ParamType {
+    /// A closed picker over a lowering vocabulary table's `(id, label, op)`
+    /// rows — see `eval::ops::math::MATH_OPS`. The op column stays behind in the
+    /// compiler; only the authoring pair crosses the seam.
+    pub fn enum_of<T>(table: &[(&str, &str, T)]) -> Self {
+        ParamType::Enum {
+            options: table
+                .iter()
+                .map(|(id, label, _)| ParamOption {
+                    id: (*id).to_string(),
+                    label: (*label).to_string(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]

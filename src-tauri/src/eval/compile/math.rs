@@ -1,12 +1,12 @@
-//! Lowering for math / elementwise nodes. Owns: scalar, ramp_between (seed) +
-//! math, threshold, remap, round, modulo, abs, abs_diff, etc. (agent extends).
+//! Lowering for math / elementwise nodes. Owns: scalar, ramp_between, math,
+//! threshold, remap, round, modulo.
 //! Map each legacy `type_id` (+ its "operation" param) to a `MathOp` variant;
 //! ports are `a`/`b` for binaries, `in` for unaries. Output shape: `c` follows
 //! the inputs; `n = max(input n)` for broadcast. Reference: legacy
 //! `node_graph/nodes/signals.rs` (`math` node) + `eval/ops/math.rs`.
 
 use super::{CompileError, LowerCtx, Lowerer};
-use crate::eval::ops::math::{BinOp, MathOp, UnaryOp};
+use crate::eval::ops::math::{MathOp, MATH_OPS, ROUND_OPS};
 use crate::eval::{OpKind, Phase};
 
 pub fn lower_math(lc: &LowerCtx, low: &mut Lowerer) -> Option<Result<(), CompileError>> {
@@ -85,21 +85,10 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
             let a = wired_or_scalar(lc, low, "a", 0.0);
             let b = wired_or_scalar(lc, low, "b", 0.0);
             let op = lc.param_str("operation").unwrap_or_else(|| "add".into());
-            let bin = match op.as_str() {
-                "add" => BinOp::Add,
-                "subtract" => BinOp::Sub,
-                "multiply" => BinOp::Mul,
-                "divide" => BinOp::Div,
-                "min" => BinOp::Min,
-                "max" => BinOp::Max,
-                "modulo" => BinOp::Mod, // truncating remainder — matches the `math` node
-                "abs_diff" => BinOp::AbsDiff,
-                "circular_distance" => BinOp::CircularDistance,
-                other => {
-                    return Err(CompileError::Graph(format!(
-                        "math node '{id}': unsupported operation '{other}'"
-                    )))
-                }
+            let Some(&(_, _, bin)) = MATH_OPS.iter().find(|(name, _, _)| *name == op) else {
+                return Err(CompileError::Graph(format!(
+                    "math node '{id}': unsupported operation '{op}'"
+                )));
             };
             // c follows the inputs; pick the wider channel count of the two slots.
             let (_, ca) = low.slot_shape(a);
@@ -172,11 +161,10 @@ fn go(lc: &LowerCtx, low: &mut Lowerer) -> Result<(), CompileError> {
         "round" => {
             let input = lc.require(low, "in")?;
             let op = lc.param_str("operation").unwrap_or_else(|| "round".into());
-            let unary = match op.as_str() {
-                "floor" => UnaryOp::Floor,
-                "ceil" => UnaryOp::Ceil,
-                "round" => UnaryOp::Round,
-                _ => UnaryOp::Round, // legacy falls back to round
+            let Some(&(_, _, unary)) = ROUND_OPS.iter().find(|(name, _, _)| *name == op) else {
+                return Err(CompileError::Graph(format!(
+                    "round node '{id}': unsupported operation '{op}'"
+                )));
             };
             let (n, c) = low.slot_shape(input);
             low.emit(

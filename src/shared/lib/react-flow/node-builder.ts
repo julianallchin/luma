@@ -117,11 +117,9 @@ export function buildNode(
 		if (definition.id === "palette") return "palette";
 		if (definition.id === "gradient") return "gradient";
 		if (definition.id === "falloff") return "falloff";
-		if (definition.id === "math") return "math";
 		if (definition.id === "noise") return "noise";
 		if (definition.id === "rainbow") return "rainbow";
 		if (definition.id === "filter_selection") return "filterSelection";
-		if (definition.id === "get_attribute") return "getAttribute";
 		if (definition.id === "apply_strobe") return "standard";
 		if (definition.id === "frequency_amplitude") return "frequencyAmplitude";
 		if (definition.id === "threshold") return "threshold";
@@ -166,15 +164,6 @@ export function buildNode(
 			type: nodeType,
 			position: position ?? { x: 0, y: 0 },
 			data: melData,
-		};
-	}
-
-	if (nodeType === "math") {
-		return {
-			id: nodeId,
-			type: nodeType,
-			position: position ?? { x: 0, y: 0 },
-			data: baseData,
 		};
 	}
 
