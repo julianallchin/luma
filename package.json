@@ -19,7 +19,9 @@
 		"shot:web": "node harness/shot-web.mjs",
 		"perf:extract": "node harness/perf/extract-baseline.mjs",
 		"test:watch": "vitest",
-		"prepare": "husky"
+		"prepare": "husky",
+		"shot:goldens": "node harness/shot-visualizer.mjs",
+		"shot:compare": "node harness/compare-shots.mjs"
 	},
 	"dependencies": {
 		"@dicebear/collection": "^9.2.4",

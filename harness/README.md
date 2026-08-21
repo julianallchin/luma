@@ -74,6 +74,71 @@ compare: geometry (heights, padding, borders), exact ladder colors, typography.
 
 ---
 
+# Renderer goldens
+
+`harness/goldens/scenes/` is the frozen record of what the **three.js**
+renderer draws, captured before the wgpu port touches it
+(`docs/specs/wgpu-renderer.md` §7). Eight scenes × three clock values = 24
+frames at 1600×1000, plus a `manifest.json` carrying the complete input
+description of every frame (camera pose, render settings, fixture poses and
+definitions, primitive state, sha256). A golden is re-derivable from the
+manifest alone — which matters, because once the port lands and three.js is
+deleted these PNGs are the *only* copy of the reference look. They are
+committed on purpose.
+
+The scenes live in `src/harness/golden-scenes.ts` — plain data, no database,
+no eval engine, no IPC. `src/harness/scenes-3d.tsx` mounts the *real*
+`<StageVisualizer>` against them on `/harness-3d.html?scene=<id>`.
+
+```sh
+node harness/shot-visualizer.mjs --all                 # -> harness/goldens/scenes/
+node harness/shot-visualizer.mjs single-mover strobe-duty
+node harness/shot-visualizer.mjs --all --out /tmp/run-b # a second run to diff
+
+# stability gate: two runs must be SSIM >= 0.999 frame for frame
+node harness/compare-shots.mjs harness/goldens /tmp/run-b
+# port comparison: sigma=4 pre-blur kills haze grain, keeps structure (§7.3)
+node harness/compare-shots.mjs harness/goldens harness/wgpu --blur 4 --min 0.98
+```
+
+## What makes a frame reproducible
+
+Four pins, and all four are load-bearing:
+
+1. **No backend.** Stores are seeded directly from the scene; fixture state
+   arrives through `PrimitiveOverrideContext` — the injection seam the app
+   already has for pattern preview. `src/harness/tauri-stub.ts` no-ops the IPC
+   bridge, and the manifest records every command the page attempted — only
+   the universe-state `listen` and render telemetry, none of which returns
+   data the frame depends on.
+2. **`frameloop="never"`.** The capture drives frames with r3f's `advance(t)`,
+   which in that mode sets `clock.elapsedTime` to exactly `t`. That clock is
+   what haze noise drift and strobe phase read.
+3. **One page load per frame.** `uFrame` (the jittered ray-start walk) and the
+   temporal history both have to start from zero, or a frame's grain depends on
+   which frames were captured before it.
+4. **64 warm-up advances at the same `t`.** The temporal EMA needs to converge;
+   repeated advances at one `t` leave delta at zero, so only the accumulator
+   moves.
+
+With those in place the capture is bit-identical run to run, not merely close:
+two full runs produce 24/24 byte-equal PNGs (SSIM 1.000000, mean |Δluma| 0).
+Any drift shows up in `compare-shots.mjs` at `--blur 0`.
+
+## Gotchas
+
+- The page hides the visualizer's DOM overlays (corner ticks, fps readout,
+  editor toolbars) via a `z-10` rule in `harness-3d.html`. Playwright clips the
+  *page* to the canvas box, so without it app chrome lands in every golden.
+- `--browser chromium` works and is faster, but WebKit is the engine that
+  matches the WKWebView the app actually ships in. Goldens are WebKit.
+- Readiness is "no fallback cube left under any fixture group, and every stage
+  piece registered". The capture then settles two rAFs so the post-mount
+  scaling/light-registration effects land — without that, the 121-fixture scene
+  intermittently captures a fixture mid-setup.
+
+---
+
 # Perf baseline
 
 `harness/perf/` holds the recorded webview perf baselines the GPUI port has to

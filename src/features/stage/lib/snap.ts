@@ -13,9 +13,10 @@
  *
  *        face mode → 180° flip about the host socket's X (tangent) axis
  *                   so normals oppose (face-to-face).
- *        edge mode → 180° flip about the host socket's Z (normal) axis
- *                   so normals stay parallel but tangents reverse
- *                   (side-by-side along a shared edge).
+ *        edge mode → identity: the held piece takes the host's orientation
+ *                   unchanged and only translates, so both pieces stay
+ *                   upright with their tangents running the same way along
+ *                   the shared edge.
  *
  *   3. Score the candidate by how close the host socket's world position
  *      is to the cursor target. This is what actually drives "snap when
