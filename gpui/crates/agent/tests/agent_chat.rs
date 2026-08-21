@@ -154,6 +154,120 @@ fn the_transcript_grows_between_frames() {
     );
 }
 
+/// The key opens the panel on a screen that is about nothing.
+///
+/// The bug this gate exists for: `scope_for` answered `None` on four of the six
+/// screens and the toggle returned without doing anything, so the key read as
+/// broken everywhere except the graph. The panel now opens unattached and says
+/// what it could attach to — which is the assertion, because "it opened" and
+/// "it opened and explained itself" are different outcomes and only the second
+/// one is any use to the person who pressed the key.
+///
+/// Both scopeless screens the chat fixture can reach, in one session: the venue
+/// grid the app starts on, and the pattern list. Navigating between them keeps
+/// the panel, because neither names a subject and there is nothing to re-point.
+#[test]
+fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
+    let mut session = chat::session(Mode::Headless, WINDOW);
+    let welcome = run(
+        &mut session,
+        &format!(
+            r#"
+            {until}
+            app.action("luma::ToggleAgentChat");
+            until("the unattached panel", (s) => {{
+                const header = s.findAll({{ role: "text" }}).some((n) => n.label === "Agent");
+                return header && s.find({{ role: "text", label: {blurb:?} }});
+            }});
+            app.frames(8, {{ waitMs: 40 }});
+            app.snapshot().nodes
+        "#,
+            until = chat::UNTIL,
+            blurb = chat::UNATTACHED_BLURB,
+        ),
+    );
+    let text = labels(&welcome, "text");
+    assert!(
+        text.iter().any(|l| l == "Agent"),
+        "the panel did not open on the venue grid: {text:?}"
+    );
+    assert!(
+        text.iter().any(|l| l == chat::UNATTACHED_BLURB),
+        "the panel opened without saying what it attaches to: {text:?}"
+    );
+    assert!(
+        text.iter().any(|l| l == luma_chat::TOGGLE_CHORD),
+        "the panel opened without naming the chord that hides it again: {text:?}"
+    );
+    // No composer and no suggestions: there is no thread for either to reach,
+    // and a live field over a conversation that cannot exist is the no-op
+    // moved one layer in. (The venue grid's own buttons are still there, so
+    // this is about the panel's, by name.)
+    assert!(
+        !labels(&welcome, "button").iter().any(|l| l == "Send"),
+        "an unattached panel offered a send that cannot land: {:?}",
+        labels(&welcome, "button")
+    );
+    assert!(
+        !labels(&welcome, "input")
+            .iter()
+            .any(|l| l == luma_chat::composer::PLACEHOLDER),
+        "an unattached panel offered a composer"
+    );
+
+    // …and it survives a move to another screen that is equally about nothing.
+    let patterns = run(
+        &mut session,
+        r#"
+            app.click(app.snapshot().find({ role: "button", label: "Patterns" }));
+            until("the pattern list", (s) => s.find({ role: "row", label: "chat-turn" }));
+            app.frames(4, { waitMs: 20 });
+            app.snapshot().nodes
+        "#,
+    );
+    assert!(
+        labels(&patterns, "text").iter().any(|l| l == "Agent"),
+        "the panel was dropped moving between two scopeless screens: {:?}",
+        labels(&patterns, "text")
+    );
+}
+
+/// An open panel follows the eye onto the screen's subject rather than
+/// vanishing from under it: unattached on the pattern list, the pattern agent
+/// once a pattern is open.
+#[test]
+fn an_open_panel_re_points_at_the_screen_it_lands_on() {
+    let mut session = chat::session(Mode::Headless, WINDOW);
+    let attached = run(
+        &mut session,
+        &format!(
+            r#"
+            {until}
+            app.click(app.snapshot().find({{ role: "button", label: "Patterns" }}));
+            until("the pattern list", (s) => s.find({{ role: "row", label: "chat-repoint" }}));
+            app.action("luma::ToggleAgentChat");
+            until("the unattached panel", (s) =>
+                s.findAll({{ role: "text" }}).some((n) => n.label === "Agent"));
+            app.click(app.snapshot().find({{ role: "row", label: "chat-repoint" }}));
+            until("the pattern agent", (s) => {{
+                const send = s.find({{ role: "button", label: "Send" }});
+                return send && send.bounds.width > 0;
+            }}).nodes
+        "#,
+            until = chat::UNTIL,
+        ),
+    );
+    let text = labels(&attached, "text");
+    assert!(
+        text.iter().any(|l| l == "Pattern agent"),
+        "the panel did not re-point onto the graph's scope: {text:?}"
+    );
+    assert!(
+        !text.iter().any(|l| l == "Agent"),
+        "the unattached header is still up beside the attached one: {text:?}"
+    );
+}
+
 /// The composer declares `TextInput`, so a space typed into it is a space and
 /// not the transport's play/pause. This is the one binding rule that is only
 /// observable from outside.

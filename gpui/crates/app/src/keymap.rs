@@ -40,6 +40,12 @@ pub(crate) mod context {
     pub const PATTERNS: &str = "Patterns";
     pub const GRAPH: &str = "Graph";
     pub const TRACK_EDITOR: &str = "TrackEditor";
+    pub const VISUALIZER: &str = "Visualizer";
+    /// Declared by the workspace's DMX-patch tab. Named here with its siblings
+    /// even though the tab that declares it is not mounted yet: this list is
+    /// the vocabulary, and a context invented at the element instead would be
+    /// the half of a pair that has no other half.
+    pub const UNIVERSE: &str = "Universe";
     pub const SETTINGS: &str = "Settings";
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
@@ -58,6 +64,8 @@ actions!(
         Back,
         /// Open settings over whatever is showing.
         OpenSettings,
+        /// Open the 3D stage view over the track editor or the track browser.
+        OpenVisualizer,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
         /// Show or hide the agent chat over whatever is showing.
@@ -121,6 +129,9 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("escape", Back, Some(&escape)),
         KeyBinding::new("secondary-[", Back, Some(context::ROOT)),
         KeyBinding::new("secondary-,", OpenSettings, Some(context::ROOT)),
+        // Not a bare letter: the track editor's alphabet is already spoken
+        // for, and this opens over that screen.
+        KeyBinding::new("secondary-shift-v", OpenVisualizer, Some(context::ROOT)),
         // Not `secondary-l`: that letter is the track editor's loop region,
         // and a chord that means one thing on one screen and another
         // everywhere else is a chord nobody can learn.

@@ -37,10 +37,13 @@ mod keymap;
 mod library;
 mod patterns;
 mod settings;
+mod tabs;
 mod track_editor;
 mod tracks;
+mod visualizer;
 mod welcome;
 
+pub use chrome::hide_native_window_buttons;
 pub use graph::ViewData;
 pub use library::{Library, LibraryError};
 
@@ -96,6 +99,19 @@ enum Screen {
         state: Box<track_editor::Editor>,
         browser: Box<Screen>,
     },
+    /// One venue's rig in 3D, over the screen it was opened from.
+    ///
+    /// The web has no visualizer *screen*: `<StageVisualizer>` is a pane four
+    /// screens embed, and the closest of them is the track editor's centre
+    /// pane. It is a screen here because the pane it would live in is one
+    /// element away — `visualizer::visualizer` takes the state and a `Window`
+    /// and nothing else — so the same module drops into that pane the day the
+    /// timeline grows one, and until then this is the whole view rather than
+    /// a third of it.
+    Visualizer {
+        state: Box<visualizer::Visualizer>,
+        previous: Box<Screen>,
+    },
     /// Settings sits *over* another screen rather than beside it — the web
     /// app opens it as a modal dialog — so it carries the screen it covers
     /// and Back restores that one whole, without re-running its load.
@@ -115,6 +131,7 @@ impl Screen {
             Self::Patterns(_) => keymap::context::PATTERNS,
             Self::Graph { .. } => keymap::context::GRAPH,
             Self::TrackEditor { .. } => keymap::context::TRACK_EDITOR,
+            Self::Visualizer { .. } => keymap::context::VISUALIZER,
             Self::Settings { .. } => keymap::context::SETTINGS,
         }
     }
@@ -210,6 +227,7 @@ impl Luma {
             Screen::Tracks(_) | Screen::Patterns(_) => self.show_venues(cx),
             Screen::Graph { .. } => self.close_graph(cx),
             Screen::TrackEditor { .. } => self.close_track_editor(cx),
+            Screen::Visualizer { .. } => self.close_visualizer(cx),
             Screen::Settings { .. } => self.close_settings(cx),
         }
     }
@@ -243,7 +261,7 @@ impl Luma {
 impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.take_focus(window, cx);
-        self.retire_agent_chat(cx);
+        self.retire_agent_chat(window, cx);
 
         let title = match &self.screen {
             Screen::Welcome { .. } => "Luma".to_string(),
@@ -251,13 +269,22 @@ impl Render for Luma {
             Screen::Patterns(_) => "Luma — Patterns".to_string(),
             Screen::Graph { state, .. } => format!("Luma — {}", state.pattern_name()),
             Screen::TrackEditor { state, .. } => format!("Luma — {}", state.track_name()),
+            Screen::Visualizer { state, .. } => format!("Luma — {}", state.venue_name()),
             Screen::Settings { .. } => "Luma — Settings".to_string(),
         };
 
-        let body = match &self.screen {
+        // Split the borrow rather than going through `&self.screen`: the 3D
+        // view is the one screen whose element both mutates its state (a
+        // lazily-acquired GPU, this frame's status) and reads the library
+        // synchronously, and the two fields are disjoint.
+        let entity = cx.entity();
+        let Self {
+            screen, library, ..
+        } = self;
+        let body = match screen {
             Screen::Welcome { venues, error } => {
-                let opened = cx.entity();
-                let patterns = cx.entity();
+                let opened = entity.clone();
+                let patterns = entity.clone();
                 welcome::welcome(
                     venues,
                     error.as_deref(),
@@ -273,15 +300,16 @@ impl Render for Luma {
                 )
                 .into_any_element()
             }
-            Screen::Tracks(state) => tracks::tracks(state, &cx.entity(), window).into_any_element(),
-            Screen::Patterns(state) => patterns::patterns(state, &cx.entity()).into_any_element(),
-            Screen::Graph { state, .. } => graph::graph(state, &cx.entity()).into_any_element(),
+            Screen::Tracks(state) => tracks::tracks(state, &entity, window).into_any_element(),
+            Screen::Patterns(state) => patterns::patterns(state, &entity).into_any_element(),
+            Screen::Graph { state, .. } => graph::graph(state, &entity).into_any_element(),
             Screen::TrackEditor { state, .. } => {
-                track_editor::track_editor(state, &cx.entity()).into_any_element()
+                track_editor::track_editor(state, &entity).into_any_element()
             }
-            Screen::Settings { state, .. } => {
-                settings::settings(state, &cx.entity()).into_any_element()
+            Screen::Visualizer { state, .. } => {
+                visualizer::visualizer(state, &entity, library, window).into_any_element()
             }
+            Screen::Settings { state, .. } => settings::settings(state, &entity).into_any_element(),
         };
 
         let this = cx.entity();
@@ -298,6 +326,9 @@ impl Render for Luma {
             .key_context(keymap::context::ROOT)
             .on_action(cx.listener(|this, _: &keymap::Back, _, cx| this.back(cx)))
             .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::OpenVisualizer, _, cx| this.open_visualizer(cx)),
+            )
             .on_action(cx.listener(|this, _: &keymap::PlayPause, _, cx| this.toggle_playback(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::FollowPlayhead, _, cx| this.toggle_follow(cx)),

@@ -122,7 +122,7 @@ impl RenderOptions {
 pub struct RenderCache {
     flats: HashMap<(SharedString, usize, usize), Rc<FlatText>>,
     code: HashMap<(SharedString, usize, usize), Rc<CachedCode>>,
-    /// The [`crate::theme::theme_generation`] these entries were shaped under.
+    /// The [`crate::theme::glass_generation`] these entries were shaped under.
     generation: u32,
 }
 
@@ -165,7 +165,7 @@ impl RenderCache {
     /// Drop every entry if the palette changed since they were shaped. Cheap
     /// enough (one relaxed atomic load) to call on every cache access.
     fn sync_palette(&mut self) {
-        let generation = crate::theme::theme_generation();
+        let generation = crate::theme::glass_generation();
         if self.generation != generation {
             self.clear();
             self.generation = generation;
@@ -1070,7 +1070,7 @@ fn render_code_block(
     div()
         .rounded(px(10.0))
         // The one raised-plate fill, with the hairline border.
-        .bg(crate::theme::card_glass_bg())
+        .bg(crate::theme::card_bg())
         .border_1()
         .border_color(theme.border)
         .overflow_hidden()

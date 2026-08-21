@@ -11,8 +11,8 @@
 //! a crate boundary so a drift is a compile error.
 
 pub use luma_md::theme::{
-    card_glass_bg, glass, glass_hover, grey, hairline, ink, neutral, oklch, scrim,
-    theme_generation, wash, window_background_appearance, Theme, GLASS_ALPHA, SCRIM_ALPHA,
+    card_bg, glass, glass_generation, glass_hover, grey, hairline, ink, neutral, oklch, scrim,
+    wash, window_background_appearance, Theme, GLASS_ALPHA, SCRIM_ALPHA,
 };
 
 // -- geometry (theme.rs:447-473) ---------------------------------------------

@@ -107,12 +107,13 @@ fn script() -> String {
 
 const SCRIPT: &str = r#"
     function open() {
-        app.click(app.snapshot().find({ role: "card", label: "Test Venue" }));
+        nav.venue("Test Venue");
         app.frames(8);
-        app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
+        nav.track("Aurora");
         // Five minutes of audio to decode and render an envelope for, on a
-        // runtime gpui does not own.
-        app.frames(60, { waitMs: 50 });
+        // runtime gpui does not own — waited for by its result rather than by
+        // a frame count.
+        until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
     }
 
     /** Every frame drawn while `run` ran, as total CPU milliseconds. */
@@ -189,7 +190,7 @@ const SCRIPT: &str = r#"
 #[ignore = "measures wall-clock frame times on a GPU device; run on demand"]
 fn scrolling_and_scrubbing_at_full_zoom_out_stay_inside_the_frame_budget() {
     let mut harness = harness();
-    let result = harness.exec(&script(), Duration::from_secs(600));
+    let result = harness.exec(&support::script(&script()), Duration::from_secs(600));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

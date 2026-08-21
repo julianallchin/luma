@@ -18,6 +18,10 @@
 
 #![cfg(feature = "app")]
 
+// Only for `support::script` — this test seeds its own fixture, but the
+// navigation helpers it drives the app with are the suite's, not its own.
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -267,7 +271,7 @@ const SCRIPT: &str = r#"
         rows: home.findAll({ role: "row" }).length,
     };
 
-    app.click(home.find({ role: "card", label: "Test Venue" }));
+    nav.venue("Test Venue");
     app.frames(6);
     const opened = read();
 
@@ -290,7 +294,7 @@ const SCRIPT: &str = r#"
 #[test]
 fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
     let mut harness = harness();
-    let result = harness.exec(SCRIPT, Duration::from_secs(120));
+    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(120));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

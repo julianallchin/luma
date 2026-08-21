@@ -33,7 +33,16 @@ use serde_json::{json, Value};
 /// pattern — so two tests sharing a pattern would share a thread, and the
 /// second would open onto the first's transcript. One pattern each is what
 /// makes each test's panel empty when it opens.
-pub const PATTERNS: [&str; 4] = ["chat-turn", "chat-growth", "chat-typing", CAPTURED];
+pub const PATTERNS: [&str; 5] = [
+    "chat-turn",
+    "chat-growth",
+    "chat-typing",
+    "chat-repoint",
+    CAPTURED,
+];
+
+/// What the unattached panel promises, as the panel itself spells it.
+pub use luma_chat::UNATTACHED_BLURB;
 
 /// The pattern the reference captures are taken over.
 pub const CAPTURED: &str = "gauntlet-chat";
@@ -268,22 +277,13 @@ pub fn session(mode: Mode, window: (f32, f32)) -> Session {
 ///
 /// Polling, not sleeping: the states under test are transient, and a fixed
 /// wait either lands inside the window by luck or misses it under load.
-// Assigned onto the global rather than declared: the interpreter keeps one
-// context per session, so a `const` would be a redeclaration the second time a
-// test pastes this in.
-pub const UNTIL: &str = r#"
-    globalThis.until = (what, pred) => {
-        let last = null;
-        for (let i = 0; i < 300; i++) {
-            last = app.snapshot();
-            if (pred(last)) return last;
-            app.frames(1, { waitMs: 10 });
-        }
-        throw new Error(`never saw ${what}: ` +
-            JSON.stringify(last.nodes.map((n) => `${n.role}:${n.label}`)));
-    };
+pub const UNTIL: &str = concat!(
+    include_str!("until.js"),
+    include_str!("nav.js"),
+    r#"
     globalThis.chips = (s) => s.findAll({ role: "chip" }).map((n) => n.label);
-"#;
+"#
+);
 
 /// The composer, in a script.
 ///
@@ -302,9 +302,13 @@ pub fn composer() -> String {
 ///
 /// Every step polls rather than counting frames: the library is behind a Tokio
 /// runtime gpui cannot see, so "how many frames until the list has loaded" is a
-/// guess that a busy machine falsifies. The toggle is inside the loop for the
-/// same reason — the chat's scope comes from the *loaded* graph document, so a
-/// toggle that arrives before it does is a no-op.
+/// guess that a busy machine falsifies.
+///
+/// The toggle is pressed once, before the graph document has landed. It opens
+/// the panel unattached and the panel re-points itself onto the pattern the
+/// moment the document arrives — which is why waiting on the *composer* is the
+/// honest wait: an unattached panel has none, so a Send that can be pressed is
+/// proof the scope resolved and not merely that a panel appeared.
 pub fn open_chat(pattern: &str) -> String {
     format!(
         r#"
@@ -312,23 +316,19 @@ pub fn open_chat(pattern: &str) -> String {
         app.click(app.snapshot().find({{ role: "button", label: "Patterns" }}));
         until("the pattern list", (s) => s.find({{ role: "row", label: {pattern:?} }}));
         app.click(app.snapshot().find({{ role: "row", label: {pattern:?} }}));
+        app.action("luma::ToggleAgentChat");
         until("the chat panel", (s) => {{
             // Not merely present: the panel slides in behind a clipping
             // container, so a control that exists is not yet a control you can
             // press. Zero width is what "clipped away" looks like.
             const send = s.find({{ role: "button", label: "Send" }});
-            if (send && send.bounds.width > 0) return true;
-            if (!s.find({{ role: "input", label: {placeholder:?} }})) {{
-                app.action("luma::ToggleAgentChat");
-            }}
-            return false;
+            return send !== undefined && send.bounds.width > 0;
         }});
         // …and let the slide land, so nothing measured after this is partly
         // clipped.
         app.frames(8, {{ waitMs: 40 }});
     "#,
         until = UNTIL,
-        placeholder = luma_chat::composer::PLACEHOLDER,
     )
 }
 

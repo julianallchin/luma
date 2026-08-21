@@ -7,3 +7,4 @@ publish = false
 [dependencies]
 gpui = { workspace = true }
 pulldown-cmark = "0.12"
+luma-ui = { workspace = true }

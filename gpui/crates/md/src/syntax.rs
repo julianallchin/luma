@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::theme::{theme_generation, Theme};
+use crate::theme::{glass_generation, Theme};
 use crate::{HighlightSpan, HighlightedCode, Highlighter};
 
 /// What a token is, in the smallest vocabulary that reads as highlighting.
@@ -407,7 +407,7 @@ impl Syntax {
 impl Highlighter for Syntax {
     fn highlight(&self, language: Option<&str>, code: &str) -> Option<Arc<HighlightedCode>> {
         let language = language?;
-        let generation = theme_generation();
+        let generation = glass_generation();
         if let Some(hit) = MEMO.with_borrow_mut(|memo| {
             let ix = memo.iter().position(|entry| {
                 entry.generation == generation && entry.language == language && entry.code == code

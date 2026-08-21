@@ -58,10 +58,14 @@ fn harness() -> Harness {
 /// play that only changed a label both fail.
 const SCRIPT: &str = r#"
     function open() {
-        app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
+        nav.track("Aurora");
         // The editor's opening load is five commands on a runtime gpui does
         // not own, one of which decodes and renders twenty seconds of audio.
-        app.frames(20);
+        // Waited for by its result (the timeline's waveform card), not by a
+        // frame count: nav.track returns as soon as the row was pressable,
+        // which is earlier than the old hand-rolled walk got here, so a bare
+        // frames(20) can land inside the load.
+        until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
         return read();
     }
 
@@ -80,7 +84,7 @@ const SCRIPT: &str = r#"
         };
     }
 
-    app.click(app.snapshot().find({ role: "card", label: "Test Venue" }));
+    nav.venue("Test Venue");
     app.frames(8);
     const opened = open();
 
@@ -92,7 +96,7 @@ const SCRIPT: &str = r#"
 
     // Leave the screen entirely and come back. A repaint survives the first
     // reading; only a write survives this one.
-    app.click(app.snapshot().find({ role: "button", label: "Back" }));
+    nav.back();
     app.frames(6);
     const reopened = open();
 
@@ -134,7 +138,7 @@ const SCRIPT: &str = r#"
 #[test]
 fn a_clip_edge_dragged_on_the_timeline_moves_stays_moved_and_the_playhead_runs() {
     let mut harness = harness();
-    let result = harness.exec(SCRIPT, Duration::from_secs(300));
+    let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
