@@ -41,6 +41,19 @@ use crate::gpu::{Channels, Renderer};
 /// missing stage — and not this number.
 pub const LIVE_SUBFRAMES: u32 = 2;
 
+/// Fraction of the output resolution a live frame's haze pass runs at.
+///
+/// The haze is a full-screen ray-march and dominates a lit frame; a half-size
+/// target is a quarter of those invocations. It is not a corner cut invented
+/// here — `hazeResolution` is a dial the web's render settings already carry,
+/// and the composite's depth-aware bilateral upsample exists precisely to put
+/// a low-res haze back at native resolution without smearing it across
+/// silhouettes. Measured against the three.js captures, a live frame at
+/// `0.5` scores the same SSIM as the sixteen-subframe export path.
+///
+/// The goldens pin it at `1.0`, so the export image is untouched.
+pub const LIVE_HAZE_RESOLUTION: f32 = 0.5;
+
 /// One rendered frame, as the presentation layer receives it.
 ///
 /// BGRA8, sRGB-encoded, row-major, no row padding: `pixels.len()` is exactly

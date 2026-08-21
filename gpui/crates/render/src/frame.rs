@@ -77,12 +77,26 @@ pub struct PointLight {
     pub cutoff_distance: f32,
 }
 
+/// One base-colour texture, with the identity it was interned under.
+///
+/// The key travels with the pixels because it is what makes an upload reusable:
+/// successive frames of one rig name the same textures, and a renderer that can
+/// recognise them uploads each mip chain once instead of once a frame. Without
+/// it the only way to know two frames mean the same texture is to compare the
+/// bytes.
+pub struct Texture {
+    /// `"<asset>#img<n>"` — stable for as long as the asset is.
+    pub key: String,
+    /// The decoded pixels.
+    pub image: Image,
+}
+
 /// Everything one output frame needs, resolved to world space.
 pub struct Frame {
     /// Deduplicated geometry referenced by [`Draw::mesh`].
     pub meshes: Vec<MeshData>,
     /// Deduplicated base-colour textures referenced by [`Draw::image`].
-    pub images: Vec<Image>,
+    pub images: Vec<Texture>,
     /// Opaque draws first, then the trailing `grid_draws` transparent ones.
     /// Depth-only passes take the opaque prefix; the grid never writes depth.
     pub draws: Vec<Draw>,
@@ -105,6 +119,15 @@ pub struct Frame {
     pub haze_density: f32,
     /// Equiangular samples per beam.
     pub haze_steps: u32,
+    /// Fraction of the output resolution the haze pass runs at.
+    ///
+    /// The haze is a full-screen ray-march and is by far the most expensive
+    /// thing in a lit frame, so halving it is a quarter of the work. The
+    /// composite's depth-aware bilateral upsample exists for exactly this: the
+    /// result is soft where the volume is soft and stays sharp across the
+    /// silhouettes plain bilinear would smear. `1.0` is native; the goldens
+    /// pin it there.
+    pub haze_resolution: f32,
     /// The clock the golden was captured at; drives noise drift and strobe.
     pub time: f32,
     /// Where the frame is seen from.
@@ -127,7 +150,7 @@ pub struct Camera {
 #[derive(Default)]
 pub(crate) struct Bank {
     meshes: Vec<MeshData>,
-    images: Vec<Image>,
+    images: Vec<Texture>,
     mesh_keys: HashMap<String, usize>,
     image_keys: HashMap<String, usize>,
 }
@@ -138,7 +161,11 @@ impl Bank {
     }
 
     fn insert_image(&mut self, key: String, build: impl FnOnce() -> Image) -> usize {
-        intern(&mut self.images, &mut self.image_keys, key, build)
+        let identity = key.clone();
+        intern(&mut self.images, &mut self.image_keys, key, || Texture {
+            key: identity,
+            image: build(),
+        })
     }
 }
 
@@ -595,6 +622,7 @@ pub fn build_with(
             0.0
         },
         haze_steps: scene.render.haze_steps,
+        haze_resolution: scene.render.haze_resolution,
         time,
         camera,
         overlays,

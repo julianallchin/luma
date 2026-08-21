@@ -41,7 +41,7 @@ pub mod viewport;
 pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
 pub use gpu::Renderer;
 pub use scene_desc::Catalogue;
-pub use viewport::{Presentation, Viewport, LIVE_SUBFRAMES};
+pub use viewport::{Presentation, Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES};
 
 /// Jitter subframes accumulated per **exported** output frame.
 ///
