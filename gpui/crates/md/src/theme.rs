@@ -24,7 +24,9 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use gpui::{hsla, Hsla, SharedString};
+use gpui::{hsla, Hsla, SharedString, WindowBackgroundAppearance};
+
+use crate::syntax::TokenKind;
 
 /// Monotonic id of the current palette.
 ///
@@ -74,6 +76,67 @@ pub fn wash(alpha: f32) -> Hsla {
 
 /// Alpha of the standard modal backdrop.
 pub const SCRIM_ALPHA: f32 = 0.60;
+
+// -- the glass tier ----------------------------------------------------------
+
+/// Coverage of the glass surfaces over whatever is behind the window.
+///
+/// macOS is the only platform where the compositor guarantees a blur behind a
+/// translucent window; everywhere else a merely *transparent* panel shows the
+/// raw desktop through it, so the glass tier resolves opaque and every call
+/// site below keeps painting without knowing which happened.
+pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
+
+/// The panel's own ground. On the glass platform this is `grey(8)` at
+/// [`GLASS_ALPHA`], so the plane behind the panel tints it; elsewhere it is
+/// that grey, opaque.
+#[must_use]
+pub fn glass() -> Hsla {
+    grey(8).opacity(GLASS_ALPHA)
+}
+
+/// Hover wash for a row sitting directly on [`glass`]. Softer than
+/// [`Theme::element_hover`]: over a translucent ground a full-strength wash
+/// paints out the tint that is the point of the tier.
+#[must_use]
+pub fn glass_hover() -> Hsla {
+    wash(0.11)
+}
+
+/// A card raised off the glass — code block, tool chip, header strip.
+///
+/// A white *wash* and not a grey plate, which is what "raised" has to mean on
+/// this tier: an opaque grey would punch a slab through the translucency, and a
+/// translucent grey lands on the ground's own tone and disappears. The wash
+/// lifts whatever is behind it instead, so the card reads as raised at every
+/// coverage [`GLASS_ALPHA`] can take.
+///
+/// One value, used by every raised plate on the surface — a second card fill
+/// would be a second answer to the same question.
+#[must_use]
+pub fn card_glass_bg() -> Hsla {
+    ink(0.05)
+}
+
+/// How the window must be composited for [`glass`] to mean anything.
+///
+/// The panel cannot apply this itself — background appearance is a *window*
+/// property and the panel is one element inside somebody's window. This is the
+/// value that window's owner passes to `Window::set_background_appearance`,
+/// stated here so the alpha above and the compositing that makes it visible
+/// are one decision in one place.
+///
+/// It must be re-applied after every theme swap: gpui's macOS backend tears
+/// the `NSVisualEffectView` out of the hierarchy whenever the value is
+/// anything but `Blurred`.
+#[must_use]
+pub fn window_background_appearance() -> WindowBackgroundAppearance {
+    if GLASS_ALPHA < 1.0 {
+        WindowBackgroundAppearance::Blurred
+    } else {
+        WindowBackgroundAppearance::Opaque
+    }
+}
 
 /// Modal backdrop. Black: a scrim's job is to darken what is behind it.
 #[must_use]
@@ -159,6 +222,72 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     (h, s, l)
 }
 
+/// Paint-only colors for fenced code.
+///
+/// A separate struct from [`Theme`] because these are the only tokens with a
+/// *lookup* — [`Self::color`] is the whole seam between the lexer's closed
+/// vocabulary and the palette, and it is the reason no other file in the crate
+/// needs to know either half.
+///
+/// Hues are zeron's: indigo / emerald / amber / pink at 72% of their nominal
+/// saturation, which is what keeps six tones on a near-black ground from
+/// reading as six highlighter pens.
+#[derive(Debug, Clone)]
+pub struct SyntaxPalette {
+    pub comment: Hsla,
+    pub keyword: Hsla,
+    pub string: Hsla,
+    pub number: Hsla,
+    pub constant: Hsla,
+    pub type_name: Hsla,
+    pub function: Hsla,
+    pub property: Hsla,
+    /// Identifiers and operators — code's body copy, and the majority of it.
+    pub plain: Hsla,
+}
+
+impl SyntaxPalette {
+    /// What one token paints in.
+    #[must_use]
+    pub fn color(&self, kind: TokenKind) -> Hsla {
+        match kind {
+            TokenKind::Comment => self.comment,
+            TokenKind::Keyword => self.keyword,
+            TokenKind::String => self.string,
+            TokenKind::Number => self.number,
+            TokenKind::Constant => self.constant,
+            TokenKind::Type => self.type_name,
+            TokenKind::Function => self.function,
+            TokenKind::Property => self.property,
+            TokenKind::Plain => self.plain,
+        }
+    }
+
+    /// The one appearance, over [`Theme::dark`]'s code surface.
+    #[must_use]
+    pub fn dark() -> Self {
+        let tone = |color: Hsla| Hsla {
+            s: color.s * 0.72,
+            ..color
+        };
+        let indigo = tone(oklch(0.673, 0.182, 276.935));
+        let emerald = tone(oklch(0.765, 0.177, 163.223));
+        let amber = tone(oklch(0.828, 0.189, 84.429));
+        let pink = tone(oklch(0.718, 0.202, 349.761));
+        Self {
+            comment: neutral(0.60),
+            keyword: indigo,
+            string: emerald,
+            number: amber,
+            constant: emerald,
+            type_name: amber,
+            function: pink,
+            property: amber,
+            plain: neutral(0.86),
+        }
+    }
+}
+
 /// The chat surface's tokens.
 ///
 /// A struct rather than free functions for the *palette* — a token is a design
@@ -208,6 +337,10 @@ pub struct Theme {
     pub code_text: Hsla,
     /// The wash behind an inline-code pill.
     pub code_wash: Hsla,
+    /// Fenced code's tokens. Paint only: a block with no highlighter, or in a
+    /// language the lexer does not know, paints entirely in [`Self::code_text`]
+    /// at exactly the same size and metrics.
+    pub syntax: SyntaxPalette,
     /// Body face. Luma's own, not zeron's Geist — the fonts are separately
     /// licensed and this port does not carry them.
     pub font_sans: SharedString,
@@ -239,6 +372,7 @@ impl Theme {
             busy: oklch(0.718, 0.202, 349.761),
             code_text: oklch(0.811, 0.111, 293.571),
             code_wash: oklch(0.702, 0.183, 293.541).opacity(0.12),
+            syntax: SyntaxPalette::dark(),
             font_sans: luma_font_sans(),
             font_mono: system_mono().into(),
         }

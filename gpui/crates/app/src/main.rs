@@ -37,6 +37,12 @@ fn main() {
                 origin: point(px(120.), px(120.)),
                 size: size(px(1200.), px(800.)),
             })),
+            // Blurred so the chat panel's glass tier reads as vibrancy rather
+            // than a flat-alpha blend. Every app surface outside the chat
+            // paints opaque ladder values, so nothing else changes. If this is
+            // ever set at runtime, only `Blurred` keeps the backing
+            // `NSVisualEffectView` alive — see `luma_chat::theme`.
+            window_background: luma_chat::theme::window_background_appearance(),
             ..Default::default()
         };
 

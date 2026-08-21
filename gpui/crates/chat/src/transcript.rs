@@ -21,17 +21,46 @@
 //! paint alone. Settled rows render the canonical tree with neither.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Instant;
 
-use gpui::{div, prelude::*, px, AnyElement, SharedString, Window};
+use gpui::{div, prelude::*, px, AnyElement, Entity, SharedString, Window};
 use luma_lib::agent::{AgentChatMessage, AgentChatPart, Role, Transcript};
 use luma_md::render::{MD_LINE_HEIGHT, MD_TEXT_SIZE};
-use luma_md::{Block, BlockTree, IncrementalParser, NoHighlight, RenderCache, RenderOptions};
+use luma_md::{Block, BlockTree, IncrementalParser, RenderCache, RenderOptions, Syntax};
 use luma_ui::node::{Instrument, Role as NodeRole};
 
 use crate::chip;
 use crate::theme::{self, Theme};
+use crate::AgentChat;
+
+/// What a row needs to know beyond its own content: where it sits, what the
+/// panel is doing, and how to talk back to it.
+///
+/// Bundled rather than passed as five arguments because every one of them is
+/// the *panel's* state, not the row's — a row that took them individually
+/// would grow a parameter every time the panel learned something new.
+pub struct RowCtx<'a> {
+    /// The panel, for the one thing a row does to it: open or close a chip.
+    pub chat: &'a Entity<AgentChat>,
+    /// This row's index, which is what a toggle has to remeasure.
+    pub ix: usize,
+    /// Whether the turn is writing into this row.
+    pub live: bool,
+    /// Tool calls the reader has closed, by call id — see
+    /// [`crate::AgentChat::toggle_tool`] for why the set is the negative one.
+    pub collapsed: &'a HashSet<SharedString>,
+    pub theme: &'a Theme,
+}
+
+impl RowCtx<'_> {
+    /// Whether this call's detail is showing.
+    #[must_use]
+    pub fn is_expanded(&self, call_id: &str) -> bool {
+        !self.collapsed.contains(call_id)
+    }
+}
 
 /// One message's render state.
 pub struct Row {
@@ -203,16 +232,10 @@ fn push_block_plain(out: &mut String, block: &Block) {
 /// parse and fades its new characters. Every other row is settled and renders
 /// neither, which is also what makes it free — a settled row's flatten and
 /// shaping are reused from the cache untouched.
-pub fn row(
-    row: &Row,
-    message: &AgentChatMessage,
-    live: bool,
-    theme: &Theme,
-    window: &Window,
-) -> AnyElement {
+pub fn row(row: &Row, message: &AgentChatMessage, ctx: &RowCtx, window: &Window) -> AnyElement {
     let body = match message.role {
-        Role::User => user_bubble(message, theme),
-        Role::Assistant => assistant(row, message, live, theme, window),
+        Role::User => user_bubble(message, ctx.theme),
+        Role::Assistant => assistant(row, message, ctx, window),
     };
     div()
         .w_full()
@@ -253,23 +276,18 @@ fn user_bubble(message: &AgentChatMessage, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-fn assistant(
-    state: &Row,
-    message: &AgentChatMessage,
-    live: bool,
-    theme: &Theme,
-    window: &Window,
-) -> AnyElement {
+fn assistant(state: &Row, message: &AgentChatMessage, ctx: &RowCtx, window: &Window) -> AnyElement {
     let now = Instant::now();
+    let theme = ctx.theme;
     let mut stack = div().w_full().flex().flex_col().gap(px(theme::GAP_BLOCK));
     for (ix, part) in message.parts.iter().enumerate() {
         let element = match part {
-            AgentChatPart::Text { .. } => markdown(state, ix, live, now, theme, window, theme.text),
+            AgentChatPart::Text { .. } => markdown(state, ix, now, ctx, window, theme.text),
             AgentChatPart::Reasoning { .. } => {
-                markdown(state, ix, live, now, theme, window, theme.text_faint)
+                markdown(state, ix, now, ctx, window, theme.text_faint)
             }
             AgentChatPart::Tool(tool) => Some(
-                chip::chip(tool, theme)
+                chip::chip(tool, ctx)
                     .agent_node(NodeRole::Chip, chip::label(tool))
                     .into_any_element(),
             ),
@@ -286,12 +304,12 @@ fn assistant(
 fn markdown(
     state: &Row,
     ix: usize,
-    live: bool,
     now: Instant,
-    theme: &Theme,
+    ctx: &RowCtx,
     window: &Window,
     color: gpui::Hsla,
 ) -> Option<AnyElement> {
+    let (live, theme) = (ctx.live, ctx.theme);
     let parser = state.parsers.get(ix)?.as_ref()?;
     if parser.source().is_empty() {
         return None;
@@ -319,7 +337,7 @@ fn markdown(
                 &opts,
                 theme,
                 window,
-                &NoHighlight,
+                &Syntax::new(theme),
             ))
             .into_any_element(),
     )

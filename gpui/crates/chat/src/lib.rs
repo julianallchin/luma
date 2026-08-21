@@ -20,6 +20,7 @@
 //!  ├ rows       Vec<Row>     render state beside it, one per message
 //!  ├ list       ListState    the virtualized transcript
 //!  ├ composer   TextareaState
+//!  ├ collapsed  HashSet      which tool chips the reader has closed
 //!  └ turn       TurnState    Idle | Streaming(Task)
 //! ```
 //!
@@ -40,6 +41,7 @@ pub mod motion;
 pub mod theme;
 pub mod transcript;
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use gpui::{
@@ -172,6 +174,14 @@ pub struct AgentChat {
     turn: TurnState,
     /// What went wrong, in the panel's own words. Cleared by the next send.
     error: Option<String>,
+    /// Tool calls the reader has *closed*, by call id.
+    ///
+    /// The negative set, because a call's detail is open by default: the work
+    /// an agent did is the reason to trust what it says, and a transcript that
+    /// hides it behind a chevron nobody presses is a transcript of assertions.
+    /// Keyed by the call rather than by row index so a chip keeps its state
+    /// while rows arrive above it.
+    collapsed: HashSet<SharedString>,
     open: bool,
     tween: Option<WidthTween>,
     focus: FocusHandle,
@@ -197,6 +207,7 @@ impl AgentChat {
             model: None,
             turn: TurnState::Idle,
             error: None,
+            collapsed: HashSet::new(),
             open: true,
             tween: Some(WidthTween {
                 from: 0.0,
@@ -309,6 +320,19 @@ impl AgentChat {
         } else {
             self.toggle(cx);
         }
+    }
+
+    /// Open or close one tool call's detail.
+    ///
+    /// Remeasures exactly the row the chip is in, for the same reason a
+    /// streamed delta does: the height that changed is one row's, and
+    /// remeasuring the list is the frame budget.
+    pub fn toggle_tool(&mut self, call_id: SharedString, row: usize, cx: &mut Context<Self>) {
+        if !self.collapsed.remove(&call_id) {
+            self.collapsed.insert(call_id);
+        }
+        self.list.remeasure_items(row..row + 1);
+        cx.notify();
     }
 
     /// Drop the turn, which cancels it.
@@ -446,9 +470,18 @@ impl AgentChat {
         let transcript_list = list(self.list.clone(), move |ix, window, cx| {
             let state = rows.read(cx);
             match (state.rows.get(ix), state.transcript.messages.get(ix)) {
-                (Some(row), Some(message)) => {
-                    transcript::row(row, message, live == Some(ix), &state.theme, window)
-                }
+                (Some(row), Some(message)) => transcript::row(
+                    row,
+                    message,
+                    &transcript::RowCtx {
+                        chat: &rows,
+                        ix,
+                        live: live == Some(ix),
+                        collapsed: &state.collapsed,
+                        theme: &state.theme,
+                    },
+                    window,
+                ),
                 _ => div().into_any_element(),
             }
         })
@@ -463,7 +496,11 @@ impl AgentChat {
             // two design languages meet on the app's terms.
             .border_l_1()
             .border_color(luma_ui::ladder::trim())
-            .bg(theme.bg)
+            // The glass tier: on macOS this ground is 80% coverage, so the
+            // plane the panel is docked over tints it and the panel reads as a
+            // surface laid on the app rather than as a hole cut in it. See
+            // `luma_md::theme::glass`.
+            .bg(theme::glass())
             .text_color(theme.text)
             .child(self.header(&theme))
             .child(
@@ -482,7 +519,7 @@ impl AgentChat {
                         el.child(empty_state(self.scope.agent_kind, &this, &theme))
                     })
                     .when(!self.transcript.messages.is_empty(), |el| {
-                        el.child(transcript_list).child(fade_band(&theme))
+                        el.child(transcript_list).child(fade_band())
                     }),
             )
             .child(status_strip(streaming, self.error.as_deref(), &theme, cx))
@@ -511,7 +548,7 @@ impl AgentChat {
             .px(px(theme::SPACE_LG))
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.surface)
+            .bg(theme::card_glass_bg())
             .text_size(px(12.0))
             .text_color(theme.text_muted)
             .child(title.clone())
@@ -522,10 +559,15 @@ impl AgentChat {
 /// The last band of the transcript, dissolved into the panel's own ground.
 ///
 /// A painted overlay rather than gpui's `EdgeFade`, which this pin does not
-/// have: the panel is opaque, so a gradient to [`Theme::bg`] *is* the fade.
-/// Without it the last line of a reply butts against the composer's plate and
-/// the two read as one control.
-fn fade_band(theme: &Theme) -> impl IntoElement {
+/// have: a gradient to the panel's own ground *is* the fade. Without it the
+/// last line of a reply butts against the composer's plate and the two read as
+/// one control.
+///
+/// The stop is [`theme::glass`] and not [`Theme::bg`] for the reason the band
+/// exists at all — it has to arrive at the colour the transcript is sitting on,
+/// and over the glass tier that colour carries the ground's own alpha.
+fn fade_band() -> impl IntoElement {
+    let ground = theme::glass();
     div()
         .absolute()
         .bottom_0()
@@ -534,8 +576,8 @@ fn fade_band(theme: &Theme) -> impl IntoElement {
         .h(px(theme::TRANSCRIPT_FADE_BAND))
         .bg(linear_gradient(
             0.0,
-            linear_color_stop(theme.bg, 0.0),
-            linear_color_stop(theme.bg.opacity(0.0), 1.0),
+            linear_color_stop(ground, 0.0),
+            linear_color_stop(ground.opacity(0.0), 1.0),
         ))
 }
 
@@ -603,7 +645,7 @@ fn empty_state(
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .bg(theme::ink(0.05))
+                        .bg(theme::card_glass_bg())
                         .border_1()
                         .border_color(theme.border)
                         .child(
@@ -663,13 +705,13 @@ fn suggestion(
         .items_center()
         .px(px(theme::SPACE_MD))
         .rounded(px(theme::CONTROL_RADIUS))
-        .bg(theme::ink(0.035))
+        .bg(theme::card_glass_bg())
         .border_1()
         .border_color(theme.border)
         .text_size(px(12.0))
         .text_color(theme.text_muted)
         .cursor_pointer()
-        .hover(|style| style.bg(theme::ink(0.08)))
+        .hover(|style| style.bg(theme::glass_hover()))
         .on_click(move |_, window, cx| {
             pressed.update(cx, |this, cx| this.suggest(prompt, window, cx));
         })
@@ -695,6 +737,11 @@ fn status_strip(
         // The transcript's inset: the strip is the tail of what is being read,
         // not a label on the composer below it.
         .px(px(theme::SPACE_LG))
+        // …and the transcript's rhythm below it. Without this the working row
+        // sits closer to the composer's plate than any two blocks in a reply
+        // sit to each other, and reads as the plate's caption. Constant, and
+        // the strip is always present, so the composer still never shifts.
+        .mb(px(theme::GAP_BLOCK))
         .text_size(px(11.0));
     if let Some(error) = error {
         return strip
