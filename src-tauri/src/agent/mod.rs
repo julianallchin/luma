@@ -335,6 +335,21 @@ impl AgentService {
         &self.services
     }
 
+    /// What the next turn's model is called, for a surface that names it.
+    ///
+    /// Settings-only: no key is read and no client is built, so a panel can ask
+    /// on open without touching a provider.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::Storage`] if settings cannot be read.
+    pub async fn model_label(&self) -> Result<&'static str, AgentError> {
+        let settings = crate::database::local::settings::get_all_settings(&self.services.db().0)
+            .await
+            .map_err(AgentError::Storage)?;
+        Ok(model::configured(&settings)?.spec().display)
+    }
+
     /// The newest thread matching `scope`, creating one if none exists.
     ///
     /// "Newest matching wins" is carried forward from the TypeScript stack

@@ -42,8 +42,10 @@ pub(crate) mod context {
     pub const TRACK_EDITOR: &str = "TrackEditor";
     pub const SETTINGS: &str = "Settings";
     /// Declared by a focused field that is taking typed text. Any binding on
-    /// a key that field could be typing excludes it.
-    pub const TEXT_INPUT: &str = "TextInput";
+    /// a key that field could be typing excludes it. Defined in `luma-ui`
+    /// because the chat panel's composer, in another crate, declares the same
+    /// context — see [`luma_ui::TEXT_INPUT`].
+    pub use luma_ui::TEXT_INPUT;
 }
 
 actions!(
@@ -56,6 +58,10 @@ actions!(
         Back,
         /// Open settings over whatever is showing.
         OpenSettings,
+        /// Keep the track editor's view centred on the playhead.
+        FollowPlayhead,
+        /// Show or hide the agent chat over whatever is showing.
+        ToggleAgentChat,
     ]
 );
 
@@ -68,8 +74,12 @@ pub(crate) fn init(cx: &mut App) {
     let play_pause = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
     cx.bind_keys([
         KeyBinding::new("space", PlayPause, Some(&play_pause)),
+        // `f` is a character a person could be typing, so it carries the same
+        // text-input exclusion the space bar does.
+        KeyBinding::new("f", FollowPlayhead, Some(&play_pause)),
         KeyBinding::new("escape", Back, Some(&escape)),
         KeyBinding::new("secondary-[", Back, Some(context::ROOT)),
         KeyBinding::new("secondary-,", OpenSettings, Some(context::ROOT)),
+        KeyBinding::new("secondary-l", ToggleAgentChat, Some(context::ROOT)),
     ]);
 }

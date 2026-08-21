@@ -129,6 +129,11 @@ const SCRIPT: &str = r#"
         return app.snapshot().find({ role: "card", label: "Waveform" });
     }
 
+    /** The 32px ruler strip, which is the only surface that scrubs. */
+    function ruler() {
+        return app.snapshot().find({ role: "card", label: "Ruler" });
+    }
+
     /** Where every clip on the timeline starts, so a leg can prove it moved. */
     function clipStarts() {
         return app
@@ -162,10 +167,12 @@ const SCRIPT: &str = r#"
     );
     const scrolled = clipStarts();
 
-    // Scrubbing: press on the waveform and walk the pointer. Every step moves
-    // the playhead and repaints.
+    // Scrubbing: press on the *ruler* and walk the pointer. A press on the
+    // waveform below it clears the selection instead, which would leave this
+    // leg measuring sixty idle frames. Every step moves the playhead and
+    // repaints.
     const scrub = measure(() =>
-        app.drag(waveform(), { dx: 600, dy: 0 }, { steps: 60 }),
+        app.drag(ruler(), { dx: 600, dy: 0 }, { steps: 60 }),
     );
 
     ({

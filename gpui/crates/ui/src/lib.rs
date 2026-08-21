@@ -49,6 +49,16 @@ mod select;
 mod slider;
 mod toggle;
 
+/// The key context a focused field declares while it is taking typed text.
+///
+/// It lives here — not in the app's keymap — because it is half of a pair: a
+/// binding predicate on one side, a `key_context` on an element on the other,
+/// and the two are written in different crates now that the chat panel has a
+/// real text field. A name spelled differently in the two places is a binding
+/// that silently never fires, so there is one spelling and both sides import
+/// it.
+pub const TEXT_INPUT: &str = "TextInput";
+
 pub use button::{luma_button, slab};
 pub use checkbox::luma_checkbox;
 pub use dropdown::luma_dropdown;

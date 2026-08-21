@@ -62,6 +62,13 @@ pub enum Role {
     Card,
     /// Read-only text a script may want to assert on.
     Text,
+    /// A labelled state pill — a tool call in the agent chat.
+    ///
+    /// Its own role because a chip is none of the others: not a button (it is
+    /// not pressable at rest), not text (it carries state), not a row. A
+    /// script that had to assert on a `Text` node would be asserting on a
+    /// phrasing detail instead of on the thing.
+    Chip,
 }
 
 impl Role {
@@ -77,6 +84,7 @@ impl Role {
             Self::Row => "row",
             Self::Card => "card",
             Self::Text => "text",
+            Self::Chip => "chip",
         }
     }
 
@@ -96,6 +104,7 @@ impl Role {
             Self::Row,
             Self::Card,
             Self::Text,
+            Self::Chip,
         ]
         .into_iter()
         .find(|role| role.as_str() == name)
