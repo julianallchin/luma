@@ -170,20 +170,48 @@ impl ReasoningLevel {
 
 /// Where a model's tokens come from. A provider is a *transport plus key*, not
 /// a catalogue: the same model can be reachable through more than one.
+///
+/// The two gateways are what Luma is actually configured for — one key reaches
+/// every model. [`Provider::Anthropic`] is direct, first-party access: a
+/// supported alternative, but one nobody gets by default, because reaching it
+/// needs a second key for a subset of the same models.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Provider {
-    Anthropic,
+    VercelAiGateway,
     OpenRouter,
+    Anthropic,
 }
 
+/// Providers in preference order: a gateway before a first-party API, so a
+/// model both can serve is billed through the key the user already has.
+const PROVIDER_PREFERENCE: [Provider; 3] = [
+    Provider::VercelAiGateway,
+    Provider::OpenRouter,
+    Provider::Anthropic,
+];
+
 impl Provider {
+    /// The provider Luma uses when the settings table names none.
+    pub const DEFAULT: Provider = Provider::VercelAiGateway;
+
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Provider::Anthropic => "anthropic",
             Provider::OpenRouter => "openrouter",
+            Provider::VercelAiGateway => "vercel-ai-gateway",
         }
+    }
+
+    /// Resolve a stored `agent_provider` value. An unrecognised value is
+    /// [`None`] rather than a guess, so a typo cannot silently move a user's
+    /// traffic — and their key — to another service.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        PROVIDER_PREFERENCE
+            .into_iter()
+            .find(|provider| provider.as_str() == value)
     }
 
     /// The environment variable checked before the settings table.
@@ -192,6 +220,7 @@ impl Provider {
         match self {
             Provider::Anthropic => "LUMA_ANTHROPIC_API_KEY",
             Provider::OpenRouter => "LUMA_OPENROUTER_API_KEY",
+            Provider::VercelAiGateway => "LUMA_AI_GATEWAY_API_KEY",
         }
     }
 
@@ -201,6 +230,7 @@ impl Provider {
         match self {
             Provider::Anthropic => "anthropic_api_key",
             Provider::OpenRouter => "openrouter_api_key",
+            Provider::VercelAiGateway => "ai_gateway_api_key",
         }
     }
 }
@@ -218,16 +248,22 @@ pub struct ModelSpec {
     pub display: &'static str,
     pub anthropic: Option<&'static str>,
     pub openrouter: Option<&'static str>,
+    pub gateway: Option<&'static str>,
     pub default_reasoning: ReasoningLevel,
 }
 
 /// The one model table.
+///
+/// Both gateways address models in the same `creator/model` space, so those two
+/// columns usually agree; they are still separate because either service can
+/// stop carrying a model without the other noticing.
 pub static MODELS: &[ModelSpec] = &[
     ModelSpec {
         key: "claude-opus-5",
         display: "Claude Opus 5",
         anthropic: Some("claude-opus-5"),
         openrouter: Some("anthropic/claude-opus-5"),
+        gateway: Some("anthropic/claude-opus-5"),
         default_reasoning: ReasoningLevel::High,
     },
     ModelSpec {
@@ -235,6 +271,7 @@ pub static MODELS: &[ModelSpec] = &[
         display: "Kimi K3 Fast",
         anthropic: None,
         openrouter: Some("moonshotai/kimi-k3-fast"),
+        gateway: Some("moonshotai/kimi-k3-fast"),
         default_reasoning: ReasoningLevel::Medium,
     },
     ModelSpec {
@@ -242,6 +279,7 @@ pub static MODELS: &[ModelSpec] = &[
         display: "Grok 4.5",
         anthropic: None,
         openrouter: Some("x-ai/grok-4.5"),
+        gateway: Some("xai/grok-4.5"),
         default_reasoning: ReasoningLevel::Medium,
     },
 ];
@@ -272,6 +310,36 @@ pub fn configured(
         .ok_or_else(|| ModelError::Unknown(requested.to_string()))
 }
 
+/// The model, the effort and the live transport the settings table selects.
+///
+/// The whole of "which provider, which key, which client" — a caller that only
+/// wants to run a turn should not have to know that a gateway and the
+/// first-party API share a transport, or which env var backs which service.
+///
+/// # Errors
+///
+/// [`ModelError::Unroutable`] if no configured provider serves the chosen
+/// model, or [`ModelError::NotConfigured`] if the one that does has no key.
+pub async fn configured_client(
+    settings: &std::collections::HashMap<String, String>,
+    pool: &SqlitePool,
+) -> Result<(std::sync::Arc<dyn ModelClient>, ModelId, ReasoningLevel), ModelError> {
+    let id = configured(settings)?;
+    let preferred = settings
+        .get("agent_provider")
+        .map(String::as_str)
+        .and_then(Provider::parse)
+        .unwrap_or(Provider::DEFAULT);
+    let (provider, _) = id.route(preferred)?;
+    let key = api_key(provider, pool).await?;
+    let client: std::sync::Arc<dyn ModelClient> = match provider {
+        Provider::VercelAiGateway => std::sync::Arc::new(anthropic::AnthropicClient::gateway(key)),
+        Provider::Anthropic => std::sync::Arc::new(anthropic::AnthropicClient::new(key)),
+        Provider::OpenRouter => std::sync::Arc::new(openrouter::OpenRouterClient::new(key)),
+    };
+    Ok((client, id, id.spec().default_reasoning))
+}
+
 /// A validated entry of [`MODELS`]. Constructing one is the only way to name a
 /// model, so an unvalidated free-form string cannot reach a provider.
 #[derive(Clone, Copy, Debug)]
@@ -285,7 +353,10 @@ impl ModelId {
         MODELS
             .iter()
             .find(|spec| {
-                spec.key == value || spec.anthropic == Some(value) || spec.openrouter == Some(value)
+                spec.key == value
+                    || spec.anthropic == Some(value)
+                    || spec.openrouter == Some(value)
+                    || spec.gateway == Some(value)
             })
             .map(ModelId)
     }
@@ -300,6 +371,23 @@ impl ModelId {
         self.0.key
     }
 
+    /// The id `provider` knows this model by.
+    ///
+    /// What a transport asks, having already been handed its provider — it must
+    /// never fall back, or one service's id goes out over another's connection.
+    ///
+    /// # Errors
+    ///
+    /// [`ModelError::Unroutable`] if that provider does not serve the model.
+    pub fn wire_id(self, provider: Provider) -> Result<&'static str, ModelError> {
+        match provider {
+            Provider::Anthropic => self.0.anthropic,
+            Provider::OpenRouter => self.0.openrouter,
+            Provider::VercelAiGateway => self.0.gateway,
+        }
+        .ok_or(ModelError::Unroutable(self.0.key))
+    }
+
     /// The provider to use and the wire id to send, preferring `preferred` and
     /// falling back to whatever provider actually routes this model.
     ///
@@ -307,19 +395,13 @@ impl ModelId {
     ///
     /// [`ModelError::Unroutable`] if no provider serves it.
     pub fn route(self, preferred: Provider) -> Result<(Provider, &'static str), ModelError> {
-        let on = |provider: Provider| match provider {
-            Provider::Anthropic => self.0.anthropic,
-            Provider::OpenRouter => self.0.openrouter,
-        };
-        if let Some(id) = on(preferred) {
+        if let Ok(id) = self.wire_id(preferred) {
             return Ok((preferred, id));
         }
-        for provider in [Provider::Anthropic, Provider::OpenRouter] {
-            if let Some(id) = on(provider) {
-                return Ok((provider, id));
-            }
-        }
-        Err(ModelError::Unroutable(self.0.key))
+        PROVIDER_PREFERENCE
+            .into_iter()
+            .find_map(|provider| Some((provider, self.wire_id(provider).ok()?)))
+            .ok_or(ModelError::Unroutable(self.0.key))
     }
 }
 
@@ -406,12 +488,103 @@ mod tests {
         let kimi = ModelId::parse("kimi-k3-fast").expect("known model");
         assert_eq!(
             kimi.route(Provider::Anthropic).expect("routable"),
-            (Provider::OpenRouter, "moonshotai/kimi-k3-fast")
+            (Provider::VercelAiGateway, "moonshotai/kimi-k3-fast")
         );
         let opus = ModelId::parse("claude-opus-5").expect("known model");
         assert_eq!(
             opus.route(Provider::Anthropic).expect("routable"),
             (Provider::Anthropic, "claude-opus-5")
         );
+    }
+
+    /// Nothing may reach the first-party Anthropic API without asking for it:
+    /// it is the one provider whose key a gateway user does not have.
+    #[test]
+    fn the_default_provider_is_a_gateway_for_every_model() {
+        assert_ne!(Provider::DEFAULT, Provider::Anthropic);
+        for spec in MODELS {
+            let (provider, _) = ModelId(spec).route(Provider::DEFAULT).expect("routable");
+            assert_ne!(
+                provider,
+                Provider::Anthropic,
+                "'{}' falls through to the first-party API by default",
+                spec.key
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_round_trips_through_its_stored_spelling() {
+        for provider in PROVIDER_PREFERENCE {
+            assert_eq!(Provider::parse(provider.as_str()), Some(provider));
+        }
+        assert_eq!(Provider::parse("vercel"), None);
+    }
+
+    /// One real turn, resolved the way a turn resolves it: settings rows in,
+    /// streamed text out. Only the live service can confirm the id space, the
+    /// bearer header and the SSE schema all agree.
+    ///
+    /// Ignored by default — it costs tokens and needs a network. Run with
+    /// `cargo test --lib a_live_gateway_turn -- --ignored --nocapture`, with
+    /// `LUMA_AI_GATEWAY_API_KEY` set.
+    #[tokio::test]
+    #[ignore = "live: needs LUMA_AI_GATEWAY_API_KEY and a network"]
+    async fn a_live_gateway_turn_streams_text() {
+        use futures_util::StreamExt;
+
+        assert!(
+            std::env::var(Provider::VercelAiGateway.key_env_var())
+                .is_ok_and(|key| !key.trim().is_empty()),
+            "no gateway credential on this machine: set {} to smoke-test",
+            Provider::VercelAiGateway.key_env_var()
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = crate::database::local::database::init_app_db_at(dir.path())
+            .await
+            .expect("app db");
+        // Exactly the rows the settings screen writes.
+        let settings = std::collections::HashMap::from([
+            (
+                "agent_provider".to_string(),
+                "vercel-ai-gateway".to_string(),
+            ),
+            (
+                "agent_model".to_string(),
+                "anthropic/claude-opus-5".to_string(),
+            ),
+        ]);
+
+        let (client, id, reasoning) = configured_client(&settings, &db.0)
+            .await
+            .expect("the settings table did not resolve to a usable client");
+        assert_eq!(id.key(), "claude-opus-5");
+
+        let mut stream = client.stream(ModelRequest {
+            model: id,
+            system: "Answer in one word.".into(),
+            messages: vec![ModelMessage {
+                role: ModelRole::User,
+                content: vec![ContentBlock::Text("Say pong.".into())],
+            }],
+            tools: Vec::new(),
+            reasoning,
+            max_tokens: 1024,
+        });
+
+        let mut text = String::new();
+        let mut ended = None;
+        while let Some(event) = stream.next().await {
+            match event.expect("the gateway stream carried an error") {
+                ModelEvent::TextDelta(delta) => text.push_str(&delta),
+                ModelEvent::StepEnded { usage, .. } => ended = Some(usage),
+                _ => {}
+            }
+        }
+        let usage = ended.expect("the stream ended without a StepEnded");
+        println!("gateway said {text:?} ({usage:?})");
+        assert!(!text.trim().is_empty(), "the gateway streamed no text");
+        assert!(usage.output_tokens > 0, "the gateway reported no usage");
     }
 }

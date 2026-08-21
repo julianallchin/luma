@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 // Side-effect import: registers the global session-finished toast subscriber.
 import "./features/track-editor/agent/auto-light";
+import { publishAgentSettings } from "./features/track-editor/agent/openrouter-key";
 import { installRenderTelemetryGlobalHandlers } from "./features/visualizer/lib/render-telemetry";
 
 if (import.meta.env.PROD) {
@@ -22,6 +23,11 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 installRenderTelemetryGlobalHandlers();
+
+// The agent's provider and key live in the settings table, which the GPUI
+// window reads too; this webview's localStorage is a cache of it. Republish at
+// boot so a key typed into an older build still reaches the other host.
+publishAgentSettings();
 
 // Perf-baseline capture (docs/specs/perf-baseline.md). Off unless
 // `localStorage.setItem("luma:perf-baseline", "1")` — one localStorage read

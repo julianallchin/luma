@@ -249,17 +249,25 @@ impl Fixture {
             0.9, 1.0, 0.0, 0.05, // high
         ];
         let blob = crate::services::waveforms::f32_slice_to_bytes(&bands);
+        let preview = crate::services::waveforms::f32_slice_to_bytes(&[0.0, 0.0]);
         crate::database::local::waveforms::upsert_track_waveform(
             &self.pool,
             TRACK_ID,
-            &crate::services::waveforms::f32_slice_to_bytes(&[0.0, 0.0]),
-            &[],
-            &[],
-            &[],
-            &blob,
-            &[],
-            48_000,
-            8.0,
+            &crate::database::local::waveforms::StoredWaveform {
+                preview_samples_blob: &preview,
+                full_samples_blob: &[],
+                colors_blob: &[],
+                preview_colors_blob: &[],
+                bands_blob: &blob,
+                preview_bands_blob: &[],
+                band_gains: crate::models::waveforms::BandGains {
+                    low: 1.0,
+                    mid: 1.0,
+                    high: 1.0,
+                },
+                sample_rate: 48_000,
+                decoded_duration: 8.0,
+            },
         )
         .await
         .unwrap();

@@ -11,9 +11,15 @@ use sqlx::SqlitePool;
 
 /// Services the agents can be pointed at, as `(stored value, label)`. Both
 /// speak the same "creator/model" model ids; only the key and routing differ.
+///
+/// A gateway is the only thing offered here because a gateway key reaches every
+/// model in [`crate::agent::model::MODELS`]. The first-party Anthropic API is
+/// reachable too — write `agent_provider = "anthropic"` by hand — but it serves
+/// a subset with a key nobody here is assumed to hold, so it is not a choice
+/// the picker can strand someone on.
 pub const AGENT_PROVIDERS: &[(&str, &str)] = &[
-    ("openrouter", "OpenRouter"),
     ("vercel-ai-gateway", "Vercel AI Gateway"),
+    ("openrouter", "OpenRouter"),
 ];
 
 /// Models the settings picker offers for the track agent, as
@@ -27,6 +33,11 @@ pub const AGENT_MODELS: &[(&str, &str)] = &[
     ("anthropic/claude-opus-5", "Claude Opus 5"),
     ("moonshotai/kimi-k3-fast", "Kimi K3 Fast"),
 ];
+
+/// The service the agents call when nothing has been chosen — the same one the
+/// agent loop falls back to, so an unset installation and a freshly written
+/// settings row route identically.
+pub const DEFAULT_AGENT_PROVIDER: &str = crate::agent::model::Provider::DEFAULT.as_str();
 
 /// The track agent's model when nothing has been chosen.
 pub const DEFAULT_AGENT_MODEL: &str = "moonshotai/kimi-k3-fast";
@@ -58,7 +69,7 @@ impl Default for AppSettings {
             artnet_net: 0,
             artnet_subnet: 0,
             max_dimmer: 100,
-            agent_provider: AGENT_PROVIDERS[0].0.to_string(),
+            agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
         }
     }
@@ -114,7 +125,7 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
         agent_provider: one_of(
             AGENT_PROVIDERS,
             map.get("agent_provider"),
-            AGENT_PROVIDERS[0].0,
+            DEFAULT_AGENT_PROVIDER,
         ),
         agent_model: one_of(AGENT_MODELS, map.get("agent_model"), DEFAULT_AGENT_MODEL),
     })
@@ -136,5 +147,18 @@ mod tests {
             );
         }
         assert!(crate::agent::model::ModelId::parse(DEFAULT_AGENT_MODEL).is_some());
+    }
+
+    /// Same contract one axis over: the picker must not offer a service the
+    /// loop cannot build a client for.
+    #[test]
+    fn every_offered_provider_resolves_in_the_model_seam() {
+        for (stored, _) in AGENT_PROVIDERS {
+            assert!(
+                crate::agent::model::Provider::parse(stored).is_some(),
+                "settings offers provider '{stored}', which agent::model does not know"
+            );
+        }
+        assert!(crate::agent::model::Provider::parse(DEFAULT_AGENT_PROVIDER).is_some());
     }
 }

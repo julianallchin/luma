@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
 export const OPENROUTER_KEY_STORAGE = "luma:openrouter-api-key";
@@ -25,9 +26,47 @@ export function getAgentModel(): AgentModelId {
 
 export function setAgentModel(model: AgentModelId): void {
 	localStorage.setItem(AGENT_MODEL_STORAGE, model);
+	mirror(AGENT_MODEL_STORAGE, model);
 	window.dispatchEvent(new Event(KEY_CHANGED_EVENT));
 }
 const KEY_CHANGED_EVENT = "luma:openrouter-key-changed";
+
+/** The `settings` row each localStorage entry mirrors into. */
+const BACKEND_SETTING: Record<string, string> = {
+	[OPENROUTER_KEY_STORAGE]: "openrouter_api_key",
+	[GATEWAY_KEY_STORAGE]: "ai_gateway_api_key",
+	[AGENT_PROVIDER_STORAGE]: "agent_provider",
+	[AGENT_MODEL_STORAGE]: "agent_model",
+};
+
+/**
+ * Mirror one agent setting into the backend settings table.
+ *
+ * The provider and key are read by two hosts — this webview and the GPUI
+ * window, which has no localStorage — so the settings table is the source of
+ * truth and localStorage is this host's cache of it. Every write goes both
+ * places; a failure is silent because the local write already succeeded and the
+ * only cost is the other host lagging until the next one.
+ */
+function mirror(storageKey: string, value: string | null): void {
+	invoke("set_setting", {
+		key: BACKEND_SETTING[storageKey],
+		value: value ?? "",
+	}).catch(() => {});
+}
+
+/**
+ * Push every agent setting this webview holds into the settings table.
+ *
+ * Called once at startup so a key typed before the table existed still reaches
+ * the other host, without the user retyping it.
+ */
+export function publishAgentSettings(): void {
+	for (const storageKey of Object.keys(BACKEND_SETTING)) {
+		const value = localStorage.getItem(storageKey);
+		if (value !== null) mirror(storageKey, value.trim());
+	}
+}
 
 /** Which service the agents call. Both speak "creator/model" model ids and are
  * driven through Pi's provider registry; only the key and routing differ. */
@@ -46,6 +85,7 @@ export function getAgentProvider(): AgentProvider {
 
 export function setAgentProvider(provider: AgentProvider): void {
 	localStorage.setItem(AGENT_PROVIDER_STORAGE, provider);
+	mirror(AGENT_PROVIDER_STORAGE, provider);
 	window.dispatchEvent(new Event(KEY_CHANGED_EVENT));
 }
 
@@ -63,6 +103,7 @@ export function setGatewayKey(value: string): void {
 	} else {
 		localStorage.setItem(GATEWAY_KEY_STORAGE, trimmed);
 	}
+	mirror(GATEWAY_KEY_STORAGE, trimmed);
 	window.dispatchEvent(new Event(KEY_CHANGED_EVENT));
 }
 
@@ -120,6 +161,7 @@ export function setOpenRouterKey(value: string): void {
 	} else {
 		localStorage.setItem(OPENROUTER_KEY_STORAGE, trimmed);
 	}
+	mirror(OPENROUTER_KEY_STORAGE, trimmed);
 	window.dispatchEvent(new Event(KEY_CHANGED_EVENT));
 }
 

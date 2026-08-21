@@ -41,8 +41,8 @@ impl OpenRouterClient {
 
 impl ModelClient for OpenRouterClient {
     fn stream(&self, request: ModelRequest) -> BoxStream<'static, Result<ModelEvent, ModelError>> {
-        let wire_id = match request.model.route(super::Provider::OpenRouter) {
-            Ok((_, id)) => id,
+        let wire_id = match request.model.wire_id(super::Provider::OpenRouter) {
+            Ok(id) => id,
             Err(error) => {
                 return Box::pin(futures_util::stream::once(async move { Err(error) }));
             }
