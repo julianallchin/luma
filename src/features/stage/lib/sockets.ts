@@ -179,11 +179,11 @@ export function resolveAnchor(anchor: BboxAnchor, bbox: Box3): Vec3 {
  *    Example: a speaker_mount (down-facing) lands on a stand_top (up-facing).
  *    The held piece is rotated 180° around the host socket's tangent.
  *
- *  - `"edge"`: the two normals stay **parallel** while the tangents become
- *    **anti-parallel**. Example: two stage decks joined edge-to-edge —
- *    both tops still face up, but the shared edge runs in opposite
- *    directions on each deck. The held piece is rotated 180° around the
- *    host socket's normal.
+ *  - `"edge"`: the held piece takes the host's orientation **unchanged** —
+ *    only a translation puts the held socket on the host socket. Example:
+ *    two stage decks joined edge-to-edge; both tops face up and the shared
+ *    edge runs the same way on each deck. Which sides meet is decided by
+ *    the `outward` opposition test in the solver, not by a rotation.
  */
 export type SocketMode = "face" | "edge";
 

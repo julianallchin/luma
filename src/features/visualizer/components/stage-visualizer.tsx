@@ -90,6 +90,14 @@ interface StageVisualizerProps {
 	 * Force dark stage off (lit environment). Used in the Universe editor.
 	 */
 	forceLightStage?: boolean;
+	/**
+	 * `"never"` freezes the render loop so the caller drives frames with
+	 * r3f's `advance(t)`. That pins the one clock the look depends on —
+	 * haze noise drift, the jitter walk and strobe phase all read it — which
+	 * is what makes golden capture reproducible. Capture only; live views
+	 * leave this alone.
+	 */
+	frameloop?: "always" | "never";
 }
 
 type TransformMode = "translate" | "rotate";
@@ -496,6 +504,7 @@ export function StageVisualizer({
 	renderAudioTimeSec = null,
 	getRenderAudioTime = null,
 	forceLightStage = false,
+	frameloop = "always",
 }: StageVisualizerProps) {
 	const darkStageSetting = useRenderSettingsStore((s) => s.darkStage);
 	const darkStage = forceLightStage ? false : darkStageSetting;
@@ -506,7 +515,9 @@ export function StageVisualizer({
 	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
 	const renderSettings = useRenderSettingsStore();
 	const volumetricHazeEnabled = renderSettings.volumetricHaze && darkStage;
-	const postProcessingEnabled = volumetricHazeEnabled || renderSettings.bloom;
+	// AgX tone mapping is unconditional, so the composer always owns the
+	// render. It has to: `SpotlightPoolEndFrame`'s positive useFrame priority
+	// takes rendering out of r3f's hands, and nothing else draws the scene.
 	const postProcessingEffects = [
 		volumetricHazeEnabled ? (
 			<VolumetricHaze
@@ -693,19 +704,12 @@ export function StageVisualizer({
 					hazeDensity: renderSettings.hazeDensity,
 					hazeSteps: renderSettings.hazeSteps,
 					maxDpr: renderSettings.maxDpr,
-					postProcessingMounted: postProcessingEnabled,
 					volumetricHaze: renderSettings.volumetricHaze,
 					volumetricHazeMounted: volumetricHazeEnabled,
 				},
 			},
 		}),
-		[
-			darkStage,
-			patchedFixtures.length,
-			postProcessingEnabled,
-			renderSettings,
-			volumetricHazeEnabled,
-		],
+		[darkStage, patchedFixtures.length, renderSettings, volumetricHazeEnabled],
 	);
 
 	useEffect(() => {
@@ -963,6 +967,7 @@ export function StageVisualizer({
 
 			<Canvas
 				shadows={{ type: PCFSoftShadowMap }}
+				frameloop={frameloop}
 				camera={{ position: [0, 1, 3], fov: 50 }}
 				dpr={[1, renderSettings.maxDpr ?? 2]}
 				// R3F's ResizeObserver currently runs through react-use-measure's
@@ -1076,15 +1081,13 @@ export function StageVisualizer({
 				<FovSync />
 				<CameraExposer cameraRef={cameraRef} sizeRef={canvasSizeRef} />
 
-				{postProcessingEnabled ? (
-					<EffectComposer
-						multisampling={4}
-						stencilBuffer={false}
-						frameBufferType={HalfFloatType}
-					>
-						{postProcessingEffects}
-					</EffectComposer>
-				) : null}
+				<EffectComposer
+					multisampling={4}
+					stencilBuffer={false}
+					frameBufferType={HalfFloatType}
+				>
+					{postProcessingEffects}
+				</EffectComposer>
 
 				{/* Runtime metrics */}
 				<RenderMetricsProbe metricsRef={renderMetricsRef} />

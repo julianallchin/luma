@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Luma golden-scene harness</title>
+    <script>document.documentElement.classList.add('dark')</script>
+    <style>
+      /*
+        A golden records renderer output, not app chrome. The visualizer's DOM
+        overlays (corner ticks, fps readout, editor toolbars) all sit at z-10
+        as direct children of the stage section; the r3f canvas wrapper does
+        not. Playwright clips the *page* to the canvas box, so without this
+        they would be baked into every shot.
+      */
+      section[aria-label="3D Stage Visualizer"] > .z-10 { display: none; }
+    </style>
+  </head>
+
+  <body style="background-color: #000000; margin: 0">
+    <div id="root"></div>
+    <script type="module" src="/src/harness/scenes-3d.tsx"></script>
+  </body>
+</html>
