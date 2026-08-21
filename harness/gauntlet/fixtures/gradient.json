@@ -1,0 +1,288 @@
+{
+	"pattern": "gradient",
+	"graph": {
+		"nodes": [
+			{
+				"id": "pattern_args",
+				"typeId": "pattern_args",
+				"params": {},
+				"positionX": 0,
+				"positionY": 0
+			},
+			{
+				"id": "node-24",
+				"typeId": "apply_color",
+				"params": {},
+				"positionX": 960,
+				"positionY": 58
+			},
+			{
+				"id": "node-25",
+				"typeId": "ramp_between",
+				"params": {},
+				"positionX": 320,
+				"positionY": 206
+			},
+			{
+				"id": "node-26",
+				"typeId": "scalar",
+				"params": {
+					"value": 1
+				},
+				"positionX": 0,
+				"positionY": 148
+			},
+			{
+				"id": "node-27",
+				"typeId": "scalar",
+				"params": {
+					"value": 0
+				},
+				"positionX": 0,
+				"positionY": 280
+			},
+			{
+				"id": "node-28",
+				"typeId": "sample_palette",
+				"params": {},
+				"positionX": 640,
+				"positionY": 206
+			},
+			{
+				"id": "node-30",
+				"typeId": "view_signal",
+				"params": {},
+				"positionX": 960,
+				"positionY": 190
+			},
+			{
+				"id": "audio-input-1",
+				"typeId": "audio_input",
+				"params": {},
+				"positionX": 0,
+				"positionY": 412
+			}
+		],
+		"edges": [
+			{
+				"id": "reactflow__edge-node-26out-node-25end",
+				"fromNode": "node-26",
+				"fromPort": "out",
+				"toNode": "node-25",
+				"toPort": "end"
+			},
+			{
+				"id": "reactflow__edge-node-27out-node-25start",
+				"fromNode": "node-27",
+				"fromPort": "out",
+				"toNode": "node-25",
+				"toPort": "start"
+			},
+			{
+				"id": "reactflow__edge-pattern_argsselection-node-24selection",
+				"fromNode": "pattern_args",
+				"fromPort": "selection",
+				"toNode": "node-24",
+				"toPort": "selection"
+			},
+			{
+				"id": "reactflow__edge-node-25out-node-28u",
+				"fromNode": "node-25",
+				"fromPort": "out",
+				"toNode": "node-28",
+				"toPort": "u"
+			},
+			{
+				"id": "reactflow__edge-pattern_argsgradient-node-28palette",
+				"fromNode": "pattern_args",
+				"fromPort": "gradient",
+				"toNode": "node-28",
+				"toPort": "stops"
+			},
+			{
+				"id": "reactflow__edge-node-28out-node-24signal",
+				"fromNode": "node-28",
+				"fromPort": "out",
+				"toNode": "node-24",
+				"toPort": "signal"
+			},
+			{
+				"id": "reactflow__edge-node-28out-node-30in",
+				"fromNode": "node-28",
+				"fromPort": "out",
+				"toNode": "node-30",
+				"toPort": "in"
+			}
+		],
+		"args": [
+			{
+				"id": "selection",
+				"name": "selection",
+				"argType": "Selection",
+				"defaultValue": {
+					"expression": "all",
+					"spatialReference": "global"
+				}
+			},
+			{
+				"id": "gradient",
+				"name": "gradient",
+				"argType": "Gradient",
+				"defaultValue": {
+					"stops": [
+						{
+							"color": "#000000",
+							"t": 0
+						},
+						{
+							"color": "#ffffff",
+							"t": 1
+						}
+					]
+				}
+			}
+		]
+	},
+	"viewSignals": {
+		"node-30": {
+			"n": 1,
+			"t": 128,
+			"c": 1,
+			"data": [
+				0.5,
+				0.544314,
+				0.587916,
+				0.630383,
+				0.671307,
+				0.710296,
+				0.746982,
+				0.78102,
+				0.812093,
+				0.839916,
+				0.864238,
+				0.884842,
+				0.901552,
+				0.914229,
+				0.922776,
+				0.927134,
+				0.92729,
+				0.923269,
+				0.915139,
+				0.903006,
+				0.887016,
+				0.867351,
+				0.844228,
+				0.817897,
+				0.788638,
+				0.756757,
+				0.722583,
+				0.686469,
+				0.648779,
+				0.609896,
+				0.570207,
+				0.530107,
+				0.489991,
+				0.450254,
+				0.411281,
+				0.373449,
+				0.337121,
+				0.302642,
+				0.270336,
+				0.240506,
+				0.213425,
+				0.189339,
+				0.168463,
+				0.150978,
+				0.137032,
+				0.126734,
+				0.12016,
+				0.117347,
+				0.118294,
+				0.122965,
+				0.131287,
+				0.14315,
+				0.158413,
+				0.176899,
+				0.198405,
+				0.222695,
+				0.249512,
+				0.278573,
+				0.309576,
+				0.342202,
+				0.376119,
+				0.410985,
+				0.44645,
+				0.482162,
+				0.517768,
+				0.552921,
+				0.58728,
+				0.620513,
+				0.652304,
+				0.682352,
+				0.710377,
+				0.736119,
+				0.759346,
+				0.779848,
+				0.797448,
+				0.811996,
+				0.823374,
+				0.831497,
+				0.836312,
+				0.837799,
+				0.835971,
+				0.830873,
+				0.822584,
+				0.81121,
+				0.796891,
+				0.779791,
+				0.760101,
+				0.738038,
+				0.713838,
+				0.687757,
+				0.660068,
+				0.631056,
+				0.601017,
+				0.570255,
+				0.53908,
+				0.5078,
+				0.476724,
+				0.446155,
+				0.416388,
+				0.387709,
+				0.360389,
+				0.334685,
+				0.310834,
+				0.289053,
+				0.269538,
+				0.252459,
+				0.237961,
+				0.226162,
+				0.217153,
+				0.210997,
+				0.207726,
+				0.207345,
+				0.209831,
+				0.215131,
+				0.223167,
+				0.233832,
+				0.246996,
+				0.262505,
+				0.280184,
+				0.299837,
+				0.321252,
+				0.344199,
+				0.368439,
+				0.393719,
+				0.41978,
+				0.446359,
+				0.473188,
+				0.5
+			]
+		}
+	},
+	"closeup": {
+		"x": -240,
+		"y": -30,
+		"zoom": 1
+	}
+}

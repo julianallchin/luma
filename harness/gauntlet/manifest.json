@@ -1,0 +1,38 @@
+{
+	"subject": "pattern-graph canvas (react-flow, web)",
+	"capturedAt": "2026-08-21T02:44:28.466Z",
+	"browser": "webkit 26.5",
+	"deviceScaleFactor": 2,
+	"fixtures": "harness/gauntlet/fixtures/<pattern>.json",
+	"nodeTypes": "harness/gauntlet/node-types.json",
+	"shots": [
+		{
+			"pattern": "gradient",
+			"view": "whole",
+			"file": "web-gradient-whole.png",
+			"bytes": 84846,
+			"sha256": "2f50ee8559f3e0d249e45837483b803057a64d9fefbdf870452c218b08b6f9c6"
+		},
+		{
+			"pattern": "gradient",
+			"view": "closeup",
+			"file": "web-gradient-closeup.png",
+			"bytes": 113714,
+			"sha256": "d743a723bc8bd50c39954cf37ffa89ba7ed3ac7263a72ff075a5a03b1d0a9553"
+		},
+		{
+			"pattern": "circle_pill_step",
+			"view": "whole",
+			"file": "web-circle_pill_step-whole.png",
+			"bytes": 236166,
+			"sha256": "a6f376819bb3b89be13a1b911fede8326b3cdec016db48a1b89837c00381382d"
+		},
+		{
+			"pattern": "circle_pill_step",
+			"view": "closeup",
+			"file": "web-circle_pill_step-closeup.png",
+			"bytes": 117639,
+			"sha256": "7ae227e6904226241c61db3552d7c78a2f0f621fac96d461b2714f0ce45aa453"
+		}
+	]
+}
