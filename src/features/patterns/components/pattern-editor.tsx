@@ -122,6 +122,7 @@ import { Toggle } from "@/shared/components/ui/toggle";
 import { IdempotentRequestGate } from "@/shared/lib/idempotent-request";
 import { LatestRequestGate } from "@/shared/lib/latest-request-gate";
 import { formatTime } from "@/shared/lib/react-flow/base-node";
+import { patternArgsNodeDef as patternArgsNodeDefFor } from "@/shared/lib/react-flow/pattern-args-node-def";
 import {
 	type EditorController,
 	ReactFlowEditorWrapper,
@@ -1160,27 +1161,10 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 			forkRequestGateRef.current.reset();
 		};
 	}, [currentUserId, implementationId, patternId]);
-	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(() => {
-		if (patternArgs.length === 0) return null;
-		return {
-			id: "pattern_args",
-			name: "Pattern Args",
-			description: "Arguments provided by track annotations.",
-			category: "Input",
-			inputs: [],
-			outputs: patternArgs.map((arg) => ({
-				id: arg.id,
-				name: arg.name,
-				portType:
-					arg.argType === "Selection"
-						? "Selection"
-						: arg.argType === "Palette" || arg.argType === "Gradient"
-							? "Stops"
-							: "Signal",
-			})),
-			params: [],
-		};
-	}, [patternArgs]);
+	const patternArgsNodeDef = useMemo<NodeTypeDef | null>(
+		() => patternArgsNodeDefFor(patternArgs),
+		[patternArgs],
+	);
 	const getNodeDefinitions = useCallback(() => {
 		const base = nodeTypes;
 		return patternArgsNodeDef ? [...base, patternArgsNodeDef] : base;

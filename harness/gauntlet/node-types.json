@@ -1,0 +1,1683 @@
+[
+  {
+    "id": "get_attribute",
+    "name": "Get Attribute",
+    "description": "Extracts spatial attributes from a selection into a Signal.",
+    "category": "Selection",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "attribute",
+        "name": "Attribute",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "index"
+      }
+    ]
+  },
+  {
+    "id": "random_select_mask",
+    "name": "Random Select Mask",
+    "description": "Re-rolls a random subset of N items on every incoming event.",
+    "category": "Selection",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "events_in",
+        "name": "Events",
+        "portType": "Events"
+      },
+      {
+        "id": "count",
+        "name": "Count",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Mask",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "avoid_repeat",
+        "name": "Avoid Repeat",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "filter_selection",
+    "name": "Filter Selection",
+    "description": "Filters a selection to only include fixtures with a specific capability.",
+    "category": "Selection",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Selection",
+        "portType": "Selection"
+      }
+    ],
+    "params": [
+      {
+        "id": "capability",
+        "name": "Capability",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "movement"
+      }
+    ]
+  },
+  {
+    "id": "mirror",
+    "name": "Mirror",
+    "description": "Folds fixture positions across a mirror axis for symmetric spatial effects.",
+    "category": "Selection",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "side",
+        "name": "Side",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "axis",
+        "name": "Axis",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "x"
+      }
+    ]
+  },
+  {
+    "id": "audio_input",
+    "name": "Audio Input",
+    "description": "Context-provided audio segment for this pattern instance.",
+    "category": "Input",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "params": [
+      {
+        "id": "trackId",
+        "name": "Track",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "startTime",
+        "name": "Start Time (s)",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "endTime",
+        "name": "End Time (s)",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "beatGrid",
+        "name": "Beat Grid JSON",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "stem_splitter",
+    "name": "Stem Splitter",
+    "description": "Loads cached stems for the incoming track and emits drums/bass/vocals/other.",
+    "category": "Audio",
+    "inputs": [
+      {
+        "id": "audio_in",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "drums_out",
+        "name": "Drums",
+        "portType": "Audio"
+      },
+      {
+        "id": "bass_out",
+        "name": "Bass",
+        "portType": "Audio"
+      },
+      {
+        "id": "vocals_out",
+        "name": "Vocals",
+        "portType": "Audio"
+      },
+      {
+        "id": "other_out",
+        "name": "Other",
+        "portType": "Audio"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "frequency_amplitude",
+    "name": "Frequency Amplitude",
+    "description": "Extracts amplitude at a specific frequency range.",
+    "category": "Audio",
+    "inputs": [
+      {
+        "id": "audio_in",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "amplitude_out",
+        "name": "Amplitude",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "selected_frequency_ranges",
+        "name": "Frequency Ranges (JSON)",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "[]"
+      }
+    ]
+  },
+  {
+    "id": "lowpass_filter",
+    "name": "Lowpass Filter",
+    "description": "Applies a lowpass filter to incoming audio.",
+    "category": "Audio",
+    "inputs": [
+      {
+        "id": "audio_in",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "audio_out",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "params": [
+      {
+        "id": "cutoff_hz",
+        "name": "Cutoff (Hz)",
+        "paramType": "Number",
+        "defaultNumber": 200.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "highpass_filter",
+    "name": "Highpass Filter",
+    "description": "Applies a highpass filter to incoming audio.",
+    "category": "Audio",
+    "inputs": [
+      {
+        "id": "audio_in",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "audio_out",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "params": [
+      {
+        "id": "cutoff_hz",
+        "name": "Cutoff (Hz)",
+        "paramType": "Number",
+        "defaultNumber": 200.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "beat_envelope",
+    "name": "Beat Envelope",
+    "description": "Generates rhythmic envelopes aligned to the beat grid.",
+    "category": "Generator",
+    "inputs": [
+      {
+        "id": "subdivision",
+        "name": "Subdivision",
+        "portType": "Signal"
+      },
+      {
+        "id": "offset",
+        "name": "Beat Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "subdivision",
+        "name": "Subdivision",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "only_downbeats",
+        "name": "Only Downbeats",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "offset",
+        "name": "Beat Offset",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "anticipate",
+        "name": "Anticipate",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "attack",
+        "name": "Attack Weight",
+        "paramType": "Number",
+        "defaultNumber": 0.3,
+        "defaultText": null
+      },
+      {
+        "id": "decay",
+        "name": "Decay Weight",
+        "paramType": "Number",
+        "defaultNumber": 0.2,
+        "defaultText": null
+      },
+      {
+        "id": "sustain",
+        "name": "Sustain Hold Weight",
+        "paramType": "Number",
+        "defaultNumber": 0.3,
+        "defaultText": null
+      },
+      {
+        "id": "release",
+        "name": "Release Weight",
+        "paramType": "Number",
+        "defaultNumber": 0.2,
+        "defaultText": null
+      },
+      {
+        "id": "sustain_level",
+        "name": "Sustain Level",
+        "paramType": "Number",
+        "defaultNumber": 0.7,
+        "defaultText": null
+      },
+      {
+        "id": "attack_curve",
+        "name": "Attack Curve",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "decay_curve",
+        "name": "Decay Curve",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "amplitude",
+        "name": "Amplitude",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "beat_pulses",
+    "name": "Beat Pulses",
+    "description": "Emits subdivision-aligned pulse timestamps from the beat grid. Feed into ADSR for shaping.",
+    "category": "Generator",
+    "inputs": [
+      {
+        "id": "subdivision",
+        "name": "Subdivision",
+        "portType": "Signal"
+      },
+      {
+        "id": "offset",
+        "name": "Beat Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "events_out",
+        "name": "Events",
+        "portType": "Events"
+      }
+    ],
+    "params": [
+      {
+        "id": "subdivision",
+        "name": "Subdivision",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "only_downbeats",
+        "name": "Only Downbeats",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "offset",
+        "name": "Beat Offset",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "drum_events",
+    "name": "Drum Events",
+    "description": "Per-class drum onset timestamps from the n2n preprocessor.",
+    "category": "Generator",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "kick_out",
+        "name": "Kick",
+        "portType": "Events"
+      },
+      {
+        "id": "snare_out",
+        "name": "Snare",
+        "portType": "Events"
+      },
+      {
+        "id": "hat_out",
+        "name": "Hi-Hat",
+        "portType": "Events"
+      },
+      {
+        "id": "cymbal_out",
+        "name": "Cymbal",
+        "portType": "Events"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "adsr",
+    "name": "ADSR Envelope",
+    "description": "Shapes incoming events into an ADSR envelope. A/D/S/R are unitless ratios that sum to ~1; total duration is `Length` in beats (or the inter-event gap if Fit To Gap is on).",
+    "category": "Signal",
+    "inputs": [
+      {
+        "id": "events_in",
+        "name": "Events",
+        "portType": "Events"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "signal_out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "attack",
+        "name": "Attack Ratio",
+        "paramType": "Number",
+        "defaultNumber": 0.1,
+        "defaultText": null
+      },
+      {
+        "id": "decay",
+        "name": "Decay Ratio",
+        "paramType": "Number",
+        "defaultNumber": 0.4,
+        "defaultText": null
+      },
+      {
+        "id": "sustain",
+        "name": "Sustain Ratio",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "release",
+        "name": "Release Ratio",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      },
+      {
+        "id": "sustain_level",
+        "name": "Sustain Level",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      },
+      {
+        "id": "attack_curve",
+        "name": "Attack Curve",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "decay_curve",
+        "name": "Decay Curve",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "amplitude",
+        "name": "Amplitude",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "length_beats",
+        "name": "Length (beats)",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      },
+      {
+        "id": "fit_to_gap",
+        "name": "Fit To Gap (0/1)",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "anticipate",
+        "name": "Anticipate (0/1)",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "math",
+    "name": "Math",
+    "description": "Performs math operations on signals with broadcasting.",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "a",
+        "name": "A",
+        "portType": "Signal"
+      },
+      {
+        "id": "b",
+        "name": "B",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "operation",
+        "name": "Operation",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "add"
+      }
+    ]
+  },
+  {
+    "id": "round",
+    "name": "Round",
+    "description": "Quantizes signal values (floor, ceil, round).",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "operation",
+        "name": "Operation",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "round"
+      }
+    ]
+  },
+  {
+    "id": "ramp",
+    "name": "Time Ramp",
+    "description": "Generates a linear ramp from 0 to n_beats over the pattern duration.",
+    "category": "Generator",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "ramp_between",
+    "name": "Linear Ramp",
+    "description": "Generates a linear ramp from start to end signals over the pattern duration.",
+    "category": "Generator",
+    "inputs": [
+      {
+        "id": "start",
+        "name": "Start",
+        "portType": "Signal"
+      },
+      {
+        "id": "end",
+        "name": "End",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "threshold",
+    "name": "Threshold",
+    "description": "Binarizes a signal using a cutoff value.",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "threshold",
+        "name": "Threshold",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "normalize",
+    "name": "Normalize (0-1)",
+    "description": "Normalizes an input signal into the 0..1 range using min/max over the whole time series.",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "falloff",
+    "name": "Falloff",
+    "description": "Applies a soft falloff to a normalized signal (0..1).",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "width",
+        "name": "Width",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "curve",
+        "name": "Curve",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "invert",
+    "name": "Invert",
+    "description": "Reflects a signal around its observed midpoint.",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "sine_wave",
+    "name": "Sine Wave",
+    "description": "Generates a beat-synced sine wave. Subdivision controls cycles per beat (1 = one full cycle per beat, 0.5 = every 2 beats, 2 = twice per beat).",
+    "category": "Generator",
+    "inputs": [
+      {
+        "id": "subdivision",
+        "name": "Subdivision",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "subdivision",
+        "name": "Subdivision",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "phase_deg",
+        "name": "Phase (deg)",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "amplitude",
+        "name": "Amplitude",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "offset",
+        "name": "Offset",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "noise",
+    "name": "Noise",
+    "description": "Generates 3D fractal noise. Samples at (x, y, time) coordinates.",
+    "category": "Generator",
+    "inputs": [
+      {
+        "id": "time",
+        "name": "Time",
+        "portType": "Signal"
+      },
+      {
+        "id": "x",
+        "name": "X",
+        "portType": "Signal"
+      },
+      {
+        "id": "y",
+        "name": "Y",
+        "portType": "Signal"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "portType": "Signal"
+      },
+      {
+        "id": "octaves",
+        "name": "Octaves",
+        "portType": "Signal"
+      },
+      {
+        "id": "amplitude",
+        "name": "Amplitude",
+        "portType": "Signal"
+      },
+      {
+        "id": "offset",
+        "name": "Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "scale",
+        "name": "Scale",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "octaves",
+        "name": "Octaves",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "amplitude",
+        "name": "Amplitude",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "offset",
+        "name": "Offset",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "remap",
+    "name": "Remap",
+    "description": "Linearly maps an input range [in_min..in_max] to [out_min..out_max].",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "in_min",
+        "name": "In Min",
+        "paramType": "Number",
+        "defaultNumber": -1.0,
+        "defaultText": null
+      },
+      {
+        "id": "in_max",
+        "name": "In Max",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "out_min",
+        "name": "Out Min",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "out_max",
+        "name": "Out Max",
+        "paramType": "Number",
+        "defaultNumber": 180.0,
+        "defaultText": null
+      },
+      {
+        "id": "clamp",
+        "name": "Clamp",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "circle",
+    "name": "Circle",
+    "description": "Circular motion in UV space. Outputs normalized (u,v) in [-1,1].",
+    "category": "Movement",
+    "inputs": [
+      {
+        "id": "phase",
+        "name": "Phase Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "uv",
+        "name": "UV",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "radius",
+        "name": "Radius",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "speed",
+        "name": "Speed (cycles/beat)",
+        "paramType": "Number",
+        "defaultNumber": 0.25,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "figure_8",
+    "name": "Figure 8",
+    "description": "Lissajous 2:1 figure-eight motion in UV space. Outputs normalized (u,v) in [-1,1].",
+    "category": "Movement",
+    "inputs": [
+      {
+        "id": "phase",
+        "name": "Phase Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "uv",
+        "name": "UV",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "width",
+        "name": "Width",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "height",
+        "name": "Height",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      },
+      {
+        "id": "speed",
+        "name": "Speed (cycles/beat)",
+        "paramType": "Number",
+        "defaultNumber": 0.25,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "sweep",
+    "name": "Sweep",
+    "description": "Linear sweep at an angle in UV space. 0°=U axis, 90°=V axis. Outputs normalized (u,v) in [-1,1].",
+    "category": "Movement",
+    "inputs": [
+      {
+        "id": "phase",
+        "name": "Phase Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "uv",
+        "name": "UV",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "angle",
+        "name": "Angle (deg)",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "range",
+        "name": "Range",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "speed",
+        "name": "Speed (cycles/beat)",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "wander",
+    "name": "Wander",
+    "description": "Noise-based organic drift in UV space. Outputs normalized (u,v) in [-1,1].",
+    "category": "Movement",
+    "inputs": [
+      {
+        "id": "phase",
+        "name": "Phase Offset",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "uv",
+        "name": "UV",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "radius",
+        "name": "Radius",
+        "paramType": "Number",
+        "defaultNumber": 0.5,
+        "defaultText": null
+      },
+      {
+        "id": "speed",
+        "name": "Speed (cycles/beat)",
+        "paramType": "Number",
+        "defaultNumber": 0.25,
+        "defaultText": null
+      },
+      {
+        "id": "smoothness",
+        "name": "Smoothness",
+        "paramType": "Number",
+        "defaultNumber": 2.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "scalar",
+    "name": "Scalar",
+    "description": "Outputs a constant scalar value.",
+    "category": "Generator",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "value",
+        "name": "Value",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "modulo",
+    "name": "Modulo",
+    "description": "Wraps input values to range [0, divisor). Useful for looping animations.",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "divisor",
+        "name": "Divisor",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "time_delay",
+    "name": "Time Delay",
+    "description": "Delays a signal in time per-fixture. Positive delay = lag, negative = advance.",
+    "category": "Transform",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      },
+      {
+        "id": "delay",
+        "name": "Delay (s)",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "palette",
+    "name": "Palette",
+    "description": "Ordered set of K colors emitted as uniformly-spaced color Stops. Use for discrete-feeling color sets (one color per seed, per pitch class, etc.).",
+    "category": "Color",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Stops",
+        "portType": "Stops"
+      }
+    ],
+    "params": [
+      {
+        "id": "value",
+        "name": "Colors",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "{\"colors\":[\"#ff0080\",\"#00ffc8\",\"#ffbe28\",\"#9d4dff\",\"#3aff8a\"]}"
+      }
+    ]
+  },
+  {
+    "id": "gradient",
+    "name": "Gradient",
+    "description": "Continuous color function defined by stops at user-positioned t values. Sampled exactly at consumer time — no fixed-resolution bake.",
+    "category": "Color",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Stops",
+        "portType": "Stops"
+      }
+    ],
+    "params": [
+      {
+        "id": "value",
+        "name": "Stops",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "{\"stops\":[{\"color\":\"#000000\",\"t\":0},{\"color\":\"#ffffff\",\"t\":1}]}"
+      }
+    ]
+  },
+  {
+    "id": "sample_palette",
+    "name": "Sample Palette",
+    "description": "Samples a Stops function at scalar position u ∈ [0,1]. OKLab interpolation between bracketing stops.",
+    "category": "Color",
+    "inputs": [
+      {
+        "id": "stops",
+        "name": "Stops",
+        "portType": "Stops"
+      },
+      {
+        "id": "u",
+        "name": "u",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Color",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "chroma_palette",
+    "name": "Harmonic Palette",
+    "description": "Maps the 12 chroma pitches to colors sampled from a Stops input (12 uniform samples). Falls back to a default rainbow.",
+    "category": "Color",
+    "inputs": [
+      {
+        "id": "chroma",
+        "name": "Chroma",
+        "portType": "Signal"
+      },
+      {
+        "id": "stops",
+        "name": "Stops",
+        "portType": "Stops"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Color",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "fallback_palette",
+        "name": "Fallback Palette",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "{\"colors\":[\"#ff0000\",\"#ff8000\",\"#ffcc00\",\"#ffff00\",\"#80ff00\",\"#00ff00\",\"#00ff80\",\"#00ffff\",\"#0080ff\",\"#0000ff\",\"#8000ff\",\"#ff0080\"]}"
+      }
+    ]
+  },
+  {
+    "id": "spectral_shift",
+    "name": "Spectral Shift",
+    "description": "Rotates color hue based on the dominant musical key.",
+    "category": "Color",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Base Color",
+        "portType": "Signal"
+      },
+      {
+        "id": "chroma",
+        "name": "Chroma",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Color",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "strength",
+        "name": "Strength",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "rainbow",
+    "name": "Rainbow",
+    "description": "Maps a signal through a full rainbow hue cycle. Without input, generates a 256-sample ramp.",
+    "category": "Color",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Color",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "offset",
+        "name": "Offset",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      },
+      {
+        "id": "spread",
+        "name": "Spread",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      },
+      {
+        "id": "saturation",
+        "name": "Saturation",
+        "paramType": "Number",
+        "defaultNumber": 1.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "color",
+    "name": "Color",
+    "description": "Outputs a constant RGB signal.",
+    "category": "Generator",
+    "inputs": [],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "color",
+        "name": "Color",
+        "paramType": "Text",
+        "defaultNumber": null,
+        "defaultText": "{\"r\":255,\"g\":0,\"b\":0,\"a\":1}"
+      }
+    ]
+  },
+  {
+    "id": "soft_voronoi",
+    "name": "Soft Voronoi",
+    "description": "K wandering seed points within the selection's bounding volume, blended in OKLab to a per-fixture color. Softness controls the softmin temperature (fraction of bbox diagonal). Vibrance lerps the blended OKLab chroma magnitude toward the weight-averaged input chroma so blends don't go muddy.",
+    "category": "Spatial",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "stops",
+        "name": "Stops",
+        "portType": "Stops"
+      },
+      {
+        "id": "num_points",
+        "name": "Points",
+        "portType": "Signal"
+      },
+      {
+        "id": "softness",
+        "name": "Softness",
+        "portType": "Signal"
+      },
+      {
+        "id": "vibrance",
+        "name": "Vibrance",
+        "portType": "Signal"
+      },
+      {
+        "id": "wander_speed",
+        "name": "Wander Speed",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "out",
+        "name": "Color",
+        "portType": "Signal"
+      }
+    ],
+    "params": [
+      {
+        "id": "num_points",
+        "name": "Points",
+        "paramType": "Number",
+        "defaultNumber": 6.0,
+        "defaultText": null
+      },
+      {
+        "id": "wander_speed",
+        "name": "Wander Speed",
+        "paramType": "Number",
+        "defaultNumber": 0.3,
+        "defaultText": null
+      },
+      {
+        "id": "softness",
+        "name": "Softness",
+        "paramType": "Number",
+        "defaultNumber": 0.3,
+        "defaultText": null
+      },
+      {
+        "id": "vibrance",
+        "name": "Vibrance",
+        "paramType": "Number",
+        "defaultNumber": 0.6,
+        "defaultText": null
+      },
+      {
+        "id": "seed_offset",
+        "name": "Seed Offset",
+        "paramType": "Number",
+        "defaultNumber": 0.0,
+        "defaultText": null
+      }
+    ]
+  },
+  {
+    "id": "apply_color",
+    "name": "Apply Color",
+    "description": "Applies RGB(A) signal to selected primitives.",
+    "category": "Output",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "signal",
+        "name": "Signal (4ch)",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "apply_strobe",
+    "name": "Apply Strobe",
+    "description": "Applies a strobe signal to selected primitives.",
+    "category": "Output",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "signal",
+        "name": "Signal (1ch)",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "apply_movement",
+    "name": "Apply Movement",
+    "description": "Maps UV perturbation through the group's movement pyramid to absolute pan/tilt per fixture.",
+    "category": "Output",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "uv",
+        "name": "UV (2ch)",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "apply_speed",
+    "name": "Apply Speed",
+    "description": "Applies movement speed to selected primitives. 0 = frozen, 1 = fast (binary).",
+    "category": "Output",
+    "inputs": [
+      {
+        "id": "selection",
+        "name": "Selection",
+        "portType": "Selection"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "mel_spec_viewer",
+    "name": "Mel Spectrogram",
+    "description": "Shows the mel spectrogram for the chosen track.",
+    "category": "View",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Audio",
+        "portType": "Audio"
+      },
+      {
+        "id": "grid",
+        "name": "Beat Grid",
+        "portType": "BeatGrid"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "harmony_analysis",
+    "name": "Harmony Analysis",
+    "description": "Detects chords from incoming audio and exposes a confidence timeline.",
+    "category": "Audio",
+    "inputs": [
+      {
+        "id": "audio_in",
+        "name": "Audio",
+        "portType": "Audio"
+      }
+    ],
+    "outputs": [
+      {
+        "id": "signal",
+        "name": "Chroma (Signal)",
+        "portType": "Signal"
+      }
+    ],
+    "params": []
+  },
+  {
+    "id": "view_signal",
+    "name": "View Signal",
+    "description": "Displays the incoming signal (flattened to 1D preview).",
+    "category": "View",
+    "inputs": [
+      {
+        "id": "in",
+        "name": "Signal",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "view_events",
+    "name": "View Events",
+    "description": "Displays an event stream as discrete pulses on the simulation grid.",
+    "category": "View",
+    "inputs": [
+      {
+        "id": "events_in",
+        "name": "Events",
+        "portType": "Events"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  },
+  {
+    "id": "view_uv",
+    "name": "View UV",
+    "description": "Displays UV plane spot positions for each selected spotlight at the current playhead.",
+    "category": "View",
+    "inputs": [
+      {
+        "id": "uv",
+        "name": "UV",
+        "portType": "Signal"
+      }
+    ],
+    "outputs": [],
+    "params": []
+  }
+]
