@@ -26,6 +26,7 @@
 //!
 //! [`ladder`] is the single source of truth for surface color. A hardcoded
 //! `rgb(0x…)` anywhere above this module is a bug — see the module docs.
+//! [`paint`] is the same for text on a screen that draws its own surface.
 //!
 //! # What is not here
 //!
@@ -38,6 +39,7 @@
 pub mod fonts;
 pub mod ladder;
 pub mod node;
+pub mod paint;
 
 mod button;
 mod checkbox;

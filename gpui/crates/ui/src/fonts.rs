@@ -14,6 +14,12 @@ use gpui::App;
 /// The family name to pass to `.font_family(…)`.
 pub const FAMILY: &str = "Inter";
 
+/// The family Tailwind's `font-mono` resolves to on WebKit/macOS — the face
+/// behind every numeric readout (a slider's value, a plot's axis labels).
+/// Not embedded: it is a system face on the platform this app ships to, and
+/// the web side inherits the same one.
+pub const MONO: &str = "SF Mono";
+
 /// Register Inter with the app's text system. Call once, at startup, before
 /// opening a window.
 ///

@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -43,12 +44,16 @@ use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices};
-use luma_lib::models::node_graph::{Graph, NodeTypeDef};
+use luma_lib::host_audio::HostAudioSnapshot;
+use luma_lib::models::node_graph::{BeatGrid, Graph, NodeTypeDef};
 use luma_lib::models::patterns::PatternSummary;
+use luma_lib::models::scores::{ScoreSummary, TrackScore};
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
+use luma_lib::models::waveforms::TrackWaveform;
 use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
+use luma_lib::services::track_edits::TrackEditResult;
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 
@@ -97,10 +102,16 @@ impl Library {
                 storage.agent_workspaces_dir(),
                 Arc::new(|| Err("the GPUI app does not run Python workspaces".to_string())),
             ));
-            Ok::<_, String>((
-                AppServices::headless(db, state_db, storage, fixtures_root, workspaces),
-                user_id,
-            ))
+            let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces);
+            // The audio host keeps its own copy of the settings it reads, and
+            // is only ever told by a write. A host that skipped this would run
+            // the whole session on the defaults and ignore what the user last
+            // chose — audible the first time a track is loaded.
+            services
+                .apply_persisted_settings()
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok::<_, String>((services, user_id))
         })?;
 
         Ok(Self {
@@ -195,6 +206,111 @@ impl Library {
         )
     }
 
+    // -- the track editor -----------------------------------------------------
+
+    /// This track's scores in `venue_id`, newest first. A track with none has
+    /// never been annotated here, and there is no timeline to open.
+    pub fn scores_for_track(
+        &self,
+        track_id: &str,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<ScoreSummary>, String>> + use<> {
+        self.call(
+            "list_scores_for_track",
+            json!({ "trackId": track_id, "venueId": venue_id }),
+        )
+    }
+
+    /// One score's clips.
+    pub fn track_scores(
+        &self,
+        score_id: &str,
+    ) -> impl Future<Output = Result<Vec<TrackScore>, String>> + use<> {
+        self.call("list_track_scores", json!({ "scoreId": score_id }))
+    }
+
+    /// The rendered envelope of a track, at both resolutions. Large — a full
+    /// track is tens of thousands of floats — so a screen reads it once.
+    pub fn track_waveform(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<TrackWaveform, String>> + use<> {
+        self.call("get_track_waveform", json!({ "trackId": track_id }))
+    }
+
+    /// A track's analyzed beats, or `None` when it has not been analyzed.
+    pub fn track_beats(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<Option<BeatGrid>, String>> + use<> {
+        self.call("get_track_beats", json!({ "trackId": track_id }))
+    }
+
+    /// Move one clip's bounds.
+    ///
+    /// `operation_id` makes a retry of *this* edit idempotent — reuse it
+    /// verbatim across attempts, never mint a second one. Unlike a graph
+    /// document there is no `base_revision` here: the authored score's edit
+    /// protocol resolves a partial update against whatever is current, so two
+    /// people moving different clips do not fight.
+    pub fn move_clip(
+        &self,
+        score_id: &str,
+        track_id: &str,
+        clip_id: &str,
+        operation_id: &str,
+        start_time: f64,
+        end_time: f64,
+    ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
+        self.call(
+            "update_track_score",
+            json!({ "payload": {
+                "operationId": operation_id,
+                "scoreId": score_id,
+                "trackId": track_id,
+                "id": clip_id,
+                "startTime": start_time,
+                "endTime": end_time,
+            }}),
+        )
+    }
+
+    /// Decode a track and hand it to the audio host, from 0.0. Slow — this is
+    /// the decode — and it must land before the transport does anything.
+    pub fn load_audio(&self, track_id: &str) -> impl Future<Output = Result<(), String>> + use<> {
+        self.call("host_load_track", json!({ "trackId": track_id }))
+    }
+
+    /// Start playback from wherever the transport currently is.
+    pub fn play(&self) -> impl Future<Output = Result<(), String>> + use<> {
+        self.call("host_play", json!({}))
+    }
+
+    pub fn pause(&self) -> impl Future<Output = Result<(), String>> + use<> {
+        self.call("host_pause", json!({}))
+    }
+
+    /// Move the transport to `seconds` from the loaded segment's start, which
+    /// for a whole track is absolute track time.
+    pub fn seek(&self, seconds: f32) -> impl Future<Output = Result<(), String>> + use<> {
+        self.call("host_seek", json!({ "seconds": seconds }))
+    }
+
+    /// The transport, `after` a wait.
+    ///
+    /// The desktop app learns the playhead from a `host-audio://state` event
+    /// that a Tauri broadcaster emits; nothing emits it here, so this host
+    /// polls instead — and the pacing belongs on the Tokio runtime because
+    /// that is the one this process has real timers on. GPUI's own timers are
+    /// driven by a test clock under the harness, so a poll paced there would
+    /// never tick in a test.
+    pub fn transport_after(
+        &self,
+        after: Duration,
+    ) -> impl Future<Output = Result<HostAudioSnapshot, String>> + use<> {
+        self.call_after("host_snapshot", json!({}), after)
+    }
+
     /// Every app setting, typed and defaulted.
     pub fn settings(&self) -> impl Future<Output = Result<AppSettings, String>> + use<> {
         self.call("get_settings", json!({}))
@@ -217,8 +333,23 @@ impl Library {
         name: &'static str,
         args: Value,
     ) -> impl Future<Output = Result<T, String>> + use<T> {
+        self.call_after(name, args, Duration::ZERO)
+    }
+
+    /// [`Self::call`], `after` a wait on the Tokio runtime. The wait is here
+    /// rather than at the call site because this runtime is the one this
+    /// process has real timers on — see [`Self::transport_after`].
+    fn call_after<T: DeserializeOwned + Send + 'static>(
+        &self,
+        name: &'static str,
+        args: Value,
+        after: Duration,
+    ) -> impl Future<Output = Result<T, String>> + use<T> {
         let services = Arc::clone(&self.services);
         let task = self.runtime.spawn(async move {
+            if !after.is_zero() {
+                tokio::time::sleep(after).await;
+            }
             let value: Value = dispatch(&services, name, &args)
                 .await
                 .map_err(|error| format!("{name}: {error}"))?;

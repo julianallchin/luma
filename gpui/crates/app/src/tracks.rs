@@ -76,6 +76,10 @@ impl Ownership {
 /// happens per frame and per hover, and re-filtering a full library there is
 /// the difference between a scroll that keeps up and one that does not.
 pub struct Tracks {
+    /// The venue the rows were decorated for. The editor needs it too — a
+    /// track's score is per-venue — so it is kept beside the name it is shown
+    /// under rather than re-derived from the screen that opened this one.
+    venue_id: String,
     venue_name: String,
     rows: Rc<[TrackBrowserRow]>,
     shown: Rc<[usize]>,
@@ -101,6 +105,18 @@ impl Tracks {
     /// reader outside this module.
     pub(crate) fn venue_name(&self) -> &str {
         &self.venue_name
+    }
+
+    /// The venue a row click opens the editor in.
+    pub(crate) fn venue_id(&self) -> &str {
+        &self.venue_id
+    }
+
+    /// The loaded row a click carries. Looked up by id rather than by index
+    /// because the click was registered against a *filtered* list, and the
+    /// filters can change before it lands.
+    pub(crate) fn find(&self, track_id: &str) -> Option<TrackBrowserRow> {
+        self.rows.iter().find(|row| row.id == track_id).cloned()
     }
 
     /// The rows the filters admit, in the order the query returned them.
@@ -162,6 +178,7 @@ impl Luma {
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
         let pending = self.library.tracks(&venue.id);
         self.screen = Screen::Tracks(Tracks {
+            venue_id: venue.id,
             venue_name: venue.name,
             rows: Rc::from(Vec::new()),
             shown: Rc::from(Vec::new()),
@@ -315,7 +332,7 @@ pub fn tracks(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 },
                 ladder::muted_foreground().into(),
             ),
-            None => body(state).into_any_element(),
+            None => body(state, app).into_any_element(),
         })
 }
 
@@ -460,11 +477,12 @@ fn header() -> Div {
 /// thousands costs one screenful of elements — the same reason the web side
 /// runs a virtualizer. Everything the closure needs is refcounted, so a redraw
 /// copies three pointers rather than the library.
-fn body(state: &Tracks) -> Div {
+fn body(state: &Tracks, app: &Entity<Luma>) -> Div {
     let rows = Rc::clone(&state.rows);
     let shown = Rc::clone(&state.shown);
     let names = Rc::clone(&state.names);
     let user = state.user.clone();
+    let app = app.clone();
     div().flex_1().overflow_hidden().child(
         uniform_list("tracks", shown.len(), move |range, _, _| {
             range
@@ -475,6 +493,7 @@ fn body(state: &Tracks) -> Div {
                         &Chrome {
                             user: user.as_deref(),
                             names: &names,
+                            app: &app,
                         },
                     )
                 })
@@ -484,11 +503,12 @@ fn body(state: &Tracks) -> Div {
     )
 }
 
-/// What a row needs beyond its own record: who is looking, and what the other
-/// people are called.
+/// What a row needs beyond its own record: who is looking, what the other
+/// people are called, and where a click on it goes.
 struct Chrome<'a> {
     user: Option<&'a str>,
     names: &'a HashMap<String, String>,
+    app: &'a Entity<Luma>,
 }
 
 fn track_row(index: usize, track: &TrackBrowserRow, chrome: &Chrome) -> AnyElement {
@@ -498,7 +518,14 @@ fn track_row(index: usize, track: &TrackBrowserRow, chrome: &Chrome) -> AnyEleme
         ladder::stripe()
     };
     let name = track_name(track);
+    let opened = chrome.app.clone();
+    let track_id = track.id.clone();
     row_shell()
+        .id(SharedString::from(track.id.clone()))
+        .on_click(move |_, _, cx| {
+            let track_id = track_id.clone();
+            opened.update(cx, |this, cx| this.open_track(&track_id, cx));
+        })
         .h(px(ROW_HEIGHT))
         .bg(stripe)
         .hover(|s| s.bg(ladder::hover()))

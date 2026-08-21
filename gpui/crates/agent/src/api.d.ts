@@ -81,6 +81,43 @@ interface ActOptions {
   restale?: "error" | "match";
 }
 
+/** What one settled frame cost the pump, in milliseconds. */
+interface FrameTiming {
+  /** The frame this was measured around — matches `Snapshot.frame`. */
+  frame: number;
+  /**
+   * Draining the app's own work before the draw: event handlers, spawned
+   * tasks, anything a pointer step kicked off.
+   */
+  parkedMs: number;
+  /** Walking the element tree into a scene — layout, prepaint, paint. */
+  drawMs: number;
+}
+
+interface Timings {
+  /**
+   * Which mode measured these. Both modes time the same two CPU phases;
+   * neither times the GPU (see `app.timings`), so pixel differs only in
+   * feeding layout real glyph metrics.
+   */
+  mode: "headless" | "pixel";
+  /** Oldest first, capped at the last 512 frames. */
+  frames: FrameTiming[];
+}
+
+/**
+ * Modifier keys held for a gesture. `"secondary"` is the platform key —
+ * command on macOS, control elsewhere — under the name gpui gives it, and is
+ * what a handler branching on cmd-or-ctrl reads.
+ */
+type Modifier =
+  | "control"
+  | "alt"
+  | "shift"
+  | "platform"
+  | "secondary"
+  | "function";
+
 interface App {
   /** Settle the app, draw a frame, and describe every control in it. */
   snapshot(): Snapshot;
@@ -126,6 +163,48 @@ interface App {
    * flight. `app.frames(3)` is how you wait for a screen to fill in.
    */
   frames(n?: number, options?: { waitMs?: number }): { frame: number };
+
+  /**
+   * Turn the wheel over a control, or over a point in the window.
+   *
+   * `dx`/`dy` are pixels and are split evenly across `steps`, each step
+   * getting its own settled frame — the same walk `drag` does, and for the
+   * same reason: a handler that accumulates (an exponential zoom, say) lands
+   * somewhere different for one flick than for the same distance in ten, and
+   * ten is what a real wheel sends.
+   *
+   * This is the only way to reach a `ScrollWheelEvent` handler. Anything a
+   * canvas puts behind the wheel — the track editor's zoom, the graph
+   * editor's pan — is unreachable by clicking, so reach for this rather than
+   * approximating a wheel with a drag.
+   */
+  scroll(
+    where: Node | { x: number; y: number },
+    options?: ActOptions & {
+      dx?: number;
+      dy?: number;
+      steps?: number;
+      modifiers?: Modifier[];
+    },
+  ): { frame: number };
+
+  /**
+   * Every frame the pump has timed, oldest first. Reading does not clear and
+   * does not settle, so it costs nothing and two readers cannot interfere —
+   * filter by `frame` against what a command returned.
+   *
+   * Every command that settles is timed, not just `frames`: a scrub is a
+   * `drag`, and the frames worth measuring are the ones it draws between
+   * pointer steps. So the shape of a measurement is
+   * `app.drag(node, {dx: 400, dy: 0}, {steps: 40})` and then reading the
+   * frames at or after the frame that returned.
+   *
+   * **These are the CPU half of a frame, not a frame time.** `drawMs` is the
+   * scene build; handing that scene to the renderer is not measured in either
+   * mode, because the only public entry point for it is gated behind gpui's
+   * `bench` feature at the pinned revision.
+   */
+  timings(): Timings;
 
   /**
    * Render to a PNG on disk and return where it went. Pixel mode only —

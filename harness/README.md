@@ -153,3 +153,32 @@ bun run perf:extract -- --name web-baseline-<date>
 pulls the newest dump into `harness/perf/<name>.json`. Full procedure and the
 acceptance metrics: `docs/specs/perf-baseline.md`. Recording is a hand-driven
 session — don't fake it with a script.
+
+---
+
+# Graph-editor gauntlet
+
+`harness/gauntlet/` is the visual quality bar for the GPUI pattern-graph
+editor: pixel-true captures of the **real** web graph canvas plus the exact
+style values behind them.
+
+```sh
+bun harness/gauntlet/extract-fixtures.ts          # graphs -> fixtures/<pattern>.json
+cargo run --manifest-path src-tauri/Cargo.toml \
+  --bin dump_node_types > harness/gauntlet/node-types.json
+node harness/gauntlet/shot-graph.mjs --all        # -> web-<pattern>-<view>.png (2x)
+node harness/gauntlet/shot-graph.mjs --all --out /tmp/run-b   # stability diff
+```
+
+- `fixtures/<pattern>.json` — the graph (real saved implementation, positions
+  normalized through the app's own `layoutGraph()`), the deterministic
+  view-node signals, and the closeup viewport. **The GPUI side must render
+  these same files**; that is what makes the two captures comparable.
+- `node-types.json` — the compiled node catalogue (`get_node_types()`), needed
+  because ports and param defs are not stored in a saved graph.
+- `style-spec.md` — every colour, radius, border, font, port-ring dimension and
+  wire parameter with its `file:line`, measured off the running page.
+
+`src/harness/graph-canvas.tsx` mounts the *real* `<ReactFlowEditor>` and the
+real node components at `/harness-graph.html?pattern=<id>&view=<whole|closeup>`.
+Two full runs produce 4/4 byte-identical PNGs.

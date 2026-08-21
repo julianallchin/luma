@@ -7,7 +7,7 @@
 //! ([`primary`]). Depth between two adjacent surfaces is a value step or a
 //! slice of [`trim`] — never a shadow, a gradient, or a rounded corner.
 
-use gpui::{rgb, rgba, Hsla, Rgba};
+use gpui::{hsla, rgb, rgba, Hsla, Rgba};
 
 /// `--titlebar-background` — the deepest plane, top bar only.
 pub fn titlebar_background() -> Rgba {
@@ -54,6 +54,20 @@ pub fn hover() -> Rgba {
 /// `--border` — the hairline between surfaces that aren't controls.
 pub fn border() -> Rgba {
     rgb(0x3f3f3f)
+}
+
+/// `--accent` / `--chart-4` — one hue under two names on the web side. Used
+/// here for a waveform the analysis gave no per-bucket colors, which is the
+/// only surface that needs a hue without meaning anything by it.
+pub fn accent() -> Rgba {
+    rgb(0x81a1c1)
+}
+
+/// `--muted` — the recessed ground a painted surface sits on. Deeper than
+/// [`background`] and shallower than [`input`]; the timeline's waveform bed and
+/// its lane fills are the only readers.
+pub fn muted() -> Rgba {
+    rgb(0x262626)
 }
 
 /// `--input` — the recessed core of an input-shaped control (checkbox fill).
@@ -114,6 +128,49 @@ pub fn default_port() -> Rgba {
     rgb(0x6b7280)
 }
 
+/// `--chart-3` — the playhead, and the third place color means something
+/// rather than placing a surface. One hue, spent on "where the audio is".
+pub fn playhead() -> Rgba {
+    rgb(0xf1b467)
+}
+
+/// The three frequency bands of a rekordbox-style waveform: bass, mids, air.
+/// Literal in `drawWaveform` (`src/features/track-editor/utils/timeline-drawing.ts`)
+/// rather than a token, because they are the data's colors and not the panel's
+/// — named here so this crate stays the one place a color is written down.
+pub fn waveform_low() -> Rgba {
+    rgb(0x0055e2)
+}
+
+/// See [`waveform_low`].
+pub fn waveform_mid() -> Rgba {
+    rgb(0xf2aa3c)
+}
+
+/// See [`waveform_low`].
+pub fn waveform_high() -> Rgba {
+    rgb(0xffffff)
+}
+
+/// The hue a pattern's clips carry on the timeline, keyed by pattern id.
+///
+/// A hash into a fixed palette rather than a stored color, so the same pattern
+/// reads the same in every venue and in both hosts without anything having to
+/// remember it. Mirrors `getPatternColor` in
+/// `src/features/track-editor/utils/timeline-constants.ts` exactly, including
+/// the wrapping `i32` accumulator — pattern ids are ASCII UUIDs, so iterating
+/// bytes here and UTF-16 code units there is the same walk.
+pub fn pattern(pattern_id: &str) -> Rgba {
+    const PALETTE: [u32; 8] = [
+        0x8b5cf6, 0xec4899, 0xf59e0b, 0x10b981, 0x3b82f6, 0xef4444, 0x06b6d4, 0xf97316,
+    ];
+    let mut hash: i32 = 0;
+    for byte in pattern_id.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(i32::from(byte));
+    }
+    rgb(PALETTE[hash.unsigned_abs() as usize % PALETTE.len()])
+}
+
 /// `text-destructive` — failure prose, not a surface. Softer than
 /// [`status_bad`] because it is a whole line of text rather than a 6px dot.
 pub fn danger() -> Rgba {
@@ -133,6 +190,56 @@ pub fn muted_foreground() -> Rgba {
 /// `text-foreground/90` — the resting label color on controls.
 pub fn foreground_90() -> Rgba {
     rgba(0xe4e4e4e6)
+}
+
+/// `text-gray-400` — the label above a node's param control, and the one text
+/// value on this screen that is neither [`foreground`] nor
+/// [`muted_foreground`]. Literal in `standard-node.tsx` rather than a token on
+/// the web side; named here so it stays a value with an owner.
+pub fn param_label() -> Rgba {
+    rgb(0x9ca3af)
+}
+
+/// `rgba(226, 232, 240, 0.85)` — the min/max axis labels the view node's 2D
+/// context writes into its plot (`view-channel-node.tsx`). A canvas literal on
+/// the web side, so it has no token to mirror.
+pub fn plot_axis() -> Rgba {
+    rgba(0xe2e8f0d9)
+}
+
+/// `text-slate-400` — the view node's "waiting for signal data…" line.
+pub fn plot_empty() -> Rgba {
+    rgb(0x94a3b8)
+}
+
+/// One trace in a view node's plot, off the same 12-step wheel the web canvas
+/// strokes with: `hsl(index · 30, 82%, 62%)` (`CHROMA_LINE_COLORS` in
+/// `view-channel-node.tsx`). The formula rather than a baked table, because
+/// the formula is what the source says and a table would be a second place to
+/// keep it right. Wraps, so a signal with more series than hues repeats them —
+/// as the web `index % length` does.
+pub fn plot_trace(index: usize) -> Rgba {
+    hsla((index % 12) as f32 * 30. / 360., 0.82, 0.62, 1.).into()
+}
+
+/// `bg-white/5` / `border-white/5` — the fill *and* the border of a legend
+/// chip under a view node's plot. One value under two names on the web side;
+/// one here.
+pub fn legend_chip() -> Rgba {
+    rgba(0xffffff0d)
+}
+
+/// `text-slate-200` — the series name on a legend chip. Lighter than
+/// [`legend_value`], which is the reading beside it.
+pub fn legend_label() -> Rgba {
+    rgb(0xe2e8f0)
+}
+
+/// `text-slate-400` — the mono reading on a legend chip. The same slate as
+/// [`plot_empty`]: the view node spends one recessive grey on everything that
+/// is not a trace.
+pub fn legend_value() -> Rgba {
+    plot_empty()
 }
 
 /// `--foreground` at an arbitrary alpha, for the places the web side stacks a

@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, canvas, div, point, px, size, uniform_list, AnyView, App, Bounds, Context, Empty,
-    FocusHandle, KeyBinding, PromptLevel, Render, Window,
+    actions, canvas, div, point, px, size, uniform_list, AnyView, App, Bounds, Context,
+    DispatchPhase, Empty, FocusHandle, HitboxBehavior, KeyBinding, PromptLevel, Render,
+    ScrollWheelEvent, Window,
 };
 use gpui_agent::{Config, Harness, Mode};
 use luma_ui::node::{agent_paint_node, AgentNode, Instrument, Role};
@@ -37,6 +38,10 @@ struct Counter {
     /// gpui routes both actions and keystrokes along the path to the *focused*
     /// element, so a view with nothing focused cannot be driven by either.
     focus: FocusHandle,
+    /// Accumulated wheel deltas, and whether the modifier was held. A wheel
+    /// handler is reachable no other way, which is the point of the test.
+    wheel: (f32, f32),
+    zoomed: bool,
 }
 
 impl Counter {
@@ -47,6 +52,8 @@ impl Counter {
             answered: None,
             stall,
             focus: cx.focus_handle(),
+            wheel: (0., 0.),
+            zoomed: false,
         }
     }
 }
@@ -178,8 +185,57 @@ impl Render for Counter {
                         },
                     ),
             )
+            .child(wheel_canvas(cx))
+            .child(
+                div()
+                    .child(format!(
+                        "wheel {:.0},{:.0} {}",
+                        self.wheel.0,
+                        self.wheel.1,
+                        if self.zoomed { "zoom" } else { "pan" }
+                    ))
+                    .agent_node(
+                        Role::Text,
+                        format!(
+                            "wheel {:.0},{:.0} {}",
+                            self.wheel.0,
+                            self.wheel.1,
+                            if self.zoomed { "zoom" } else { "pan" }
+                        ),
+                    ),
+            )
             .child(painted_canvas())
     }
+}
+
+/// A canvas that answers the wheel, scoped to its own hitbox the way the real
+/// editors are — the shape `app.scroll` has to be able to reach.
+fn wheel_canvas(cx: &mut Context<Counter>) -> impl IntoElement {
+    let view = cx.entity();
+    div().w(px(120.)).h(px(40.)).child(
+        canvas(
+            move |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                let view = view.clone();
+                let over = hitbox.clone();
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble || !over.is_hovered(window) {
+                        return;
+                    }
+                    let delta = event.delta.pixel_delta(window.line_height());
+                    let zoomed = event.modifiers.secondary() || event.modifiers.control;
+                    view.update(cx, |this, cx| {
+                        this.wheel.0 += f32::from(delta.x);
+                        this.wheel.1 += f32::from(delta.y);
+                        this.zoomed = zoomed;
+                        cx.notify();
+                    });
+                });
+            },
+        )
+        .size_full()
+        .agent_node(Role::Card, "Wheel"),
+    )
 }
 
 /// Two cards registered by hand from inside a clipped canvas — one within the
@@ -282,6 +338,8 @@ fn a_snapshot_names_every_instrumented_control() {
             "Stall",
             "count 0",
             "unanswered",
+            "Wheel",
+            "wheel 0,0 pan",
             "Painted",
             "PaintedOffscreen",
         ]
@@ -518,6 +576,182 @@ fn a_painted_control_outside_its_mask_is_seen_but_not_clickable() {
     run(
         &mut harness,
         r#"app.click(app.snapshot().find({ label: "Painted" }))"#,
+    );
+}
+
+/// Timing exists for a perf loop, so the properties that matter are: every
+/// settling command is measured (not just `frames`), the numbers line up with
+/// the frames a script can see, and reading is free.
+#[test]
+fn every_settled_frame_is_timed_and_readable() {
+    let mut harness = harness();
+
+    let before = run(&mut harness, "app.timings().frames.length")
+        .as_u64()
+        .unwrap();
+
+    // A drag is the shape a scrub has: one settle per pointer step. If only
+    // `frames` were instrumented this would add nothing, which is the failure
+    // this test exists to catch.
+    let after = run(
+        &mut harness,
+        r#"
+            app.drag(app.snapshot().find({ label: "Source" }), { dx: 0, dy: 4 }, { steps: 6 });
+            app.timings().frames.length
+        "#,
+    )
+    .as_u64()
+    .unwrap();
+    // mouse-down, six moves, mouse-up, plus the two snapshots either side.
+    assert!(
+        after >= before + 8,
+        "a six-step drag should have timed at least eight frames, got {}",
+        after - before
+    );
+
+    let report = run(
+        &mut harness,
+        r#"
+            const t = app.timings();
+            const last = t.frames[t.frames.length - 1];
+            ({
+                mode: t.mode,
+                keys: Object.keys(last).sort(),
+                nonNegative: t.frames.every((f) => f.parkedMs >= 0 && f.drawMs >= 0),
+                ordered: t.frames.every((f, i) => i === 0 || f.frame >= t.frames[i - 1].frame),
+                current: last.frame,
+            })
+        "#,
+    );
+    assert_eq!(report["mode"], "headless");
+    assert_eq!(
+        report["keys"],
+        serde_json::json!(["drawMs", "frame", "parkedMs"])
+    );
+    assert_eq!(report["nonNegative"], true);
+    assert_eq!(report["ordered"], true);
+
+    // The frame numbers are the same ones a snapshot reports, which is what
+    // makes "filter to the frames my drag produced" possible at all.
+    let snapshot_frame = run(&mut harness, "app.snapshot().frame").as_u64().unwrap();
+    let timed = run(
+        &mut harness,
+        &format!("app.timings().frames.some((f) => f.frame === {snapshot_frame})"),
+    );
+    assert_eq!(
+        timed, true,
+        "frame {snapshot_frame} was drawn but not timed"
+    );
+
+    // Reading is free: it neither settles nor clears.
+    let twice = run(
+        &mut harness,
+        "const a = app.timings(); JSON.stringify(a) === JSON.stringify(app.timings())",
+    );
+    assert_eq!(twice, true, "reading timings changed them");
+}
+
+/// The history is bounded, or a long profiling session grows without limit.
+#[test]
+fn the_timing_history_is_capped() {
+    let mut harness = harness();
+    let count = run(
+        &mut harness,
+        "app.frames(600, { waitMs: 0 }); app.timings().frames.length",
+    )
+    .as_u64()
+    .unwrap();
+    assert_eq!(count, 512);
+}
+
+/// A wheel handler is reachable no other way: it is scoped to a canvas hitbox
+/// and answers only `ScrollWheelEvent`, so no amount of clicking or dragging
+/// gets at it. This is the whole reason `app.scroll` exists.
+#[test]
+fn the_wheel_reaches_a_handler_that_clicks_cannot() {
+    let mut harness = harness();
+    let wheel = |harness: &mut Harness| {
+        run(
+            harness,
+            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#,
+        )
+    };
+    assert_eq!(wheel(&mut harness), "wheel 0,0 pan");
+
+    // Clicking the same canvas does nothing, so the wheel is doing the work.
+    run(
+        &mut harness,
+        r#"app.click(app.snapshot().find({ label: "Wheel" }))"#,
+    );
+    assert_eq!(wheel(&mut harness), "wheel 0,0 pan");
+
+    run(
+        &mut harness,
+        r#"app.scroll(app.snapshot().find({ label: "Wheel" }), { dx: 30, dy: 60 })"#,
+    );
+    assert_eq!(wheel(&mut harness), "wheel 30,60 pan");
+}
+
+/// The modifier is what a timeline branches on to choose zoom over pan, so it
+/// has to survive the trip as more than "some modifier was held".
+#[test]
+fn a_scroll_can_hold_a_modifier() {
+    let mut harness = harness();
+    run(
+        &mut harness,
+        r#"app.scroll(app.snapshot().find({ label: "Wheel" }), { dy: 10, modifiers: ["secondary"] })"#,
+    );
+    assert_eq!(
+        run(
+            &mut harness,
+            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#
+        ),
+        "wheel 0,10 zoom"
+    );
+
+    let result = harness.exec(
+        r#"app.scroll(app.snapshot().find({ label: "Wheel" }), { dy: 1, modifiers: ["hyper"] })"#,
+        Duration::from_secs(10),
+    );
+    let error = result.error.expect("an unknown modifier should fail");
+    assert!(error.contains("unknown modifier"), "unexpected: {error}");
+}
+
+/// Steps are the point of a scripted wheel: the delta is split across them and
+/// each gets its own settled frame, so a handler that accumulates sees the
+/// same shape a real wheel produces — and each step is timed.
+#[test]
+fn a_scroll_walks_in_steps_and_each_one_is_timed() {
+    let mut harness = harness();
+    let before = run(&mut harness, "app.timings().frames.length")
+        .as_u64()
+        .unwrap();
+    // Addressed by point, not by node — but the point is taken from the node,
+    // so this also proves the two ways of naming a spot agree.
+    run(
+        &mut harness,
+        r#"
+            const b = app.snapshot().find({ label: "Wheel" }).bounds;
+            app.scroll({ x: b.x + b.width / 2, y: b.y + b.height / 2 }, { dy: 100, steps: 10 });
+        "#,
+    );
+    let after = run(&mut harness, "app.timings().frames.length")
+        .as_u64()
+        .unwrap();
+    assert!(
+        after >= before + 10,
+        "ten steps should have timed ten frames, got {}",
+        after - before
+    );
+
+    // Scrolling at a bare point reaches the same handler as scrolling a node,
+    // which is what makes a canvas with no control at the spot addressable.
+    assert_eq!(
+        run(
+            &mut harness,
+            r#"app.snapshot().find((n) => n.label.startsWith("wheel")).label"#
+        ),
+        "wheel 0,100 pan"
     );
 }
 

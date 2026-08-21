@@ -35,9 +35,11 @@ mod graph;
 mod library;
 mod patterns;
 mod settings;
+mod track_editor;
 mod tracks;
 mod welcome;
 
+pub use graph::ViewData;
 pub use library::Library;
 
 /// Everything the app's views need present in an `App` before a window opens:
@@ -73,6 +75,15 @@ enum Screen {
     /// One pattern's graph, on a canvas. Boxed because it is by far the
     /// largest screen — every other variant would otherwise pay its size.
     Graph(Box<graph::Editor>),
+    /// One track's timeline: waveform, beat grid and clips, over the same
+    /// transport the desktop app plays through. Boxed for the same reason as
+    /// [`Screen::Graph`], and it carries the browser it was opened from so
+    /// Back restores that venue's filters and search rather than re-running
+    /// the query — settings does the same for the screen it covers.
+    TrackEditor {
+        state: Box<track_editor::Editor>,
+        browser: Box<Screen>,
+    },
     /// Settings sits *over* another screen rather than beside it — the web
     /// app opens it as a modal dialog — so it carries the screen it covers
     /// and Back restores that one whole, without re-running its load.
@@ -149,6 +160,7 @@ impl Render for Luma {
             Screen::Tracks(state) => format!("Luma — {}", state.venue_name()),
             Screen::Patterns(_) => "Luma — Patterns".to_string(),
             Screen::Graph(state) => format!("Luma — {}", state.pattern_name()),
+            Screen::TrackEditor { state, .. } => format!("Luma — {}", state.track_name()),
             Screen::Settings { .. } => "Luma — Settings".to_string(),
         };
 
@@ -174,6 +186,9 @@ impl Render for Luma {
             Screen::Tracks(state) => tracks::tracks(state, &cx.entity(), window).into_any_element(),
             Screen::Patterns(state) => patterns::patterns(state, &cx.entity()).into_any_element(),
             Screen::Graph(state) => graph::graph(state, &cx.entity()).into_any_element(),
+            Screen::TrackEditor { state, .. } => {
+                track_editor::track_editor(state, &cx.entity()).into_any_element()
+            }
             Screen::Settings { state, .. } => {
                 settings::settings(state, &cx.entity()).into_any_element()
             }

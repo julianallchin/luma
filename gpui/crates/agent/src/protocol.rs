@@ -48,6 +48,19 @@ pub enum DragTarget {
     By { dx: f32, dy: f32 },
 }
 
+/// Where a scroll happens: over a control, or at a point in the window.
+///
+/// A point as well as a node because a wheel handler is usually scoped to a
+/// canvas hitbox rather than to any control on it — zooming a timeline means
+/// "wheel over the timeline", and the timeline may have no node at the exact
+/// spot you want to zoom about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollAt {
+    Node(NodeRef),
+    At { x: f32, y: f32 },
+}
+
 /// One unit of work for the app thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -56,6 +69,9 @@ pub enum Cmd {
     Snapshot,
     /// Read the frame counter without settling. Used to stamp an exec result.
     CurrentFrame,
+    /// Every frame the pump has timed, with the mode that produced them.
+    /// Reads only — no settle, so asking does not add a frame to the answer.
+    Timings,
     Click {
         node: NodeRef,
         #[serde(default)]
@@ -95,6 +111,25 @@ pub enum Cmd {
         /// executors.
         #[serde(default = "default_wait_ms")]
         wait_ms: u64,
+    },
+    /// Turn the wheel over a point. `dx`/`dy` are pixels, delivered as
+    /// `ScrollDelta::Pixels` — the exact form a trackpad sends, and the one a
+    /// handler reading `delta.pixel_delta(line_height)` passes through
+    /// unchanged.
+    Scroll {
+        at: ScrollAt,
+        #[serde(default)]
+        dx: f32,
+        #[serde(default)]
+        dy: f32,
+        #[serde(default = "default_steps")]
+        steps: u32,
+        /// Held for the whole gesture. Named, not a bitfield: a script says
+        /// `["platform"]`, not a number nobody can read.
+        #[serde(default)]
+        modifiers: Vec<String>,
+        #[serde(default)]
+        restale: Restale,
     },
     /// Capture the window, or one node's box within it. Pixel mode only.
     Screenshot {

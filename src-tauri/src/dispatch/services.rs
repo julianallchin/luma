@@ -267,6 +267,27 @@ impl AppServices {
         self
     }
 
+    /// Push the persisted settings into the subsystems that read them.
+    ///
+    /// Settings live in a table, but two subsystems hold their own copy of the
+    /// ones they care about: Art-Net's manager and the audio host. A write goes
+    /// through `set_setting`, which calls this — but a freshly built
+    /// `AppServices` has never been told, so a host must call it once at
+    /// startup or it runs the whole session on the defaults. Art-Net is skipped
+    /// on a host with no manager (see [`AppServices::artnet`]).
+    ///
+    /// # Errors
+    ///
+    /// If the settings cannot be read, or a subsystem refuses what they say.
+    pub async fn apply_persisted_settings(&self) -> Result<(), CommandError> {
+        let pool = &self.db.0;
+        if let Some(artnet) = &self.artnet {
+            crate::artnet::reload_settings(artnet, pool).await?;
+        }
+        crate::host_audio::reload_settings(&self.host_audio, pool).await?;
+        Ok(())
+    }
+
     /// The principal of the verified host session in the state database.
     ///
     /// Not interchangeable with the app database's signed-write admission gate:
