@@ -179,6 +179,9 @@ pub struct AppServices {
     /// because its interior is a bare `Mutex` — a clone would fork the index
     /// rather than share it.
     pub(crate) fixtures: Arc<FixtureState>,
+    /// Turns started through the seam by a host that cannot hold a
+    /// `TurnStream`. Empty and idle on every other host.
+    pub(crate) agent_turns: Arc<crate::agent::host::TurnRegistry>,
     pub(crate) events: Events,
     pub(crate) host: HostControl,
     /// Explicit trusted principal for a disposable headless fixture. Unset on
@@ -239,10 +242,24 @@ impl AppServices {
             storage,
             fixtures_root,
             fixtures: Arc::new(FixtureState::empty()),
+            agent_turns: Arc::default(),
             events: Events::discard(),
             host: HostControl::process_exit(),
             fixture_principal: None,
         }
+    }
+
+    /// Put the services behind a shared handle.
+    ///
+    /// The agent's turn loop outlives the command that starts it, so it cannot
+    /// borrow a command body's `&AppServices`; a host that wants the
+    /// `agent_turn_*` commands hands ownership over here instead. Every other
+    /// host can ignore this.
+    #[must_use]
+    pub fn into_shared(self) -> Arc<Self> {
+        let shared = Arc::new(self);
+        shared.agent_turns.attach(&shared);
+        shared
     }
 
     /// Observe the events commands emit.
@@ -334,6 +351,16 @@ impl AppServices {
 /// [`super::dispatch`] and nothing else. They exist so a host that does can
 /// reach these singletons rather than keep a second, forkable copy.
 impl AppServices {
+    /// Where this host's push notifications go.
+    pub fn events(&self) -> &Events {
+        &self.events
+    }
+
+    /// Turns started through the dispatch seam.
+    pub fn agent_turns(&self) -> &Arc<crate::agent::host::TurnRegistry> {
+        &self.agent_turns
+    }
+
     /// The app database.
     pub fn db(&self) -> &Db {
         &self.db

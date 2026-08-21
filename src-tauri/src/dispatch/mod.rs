@@ -60,7 +60,7 @@ use serde_json::Value;
 macro_rules! commands {
     ($( $domain:ident :: $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty );* $(;)?) => {
         /// The Tauri adapter. Each wrapper does the two things a handler
-        /// cannot: it receives `State<AppServices>`, and it lowers
+        /// cannot: it receives the host's shared `AppServices`, and it lowers
         /// [`CommandError`] to the `String` the wire carries. Generated, so a
         /// wrapper cannot drift from its handler.
         ///
@@ -72,7 +72,7 @@ macro_rules! commands {
             $(
                 #[tauri::command]
                 pub async fn $name(
-                    services: tauri::State<'_, AppServices>,
+                    services: tauri::State<'_, std::sync::Arc<AppServices>>,
                     $($arg: $ty,)*
                 ) -> Result<$ret, String> {
                     handlers::$domain::$name(&services, $($arg),*)
@@ -170,7 +170,7 @@ use crate::models::stage::StagePiece;
 use crate::models::tracks::{TrackBrowserRow, TrackSummary};
 use crate::models::universe::UniverseState;
 use crate::models::venues::Venue;
-use crate::models::waveforms::TrackWaveform;
+use crate::models::waveforms::{TrackWaveform, WaveformWindow};
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 use crate::render_engine::PerformDeckInput;
 use crate::services::graph_documents::{GraphDocument, GraphEditResult};
@@ -250,6 +250,13 @@ commands! {
     ) -> Vec<AgentThreadMessage>;
     agent_threads::agent_thread_rename(thread_id: String, title: Option<String>) -> AgentThread;
     agent_threads::agent_thread_delete(thread_id: String) -> ();
+
+    // Only what a webview needs and a typed caller does not: it cannot hold a
+    // `TurnStream`, so a turn is addressed by thread id and its deltas arrive
+    // as `"agent-turn"` events.
+    agent::agent_turn_start(thread_id: String, prompt: String) -> String;
+    agent::agent_turn_cancel(thread_id: String) -> bool;
+    agent::agent_steer(thread_id: String, message: String) -> ();
 
     authored_state::authored_state_prepare_turn(
         input: PrepareAuthoredTurnInput,
@@ -378,6 +385,12 @@ commands! {
     artnet::get_discovered_nodes() -> Vec<ArtNetNode>;
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
+    waveforms::get_track_waveform_window(
+        track_id: String,
+        start_seconds: f64,
+        end_seconds: f64,
+        buckets: u32,
+    ) -> WaveformWindow;
     waveforms::reprocess_waveform(track_id: String) -> TrackWaveform;
 
     tracks::list_tracks() -> Vec<TrackSummary>;

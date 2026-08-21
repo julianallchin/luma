@@ -45,6 +45,32 @@ pub struct TrackWaveform {
     pub duration_seconds: f64,
 }
 
+/// One visible range of a track, bucketed at whatever density the caller asked
+/// for — the answer to "what does this second of audio look like across these
+/// 900 pixels", which the fixed-resolution [`TrackWaveform`] cannot give once a
+/// zoom puts fewer than one stored bucket under a pixel.
+///
+/// The three series are the same length and describe the same buckets:
+/// `min[i] <= 0 <= max[i]` is the extent the audio reached, `rms[i]` is how
+/// loud it was over the whole bucket. A renderer draws the extent and shades by
+/// the RMS; nothing needs a second query to do both.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct WaveformWindow {
+    pub track_id: String,
+    /// The range actually measured. A request that ran past either end of the
+    /// decoded audio is clamped to what exists rather than refused, so the
+    /// caller positions the buckets from these two numbers, not from the two
+    /// it sent.
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    pub min: Vec<f32>,
+    pub max: Vec<f32>,
+    pub rms: Vec<f32>,
+}
+
 impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {
     fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
         use crate::services::waveforms::{bytes_to_band_envelopes, bytes_to_f32_vec};

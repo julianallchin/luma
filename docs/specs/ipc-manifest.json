@@ -4,10 +4,10 @@
 	"generated": "2026-08-19",
 	"source": "merged from 9 audit fragments + tauri::command signature scan of src-tauri/src",
 	"summary": {
-		"commandCount": 196,
+		"commandCount": 197,
 		"domainCount": 38,
 		"deadCommandCount": 15,
-		"asyncCommandCount": 178,
+		"asyncCommandCount": 179,
 		"eventCount": 22,
 		"commandsMissingFromRegistry": []
 	},
@@ -146,7 +146,7 @@
 		},
 		{
 			"domain": "tracks/waveforms",
-			"commandCount": 2
+			"commandCount": 3
 		},
 		{
 			"domain": "universe",
@@ -7028,6 +7028,58 @@
 			],
 			"callerUsage": null,
 			"notes": "Read-through cache, not a pure read: first call for a track can take seconds and writes to the DB. Samples are interleaved min/max pairs per bucket (previewSamples.length = 2*buckets); bands/colors are the two generations of the same idea (colors is legacy interleaved RGB bytes). fullSamples/bands/colors are NOT cloud-synced \u2014 regenerated locally, so they can be null on a freshly pulled device. durationSeconds prefers decoded_duration and falls back to the tracks.duration_seconds metadata; callers (use-track-editor-store) use it as the timeline duration. All TS callers .catch(() => null) \u2014 treat failure as 'no waveform', not fatal."
+		},
+		{
+			"name": "get_track_waveform_window",
+			"domain": "tracks/waveforms",
+			"dead": false,
+			"rust": {
+				"file": "src-tauri/src/dispatch/handlers/waveforms.rs",
+				"line": 15,
+				"fn": "get_track_waveform_window",
+				"service": "services::waveforms::get_track_waveform_window",
+				"async": true,
+				"signature": "Result<WaveformWindow, CommandError>"
+			},
+			"args": [
+				{
+					"name": "trackId",
+					"type": "String",
+					"rustName": "track_id"
+				},
+				{
+					"name": "startSeconds",
+					"type": "f64",
+					"rustName": "start_seconds"
+				},
+				{
+					"name": "endSeconds",
+					"type": "f64",
+					"rustName": "end_seconds"
+				},
+				{
+					"name": "buckets",
+					"type": "u32",
+					"rustName": "buckets"
+				}
+			],
+			"injected": [
+				{
+					"name": "db",
+					"type": "State<Db>"
+				}
+			],
+			"returns": "WaveformWindow { trackId, startSeconds, endSeconds, min: number[], max: number[], rms: number[] } \u2014 the three series are the same length, and it is the requested bucket count clamped to 1..=16384",
+			"sideEffects": [
+				"VisibleTrackAccess::<Read> on the track, to read file_path/track_hash",
+				"Decodes the audio through audio::cache (process-wide LRU over the on-disk .pcm cache) on a blocking thread if it is not already resident \u2014 the same (hash, device rate) key host_load_track uses, so a track loaded for playback is already there",
+				"Writes nothing"
+			],
+			"callers": [
+				"gpui/crates/app/src/library.rs:238"
+			],
+			"callerUsage": null,
+			"notes": "The fine half of the waveform pair: get_track_waveform is a fixed 30 000 buckets however long the track is, this is exactly the visible range at exactly the caller's pixel density, measured from the audio each time. No AnalysisTaskGroup lease and no DB write \u2014 it is a view of the audio, not a stored artifact. Total by construction: the range is clamped to the decoded audio (the returned startSeconds/endSeconds are the clamped range, not the requested one) and the bucket count to 1..=16384, so a request past either end is answered rather than refused. Only the GPUI editor calls it today; the web timeline can adopt it unchanged, and should above ~FULL_WAVEFORM_SIZE/duration pixels per second, which is where its stored envelope runs out of buckets."
 		},
 		{
 			"name": "reprocess_waveform",

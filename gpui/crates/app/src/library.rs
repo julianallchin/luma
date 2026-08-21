@@ -50,12 +50,20 @@ use luma_lib::models::patterns::PatternSummary;
 use luma_lib::models::scores::{ScoreSummary, TrackScore};
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
-use luma_lib::models::waveforms::TrackWaveform;
+use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
 use luma_lib::services::track_edits::TrackEditResult;
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
+
+/// How long a fine waveform window waits before it is sent.
+///
+/// A wheel notch changes the zoom every few milliseconds and each one wants a
+/// different window; this is the pause that says the gesture has stopped. Short
+/// enough that a deliberate zoom is answered within a frame or two of settling,
+/// long enough that a flick asks once instead of forty times.
+const WINDOW_DEBOUNCE: Duration = Duration::from_millis(40);
 
 /// A connection to the real Luma library.
 pub struct Library {
@@ -236,6 +244,32 @@ impl Library {
         track_id: &str,
     ) -> impl Future<Output = Result<TrackWaveform, String>> + use<> {
         self.call("get_track_waveform", json!({ "trackId": track_id }))
+    }
+
+    /// One visible range of a track's audio, measured into `buckets` min/max/RMS
+    /// buckets — the fine half of the pair, and the only source with a bucket
+    /// per pixel once the zoom outruns the stored envelope's fixed resolution.
+    ///
+    /// Waited before it is sent, because it is asked for while a zoom gesture
+    /// is still moving and only the window that gesture settles on is worth
+    /// measuring.
+    pub fn track_waveform_window(
+        &self,
+        track_id: &str,
+        start_seconds: f64,
+        end_seconds: f64,
+        buckets: u32,
+    ) -> impl Future<Output = Result<WaveformWindow, String>> + use<> {
+        self.call_after(
+            "get_track_waveform_window",
+            json!({
+                "trackId": track_id,
+                "startSeconds": start_seconds,
+                "endSeconds": end_seconds,
+                "buckets": buckets,
+            }),
+            WINDOW_DEBOUNCE,
+        )
     }
 
     /// A track's analyzed beats, or `None` when it has not been analyzed.

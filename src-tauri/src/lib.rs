@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod agent_execution;
 pub mod annotation_preview;
 mod artnet;
@@ -346,7 +347,7 @@ pub fn run() {
                     engine.authored().clone(),
                     sync::host::SyncHost {
                         storage: authored_storage.clone(),
-                        events: dispatch::tauri_events(app_handle),
+                events: dispatch::tauri_events(app_handle),
                         workspaces: workspaces.clone(),
                         graph_runs: graph_runs.clone(),
                     },
@@ -454,10 +455,14 @@ pub fn run() {
                 storage: authored_storage,
                 fixtures_root: fixtures_root.clone(),
                 fixtures: std::sync::Arc::clone(&fixture_state),
+                agent_turns: std::sync::Arc::default(),
                 events: dispatch::tauri_events(app_handle),
                 host: dispatch::tauri_host(app_handle),
                 fixture_principal: None,
-            });
+            }
+            // Shared, because the agent's turn loop outlives the command that
+            // starts it and cannot borrow a command body's `&AppServices`.
+            .into_shared());
 
             // Build fixture index eagerly so search works before any UI page mounts
             if let Err(e) = tauri::async_runtime::block_on(
@@ -552,6 +557,7 @@ pub fn run() {
             dispatch::adapter::delete_track_score,
             dispatch::adapter::replace_track_scores,
             dispatch::adapter::get_track_waveform,
+            dispatch::adapter::get_track_waveform_window,
             dispatch::adapter::reprocess_waveform,
             dispatch::adapter::initialize_fixtures,
             dispatch::adapter::search_fixtures,
@@ -687,6 +693,9 @@ pub fn run() {
             dispatch::adapter::agent_thread_append_messages,
             dispatch::adapter::agent_thread_delete,
             dispatch::adapter::agent_thread_rename,
+            dispatch::adapter::agent_turn_start,
+            dispatch::adapter::agent_turn_cancel,
+            dispatch::adapter::agent_steer,
             // Relational authored document history
             dispatch::adapter::authored_state_prepare_turn,
             dispatch::adapter::authored_state_finalize_turn,
