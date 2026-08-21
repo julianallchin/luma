@@ -15,6 +15,15 @@
 //! [`get_track_waveform_window`] is the other half: exactly the visible range,
 //! at exactly the caller's pixel density, measured from the audio each time.
 //!
+//! ## One picture, two sources
+//!
+//! Both return the *same three band envelopes in the same units*, so a renderer
+//! has one drawing routine and crossing the threshold shows more detail rather
+//! than a different waveform. What makes the units shared is [`BandGains`]:
+//! band peaks are normalised against a whole-track percentile, which a visible
+//! range cannot measure for itself, so the three divisors are stored beside the
+//! envelopes and every later measurement is compressed against them.
+//!
 //! ## Why on-demand aggregation and not a pyramid
 //!
 //! The alternative was a precomputed multi-resolution pyramid — the stored
@@ -48,7 +57,8 @@ use std::time::Instant;
 use crate::audio::{decode_track_samples, filter_3band, FilteredBands};
 use crate::database::local;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
-use crate::models::waveforms::{BandEnvelopes, TrackWaveform, WaveformWindow};
+use crate::database::local::waveforms::StoredWaveform;
+use crate::models::waveforms::{BandEnvelopes, BandGains, TrackWaveform, WaveformWindow};
 use crate::preprocessing::{AnalysisGuard, AnalysisTaskGroup};
 
 /// Number of samples in preview waveform (low resolution for overview/minimap)
@@ -62,6 +72,8 @@ struct ComputedWaveform {
     full_samples: Vec<f32>,
     bands: BandEnvelopes,
     preview_bands: BandEnvelopes,
+    /// The units `bands` and `preview_bands` are both in.
+    gains: BandGains,
     colors: Vec<u8>,
     preview_colors: Vec<u8>,
     sample_rate: u32,
@@ -70,11 +82,15 @@ struct ComputedWaveform {
 
 /// Compute and atomically publish waveform data for the exact visible track
 /// snapshot admitted at the start of this analysis generation.
+///
+/// Returns the payload and the [`BandGains`] its envelopes are in — the two are
+/// one measurement, and separating them is how a range ends up drawn in units
+/// nothing else shares.
 pub(crate) async fn ensure_track_waveform(
     pool: &SqlitePool,
     track_id: &str,
     analysis: &AnalysisGuard,
-) -> Result<TrackWaveform, String> {
+) -> Result<(TrackWaveform, BandGains), String> {
     analysis.checkpoint()?;
     let mut initial = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
     let initial_principal = initial.principal().map(str::to_owned);
@@ -116,32 +132,38 @@ pub(crate) async fn ensure_track_waveform(
         publication.connection(),
         track_id,
         uid.as_deref(),
-        &preview_samples_blob,
-        &full_samples_blob,
-        &computed.colors,
-        &computed.preview_colors,
-        &bands_blob,
-        &preview_bands_blob,
-        computed.sample_rate as i64,
-        computed.duration_seconds,
+        &StoredWaveform {
+            preview_samples_blob: &preview_samples_blob,
+            full_samples_blob: &full_samples_blob,
+            colors_blob: &computed.colors,
+            preview_colors_blob: &computed.preview_colors,
+            bands_blob: &bands_blob,
+            preview_bands_blob: &preview_bands_blob,
+            band_gains: computed.gains,
+            sample_rate: computed.sample_rate as i64,
+            decoded_duration: computed.duration_seconds,
+        },
     )
     .await?;
     let db_ms = db_started.elapsed().as_millis();
     publication.commit().await?;
 
     eprintln!("[waveform] track {track_id} published in {db_ms}ms");
-    Ok(TrackWaveform {
-        track_id: track_id.to_owned(),
-        uid,
-        preview_samples: computed.preview_samples,
-        full_samples: Some(computed.full_samples),
-        bands: Some(computed.bands),
-        preview_bands: Some(computed.preview_bands),
-        colors: Some(computed.colors),
-        preview_colors: Some(computed.preview_colors),
-        sample_rate: computed.sample_rate,
-        duration_seconds: computed.duration_seconds,
-    })
+    Ok((
+        TrackWaveform {
+            track_id: track_id.to_owned(),
+            uid,
+            preview_samples: computed.preview_samples,
+            full_samples: Some(computed.full_samples),
+            bands: Some(computed.bands),
+            preview_bands: Some(computed.preview_bands),
+            colors: Some(computed.colors),
+            preview_colors: Some(computed.preview_colors),
+            sample_rate: computed.sample_rate,
+            duration_seconds: computed.duration_seconds,
+        },
+        computed.gains,
+    ))
 }
 
 async fn compute_waveform_payload(
@@ -183,12 +205,21 @@ async fn compute_waveform_payload(
     analysis.checkpoint()?;
     let waveform_ms = t0.elapsed().as_millis();
 
-    // Filter once, reuse for both resolutions
+    // Filter once, reuse for both resolutions. The gains come from the full
+    // resolution and are then applied to *both*, so the preview and the full
+    // envelope are one unit system rather than two percentiles of two different
+    // bucketizations.
     let t0 = Instant::now();
     let filtered = filter_3band(&samples, sample_rate as f32);
 
-    let bands = bucketize_band_envelopes(&filtered, samples.len(), FULL_WAVEFORM_SIZE);
-    let preview_bands = bucketize_band_envelopes(&filtered, samples.len(), PREVIEW_WAVEFORM_SIZE);
+    let full_peaks = bucketize_band_peaks(&filtered, 0..samples.len(), FULL_WAVEFORM_SIZE);
+    let gains = BandGains::from_peaks(&full_peaks);
+    let bands = gains.compress(&full_peaks);
+    let preview_bands = gains.compress(&bucketize_band_peaks(
+        &filtered,
+        0..samples.len(),
+        PREVIEW_WAVEFORM_SIZE,
+    ));
     analysis.checkpoint()?;
     let bands_ms = t0.elapsed().as_millis();
 
@@ -214,6 +245,7 @@ async fn compute_waveform_payload(
         full_samples,
         bands,
         preview_bands,
+        gains,
         colors,
         preview_colors,
         sample_rate,
@@ -229,15 +261,22 @@ pub async fn reprocess_track_waveform(
 ) -> Result<TrackWaveform, String> {
     let epoch = tasks.current_epoch()?;
     let lease = tasks.lease(epoch)?;
-    ensure_track_waveform(pool, track_id, &lease.guard()).await
+    Ok(ensure_track_waveform(pool, track_id, &lease.guard())
+        .await?
+        .0)
 }
 
 /// Get waveform for a track, computing if missing.
+///
+/// A row written before the band gains were stored counts as missing: the
+/// envelopes without their units are not a waveform anything else can be drawn
+/// against, and recomputing is how such a row is backfilled — one measurement
+/// of one decode produces both, so they cannot disagree.
 pub async fn get_track_waveform(
     pool: &SqlitePool,
     tasks: &AnalysisTaskGroup,
     track_id: &str,
-) -> Result<TrackWaveform, String> {
+) -> Result<(TrackWaveform, BandGains), String> {
     let epoch = tasks.current_epoch()?;
     let lease = tasks.lease(epoch)?;
     let analysis = lease.guard();
@@ -253,13 +292,35 @@ pub async fn get_track_waveform(
     // Try cached waveform
     let row = local::waveforms::fetch_track_waveform_for_connection(access.connection(), track_id)
         .await?;
+    let gains = local::waveforms::fetch_band_gains(access.connection(), track_id).await?;
 
-    if let Some(row) = row {
-        return build_waveform(track_id, duration_seconds, row);
+    if let (Some(row), Some(gains)) = (row, gains) {
+        return Ok((build_waveform(track_id, duration_seconds, row)?, gains));
     }
     drop(access);
 
     ensure_track_waveform(pool, track_id, &analysis).await
+}
+
+/// The units a track's band envelopes are in.
+///
+/// Total wherever [`get_track_waveform`] is: the fast path is the stored
+/// scalars, and a row that predates them is materialised through the one path
+/// that computes them rather than re-derived here — a second derivation would
+/// be a second unit system, which is exactly what these exist to prevent.
+async fn band_gains(
+    pool: &SqlitePool,
+    tasks: &AnalysisTaskGroup,
+    track_id: &str,
+) -> Result<BandGains, String> {
+    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
+    let stored = local::waveforms::fetch_band_gains(access.connection(), track_id).await?;
+    drop(access);
+
+    match stored {
+        Some(gains) => Ok(gains),
+        None => Ok(get_track_waveform(pool, tasks, track_id).await?.1),
+    }
 }
 
 /// The most buckets one window may be cut into.
@@ -270,8 +331,12 @@ pub async fn get_track_waveform(
 const MAX_WINDOW_BUCKETS: usize = 16_384;
 
 /// Measure `start_seconds..end_seconds` of a track's audio into `buckets`
-/// min/max/RMS buckets — see the module docs for why this is measured rather
+/// three-band buckets — see the module docs for why this is measured rather
 /// than looked up.
+///
+/// The bands come back in the *stored* envelope's units (see [`BandGains`]), so
+/// a renderer draws this exactly as it draws [`get_track_waveform`]'s bands and
+/// the two are interchangeable at the same range.
 ///
 /// Total by construction: the range is clamped to the decoded audio and the
 /// bucket count to `1..=`[`MAX_WINDOW_BUCKETS`], so a caller cannot ask a
@@ -284,11 +349,13 @@ const MAX_WINDOW_BUCKETS: usize = 16_384;
 /// file cannot be decoded.
 pub async fn get_track_waveform_window(
     pool: &SqlitePool,
+    tasks: &AnalysisTaskGroup,
     track_id: &str,
     start_seconds: f64,
     end_seconds: f64,
     buckets: u32,
 ) -> Result<WaveformWindow, String> {
+    let gains = band_gains(pool, tasks, track_id).await?;
     let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
     let (file_path, track_hash): (String, String) =
         sqlx::query_as("SELECT file_path, track_hash FROM tracks WHERE id = ?")
@@ -310,7 +377,8 @@ pub async fn get_track_waveform_window(
 
     let buckets = (buckets as usize).clamp(1, MAX_WINDOW_BUCKETS);
     let channels = usize::from(audio.channels).max(1);
-    let rate = f64::from(audio.sample_rate.max(1));
+    let sample_rate = audio.sample_rate.max(1);
+    let rate = f64::from(sample_rate);
     let frames = audio.samples.len() / channels;
     let duration = frames as f64 / rate;
 
@@ -318,14 +386,17 @@ pub async fn get_track_waveform_window(
     let end = end_seconds.clamp(start, duration);
     let range = (start * rate) as usize..((end * rate).ceil() as usize).min(frames);
 
-    let (min, max, rms) = window_envelope(&audio.samples, channels, range, buckets);
+    let peaks = tauri::async_runtime::spawn_blocking(move || {
+        window_band_peaks(&audio.samples, channels, sample_rate, range, buckets)
+    })
+    .await
+    .map_err(|error| format!("Waveform window measurement failed: {error}"))?;
+
     Ok(WaveformWindow {
         track_id: track_id.to_owned(),
         start_seconds: start,
         end_seconds: end,
-        min,
-        max,
-        rms,
+        bands: gains.compress(&peaks),
     })
 }
 
@@ -333,51 +404,70 @@ pub async fn get_track_waveform_window(
 // DSP helpers
 // -----------------------------------------------------------------------------
 
-/// Fold `frames` of interleaved `channels`-channel PCM into `buckets` triples of
-/// (minimum, maximum, RMS), mono-summing as it goes so nothing is allocated for
-/// the mono copy.
+/// How much audio either side of a measured range is filtered and thrown away.
 ///
-/// Every bucket covers at least one frame: past one bucket per frame the
-/// buckets repeat rather than coming back empty, which is what makes a request
-/// finer than the audio a flat answer instead of an error.
-fn window_envelope(
+/// [`filter_3band`] is a chain of biquads, and a biquad started mid-signal rings
+/// for a few dozen samples before it settles. Starting it at the edge of the
+/// visible range would put that ringing on screen — a band bar taller or
+/// shorter than the stored envelope's at the same instant, which is precisely
+/// the seam this is all here to remove. A quarter second is orders of magnitude
+/// more than the lowest crossover needs.
+const FILTER_WARMUP_SECONDS: f64 = 0.25;
+
+/// Measure `frames` of interleaved `channels`-channel PCM into `buckets` raw
+/// three-band peaks — the same quantity [`bucketize_band_peaks`] takes off a
+/// whole track, over a shorter range and usually a much finer grid.
+///
+/// The result is *not* in envelope units; [`BandGains::compress`] puts it
+/// there, and only the track's stored gains can.
+fn window_band_peaks(
     samples: &[f32],
     channels: usize,
+    sample_rate: u32,
     frames: std::ops::Range<usize>,
     buckets: usize,
-) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-    let mut min = vec![0.0f32; buckets];
-    let mut max = vec![0.0f32; buckets];
-    let mut rms = vec![0.0f32; buckets];
-    let span = frames.end.saturating_sub(frames.start);
-    if span == 0 {
-        return (min, max, rms);
+) -> BandPeaks {
+    let total = samples.len() / channels.max(1);
+    if frames.end <= frames.start || total == 0 {
+        return BandPeaks::silent(buckets);
     }
 
-    let frame = |index: usize| -> f32 {
-        let base = index * channels;
-        let sum: f32 = samples[base..base + channels].iter().sum();
-        sum / channels as f32
-    };
-    let edge = |bucket: usize| frames.start + (bucket * span) / buckets;
+    // Filtered over a padded range, bucketized over the asked-for one: the pad
+    // is what the filters settle in, so the buckets never see the transient.
+    let warmup = (f64::from(sample_rate) * FILTER_WARMUP_SECONDS) as usize;
+    let padded = frames.start.saturating_sub(warmup)..(frames.end + warmup).min(total);
+    let mono: Vec<f32> = padded
+        .clone()
+        .map(|index| {
+            let base = index * channels;
+            samples[base..base + channels].iter().sum::<f32>() / channels as f32
+        })
+        .collect();
 
-    for bucket in 0..buckets {
-        let from = edge(bucket);
-        let to = edge(bucket + 1).max(from + 1).min(frames.end);
-        let mut low = f32::INFINITY;
-        let mut high = f32::NEG_INFINITY;
-        let mut energy = 0.0f64;
-        for index in from..to {
-            let value = frame(index);
-            low = low.min(value);
-            high = high.max(value);
-            energy += f64::from(value) * f64::from(value);
-        }
-        min[bucket] = if low.is_finite() { low.min(0.) } else { 0. };
-        max[bucket] = if high.is_finite() { high.max(0.) } else { 0. };
-        rms[bucket] = (energy / (to - from) as f64).sqrt() as f32;
-    }
-    (min, max, rms)
+    let filtered = filter_3band(&mono, sample_rate as f32);
+    let offset = frames.start - padded.start;
+    bucketize_band_peaks(
+        &filtered,
+        offset..offset + (frames.end - frames.start),
+        buckets,
+    )
+}
+
+/// The half-open sample range bucket `index` of `buckets` covers within
+/// `range`.
+///
+/// Every bucket covers at least one sample: past one bucket per sample the
+/// buckets repeat rather than coming back empty, which is what makes a request
+/// finer than the audio a flat answer instead of an error.
+fn bucket_range(
+    range: &std::ops::Range<usize>,
+    buckets: usize,
+    index: usize,
+) -> std::ops::Range<usize> {
+    let span = range.end - range.start;
+    let edge = |bucket: usize| range.start + (bucket * span) / buckets;
+    let from = edge(index);
+    from..edge(index + 1).max(from + 1).min(range.end)
 }
 
 fn build_waveform(
@@ -431,114 +521,158 @@ pub fn compute_waveform(samples: &[f32], num_buckets: usize) -> Vec<f32> {
     result
 }
 
-/// Compute 3-band envelopes (low, mid, high) for rekordbox-style waveform.
-/// Standalone version that filters internally — use `bucketize_band_envelopes`
-/// with pre-filtered bands when computing multiple resolutions.
+/// Compute 3-band envelopes (low, mid, high) for rekordbox-style waveform,
+/// normalised against this call's own audio.
+///
+/// Standalone: it derives its own [`BandGains`], so two calls over different
+/// audio are in different units. The pipeline instead derives gains once per
+/// track and compresses every resolution against them — that is what makes the
+/// stored envelope and a measured window the same picture.
 pub fn compute_band_envelopes(
     samples: &[f32],
     sample_rate: u32,
     num_buckets: usize,
 ) -> BandEnvelopes {
     if samples.is_empty() || num_buckets == 0 {
-        return BandEnvelopes {
-            low: vec![0.0; num_buckets],
-            mid: vec![0.0; num_buckets],
-            high: vec![0.0; num_buckets],
-        };
+        return BandPeaks::silent(num_buckets).into_envelopes();
     }
 
     let filtered = filter_3band(samples, sample_rate as f32);
-    bucketize_band_envelopes(&filtered, samples.len(), num_buckets)
+    let peaks = bucketize_band_peaks(&filtered, 0..samples.len(), num_buckets);
+    BandGains::from_peaks(&peaks).compress(&peaks)
 }
 
-/// Bucketize pre-filtered 3-band audio into envelope data.
-/// The `total_samples` parameter is the length of the original (unfiltered) audio.
-pub fn bucketize_band_envelopes(
-    filtered: &FilteredBands,
-    total_samples: usize,
-    num_buckets: usize,
-) -> BandEnvelopes {
-    if total_samples < num_buckets || num_buckets == 0 {
-        return BandEnvelopes {
-            low: vec![0.0; num_buckets],
-            mid: vec![0.0; num_buckets],
-            high: vec![0.0; num_buckets],
-        };
-    }
+/// Per-bucket band peaks in the audio's own units, before any normalisation.
+///
+/// Distinct from [`BandEnvelopes`] on purpose: these two are the same three
+/// vectors in different units, and the type is what stops one being drawn where
+/// the other belongs.
+pub struct BandPeaks {
+    low: Vec<f32>,
+    mid: Vec<f32>,
+    high: Vec<f32>,
+}
 
-    let total = total_samples as f64;
-    let buckets = num_buckets as f64;
-
-    let mut low_env = Vec::with_capacity(num_buckets);
-    let mut mid_env = Vec::with_capacity(num_buckets);
-    let mut high_env = Vec::with_capacity(num_buckets);
-
-    for bucket_idx in 0..num_buckets {
-        let start = (bucket_idx as f64 * total / buckets) as usize;
-        let end = (((bucket_idx + 1) as f64 * total / buckets) as usize).min(total_samples);
-
-        let low_peak = filtered.low[start..end]
-            .iter()
-            .fold(0.0f32, |max, &s| max.max(s.abs()));
-        let mid_peak = filtered.mid[start..end]
-            .iter()
-            .fold(0.0f32, |max, &s| max.max(s.abs()));
-        let high_peak = filtered.high[start..end]
-            .iter()
-            .fold(0.0f32, |max, &s| max.max(s.abs()));
-
-        low_env.push(low_peak);
-        mid_env.push(mid_peak);
-        high_env.push(high_peak);
-    }
-
-    fn normalize_band(env: &mut [f32]) {
-        if env.is_empty() {
-            return;
+impl BandPeaks {
+    fn silent(buckets: usize) -> Self {
+        BandPeaks {
+            low: vec![0.0; buckets],
+            mid: vec![0.0; buckets],
+            high: vec![0.0; buckets],
         }
+    }
 
-        let mut sorted: Vec<f32> = env.to_vec();
+    /// Reinterpret as envelopes without compressing — only valid for all-zero
+    /// peaks, where every gain maps to zero anyway.
+    fn into_envelopes(self) -> BandEnvelopes {
+        BandEnvelopes {
+            low: self.low,
+            mid: self.mid,
+            high: self.high,
+        }
+    }
+}
+
+/// Where a band sits in the stack, and how tall it is allowed to draw.
+///
+/// The three scales are the rekordbox look: the quieter bands paint over the
+/// louder ones and read as an outline around them, which only works while the
+/// ceiling of each is fixed and known on both sides of the seam.
+#[derive(Clone, Copy)]
+enum Band {
+    Low,
+    Mid,
+    High,
+}
+
+impl Band {
+    fn scale(self) -> f32 {
+        match self {
+            Band::Low => 0.95,
+            Band::Mid => 0.8,
+            Band::High => 0.6,
+        }
+    }
+}
+
+impl BandGains {
+    /// The divisor a band normalises against: the 99th percentile of its peaks,
+    /// so a handful of transients cannot flatten the rest of the track.
+    ///
+    /// Floored well above zero, which is what makes [`BandGains::compress`]
+    /// total — silence normalises to silence rather than to a division by it.
+    fn of(peaks: &[f32]) -> f32 {
+        let mut sorted = peaks.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let index = (sorted.len() as f32 * 0.99) as usize;
+        sorted.get(index).copied().unwrap_or(1.0).max(0.0001)
+    }
 
-        let p99_idx = (sorted.len() as f32 * 0.99) as usize;
-        let p99 = sorted.get(p99_idx).copied().unwrap_or(1.0);
-
-        let peak_val = p99.max(0.0001);
-
-        for v in env.iter_mut() {
-            *v = (*v / peak_val).clamp(0.0, 1.0);
+    /// Derive the units of a track from its full-resolution band peaks.
+    pub fn from_peaks(peaks: &BandPeaks) -> Self {
+        BandGains {
+            low: Self::of(&peaks.low),
+            mid: Self::of(&peaks.mid),
+            high: Self::of(&peaks.high),
         }
     }
 
-    normalize_band(&mut low_env);
-    normalize_band(&mut mid_env);
-    normalize_band(&mut high_env);
-
-    fn apply_log_compression(env: &mut [f32]) {
-        for v in env.iter_mut() {
-            *v = (1.0 + 9.0 * *v).log10();
+    fn gain(&self, band: Band) -> f32 {
+        match band {
+            Band::Low => self.low,
+            Band::Mid => self.mid,
+            Band::High => self.high,
         }
     }
 
-    apply_log_compression(&mut low_env);
-    apply_log_compression(&mut mid_env);
-    apply_log_compression(&mut high_env);
+    /// Raw band peaks to stored envelope units: normalise, log-compress to lift
+    /// the quiet detail, then scale to the band's ceiling.
+    ///
+    /// The only place that mapping exists, so anything compressed with the same
+    /// gains is directly comparable however it was bucketized.
+    pub fn compress(&self, peaks: &BandPeaks) -> BandEnvelopes {
+        let band = |values: &[f32], band: Band| {
+            let (gain, scale) = (self.gain(band), band.scale());
+            values
+                .iter()
+                .map(|peak| (1.0 + 9.0 * (peak / gain).clamp(0.0, 1.0)).log10() * scale)
+                .collect()
+        };
+        BandEnvelopes {
+            low: band(&peaks.low, Band::Low),
+            mid: band(&peaks.mid, Band::Mid),
+            high: band(&peaks.high, Band::High),
+        }
+    }
+}
 
-    for v in low_env.iter_mut() {
-        *v *= 0.95;
-    }
-    for v in mid_env.iter_mut() {
-        *v *= 0.8;
-    }
-    for v in high_env.iter_mut() {
-        *v *= 0.6;
+/// Fold `range` of pre-filtered 3-band audio into `num_buckets` per-band peaks.
+pub fn bucketize_band_peaks(
+    filtered: &FilteredBands,
+    range: std::ops::Range<usize>,
+    num_buckets: usize,
+) -> BandPeaks {
+    if num_buckets == 0 || range.end <= range.start {
+        return BandPeaks::silent(num_buckets);
     }
 
-    BandEnvelopes {
-        low: low_env,
-        mid: mid_env,
-        high: high_env,
+    let peak = |values: &[f32], bucket: std::ops::Range<usize>| {
+        values[bucket]
+            .iter()
+            .fold(0.0f32, |max, &s| max.max(s.abs()))
+    };
+    let mut peaks = BandPeaks {
+        low: Vec::with_capacity(num_buckets),
+        mid: Vec::with_capacity(num_buckets),
+        high: Vec::with_capacity(num_buckets),
+    };
+    for index in 0..num_buckets {
+        let bucket = bucket_range(&range, num_buckets, index);
+        peaks.low.push(peak(&filtered.low, bucket.clone()));
+        peaks.mid.push(peak(&filtered.mid, bucket.clone()));
+        peaks.high.push(peak(&filtered.high, bucket));
     }
+    peaks
 }
 
 /// Compute RGB colors based on spectral content (Legacy - kept for backwards compatibility).
@@ -675,7 +809,7 @@ fn band_envelopes_to_bytes(bands: &BandEnvelopes) -> Vec<u8> {
 /// Deserialize a blob back to BandEnvelopes (3 equal-length bands)
 pub fn bytes_to_band_envelopes(data: &[u8]) -> Option<BandEnvelopes> {
     let floats = bytes_to_f32_vec(data);
-    if floats.len() % 3 != 0 {
+    if !floats.len().is_multiple_of(3) {
         return None;
     }
     let band_len = floats.len() / 3;

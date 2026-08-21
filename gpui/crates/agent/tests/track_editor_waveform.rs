@@ -73,7 +73,7 @@ const SCRIPT: &str = r#"
     }
 
     /** Wait until `check` returns something truthy, or give up and say so. */
-    function until(check, limit) {
+    function settle(check, limit) {
         for (let i = 0; i < limit; i++) {
             const value = check();
             if (value) return value;
@@ -88,7 +88,7 @@ const SCRIPT: &str = r#"
 
     // Three minutes of audio to decode and render an envelope for, on a runtime
     // gpui does not own — waited for by its result rather than by a frame count.
-    const opened = until(waveform, 200);
+    const opened = settle(waveform, 200);
     const width = opened === null ? 0 : opened.bounds.width;
 
     // At the opening zoom the stored envelope still has a bucket per pixel, so
@@ -99,7 +99,7 @@ const SCRIPT: &str = r#"
     // All the way in. The zoom is exponential in the wheel distance and clamps
     // at MAX_ZOOM, so this overshoots deliberately.
     app.scroll(waveform(), { dy: 2000, steps: 20, modifiers: ["platform"] });
-    const zoomedIn = until(fine, 100);
+    const zoomedIn = settle(fine, 100);
 
     // A clip of known length reads the zoom back off its drawn width.
     const clip = app.snapshot().find({ role: "card", label: "Strobe" });
@@ -107,7 +107,7 @@ const SCRIPT: &str = r#"
 
     // And all the way back out, where there is nothing left to measure.
     app.scroll(waveform(), { dy: -2400, steps: 20, modifiers: ["platform"] });
-    until(() => fine() === null, 100);
+    settle(() => fine() === null, 100);
 
     ({
         width,
