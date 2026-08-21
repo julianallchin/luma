@@ -50,7 +50,9 @@ use luma_lib::dispatch::{dispatch, AppServices};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, Graph, NodeTypeDef};
 use luma_lib::models::patterns::PatternSummary;
-use luma_lib::models::scores::{ScoreSummary, TrackScore};
+use luma_lib::models::scores::{
+    CreateTrackScoreInput, DeleteTrackScoreInput, ScoreSummary, TrackScore,
+};
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
@@ -323,32 +325,67 @@ impl Library {
         self.call("get_track_beats", json!({ "trackId": track_id }))
     }
 
-    /// Move one clip's bounds.
+    /// Create one clip.
     ///
-    /// `operation_id` makes a retry of *this* edit idempotent — reuse it
-    /// verbatim across attempts, never mint a second one. Unlike a graph
-    /// document there is no `base_revision` here: the authored score's edit
-    /// protocol resolves a partial update against whatever is current, so two
-    /// people moving different clips do not fight.
-    pub fn move_clip(
+    /// `request_id` is the idempotency key and the clip's id is derived from
+    /// it, so a replay returns the clip the first attempt made instead of
+    /// minting a second one at the same spot. Read the id back from
+    /// [`TrackEditResult::created_clip_id`]; do not assume it.
+    pub fn create_clip(
+        &self,
+        input: CreateTrackScoreInput,
+    ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
+        self.call("create_track_score", json!({ "payload": input }))
+    }
+
+    /// Delete one clip.
+    ///
+    /// `operation_id` is the idempotency key, and the containing score is
+    /// named explicitly so a replay stays resolvable *after* the clip row is
+    /// gone — which is the case that matters, because the response a client
+    /// lost is the one it will retry.
+    pub fn delete_clip(
+        &self,
+        input: DeleteTrackScoreInput,
+    ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
+        self.call("delete_track_score", json!({ "payload": input }))
+    }
+
+    /// Publish one complete clip list as a single compare-and-swap.
+    ///
+    /// **This is the only way to express a gesture that touches more than one
+    /// clip** — duplicate, split, delete-selection, paste, a group drag's
+    /// z-index change. Fanning such a gesture out into per-clip calls would
+    /// let it half-land, and the intermediate states are ones the editor's own
+    /// rules forbid (a clip gone before its replacement lands, a lane briefly
+    /// empty).
+    ///
+    /// `base` is the list the caller edited and `candidate` is what it should
+    /// become; the seam refuses the write if the stored list has moved on
+    /// since `base`. A candidate clip whose id is not in `base` is a create,
+    /// an id in `base` and not in `candidate` is a delete, and
+    /// [`TrackEditResult::id_map`] carries the ids the seam allocated for the
+    /// creates. `operation_id` is the idempotency key for the whole batch.
+    ///
+    /// The result's `clips` are authoritative and may be *newer* than the
+    /// candidate on a replay, so adopt them rather than the candidate.
+    pub fn replace_clips(
         &self,
         score_id: &str,
         track_id: &str,
-        clip_id: &str,
+        base: &[TrackScore],
+        candidate: &[TrackScore],
         operation_id: &str,
-        start_time: f64,
-        end_time: f64,
     ) -> impl Future<Output = Result<TrackEditResult, String>> + use<> {
         self.call(
-            "update_track_score",
-            json!({ "payload": {
-                "operationId": operation_id,
+            "replace_track_scores",
+            json!({
                 "scoreId": score_id,
                 "trackId": track_id,
-                "id": clip_id,
-                "startTime": start_time,
-                "endTime": end_time,
-            }}),
+                "baseScores": base,
+                "scores": candidate,
+                "operationId": operation_id,
+            }),
         )
     }
 
@@ -371,6 +408,25 @@ impl Library {
     /// for a whole track is absolute track time.
     pub fn seek(&self, seconds: f32) -> impl Future<Output = Result<(), String>> + use<> {
         self.call("host_seek", json!({ "seconds": seconds }))
+    }
+
+    /// Loop `region`, or stop looping when it is `None`.
+    ///
+    /// One argument for what the seam takes as two bounds, because the host
+    /// turns looping *on* exactly when both are given — so a pair of
+    /// independent `Option`s could spell a state that means nothing, and this
+    /// one cannot.
+    pub fn set_loop_region(
+        &self,
+        region: Option<(f32, f32)>,
+    ) -> impl Future<Output = Result<(), String>> + use<> {
+        self.call(
+            "host_set_loop_region",
+            json!({
+                "startSeconds": region.map(|(start, _)| start),
+                "endSeconds": region.map(|(_, end)| end),
+            }),
+        )
     }
 
     /// The transport, `after` a wait.

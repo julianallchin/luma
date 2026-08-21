@@ -30,6 +30,20 @@
 //! interpreter safe to run scripts of unknown quality: the worst a script can
 //! do is send a command that fails.
 //!
+//! # The input vocabulary
+//!
+//! There is one pointer gesture — press, optionally walk, release — and its
+//! variations are *parameters*, not separate commands: which
+//! [`protocol::Button`], how many clicks, which modifiers are held. So
+//! right-click is `click` with `button: "right"`, double-click is `count: 2`,
+//! and shift-click is `modifiers: ["shift"]`. Adding a `double_click` command
+//! beside `click` would mean two places that know how a press is synthesized,
+//! and the second would drift.
+//!
+//! Modifiers are held for the *whole* gesture, intermediate moves included,
+//! because that is what the app reads: an alt-drag that let go of alt before
+//! the drop is a move, not a duplicate.
+//!
 //! # The snapshot invariant
 //!
 //! Node ids are indices into one frame's registration order, so they mean

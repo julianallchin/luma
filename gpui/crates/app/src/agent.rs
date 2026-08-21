@@ -15,13 +15,16 @@ use crate::{Luma, Screen};
 
 /// The conversation `screen` is about, or `None` for a screen that is not
 /// about anything an agent can work on.
-///
-/// The track editor is deliberately absent: its state does not publish the
-/// track and venue a scope needs, and widening it is that screen's change to
-/// make, not this one's. When it does, the arm is three lines here.
 pub(crate) fn scope_for(screen: &Screen) -> Option<ThreadScope> {
     match screen {
-        Screen::Graph(editor) => {
+        // A track with no score is a screen with nothing to talk about: the
+        // track agent's scope names the score it edits, and `Editor::subject`
+        // is `None` until there is one.
+        Screen::TrackEditor { state, .. } => {
+            let (track, venue, score) = state.subject()?;
+            Some(ThreadScope::track(track, venue, score))
+        }
+        Screen::Graph { state: editor, .. } => {
             let (pattern, implementation) = editor.subject()?;
             Some(ThreadScope {
                 agent_kind: AgentKind::PatternGraph,

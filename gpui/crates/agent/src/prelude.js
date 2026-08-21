@@ -34,6 +34,17 @@
   const target = (value) => {
     if (value !== null && typeof value === "object" &&
         typeof value.dx === "number" && typeof value.dy === "number") {
+      // A displacement carries dx and dy and nothing else. Anything more is
+      // almost always `app.drag(node, {dx, dy, modifiers})` — the options
+      // belong in a *third* argument, and taken as part of the target they
+      // would be silently dropped and the gesture quietly wrong.
+      const extra = Object.keys(value).filter((key) => key !== "dx" && key !== "dy");
+      if (extra.length > 0) {
+        throw new Error(
+          `a drag target is {dx, dy}; \`${extra.join(", ")}\` belongs in the ` +
+          `options argument: app.drag(from, {dx, dy}, { ${extra[0]}: … })`,
+        );
+      }
       return { by: { dx: value.dx, dy: value.dy } };
     }
     return { node: node(value, "to") };
@@ -68,19 +79,29 @@
     click: (target, opts) =>
       call("click", {
         node: node(target, "node"),
-        ...options(opts, { restale: "restale" }),
+        ...options(opts, {
+          restale: "restale",
+          modifiers: "modifiers",
+          button: "button",
+          count: "count",
+        }),
       }),
     drag: (from, to, opts) =>
       call("drag", {
         from: node(from, "from"),
         to: target(to),
-        ...options(opts, { restale: "restale", steps: "steps" }),
+        ...options(opts, {
+          restale: "restale",
+          steps: "steps",
+          modifiers: "modifiers",
+          button: "button",
+        }),
       }),
     type: (target, text, opts) =>
       call("type", {
         node: node(target, "node"),
         text,
-        ...options(opts, { restale: "restale" }),
+        ...options(opts, { restale: "restale", modifiers: "modifiers" }),
       }),
     key: (keys) => call("key", { keys }),
     action: (name, payload) => call("action", { name, payload: payload ?? null }),

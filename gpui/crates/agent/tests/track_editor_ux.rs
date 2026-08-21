@@ -3,10 +3,11 @@
 //! Everything here is a behavior the web timeline has and this canvas had to
 //! grow: which vertical band answers a press, that only a clip's header bar is
 //! grabbable, that a sweep of empty lane selects what it *contains*, that a
-//! resize snaps to the beat grid and moves every selected clip, and that the
-//! wheel scrolls where it is not zooming. The contract they are checked
-//! against is `harness/gauntlet-te/behavior-spec.md`, which is the web source
-//! turned into an index.
+//! resize snaps to the beat grid and moves every selected clip, that every
+//! destructive command steps back under Cmd+Z, that two clips may share a
+//! layer, and that the wheel scrolls where it is not zooming. The contract
+//! they are checked against is `harness/gauntlet-te/behavior-spec.md`, which
+//! is the web source turned into an index.
 //!
 //! # Why one test and not one per cluster
 //!
@@ -274,7 +275,280 @@ const SCRIPT: &str = r#"
     app.frames(2);
     const unfollowed = status();
 
+    // --- loop region -------------------------------------------------------
+    // Cmd+L loops the cursor's range, and a second press over the same range
+    // takes the loop off. The chord used to open the agent chat; the chat
+    // answers to cmd-shift-l now, so nothing shadows the editor's own key.
+
+    const loopLane = shot().find({ role: "row", label: "Lane 2" });
+    app.drag(loopLane, { dx: 200, dy: 0 });
+    app.frames(2);
+    const loopCursor = readout("CURSOR ");
+    app.key("cmd-l");
+    app.frames(2);
+    const looped = { region: readout("LOOP "), status: status() };
+    app.key("cmd-l");
+    app.frames(2);
+    const unlooped = readout("LOOP ");
+
+    // --- editing commands --------------------------------------------------
+    // Everything below is a *write*: the working copy changes and one
+    // compare-and-swap publishes it. Each section therefore reads back twice —
+    // once from the picture, once after a reopen, which is the only proof the
+    // score and not just the canvas moved.
+    //
+    // Reopening first also puts the view back at the opening zoom with no
+    // scroll, so the pixel arithmetic above still holds.
+
+    /** How many clips carry this label. Duplicates are the point of half the
+        sections below, so nothing here may key a map by label. */
+    function count(label) {
+        return shot().findAll({ role: "card" }).filter((c) => c.label === label).length;
+    }
+    function total() {
+        return shot().findAll({ role: "card" })
+            .filter((c) => c.label !== "Waveform" && c.label !== "Ruler").length;
+    }
+    function reopen() {
+        settled();
+        app.click(node("button", "Back"));
+        app.frames(6);
+        open();
+    }
+
+    reopen();
+    /** Every card with this label, left to right. */
+    function spans(label) {
+        return shot().findAll({ role: "card" })
+            .filter((c) => c.label === label)
+            .map((c) => ({ start: c.bounds.x / ZOOM, length: c.bounds.width / ZOOM, y: c.bounds.y }))
+            .sort((a, b) => a.start - b.start);
+    }
+    function laneBox(label) {
+        const lane = shot().find({ role: "row", label });
+        return {
+            top: lane.bounds.y,
+            bottom: lane.bounds.y + lane.bounds.height,
+            width: lane.bounds.width,
+        };
+    }
+    const editable = { clips: clips(), total: total(), lane: laneBox("Lane 2") };
+
+    // Duplicate: Cmd+D copies the cursor's region and lays it down immediately
+    // after itself, clearing whatever the destination already held.
+    app.click(node("card", "Haze"));
+    app.frames(2);
+    app.key("cmd-d");
+    app.frames(20);
+    settled();
+    const duplicated = { hazes: count("Haze"), total: total() };
+
+    // Delete: the copy is still selected and the cursor still spans it, so
+    // Delete clears exactly that region and leaves the original alone.
+    app.key("delete");
+    app.frames(20);
+    settled();
+    reopen();
+    const deleted = { hazes: count("Haze"), total: total() };
+
+    // Undo: every mutating command is reversible, and the reversal is itself
+    // a write — so the proof is not only that the clip comes back on screen
+    // but that it is there again after a reopen.
+    //
+    // No reopen inside the sequence: the history belongs to the screen, and
+    // leaving the editor is leaving it behind. `ctrl-z` at the end is the
+    // other spelling of the same chord, which the web reads too.
+    const beforeUndo = { total: total(), strobes: count("Strobe") };
+    app.click(node("card", "Strobe"));
+    app.frames(2);
+    app.key("delete");
+    app.frames(20);
+    const afterDelete = { total: total(), strobes: count("Strobe") };
+    app.key("cmd-z");
+    app.frames(20);
+    const undone = { total: total(), strobes: count("Strobe") };
+    app.key("cmd-shift-z");
+    app.frames(20);
+    const redone = { total: total(), strobes: count("Strobe") };
+    app.key("ctrl-z");
+    app.frames(20);
+    settled();
+    reopen();
+    const undoneStored = { total: total(), strobes: count("Strobe") };
+
+    // Split: put Haze under the middle of the lane, set the cursor there with
+    // an empty-lane press — the lane's centre is below the 18px header band,
+    // so that press lands on the clip's inert body — and cut it in two.
+    const middle = laneBox("Lane 2").width / 2 / ZOOM;
+    const haze = clips()["Haze"];
+    app.drag(node("card", "Haze"), {
+        dx: (middle - (haze.start + haze.length / 2)) * ZOOM,
+        dy: 0,
+    });
+    app.frames(20);
+    settled();
+    const straddling = spans("Haze")[0];
+    app.click(shot().find({ role: "row", label: "Lane 2" }));
+    app.frames(2);
+    app.key("cmd-e");
+    app.frames(20);
+    settled();
+    reopen();
+    const splitHalves = spans("Haze");
+
+    // Vertical drag: pull the left half up a lane. Its z becomes the layer
+    // above — which is where Wash lives — so it ends up sharing Wash's lane,
+    // and stays there across a reopen, which a paint-only row offset could
+    // not do.
+    const beforeLift = { hazes: spans("Haze"), strobe: spans("Strobe")[0] };
+    app.drag(node("card", "Haze"), { dx: 0, dy: -80 });
+    app.frames(20);
+    settled();
+    const lifted = { hazes: spans("Haze"), wash: spans("Wash")[0] };
+    reopen();
+    const relifted = { hazes: spans("Haze"), strobe: spans("Strobe")[0] };
+
+    // Alt-drag: the copy stays where the press was and the original is what
+    // the pointer takes away.
+    const beforeAlt = spans("Strobe")[0];
+    app.drag(node("card", "Strobe"), { dx: -500, dy: 0 }, { modifiers: ["alt"] });
+    app.frames(20);
+    settled();
+    reopen();
+    const strobes = spans("Strobe");
+
+    // Overlap: two clips may share a layer *and* a span. The web timeline
+    // says so — it specifies which of two overlapping clips a press picks —
+    // so a move across a neighbour has to survive the write rather than be
+    // painted, accepted and then quietly rolled back on the next visit.
+    /** The leftmost card carrying this label. */
+    function leftmost(label) {
+        return shot().findAll({ role: "card" })
+            .filter((c) => c.label === label)
+            .sort((a, b) => a.bounds.x - b.bounds.x)[0];
+    }
+    const beforeOverlap = spans("Strobe");
+    app.drag(leftmost("Strobe"), { dx: 350, dy: 0 });
+    app.frames(20);
+    const overlapped = { strobes: spans("Strobe"), status: status() };
+    settled();
+    reopen();
+    const overlapStored = { strobes: spans("Strobe"), status: status() };
+
+    // Right-click: the insertion menu, and the clip it commits. Row 0 opens a
+    // lane above everything, so the inserted clip cannot overlap what is
+    // already there whichever pattern is chosen.
+    const beforeInsert = total();
+    app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
+    app.frames(2);
+    const menu = shot()
+        .findAll({ role: "row" })
+        .map((n) => n.label)
+        .filter((label) => !label.startsWith("Lane "));
+    app.click(shot().find({ role: "row", label: "Wash" }));
+    app.frames(20);
+    settled();
+    reopen();
+    const inserted = { total: total(), washes: spans("Wash") };
+
+    // The menu also has a keyboard: ArrowDown moves the active row and Enter
+    // commits *that* one, so what lands is the second pattern and not the
+    // first. A menu a key could open and only a pointer could answer is a menu
+    // that wedges the screen.
+    const beforeKeyed = { total: total(), chosen: count(menu[1]) };
+    app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
+    app.frames(2);
+    app.key("down");
+    app.frames(2);
+    app.key("enter");
+    app.frames(20);
+    settled();
+    reopen();
+    const keyed = { total: total(), chosen: count(menu[1]) };
+
+    // And Escape puts it away without leaving the screen, which is the other
+    // half of not being wedged.
+    app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
+    app.frames(2);
+    const menuOpen = shot().findAll({ role: "row" }).some((n) => n.label === menu[0]);
+    app.key("escape");
+    app.frames(2);
+    const dismissed = {
+        open: shot().findAll({ role: "row" }).some((n) => n.label === menu[0]),
+        editor: node("card", "Ruler") !== undefined,
+        total: total(),
+    };
+
+    // Follow re-centres while the transport is *stopped*: the playhead moves
+    // because the pointer moved it, and the eye still has to keep up.
+    //
+    // The keystroke comes *before* the wheel deliberately. A prior round left
+    // open whether a wheel that follows a keystroke still reaches the canvas;
+    // the zoom below is exactly that, and the re-centring assertion cannot
+    // pass unless it landed — a timeline narrower than its viewport has
+    // nowhere to scroll to.
+    app.key("f");
+    app.frames(2);
+    app.scroll(waveform(), { dy: 600, steps: 10, modifiers: ["platform"] });
+    toStart();
+    const strip = node("card", "Ruler");
+    // One step, so the press and the move are the whole gesture: the press
+    // lands under the pointer and the move is 300px to the right of it, which
+    // a following eye pulls back to the middle and a still one leaves where it
+    // fell.
+    app.drag(strip, { dx: 300, dy: 0 }, { steps: 1 });
+    app.frames(6);
+    const followed = {
+        playhead: playhead(),
+        centre: strip.bounds.x + strip.bounds.width / 2,
+    };
+
+    // Double-click opens the clip's pattern. Last, because it navigates away —
+    // and from a reopened view, because the section above left the timeline
+    // zoomed in with the clips off the right-hand edge.
+    reopen();
+    app.click(node("card", "Wash"), { count: 2 });
+    app.frames(20);
+    const navigated = shot().find({ role: "card", label: "Ruler" }) === undefined;
+
+    // ... and Back returns to the timeline it came from, not the patterns
+    // list: the graph screen carries the screen it was opened over.
+    app.action("luma::Back");
+    app.frames(12);
+    const returned = shot().find({ role: "card", label: "Ruler" }) !== undefined;
+
     ({
+        editable,
+        duplicated,
+        deleted,
+        beforeUndo,
+        afterDelete,
+        undone,
+        redone,
+        undoneStored,
+        beforeOverlap,
+        overlapped,
+        overlapStored,
+        loopCursor,
+        looped,
+        unlooped,
+        straddling,
+        splitHalves,
+        beforeLift,
+        lifted,
+        relifted,
+        beforeAlt,
+        strobes,
+        beforeInsert,
+        menu,
+        inserted,
+        beforeKeyed,
+        keyed,
+        menuOpen,
+        dismissed,
+        followed,
+        navigated,
+        returned,
         opened,
         clipPressed,
         waveformPressed,
@@ -485,6 +759,279 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
         !labels(&out, "unfollowed").contains(&"FOLLOW".to_string()),
         "F did not turn follow-playhead back off: {:#}",
         out["unfollowed"]
+    );
+
+    // 11. Duplicate lays the cursor's region down again immediately after
+    //     itself, in the same lane — and it is a real clip, not a paint.
+    let (before, after) = (&out["editable"], &out["duplicated"]);
+    assert_eq!(
+        after["hazes"].as_u64(),
+        Some(2),
+        "Cmd+D did not duplicate the selected clip: {before:#} -> {after:#}"
+    );
+    assert_eq!(
+        after["total"].as_u64(),
+        before["total"].as_u64().map(|total| total + 1),
+        "Cmd+D changed the score by more than the one clip it copied"
+    );
+
+    // 12. Delete clears the cursor's region and nothing else, and the score
+    //     comes back that way.
+    let deleted = &out["deleted"];
+    assert_eq!(
+        deleted["hazes"].as_u64(),
+        Some(1),
+        "Delete did not take the copy back out: {deleted:#}"
+    );
+    assert_eq!(
+        deleted["total"].as_u64(),
+        before["total"].as_u64(),
+        "after a duplicate and a delete the score should be back where it started: {deleted:#}"
+    );
+
+    // 12a. Undo puts a destructive command back, redo takes it away again,
+    //      and both are writes — the reopen is what proves the score moved
+    //      and not only the canvas.
+    let (was, gone) = (&out["beforeUndo"], &out["afterDelete"]);
+    assert_eq!(
+        gone["strobes"].as_u64(),
+        Some(0),
+        "the delete under test did not remove the clip: {was:#} -> {gone:#}"
+    );
+    let undone = &out["undone"];
+    assert_eq!(
+        (undone["strobes"].as_u64(), undone["total"].as_u64()),
+        (was["strobes"].as_u64(), was["total"].as_u64()),
+        "Cmd+Z did not put the deleted clip back: {gone:#} -> {undone:#}"
+    );
+    assert_eq!(
+        out["redone"]["strobes"].as_u64(),
+        Some(0),
+        "Cmd+Shift+Z did not re-apply the delete: {:#}",
+        out["redone"]
+    );
+    let stored = &out["undoneStored"];
+    assert_eq!(
+        (stored["strobes"].as_u64(), stored["total"].as_u64()),
+        (was["strobes"].as_u64(), was["total"].as_u64()),
+        "an undo is a write: the score should come back undone, not deleted: {stored:#}"
+    );
+
+    // 12b. A clip may be moved across its neighbour on the same layer, and
+    //      the move survives the write. The failure this pins is the one that
+    //      painted the edit, accepted it, and rolled it back on the next
+    //      visit with an internal error for a warning.
+    let laid_out = out["beforeOverlap"].as_array().cloned().unwrap_or_default();
+    let crossed = out["overlapped"]["strobes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        (laid_out.len(), crossed.len()),
+        (2, 2),
+        "the overlap section needs the two clips the alt-drag left: {laid_out:#?}"
+    );
+    let moved = number(&crossed[0], "start");
+    assert!(
+        (moved - (number(&laid_out[0], "start") + 7.)).abs() < 0.01,
+        "the drag should have slid the clip 7s right, to overlap its neighbour: {crossed:#?}"
+    );
+    assert!(
+        moved + number(&crossed[0], "length") > number(&crossed[1], "start"),
+        "the two clips do not overlap, so this proves nothing: {crossed:#?}"
+    );
+    let restored = out["overlapStored"]["strobes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        restored.len(),
+        2,
+        "the overlapping move lost a clip: {restored:#?}"
+    );
+    assert!(
+        (number(&restored[0], "start") - moved).abs() < 0.01,
+        "the overlapping move did not survive a reopen: {moved}s -> {restored:#?}"
+    );
+    for reading in ["overlapped", "overlapStored"] {
+        assert!(
+            !labels(&out[reading], "status")
+                .iter()
+                .any(|label| label.contains("overlap")),
+            "the editor reported an overlap refusal: {:#}",
+            out[reading]
+        );
+    }
+
+    // 12c. Cmd+L takes the loop from the cursor's range, and takes it off
+    //      again when asked for the same one — and it reaches the editor
+    //      rather than the agent chat that used to hold the chord.
+    let looped = &out["looped"];
+    let region = looped["region"].as_str().unwrap_or_default();
+    let cursor = out["loopCursor"].as_str().unwrap_or_default();
+    assert!(
+        !region.is_empty()
+            && region.trim_start_matches("LOOP ") == cursor.trim_start_matches("CURSOR "),
+        "Cmd+L should loop exactly the cursor's range: {cursor:?} -> {looped:#}"
+    );
+    assert!(
+        !labels(looped, "status")
+            .iter()
+            .any(|label| label == "Track agent"),
+        "Cmd+L opened the agent chat instead of setting the loop: {looped:#}"
+    );
+    assert_eq!(
+        out["unlooped"],
+        Value::Null,
+        "a second Cmd+L over the same range should clear the loop"
+    );
+
+    // 13. The lane block is bottom-anchored: the last lane's floor is the
+    //     canvas's, not 192 + N*80 down from the top.
+    let lane = &before["lane"];
+    assert!(
+        number(lane, "bottom") > 600.,
+        "the lanes are not pinned to the bottom of the canvas: {lane:#}"
+    );
+
+    // 14. Split cuts the clip the cursor crosses into two halves that together
+    //     cover exactly what the one clip did, and the score comes back split.
+    let straddling = &out["straddling"];
+    let halves = out["splitHalves"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        halves.len(),
+        2,
+        "Cmd+E did not split the clip under the cursor: {straddling:#} -> {halves:#?}"
+    );
+    let (was_start, was_length) = (number(straddling, "start"), number(straddling, "length"));
+    let covered: f64 = halves.iter().map(|half| number(half, "length")).sum();
+    assert!(
+        (number(&halves[0], "start") - was_start).abs() < 0.01
+            && (covered - was_length).abs() < 0.05,
+        "the halves do not cover the clip they came from: {straddling:#} -> {halves:#?}"
+    );
+
+    // 15. A vertical drag is a z-index write, not a paint offset: the half
+    //     that was pulled up lands in the lane above and is still there after
+    //     a reopen. Read as a *gap* between the two halves, which were in one
+    //     lane before and cannot be in one after.
+    let (was, now, again) = (&out["beforeLift"], &out["lifted"], &out["relifted"]);
+    let lane_gap = |reading: &Value| {
+        let hazes = reading["hazes"].as_array().cloned().unwrap_or_default();
+        assert_eq!(hazes.len(), 2, "the split halves went missing: {reading:#}");
+        number(&hazes[1], "y") - number(&hazes[0], "y")
+    };
+    assert!(
+        lane_gap(was).abs() < 1.,
+        "the two halves should start out in one lane: {was:#}"
+    );
+    assert!(
+        (lane_gap(now) - 80.).abs() < 1.,
+        "an upward drag should have lifted one half a lane: {now:#}"
+    );
+    assert!(
+        (lane_gap(again) - 80.).abs() < 1.,
+        "the lane change did not survive a reopen: {again:#}"
+    );
+    assert!(
+        (number(&now["hazes"][0], "y") - number(&now["wash"], "y")).abs() < 1.,
+        "the lifted half should share the layer above, which is Wash's: {now:#}"
+    );
+    // Bottom-anchored: the lane count did not change, so nothing else moved.
+    assert!(
+        (number(&was["strobe"], "y") - number(&again["strobe"], "y")).abs() < 1.,
+        "the layer on the floor moved when another clip changed lane"
+    );
+
+    // 16. Alt+drag duplicates in place: the copy is left where the press was
+    //     and the original is what the pointer took away.
+    let strobes = out["strobes"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        strobes.len(),
+        2,
+        "an alt-drag should have left a copy behind: {strobes:#?}"
+    );
+    let from = number(&out["beforeAlt"], "start");
+    let (moved, stayed) = (number(&strobes[0], "start"), number(&strobes[1], "start"));
+    assert!(
+        (stayed - from).abs() < 0.01 && (moved - (from - 10.)).abs() < 0.01,
+        "the copy should stay at {from}s and the original move 10s back: {stayed}s and {moved}s"
+    );
+
+    // 17. A right-click offers the library's patterns and commits one onto the
+    //     lane it pointed at — row 0, which opens a layer above everything.
+    let menu = labels(&out, "menu");
+    for (_, name, ..) in CLIPS {
+        assert!(
+            menu.contains(&name.to_string()),
+            "the insertion menu did not offer {name}: {menu:?}"
+        );
+    }
+    let inserted = &out["inserted"];
+    assert_eq!(
+        inserted["total"].as_u64(),
+        out["beforeInsert"].as_u64().map(|total| total + 1),
+        "the insertion menu did not add a clip: {inserted:#}"
+    );
+    let washes = inserted["washes"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        washes.len(),
+        2,
+        "the clip the menu inserted is not the pattern that was chosen: {inserted:#}"
+    );
+    let lanes: Vec<f64> = washes.iter().map(|clip| number(clip, "y")).collect();
+    assert!(
+        (lanes[0] - lanes[1]).abs() > 79.,
+        "an insertion on row 0 should open a lane of its own above the rest: {inserted:#}"
+    );
+
+    // 17a. The menu answers the keyboard: Enter commits the row the arrows
+    //      left active, and Escape closes it without leaving the editor.
+    let (was, keyed) = (&out["beforeKeyed"], &out["keyed"]);
+    assert_eq!(
+        keyed["total"].as_u64(),
+        was["total"].as_u64().map(|total| total + 1),
+        "Enter did not commit the insertion menu: {was:#} -> {keyed:#}"
+    );
+    assert_eq!(
+        keyed["chosen"].as_u64(),
+        was["chosen"].as_u64().map(|of| of + 1),
+        "Enter committed a pattern the arrow key had moved off: {keyed:#}"
+    );
+    assert_eq!(
+        out["menuOpen"], true,
+        "the right-click did not open the menu, so Escape proves nothing"
+    );
+    let dismissed = &out["dismissed"];
+    assert_eq!(
+        (dismissed["open"].as_bool(), dismissed["editor"].as_bool()),
+        (Some(false), Some(true)),
+        "Escape should close the menu and leave the timeline up: {dismissed:#}"
+    );
+    assert_eq!(
+        dismissed["total"].as_u64(),
+        keyed["total"].as_u64(),
+        "closing the menu inserted a clip: {dismissed:#}"
+    );
+
+    // 17. With follow on, a scrub that moves the playhead pulls the view back
+    //     under it — the transport is *stopped*, so nothing else would.
+    let followed = &out["followed"];
+    let (landed, centre) = (number(followed, "playhead"), number(followed, "centre"));
+    assert!(
+        (landed - centre).abs() <= 2.,
+        "a followed scrub left the playhead at {landed}, not re-centred at {centre}: {followed:#}"
+    );
+
+    // 18. Double-clicking a clip leaves the timeline for its pattern — and
+    //     Back restores that timeline whole, not the patterns list.
+    assert_eq!(
+        out["navigated"], true,
+        "a double-click on a clip did not open its pattern"
+    );
+    assert_eq!(
+        out["returned"], true,
+        "Back from a double-click-opened pattern did not return to the timeline"
     );
 }
 

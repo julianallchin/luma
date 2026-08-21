@@ -531,8 +531,8 @@ pub(crate) async fn check_track_workspace_candidate(
 }
 
 /// Validate a detached authored candidate against the exact document it was
-/// based on. Unlike live projection checks, overlap preservation and identity
-/// ownership must not drift with concurrent changes to the main score.
+/// based on. Unlike live projection checks, identity ownership must not drift
+/// with concurrent changes to the main score.
 pub(crate) async fn check_track_detached_candidate(
     pool: &SqlitePool,
     scope: &TrackScope,
@@ -1079,6 +1079,16 @@ fn materialize_candidate(
     (materialized, id_map)
 }
 
+/// Check a candidate against the rules a stored clip must obey: finite times
+/// inside the track, a minimum duration, an object for args, and a pattern
+/// that exists.
+///
+/// Two clips overlapping in time on one layer is **not** one of those rules.
+/// The timeline is a stack of layers the compositor blends in `z_index` order
+/// and resolves ties by array order; a lane is not a monophonic voice, so an
+/// editor that lets a clip be dragged across its neighbour is expressing what
+/// the model already allows. Rejecting it here refused an edit the canvas had
+/// already painted and the user had already seen land.
 async fn validate_candidate(
     connection: &mut SqliteConnection,
     current: &[TrackScore],
@@ -1154,19 +1164,6 @@ async fn validate_candidate(
         }
     }
 
-    let before = overlap_pairs(
-        &current
-            .iter()
-            .map(TrackClip::from)
-            .collect::<Vec<TrackClip>>(),
-    );
-    let after = overlap_pairs(candidate);
-    if let Some((left, right)) = after.difference(&before).next() {
-        return Err(TrackEditError::invalid(format!(
-            "clips {left} and {right} would overlap on the same layer"
-        )));
-    }
-
     Ok(())
 }
 
@@ -1206,26 +1203,6 @@ pub(crate) fn validate_track_draft_envelope(candidate: &[TrackClip]) -> Result<(
         }
     }
     Ok(())
-}
-
-fn overlap_pairs(clips: &[TrackClip]) -> BTreeSet<(String, String)> {
-    let mut pairs = BTreeSet::new();
-    for (index, left) in clips.iter().enumerate() {
-        for right in &clips[index + 1..] {
-            if left.z_index != right.z_index {
-                continue;
-            }
-            if left.start_time < right.end_time && right.start_time < left.end_time {
-                let pair = if left.id <= right.id {
-                    (left.id.clone(), right.id.clone())
-                } else {
-                    (right.id.clone(), left.id.clone())
-                };
-                pairs.insert(pair);
-            }
-        }
-    }
-    pairs
 }
 
 fn same_semantics(existing: &TrackScore, candidate: &TrackClip) -> bool {
@@ -1683,39 +1660,41 @@ mod tests {
         assert_eq!(client_id_count, 0);
     }
 
+    /// Two clips may share a layer and a span: the compositor blends by
+    /// `z_index` and breaks ties by order, and the editors let a clip be
+    /// dragged across its neighbour. A guard here refused edits the user had
+    /// already watched land.
     #[tokio::test]
-    async fn existing_overlap_is_preserved_but_new_overlap_is_rejected() {
+    async fn clips_may_overlap_on_one_layer() {
         let (_directory, pool) = test_pool().await;
         insert_score(&pool, &score("a", 0.0, 2.0, 0), 1, "synced").await;
-        insert_score(&pool, &score("b", 1.0, 3.0, 0), 1, "synced").await;
+        insert_score(&pool, &score("b", 4.0, 6.0, 0), 1, "synced").await;
         let document = load_track_document(&pool, &scope()).await.unwrap();
 
-        let no_op = apply_track_edit(
-            &pool,
-            &scope(),
-            TrackEditPlan {
-                base_revision: document.revision.clone(),
-                candidate: document.clips.clone(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!((no_op.added, no_op.updated, no_op.removed), (0, 0, 0));
-
-        let mut candidate = document.clips;
+        // Slide `b` back over `a`, and land a third clip inside both.
+        let mut candidate = document.clips.clone();
+        let moved = candidate
+            .iter_mut()
+            .find(|existing| existing.id == "b")
+            .unwrap();
+        moved.start_time = 1.0;
+        moved.end_time = 3.0;
         candidate.push(clip("new:collision", 1.5, 2.5, 0));
-        let error = check_track_edit(
+
+        let applied = apply_track_edit(
             &pool,
             &scope(),
             TrackEditPlan {
-                base_revision: no_op.revision,
+                base_revision: document.revision,
                 candidate,
             },
         )
         .await
-        .unwrap_err();
-        assert!(matches!(error, TrackEditError::Invalid { .. }));
-        assert!(error.to_string().contains("overlap on the same layer"));
+        .unwrap();
+        assert_eq!((applied.added, applied.updated, applied.removed), (1, 1, 0));
+
+        let reloaded = load_track_document(&pool, &scope()).await.unwrap();
+        assert_eq!(reloaded.clips.len(), 3);
     }
 
     #[tokio::test]

@@ -37,8 +37,8 @@ pub struct TotalSyncMerge<T> {
 }
 
 /// Deterministically merge score semantics. The integration boundary performs
-/// database-aware validation (known patterns, duration, and inherited overlap
-/// rules) before publishing the result.
+/// database-aware validation (known patterns and duration) before publishing
+/// the result.
 pub fn merge_track_total(
     base: &TrackDocument,
     current: &TrackDocument,
