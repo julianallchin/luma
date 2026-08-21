@@ -23,7 +23,7 @@ use luma_ui::Enabled;
 
 use luma_lib::settings::{AppSettings, AGENT_MODELS, AGENT_PROVIDERS};
 
-use crate::{Luma, Screen};
+use crate::Luma;
 
 /// Which section is showing.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -78,37 +78,22 @@ impl Settings {
 // impl lives here so the router stays a router.
 
 impl Luma {
-    /// Open settings over whatever is showing. The screen underneath is kept
-    /// whole, so Back returns to it without re-running its load.
+    /// Open settings over the whole shell. The regions persist beneath the
+    /// overlay, so closing it reveals them exactly as they were.
     pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.screen, Screen::Settings { .. }) {
+        if matches!(self.overlay, Some(crate::shell::Overlay::Settings(_))) {
             return;
         }
-        let previous = std::mem::replace(
-            &mut self.screen,
-            Screen::Welcome {
-                venues: Vec::new(),
-                error: None,
-            },
-        );
-        self.screen = Screen::Settings {
-            state: Settings::new(),
-            previous: Box::new(previous),
-        };
+        self.overlay = Some(crate::shell::Overlay::Settings(Settings::new()));
         cx.notify();
         self.reload_settings(cx);
     }
 
-    /// Return to the screen settings was opened over.
+    /// Dismiss the overlay. The Back button's handler; Escape lands in
+    /// [`Luma::dismiss_overlay`] and does the same thing.
     pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
-        if let Screen::Settings { previous, .. } = &mut self.screen {
-            self.screen = *std::mem::replace(
-                previous,
-                Box::new(Screen::Welcome {
-                    venues: Vec::new(),
-                    error: None,
-                }),
-            );
+        if matches!(self.overlay, Some(crate::shell::Overlay::Settings(_))) {
+            self.overlay = None;
             cx.notify();
         }
     }
@@ -166,11 +151,11 @@ impl Luma {
         .detach();
     }
 
-    /// Run `edit` against the settings screen's state, if that is still what
-    /// is showing. A load that lands after the user navigated away is a
-    /// no-op, not a screen that snaps back.
+    /// Run `edit` against the settings overlay's state, if it is still up. A
+    /// load that lands after it was dismissed is a no-op, not an overlay that
+    /// snaps back.
     fn with_settings(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
-        if let Screen::Settings { state, .. } = &mut self.screen {
+        if let Some(crate::shell::Overlay::Settings(state)) = &mut self.overlay {
             edit(state);
             cx.notify();
         }
@@ -217,7 +202,7 @@ fn toolbar(state: &Settings, app: &Entity<Luma>) -> Div {
         .child(
             luma_ui::luma_button("Back", Enabled::Yes)
                 .id("settings-back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
+                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_settings(cx)))
                 .agent_node(Role::Button, "Back"),
         )
         .child(luma_ui::silkscreen("SETTINGS"))

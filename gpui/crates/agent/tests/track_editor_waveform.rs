@@ -56,6 +56,10 @@ fn harness() -> Harness {
             CLIP.0 + CLIP.1,
         )],
     )
+    // The zoom arithmetic here was authored against a 1200-wide canvas; the
+    // shell's sidebar takes 256 of the row and the tab strip 28 of the
+    // column, so the window grows by exactly that much.
+    .window(1456., 828.)
     .open(Mode::Headless)
 }
 
@@ -82,9 +86,7 @@ const SCRIPT: &str = r#"
         return null;
     }
 
-    app.click(app.snapshot().find({ role: "card", label: "Test Venue" }));
-    app.frames(8);
-    app.click(app.snapshot().find({ role: "row", label: "Aurora" }));
+    nav.trackEditor("Test Venue", "Aurora");
 
     // Three minutes of audio to decode and render an envelope for, on a runtime
     // gpui does not own — waited for by its result rather than by a frame count.
@@ -122,7 +124,7 @@ const SCRIPT: &str = r#"
 fn a_deep_zoom_repaints_from_a_measured_window_and_a_zoom_out_gives_it_back() {
     let mut harness = harness();
     let script = SCRIPT.replace("CLIP_SECONDS", &CLIP.1.to_string());
-    let result = harness.exec(&script, Duration::from_secs(600));
+    let result = harness.exec(&support::script(&script), Duration::from_secs(600));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 

@@ -51,16 +51,19 @@
 /// `String` today — minting four newtypes here would put a second id vocabulary
 /// at the wrong layer and make every call site a conversion. Recorded as a
 /// deviation in the spec rather than silently dropped.
+///
+/// The fields are what today's *gestures* can name — a key wider than any
+/// gesture would force every call site to invent the missing half. A track row
+/// names `(track, venue)` and the score is resolved from that pair; a pattern
+/// row names a pattern and the implementation arrives with the document. When
+/// a gesture that names a score or an implementation exists, the key widens in
+/// the same change that adds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Target {
-    /// One track's timeline, against one venue's score.
-    TrackEditor { track: String, score: String },
-    /// One pattern's node graph, at the exact implementation the tab may
-    /// author into — two implementations of one pattern are two tabs.
-    Graph {
-        pattern: String,
-        implementation: String,
-    },
+    /// One track's timeline, against the named venue's score for it.
+    TrackEditor { track: String, venue: String },
+    /// One pattern's node graph.
+    Graph { pattern: String },
     /// One venue's rig in 3D. Singleton per venue.
     Visualizer { venue: String },
     /// One venue's DMX patch. Singleton per venue.
@@ -98,11 +101,8 @@ impl Target {
     /// reordered would lose its hover and its drag mid-gesture.
     pub(crate) fn element_key(&self) -> String {
         match self {
-            Self::TrackEditor { track, score } => format!("track:{track}:{score}"),
-            Self::Graph {
-                pattern,
-                implementation,
-            } => format!("graph:{pattern}:{implementation}"),
+            Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
+            Self::Graph { pattern } => format!("graph:{pattern}"),
             Self::Visualizer { venue } => format!("visualizer:{venue}"),
             Self::Universe { venue } => format!("universe:{venue}"),
         }
@@ -302,14 +302,13 @@ mod tests {
     fn track(id: &str) -> Target {
         Target::TrackEditor {
             track: id.to_string(),
-            score: "score".to_string(),
+            venue: "venue".to_string(),
         }
     }
 
-    fn graph(pattern: &str, implementation: &str) -> Target {
+    fn graph(pattern: &str) -> Target {
         Target::Graph {
             pattern: pattern.to_string(),
-            implementation: implementation.to_string(),
         }
     }
 
@@ -336,10 +335,13 @@ mod tests {
     }
 
     #[test]
-    fn one_pattern_at_two_implementations_is_two_tabs() {
+    fn two_patterns_are_two_tabs_and_one_pattern_is_one() {
         let mut tabs: Tabs<&str> = Tabs::default();
-        tabs.open(graph("pattern", "impl-1"), || "one");
-        tabs.open(graph("pattern", "impl-2"), || "two");
+        tabs.open(graph("pulse"), || "one");
+        tabs.open(graph("wash"), || "two");
+        tabs.open(graph("pulse"), || {
+            panic!("an open pattern must not be rebuilt")
+        });
         assert_eq!(tabs.iter().count(), 2);
     }
 
@@ -488,7 +490,7 @@ mod tests {
         let keys = [
             track("a").element_key(),
             track("b").element_key(),
-            graph("p", "i").element_key(),
+            graph("p").element_key(),
             Target::Visualizer {
                 venue: "v".to_string(),
             }
@@ -506,7 +508,7 @@ mod tests {
     fn every_target_declares_a_distinct_key_context() {
         let contexts = [
             track("a").key_context(),
-            graph("p", "i").key_context(),
+            graph("p").key_context(),
             Target::Visualizer {
                 venue: "v".to_string(),
             }

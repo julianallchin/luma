@@ -49,15 +49,14 @@ fn run(harness: &mut Harness, code: &str) -> Value {
 fn open_viewport(harness: &mut Harness) {
     run(
         harness,
-        r#"
-            app.frames(4, { waitMs: 60 });
-            const venue = app.snapshot().find({ role: "card" });
-            if (!venue) { throw new Error("no venue card on the welcome screen"); }
-            app.click(venue, { restale: "match" });
+        &support::script(
+            r#"
+            nav.venue("Test Venue");
             app.frames(4, { waitMs: 60 });
             app.action("luma::OpenVisualizer");
             app.frames(8, { waitMs: 60 });
         "#,
+        ),
     );
 }
 
@@ -69,10 +68,18 @@ fn open_viewport(harness: &mut Harness) {
 /// that will move when the presentation seam changes, which is the point:
 /// spec §7.4 budgets the readback at 3 ms and nothing measured it before.
 ///
-/// Optimised, on an M-series retina window, a frame of this is ~22 ms median /
-/// ~26 ms p95 — over the 16 ms the spec wants, and dominated by the readback
-/// and the BGRA copy of a full-resolution surface, which is exactly the cost
-/// the v2 zero-copy path exists to delete.
+/// Release, on an M-series retina window at 1200x800 with four movers, a frame
+/// of this orbit is ~6.9 ms median / ~7.6 ms p95, and ~8.9 / ~12.0 under a
+/// steeper two-axis drag — inside the 16.7 ms frame either way, with room for a
+/// rig several times this size.
+///
+/// It was ~27 ms, and the readback was blamed. The readback was not the cost:
+/// three things were, in order — a full-screen haze march at native resolution
+/// (`LIVE_HAZE_RESOLUTION`), every base-colour texture re-uploaded with a fresh
+/// CPU-built mip chain each frame (the renderer's material cache), and a
+/// byte-at-a-time RGBA→BGRA swizzle over the whole surface (now the output
+/// texture's own format). The actual copy out of the mapped buffer is ~0.1 ms
+/// per megapixel, which is what the v2 zero-copy path stands to delete.
 #[test]
 fn orbiting_reports_its_frame_cost() {
     let mut harness = harness("visualizer-budget");

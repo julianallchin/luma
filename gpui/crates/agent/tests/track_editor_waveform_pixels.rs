@@ -53,6 +53,10 @@ fn harness() -> Harness {
         TRACK_SECONDS,
         vec![Clip::new("pattern-strobe", "Strobe", 11.5, 12.5)],
     )
+    // The zoom arithmetic here was authored against a 1200-wide canvas; the
+    // shell's sidebar takes 256 of the row and the tab strip 28 of the
+    // column, so the window grows by exactly that much.
+    .window(1456., 828.)
     .open(Mode::Pixel)
 }
 
@@ -91,12 +95,7 @@ const SCRIPT: &str = r#"
     // Pixel mode lays out with real glyph metrics on a real device, so the
     // first frames take long enough that a fixed frame count can click at
     // nothing. Every step waits for what it is about to press.
-    const venue = settle(() => app.snapshot().find({ role: "card", label: "Test Venue" }), 200);
-    if (venue === null) throw new Error("the venue list never appeared");
-    app.click(venue);
-    const track = settle(() => app.snapshot().find({ role: "row", label: "Aurora" }), 200);
-    if (track === null) throw new Error("the track list never appeared");
-    app.click(track);
+    nav.trackEditor("Test Venue", "Aurora");
 
     // Three minutes of audio to decode an envelope for, on a runtime gpui does
     // not own — waited for by its result rather than by a frame count.
@@ -123,7 +122,7 @@ const SCRIPT: &str = r#"
 fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn() {
     let mut harness = harness();
     let result = harness.exec(
-        &SCRIPT.replace("NOTCH", &NOTCH.to_string()),
+        &support::script(&SCRIPT.replace("NOTCH", &NOTCH.to_string())),
         Duration::from_secs(600),
     );
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);

@@ -19,7 +19,7 @@ use luma_ui::Enabled;
 
 use luma_lib::models::patterns::PatternSummary;
 
-use crate::{Luma, Screen};
+use crate::Luma;
 
 /// The screen's whole state: what the query returned, and whether it has.
 pub struct Patterns {
@@ -31,19 +31,19 @@ pub struct Patterns {
 }
 
 impl Luma {
-    /// Navigate to the pattern list and read it.
+    /// Open the pattern picker overlay and read the list.
     pub(crate) fn show_patterns(&mut self, cx: &mut Context<Self>) {
         let pending = self.library.patterns();
-        self.screen = Screen::Patterns(Patterns {
+        self.overlay = Some(crate::shell::Overlay::Patterns(Patterns {
             rows: Rc::from(Vec::new()),
             loaded: false,
             error: None,
-        });
+        }));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                if let Screen::Patterns(state) = &mut this.screen {
+                if let Some(crate::shell::Overlay::Patterns(state)) = &mut this.overlay {
                     state.loaded = true;
                     match result {
                         Ok(rows) => state.rows = rows.into(),
@@ -59,7 +59,7 @@ impl Luma {
 
     /// The loaded pattern a row click carries.
     fn find_pattern(&self, id: &str) -> Option<PatternSummary> {
-        let Screen::Patterns(state) = &self.screen else {
+        let Some(crate::shell::Overlay::Patterns(state)) = &self.overlay else {
             return None;
         };
         state.rows.iter().find(|row| row.id == id).cloned()
@@ -99,7 +99,7 @@ pub fn patterns(state: &Patterns, app: &Entity<Luma>) -> Div {
 }
 
 fn toolbar(state: &Patterns, app: &Entity<Luma>) -> Div {
-    let back = app.clone();
+    let close = app.clone();
     let label = format!("{} PATTERNS", state.rows.len());
     div()
         .flex()
@@ -111,10 +111,10 @@ fn toolbar(state: &Patterns, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", Enabled::Yes)
-                .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
-                .agent_node(Role::Button, "Back"),
+            luma_ui::luma_button("Close", Enabled::Yes)
+                .id("close")
+                .on_click(move |_, _, cx| close.update(cx, |this, cx| this.dismiss_overlay(cx)))
+                .agent_node(Role::Button, "Close"),
         )
         .child(luma_ui::silkscreen(label))
 }

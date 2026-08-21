@@ -1,9 +1,11 @@
-//! The track browser: one venue's library as a filtered, striped table.
+//! The track browser: one venue's library, as the shell's sidebar.
 //!
-//! Mirrors `src/features/tracks/components/track-browser.tsx` — the same
-//! column order and widths, the same 10px uppercase silkscreen headers, the
-//! same `bg-card` / `bg-stripe` alternation with a `--hover` lift, and the same
-//! three filters over one query's worth of rows.
+//! The web's table (`src/features/tracks/components/track-browser.tsx`) became
+//! a row list at sidebar width when the shell landed — comet's session-row
+//! anatomy: a status lead, the title, `artist · bpm` muted under it. The three
+//! filters and the search are the web browser's, unchanged, over one query's
+//! worth of rows. The added-by and preprocessing columns died with the table;
+//! they return with a wider tracks surface if one is ever wanted.
 //!
 //! # Filtering is the view's job, not the query's
 //!
@@ -23,8 +25,6 @@
 //! native host just reads the file, so `img(path)` is the whole story and
 //! GPUI's image cache handles the decode and the lazy load.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::*;
@@ -35,7 +35,7 @@ use luma_ui::Enabled;
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 
-use crate::{Luma, Screen};
+use crate::Luma;
 
 /// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
 /// the default the web browser opens with.
@@ -92,12 +92,9 @@ pub struct Tracks {
     ownership: Ownership,
     in_venue: bool,
     query: String,
-    /// The signed-in principal, snapshotted when the screen opened. The
-    /// ownership filter and the added-by column both read it.
+    /// The signed-in principal, snapshotted when the venue was selected. The
+    /// ownership filter reads it.
     user: Option<String>,
-    /// `uid -> display name` for other people's tracks, filled by one lookup
-    /// after the rows land. Absent uids read as "shared", as on the web side.
-    names: Rc<HashMap<String, String>>,
     search_focus: FocusHandle,
 }
 
@@ -138,20 +135,6 @@ impl Tracks {
     fn refilter(&mut self) {
         self.shown = self.filter().into();
     }
-
-    /// Every uid on screen that is somebody else's and has no name yet.
-    fn unnamed_uids(&self) -> Vec<String> {
-        let mut uids: Vec<String> = self
-            .rows
-            .iter()
-            .filter_map(|row| row.uid.as_deref())
-            .filter(|uid| Some(*uid) != self.user.as_deref() && !self.names.contains_key(*uid))
-            .map(str::to_string)
-            .collect();
-        uids.sort_unstable();
-        uids.dedup();
-        uids
-    }
 }
 
 /// `title`, `artist` or `album` contains `query`, which is already lowercased
@@ -173,12 +156,22 @@ fn matches(track: &TrackBrowserRow, query: &str) -> bool {
 // a router.
 
 impl Luma {
-    /// Navigate to a venue's tracks. The table renders immediately, empty, and
-    /// fills in when the query lands — the venue is already known, so there is
-    /// nothing to wait for before drawing the screen.
+    /// Select a venue: the sidebar fills with its tracks, the picker overlay
+    /// closes, and any *rig* tabs of another venue close with it — a
+    /// visualizer is a view of a venue, and a view of a room you left is a
+    /// window into nowhere. Track and graph tabs stay: they are about their
+    /// own subjects, and closing somebody's open timeline because they glanced
+    /// at another room would be the shell throwing work away.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
+        let leaving: Vec<crate::shell::Body> = self
+            .workspace
+            .close_where(|target| target.venue().is_some_and(|owner| owner != venue.id));
+        for body in leaving {
+            self.teardown(body, cx);
+        }
+        self.overlay = None;
         let pending = self.library.tracks(&venue.id);
-        self.screen = Screen::Tracks(Tracks {
+        self.sidebar = Some(Tracks {
             venue_id: venue.id,
             venue_name: venue.name,
             rows: Rc::from(Vec::new()),
@@ -189,7 +182,6 @@ impl Luma {
             in_venue: true,
             query: String::new(),
             user: self.library.user_id().map(str::to_string),
-            names: Rc::new(HashMap::new()),
             search_focus: cx.focus_handle(),
         });
         cx.notify();
@@ -206,39 +198,8 @@ impl Luma {
                         Err(error) => state.error = Some(error.to_string()),
                     }
                 });
-                this.load_display_names(cx);
             })
             .ok();
-        })
-        .detach();
-    }
-
-    /// Name the other people whose tracks are on screen. Skipped entirely when
-    /// every row is this host's own, which is the usual case and the only one
-    /// an offline host can answer.
-    fn load_display_names(&mut self, cx: &mut Context<Self>) {
-        let Screen::Tracks(state) = &self.screen else {
-            return;
-        };
-        let uids = state.unnamed_uids();
-        if uids.is_empty() {
-            return;
-        }
-        let pending = self.library.display_names(uids);
-        cx.spawn(async move |this, cx| {
-            // A directory lookup is a network call; failing it leaves the
-            // column reading "shared", which is the same thing it says for a
-            // uid the directory does not know.
-            if let Ok(names) = pending.await {
-                this.update(cx, |this, cx| {
-                    this.with_tracks(cx, |state| {
-                        let mut merged = (*state.names).clone();
-                        merged.extend(names);
-                        state.names = Rc::new(merged);
-                    })
-                })
-                .ok();
-            }
         })
         .detach();
     }
@@ -279,10 +240,10 @@ impl Luma {
         });
     }
 
-    /// Run `edit` against the track screen's state, if that is still what is
-    /// showing. A load that lands after the user navigated away is a no-op.
+    /// Run `edit` against the sidebar's browser, if a venue is selected. A
+    /// load that lands after the venue changed is a no-op.
     fn with_tracks(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Tracks)) {
-        if let Screen::Tracks(state) = &mut self.screen {
+        if let Some(state) = &mut self.sidebar {
             edit(state);
             cx.notify();
         }
@@ -291,31 +252,24 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
-/// Row height. The web rows are content-sized by their 32px album-art cell.
-const ROW_HEIGHT: f32 = 32.;
-/// `grid-cols-[28px_56px_1fr_1fr_70px_60px_60px_70px]`, minus the selection
-/// checkbox this host does not have.
-const ART_WIDTH: f32 = 56.;
-const BPM_WIDTH: f32 = 70.;
-const TIME_WIDTH: f32 = 60.;
-const STATUS_WIDTH: f32 = 60.;
-const ADDED_BY_WIDTH: f32 = 70.;
-const SEARCH_WIDTH: f32 = 200.;
+/// Comet's session-row anatomy at sidebar width: two text lines plus the lead.
+const ROW_HEIGHT: f32 = 44.;
 const GAP: f32 = 8.;
-const PAD_X: f32 = 16.;
+const PAD_X: f32 = 12.;
 /// The coverage dot's box, matching the web side's `w-1.5 h-1.5`.
 const DOT: f32 = 6.;
 
-/// Render the browser. `app` is the root entity every control writes through.
-pub fn tracks(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+/// The sidebar: the venue's name (the way back to the picker), the search,
+/// the filters, and the venue's tracks as a row list.
+pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
     div()
         .size_full()
         .flex()
         .flex_col()
         .bg(ladder::background())
         .text_color(ladder::foreground())
-        .child(toolbar(state, app, window))
-        .child(header())
+        .child(head(state, app))
+        .child(filters(state, app, window))
         .child(match &state.error {
             Some(message) => luma_ui::plate(
                 format!("Failed to load tracks: {message}"),
@@ -336,62 +290,77 @@ pub fn tracks(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         })
 }
 
-/// The way back, the venue, the search field, and the filters.
-fn toolbar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
-    let back = app.clone();
+/// The venue at the head of the sidebar. Pressing it reopens the venue picker
+/// — the picker overlay is the one venue-choosing mechanism, so the head is a
+/// door to it rather than a second selector that could disagree with it.
+fn head(state: &Tracks, app: &Entity<Luma>) -> Div {
+    let picker = app.clone();
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(12.))
+        .gap(px(GAP))
         .px(px(PAD_X))
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", Enabled::Yes)
-                .id("back")
-                .on_click(move |_, _, cx| back.update(cx, |this, cx| this.back(cx)))
-                .agent_node(Role::Button, "Back"),
+            luma_ui::luma_button(&state.venue_name, Enabled::Yes)
+                .id("venue")
+                .on_click(move |_, _, cx| picker.update(cx, |this, cx| this.show_venues(cx)))
+                .agent_node(Role::Button, state.venue_name.clone()),
         )
+        .child(div().flex_1())
+        // How many rows the filters admit — the web browser's footer, kept in
+        // the head because the sidebar has no second bar to spare.
+        .child(luma_ui::silkscreen(format!("{} TRACKS", state.shown.len())))
+}
+
+/// The search over the filters, stacked — at sidebar width they do not share
+/// a row.
+fn filters(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .flex_col()
+        .gap(px(6.))
+        .px(px(PAD_X))
+        .py(px(8.))
+        .border_b_1()
+        .border_color(ladder::trim())
+        .child(search(state, app, window))
         .child(
             div()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .child(state.venue_name.clone())
-                .agent_node(Role::Text, state.venue_name.clone()),
+                .flex()
+                .items_center()
+                .gap(px(GAP))
+                .child(ownership_filter(state, app))
+                .child(in_venue_filter(state, app)),
         )
-        // How many rows the filters admit — the web browser's footer, kept in
-        // the toolbar because a native window has no second bar to spare.
-        .child(luma_ui::silkscreen(format!("{} TRACKS", state.shown.len())))
-        .child(div().flex_1())
-        .child(search(state, app, window))
-        .child(ownership_filter(state, app))
-        .child(in_venue_filter(state, app))
 }
 
 /// The search field: a `luma_input` that takes keystrokes.
 ///
-/// It edits a `String` on the screen's state rather than hosting a real text
+/// It edits a `String` on the sidebar's state rather than hosting a real text
 /// editor — no caret, no selection, no IME — because the browser needs a
 /// filter, and every one of those is a control `luma-ui` would have to own for
-/// the whole app rather than one this screen invents.
+/// the whole app rather than one this list invents.
 fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
     const PLACEHOLDER: &str = "Search tracks…";
     let empty = state.query.is_empty();
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
     let typed = app.clone();
-    luma_ui::luma_input(text, empty, SEARCH_WIDTH)
+    luma_ui::luma_input(text, empty, crate::shell::SIDEBAR_WIDTH - 2. * PAD_X)
         .id("search")
         .track_focus(&focus)
         // While this field has the keyboard, a key a person could be typing
         // is text and not a shortcut — see `keymap`. Escape is the reason
-        // this is not academic: it clears the query here and leaves the venue
-        // everywhere else.
+        // this is not academic: it clears the query here and dismisses an
+        // overlay everywhere else.
         .key_context(crate::keymap::context::TEXT_INPUT)
         // A press focuses it: `track_focus` registers that itself, and it also
-        // stops the screen root underneath from taking the focus back.
+        // stops the shell root underneath from taking the focus back.
         .on_key_down(move |event, _, cx| {
             let keystroke = event.keystroke.clone();
             typed.update(cx, |this, cx| this.search_key(&keystroke, cx));
@@ -434,114 +403,83 @@ fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
     )
 }
 
-fn header() -> Div {
-    row_shell()
-        .flex_shrink_0()
-        .py(px(8.))
-        .border_b_1()
-        .border_color(ladder::trim())
-        .text_size(px(10.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(ladder::muted_foreground())
-        .child(art_cell().child(""))
-        .child(flex_cell().child("TITLE"))
-        .child(flex_cell().child("ARTIST"))
-        .child(numeric_cell(BPM_WIDTH).child("BPM"))
-        .child(numeric_cell(TIME_WIDTH).child("TIME"))
-        .child(centered_cell(STATUS_WIDTH).child("STATUS"))
-        .child(numeric_cell(ADDED_BY_WIDTH).child("ADDED BY"))
-}
-
 /// The scrolling rows. `uniform_list` virtualizes them, so a library of
 /// thousands costs one screenful of elements — the same reason the web side
 /// runs a virtualizer. Everything the closure needs is refcounted, so a redraw
-/// copies three pointers rather than the library.
+/// copies two pointers rather than the library.
 fn body(state: &Tracks, app: &Entity<Luma>) -> Div {
     let rows = Rc::clone(&state.rows);
     let shown = Rc::clone(&state.shown);
-    let names = Rc::clone(&state.names);
-    let user = state.user.clone();
     let app = app.clone();
     div().flex_1().overflow_hidden().child(
         uniform_list("tracks", shown.len(), move |range, _, _| {
             range
-                .map(|index| {
-                    track_row(
-                        index,
-                        &rows[shown[index]],
-                        &Chrome {
-                            user: user.as_deref(),
-                            names: &names,
-                            app: &app,
-                        },
-                    )
-                })
+                .map(|index| track_row(index, &rows[shown[index]], &app))
                 .collect()
         })
         .size_full(),
     )
 }
 
-/// What a row needs beyond its own record: who is looking, what the other
-/// people are called, and where a click on it goes.
-struct Chrome<'a> {
-    user: Option<&'a str>,
-    names: &'a HashMap<String, String>,
-    app: &'a Entity<Luma>,
-}
-
-fn track_row(index: usize, track: &TrackBrowserRow, chrome: &Chrome) -> AnyElement {
+fn track_row(index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyElement {
     let stripe = if index.is_multiple_of(2) {
         ladder::background()
     } else {
         ladder::stripe()
     };
     let name = track_name(track);
-    let opened = chrome.app.clone();
+    let opened = app.clone();
     let track_id = track.id.clone();
-    row_shell()
+    let artist = track
+        .artist
+        .clone()
+        .unwrap_or_else(|| "Unknown artist".into());
+    let sub = match track.bpm {
+        Some(bpm) => format!("{artist} · {bpm:.1}"),
+        None => artist,
+    };
+    div()
         .id(SharedString::from(track.id.clone()))
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .flex()
+        .items_center()
+        .gap(px(GAP))
+        .px(px(PAD_X))
+        .overflow_hidden()
         .on_click(move |_, _, cx| {
             let track_id = track_id.clone();
             opened.update(cx, |this, cx| this.open_track(&track_id, cx));
         })
-        .h(px(ROW_HEIGHT))
         .bg(stripe)
         .hover(|s| s.bg(ladder::hover()))
-        .text_size(px(12.))
-        .text_color(ladder::foreground_90())
-        .child(art(track))
         .child(
-            flex_cell()
+            div()
+                .flex_shrink_0()
+                .w(px(DOT))
+                .children(coverage_dot(track)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
                 .flex()
-                .items_center()
-                .gap(px(6.))
-                .children(coverage_dot(track))
-                .child(name.clone()),
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(ladder::foreground_90())
+                        .child(name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(ladder::muted_foreground())
+                        .child(sub),
+                ),
         )
-        .child(
-            flex_cell().child(
-                track
-                    .artist
-                    .clone()
-                    .unwrap_or_else(|| "Unknown artist".into()),
-            ),
-        )
-        .child(
-            numeric_cell(BPM_WIDTH)
-                .font_family("SF Mono")
-                .child(match track.bpm {
-                    Some(bpm) => format!("{bpm:.1}"),
-                    None => "--".into(),
-                }),
-        )
-        .child(
-            numeric_cell(TIME_WIDTH)
-                .font_family("SF Mono")
-                .child(duration(track.duration_seconds)),
-        )
-        .child(preprocessing_status(track))
-        .child(numeric_cell(ADDED_BY_WIDTH).child(added_by(track, chrome)))
         .agent_node(Role::Row, name)
         .into_any_element()
 }
@@ -585,129 +523,4 @@ fn coverage_dot(track: &TrackBrowserRow) -> Option<Div> {
             .rounded_full()
             .bg(color),
     )
-}
-
-/// The seven preprocessing steps, as "done / total".
-///
-/// The web side draws this as a progress ring with the step names in a
-/// tooltip. GPUI has no arc primitive and this host has no hover cards, so the
-/// same fact is written out — which is also the only form a driver can read.
-fn preprocessing_status(track: &TrackBrowserRow) -> Div {
-    let steps = [
-        track.has_storage,
-        track.has_beats,
-        track.has_stems,
-        track.has_roots,
-        track.has_drum_onsets,
-        track.has_bar_classifications,
-        track.has_genres,
-    ];
-    let done = steps.iter().filter(|step| **step).count();
-    centered_cell(STATUS_WIDTH)
-        .font_family("SF Mono")
-        .text_size(px(10.))
-        .text_color(if done == steps.len() {
-            ladder::status_ok()
-        } else {
-            ladder::muted_foreground()
-        })
-        .child(format!("{done}/{}", steps.len()))
-}
-
-/// Who imported this track: "you" for your own and for the guest namespace,
-/// the person's display name otherwise, "shared" while — or if — that name
-/// cannot be looked up.
-fn added_by(track: &TrackBrowserRow, chrome: &Chrome) -> String {
-    match &track.uid {
-        Some(uid) if Some(uid.as_str()) != chrome.user => chrome
-            .names
-            .get(uid)
-            .cloned()
-            .unwrap_or_else(|| "shared".into()),
-        _ => "you".into(),
-    }
-}
-
-/// `formatDuration`: `M:SS`, `--:--` when unknown.
-fn duration(seconds: Option<f64>) -> String {
-    match seconds {
-        Some(seconds) if seconds.is_finite() => {
-            let total = seconds.max(0.);
-            format!("{}:{:02}", (total / 60.) as u64, (total % 60.) as u64)
-        }
-        _ => "--:--".into(),
-    }
-}
-
-// -- cell geometry, shared by the header and every row ------------------------
-
-/// One row's box. `w_full` is load-bearing: a `uniform_list` item is laid out
-/// against its own content unless it claims the list's width, and without it
-/// the `flex_1` cells never expand and the stripe stops where the text does.
-fn row_shell() -> Div {
-    div()
-        .w_full()
-        .flex()
-        .items_center()
-        .gap(px(GAP))
-        .px(px(PAD_X))
-        .overflow_hidden()
-}
-
-/// The art column's box: `h-8 w-14 overflow-hidden`, which is what makes the
-/// row 32px tall on the web side too.
-fn art_cell() -> Div {
-    div()
-        .flex_shrink_0()
-        .w(px(ART_WIDTH))
-        .h(px(ROW_HEIGHT))
-        .overflow_hidden()
-}
-
-/// One row's art: the image cropped to fill, or the same "no art" plate the
-/// web side draws when a track has none.
-fn art(track: &TrackBrowserRow) -> Div {
-    let cell = art_cell();
-    match &track.album_art_path {
-        // Explicit pixel bounds, not `size_full`: an `Img` falls back to the
-        // decoded image's intrinsic size when its own box isn't definite, and
-        // an oversized cell doesn't just overflow — it breaks `uniform_list`,
-        // which scrolls on the assumption that every row is the same height.
-        Some(path) => cell.child(
-            img(PathBuf::from(path))
-                .w(px(ART_WIDTH))
-                .h(px(ROW_HEIGHT))
-                .object_fit(ObjectFit::Cover),
-        ),
-        None => cell
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgba(0x00000033))
-            .text_size(px(7.))
-            .text_color(ladder::muted_foreground())
-            .child("NO ART"),
-    }
-}
-
-fn flex_cell() -> Div {
-    div().flex_1().min_w(px(0.)).overflow_hidden()
-}
-
-fn numeric_cell(width: f32) -> Div {
-    div()
-        .flex_shrink_0()
-        .w(px(width))
-        .flex()
-        .justify_end()
-        .overflow_hidden()
-}
-
-fn centered_cell(width: f32) -> Div {
-    div()
-        .flex_shrink_0()
-        .w(px(width))
-        .flex()
-        .justify_center()
-        .overflow_hidden()
 }

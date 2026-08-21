@@ -96,7 +96,7 @@ const SCRIPT: &str = r#"
 
     // Leave the screen entirely and come back. A repaint survives the first
     // reading; only a write survives this one.
-    nav.back();
+    nav.closeTab();
     app.frames(6);
     const reopened = open();
 

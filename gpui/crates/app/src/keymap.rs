@@ -7,10 +7,17 @@
 //!
 //! # Where a binding fires
 //!
-//! Scope comes from *key context*, not from a screen check inside the
-//! handler: `Luma::render` declares [`context::ROOT`] at the window root and
-//! the screen's own context at the focused screen root, so `space` can mean
-//! playback in the track editor and mean nothing at all on the venue grid.
+//! Scope comes from *key context*, not from a mode check inside the handler.
+//! The shell declares [`context::ROOT`] at the window root, one context per
+//! region under it, and the active tab's own context inside the workspace, so
+//! `space` can mean playback in a track-editor tab and mean nothing at all in
+//! the thread beside it.
+//!
+//! Contexts **nest**: `Luma > Workspace > TrackEditor`. gpui evaluates a
+//! binding's predicate over the whole focus path and resolves by specificity,
+//! which is what makes `secondary-w` a *scoped* binding rather than a runtime
+//! branch — the tab's ⌘W wins while a tab is focused, and the window's works
+//! everywhere else.
 //!
 //! # Why a text field can keep the space bar
 //!
@@ -20,12 +27,12 @@
 //! belongs on the binding: every binding whose key is a character a person
 //! could be typing carries `&& !`[`context::TEXT_INPUT`], a predicate gpui
 //! evaluates over the *whole* focus path. One rule, stated once, and it is
-//! what keeps the browser's spacebar a space and its escape a cleared query.
+//! what keeps the sidebar's spacebar a space and its escape a cleared query.
 
 use gpui::{actions, Action, App, KeyBinding};
 
-/// The key contexts a dispatch path can carry: the window's, each screen's,
-/// and one for a field that is taking typed text.
+/// The key contexts a dispatch path can carry: the window's, each region's,
+/// each tab's, each overlay's, and one for a field taking typed text.
 ///
 /// They live together because these names are only ever half of a pair — a
 /// binding predicate here and a `key_context` on an element there — and a
@@ -35,21 +42,25 @@ pub(crate) mod context {
     /// The window root. Everything Luma renders is under it, so a binding
     /// scoped here is app-wide without being global.
     pub const ROOT: &str = "Luma";
-    pub const WELCOME: &str = "Welcome";
-    pub const TRACKS: &str = "Tracks";
-    pub const PATTERNS: &str = "Patterns";
-    pub const GRAPH: &str = "Graph";
+
+    // The three regions of the shell.
+    pub const SIDEBAR: &str = "Sidebar";
+    pub const THREAD: &str = "Thread";
+    pub const WORKSPACE: &str = "Workspace";
+
+    // Tab contexts, declared by the tab's own root *inside* `WORKSPACE`.
     pub const TRACK_EDITOR: &str = "TrackEditor";
+    pub const GRAPH: &str = "Graph";
     pub const VISUALIZER: &str = "Visualizer";
-    /// Declared by the workspace's DMX-patch tab. Named here with its siblings
-    /// even though the tab that declares it is not mounted yet: this list is
-    /// the vocabulary, and a context invented at the element instead would be
-    /// the half of a pair that has no other half.
     pub const UNIVERSE: &str = "Universe";
+
+    // Overlay contexts. One overlay is up at a time, over all three regions.
+    pub const VENUES: &str = "Venues";
+    pub const PATTERNS: &str = "Patterns";
     pub const SETTINGS: &str = "Settings";
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
-    /// because the chat panel's composer, in another crate, declares the same
+    /// because the chat's composer, in another crate, declares the same
     /// context — see [`luma_ui::TEXT_INPUT`].
     pub use luma_ui::TEXT_INPUT;
 }
@@ -59,17 +70,36 @@ actions!(
     [
         /// Start or stop the track editor's transport.
         PlayPause,
-        /// Leave the screen for the one it was opened from. A no-op on the
-        /// venue grid, which was not opened from anywhere.
-        Back,
-        /// Open settings over whatever is showing.
+        /// Dismiss the overlay that is up, or the insertion menu inside the
+        /// editor. Nothing with neither up: the shell is persistent, so there
+        /// is no screen to leave.
+        DismissOverlay,
+        /// Show or hide the sidebar / the workspace panel.
+        ToggleSidebar,
+        ToggleWorkspace,
+        /// Switch the workspace between taking over everything right of the
+        /// sidebar and sharing it with the thread column.
+        ToggleExpand,
+        /// Close the focused tab.
+        CloseTab,
+        /// Reveal the nth tab in strip order.
+        SelectTab1,
+        SelectTab2,
+        SelectTab3,
+        SelectTab4,
+        SelectTab5,
+        SelectTab6,
+        SelectTab7,
+        SelectTab8,
+        SelectTab9,
+        /// Open the pattern picker overlay.
+        OpenPatterns,
+        /// Open settings over the whole shell.
         OpenSettings,
-        /// Open the 3D stage view over the track editor or the track browser.
+        /// Open the 3D stage view as a workspace tab.
         OpenVisualizer,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
-        /// Show or hide the agent chat over whatever is showing.
-        ToggleAgentChat,
         /// Undo / redo the track editor's last edit.
         UndoClips,
         RedoClips,
@@ -106,8 +136,8 @@ pub(crate) fn init(cx: &mut App) {
     // `secondary-` is cmd on macOS and ctrl elsewhere: gpui resolves it per
     // platform, which is why there is no `cfg` here.
     let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
-    // Every track-editor binding shares one predicate: it means something on
-    // that screen and nothing anywhere else, and a field taking typed text
+    // Every track-editor binding shares one predicate: it means something in
+    // that tab and nothing anywhere else, and a field taking typed text
     // out-ranks all of it — `f` is a letter, `delete` is a correction, and
     // `secondary-c` is the clipboard the field already owns.
     let editing = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
@@ -126,16 +156,28 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("backspace", DeleteClips, Some(&editing)),
         KeyBinding::new("alt-up", MoveClipsUp, Some(&editing)),
         KeyBinding::new("alt-down", MoveClipsDown, Some(&editing)),
-        KeyBinding::new("escape", Back, Some(&escape)),
-        KeyBinding::new("secondary-[", Back, Some(context::ROOT)),
+        KeyBinding::new("escape", DismissOverlay, Some(&escape)),
+        KeyBinding::new("secondary-b", ToggleSidebar, Some(context::ROOT)),
+        KeyBinding::new("secondary-shift-b", ToggleWorkspace, Some(context::ROOT)),
+        // Scoped to the panel, so the window's own ⌘W still closes the window
+        // from anywhere else. gpui resolves by specificity — this is a
+        // binding, not a branch, which is what keeps "which ⌘W did I get"
+        // answerable from the focus path alone.
+        KeyBinding::new("secondary-w", CloseTab, Some(context::WORKSPACE)),
+        KeyBinding::new("secondary-p", OpenPatterns, Some(context::ROOT)),
         KeyBinding::new("secondary-,", OpenSettings, Some(context::ROOT)),
         // Not a bare letter: the track editor's alphabet is already spoken
-        // for, and this opens over that screen.
+        // for, and this opens a tab beside that editor.
         KeyBinding::new("secondary-shift-v", OpenVisualizer, Some(context::ROOT)),
-        // Not `secondary-l`: that letter is the track editor's loop region,
-        // and a chord that means one thing on one screen and another
-        // everywhere else is a chord nobody can learn.
-        KeyBinding::new("secondary-shift-l", ToggleAgentChat, Some(context::ROOT)),
+        KeyBinding::new("secondary-1", SelectTab1, Some(context::ROOT)),
+        KeyBinding::new("secondary-2", SelectTab2, Some(context::ROOT)),
+        KeyBinding::new("secondary-3", SelectTab3, Some(context::ROOT)),
+        KeyBinding::new("secondary-4", SelectTab4, Some(context::ROOT)),
+        KeyBinding::new("secondary-5", SelectTab5, Some(context::ROOT)),
+        KeyBinding::new("secondary-6", SelectTab6, Some(context::ROOT)),
+        KeyBinding::new("secondary-7", SelectTab7, Some(context::ROOT)),
+        KeyBinding::new("secondary-8", SelectTab8, Some(context::ROOT)),
+        KeyBinding::new("secondary-9", SelectTab9, Some(context::ROOT)),
     ];
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);

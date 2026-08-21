@@ -64,6 +64,11 @@ fn harness() -> Harness {
             .map(|(pattern, name, start, end, z)| Clip::new(*pattern, *name, *start, *end).lane(*z))
             .collect(),
     )
+    // Every pixel-arithmetic premise in SCRIPT was authored against a
+    // 1200×762 canvas; the shell's sidebar takes 256 of the row and the tab
+    // strip 28 of the column, so the window grows by exactly that much and
+    // the timeline keeps its size.
+    .window(1456., 828.)
     .open(Mode::Headless)
 }
 
@@ -83,13 +88,21 @@ const SCRIPT: &str = r#"
         return shot().find({ role, label });
     }
 
+    /** Where time zero is on screen: the canvas origin, off the waveform
+     *  strip. Subtracted from every x so a reading is track time, not window
+     *  geometry — the shell's sidebar sits left of the canvas. */
+    function origin() {
+        return node("card", "Waveform").bounds.x;
+    }
+
     /** Every clip's drawn extent, in seconds, off its header node. */
     function clips() {
+        const zero = origin();
         const out = {};
         for (const card of shot().findAll({ role: "card" })) {
             if (card.label === "Waveform" || card.label === "Ruler") continue;
             out[card.label] = {
-                start: card.bounds.x / ZOOM,
+                start: (card.bounds.x - zero) / ZOOM,
                 length: card.bounds.width / ZOOM,
                 y: card.bounds.y,
                 height: card.bounds.height,
@@ -219,7 +232,7 @@ const SCRIPT: &str = r#"
     // Leaving before the write lands would read the score back unchanged for
     // a reason that is not the one under test.
     settled();
-    app.click(node("button", "Back"));
+    nav.closeTab();
     app.frames(6);
     open();
     const reopened = clips();
@@ -315,7 +328,7 @@ const SCRIPT: &str = r#"
     }
     function reopen() {
         settled();
-        app.click(node("button", "Back"));
+        nav.closeTab();
         app.frames(6);
         open();
     }
@@ -323,9 +336,14 @@ const SCRIPT: &str = r#"
     reopen();
     /** Every card with this label, left to right. */
     function spans(label) {
+        const zero = origin();
         return shot().findAll({ role: "card" })
             .filter((c) => c.label === label)
-            .map((c) => ({ start: c.bounds.x / ZOOM, length: c.bounds.width / ZOOM, y: c.bounds.y }))
+            .map((c) => ({
+                start: (c.bounds.x - zero) / ZOOM,
+                length: c.bounds.width / ZOOM,
+                y: c.bounds.y,
+            }))
             .sort((a, b) => a.start - b.start);
     }
     function laneBox(label) {
@@ -443,12 +461,16 @@ const SCRIPT: &str = r#"
     // lane above everything, so the inserted clip cannot overlap what is
     // already there whichever pattern is chosen.
     const beforeInsert = total();
+    // The menu's rows are whichever rows the right-click *added*: the lane
+    // headers and the sidebar's track rows are rows too, so "every row that
+    // is not a lane" would pick up the track list.
+    const rowsBefore = shot().findAll({ role: "row" }).map((n) => n.label);
     app.click(shot().find({ role: "row", label: "Lane 0" }), { button: "right" });
     app.frames(2);
     const menu = shot()
         .findAll({ role: "row" })
         .map((n) => n.label)
-        .filter((label) => !label.startsWith("Lane "));
+        .filter((label) => !rowsBefore.includes(label));
     app.click(shot().find({ role: "row", label: "Wash" }));
     app.frames(20);
     settled();
@@ -517,7 +539,7 @@ const SCRIPT: &str = r#"
 
     // ... and Back returns to the timeline it came from, not the patterns
     // list: the graph screen carries the screen it was opened over.
-    app.action("luma::Back");
+    app.action("luma::CloseTab");
     app.frames(12);
     const returned = shot().find({ role: "card", label: "Ruler" }) !== undefined;
 
@@ -687,8 +709,12 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     //    a number the drag distance alone could not produce.
     let (before, after) = (&out["beforeSnap"], &out["snapped"]);
     let moved = span(after, "Haze").1 - span(before, "Haze").1;
+    // One device pixel of tolerance, not half of one: layout snaps boxes to
+    // whole pixels, and a snapped end that lands on a half-pixel boundary
+    // (1.75s at 50px/s is 87.5px) reads back one pixel short. The raw drag is
+    // 2.5px from the grid, so a 1px tolerance still tells snap from no-snap.
     assert!(
-        (moved - 1.75).abs() < 0.01,
+        (moved - 1.75).abs() <= 0.02,
         "the resize moved the edge by {moved}s; snapped to the grid it is 1.75s"
     );
 

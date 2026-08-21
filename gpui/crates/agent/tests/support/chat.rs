@@ -297,35 +297,32 @@ pub fn composer() -> String {
     )
 }
 
-/// Open one pattern and the chat over it. Leaves the panel idle, which is
-/// where every capture and every assertion starts.
+/// Open one pattern's graph tab and put the thread beside it. Leaves the chat
+/// idle, which is where every capture and every assertion starts.
 ///
 /// Every step polls rather than counting frames: the library is behind a Tokio
 /// runtime gpui cannot see, so "how many frames until the list has loaded" is a
 /// guess that a busy machine falsifies.
 ///
-/// The toggle is pressed once, before the graph document has landed. It opens
-/// the panel unattached and the panel re-points itself onto the pattern the
-/// moment the document arrives — which is why waiting on the *composer* is the
-/// honest wait: an unattached panel has none, so a Send that can be pressed is
-/// proof the scope resolved and not merely that a panel appeared.
+/// The chat is the shell's centre and is already there; what this walk does is
+/// give it a subject (the graph tab) and give it *room* — the workspace opens
+/// in takeover, so `ToggleExpand` splits the panel back beside the thread.
+/// Waiting on the *composer* is the honest wait: an unattached centre has
+/// none, so a Send that can be pressed is proof the scope resolved and not
+/// merely that a region appeared.
 pub fn open_chat(pattern: &str) -> String {
     format!(
         r#"
         {until}
-        app.click(app.snapshot().find({{ role: "button", label: "Patterns" }}));
-        until("the pattern list", (s) => s.find({{ role: "row", label: {pattern:?} }}));
-        app.click(app.snapshot().find({{ role: "row", label: {pattern:?} }}));
-        app.action("luma::ToggleAgentChat");
-        until("the chat panel", (s) => {{
-            // Not merely present: the panel slides in behind a clipping
-            // container, so a control that exists is not yet a control you can
-            // press. Zero width is what "clipped away" looks like.
+        nav.pattern({pattern:?});
+        app.action("luma::ToggleExpand");
+        until("the chat centre", (s) => {{
+            // Not merely present: a control inside a clipped region exists
+            // without being pressable. Zero width is what "clipped away"
+            // looks like.
             const send = s.find({{ role: "button", label: "Send" }});
             return send !== undefined && send.bounds.width > 0;
         }});
-        // …and let the slide land, so nothing measured after this is partly
-        // clipped.
         app.frames(8, {{ waitMs: 40 }});
     "#,
         until = UNTIL,
