@@ -66,6 +66,60 @@ pub fn primary() -> Rgba {
     rgb(0x88c0d0)
 }
 
+/// The status hues, and the only place a color means something rather than
+/// placing a surface. Tailwind's `emerald-500` / `amber-500` / `rose-500`,
+/// which is what the web app reaches for on a coverage dot or a progress ring.
+pub fn status_ok() -> Rgba {
+    rgb(0x10b981)
+}
+
+/// See [`status_ok`].
+pub fn status_warn() -> Rgba {
+    rgb(0xf59e0b)
+}
+
+/// See [`status_ok`].
+pub fn status_bad() -> Rgba {
+    rgb(0xf43f5e)
+}
+
+/// The hue a graph port and its wire carry, keyed by the wire spelling of
+/// `PortType`. One hue per signal kind is the graph editor's whole legend —
+/// the second place after the status dots where color means something rather
+/// than placing a surface.
+///
+/// Keyed by string rather than by the enum because that enum lives in Luma's
+/// core, which this crate deliberately does not depend on. The caller matches
+/// exhaustively on `PortType` to produce the key, so a new variant is a
+/// compile error there and lands here as [`default_port`] until it is named.
+/// Mirrors `PORT_TYPE_COLORS` in `src/shared/lib/react-flow/types.ts`.
+pub fn port(port_type: &str) -> Rgba {
+    match port_type {
+        "Intensity" => rgb(0xf59e0b),
+        "Audio" => rgb(0x3b82f6),
+        "BeatGrid" => rgb(0x10b981),
+        "Series" => rgb(0x8b5cf6),
+        "Color" => rgb(0xec4899),
+        "Signal" => rgb(0x22d3ee),
+        "Selection" => rgb(0xc084fc),
+        "Events" => rgb(0xef4444),
+        "Stops" => rgb(0xf472b6),
+        _ => default_port(),
+    }
+}
+
+/// The hue of a port whose type [`port`] does not know — `gray-500`, as on the
+/// web side.
+pub fn default_port() -> Rgba {
+    rgb(0x6b7280)
+}
+
+/// `text-destructive` — failure prose, not a surface. Softer than
+/// [`status_bad`] because it is a whole line of text rather than a 6px dot.
+pub fn danger() -> Rgba {
+    rgb(0xf87171)
+}
+
 /// `--foreground`.
 pub fn foreground() -> Rgba {
     rgb(0xe4e4e4)

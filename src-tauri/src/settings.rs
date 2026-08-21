@@ -9,6 +9,23 @@ use crate::database::local::settings as db;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+/// Services the agents can be pointed at, as `(stored value, label)`. Both
+/// speak the same "creator/model" model ids; only the key and routing differ.
+pub const AGENT_PROVIDERS: &[(&str, &str)] = &[
+    ("openrouter", "OpenRouter"),
+    ("vercel-ai-gateway", "Vercel AI Gateway"),
+];
+
+/// Models the settings picker offers for the track agent, as
+/// `(stored value, label)`.
+pub const AGENT_MODELS: &[(&str, &str)] = &[
+    ("anthropic/claude-opus-5", "Claude Opus 5"),
+    ("moonshotai/kimi-k3-fast", "Kimi K3 Fast"),
+];
+
+/// The track agent's model when nothing has been chosen.
+pub const DEFAULT_AGENT_MODEL: &str = "moonshotai/kimi-k3-fast";
+
 /// Wire shape of `get_settings`. Deliberately **not** `rename_all` —
 /// the frontend reads these keys in `snake_case`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +38,8 @@ pub struct AppSettings {
     pub artnet_net: u8,
     pub artnet_subnet: u8,
     pub max_dimmer: u8,
+    pub agent_provider: String,
+    pub agent_model: String,
 }
 
 impl Default for AppSettings {
@@ -34,8 +53,20 @@ impl Default for AppSettings {
             artnet_net: 0,
             artnet_subnet: 0,
             max_dimmer: 100,
+            agent_provider: AGENT_PROVIDERS[0].0.to_string(),
+            agent_model: DEFAULT_AGENT_MODEL.to_string(),
         }
     }
+}
+
+/// Resolve a stored value against a closed option list, falling back to
+/// `default`. An id that has been retired must not strand the picker on a
+/// value it can no longer show.
+fn one_of(options: &[(&str, &str)], stored: Option<&String>, default: &str) -> String {
+    stored
+        .filter(|value| options.iter().any(|(id, _)| id == value))
+        .cloned()
+        .unwrap_or_else(|| default.to_string())
 }
 
 /// Read every setting and apply the typing and defaults. An unparseable value
@@ -75,5 +106,11 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.min(100))
             .unwrap_or(100),
+        agent_provider: one_of(
+            AGENT_PROVIDERS,
+            map.get("agent_provider"),
+            AGENT_PROVIDERS[0].0,
+        ),
+        agent_model: one_of(AGENT_MODELS, map.get("agent_model"), DEFAULT_AGENT_MODEL),
     })
 }

@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, px, uniform_list, AnyView, App, Context, Empty, FocusHandle, KeyBinding,
-    PromptLevel, Render, Window,
+    actions, canvas, div, point, px, size, uniform_list, AnyView, App, Bounds, Context, Empty,
+    FocusHandle, KeyBinding, PromptLevel, Render, Window,
 };
 use gpui_agent::{Config, Harness, Mode};
-use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::node::{agent_paint_node, AgentNode, Instrument, Role};
 use serde_json::Value;
 
 actions!(gpui_agent_test, [Bump]);
@@ -178,7 +178,34 @@ impl Render for Counter {
                         },
                     ),
             )
+            .child(painted_canvas())
     }
+}
+
+/// Two cards registered by hand from inside a clipped canvas — one within the
+/// mask, one past its right edge.
+///
+/// This is the only way a node with empty bounds can reach the registry: gpui
+/// never lays out an element outside its parent, and `uniform_list` does not
+/// even build the rows it has scrolled past, so the laid-out path can never
+/// produce one. A custom canvas paints wherever it likes, which is exactly why
+/// `agent_paint_node` does the content-mask clip itself.
+fn painted_canvas() -> impl IntoElement {
+    div().w(px(100.)).h(px(40.)).overflow_hidden().child(
+        canvas(
+            |bounds, window, cx| {
+                let card = |x: f32| Bounds {
+                    origin: point(bounds.origin.x + px(x), bounds.origin.y),
+                    size: size(px(40.), px(20.)),
+                };
+                agent_paint_node(Role::Card, "Painted", card(0.), window, cx);
+                // Starts 200px right of a 100px-wide box: entirely outside.
+                agent_paint_node(Role::Card, "PaintedOffscreen", card(200.), window, cx);
+            },
+            |_, _, _, _| {},
+        )
+        .size_full(),
+    )
 }
 
 // -- fixtures -----------------------------------------------------------------
@@ -255,6 +282,8 @@ fn a_snapshot_names_every_instrumented_control() {
             "Stall",
             "count 0",
             "unanswered",
+            "Painted",
+            "PaintedOffscreen",
         ]
     );
     assert!(shot["frame"].as_u64().unwrap() > 0);
@@ -353,6 +382,43 @@ fn a_drag_walks_the_pointer_and_lands_on_the_target() {
     assert_eq!(result, "dropped 1");
 }
 
+/// The other target shape. A canvas move has no destination control, so the
+/// delta has to walk the pointer exactly as far as it was told — the drop here
+/// only lands because `Target` is that far below `Source`.
+#[test]
+fn a_drag_can_name_its_destination_as_a_displacement() {
+    let mut harness = harness();
+    let result = run(
+        &mut harness,
+        r#"
+            const shot = app.snapshot();
+            const source = shot.find({ label: "Source" });
+            const target = shot.find({ label: "Target" });
+            app.drag(source, { dx: 0, dy: target.bounds.y - source.bounds.y });
+            app.snapshot().find((n) => n.label.startsWith("dropped")).label
+        "#,
+    );
+    assert_eq!(result, "dropped 1");
+}
+
+/// A pointer walked off the window is dropped by gpui, so the drag would end
+/// short with nothing to say it had. Refusing is the only outcome a script can
+/// act on.
+#[test]
+fn a_displacement_that_leaves_the_window_is_refused() {
+    let mut harness = harness();
+    let result = harness.exec(
+        r#"app.drag(app.snapshot().find({ label: "Source" }), { dx: 0, dy: -1000 })"#,
+        Duration::from_secs(10),
+    );
+    let error = result.error.expect("an off-window drag should have failed");
+    assert!(error.contains("BadCall"), "unexpected error: {error}");
+    assert!(
+        error.contains("outside the"),
+        "the error should say what it refused: {error}"
+    );
+}
+
 #[test]
 fn an_action_can_be_dispatched_by_name_and_by_keystroke() {
     let mut harness = harness();
@@ -399,6 +465,59 @@ fn a_misspelt_option_is_refused() {
     assert_eq!(
         run(&mut harness, "app.frames(2, { waitMs: 0 }).frame > 0"),
         true
+    );
+}
+
+/// The empty-bounds contract, end to end: a painted control outside its mask
+/// is registered — a script can see it exists — but has no box, and acting on
+/// it is refused rather than clicking through to whatever is really there.
+#[test]
+fn a_painted_control_outside_its_mask_is_seen_but_not_clickable() {
+    let mut harness = harness();
+
+    // Compared as numbers, not as JSON: a whole float makes the round trip
+    // through JavaScript as an integer, so `40.0` comes back `40`.
+    let area = |harness: &mut Harness, label: &str| -> (f64, f64) {
+        let box_ = run(
+            harness,
+            // Scoped, because `globalThis` persists between `exec` calls and a
+            // bare `const` would be a redeclaration the second time round.
+            &format!(
+                r#"(() => {{
+                    const n = app.snapshot().find({{ label: "{label}" }});
+                    return [n.bounds.width, n.bounds.height];
+                }})()"#
+            ),
+        );
+        (
+            box_[0].as_f64().expect("width"),
+            box_[1].as_f64().expect("height"),
+        )
+    };
+    assert_eq!(area(&mut harness, "Painted"), (40., 20.));
+    // Zero along the axis it left, not `0 × 0`: `Bounds::intersect` clamps
+    // each corner componentwise, so a card off to the right keeps its height.
+    // What the harness actually leans on is `is_empty`, i.e. either dimension
+    // being zero — assert that, not a particular shape.
+    let (width, height) = area(&mut harness, "PaintedOffscreen");
+    assert_eq!(width, 0., "off to the right, so the width should collapse");
+    assert!(
+        width == 0. || height == 0.,
+        "the off-mask card should be empty in at least one axis, got {width}x{height}"
+    );
+
+    let result = harness.exec(
+        r#"app.click(app.snapshot().find({ label: "PaintedOffscreen" }))"#,
+        Duration::from_secs(10),
+    );
+    let error = result.error.expect("clicking a clipped card should fail");
+    assert!(error.contains("NotVisible"), "unexpected error: {error}");
+
+    // The one inside the mask is clickable, so the guard is not just refusing
+    // everything painted.
+    run(
+        &mut harness,
+        r#"app.click(app.snapshot().find({ label: "Painted" }))"#,
     );
 }
 

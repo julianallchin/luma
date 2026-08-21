@@ -47,7 +47,7 @@ fn main() {
         // Reopened per build so that `reset` gets a clean connection; the
         // failure path is already ruled out above.
         let library = luma_app::Library::open().expect("the library stopped opening");
-        cx.new(|cx| luma_app::Luma::new(library, None, cx)).into()
+        cx.new(|cx| luma_app::Luma::new(library, cx)).into()
     });
 
     pump::run(config, root, |client| {

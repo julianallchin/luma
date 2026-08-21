@@ -7,9 +7,10 @@
 //! let library = Library::open()?;
 //! let venues: Vec<Venue> = library.venues().await?;
 //! let tracks: Vec<TrackBrowserRow> = library.tracks(&venue.id).await?;
+//! library.set_setting("audio_output_enabled", "false").await?;
 //! ```
 //!
-//! Everything a screen knows about data access is those two methods. It never
+//! Everything a screen knows about data access is those methods. It never
 //! sees a command name, a JSON frame, an `AppServices`, or a runtime — which
 //! is the point: [`luma_lib::dispatch`] is the *only* way this binary reaches
 //! Luma's behavior, and re-implementing a query above it would fork the app
@@ -29,6 +30,7 @@
 //! from. It costs one round-trip through serde per call, which for a screenful
 //! of rows is not worth a second, typed entry point into the seam.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,17 +39,25 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use luma_lib::agent_execution::workspace::PythonWorkspaceService;
+use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices};
+use luma_lib::models::node_graph::{Graph, NodeTypeDef};
+use luma_lib::models::patterns::PatternSummary;
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 use luma_lib::services::fixtures as fixtures_service;
+use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
+use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 
 /// A connection to the real Luma library.
 pub struct Library {
     services: Arc<AppServices>,
+    /// Who the app database admitted at startup. `None` is the guest
+    /// namespace, which is also what an un-signed-in host gets.
+    user_id: Option<String>,
     /// Owns the reactor every dispatched command runs on. Dropping it cancels
     /// in-flight work, so it lives exactly as long as the `Library`.
     runtime: tokio::runtime::Runtime,
@@ -72,10 +82,14 @@ impl Library {
         let storage = config_dir()?;
         let fixtures_root = fixtures_root()?;
 
-        let services = runtime.block_on(async {
+        let (services, user_id) = runtime.block_on(async {
             let db = init_app_db_at(storage.path()).await?;
             let state_db = init_state_db_at(storage.path()).await?;
-            // Read-only v0: nothing here runs Python, and a workspace service
+            // Admission is host bootstrap, not a command: until it is armed
+            // every `auth_visible_*` view is empty, so a host that skipped
+            // this would show an empty library and no error to explain it.
+            let user_id = bootstrap_host_admission(&db.0, &state_db.0).await?;
+            // Nothing in this host runs Python, and a workspace service
             // resolves its worker environment lazily, so refusing to build one
             // is both honest and harmless. The day this app runs an agent, it
             // grows the same `resolve_worker_env` the headless harness has.
@@ -83,19 +97,24 @@ impl Library {
                 storage.agent_workspaces_dir(),
                 Arc::new(|| Err("the GPUI app does not run Python workspaces".to_string())),
             ));
-            Ok::<_, String>(AppServices::headless(
-                db,
-                state_db,
-                storage,
-                fixtures_root,
-                workspaces,
+            Ok::<_, String>((
+                AppServices::headless(db, state_db, storage, fixtures_root, workspaces),
+                user_id,
             ))
         })?;
 
         Ok(Self {
             services: Arc::new(services),
+            user_id,
             runtime,
         })
+    }
+
+    /// The signed-in principal, or `None` for the guest namespace. Identity is
+    /// fixed for the life of the process here — this host has no sign-in — so
+    /// it is a field rather than a query.
+    pub fn user_id(&self) -> Option<&str> {
+        self.user_id.as_deref()
     }
 
     /// Every venue in the library, newest activity first.
@@ -110,6 +129,83 @@ impl Library {
         venue_id: &str,
     ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, String>> + use<> {
         self.call("list_tracks_enriched", json!({ "venueId": venue_id }))
+    }
+
+    /// Display names for other people's uids, as `uid -> name`. Sparse: a uid
+    /// the directory does not know is simply absent.
+    pub fn display_names(
+        &self,
+        uids: Vec<String>,
+    ) -> impl Future<Output = Result<HashMap<String, String>, String>> + use<> {
+        self.call("get_display_names", json!({ "uids": uids }))
+    }
+
+    /// Every pattern in the library.
+    pub fn patterns(&self) -> impl Future<Output = Result<Vec<PatternSummary>, String>> + use<> {
+        self.call("list_patterns", json!({}))
+    }
+
+    /// The node catalogue: what every `typeId` in a graph means. Static for
+    /// the life of the process, so a screen reads it once.
+    pub fn node_types(&self) -> impl Future<Output = Result<Vec<NodeTypeDef>, String>> + use<> {
+        self.call("get_node_types", json!({}))
+    }
+
+    /// One pattern's graph, with the implementation and revision it came from.
+    /// Both are the write token: [`Self::save_pattern_graph`] needs them, and
+    /// they are only valid for the document this returned.
+    ///
+    /// Resolves the implementation venue-agnostically, as the web editor does
+    /// — `get_pattern_args` is the one that resolves against a venue, and the
+    /// two can disagree.
+    pub fn pattern_graph(
+        &self,
+        pattern_id: &str,
+    ) -> impl Future<Output = Result<GraphDocument, String>> + use<> {
+        self.call(
+            "get_pattern_graph_document",
+            json!({ "id": pattern_id, "implementationId": null }),
+        )
+    }
+
+    /// Write a whole graph back, optimistically.
+    ///
+    /// `base_revision` is the revision the edited graph was read at; the seam
+    /// refuses the write if the document has moved since, which is the only
+    /// thing keeping two editors from silently overwriting each other.
+    /// `operation_id` makes a retry of *this* write idempotent — reuse it
+    /// verbatim across attempts, never mint a second one.
+    pub fn save_pattern_graph(
+        &self,
+        pattern_id: &str,
+        implementation_id: &str,
+        operation_id: &str,
+        base_revision: &str,
+        graph: &Graph,
+    ) -> impl Future<Output = Result<GraphEditResult, String>> + use<> {
+        self.call(
+            "save_pattern_graph_document",
+            json!({
+                "id": pattern_id,
+                "implementationId": implementation_id,
+                "operationId": operation_id,
+                "baseRevision": base_revision,
+                "graph": graph,
+            }),
+        )
+    }
+
+    /// Every app setting, typed and defaulted.
+    pub fn settings(&self) -> impl Future<Output = Result<AppSettings, String>> + use<> {
+        self.call("get_settings", json!({}))
+    }
+
+    /// Write one setting. The seam owns what a key means and what a write
+    /// costs (Art-Net and audio both reload on one), so the caller's only job
+    /// afterwards is to read the settings back — which is also the only honest
+    /// proof the write landed.
+    pub fn set_setting(&self, key: &str, value: &str) -> impl Future<Output = Result<(), String>> {
+        self.call("set_setting", json!({ "key": key, "value": value }))
     }
 
     /// Run one command on the Tokio runtime and decode its result.

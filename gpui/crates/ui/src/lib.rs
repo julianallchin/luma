@@ -30,9 +30,10 @@
 //! # What is not here
 //!
 //! The ports cover the *resting appearance* of each control, which is what
-//! the harness compares against WebKit. Open menus, carets and selection are
-//! not ported yet; `luma_select` and `luma_dropdown` render their closed
-//! triggers only.
+//! the harness compares against WebKit. Carets and text selection are not
+//! ported — `luma_input` renders a value, it does not edit one — and neither
+//! is a slider's drag. `<Select>`'s open menu is here ([`luma_select_menu`]);
+//! `luma_dropdown` still renders its closed trigger only.
 
 pub mod fonts;
 pub mod ladder;
@@ -50,6 +51,6 @@ pub use button::{luma_button, slab};
 pub use checkbox::luma_checkbox;
 pub use dropdown::luma_dropdown;
 pub use input::luma_input;
-pub use select::{luma_select, luma_selector};
+pub use select::{luma_select, luma_select_item, luma_select_menu, luma_selector};
 pub use slider::luma_slider;
-pub use toggle::{luma_toggle, luma_toggle_group};
+pub use toggle::{luma_toggle, luma_toggle_group, luma_toggle_segment};

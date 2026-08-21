@@ -33,6 +33,21 @@ pub enum Restale {
     Match,
 }
 
+/// Where a drag ends: on another control, or a displacement from where it
+/// started.
+///
+/// A canvas move — a graph node, a clip on a timeline — has no destination
+/// control, so node-to-node cannot express it; a delta can. Externally tagged
+/// (`{"node": …}` / `{"by": …}`) rather than untagged so that a malformed
+/// target names the field serde could not read, instead of collapsing into
+/// "did not match any variant".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DragTarget {
+    Node(NodeRef),
+    By { dx: f32, dy: f32 },
+}
+
 /// One unit of work for the app thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -48,7 +63,7 @@ pub enum Cmd {
     },
     Drag {
         from: NodeRef,
-        to: NodeRef,
+        to: DragTarget,
         #[serde(default = "default_steps")]
         steps: u32,
         #[serde(default)]

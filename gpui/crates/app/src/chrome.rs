@@ -18,8 +18,10 @@ use luma_ui::node::{Instrument, Role};
 pub const HEIGHT: f32 = 28.;
 
 /// The titlebar: a drag region carrying `title` as silkscreen on the left and
-/// the window controls on the right.
-pub fn titlebar(title: &str) -> Div {
+/// the right-hand action cluster — settings, then the window controls — on the
+/// right. Mirrors `src/shared/components/header-actions.tsx`, minus the
+/// account dropdown (this host has no session yet).
+pub fn titlebar(title: &str, on_settings: impl Fn(&mut Window, &mut App) + 'static) -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -40,6 +42,25 @@ pub fn titlebar(title: &str) -> Div {
                 .text_color(ladder::muted_foreground())
                 .child(title.to_uppercase())
                 .agent_node(Role::Text, title.to_uppercase()),
+        )
+        .child(header_actions(on_settings))
+}
+
+/// The `no-drag` cluster on the right: the settings button and the window
+/// controls, `gap-2` apart.
+fn header_actions(on_settings: impl Fn(&mut Window, &mut App) + 'static) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            luma_ui::luma_button("Settings", false)
+                .id("settings")
+                // Same reason as a window control: the press must not also
+                // start a window move.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, window, cx| on_settings(window, cx))
+                .agent_node(Role::Button, "Settings"),
         )
         .child(window_controls())
 }

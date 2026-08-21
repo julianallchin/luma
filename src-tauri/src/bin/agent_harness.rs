@@ -221,34 +221,7 @@ async fn run() -> Result<(), String> {
         // derives from the verified host session.
         auth::arm_write_admission(&db.0, Some(principal)).await?;
     } else {
-        let recovered = {
-            let mut state_connection = state_db
-                .0
-                .acquire()
-                .await
-                .map_err(|error| format!("Failed to lock harness auth state: {error}"))?;
-            auth::recover_committed_signout(&db.0, &mut state_connection).await?
-        };
-        if !recovered {
-            auth::get_session_item(&state_db.0, auth::SUPABASE_SESSION_KEY).await?;
-            let mut state_connection = state_db
-                .0
-                .acquire()
-                .await
-                .map_err(|error| format!("Failed to lock harness auth state: {error}"))?;
-            let recovered = auth::recover_committed_signout(&db.0, &mut state_connection).await?;
-            if !recovered {
-                let principal =
-                    auth::load_verified_principal_for_connection(&mut state_connection).await?;
-                auth::arm_write_admission(
-                    &db.0,
-                    principal
-                        .as_ref()
-                        .map(|principal| principal.user_id.as_str()),
-                )
-                .await?;
-            }
-        }
+        auth::bootstrap_host_admission(&db.0, &state_db.0).await?;
     }
 
     let workspaces = std::sync::Arc::new(PythonWorkspaceService::new(
