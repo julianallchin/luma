@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 /// The whole golden-scene catalogue, as `dump-golden-scenes.ts` writes it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Catalogue {
     /// Jitter subframes the capture settled through before shooting. The
@@ -30,7 +30,7 @@ pub struct Catalogue {
 }
 
 /// CSS pixels; multiply by `device_scale_factor` for the captured buffer.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Viewport {
     /// Width in CSS pixels.
     pub width: u32,
@@ -39,7 +39,7 @@ pub struct Viewport {
 }
 
 /// One golden scene: a complete description of a frame's inputs.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scene {
     /// Stable id; also the filename stem of every frame.
@@ -63,7 +63,7 @@ pub struct Scene {
 }
 
 /// Three.js Y-up, because that is the space `useCameraStore` holds.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CameraPose {
     /// Eye position.
     pub position: [f32; 3],
@@ -312,7 +312,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
 }
 
 /// Z-up data space; `pos[2]` is height, rotations are Euler XYZ radians.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Fixture {
     /// Venue-unique id; primitive keys are `"<id>:<head>"`.
@@ -328,7 +328,7 @@ pub struct Fixture {
 }
 
 /// A stage piece, in the same Z-up data space as [`Fixture`].
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Piece {
     /// Venue-unique id.
@@ -345,7 +345,7 @@ pub struct Piece {
 
 /// One head's evaluated state. Mirrors the eval engine's `PrimitiveState`
 /// minus `speed`, which only gates mesh articulation the goldens freeze.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct PrimitiveState {
     /// 0..1 intensity.
     pub dimmer: f32,
@@ -364,7 +364,7 @@ pub struct PrimitiveState {
 }
 
 /// The QLC+ `.qxf` subset the renderer reads.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Definition {
     /// QLC+ fixture type; selects the mesh and the fallback cone.
     #[serde(rename = "Type")]
@@ -379,7 +379,7 @@ pub struct Definition {
 
 /// A patchable mode. Only its head count matters here — the visualizer patches
 /// DMX, not pixels.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Mode {
     /// Mode name, matched against `Fixture::mode_name`.
     #[serde(rename = "@Name")]
@@ -390,7 +390,7 @@ pub struct Mode {
 }
 
 /// QLC+ `Physical`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Physical {
     /// Housing size.
     #[serde(rename = "Dimensions")]
@@ -404,7 +404,7 @@ pub struct Physical {
 }
 
 /// Millimetres, as QLC+ writes them.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Dimensions {
     /// Width, mm.
     #[serde(rename = "@Width")]
@@ -418,7 +418,7 @@ pub struct Dimensions {
 }
 
 /// Pixel grid of a procedural fixture.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Layout {
     /// Pixels per row.
     #[serde(rename = "@Width")]
@@ -430,7 +430,7 @@ pub struct Layout {
 
 /// Lens block. A fixed lens repeats one value; a zoom lens gives a range and,
 /// with no zoom channel in the state model, the renderer sits at mid-zoom.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Lens {
     /// Narrow end of the beam angle, degrees. Zero means "unknown".
     #[serde(rename = "@DegreesMin")]
@@ -438,6 +438,34 @@ pub struct Lens {
     /// Wide end of the beam angle, degrees. Zero means "unknown".
     #[serde(rename = "@DegreesMax")]
     pub degrees_max: f32,
+}
+
+/// Versioned, self-describing inputs for one renderer golden PNG.
+///
+/// The descriptor deliberately contains only the fixture definitions referenced
+/// by the scene. Paths remain part of the contract for mesh assets, while every
+/// numeric render, camera, fixture and primitive-state input is recorded inline.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldenFrameDescriptor<'a> {
+    /// Schema identifier for consumers that compare captures across revisions.
+    pub schema: &'static str,
+    /// PNG filename written beside this descriptor.
+    pub image: String,
+    /// Source viewport in CSS pixels.
+    pub viewport: &'a Viewport,
+    /// Device scale applied to the source viewport.
+    pub device_scale_factor: f32,
+    /// Physical output dimensions in pixels.
+    pub output_size: [u32; 2],
+    /// Deterministic temporal samples accumulated into the output.
+    pub subframes: u32,
+    /// Absolute scene clock evaluated for this output, in seconds.
+    pub time_seconds: f32,
+    /// Complete closed scene, camera, environment and primitive-state contract.
+    pub scene: &'a Scene,
+    /// Renderer-relevant fixture definitions used to resolve scene fixtures.
+    pub definitions: BTreeMap<&'a str, &'a Definition>,
 }
 
 impl Catalogue {
@@ -459,6 +487,41 @@ impl Catalogue {
             (self.viewport.height as f32 * s).round() as u32,
         )
     }
+
+    /// Build the deterministic input descriptor written beside a golden frame.
+    ///
+    /// # Errors
+    /// Fails when a fixture refers to a definition absent from this catalogue.
+    pub fn frame_descriptor<'a>(
+        &'a self,
+        scene: &'a Scene,
+        time_seconds: f32,
+        subframes: u32,
+    ) -> anyhow::Result<GoldenFrameDescriptor<'a>> {
+        let mut definitions = BTreeMap::new();
+        for fixture in &scene.fixtures {
+            let definition = self.definitions.get(&fixture.fixture_path).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "scene {:?} references missing fixture definition {:?}",
+                    scene.id,
+                    fixture.fixture_path
+                )
+            })?;
+            definitions.insert(fixture.fixture_path.as_str(), definition);
+        }
+        let (width, height) = self.frame_size();
+        Ok(GoldenFrameDescriptor {
+            schema: "luma.renderer-frame/1",
+            image: scene.frame_name(time_seconds),
+            viewport: &self.viewport,
+            device_scale_factor: self.device_scale_factor,
+            output_size: [width, height],
+            subframes,
+            time_seconds,
+            scene,
+            definitions,
+        })
+    }
 }
 
 impl Scene {
@@ -466,6 +529,12 @@ impl Scene {
     #[must_use]
     pub fn frame_name(&self, t: f32) -> String {
         format!("{}-{t:.3}.png", self.id)
+    }
+
+    /// `<id>-<t>.json`, paired with [`Self::frame_name`].
+    #[must_use]
+    pub fn descriptor_name(&self, t: f32) -> String {
+        format!("{}-{t:.3}.json", self.id)
     }
 
     /// The pinned state of one head, if the scene declares it.
