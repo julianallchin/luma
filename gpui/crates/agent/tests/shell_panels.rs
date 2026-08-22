@@ -90,7 +90,10 @@ const SCRIPT: &str = r#"
     app.frames(2);
     const maxed = read();
     app.action("luma::ToggleSidebar");
-    app.frames(2);
+    until("the sidebar after the clamped drag", (s) => {
+        const search = s.find({ role: "input", label: "Search tracks…" });
+        return search !== undefined && search.bounds.width > 0 ? s : undefined;
+    });
 
     // 4. …and double-clicking it puts the panel back at its default width.
     app.click(app.snapshot().find({ role: "slider", label: "Workspace width" }), { count: 2 });
@@ -98,8 +101,9 @@ const SCRIPT: &str = r#"
     const reset = read();
 
     // 5. An overlay owns its pointer plane. The sidebar toggle is still in the
-    //    automation tree underneath it, but pressing those coordinates must
-    //    not close the covered sidebar.
+    //    automation tree underneath it, but pressing those coordinates lands
+    //    on the optional scrim: it dismisses the dialog without toggling the
+    //    covered sidebar.
     app.click(app.snapshot().find({ role: "input", label: "Search tracks…" }));
     app.action("luma::OpenPatterns");
     until("the pattern picker", (s) =>
@@ -110,9 +114,13 @@ const SCRIPT: &str = r#"
     app.click(app.snapshot().find({ role: "button", label: "sidebar-toggle" }));
     app.frames(2);
     const overlayBlocked = read();
+    const dialogAfterScrim = app.snapshot().find({ role: "card", label: "Pattern dialog" });
 
-    // The same modal boundary applies to keyboard bindings. Escape then
-    // restores the exact search field which opened the overlay.
+    // Reopen it: the same modal boundary applies to keyboard bindings. Escape
+    // then restores the exact search field which opened the overlay.
+    app.action("luma::OpenPatterns");
+    until("the reopened pattern picker", (s) =>
+        s.find({ role: "card", label: "Pattern dialog" }) !== undefined);
     app.key("secondary-b");
     app.frames(2);
     const overlayKeyBlocked = read();
@@ -132,7 +140,7 @@ const SCRIPT: &str = r#"
     app.frames(2);
     const restoredSearch = app.snapshot().find({ role: "input", label: "Search tracks…" });
 
-    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, widened, maxed, reset, overlayBlocked, overlayKeyBlocked, dialog, dialogAfterTab, firstAfterTab, dialogAfterReverse, firstAfterReverse, lastAfterReverse, firstAfterWrap, restoredSearch })
+    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, widened, maxed, reset, overlayBlocked, overlayKeyBlocked, dialog, dialogAfterScrim, dialogAfterTab, firstAfterTab, dialogAfterReverse, firstAfterReverse, lastAfterReverse, firstAfterWrap, restoredSearch })
 "#;
 
 fn number(value: &Value, key: &str) -> f64 {
@@ -204,13 +212,14 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
         out["reset"]
     );
 
-    // 5. The modal overlay swallowed the pointer instead of toggling the
-    //    sidebar hidden behind it.
+    // 5. The modal scrim swallowed the pointer instead of toggling the sidebar
+    //    hidden behind it, and applied the route's outside-click dismissal.
     assert!(
         number(&out["overlayBlocked"], "sidebar") > 0.0,
         "the overlay let a press reach the covered sidebar toggle: {:#}",
         out["overlayBlocked"]
     );
+    assert!(out["dialogAfterScrim"].is_null());
     assert!(
         number(&out["overlayKeyBlocked"], "sidebar") > 0.0,
         "the overlay let a shell shortcut mutate the covered sidebar: {:#}",
