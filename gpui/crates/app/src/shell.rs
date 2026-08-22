@@ -27,18 +27,26 @@
 //! picker into an empty shell" is a state that cannot be reached.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Div, SharedString, Window};
+use gpui::{div, px, AnyElement, Context, Div, DragMoveEvent, Pixels, SharedString, Window};
 
 use luma_lib::models::venues::Venue;
-use luma_ui::ladder;
+use luma_ui::node::{Instrument, Role};
+use luma_ui::pane;
+use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{graph, keymap, patterns, settings, track_editor, tracks, visualizer, welcome, Luma};
 
 /// How wide the sidebar and the shared workspace open. Comet's defaults; the
-/// drag-resize and persisted widths land with the polish phase.
+/// workspace's is the width it *starts* at, since its seam can be dragged.
 pub(crate) const SIDEBAR_WIDTH: f32 = 256.0;
 pub(crate) const WORKSPACE_WIDTH: f32 = 520.0;
+/// How far the workspace panel's seam can be dragged. The upper bound is also
+/// capped at a fraction of the window, so a narrow window cannot be dragged
+/// into having no thread column left.
+const WORKSPACE_MIN: f32 = 320.0;
+const WORKSPACE_MAX: f32 = 900.0;
+const WORKSPACE_MAX_FRACTION: f32 = 0.62;
 /// The content cards' corner radius and their inset from the glass plane —
 /// comet's `PANEL_RADIUS` and pane gap.
 pub(crate) const CARD_RADIUS: f32 = 10.0;
@@ -108,12 +116,19 @@ impl Luma {
     /// Where the keyboard belongs this frame: the overlay when one is up,
     /// else the active tab, else the shell root (whose dispatch path still
     /// reaches every ROOT-scoped binding).
-    fn focus_slot(&self) -> FocusSlot {
+    pub(crate) fn focus_slot(&self) -> FocusSlot {
         if let Some(overlay) = &self.overlay {
             return FocusSlot::Overlay(overlay.key_context());
         }
+        // A hidden panel still *has* an active tab, but that tab is not on
+        // screen: leaving the keyboard with it would track the one focus
+        // handle at an element no frame renders, and every action dispatched
+        // from there — including the one that shows the panel again — would
+        // dead-end. Hiding the workspace hands the keyboard back to the shell.
         if let Some(target) = self.workspace.active() {
-            return FocusSlot::Tab(target.clone());
+            if !self.workspace_hidden {
+                return FocusSlot::Tab(target.clone());
+            }
         }
         FocusSlot::Shell
     }
@@ -151,6 +166,12 @@ impl Luma {
         };
         if let Some(body) = self.workspace.close(&target) {
             self.teardown(body, cx);
+        }
+        if self.workspace.is_empty() {
+            // Closing the last tab destroys what the panel was showing, so
+            // there is nothing left to slide shut — an empty card easing out
+            // would be the animation drawing attention to its own machinery.
+            self.workspace_width.set(0.0);
         }
         cx.notify();
     }
@@ -242,28 +263,39 @@ impl Luma {
 /// steps butted edge to edge.
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
+    // Geometry follows state. Each edge region's resting width is restated
+    // here every frame as a pure function of what the shell is showing, so a
+    // toggle only flips a flag and `retarget` — a no-op while the destination
+    // is unchanged — turns that into a slide.
+    app.sidebar_width.retarget(app.sidebar_slot(), cx);
+    app.workspace_width.retarget(app.workspace_slot(), cx);
+    let sidebar_w = app.sidebar_width.eval(window);
+    let workspace_w = app.workspace_width.eval(window);
+
+    // No `gap` between the children: an edge region carries the gutter to its
+    // neighbour itself (see [`region`]), because a gap laid out by the row
+    // would be there in full on the first frame of a slide and shove the
+    // centre 8px sideways before the panel had moved at all.
     let mut row = div()
         .flex_1()
         .min_h_0()
         .flex()
         .flex_row()
         .relative()
-        .gap(px(CARD_GAP))
         .px(px(CARD_GAP))
-        .pb(px(CARD_GAP));
+        .pb(px(CARD_GAP))
+        .on_drag_move(cx.listener(Luma::drag_workspace_seam));
 
-    if !app.sidebar_hidden {
-        if let Some(browser) = &app.sidebar {
-            row = row.child(
-                div()
-                    .w(px(SIDEBAR_WIDTH))
-                    .flex_none()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .key_context(keymap::context::SIDEBAR)
-                    .child(tracks::sidebar(browser, &entity, window)),
-            );
+    if let Some(browser) = &app.sidebar {
+        if sidebar_w > px(0.0) {
+            let body = div()
+                .h_full()
+                .flex()
+                .flex_col()
+                .key_context(keymap::context::SIDEBAR)
+                .child(tracks::sidebar(browser, &entity, window))
+                .into_any_element();
+            row = row.child(region(sidebar_w, SIDEBAR_WIDTH, Gutter::Right, body));
         }
     }
 
@@ -274,6 +306,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if !takeover {
         row = row.child(
             card()
+                .bg(glass::panel())
                 .flex_1()
                 .min_w_0()
                 .key_context(keymap::context::THREAD)
@@ -281,16 +314,37 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         );
     }
 
-    if !app.workspace_hidden && !app.workspace.is_empty() {
-        let pane = if takeover {
-            card().flex_1().min_w_0()
+    if !app.workspace.is_empty() && (takeover || workspace_w > px(0.0)) {
+        // Opaque, and the ladder's own ground: a tab holds an instrument
+        // surface, and a timeline read through a blurred desktop is a
+        // timeline you cannot read.
+        let tab = card()
+            .bg(ladder::background())
+            .flex_1()
+            .min_w_0()
+            .key_context(keymap::context::WORKSPACE)
+            .child(active_tab(app, window, cx))
+            .into_any_element();
+        row = row.child(if takeover {
+            // The remainder of the row, with no gutter of its own: the sidebar
+            // already carries the one between them, and the row's padding is
+            // what stands between the card and the window edge.
+            div().flex_1().min_w_0().h_full().child(tab)
         } else {
-            card().w(px(WORKSPACE_WIDTH)).flex_none()
-        };
-        row = row.child(
-            pane.key_context(keymap::context::WORKSPACE)
-                .child(active_tab(app, window, cx)),
-        );
+            // The seam floats in the gutter the region already leaves, at zero
+            // layout width — a strip that took room of its own would widen the
+            // gutter into something that reads as a border.
+            region(workspace_w, app.workspace_open_width, Gutter::Left, tab).child(
+                workspace_seam(cx)
+                    .absolute()
+                    .top_0()
+                    .left(px((CARD_GAP - pane::HANDLE_WIDTH) / 2.0))
+                    // A slider is the closest thing in the closed role
+                    // vocabulary to a grip whose position along an axis is the
+                    // value — which is what the seam is.
+                    .agent_node(Role::Slider, "Workspace width"),
+            )
+        });
     }
 
     if let Some(overlay) = &app.overlay {
@@ -299,9 +353,102 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     row
 }
 
-/// One content card: a rounded plane inset from the glass ground. The ladder
-/// (or the thread) lives *inside* it, clipped by the radius, so instrument
-/// surfaces never touch the window edge.
+/// Which side of a region the gutter to the neighbouring card is on.
+enum Gutter {
+    Left,
+    Right,
+}
+
+/// One edge region at its live width: a card clipped to `width`, laid out at
+/// `content`, and the gutter between it and the card beside it.
+///
+/// Two things this shape buys, both of them only visible mid-slide. The card
+/// is laid out at its **final** width the whole way, so a panel sliding in
+/// reveals its text rather than re-wrapping it forty times. And the gutter is
+/// the region's own child rather than the row's `gap`, so it is never in full
+/// before the panel has moved — it closes only over the last few pixels, which
+/// on this curve is the slowest part of the slide, so the two cards never
+/// touch on the way past each other.
+///
+/// The returned element is positioned, so a caller may hang an absolute child
+/// (the seam) in its gutter.
+fn region(width: Pixels, content: f32, gutter: Gutter, inner: AnyElement) -> Div {
+    let clipped = pane::pane(width, px(content), inner);
+    let gap = div().h_full().flex_none().w(width.min(px(CARD_GAP)));
+    let region = div().h_full().flex_none().flex().flex_row().relative();
+    match gutter {
+        Gutter::Left => region.child(gap).child(clipped),
+        Gutter::Right => region.child(clipped).child(gap),
+    }
+}
+
+/// The workspace panel's draggable left edge. Double-click restores the
+/// default width — the same gesture comet's seams answer to.
+fn workspace_seam(cx: &mut Context<Luma>) -> gpui::Stateful<Div> {
+    pane::resize_handle(
+        "workspace-seam",
+        || WorkspaceResize,
+        |app: &mut Luma, _| app.workspace_open_width = WORKSPACE_WIDTH,
+        glass::glass_hover(),
+        cx,
+    )
+}
+
+/// The workspace panel's left seam, under the pointer. gpui routes a drag by
+/// the type it carries, so this marker is what tells the row's listener that
+/// the pointer belongs to this seam rather than to anything else being dragged.
+struct WorkspaceResize;
+
+impl Luma {
+    /// How wide the sidebar's card rests: open, or nothing at all.
+    fn sidebar_slot(&self) -> f32 {
+        if self.sidebar_hidden || self.sidebar.is_none() {
+            return 0.0;
+        }
+        SIDEBAR_WIDTH
+    }
+
+    /// The same for the workspace panel, whose open width is the dragged one.
+    /// In takeover the panel has no width of its own — it is the remainder —
+    /// and the layout branch in [`regions`] takes over.
+    fn workspace_slot(&self) -> f32 {
+        if self.workspace_hidden || self.workspace.is_empty() {
+            return 0.0;
+        }
+        self.workspace_open_width
+    }
+
+    /// Track the pointer while the workspace seam is dragged. A drag is
+    /// already continuous, so the width follows it directly — tweening toward
+    /// the pointer would only add lag to a gesture that has none.
+    fn drag_workspace_seam(
+        &mut self,
+        event: &DragMoveEvent<WorkspaceResize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let viewport = f32::from(window.viewport_size().width);
+        // The pointer holds the seam's centre, which sits in the middle of the
+        // gutter: the card's own left edge is half a gutter to its right, and
+        // the row's padding is what remains to the window edge.
+        let seam = f32::from(event.event.position.x);
+        let width = viewport - seam - CARD_GAP - CARD_GAP / 2.0;
+        let max = WORKSPACE_MAX.min(viewport * WORKSPACE_MAX_FRACTION);
+        self.workspace_open_width = width.clamp(WORKSPACE_MIN, max.max(WORKSPACE_MIN));
+        self.workspace_width.set(self.workspace_slot());
+        cx.notify();
+    }
+}
+
+/// One content card: a rounded plane inset from the glass ground, clipping
+/// whatever lives inside it to the radius so no content touches the window
+/// edge.
+///
+/// **No fill.** Which ground a card takes is which *tier* its contents belong
+/// to (spec §9), and only the caller knows that: the thread column is chrome
+/// and paints [`glass::panel`], a workspace tab is an instrument and paints
+/// [`ladder::background`] opaque. A default here would be the wrong one half
+/// the time and invisible when it was.
 fn card() -> Div {
     div()
         .h_full()
@@ -309,7 +456,6 @@ fn card() -> Div {
         .overflow_hidden()
         .flex()
         .flex_col()
-        .bg(luma_ui::glass::grey(6))
 }
 
 /// The visible tab's body, with the tab's own key context nested inside the
@@ -320,9 +466,11 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     let Some(target) = app.workspace.active().cloned() else {
         return div().into_any_element();
     };
-    // The one focus handle lives at exactly one element per frame — here only
-    // while no overlay out-ranks the tab. See `Luma::focus_slot`.
-    let holds_focus = app.overlay.is_none();
+    // The one focus handle lives at exactly one element per frame, and
+    // [`Luma::focus_slot`] is the only thing that decides which — asking it
+    // rather than restating its conditions is what keeps the handle from
+    // being tracked twice, or nowhere.
+    let holds_focus = matches!(app.focus_slot(), FocusSlot::Tab(_));
     let focus = app.focus.clone();
     // Split the borrow: the 3D view's element both mutates its state (a
     // lazily-acquired GPU, this frame's status) and reads the library
@@ -384,7 +532,11 @@ fn overlay_layer(
     div()
         .absolute()
         .inset_0()
-        .bg(ladder::background())
+        // The plane the overlay's body sits on, not the body's own ground:
+        // every screen re-homed here fills it with an opaque ladder surface of
+        // its own. A scrim rather than a ladder tone so the day one of them is
+        // inset as a card, what shows around it is the shell, dimmed.
+        .bg(glass::scrim(glass::SCRIM_ALPHA))
         .key_context(overlay.key_context())
         .track_focus(&app.focus)
         .child(body)

@@ -25,6 +25,7 @@
 //! native host just reads the file, so `img(path)` is the whole story and
 //! GPUI's image cache handles the decode and the lazy load.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -258,6 +259,12 @@ const GAP: f32 = 8.;
 const PAD_X: f32 = 12.;
 /// The coverage dot's box, matching the web side's `w-1.5 h-1.5`.
 const DOT: f32 = 6.;
+/// The album-art thumbnail's box, and the row's second lead. Square, so the
+/// placeholder and a loaded cover occupy the same rect and a row cannot change
+/// shape when its art arrives.
+const ART: f32 = 32.;
+/// The art's corner radius — chrome tier, so comet's small-control radius.
+const ART_RADIUS: f32 = 4.;
 
 /// The sidebar: the venue's name (the way back to the picker), the search,
 /// the filters, and the venue's tracks as a row list.
@@ -510,6 +517,7 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
                 .w(px(DOT))
                 .children(coverage_dot(track)),
         )
+        .child(album_art(track))
         .child(
             div()
                 .flex_1()
@@ -518,14 +526,21 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
                 .flex()
                 .flex_col()
                 .gap(px(2.))
+                // Both lines truncate rather than wrap. The row's height is
+                // declared, not measured — `uniform_list` gives every row
+                // exactly [`ROW_HEIGHT`] — so a title allowed to take a second
+                // line does not make its row taller, it pushes the artist line
+                // out of the bottom of it.
                 .child(
                     div()
+                        .truncate()
                         .text_size(px(12.))
                         .text_color(luma_ui::glass::ink(0.88))
                         .child(name.clone()),
                 )
                 .child(
                     div()
+                        .truncate()
                         .text_size(px(10.))
                         .text_color(luma_ui::glass::ink(0.45))
                         .child(sub),
@@ -533,6 +548,32 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
         )
         .agent_node(Role::Row, name)
         .into_any_element()
+}
+
+/// The row's cover thumbnail: a neutral plate, with the art painted over it
+/// when the track has any.
+///
+/// The plate is always there and the image sits *inside* it, which is what
+/// makes the two states one rect: a track with no art, a path that no longer
+/// resolves, and a decode still in flight all show the same square, and none
+/// of them can reflow the row. `img` reads the file through gpui's global
+/// image cache, so a row scrolled back into view costs a cache hit rather than
+/// a decode — the reason the web side has to preload art by hand
+/// (`track-browser.tsx`) and this one does not.
+fn album_art(track: &TrackBrowserRow) -> Div {
+    div()
+        .flex_shrink_0()
+        .size(px(ART))
+        .rounded(px(ART_RADIUS))
+        .overflow_hidden()
+        .bg(luma_ui::glass::wash(0.06))
+        .children(
+            track
+                .album_art_path
+                .as_ref()
+                .filter(|path| !path.is_empty())
+                .map(|path| img(PathBuf::from(path)).size(px(ART))),
+        )
 }
 
 /// The web side falls back through title → filename; `file_path`'s basename is

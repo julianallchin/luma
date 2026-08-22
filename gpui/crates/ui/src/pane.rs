@@ -1,9 +1,10 @@
 //! A region of the shell whose width animates, and the handle that drags it.
 //!
-//! Three regions share this: the sidebar, the workspace panel, and the chat
-//! column's own historical slide. Each of them wants the same two behaviours —
-//! a width that eases between two values, and a seam the mouse can pull — so
-//! they are stated once here rather than three times in the shell.
+//! Both edge regions share this: the sidebar and the workspace panel. Each
+//! wants the same two behaviours — a width that eases between two values, and
+//! a seam the mouse can pull — so they are stated once here rather than twice
+//! in the shell. Where a region's gutter to its neighbour goes is the shell's
+//! business, not this module's.
 //!
 //! # Why the tween is evaluated by hand
 //!
@@ -59,8 +60,18 @@ impl PaneWidth {
     /// Send the region to `to`, starting from wherever it is *now* — so
     /// reversing mid-slide reverses from the visible width rather than
     /// snapping back to where the last slide began.
-    pub fn retarget(&mut self, to: f32) {
+    ///
+    /// Already heading there is not a new slide: this is safe to call every
+    /// frame with a target derived from the shell's state, which is how the
+    /// toggles avoid keeping animation bookkeeping of their own.
+    ///
+    /// Under reduced motion the region simply *is* at `to`.
+    pub fn retarget(&mut self, to: f32, cx: &App) {
         if (self.target - to).abs() < f32::EPSILON {
+            return;
+        }
+        if motion::reduced_motion(cx) {
+            self.set(to);
             return;
         }
         let from = self.current();
@@ -92,7 +103,8 @@ impl PaneWidth {
         let Some(Tween { from, started }) = self.moving else {
             return self.target;
         };
-        let raw = started.elapsed().as_secs_f32() / RESIZE.total().as_secs_f32();
+        let span = RESIZE.total().mul_f32(motion::speed_scale());
+        let raw = started.elapsed().as_secs_f32() / span.as_secs_f32();
         if raw >= 1.0 {
             return self.target;
         }

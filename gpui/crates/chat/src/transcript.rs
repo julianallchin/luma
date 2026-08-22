@@ -48,6 +48,10 @@ pub struct RowCtx<'a> {
     pub ix: usize,
     /// Whether the turn is writing into this row.
     pub live: bool,
+    /// The working indicator, on the one row that carries it — the last. See
+    /// [`crate::working`] for why it trails a row rather than pinning to the
+    /// panel.
+    pub trailer: Option<crate::working::Trailer>,
     /// Tool calls the reader has closed, by call id — see
     /// [`crate::AgentChat::toggle_tool`] for why the set is the negative one.
     pub collapsed: &'a HashSet<SharedString>,
@@ -240,11 +244,22 @@ fn push_block_plain(out: &mut String, block: &Block) {
 /// parse and fades its new characters. Every other row is settled and renders
 /// neither, which is also what makes it free — a settled row's flatten and
 /// shaping are reused from the cache untouched.
-pub fn row(row: &Row, message: &AgentChatMessage, ctx: &RowCtx, window: &Window) -> AnyElement {
+pub fn row(
+    row: &Row,
+    message: &AgentChatMessage,
+    ctx: &RowCtx,
+    window: &Window,
+    cx: &mut gpui::App,
+) -> AnyElement {
     let body = match message.role {
         Role::User => user_bubble(message, ctx.theme),
         Role::Assistant => assistant(row, message, ctx, window),
     };
+    let view = ctx.chat.entity_id();
+    let trailer = ctx
+        .trailer
+        .as_ref()
+        .map(|state| crate::working::trailer(state, ctx.theme, view, cx));
     // A settled assistant turn is signed with when it arrived — comet's faint
     // line under the reply. A live row is not: its time is "now".
     let stamp = (!ctx.live && matches!(message.role, Role::Assistant))
@@ -274,6 +289,7 @@ pub fn row(row: &Row, message: &AgentChatMessage, ctx: &RowCtx, window: &Window)
                 .flex()
                 .flex_col()
                 .child(body)
+                .children(trailer)
                 .children(stamp),
         )
         .agent_node(NodeRole::Text, row.plain_text(message))

@@ -1,17 +1,20 @@
 //! Ported from zeron (MIT, © 2026 Wing) — crates/ui/src/motion.rs
 //!
-//! Animation kit — the zeron motion catalog as reusable helpers over gpui
-//! [`Animation`]/[`AnimationExt`].
+//! Animation kit — one curve, four durations, and the helpers that ride them
+//! over gpui [`Animation`]/[`AnimationExt`].
 //!
-//! Catalog (docs/research/feature-inventory.md §1.12):
-//! - `fade-in`   0.5s  cubic-bezier(0.16,1,0.3,1), translateY 4→0 (entrances)
-//! - `fade-quick` 0.15s
-//! - `menu-in`   0.14s scale 0.96 + translateY −2 (popovers)
-//! - `dialog-in` 0.18s scale 0.96→1
-//! - `splash-out` 0.5s opacity + translateY −6, 0.15s delay
-//! - `zeron-pulse` 2.4s staggered cell opacity 0.08→1, scale 0.9→1 (loaders)
-//! - `gradient-spin-pulse` 750ms per-cell phase wave (working indicator)
-//! - 200ms ease-out width/height transitions (sidebar/panes)
+//! # One curve
+//!
+//! Everything that moves eases on [`ROOT`]. A second curve would be a second
+//! motion language, and the app would read as two apps sharing a window: the
+//! only thing that distinguishes a menu pop from a panel slide is how far and
+//! for how long, never *how*.
+//!
+//! Durations come from the ladder — [`SNAP`], [`QUICK`], [`BASE`], [`SLOW`] —
+//! for the same reason the greys do: a new animation picks a rung rather than
+//! inventing a number, and a fifth rung is a design decision, not a literal.
+//! Loader *periods* ([`PULSE`], [`GRADIENT_SPIN`]) are not on the ladder — they
+//! are the length of a loop, not of a transition.
 //!
 //! Custom easing is a closure over gpui's `Fn(f32) -> f32` easing shape; CSS
 //! `cubic-bezier()` is evaluated exactly by [`CubicBezier`].
@@ -207,17 +210,14 @@ impl CubicBezier {
     }
 }
 
-/// zeron's signature entrance curve — CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
-pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::new(0.16, 1.0, 0.3, 1.0);
-/// CSS `ease-out` — width/height transitions.
-pub const EASE_OUT: CubicBezier = CubicBezier::new(0.0, 0.0, 0.58, 1.0);
-/// CSS `ease` — quick fades, menu/dialog pops.
-pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.0);
-/// Sidebar resort glide — CSS `cubic-bezier(0.22, 1, 0.36, 1)` (used from M3b).
-pub const EASE_RESORT: CubicBezier = CubicBezier::new(0.22, 1.0, 0.36, 1.0);
-/// CSS `ease-in-out` — the transcript scroll glide (browser smooth-scroll
-/// shape: gentle start, cruise, gentle landing).
-pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0.0, 0.58, 1.0);
+/// **The** curve — CSS `cubic-bezier(0.16, 1, 0.3, 1)`, an exponential ease-out:
+/// leaves immediately, arrives slowly, never overshoots.
+///
+/// It is comet's signature easing (its `fade-in`, its iOS `Motion.swift`), and
+/// it is the only curve in this app. Panel slides in the original ride CSS
+/// `ease-out` instead; that is a milder shape of the same idea, and one shape
+/// beats two nearly-identical ones.
+pub const ROOT: CubicBezier = CubicBezier::new(0.16, 1.0, 0.3, 1.0);
 
 // ---------------------------------------------------------------------------
 // Motion specs (the catalog)
@@ -279,42 +279,56 @@ impl MotionSpec {
     }
 }
 
-/// Entrances: 0.5s expo-out fade + 4px rise.
-pub const FADE_IN: MotionSpec = MotionSpec::new(500, EASE_OUT_EXPO);
-/// Quick fade: 0.15s.
-pub const FADE_QUICK: MotionSpec = MotionSpec::new(150, EASE);
-/// Popover-in: 0.14s (scale 0.96 approximated, translateY −2).
-pub const MENU_IN: MotionSpec = MotionSpec::new(140, EASE);
-/// Popover-out: 0.1s — quicker than the entrance (exits should get out of the
-/// way; matches the Radix convention of a shorter close than open).
-pub const MENU_OUT: MotionSpec = MotionSpec::new(100, EASE);
-/// Dialog-in: 0.18s (scale 0.96→1 approximated).
-pub const DIALOG_IN: MotionSpec = MotionSpec::new(180, EASE);
-/// Boot splash exit: 0.5s fade + 6px lift after a 0.15s hold.
-pub const SPLASH_OUT: MotionSpec = MotionSpec::new(500, EASE).with_delay(150);
-/// Sidebar / pane width+height transitions: 200ms ease-out.
-pub const RESIZE: MotionSpec = MotionSpec::new(200, EASE_OUT);
-/// Terminal tab drag-reorder sliding transforms: 150ms (§1.10).
-pub const TAB_SLIDE: MotionSpec = MotionSpec::new(150, EASE_OUT);
-/// Diff-pane per-file collapse: 180ms height (§1.11).
-pub const COLLAPSE: MotionSpec = MotionSpec::new(180, EASE_OUT);
-/// Diff-pane chevron rotate: 200ms (§1.11; approximated as a crossfade — gpui
-/// divs have no rotation transform at the pinned rev, same caveat as scale).
-pub const CHEVRON: MotionSpec = MotionSpec::new(200, EASE);
-/// Rail-tick / scroll-to-row glide: 500ms ease-in-out over the whole distance
-/// (Electron parity — the original rail rode the browser's native smooth
-/// scroll, a fixed-duration gentle ease, never percent-of-remaining).
-pub const SCROLL_GLIDE: MotionSpec = MotionSpec::new(500, EASE_IN_OUT);
-/// Tailwind's default transition curve — CSS `cubic-bezier(0.4, 0, 0.2, 1)`
-/// (`transition-colors` et al. carry it unless overridden; zeron never does).
-pub const EASE_TAILWIND: CubicBezier = CubicBezier::new(0.4, 0.0, 0.2, 1.0);
-/// CSS `transition-colors` default: 150ms over [`EASE_TAILWIND`] — the temporal
-/// blend every interactive hover wash rides in the original.
-pub const HOVER_FADE: MotionSpec = MotionSpec::new(150, EASE_TAILWIND);
-/// Loader pulse period: 2.4s.
-pub const PULSE: MotionSpec = MotionSpec::new(2400, EASE);
-/// Gradient matrix spinner wave period: 750ms.
-pub const GRADIENT_SPIN: MotionSpec = MotionSpec::new(750, EASE);
+// -- the duration ladder ------------------------------------------------------
+
+/// Getting out of the way (100ms): an exit whose end state is what the eye
+/// already wants.
+pub const SNAP: u64 = 100;
+/// Something small appearing where the pointer already is (150ms): menus,
+/// hover washes, a chip sliding one slot over.
+pub const QUICK: u64 = 150;
+/// A region of the window changing size (200ms) — comet's panel duration, and
+/// the rung anything structural takes.
+pub const BASE: u64 = 200;
+/// A whole surface arriving (500ms): entrances, the splash, a scroll that
+/// crosses the viewport.
+pub const SLOW: u64 = 500;
+
+// -- the catalog --------------------------------------------------------------
+
+/// Entrances: fade + 4px rise.
+pub const FADE_IN: MotionSpec = MotionSpec::new(SLOW, ROOT);
+/// Opacity-only fade.
+pub const FADE_QUICK: MotionSpec = MotionSpec::new(QUICK, ROOT);
+/// Popover-in (scale 0.96 approximated, translateY −2).
+pub const MENU_IN: MotionSpec = MotionSpec::new(QUICK, ROOT);
+/// Popover-out — a rung below the entrance, the one asymmetry the ladder
+/// keeps: a menu the user has dismissed is already gone as far as they are
+/// concerned, and matching the open would read as lag.
+pub const MENU_OUT: MotionSpec = MotionSpec::new(SNAP, ROOT);
+/// Dialog-in (scale 0.96→1 approximated).
+pub const DIALOG_IN: MotionSpec = MotionSpec::new(BASE, ROOT);
+/// Boot splash exit: fade + 6px lift after a hold.
+pub const SPLASH_OUT: MotionSpec = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
+/// Region width/height transitions — the sidebar and the workspace panel
+/// sliding open and shut (see [`crate::pane`]).
+pub const RESIZE: MotionSpec = MotionSpec::new(BASE, ROOT);
+/// Tab drag-reorder sliding transforms.
+pub const TAB_SLIDE: MotionSpec = MotionSpec::new(QUICK, ROOT);
+/// Per-row collapse (height).
+pub const COLLAPSE: MotionSpec = MotionSpec::new(BASE, ROOT);
+/// Chevron rotate (approximated as a crossfade — gpui divs have no rotation
+/// transform at the pinned rev, same caveat as scale).
+pub const CHEVRON: MotionSpec = MotionSpec::new(BASE, ROOT);
+/// Scroll-to-row glide over the whole distance — fixed duration, never
+/// percent-of-remaining.
+pub const SCROLL_GLIDE: MotionSpec = MotionSpec::new(SLOW, ROOT);
+/// The temporal blend every interactive hover wash rides.
+pub const HOVER_FADE: MotionSpec = MotionSpec::new(QUICK, ROOT);
+/// Loader pulse period (a loop length, not a transition — see the module docs).
+pub const PULSE: MotionSpec = MotionSpec::new(2400, ROOT);
+/// Gradient matrix spinner wave period.
+pub const GRADIENT_SPIN: MotionSpec = MotionSpec::new(750, ROOT);
 
 // ---------------------------------------------------------------------------
 // Element helpers (paint-layer entrances/exits)
@@ -353,7 +367,7 @@ where
 
 /// Popover exit: the reverse of [`menu_in`] — fade to 0 + translateY 0→−2 over
 /// [`MENU_OUT`]. Unlike the entrances, the eased progress `t` comes from the
-/// caller (computed off [`the panel's close state`]'s closing instant at render
+/// caller (computed off the closing panel's own instant at render
 /// time): `with_animation`'s element-id-keyed clock replays from 0 on remount
 /// (the hover-blend comment's warning), and a replay mid-exit is a full-opacity
 /// flash. The wall-clock progress is monotonic by construction; the animation
@@ -456,10 +470,10 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
 // ---------------------------------------------------------------------------
 //
 // gpui `.hover()` styles snap by construction — the style applies the frame
-// the pointer enters. The original zeron puts Tailwind `transition-colors`
-// (150ms, cubic-bezier(0.4, 0, 0.2, 1)) on every interactive wash, so hover
-// states FADE. This is the manual-drive tween for that (the shell `WidthTween`
-// pattern — never `with_animation`, whose element-id-keyed clock replays on
+// the pointer enters. The original puts a colour transition on every
+// interactive wash, so hover states FADE. This is the manual-drive tween for
+// that ([`crate::pane::PaneWidth`]'s pattern — never `with_animation`, whose
+// element-id-keyed clock replays on
 // remount): a per-element-key hover progress, advanced from wall time on each
 // evaluation, with the render tail requesting frames while any fade is
 // mid-flight.
@@ -668,8 +682,22 @@ pub fn speed_scale() -> f32 {
     })
 }
 
+/// Adopt the process's motion policy. Call once, before a window opens.
+///
+/// The OS accessibility setting already reaches gpui; this only adds the
+/// escape hatch `LUMA_MOTION=off`, which the automation harness sets so a test
+/// reads final geometry the frame after it acts instead of racing a slide.
+/// Nothing turns motion back *on* — an override that could contradict the
+/// user's accessibility preference is not an override worth having.
+pub fn init(cx: &mut App) {
+    if std::env::var("LUMA_MOTION").as_deref() == Ok("off") {
+        set_reduced_motion(cx, true);
+    }
+}
+
 /// Global reduced-motion flag. gpui snaps every `with_animation` element when
-/// set (end state for oneshots, rest state for loops) and schedules no frames.
+/// set (end state for oneshots, rest state for loops) and schedules no frames;
+/// the manually driven tweens in [`crate::pane`] honour it themselves.
 pub fn set_reduced_motion(cx: &mut App, reduced: bool) {
     cx.set_reduce_motion(reduced);
 }
@@ -681,13 +709,24 @@ pub fn reduced_motion(cx: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// [`ROOT`] plus the CSS curves it replaced. The solver is general — a
+    /// caller may pass any `cubic-bezier()` — so it is exercised against
+    /// shapes with slow starts and steep tails too, not only the app's one.
+    const CURVES: [CubicBezier; 5] = [
+        ROOT,
+        CubicBezier::new(0.0, 0.0, 0.58, 1.0),  // ease-out
+        CubicBezier::new(0.25, 0.1, 0.25, 1.0), // ease
+        CubicBezier::new(0.22, 1.0, 0.36, 1.0), // ease-out-quint
+        CubicBezier::new(0.42, 0.0, 0.58, 1.0), // ease-in-out
+    ];
+
     #[test]
     fn eval_never_escapes_unit_interval_dense_sweep() {
         // Regression: f32 rounding produced 1.000000119 near the tail of
-        // EASE_OUT_EXPO, tripping gpui's `delta ∈ [0,1]` assert (SIGABRT on
-        // the user's machine). Sweep densely, including the values right
-        // below 1.0 where Newton lands closest to the endpoint.
-        for curve in [EASE_OUT_EXPO, EASE_OUT, EASE, EASE_RESORT, EASE_IN_OUT] {
+        // ROOT, tripping gpui's `delta ∈ [0,1]` assert (SIGABRT on the
+        // user's machine). Sweep densely, including the values right below
+        // 1.0 where Newton lands closest to the endpoint.
+        for curve in CURVES {
             for i in 0..=100_000u32 {
                 let x = i as f32 / 100_000.0;
                 let y = curve.eval(x);
@@ -722,18 +761,18 @@ mod tests {
         // References computed independently with 80-step bisection.
         let cases: [(&str, CubicBezier, [f32; 5]); 3] = [
             (
-                "expo",
-                EASE_OUT_EXPO,
+                "root",
+                CURVES[0],
                 [0.494391, 0.825622, 0.971779, 0.997677, 0.999878],
             ),
             (
                 "ease-out",
-                EASE_OUT,
+                CURVES[1],
                 [0.160572, 0.378138, 0.684643, 0.906535, 0.982973],
             ),
             (
                 "ease",
-                EASE,
+                CURVES[2],
                 [0.094796, 0.408511, 0.802403, 0.960459, 0.994316],
             ),
         ];
@@ -746,7 +785,7 @@ mod tests {
 
     #[test]
     fn bezier_endpoints_and_clamping() {
-        for curve in [EASE_OUT_EXPO, EASE_OUT, EASE, EASE_RESORT, EASE_IN_OUT] {
+        for curve in CURVES {
             assert_eq!(curve.eval(0.0), 0.0);
             assert_eq!(curve.eval(1.0), 1.0);
             assert_eq!(curve.eval(-0.5), 0.0);
@@ -756,7 +795,7 @@ mod tests {
 
     #[test]
     fn bezier_is_monotonic_for_catalog_curves() {
-        for curve in [EASE_OUT_EXPO, EASE_OUT, EASE, EASE_RESORT, EASE_IN_OUT] {
+        for curve in CURVES {
             let mut last = 0.0;
             for i in 0..=100 {
                 let y = curve.eval(i as f32 / 100.0);
@@ -780,28 +819,42 @@ mod tests {
         let mid = SPLASH_OUT.progress(0.65);
         assert!(mid > 0.0 && mid < 1.0);
         // No-delay specs pass straight through the curve.
-        assert_close(
-            FADE_IN.progress(0.5),
-            EASE_OUT_EXPO.eval(0.5),
-            1e-6,
-            "no-delay",
-        );
+        assert_close(FADE_IN.progress(0.5), ROOT.eval(0.5), 1e-6, "no-delay");
     }
 
     #[test]
-    fn catalog_timings_match_zeron() {
-        assert_eq!(FADE_IN.duration_ms, 500);
-        assert_eq!(FADE_QUICK.duration_ms, 150);
-        assert_eq!(MENU_IN.duration_ms, 140);
-        assert_eq!(DIALOG_IN.duration_ms, 180);
-        assert_eq!((SPLASH_OUT.duration_ms, SPLASH_OUT.delay_ms), (500, 150));
+    fn every_transition_rides_the_root_curve_and_the_ladder() {
+        // The design rule, stated where a new entry has to pass it: one curve,
+        // and a duration off the ladder. Loader periods are loop lengths, not
+        // transitions, so they carry their own numbers (module docs).
+        let transitions = [
+            FADE_IN,
+            FADE_QUICK,
+            MENU_IN,
+            MENU_OUT,
+            DIALOG_IN,
+            SPLASH_OUT,
+            RESIZE,
+            TAB_SLIDE,
+            COLLAPSE,
+            CHEVRON,
+            SCROLL_GLIDE,
+            HOVER_FADE,
+        ];
+        for spec in transitions {
+            assert_eq!(spec.curve, ROOT, "{spec:?} rides a second curve");
+            assert!(
+                [SNAP, QUICK, BASE, SLOW].contains(&spec.duration_ms),
+                "{spec:?} invents a duration"
+            );
+            assert!(
+                spec.delay_ms == 0 || [SNAP, QUICK, BASE, SLOW].contains(&spec.delay_ms),
+                "{spec:?} invents a delay"
+            );
+        }
+        assert_eq!(ROOT, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
+        // The panel slide keeps comet's 200ms.
         assert_eq!(RESIZE.duration_ms, 200);
-        assert_eq!(TAB_SLIDE.duration_ms, 150);
-        assert_eq!(COLLAPSE.duration_ms, 180);
-        assert_eq!(CHEVRON.duration_ms, 200);
-        assert_eq!(PULSE.duration_ms, 2400);
-        assert_eq!(GRADIENT_SPIN.duration_ms, 750);
-        assert_eq!(EASE_OUT_EXPO, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
     }
 
     #[test]
@@ -958,10 +1011,9 @@ mod tests {
     }
 
     #[test]
-    fn hover_spec_matches_tailwind_transition_colors() {
-        assert_eq!(HOVER_FADE.duration_ms, 150);
+    fn hover_fade_is_a_quick_undelayed_wash() {
+        assert_eq!(HOVER_FADE.duration_ms, QUICK);
         assert_eq!(HOVER_FADE.delay_ms, 0);
-        assert_eq!(EASE_TAILWIND, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
     }
 
     #[test]

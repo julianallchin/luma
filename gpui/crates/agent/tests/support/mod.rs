@@ -167,6 +167,15 @@ impl Fixture {
     /// Sets `LUMA_CONFIG_DIR`, so exactly one fixture may be open per process.
     pub fn open(self, mode: Mode) -> Harness {
         std::env::set_var("LUMA_CONFIG_DIR", self.seed());
+        // A walk acts and then looks. With the panel slides running, "looks"
+        // would land mid-transition and every geometry assertion would be a
+        // race against a 200ms tween; snapped, the frame after an action is
+        // the finished one. Process-global for the same reason the config
+        // directory is — and left alone when the run already asked for motion
+        // (`shell_motion` shoots the slides themselves).
+        if std::env::var_os("LUMA_MOTION").is_none() {
+            std::env::set_var("LUMA_MOTION", "off");
+        }
         let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
             luma_app::init(cx);
             let library = luma_app::Library::open().expect("failed to open the fixture library");

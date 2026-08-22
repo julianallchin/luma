@@ -51,11 +51,12 @@ fn main() {
             // Below this the panel rows stop being readable; the graph editor
             // and the agent pane both reserve fixed gutters.
             window_min_size: Some(size(px(800.), px(600.))),
-            // Blurred so the chat panel's glass tier reads as vibrancy rather
-            // than a flat-alpha blend. Every app surface outside the chat
-            // paints opaque ladder values, so nothing else changes. If this is
-            // ever set at runtime, only `Blurred` keeps the backing
-            // `NSVisualEffectView` alive — see `luma_chat::theme`.
+            // Blurred, because the shell's whole chrome tier is translucent:
+            // the plane, the titlebar and the sidebar are `luma_ui::glass`
+            // surfaces and there is nothing behind them but this. Instrument
+            // cards paint opaque over it. If this is ever set at runtime, only
+            // `Blurred` keeps the backing `NSVisualEffectView` alive — see
+            // `luma_ui::glass::window_background_appearance`.
             window_background: luma_chat::theme::window_background_appearance(),
             ..Default::default()
         };

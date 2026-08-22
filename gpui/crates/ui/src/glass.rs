@@ -16,6 +16,20 @@
 //! now, so the boundary is a named tier rather than a dependency edge — see
 //! `docs/specs/comet-shell.md` §5.
 //!
+//! # One ladder, two coverages
+//!
+//! This tier does **not** mint tones of its own. Every surface here is a rung
+//! of [`crate::ladder`] taken to a coverage — [`glass`] is the ladder's
+//! deepest rung, [`panel`] the next, [`overlay`] the next — so the two tiers
+//! read as one progression (`0e → 19 → 27`) and there is exactly one place a
+//! grey is written down. The tier decides *how much desktop shows through*,
+//! never *what colour a surface is*.
+//!
+//! [`ink`], [`wash`] and [`hairline`] are the exception, and deliberately so:
+//! they are alpha over neutral white, which is what a translucent surface's
+//! own states have to be — an opaque grey plate on a translucent plane paints
+//! out the tint that is the point of the tier.
+//!
 //! Motto, kept from the source: **numbers drive layout, colors are paint.**
 //! Every layout constant above this module is a plain number and none of them
 //! depend on which color is painted.
@@ -31,6 +45,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use gpui::{hsla, Hsla, WindowBackgroundAppearance};
+
+use crate::ladder;
 
 /// Monotonic id of the current palette.
 static GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -77,7 +93,7 @@ pub fn wash(alpha: f32) -> Hsla {
 /// Alpha of the standard modal backdrop.
 pub const SCRIM_ALPHA: f32 = 0.60;
 
-/// Coverage of the glass surfaces over whatever is behind the window.
+/// Coverage of the shell's ground plane over whatever is behind the window.
 ///
 /// macOS is the only platform where the compositor guarantees a blur behind a
 /// translucent window; everywhere else a merely *transparent* panel shows the
@@ -85,12 +101,56 @@ pub const SCRIM_ALPHA: f32 = 0.60;
 /// site below keeps painting without knowing which happened.
 pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
 
-/// The chrome's own ground. On the glass platform this is `grey(8)` at
-/// [`GLASS_ALPHA`], so the plane behind the window tints it; elsewhere it is
-/// that grey, opaque.
+/// Coverage of a chrome card floating on [`glass`]. Lower than
+/// [`GLASS_ALPHA`] on purpose: the card is already a value step up from the
+/// plane, so it can spend more of its coverage on the blur behind it and still
+/// read as raised.
+pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
+
+/// Coverage of a floating chrome surface — menu, popover, picker. Heavier than
+/// [`PANEL_ALPHA`] because a menu's rows have to sit on a *known* background:
+/// text ghosting over whatever the popover happens to cover is worse than a
+/// thinner blur.
+pub const OVERLAY_ALPHA: f32 = if cfg!(target_os = "macos") { 0.85 } else { 1.0 };
+
+/// The shell's ground plane, and the deepest surface there is: the sidebar and
+/// the titlebar sit straight on it and the content cards float over it.
+///
+/// [`ladder::titlebar_background`] at [`GLASS_ALPHA`], so the blurred desktop
+/// tints it. The tone is the ladder's own deepest rung rather than a sampled
+/// comet grey — that is what keeps `0e → 19 → 27` one value ladder across
+/// both tiers instead of a cliff between a near-black chrome and a much
+/// lighter instrument panel.
 #[must_use]
 pub fn glass() -> Hsla {
-    grey(8).opacity(GLASS_ALPHA)
+    tinted(ladder::titlebar_background(), GLASS_ALPHA)
+}
+
+/// A chrome card floating on [`glass`] — the thread column, and any pane whose
+/// contents are chrome rather than instrument. One rung up the ladder
+/// ([`ladder::gutter`]) at [`PANEL_ALPHA`].
+///
+/// The instrument tier's answer to the same question is
+/// [`ladder::background`], opaque: a timeline or a graph canvas is a lit panel
+/// inset in the frame, not a pane of it.
+#[must_use]
+pub fn panel() -> Hsla {
+    tinted(ladder::gutter(), PANEL_ALPHA)
+}
+
+/// A floating chrome surface: menu, popover, the plane an overlay screen sits
+/// on. [`ladder::trim`] at [`OVERLAY_ALPHA`] — one rung above [`panel`], so a
+/// thing that floats over a card still reads above it.
+#[must_use]
+pub fn overlay() -> Hsla {
+    tinted(ladder::trim(), OVERLAY_ALPHA)
+}
+
+/// A ladder tone taken to the glass tier at `alpha`. The single conversion
+/// between the two tiers: the ladder owns every *value*, this module owns how
+/// much of the desktop each surface lets through.
+fn tinted(tone: gpui::Rgba, alpha: f32) -> Hsla {
+    Hsla::from(tone).opacity(alpha)
 }
 
 /// Hover wash for a row sitting directly on [`glass`]. Softer than an opaque
@@ -139,13 +199,6 @@ pub fn window_background_appearance() -> WindowBackgroundAppearance {
 #[must_use]
 pub fn scrim(alpha: f32) -> Hsla {
     hsla(0.0, 0.0, 0.0, alpha)
-}
-
-/// An exact achromatic tone from an 8-bit channel value (`grey(13)` ≡
-/// `#0d0d0d`) — the surfaces are sampled from screenshots, not generated.
-#[must_use]
-pub fn grey(value: u8) -> Hsla {
-    hsla(0.0, 0.0, f32::from(value) / 255.0, 1.0)
 }
 
 /// A neutral (chroma 0) oklch tone. Chroma 0 means `r == g == b` exactly, so
@@ -223,9 +276,19 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
 mod tests {
     use super::*;
 
+    /// The tier borrows the ladder's *value* and changes only its coverage —
+    /// a glass surface that had drifted to a tone of its own is the bug this
+    /// asserts against.
     #[test]
-    fn grey_matches_its_hex() {
-        assert_eq!(grey(13).l, 13.0 / 255.0);
+    fn glass_surfaces_are_ladder_rungs_at_a_coverage() {
+        for (surface, rung, alpha) in [
+            (glass(), ladder::titlebar_background(), GLASS_ALPHA),
+            (panel(), ladder::gutter(), PANEL_ALPHA),
+            (overlay(), ladder::trim(), OVERLAY_ALPHA),
+        ] {
+            assert_eq!(surface.l, Hsla::from(rung).l);
+            assert_eq!(surface.a, alpha);
+        }
     }
 
     #[test]
