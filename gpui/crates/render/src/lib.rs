@@ -30,6 +30,7 @@
 #![allow(clippy::too_many_lines)]
 
 pub mod assets;
+pub mod clusters;
 pub mod coords;
 pub mod frame;
 mod gpu;
