@@ -273,6 +273,71 @@ async fn rehydration_replays_the_tool_result_to_the_model() {
         .any(|block| matches!(block, super::model::ContentBlock::ToolResult { .. }))));
 }
 
+/// The whole loop over the live wire: a real provider, a real tool, and the
+/// rehydration in between. What the scripted tests cannot reach — a scripted
+/// model accepts any `messages` array, and every ordering rule the provider
+/// enforces on a tool round trip is invisible to it.
+///
+/// Ignored by default — it costs tokens and needs a network. Run with
+/// `cargo test --lib a_live_turn -- --ignored --nocapture`, with
+/// `LUMA_AI_GATEWAY_API_KEY` set.
+#[tokio::test]
+#[ignore = "live: needs LUMA_AI_GATEWAY_API_KEY and a network"]
+async fn a_live_turn_runs_a_tool_and_answers_from_its_result() {
+    let key = std::env::var(super::model::Provider::VercelAiGateway.key_env_var())
+        .expect("no gateway credential: set LUMA_AI_GATEWAY_API_KEY to smoke-test");
+    let fixture = fixture().await;
+    let service = AgentService::new(Arc::clone(&fixture.services))
+        .with_model(Arc::new(super::model::anthropic::AnthropicClient::gateway(
+            key,
+        )))
+        .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
+
+    let mut stream = service.turn(
+        &fixture.thread_id,
+        "Call the echo tool with value \"ping\", then tell me what it echoed."
+            .to_string()
+            .into(),
+    );
+    let events = drain(&mut stream).await;
+    assert_eq!(
+        events.last(),
+        Some(&TurnEvent::TurnEnded {
+            outcome: TurnOutcome::Completed
+        }),
+        "the live turn did not complete: {events:#?}"
+    );
+
+    let called = events.iter().any(
+        |event| matches!(event, TurnEvent::ToolCallEnded { output, .. } if matches!(output, ToolResult::Output { .. })),
+    );
+    assert!(called, "the live turn ran no tool: {events:#?}");
+
+    let rows = crate::database::local::agent_threads::list_messages(
+        fixture.pool(),
+        &fixture.thread_id,
+        None,
+    )
+    .await
+    .expect("messages");
+    let transcript = Transcript::from_rows(&rows).expect("transcript");
+    let reply: String = transcript
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .filter_map(|part| match part {
+            AgentChatPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    println!("--- transcript ---\n{reply}");
+    assert!(
+        reply.contains("ping"),
+        "the model never read the tool result back: {reply}"
+    );
+}
+
 #[tokio::test]
 async fn dropping_the_stream_stops_the_turn() {
     let fixture = fixture().await;

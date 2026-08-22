@@ -587,4 +587,106 @@ mod tests {
         assert!(!text.trim().is_empty(), "the gateway streamed no text");
         assert!(usage.output_tokens > 0, "the gateway reported no usage");
     }
+
+    /// The tool round trip over the live wire, with the *real* tool spec — the
+    /// half the scripted loop cannot check, because the scripted model never
+    /// reads `input_schema` and never has to accept a `tool_result` back.
+    ///
+    /// Two steps, exactly as a turn makes them: declare the tool and let the
+    /// model call it, then replay its `tool_use` alongside a `tool_result` and
+    /// require it to answer from the result.
+    ///
+    /// Ignored by default — it costs tokens and needs a network. Run with
+    /// `cargo test --lib a_live_gateway_tool -- --ignored --nocapture`, with
+    /// `LUMA_AI_GATEWAY_API_KEY` set.
+    #[tokio::test]
+    #[ignore = "live: needs LUMA_AI_GATEWAY_API_KEY and a network"]
+    async fn a_live_gateway_tool_call_round_trips() {
+        use crate::agent::tools;
+        use futures_util::StreamExt;
+
+        let key = std::env::var(Provider::VercelAiGateway.key_env_var())
+            .expect("no gateway credential: set LUMA_AI_GATEWAY_API_KEY to smoke-test");
+        let client = anthropic::AnthropicClient::gateway(key);
+        let id = ModelId::parse(DEFAULT_MODEL).expect("known model");
+
+        // The shipped registry's own spec, not a hand-written stand-in: the
+        // schema a real turn sends is the thing under test.
+        let specs = tools::registry(crate::agent::AgentKind::TrackCopilot).specs();
+        assert_eq!(specs.len(), 1, "the track agent declares one tool");
+        println!(
+            "input_schema: {}",
+            serde_json::to_string(&specs[0].schema).expect("schema")
+        );
+
+        let step = |messages: Vec<ModelMessage>| ModelRequest {
+            model: id,
+            system: "Use the python tool to answer. Do not answer from memory.".into(),
+            messages,
+            tools: specs.clone(),
+            reasoning: id.spec().default_reasoning,
+            max_tokens: 4096,
+        };
+
+        let mut stream = client.stream(step(vec![ModelMessage {
+            role: ModelRole::User,
+            content: vec![ContentBlock::Text(
+                "Compute 6 * 7 by running a python cell.".into(),
+            )],
+        }]));
+
+        let (mut call, mut args, mut stop) = (None, String::new(), None);
+        while let Some(event) = stream.next().await {
+            match event.expect("the gateway stream carried an error") {
+                ModelEvent::ToolCallStarted { id, name } => call = Some((id, name)),
+                ModelEvent::ToolCallArgsDelta { json, .. } => args.push_str(&json),
+                ModelEvent::StepEnded { stop_reason, .. } => stop = Some(stop_reason),
+                _ => {}
+            }
+        }
+        let (call_id, name) = call.expect("the gateway declared the tool but streamed no tool_use");
+        assert_eq!(name, "python");
+        assert_eq!(stop, Some(StopReason::ToolUse));
+        let input: Value = serde_json::from_str(args.trim())
+            .unwrap_or_else(|error| panic!("tool arguments did not parse: {error} in {args:?}"));
+        println!("called {name}({input})");
+        assert!(input.get("code").is_some(), "no `code` argument: {input}");
+
+        // Step two: the model's own call, answered.
+        let mut stream = client.stream(step(vec![
+            ModelMessage {
+                role: ModelRole::User,
+                content: vec![ContentBlock::Text(
+                    "Compute 6 * 7 by running a python cell.".into(),
+                )],
+            },
+            ModelMessage {
+                role: ModelRole::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: call_id.clone(),
+                    name,
+                    input,
+                }],
+            },
+            ModelMessage {
+                role: ModelRole::User,
+                content: vec![ContentBlock::ToolResult {
+                    id: call_id,
+                    content: vec![ContentBlock::Text("stdout:\n42".into())],
+                    is_error: false,
+                }],
+            },
+        ]));
+
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let ModelEvent::TextDelta(delta) =
+                event.expect("the gateway rejected the tool_result")
+            {
+                text.push_str(&delta);
+            }
+        }
+        println!("answered {text:?}");
+        assert!(text.contains("42"), "the model did not read the result");
+    }
 }

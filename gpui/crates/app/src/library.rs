@@ -56,7 +56,7 @@ use serde_json::{json, Value};
 use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::agent::{AgentService, ThreadScope};
-use luma_lib::agent_execution::workspace::PythonWorkspaceService;
+use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
@@ -188,13 +188,13 @@ impl Library {
             // every `auth_visible_*` view is empty, so a host that skipped
             // this would show an empty library and no error to explain it.
             let user_id = bootstrap_host_admission(&db.0, &state_db.0).await?;
-            // Nothing in this host runs Python, and a workspace service
-            // resolves its worker environment lazily, so refusing to build one
-            // is both honest and harmless. The day this app runs an agent, it
-            // grows the same `resolve_worker_env` the headless harness has.
-            let workspaces = Arc::new(PythonWorkspaceService::new(
-                storage.agent_workspaces_dir(),
-                Arc::new(|| Err("the GPUI app does not run Python workspaces".to_string())),
+            // This host runs the agent, and the agent's only tool is Python —
+            // so it resolves the same managed environment the Tauri app
+            // created, through the one resolver every non-Tauri host shares.
+            // Resolution is lazy: a machine with no venv yet still opens.
+            let workspaces = Arc::new(headless_env::workspace_service(
+                &storage,
+                headless_env::cache_dir()?,
             ));
             let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces);
             // The audio host keeps its own copy of the settings it reads, and

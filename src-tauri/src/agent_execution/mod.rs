@@ -19,6 +19,7 @@ pub mod artifacts;
 pub mod bindings;
 pub mod error;
 pub mod graph_runs;
+pub mod headless_env;
 #[cfg(test)]
 mod kernel_tests;
 pub mod sandbox;
