@@ -280,8 +280,9 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         app.frames(2);
         const forwardFirst = focusedLeaf(app.snapshot());
         focusTrace.push(...forwardLeaves, forwardFirst);
-        // Coordinate activation of the shell setting behind the modal must be
-        // intercepted by the scrim/occlusion plane.
+        // Coordinate activation of the shell setting behind the modal lands
+        // on the optional scrim: the venue dialog dismisses, but the covered
+        // settings action must not run.
         const occludedSettings = app.snapshot().find({ role: "button", label: "Settings" });
         app.click(occludedSettings);
         app.frames(2);
@@ -321,7 +322,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
                && reverseFirst === focusOrder[0]
                && forwardFirst === focusOrder[0],
            focusTrace,
-           occluded: afterOccludedClick.find({ role: "card", label: "Venue dialog" }) !== undefined
+           occluded: afterOccludedClick.find({ role: "card", label: "Venue dialog" }) === undefined
                && afterOccludedClick.find({ role: "card", label: "Settings dialog" }) === undefined,
            restoredOpener: restoredOpener.find({ role: "button", label: "Beta Room" })?.focused === true })
     "#,
