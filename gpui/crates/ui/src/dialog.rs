@@ -213,6 +213,10 @@ pub fn host(
     let max_height = (viewport.height - px(TITLEBAR_CLEARANCE + VIEWPORT_GUTTER)).max(px(1.0));
 
     let card = gpui::div()
+        // The card is a sibling of the full-window scrim. Register its hitbox
+        // as an occluder so controls inside it cannot also hit the dismissal
+        // plane behind it.
+        .occlude()
         .max_w(max_width)
         .max_h(max_height)
         .overflow_hidden()
