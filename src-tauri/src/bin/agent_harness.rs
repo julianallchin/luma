@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
-use luma_lib::agent_execution::sandbox;
-use luma_lib::agent_execution::workspace::{PythonWorkspaceService, WorkerEnv};
+use luma_lib::agent_execution::headless_env;
+use luma_lib::agent_execution::workspace::PythonWorkspaceService;
 use luma_lib::database::local::{auth, database::init_app_db_at, state::init_state_db_at};
 use luma_lib::dispatch::{self, AppServices, EventSink, Events};
 use luma_lib::services::fixtures as fixtures_service;
@@ -130,54 +130,12 @@ fn resolve_config_dir(cli: &Cli) -> Result<StorageRoot, String> {
     StorageRoot::from_env_default()
 }
 
-/// The app cache dir: where the managed venv and the deployed `luma_exec`
-/// package live. The app derives it from Tauri's identifier; headless we
-/// reconstruct the same path.
+/// The app cache dir, with the CLI's override ahead of the shared default.
 fn resolve_cache_dir(cli: &Cli) -> Result<PathBuf, String> {
-    if let Some(p) = &cli.cache_dir {
-        return Ok(p.clone());
+    match &cli.cache_dir {
+        Some(path) => Ok(path.clone()),
+        None => headless_env::cache_dir(),
     }
-    if let Some(p) = std::env::var_os("LUMA_CACHE_DIR") {
-        return Ok(PathBuf::from(p));
-    }
-    dirs::cache_dir()
-        .map(|p| p.join("com.luma.luma"))
-        .ok_or_else(|| "could not locate a cache directory".to_string())
-}
-
-/// The worker environment without an `AppHandle`: the venv must already exist
-/// (headless never creates one — that is minutes of work the app does at
-/// startup), and the worker script comes from the repo, falling back to the
-/// copy the app deploys into its cache.
-fn resolve_worker_env(cache_dir: &Path) -> Result<WorkerEnv, String> {
-    let python_bin =
-        luma_lib::python_env::find_existing_venv_python(cache_dir).ok_or_else(|| {
-            format!(
-                "no managed python environment under {} — run the app once to create it",
-                cache_dir.display()
-            )
-        })?;
-
-    let repo_script = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("python")
-        .join("luma_exec")
-        .join("worker.py");
-    let worker_script = if repo_script.exists() {
-        repo_script
-    } else {
-        cache_dir.join("luma_exec").join("worker.py")
-    };
-    if !worker_script.exists() {
-        return Err(format!(
-            "agent python worker missing at {}",
-            worker_script.display()
-        ));
-    }
-    Ok(WorkerEnv::new(
-        python_bin,
-        worker_script,
-        std::sync::Arc::new(sandbox::default_launcher),
-    ))
 }
 
 fn resolve_fixtures(cli: &Cli) -> Result<PathBuf, String> {
@@ -226,7 +184,7 @@ async fn run() -> Result<(), String> {
 
     let workspaces = std::sync::Arc::new(PythonWorkspaceService::new(
         storage.agent_workspaces_dir(),
-        std::sync::Arc::new(move || resolve_worker_env(&cache_dir)),
+        std::sync::Arc::new(move || headless_env::resolve_worker_env(&cache_dir)),
     ));
 
     // Events go to stderr: stdout carries the response protocol and must stay
