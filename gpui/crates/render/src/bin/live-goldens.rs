@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     // live frame does not, and a comparison that quietly kept the export's dial
     // would be measuring the wrong path.
     for scene in &mut catalogue.scenes {
-        scene.render.haze_resolution = luma_render::LIVE_HAZE_RESOLUTION;
+        scene.render.haze.resolution = luma_render::LIVE_HAZE_RESOLUTION;
     }
     let mut library = luma_render::assets::Library::new(repo.join("resources/meshes"));
     let out_dir = repo.join("harness/goldens/scenes-live");

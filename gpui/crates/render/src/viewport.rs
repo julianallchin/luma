@@ -27,6 +27,8 @@
 //! are the compositor's, because only it knows when a repaint is wanted — this
 //! crate has no windowing and gains none.
 
+use std::time::{Duration, Instant};
+
 use crate::frame::Frame;
 use crate::gpu::{Channels, Renderer};
 
@@ -66,6 +68,8 @@ pub struct Presentation<'a> {
     pub height: u32,
     /// `width * height` BGRA8 texels.
     pub pixels: &'a [u8],
+    /// End-to-end wall time for this draw, including synchronous readback.
+    pub draw_time: Duration,
 }
 
 /// The renderer, kept alive across frames and pointed at a resizable surface.
@@ -76,6 +80,7 @@ pub struct Viewport {
     renderer: Renderer,
     pixels: Vec<u8>,
     subframes: u32,
+    last_draw_time: Option<Duration>,
 }
 
 impl Viewport {
@@ -90,6 +95,7 @@ impl Viewport {
             renderer: Renderer::new()?,
             pixels: Vec::new(),
             subframes: LIVE_SUBFRAMES,
+            last_draw_time: None,
         })
     }
 
@@ -97,6 +103,15 @@ impl Viewport {
     /// frame; see [`LIVE_SUBFRAMES`].
     pub fn set_subframes(&mut self, subframes: u32) {
         self.subframes = subframes.max(1);
+    }
+
+    /// CPU wall time of the previous [`Self::draw`], including queue submit,
+    /// GPU completion and readback. This deliberately does not claim to be a
+    /// GPU timestamp; it measures the end-to-end cost the current synchronous
+    /// presentation seam imposes on its caller.
+    #[must_use]
+    pub fn last_draw_time(&self) -> Option<Duration> {
+        self.last_draw_time
     }
 
     /// Render `frame` at `width` x `height` physical pixels.
@@ -116,18 +131,22 @@ impl Viewport {
         // room yet, not an error — wgpu would reject the extent, so clamp.
         let width = width.max(1);
         let height = height.max(1);
-        self.renderer.render_into(
+        let started = Instant::now();
+        let result = self.renderer.render_into(
             frame,
             width,
             height,
             self.subframes,
             Channels::Bgra,
             &mut self.pixels,
-        )?;
+        );
+        self.last_draw_time = Some(started.elapsed());
+        result?;
         Ok(Presentation {
             width,
             height,
             pixels: &self.pixels,
+            draw_time: self.last_draw_time.unwrap_or_default(),
         })
     }
 }
