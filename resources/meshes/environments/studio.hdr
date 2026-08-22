@@ -1,0 +1,6 @@
+#?RADIANCE
+# Procedurally authored for Luma renderer tests; CC0-1.0.
+FORMAT=32-bit_rle_rgbe
+
+-Y 2 +X 4
+~@@`P@@P`@@~0000@0@00000

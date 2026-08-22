@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use glam::{Mat3, Mat4, Vec3};
 
-use crate::assets::{Image, Library, Material, Vertex};
+use crate::assets::{HdrImage, Image, Library, Material, Vertex};
 use crate::coords::{euler_xyz, hex_srgb, three_to_world_basis, world_from_three};
 use crate::luminaire::{cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL};
 use crate::overlay::Overlay;
@@ -132,6 +132,21 @@ pub struct Texture {
     pub image: Image,
 }
 
+/// One decoded HDR probe plus its per-frame display controls.
+#[derive(Clone)]
+pub struct EnvironmentImage {
+    /// Stable asset identity used by the renderer's resident cache.
+    pub key: String,
+    /// Decoded linear source pixels.
+    pub image: HdrImage,
+    /// Image-based lighting multiplier.
+    pub intensity: f32,
+    /// Rotation around world Z, in radians.
+    pub rotation: f32,
+    /// Whether the source is visible behind scene geometry.
+    pub visible: bool,
+}
+
 /// Everything one output frame needs, resolved to world space.
 pub struct Frame {
     /// Deduplicated geometry referenced by [`Draw::mesh`].
@@ -153,6 +168,8 @@ pub struct Frame {
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
     pub ambient: Vec3,
+    /// Optional resident image-based environment.
+    pub environment: Option<EnvironmentImage>,
     /// The independently controlled directional light, if enabled.
     pub directional: Option<DirectionalLight>,
     /// Effective density after the hazer-dimmer scaling; zero disables the pass.
@@ -667,6 +684,22 @@ pub fn build_with(
 
     let overlays = crate::overlay::build(scene, definitions, &camera, to_world, &mut bank);
 
+    let environment = scene
+        .render
+        .environment
+        .probe
+        .as_ref()
+        .map(|probe| {
+            Ok::<_, anyhow::Error>(EnvironmentImage {
+                key: probe.asset.clone(),
+                image: lib.environment(&probe.asset)?.clone(),
+                intensity: probe.intensity.max(0.0),
+                rotation: probe.rotation_deg.to_radians(),
+                visible: probe.visible,
+            })
+        })
+        .transpose()?;
+
     Ok(Frame {
         meshes: bank.meshes,
         images: bank.images,
@@ -677,6 +710,7 @@ pub fn build_with(
         clear_color: Vec3::from(scene.render.environment.background),
         ambient: Vec3::from(scene.render.environment.ambient_color)
             * scene.render.environment.ambient_intensity.max(0.0),
+        environment,
         directional: scene.render.sun.and_then(|sun| {
             let direction = Vec3::from(sun.direction).normalize_or_zero();
             (direction != Vec3::ZERO && sun.intensity > 0.0).then_some(DirectionalLight {

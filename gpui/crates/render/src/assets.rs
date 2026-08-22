@@ -37,6 +37,17 @@ pub struct Image {
     pub rgba: Arc<[u8]>,
 }
 
+/// Decoded linear RGB pixels from a Radiance HDR environment.
+#[derive(Clone)]
+pub struct HdrImage {
+    /// Pixels per row.
+    pub width: u32,
+    /// Rows.
+    pub height: u32,
+    /// Tightly packed linear RGB32F pixels.
+    pub rgb: Arc<[f32]>,
+}
+
 /// The glTF subset the `Pbr` material path consumes.
 #[derive(Debug, Clone, Copy)]
 pub struct Material {
@@ -172,6 +183,7 @@ impl Glb {
 pub struct Library {
     root: PathBuf,
     loaded: HashMap<String, Glb>,
+    environments: HashMap<String, HdrImage>,
 }
 
 impl Library {
@@ -181,6 +193,7 @@ impl Library {
         Self {
             root: root.into(),
             loaded: HashMap::new(),
+            environments: HashMap::new(),
         }
     }
 
@@ -194,6 +207,42 @@ impl Library {
             self.loaded.insert(rel.to_string(), glb);
         }
         Ok(&self.loaded[rel])
+    }
+
+    /// Decode and cache a Radiance HDR environment by stable relative path.
+    ///
+    /// # Errors
+    /// Fails if the file is missing or is not a readable Radiance HDR image.
+    pub fn environment(&mut self, rel: &str) -> anyhow::Result<&HdrImage> {
+        if !self.environments.contains_key(rel) {
+            let path = self.root.join(rel);
+            let image = image::load(
+                std::io::BufReader::new(std::fs::File::open(&path)?),
+                image::ImageFormat::Hdr,
+            )?
+            .into_rgb32f();
+            let (width, height) = image.dimensions();
+            anyhow::ensure!(
+                width > 0 && height > 0,
+                "empty HDR environment: {}",
+                path.display()
+            );
+            let rgb = image
+                .into_raw()
+                .into_iter()
+                .map(|channel| {
+                    if channel.is_finite() {
+                        channel.max(0.0)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect::<Vec<_>>()
+                .into();
+            self.environments
+                .insert(rel.to_string(), HdrImage { width, height, rgb });
+        }
+        Ok(&self.environments[rel])
     }
 }
 

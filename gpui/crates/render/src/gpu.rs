@@ -15,6 +15,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
 use crate::assets::Image;
+use crate::environment::EnvironmentSystem;
 use crate::frame::{Draw, Frame};
 use crate::overlay::{Overlay, OverlayDepth};
 
@@ -116,6 +117,7 @@ const HAZE_TILE_SIZE: u32 = 16;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CompositeUniform {
+    inv_view_proj: [[f32; 4]; 4],
     params: [f32; 4],
     depth: [f32; 4],
 }
@@ -161,6 +163,8 @@ pub struct UploadStats {
     pub geometry: u64,
     /// Material-map uploads, counted per source/color-space role.
     pub textures: u64,
+    /// HDR environment uploads and GPU preprocessing runs.
+    pub environments: u64,
 }
 
 /// Adapter identity attached to volumetric timing evidence.
@@ -218,6 +222,7 @@ pub struct Renderer {
     adapter_profile: RendererProfile,
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
+    environment: EnvironmentSystem,
     haze_layout: wgpu::BindGroupLayout,
     temporal_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -512,6 +517,7 @@ impl Renderer {
             }),
             timestamp_period_ns: queue.get_timestamp_period(),
         });
+        let environment = EnvironmentSystem::new(&device, &queue);
 
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
@@ -645,7 +651,7 @@ impl Renderer {
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene"),
-                bind_group_layouts: &[&scene_layout, &material_layout],
+                bind_group_layouts: &[&scene_layout, &material_layout, environment.scene_layout()],
                 push_constant_ranges: &[],
             });
 
@@ -803,7 +809,7 @@ impl Renderer {
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("composite"),
-                bind_group_layouts: &[&composite_layout],
+                bind_group_layouts: &[&composite_layout, environment.scene_layout()],
                 push_constant_ranges: &[],
             });
         let composite_pipelines = [Channels::Rgba, Channels::Bgra].map(|channels| {
@@ -1010,6 +1016,7 @@ impl Renderer {
             adapter_profile,
             scene_layout,
             material_layout,
+            environment,
             haze_layout,
             temporal_layout,
             composite_layout,
@@ -1036,6 +1043,7 @@ impl Renderer {
             upload_stats: UploadStats {
                 geometry: 0,
                 textures: 0,
+                environments: 0,
             },
             targets: None,
             haze_history_valid: false,
@@ -1386,6 +1394,15 @@ impl Renderer {
                 frame.debug_view.shader_code() as f32,
             ],
         };
+        if self
+            .environment
+            .prepare(&self.device, &self.queue, frame.environment.as_ref())
+        {
+            self.upload_stats.environments += 1;
+        }
+        let (_environment_uniform, environment_bg) = self
+            .environment
+            .bind_group(&self.device, frame.environment.as_ref());
 
         // --- resident geometry ----------------------------------------------
         // Frame assembly is intentionally cheap and ephemeral, but the meshes
@@ -1652,6 +1669,7 @@ impl Renderer {
                     });
                     pass.set_pipeline(&self.shadow_pipeline);
                     pass.set_bind_group(0, &shadow_bgs[cascade].1, &[]);
+                    pass.set_bind_group(2, &environment_bg, &[]);
                     draw_range(&mut pass, 0..opaque);
                 }
             }
@@ -1674,6 +1692,7 @@ impl Renderer {
                 });
                 pass.set_pipeline(&self.depth_pipeline);
                 pass.set_bind_group(0, &unlit_bg, &[]);
+                pass.set_bind_group(2, &environment_bg, &[]);
                 draw_range(&mut pass, 0..opaque);
             }
 
@@ -1699,6 +1718,7 @@ impl Renderer {
                 });
                 pass.set_pipeline(&self.scene_pipeline);
                 pass.set_bind_group(0, &lit_bg, &[]);
+                pass.set_bind_group(2, &environment_bg, &[]);
                 draw_range(&mut pass, 0..opaque);
                 if frame.grid_draws > 0 {
                     pass.set_pipeline(&self.grid_pipeline);
@@ -1915,6 +1935,7 @@ impl Renderer {
 
         // --- composite + readback --------------------------------------------
         let composite_uniform = CompositeUniform {
+            inv_view_proj: inv_view_proj.to_cols_array_2d(),
             params: [
                 haze_size.0 as f32,
                 haze_size.1 as f32,
@@ -1965,6 +1986,7 @@ impl Renderer {
                 });
                 pass.set_pipeline(&self.composite_pipelines[channels.index()]);
                 pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_bind_group(1, &environment_bg, &[]);
                 pass.draw(0..3, 0..1);
             }
             if let Some((queries, resolve, profile_readback, _)) = &profile {
@@ -1994,6 +2016,7 @@ impl Renderer {
                 });
                 fence.set_pipeline(&self.composite_pipelines[channels.index()]);
                 fence.set_bind_group(0, &bind_group, &[]);
+                fence.set_bind_group(1, &environment_bg, &[]);
                 fence.draw(0..0, 0..1);
                 drop(fence);
                 encoder.resolve_query_set(queries, 0..4, resolve, 0);
@@ -2252,7 +2275,7 @@ mod tests {
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
         assert_eq!(std::mem::size_of::<Globals>(), 368);
         assert_eq!(std::mem::size_of::<HazeUniform>(), 160);
-        assert_eq!(std::mem::size_of::<CompositeUniform>(), 32);
+        assert_eq!(std::mem::size_of::<CompositeUniform>(), 96);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 48);
         assert_eq!(std::mem::size_of::<TileHeader>(), 16);

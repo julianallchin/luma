@@ -110,6 +110,17 @@ fn distance_attenuation(d: f32, cutoff: f32) -> f32 {
     return falloff;
 }
 
+fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
+    let c = cos(environment_params.rotation);
+    let s = sin(environment_params.rotation);
+    let rotated = vec3<f32>(
+        c * world_direction.x - s * world_direction.y,
+        s * world_direction.x + c * world_direction.y,
+        world_direction.z,
+    );
+    return vec3<f32>(rotated.x, rotated.z, -rotated.y);
+}
+
 /// 3x3 PCF, matching the kernel three's `PCFSoftShadowMap` settles on closely
 /// enough that only the outermost shadow pixel differs.
 fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
@@ -231,6 +242,32 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
 
     var out = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
     out += globals.ambient.rgb * diffuse_color * RECIPROCAL_PI * ao;
+    if environment_params.enabled > 0.5 && environment_params.intensity > 0.0 {
+        let dot_nv = saturate(dot(n, v));
+        let fresnel = f_schlick(f0, 1.0, dot_nv);
+        let diffuse_ibl = textureSampleLevel(
+            environment_irradiance,
+            environment_sampler,
+            environment_direction(n),
+            0.0,
+        ).rgb * diffuse_color;
+        let reflected = reflect(-v, n);
+        let prefiltered = textureSampleLevel(
+            environment_specular,
+            environment_sampler,
+            environment_direction(reflected),
+            roughness * 7.0,
+        ).rgb;
+        let brdf = textureSampleLevel(
+            environment_brdf,
+            environment_sampler,
+            vec2<f32>(dot_nv, roughness),
+            0.0,
+        ).rg;
+        let specular_ibl = prefiltered * (f0 * brdf.x + brdf.y);
+        out += (diffuse_ibl * (vec3<f32>(1.0) - fresnel) + specular_ibl)
+            * environment_params.intensity * ao;
+    }
 
     if globals.dir_to_light.w > 0.5 {
         let l = globals.dir_to_light.xyz;

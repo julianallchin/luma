@@ -4,6 +4,7 @@
 // anyway.
 
 struct Composite {
+    inv_view_proj: mat4x4<f32>,
     // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
     // xy: camera near/far planes.
@@ -15,6 +16,18 @@ struct Composite {
 @group(0) @binding(2) var haze_tex: texture_2d<f32>;
 @group(0) @binding(3) var haze_sampler: sampler;
 @group(0) @binding(4) var depth_tex: texture_depth_2d;
+
+struct EnvironmentParams {
+    intensity: f32,
+    rotation: f32,
+    enabled: f32,
+    visible: f32,
+};
+@group(1) @binding(0) var environment_irradiance: texture_cube<f32>;
+@group(1) @binding(1) var environment_specular: texture_cube<f32>;
+@group(1) @binding(2) var environment_brdf: texture_2d<f32>;
+@group(1) @binding(3) var environment_sampler: sampler;
+@group(1) @binding(4) var<uniform> environment_params: EnvironmentParams;
 
 fn linear_view_depth(raw_depth: f32) -> f32 {
     let near = cfg.depth.x;
@@ -101,7 +114,7 @@ fn agx(color_in: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(frag.xy);
-    let scene = textureLoad(scene_tex, coord, 0).rgb;
+    var scene = textureLoad(scene_tex, coord, 0).rgb;
     let size = vec2<f32>(textureDimensions(scene_tex));
     let uv = frag.xy / size;
     // Anchored on *this* pixel's own depth, not on the depth the nearest haze
@@ -113,6 +126,24 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // Subframe weights sum to 1, so the accumulated target is already a mean —
     // nothing here rescales it.
     let raw_depth = textureLoad(depth_tex, coord, 0);
+    if raw_depth <= 0.0 && environment_params.visible > 0.5 {
+        let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+        let near_h = cfg.inv_view_proj * vec4<f32>(ndc_xy, 1.0, 1.0);
+        let far_h = cfg.inv_view_proj * vec4<f32>(ndc_xy, 0.0, 1.0);
+        let near_world = near_h.xyz / near_h.w;
+        let far_world = far_h.xyz / far_h.w;
+        var direction = normalize(far_world - near_world);
+        let c = cos(environment_params.rotation);
+        let s = sin(environment_params.rotation);
+        direction = vec3<f32>(
+            c * direction.x - s * direction.y,
+            s * direction.x + c * direction.y,
+            direction.z,
+        );
+        direction = vec3<f32>(direction.x, direction.z, -direction.y);
+        scene = textureSampleLevel(environment_specular, environment_sampler, direction, 0.0).rgb
+            * environment_params.intensity;
+    }
     let depth = linear_view_depth(raw_depth);
     let debug = u32(cfg.params.w + 0.5);
     if debug >= 1u && debug <= 5u {

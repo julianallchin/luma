@@ -183,6 +183,10 @@ struct RenderLab {
     background_color: [f32; 3],
     ambient_color: [f32; 3],
     ambient_intensity: f32,
+    probe_enabled: bool,
+    probe_intensity: f32,
+    probe_rotation_deg: f32,
+    probe_visible: bool,
     haze_enabled: bool,
     haze_density: f32,
     haze_steps: u32,
@@ -205,6 +209,10 @@ impl RenderLab {
             background_color: scene_desc::Environment::EDITOR.background,
             ambient_color: scene_desc::Environment::EDITOR.ambient_color,
             ambient_intensity: if editor_lit { 0.2 } else { 0.0 },
+            probe_enabled: false,
+            probe_intensity: 0.8,
+            probe_rotation_deg: 0.0,
+            probe_visible: false,
             haze_enabled: true,
             haze_density: 0.8,
             haze_steps: 8,
@@ -257,6 +265,8 @@ enum LabToggle {
     Sun,
     Shadows,
     Environment,
+    Probe,
+    ProbeVisible,
     Haze,
     Grid,
 }
@@ -270,6 +280,8 @@ enum LabValue {
     BackgroundColor(usize),
     AmbientColor(usize),
     Ambient,
+    ProbeIntensity,
+    ProbeRotation,
     HazeDensity,
     HazeSteps,
     HazeResolution,
@@ -281,6 +293,8 @@ impl RenderLab {
             LabToggle::Sun => &mut self.sun_enabled,
             LabToggle::Shadows => &mut self.sun_shadows,
             LabToggle::Environment => &mut self.environment_enabled,
+            LabToggle::Probe => &mut self.probe_enabled,
+            LabToggle::ProbeVisible => &mut self.probe_visible,
             LabToggle::Haze => &mut self.haze_enabled,
             LabToggle::Grid => &mut self.grid_enabled,
         };
@@ -311,6 +325,13 @@ impl RenderLab {
             }
             LabValue::Ambient => {
                 self.ambient_intensity = (self.ambient_intensity + delta).clamp(0.0, 2.0);
+            }
+            LabValue::ProbeIntensity => {
+                self.probe_intensity = (self.probe_intensity + delta).clamp(0.0, 4.0);
+            }
+            LabValue::ProbeRotation => {
+                self.probe_rotation_deg =
+                    (self.probe_rotation_deg + delta + 180.0).rem_euclid(360.0) - 180.0;
             }
             LabValue::HazeDensity => {
                 self.haze_density = (self.haze_density + delta).clamp(0.0, 2.0);
@@ -1070,6 +1091,36 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
         ))
         .child(lab_toggle(
             app,
+            "HDR probe",
+            lab.probe_enabled,
+            LabToggle::Probe,
+        ))
+        .child(lab_value(
+            app,
+            "Probe intensity",
+            lab.probe_intensity,
+            0.0,
+            4.0,
+            0.1,
+            LabValue::ProbeIntensity,
+        ))
+        .child(lab_value(
+            app,
+            "Probe rotation",
+            lab.probe_rotation_deg,
+            -180.0,
+            180.0,
+            15.0,
+            LabValue::ProbeRotation,
+        ))
+        .child(lab_toggle(
+            app,
+            "Show probe background",
+            lab.probe_visible,
+            LabToggle::ProbeVisible,
+        ))
+        .child(lab_toggle(
+            app,
             "Fixture haze",
             lab.haze_enabled,
             LabToggle::Haze,
@@ -1358,6 +1409,10 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let ambient_intensity = state.render_lab.ambient_intensity;
     let ambient_color = state.render_lab.ambient_color;
     let background_color = state.render_lab.background_color;
+    let probe_enabled = state.render_lab.probe_enabled;
+    let probe_intensity = state.render_lab.probe_intensity;
+    let probe_rotation_deg = state.render_lab.probe_rotation_deg;
+    let probe_visible = state.render_lab.probe_visible;
     let haze_enabled = state.render_lab.haze_enabled;
     let haze_density = state.render_lab.haze_density;
     let haze_steps = state.render_lab.haze_steps;
@@ -1396,6 +1451,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             },
                             ambient_color,
                             ambient_intensity,
+                            probe: probe_enabled.then(|| scene_desc::EnvironmentProbe {
+                                asset: "environments/studio.hdr".into(),
+                                intensity: probe_intensity,
+                                rotation_deg: probe_rotation_deg,
+                                visible: probe_visible,
+                            }),
                         };
                         scene.render.sun = sun_enabled.then_some(scene_desc::DirectionalLight {
                             direction: sun_direction,
@@ -1573,6 +1634,10 @@ mod render_lab_tests {
         lab.adjust(LabValue::SunColor(0), -0.35);
         lab.adjust(LabValue::BackgroundColor(2), 0.2);
         lab.adjust(LabValue::AmbientColor(1), -0.4);
+        lab.adjust(LabValue::ProbeIntensity, 10.0);
+        lab.adjust(LabValue::ProbeRotation, 225.0);
+        lab.toggle(LabToggle::Probe);
+        lab.toggle(LabToggle::ProbeVisible);
         lab.adjust(LabValue::HazeSteps, 100.0);
         lab.adjust(LabValue::HazeResolution, -10.0);
 
@@ -1580,6 +1645,10 @@ mod render_lab_tests {
         assert!((lab.background_color[2] - (original_background[2] + 0.2)).abs() < f32::EPSILON);
         assert!((lab.ambient_color[1] - 0.6).abs() < f32::EPSILON);
         assert_eq!(lab.background_color[..2], original_background[..2]);
+        assert_eq!(lab.probe_intensity, 4.0);
+        assert_eq!(lab.probe_rotation_deg, -135.0);
+        assert!(lab.probe_enabled);
+        assert!(lab.probe_visible);
         assert_eq!(lab.haze_steps, 64);
         assert_eq!(lab.haze_resolution, 0.25);
 
