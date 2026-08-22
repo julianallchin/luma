@@ -19,8 +19,36 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&output)?;
     let mut renderer = Renderer::new()?;
     let mut library = assets::Library::new(repo.join("resources/meshes"));
+    let requested = std::env::args().skip(1).collect::<Vec<_>>();
 
     for scene in material_scenes() {
+        if !requested.is_empty() && !requested.contains(&scene.id) {
+            continue;
+        }
+        render_case(
+            &mut renderer,
+            &mut library,
+            &Catalogue {
+                warmup_frames: DEFAULT_SUBFRAMES,
+                viewport: luma_render::scene_desc::Viewport {
+                    width: 640,
+                    height: 400,
+                },
+                device_scale_factor: 1.0,
+                definitions: BTreeMap::new(),
+                scenes: Vec::new(),
+            },
+            &scene,
+            &output,
+        )?;
+    }
+    for scene in [
+        shadow_scene("sun-shadow-hard", 0.0),
+        shadow_scene("sun-shadow-soft", 3.0),
+    ] {
+        if !requested.is_empty() && !requested.contains(&scene.id) {
+            continue;
+        }
         render_case(
             &mut renderer,
             &mut library,
@@ -60,6 +88,9 @@ fn main() -> anyhow::Result<()> {
             Some((1, std::f32::consts::TAU - 0.001)),
         ),
     ] {
+        if !requested.is_empty() && !requested.iter().any(|requested| requested == id) {
+            continue;
+        }
         let mut scene = copy_scene(find_scene(&source, source_id)?);
         scene.id = id.into();
         scene.times = vec![TIME];
@@ -94,13 +125,15 @@ fn main() -> anyhow::Result<()> {
         definitions: copy_definitions(&source)?,
         scenes: Vec::new(),
     };
-    render_case(
-        &mut renderer,
-        &mut library,
-        &performance_catalogue,
-        &performance,
-        &output,
-    )?;
+    if requested.is_empty() || requested.contains(&performance.id) {
+        render_case(
+            &mut renderer,
+            &mut library,
+            &performance_catalogue,
+            &performance,
+            &output,
+        )?;
+    }
     Ok(())
 }
 
@@ -120,6 +153,7 @@ fn material_scenes() -> Vec<Scene> {
             color: [1.0, 0.93, 0.82],
             intensity: 2.4,
             shadows: false,
+            shadow_softness: 1.0,
         });
         Scene {
             id: id.into(),
@@ -165,6 +199,54 @@ fn material_scenes() -> Vec<Scene> {
         ),
         material("sun-off", "pbr-sweep.gltf", None),
     ]
+}
+
+fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
+    let mut render = RenderSettings::dark_stage(42.0, 1.0);
+    render.environment = Environment {
+        background: [0.004, 0.006, 0.01],
+        ambient_color: [0.3, 0.38, 0.5],
+        ambient_intensity: 0.12,
+        probe: None,
+    };
+    render.haze.enabled = false;
+    render.show_grid = false;
+    render.sun = Some(DirectionalLight {
+        direction: [-5.0, -3.0, 8.0],
+        color: [1.0, 0.93, 0.82],
+        intensity: 2.8,
+        shadows: true,
+        shadow_softness,
+    });
+    Scene {
+        id: id.into(),
+        times: vec![TIME],
+        camera: CameraPose {
+            position: [6.5, 4.0, 8.5],
+            target: [0.0, 0.8, 0.0],
+        },
+        editing: false,
+        render,
+        selected_fixture_ids: Vec::new(),
+        fixtures: Vec::new(),
+        pieces: vec![
+            Piece {
+                id: "receiver".into(),
+                mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                pos: [0.0, 0.0, 0.0],
+                rot: [0.0; 3],
+                scale: 2.4,
+            },
+            Piece {
+                id: "caster".into(),
+                mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                pos: [0.0, 1.1, 0.0],
+                rot: [0.0, 0.35, 0.0],
+                scale: 1.2,
+            },
+        ],
+        state: BTreeMap::new(),
+    }
 }
 
 fn render_case(

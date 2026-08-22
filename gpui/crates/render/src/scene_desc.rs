@@ -214,6 +214,14 @@ pub struct DirectionalLight {
     pub intensity: f32,
     /// Whether this light renders and samples the directional shadow map.
     pub shadows: bool,
+    /// Radius of the deterministic shadow filter in shadow-map texels.
+    /// Zero is a single hard comparison; values up to three widen the penumbra.
+    #[serde(default = "default_shadow_softness")]
+    pub shadow_softness: f32,
+}
+
+const fn default_shadow_softness() -> f32 {
+    1.0
 }
 
 impl DirectionalLight {
@@ -224,6 +232,7 @@ impl DirectionalLight {
         color: [1.0; 3],
         intensity: 1.4,
         shadows: true,
+        shadow_softness: 1.0,
     };
 }
 

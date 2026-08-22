@@ -121,8 +121,9 @@ fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(rotated.x, rotated.z, -rotated.y);
 }
 
-/// 3x3 PCF, matching the kernel three's `PCFSoftShadowMap` settles on closely
-/// enough that only the outermost shadow pixel differs.
+/// Deterministic 3x3 PCF. The authored tap radius is measured in shadow-map
+/// texels, so zero collapses all taps to one hard comparison while larger
+/// values widen the penumbra without changing cascade projection or stability.
 fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     // `shadow-normalBias={0.01}`: push the sample along the surface normal so
     // near-grazing faces do not shadow themselves.
@@ -137,10 +138,11 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
         return 1.0;
     }
     let texel = globals.params.y;
+    let radius = clamp(globals.dir_color.w, 0.0, 3.0);
     var sum = 0.0;
     for (var j = -1; j <= 1; j = j + 1) {
         for (var i = -1; i <= 1; i = i + 1) {
-            let offset = vec2<f32>(f32(i), f32(j)) * texel;
+            let offset = vec2<f32>(f32(i), f32(j)) * radius * texel;
             sum += textureSampleCompareLevel(
                 shadow_map,
                 shadow_sampler,

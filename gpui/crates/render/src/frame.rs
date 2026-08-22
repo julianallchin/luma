@@ -116,6 +116,8 @@ pub struct DirectionalLight {
     pub shadow_eye: Vec3,
     /// Whether the shadow map is rendered and sampled.
     pub shadows: bool,
+    /// Sanitized shadow-filter radius in shadow-map texels.
+    pub shadow_softness: f32,
 }
 
 /// One base-colour texture, with the identity it was interned under.
@@ -721,6 +723,11 @@ pub fn build_with(
                     .legacy_shadow_eye
                     .map_or(direction * 244.0_f32.sqrt(), Vec3::from),
                 shadows: sun.shadows,
+                shadow_softness: if sun.shadow_softness.is_finite() {
+                    sun.shadow_softness.clamp(0.0, 3.0)
+                } else {
+                    1.0
+                },
             })
         }),
         haze_density: if scene.render.haze.enabled {
