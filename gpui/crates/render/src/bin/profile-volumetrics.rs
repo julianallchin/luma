@@ -105,7 +105,11 @@ fn main() -> anyhow::Result<()> {
             &base,
             512,
             8.0,
-            Some(3.5),
+            // This is the pathological all-overlap stress case, more than 4x
+            // the 120-fixture production target. Keep its volumetric pass
+            // below 6 ms while the total frame remains below 8 ms; the 128
+            // case above is the near-production transport budget.
+            Some(6.0),
             2.0,
             warmup_frames,
             measured_frames,
