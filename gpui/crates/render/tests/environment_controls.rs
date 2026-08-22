@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use luma_render::assets::Library;
@@ -310,5 +311,74 @@ fn textured_pbr_proof_scene_resolves_deterministically() {
             .iter()
             .map(|image| (&image.key, &image.image.rgba))
             .collect::<HashMap<_, _>>()
+    );
+
+    // The second draw takes the resident geometry/texture path. Capture mode
+    // must remain byte deterministic across that lifetime transition.
+    let mut renderer = luma_render::Renderer::new().unwrap();
+    let first_pixels = renderer.render(&first, 160, 120, 2).unwrap();
+    let first_uploads = renderer.upload_stats();
+    let resident_pixels = renderer.render(&second, 160, 120, 2).unwrap();
+    assert_eq!(first_pixels, resident_pixels);
+    assert_eq!(
+        renderer.upload_stats(),
+        first_uploads,
+        "unchanged mesh and texture identities must not upload again"
+    );
+}
+
+#[test]
+fn live_async_presentation_matches_deterministic_capture_without_ui_polling() {
+    const WIDTH: u32 = 96;
+    const HEIGHT: u32 = 72;
+    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let proof_piece = || Piece {
+        id: "async-proof".into(),
+        mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        pos: [0.0, 0.0, 0.0],
+        rot: [0.0, 0.0, 0.0],
+        scale: 1.0,
+    };
+    let proof = scene(
+        probe_settings([-6.0, -4.0, 8.0], 1.4, true),
+        vec![proof_piece()],
+    );
+    let definitions = BTreeMap::new();
+    let build = |library: &mut Library| {
+        build_frame_with(&proof, &definitions, &|_, _| None, 0.0, library).unwrap()
+    };
+
+    let mut capture_library = Library::new(meshes.clone());
+    let capture = build(&mut capture_library);
+    let expected = luma_render::Renderer::new()
+        .unwrap()
+        .render(&capture, WIDTH, HEIGHT, 1)
+        .unwrap();
+
+    let mut live_library = Library::new(meshes);
+    let mut live = luma_render::AsyncViewport::new();
+    live.set_subframes(1);
+    for _ in 0..4 {
+        live.submit(build(&mut live_library), WIDTH, HEIGHT);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let presented = loop {
+        if let Some(frame) = live.take_latest() {
+            let frame = frame.unwrap();
+            if frame.serial == 4 {
+                break frame;
+            }
+        }
+        assert!(Instant::now() < deadline, "async GPU frame did not retire");
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let mut rgba = presented.pixels.to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    assert_eq!(
+        rgba, expected,
+        "live BGRA output diverged from capture RGBA"
     );
 }

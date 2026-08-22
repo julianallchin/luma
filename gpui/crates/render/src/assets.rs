@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use glam::{Mat4, Vec3, Vec4};
 
@@ -23,13 +24,14 @@ pub struct Vertex {
 }
 
 /// A decoded `baseColorTexture`, sRGB-encoded RGBA8, tightly packed.
+#[derive(Clone)]
 pub struct Image {
     /// Pixels per row.
     pub width: u32,
     /// Rows.
     pub height: u32,
     /// `width * height * 4` bytes, sRGB-encoded (the GPU decodes on sample).
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<[u8]>,
 }
 
 /// The glTF subset the `Pbr` material path consumes.
@@ -69,9 +71,9 @@ impl Default for Material {
 /// One triangle list with one material — a glTF mesh primitive.
 pub struct Primitive {
     /// Interleaved vertex data.
-    pub vertices: Vec<Vertex>,
+    pub vertices: Arc<[Vertex]>,
     /// Triangle list into `vertices`.
-    pub indices: Vec<u32>,
+    pub indices: Arc<[u32]>,
     /// Material shared by every triangle here.
     pub material: Material,
     /// Index into [`Glb::images`] of the `baseColorTexture`, if any. A resource
@@ -133,7 +135,7 @@ impl Glb {
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
         for (node, world) in self.nodes.iter().zip(&worlds) {
             for &p in &node.primitives {
-                for v in &self.primitives[p].vertices {
+                for v in self.primitives[p].vertices.iter() {
                     let w = world.transform_point3(Vec3::from(v.position));
                     lo = lo.min(w);
                     hi = hi.max(w);
@@ -238,7 +240,7 @@ fn to_rgba8(data: &gltf::image::Data) -> Image {
             return Image {
                 width: 1,
                 height: 1,
-                rgba: vec![255; 4],
+                rgba: Arc::from([255; 4]),
             }
         }
     };
@@ -255,7 +257,7 @@ fn to_rgba8(data: &gltf::image::Data) -> Image {
     Image {
         width: data.width,
         height: data.height,
-        rgba,
+        rgba: Arc::from(rgba),
     }
 }
 
@@ -294,8 +296,9 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
                 normal,
                 uv,
             })
-            .collect(),
-        indices,
+            .collect::<Vec<_>>()
+            .into(),
+        indices: indices.into(),
         base_color_image: pbr
             .base_color_texture()
             .map(|t| t.texture().source().index()),

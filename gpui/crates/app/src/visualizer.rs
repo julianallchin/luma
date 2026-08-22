@@ -15,16 +15,15 @@
 //!
 //! # Where the pixels come from
 //!
-//! gpui at the pinned rev has no zero-copy texture handoff (spec §4.1), so the
-//! path is: our own wgpu device renders into a texture, the texture is read
-//! back as BGRA8, the bytes become a [`RenderImage`], and `Window::paint_image`
-//! draws it into the element's bounds. All of that is behind
-//! [`luma_render::Viewport`]; when the zero-copy path of spec §4.2 lands it
-//! replaces [`Stage::frame`] and nothing else here moves.
+//! gpui at the pinned rev has no zero-copy texture handoff (spec §4.1), so a
+//! renderer worker reads BGRA8 back asynchronously, the completed bytes become
+//! a [`RenderImage`], and `Window::paint_image` draws it. The worker's bounded
+//! three-slot seam drops obsolete work rather than blocking prepaint. A future
+//! IOSurface path replaces that seam without changing the screen.
 //!
-//! The render happens in a [`canvas`] *prepaint*, because prepaint is the first
-//! phase that knows the element's bounds — rendering during `render` would draw
-//! this frame at last frame's size.
+//! Frame submission happens in a [`canvas`] *prepaint*, because prepaint is the
+//! first phase that knows the element's bounds. Rendering itself is off-thread;
+//! prepaint only takes the newest completed frame and submits current inputs.
 //!
 //! # Where the light comes from
 //!
@@ -58,7 +57,7 @@ use gpui::{
 use luma_lib::models::fixtures::FixtureDefinition;
 use luma_lib::models::stage::StagePiece;
 use luma_lib::models::universe::UniverseState;
-use luma_render::{assets, build_frame_with, coords, scene_desc, Viewport};
+use luma_render::{assets, build_frame_with, coords, scene_desc, AsyncViewport};
 use luma_scene::Camera;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{ladder, Enabled};
@@ -355,28 +354,19 @@ impl Visualizer {
             .map_or(0, |s| s.fixtures.len())
     }
 
-    /// Acquire a device, once, on the first frame that has something to draw.
+    /// Start the renderer worker once, on the first frame with something to draw.
     ///
-    /// Lazy rather than at construction so that a machine with no GPU reaches a
-    /// screen that says so, instead of a window that never opened. Returns
-    /// whether there is one; the caller shows [`Status::Empty`] if not.
+    /// GPU acquisition itself happens on that worker. A failure is returned as
+    /// an asynchronous frame result, so opening the screen never blocks the UI.
     fn gpu_ready(&mut self) -> bool {
         if self.stage.borrow().gpu.is_some() {
             return true;
         }
-        match Viewport::new() {
-            Ok(viewport) => {
-                self.stage.borrow_mut().gpu = Some(Gpu {
-                    viewport,
-                    assets: assets::Library::new(meshes_root()),
-                });
-                true
-            }
-            Err(error) => {
-                self.status = Status::Empty(format!("No GPU for the 3D view — {error}"));
-                false
-            }
-        }
+        self.stage.borrow_mut().gpu = Some(Gpu {
+            viewport: AsyncViewport::new(),
+            assets: assets::Library::new(meshes_root()),
+        });
+        true
     }
 
     /// Dolly by a factor: the web toolbar's one zoom verb, and what both the
@@ -692,17 +682,17 @@ fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
 
 /// The renderer and the meshes it has loaded.
 struct Gpu {
-    viewport: Viewport,
+    viewport: AsyncViewport,
     assets: assets::Library,
 }
 
 impl Gpu {
-    /// Draw one frame and hand back an image gpui can paint.
+    /// Queue one frame and hand back the newest completed image, if any.
     ///
-    /// The whole of the spec §4.2 v1 readback is here: the renderer produces
-    /// BGRA8 rows and they are copied once into the `image::Frame` a
-    /// [`RenderImage`] owns. A zero-copy replacement swaps this body and keeps
-    /// the signature.
+    /// Frame assembly stays on the caller because it samples current evaluator
+    /// state. Device submission, mapping and its blocking wait are owned by
+    /// [`AsyncViewport`]'s renderer thread. This method only enqueues and drains
+    /// a completed slot; neither operation polls the GPU.
     ///
     /// # Errors
     /// A mesh that would not load, or a readback that would not map, as a
@@ -715,7 +705,7 @@ impl Gpu {
         time: f32,
         width: u32,
         height: u32,
-    ) -> Result<(Arc<RenderImage>, f32), String> {
+    ) -> Result<Option<(Arc<RenderImage>, f32)>, String> {
         let frame = build_frame_with(
             scene,
             definitions,
@@ -724,21 +714,26 @@ impl Gpu {
             &mut self.assets,
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
-        let presented = self
+        let completed = self
             .viewport
-            .draw(&frame, width, height)
+            .take_latest()
+            .transpose()
             .map_err(|error| format!("Could not render the frame: {error}"))?;
+        self.viewport.submit(frame, width, height);
+        let Some(presented) = completed else {
+            return Ok(None);
+        };
         let draw_ms = presented.draw_time.as_secs_f32() * 1_000.0;
         let buffer = image::RgbaImage::from_raw(
             presented.width,
             presented.height,
-            presented.pixels.to_vec(),
+            presented.pixels.as_ref().to_vec(),
         )
         .ok_or_else(|| "readback was not width * height * 4 bytes".to_string())?;
-        Ok((
+        Ok(Some((
             Arc::new(RenderImage::new([image::Frame::new(buffer)])),
             draw_ms,
-        ))
+        )))
     }
 }
 
@@ -1258,10 +1253,11 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             width,
                             height,
                         ) {
-                            Ok((image, draw_ms)) => {
+                            Ok(Some((image, draw_ms))) => {
                                 stage.last_draw_ms = Some(draw_ms);
                                 Some(image)
                             }
+                            Ok(None) => stage.previous.clone(),
                             Err(error) => {
                                 stage.error = Some(error);
                                 None
@@ -1291,8 +1287,15 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             false,
                         )
                         .ok();
-                    if let Some(old) = stage.borrow_mut().previous.replace(image) {
-                        window.drop_image(old).ok();
+                    let mut stage = stage.borrow_mut();
+                    let already_presented = stage
+                        .previous
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, &image));
+                    if !already_presented {
+                        if let Some(old) = stage.previous.replace(image) {
+                            window.drop_image(old).ok();
+                        }
                     }
                 }
                 listen(&app, &hitbox, window, cx);

@@ -115,8 +115,9 @@ impl MeshKind {
         match self {
             MeshKind::Arrow => cone(0.05, 0.2, 12),
             MeshKind::Segment => MeshData {
-                vertices: vec![vertex(Vec3::ZERO), vertex(Vec3::X)],
-                indices: vec![0, 1],
+                key: String::new(),
+                vertices: vec![vertex(Vec3::ZERO), vertex(Vec3::X)].into(),
+                indices: vec![0, 1].into(),
             },
             MeshKind::Octahedron => octahedron(0.1),
             MeshKind::Quad => crate::frame::plane_mesh(0.295, 0.295),
@@ -426,7 +427,11 @@ fn box_wireframe(size: Vec3) -> MeshData {
             indices.extend([base + i, base + j]);
         }
     }
-    MeshData { vertices, indices }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
 }
 
 /// `CylinderGeometry(0, radius, height, segments, 1, false)`. The zero top
@@ -453,14 +458,18 @@ fn cone(radius: f32, height: f32, segments: u32) -> MeshData {
         indices.extend([0, a, b]);
         indices.extend([1, b, a]);
     }
-    MeshData { vertices, indices }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
 }
 
 /// `OctahedronGeometry(radius, 0)`: the six axis poles, eight faces, wound
 /// outward.
 fn octahedron(radius: f32) -> MeshData {
     let poles = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z];
-    let vertices = poles.iter().map(|&p| vertex(p * radius)).collect();
+    let vertices: Vec<_> = poles.iter().map(|&p| vertex(p * radius)).collect();
     let mut indices = Vec::new();
     for (x, y, z) in [
         (0, 2, 4),
@@ -474,5 +483,9 @@ fn octahedron(radius: f32) -> MeshData {
     ] {
         indices.extend([x, y, z]);
     }
-    MeshData { vertices, indices }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
 }
