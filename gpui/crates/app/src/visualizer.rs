@@ -57,7 +57,7 @@ use gpui::{
 use luma_lib::models::fixtures::FixtureDefinition;
 use luma_lib::models::stage::StagePiece;
 use luma_lib::models::universe::UniverseState;
-use luma_render::{assets, build_frame_with, coords, scene_desc, AsyncViewport};
+use luma_render::{assets, build_frame_with, coords, scene_desc, AsyncViewport, FrameTimings};
 use luma_scene::Camera;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{ladder, Enabled};
@@ -163,6 +163,10 @@ struct Stage {
     error: Option<String>,
     /// End-to-end renderer wall time from the previous completed frame.
     last_draw_ms: Option<f32>,
+    /// CPU scene encoding and queue submission time from the previous frame.
+    last_cpu_ms: Option<f32>,
+    /// GPU scene-through-composite time from the previous frame.
+    last_gpu_ms: Option<f32>,
 }
 
 /// Runtime renderer controls. They belong to the viewport, not persisted venue
@@ -173,11 +177,16 @@ struct RenderLab {
     sun_azimuth_deg: f32,
     sun_elevation_deg: f32,
     sun_intensity: f32,
+    sun_color: [f32; 3],
     sun_shadows: bool,
     environment_enabled: bool,
+    background_color: [f32; 3],
+    ambient_color: [f32; 3],
     ambient_intensity: f32,
     haze_enabled: bool,
     haze_density: f32,
+    haze_steps: u32,
+    haze_resolution: f32,
     grid_enabled: bool,
     debug_view: scene_desc::DebugView,
 }
@@ -190,11 +199,16 @@ impl RenderLab {
             sun_azimuth_deg: -36.87,
             sun_elevation_deg: 50.19,
             sun_intensity: 1.4,
+            sun_color: [1.0; 3],
             sun_shadows: true,
             environment_enabled: editor_lit,
+            background_color: scene_desc::Environment::EDITOR.background,
+            ambient_color: scene_desc::Environment::EDITOR.ambient_color,
             ambient_intensity: if editor_lit { 0.2 } else { 0.0 },
             haze_enabled: true,
             haze_density: 0.8,
+            haze_steps: 8,
+            haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
             grid_enabled: editor_lit,
             debug_view: scene_desc::DebugView::Pbr,
         }
@@ -252,8 +266,13 @@ enum LabValue {
     Azimuth,
     Elevation,
     SunIntensity,
+    SunColor(usize),
+    BackgroundColor(usize),
+    AmbientColor(usize),
     Ambient,
     HazeDensity,
+    HazeSteps,
+    HazeResolution,
 }
 
 impl RenderLab {
@@ -280,11 +299,27 @@ impl RenderLab {
             LabValue::SunIntensity => {
                 self.sun_intensity = (self.sun_intensity + delta).clamp(0.0, 10.0);
             }
+            LabValue::SunColor(channel) => {
+                self.sun_color[channel] = (self.sun_color[channel] + delta).clamp(0.0, 1.0);
+            }
+            LabValue::BackgroundColor(channel) => {
+                self.background_color[channel] =
+                    (self.background_color[channel] + delta).clamp(0.0, 1.0);
+            }
+            LabValue::AmbientColor(channel) => {
+                self.ambient_color[channel] = (self.ambient_color[channel] + delta).clamp(0.0, 1.0);
+            }
             LabValue::Ambient => {
                 self.ambient_intensity = (self.ambient_intensity + delta).clamp(0.0, 2.0);
             }
             LabValue::HazeDensity => {
                 self.haze_density = (self.haze_density + delta).clamp(0.0, 2.0);
+            }
+            LabValue::HazeSteps => {
+                self.haze_steps = ((self.haze_steps as f32 + delta).round() as u32).clamp(1, 64);
+            }
+            LabValue::HazeResolution => {
+                self.haze_resolution = (self.haze_resolution + delta).clamp(0.25, 1.0);
             }
         }
     }
@@ -733,7 +768,7 @@ impl Gpu {
         time: f32,
         width: u32,
         height: u32,
-    ) -> Result<Option<(Arc<RenderImage>, f32)>, String> {
+    ) -> Result<Option<(Arc<RenderImage>, f32, Option<FrameTimings>)>, String> {
         let frame = build_frame_with(
             scene,
             definitions,
@@ -761,6 +796,7 @@ impl Gpu {
         Ok(Some((
             Arc::new(RenderImage::new([image::Frame::new(buffer)])),
             draw_ms,
+            presented.timings,
         )))
     }
 }
@@ -993,6 +1029,12 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             0.2,
             LabValue::SunIntensity,
         ))
+        .children(color_controls(
+            app,
+            "Sun color",
+            lab.sun_color,
+            LabValue::SunColor,
+        ))
         .child(lab_toggle(
             app,
             "Sun shadows",
@@ -1004,6 +1046,18 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             "Environment",
             lab.environment_enabled,
             LabToggle::Environment,
+        ))
+        .children(color_controls(
+            app,
+            "Background",
+            lab.background_color,
+            LabValue::BackgroundColor,
+        ))
+        .children(color_controls(
+            app,
+            "Ambient color",
+            lab.ambient_color,
+            LabValue::AmbientColor,
         ))
         .child(lab_value(
             app,
@@ -1029,6 +1083,24 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             0.1,
             LabValue::HazeDensity,
         ))
+        .child(lab_value(
+            app,
+            "Haze steps",
+            lab.haze_steps as f32,
+            1.0,
+            64.0,
+            1.0,
+            LabValue::HazeSteps,
+        ))
+        .child(lab_value(
+            app,
+            "Haze resolution",
+            lab.haze_resolution,
+            0.25,
+            1.0,
+            0.05,
+            LabValue::HazeResolution,
+        ))
         .child(lab_toggle(
             app,
             "Editor grid",
@@ -1040,12 +1112,46 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             div()
                 .text_size(px(10.))
                 .text_color(ladder::muted_foreground())
-                .child(state.stage.borrow().last_draw_ms.map_or_else(
-                    || "Draw timing pending".into(),
-                    |ms| format!("Draw {ms:.2} ms"),
-                ))
-                .agent_node(Role::Text, "Renderer draw timing"),
+                .child({
+                    let stage = state.stage.borrow();
+                    match (stage.last_cpu_ms, stage.last_gpu_ms) {
+                        (Some(cpu), Some(gpu)) => format!("CPU {cpu:.2} ms · GPU {gpu:.2} ms"),
+                        _ => "CPU/GPU timing unavailable".into(),
+                    }
+                })
+                .agent_node(Role::Text, "Renderer CPU and GPU timing"),
         )
+}
+
+fn color_controls(
+    app: &Entity<Luma>,
+    label: &'static str,
+    color: [f32; 3],
+    control: fn(usize) -> LabValue,
+) -> [Div; 3] {
+    [0, 1, 2].map(|index| {
+        let channel_label = match (label, index) {
+            ("Sun color", 0) => "Sun color red",
+            ("Sun color", 1) => "Sun color green",
+            ("Sun color", _) => "Sun color blue",
+            ("Background", 0) => "Background red",
+            ("Background", 1) => "Background green",
+            ("Background", _) => "Background blue",
+            ("Ambient color", 0) => "Ambient color red",
+            ("Ambient color", 1) => "Ambient color green",
+            ("Ambient color", _) => "Ambient color blue",
+            _ => unreachable!("color controls have a fixed label set"),
+        };
+        lab_value(
+            app,
+            channel_label,
+            color[index],
+            0.0,
+            1.0,
+            0.05,
+            control(index),
+        )
+    })
 }
 
 fn debug_view_button(app: &Entity<Luma>, view: &'static str) -> impl IntoElement {
@@ -1246,11 +1352,16 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let sun_enabled = state.render_lab.sun_enabled;
     let sun_direction = state.render_lab.sun_direction();
     let sun_intensity = state.render_lab.sun_intensity;
+    let sun_color = state.render_lab.sun_color;
     let sun_shadows = state.render_lab.sun_shadows;
     let environment_enabled = state.render_lab.environment_enabled;
     let ambient_intensity = state.render_lab.ambient_intensity;
+    let ambient_color = state.render_lab.ambient_color;
+    let background_color = state.render_lab.background_color;
     let haze_enabled = state.render_lab.haze_enabled;
     let haze_density = state.render_lab.haze_density;
+    let haze_steps = state.render_lab.haze_steps;
+    let haze_resolution = state.render_lab.haze_resolution;
     let grid_enabled = state.render_lab.grid_enabled;
     let debug_view = state.render_lab.debug_view;
     let sized = app.clone();
@@ -1279,21 +1390,23 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         scene.render.fov = camera.fov_y_deg;
                         scene.render.environment = scene_desc::Environment {
                             background: if environment_enabled {
-                                scene_desc::Environment::EDITOR.background
+                                background_color
                             } else {
                                 scene_desc::Environment::DARK.background
                             },
-                            ambient_color: [1.0; 3],
+                            ambient_color,
                             ambient_intensity,
                         };
                         scene.render.sun = sun_enabled.then_some(scene_desc::DirectionalLight {
                             direction: sun_direction,
-                            color: [1.0; 3],
+                            color: sun_color,
                             intensity: sun_intensity,
                             shadows: sun_shadows,
                         });
                         scene.render.haze.enabled = haze_enabled;
                         scene.render.haze.density = haze_density;
+                        scene.render.haze.steps = haze_steps;
+                        scene.render.haze.resolution = haze_resolution;
                         scene.render.show_grid = grid_enabled;
                         scene.render.debug_view = debug_view;
                         match gpu.frame(
@@ -1304,8 +1417,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             width,
                             height,
                         ) {
-                            Ok(Some((image, draw_ms))) => {
+                            Ok(Some((image, draw_ms, timings))) => {
                                 stage.last_draw_ms = Some(draw_ms);
+                                if let Some(timings) = timings {
+                                    stage.last_cpu_ms = Some(timings.cpu_encode_submit_ms as f32);
+                                    stage.last_gpu_ms = Some(timings.gpu_total_ms as f32);
+                                }
                                 Some(image)
                             }
                             Ok(None) => stage.previous.clone(),
@@ -1442,4 +1559,33 @@ fn plate(message: String) -> AnyElement {
         .child(luma_ui::silkscreen(message.clone()))
         .agent_node(Role::Text, message)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod render_lab_tests {
+    use super::*;
+
+    #[test]
+    fn render_lab_controls_are_independent_and_bounded() {
+        let mut lab = RenderLab::new(true);
+        let original_background = lab.background_color;
+
+        lab.adjust(LabValue::SunColor(0), -0.35);
+        lab.adjust(LabValue::BackgroundColor(2), 0.2);
+        lab.adjust(LabValue::AmbientColor(1), -0.4);
+        lab.adjust(LabValue::HazeSteps, 100.0);
+        lab.adjust(LabValue::HazeResolution, -10.0);
+
+        assert!((lab.sun_color[0] - 0.65).abs() < f32::EPSILON);
+        assert!((lab.background_color[2] - (original_background[2] + 0.2)).abs() < f32::EPSILON);
+        assert!((lab.ambient_color[1] - 0.6).abs() < f32::EPSILON);
+        assert_eq!(lab.background_color[..2], original_background[..2]);
+        assert_eq!(lab.haze_steps, 64);
+        assert_eq!(lab.haze_resolution, 0.25);
+
+        lab.adjust(LabValue::HazeSteps, -100.0);
+        lab.adjust(LabValue::HazeResolution, 10.0);
+        assert_eq!(lab.haze_steps, 1);
+        assert_eq!(lab.haze_resolution, 1.0);
+    }
 }

@@ -261,10 +261,14 @@ pub struct Renderer {
 }
 
 struct ProfilerResources {
+    slots: [ProfilerSlot; 3],
+    timestamp_period_ns: f32,
+}
+
+struct ProfilerSlot {
     query_set: wgpu::QuerySet,
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
-    timestamp_period_ns: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,7 +424,7 @@ pub(crate) struct CompletedReadback {
     pub(crate) height: u32,
     pub(crate) pixels: Vec<u8>,
     pub(crate) draw_time: Duration,
-    profile: Option<FrameTimings>,
+    pub(crate) profile: Option<FrameTimings>,
 }
 
 impl Renderer {
@@ -479,22 +483,24 @@ impl Renderer {
         };
 
         let profiler = profiled.then(|| ProfilerResources {
-            query_set: device.create_query_set(&wgpu::QuerySetDescriptor {
-                label: Some("luma-profile-timestamps"),
-                ty: wgpu::QueryType::Timestamp,
-                count: 4,
-            }),
-            resolve: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("luma-profile-resolve"),
-                size: 32,
-                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }),
-            readback: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("luma-profile-readback"),
-                size: 32,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
+            slots: std::array::from_fn(|_| ProfilerSlot {
+                query_set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("luma-profile-timestamps"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 4,
+                }),
+                resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("luma-profile-resolve"),
+                    size: 32,
+                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }),
+                readback: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("luma-profile-readback"),
+                    size: 32,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                }),
             }),
             timestamp_period_ns: queue.get_timestamp_period(),
         });
@@ -1175,6 +1181,7 @@ impl Renderer {
             Channels::Rgba,
             0,
             true,
+            true,
         );
         self.device.poll(wgpu::PollType::Wait)?;
         pending
@@ -1215,7 +1222,8 @@ impl Renderer {
         channels: Channels,
         out: &mut Vec<u8>,
     ) -> anyhow::Result<()> {
-        let mut pending = self.submit_readback(frame, width, height, subframes, channels, 0, false);
+        let mut pending =
+            self.submit_readback(frame, width, height, subframes, channels, 0, false, false);
         self.device.poll(wgpu::PollType::Wait)?;
         let completed = pending
             .try_complete()?
@@ -1233,7 +1241,8 @@ impl Renderer {
         channels: Channels,
         out: &mut Vec<u8>,
     ) -> anyhow::Result<()> {
-        let mut pending = self.submit_readback(frame, width, height, subframes, channels, 0, true);
+        let mut pending =
+            self.submit_readback(frame, width, height, subframes, channels, 0, true, false);
         self.device.poll(wgpu::PollType::Wait)?;
         let completed = pending
             .try_complete()?
@@ -1249,8 +1258,18 @@ impl Renderer {
         height: u32,
         subframes: u32,
         slot: usize,
+        measure: bool,
     ) -> PendingReadback {
-        self.submit_readback(frame, width, height, subframes, Channels::Bgra, slot, true)
+        self.submit_readback(
+            frame,
+            width,
+            height,
+            subframes,
+            Channels::Bgra,
+            slot,
+            true,
+            measure,
+        )
     }
 
     pub(crate) fn poll_live(&self) -> anyhow::Result<()> {
@@ -1267,14 +1286,16 @@ impl Renderer {
         channels: Channels,
         slot: usize,
         temporal: bool,
+        measure: bool,
     ) -> PendingReadback {
         assert!(slot < 3, "presentation slot is bounded to three");
         let started = Instant::now();
-        let profile = self.profiler.as_ref().map(|profile| {
+        let profile = self.profiler.as_ref().filter(|_| measure).map(|profile| {
+            let resources = &profile.slots[slot];
             (
-                profile.query_set.clone(),
-                profile.resolve.clone(),
-                profile.readback.clone(),
+                resources.query_set.clone(),
+                resources.resolve.clone(),
+                resources.readback.clone(),
                 profile.timestamp_period_ns,
             )
         });
@@ -1588,15 +1609,14 @@ impl Renderer {
                     label: Some("depth-prepass"),
                     color_attachments: &[],
                     depth_stencil_attachment: Some(depth_attachment(&depth_view)),
-                    timestamp_writes: profile.as_ref().map(|(queries, ..)| {
-                        wgpu::RenderPassTimestampWrites {
-                            query_set: queries,
-                            beginning_of_pass_write_index: (!frame
-                                .directional
-                                .is_some_and(|light| light.shadows))
-                            .then_some(0),
-                            end_of_pass_write_index: None,
-                        }
+                    timestamp_writes: profile.as_ref().and_then(|(queries, ..)| {
+                        (!frame.directional.is_some_and(|light| light.shadows)).then_some(
+                            wgpu::RenderPassTimestampWrites {
+                                query_set: queries,
+                                beginning_of_pass_write_index: Some(0),
+                                end_of_pass_write_index: None,
+                            },
+                        )
                     }),
                     ..Default::default()
                 });

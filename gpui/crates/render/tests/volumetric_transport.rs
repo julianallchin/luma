@@ -495,6 +495,10 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
         HEIGHT,
         1,
     );
+    if let Some(timings) = first.timings {
+        assert!(timings.cpu_encode_submit_ms >= 0.0);
+        assert!(timings.gpu_total_ms >= timings.gpu_volumetric_ms);
+    }
     let stabilized = draw_async(
         &mut live,
         frame(Vec::new(), vec![light(0)]),

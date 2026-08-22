@@ -28,7 +28,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::frame::Frame;
-use crate::gpu::{Channels, PendingReadback, Renderer};
+use crate::gpu::{Channels, FrameTimings, PendingReadback, Renderer};
 
 /// Jitter subframes a live frame accumulates.
 ///
@@ -85,6 +85,9 @@ pub struct AsyncPresentation {
     pub pixels: Arc<[u8]>,
     /// End-to-end time spent on the renderer thread.
     pub draw_time: Duration,
+    /// Independent CPU encode/submit and GPU pass timings when the adapter
+    /// supports timestamp queries. Unsupported adapters still present frames.
+    pub timings: Option<FrameTimings>,
 }
 
 /// What a nonblocking live-frame submission did.
@@ -414,8 +417,15 @@ fn retire<J, R>(shared: &Shared<J, R>, slot: usize, serial: u64, result: R) {
 }
 
 fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>>) {
-    let mut renderer = Renderer::new().map_err(|error| error.to_string());
+    // The lab should expose honest GPU time where the adapter can provide it,
+    // without making timestamp support a requirement for opening a viewport.
+    let mut renderer = Renderer::new_profiled()
+        .or_else(|_| Renderer::new())
+        .map_err(|error| error.to_string());
     let mut pending: [Option<(u64, PendingReadback)>; 3] = std::array::from_fn(|_| None);
+    // Timestamp queries use a single ordered measurement stream. Ordinary
+    // frames continue to occupy all three presentation slots around it.
+    let mut profile_slot = None;
     loop {
         if shared
             .slots
@@ -443,7 +453,11 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                         request.height,
                         request.subframes,
                         slot,
+                        profile_slot.is_none(),
                     );
+                    if profile_slot.is_none() {
+                        profile_slot = Some(slot);
+                    }
                     pending[slot] = Some((serial, readback));
                 }
                 Err(error) => retire(shared, slot, serial, Err(anyhow::anyhow!(error.clone()))),
@@ -458,6 +472,7 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                         retire(shared, slot, serial, Err(anyhow::anyhow!(message.clone())));
                     }
                 }
+                profile_slot = None;
             }
         }
 
@@ -470,6 +485,9 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                 Ok(None) => {}
                 Ok(Some(frame)) => {
                     let (serial, _) = in_flight.take().expect("completed readback was in flight");
+                    if profile_slot == Some(slot) {
+                        profile_slot = None;
+                    }
                     retire(
                         shared,
                         slot,
@@ -480,11 +498,15 @@ fn render_worker(shared: &Shared<FrameRequest, anyhow::Result<AsyncPresentation>
                             height: frame.height,
                             pixels: Arc::from(frame.pixels),
                             draw_time: frame.draw_time,
+                            timings: frame.profile,
                         }),
                     );
                 }
                 Err(error) => {
                     let (serial, _) = in_flight.take().expect("failed readback was in flight");
+                    if profile_slot == Some(slot) {
+                        profile_slot = None;
+                    }
                     retire(shared, slot, serial, Err(error));
                 }
             }

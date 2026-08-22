@@ -113,7 +113,13 @@ fn orbiting_changes_what_is_drawn() {
             app.click(lab, { restale: "match" });
             app.frames(2);
             const snapshot = app.snapshot();
-            for (const label of ["Sun azimuth", "Sun elevation", "Sun intensity", "Ambient intensity", "Haze density"]) {
+            for (const label of [
+                "Sun azimuth", "Sun elevation", "Sun intensity",
+                "Sun color red", "Sun color green", "Sun color blue",
+                "Background red", "Background green", "Background blue",
+                "Ambient color red", "Ambient color green", "Ambient color blue",
+                "Ambient intensity", "Haze density", "Haze steps", "Haze resolution"
+            ]) {
                 if (!snapshot.find({ role: "slider", label })) {
                     throw new Error(`renderer lab is missing ${label}`);
                 }
@@ -123,8 +129,8 @@ fn orbiting_changes_what_is_drawn() {
                     throw new Error(`renderer lab is missing ${label}`);
                 }
             }
-            if (!snapshot.find({ role: "text", label: "Renderer draw timing" })) {
-                throw new Error("renderer lab is missing draw timing");
+            if (!snapshot.find({ role: "text", label: "Renderer CPU and GPU timing" })) {
+                throw new Error("renderer lab is missing separate CPU/GPU timing");
             }
             const sun = snapshot.find({ role: "checkbox", label: "Sun" });
             if (!sun) { throw new Error("the sun control is not in the renderer lab"); }
