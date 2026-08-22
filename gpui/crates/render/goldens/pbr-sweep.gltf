@@ -1,0 +1,52 @@
+{
+  "asset": { "version": "2.0", "generator": "Luma PBR sweep golden" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1, 2, 3, 4, 5, 6, 7, 8] }],
+  "nodes": [
+    { "mesh": 0, "translation": [-2.4, 0.0, 2.4] },
+    { "mesh": 1, "translation": [ 0.0, 0.0, 2.4] },
+    { "mesh": 2, "translation": [ 2.4, 0.0, 2.4] },
+    { "mesh": 3, "translation": [-2.4, 0.0, 0.0] },
+    { "mesh": 4, "translation": [ 0.0, 0.0, 0.0] },
+    { "mesh": 5, "translation": [ 2.4, 0.0, 0.0] },
+    { "mesh": 6, "translation": [-2.4, 0.0,-2.4] },
+    { "mesh": 7, "translation": [ 0.0, 0.0,-2.4] },
+    { "mesh": 8, "translation": [ 2.4, 0.0,-2.4] }
+  ],
+  "meshes": [
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 0 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 1 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 2 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 3 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 4 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 5 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 6 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 7 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2, "material": 8 }] }
+  ],
+  "materials": [
+    { "name": "dielectric-rough", "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 0.0, "roughnessFactor": 0.9 } },
+    { "name": "mixed-rough",      "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 0.5, "roughnessFactor": 0.9 } },
+    { "name": "metal-rough",      "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 1.0, "roughnessFactor": 0.9 } },
+    { "name": "dielectric-mid",   "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 0.0, "roughnessFactor": 0.5 } },
+    { "name": "mixed-mid",        "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 0.5, "roughnessFactor": 0.5 } },
+    { "name": "metal-mid",        "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 1.0, "roughnessFactor": 0.5 } },
+    { "name": "dielectric-smooth","pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 0.0, "roughnessFactor": 0.1 } },
+    { "name": "mixed-smooth",     "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 0.5, "roughnessFactor": 0.1 } },
+    { "name": "metal-smooth",     "pbrMetallicRoughness": { "baseColorFactor": [0.72,0.30,0.12,1], "metallicFactor": 1.0, "roughnessFactor": 0.1 } }
+  ],
+  "buffers": [{
+    "byteLength": 140,
+    "uri": "data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAACAPwAAgD8AAAAAAACAvwAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AAAAAAAAgD8AAAEAAgAAAAIAAwA="
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 48, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 128, "byteLength": 12, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-1,-1,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5123, "count": 6, "type": "SCALAR" }
+  ]
+}

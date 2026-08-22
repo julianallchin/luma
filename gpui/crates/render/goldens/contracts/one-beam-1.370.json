@@ -1,0 +1,169 @@
+{
+  "schema": "luma.renderer-frame/1",
+  "image": "one-beam-1.370.png",
+  "viewport": {
+    "width": 800,
+    "height": 500
+  },
+  "deviceScaleFactor": 1.0,
+  "outputSize": [
+    800,
+    500
+  ],
+  "subframes": 16,
+  "timeSeconds": 1.37,
+  "scene": {
+    "id": "one-beam",
+    "times": [
+      1.37
+    ],
+    "camera": {
+      "position": [
+        5.5,
+        2.2,
+        5.5
+      ],
+      "target": [
+        0.0,
+        1.5,
+        0.0
+      ]
+    },
+    "editing": false,
+    "render": {
+      "environment": {
+        "background": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ambientColor": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "ambientIntensity": 0.0
+      },
+      "haze": {
+        "enabled": true,
+        "steps": 8,
+        "resolution": 1.0,
+        "density": 0.8
+      },
+      "sun": null,
+      "showGrid": false,
+      "debugView": "pbr",
+      "fov": 50.0
+    },
+    "selectedFixtureIds": [],
+    "fixtures": [
+      {
+        "id": "mover",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          0.0,
+          0.0,
+          4.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "hazer",
+        "fixturePath": "golden/hazer.qxf",
+        "modeName": "Default",
+        "pos": [
+          0.0,
+          8.0,
+          0.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "pieces": [],
+    "state": {
+      "hazer:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "mover:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          30.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      }
+    }
+  },
+  "definitions": {
+    "golden/hazer.qxf": {
+      "Type": "Smoke",
+      "Mode": [
+        {
+          "@Name": "Default",
+          "Head": []
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Width": 246.0,
+          "@Height": 350.0,
+          "@Depth": 419.0
+        },
+        "Layout": null,
+        "Lens": {
+          "@DegreesMin": 0.0,
+          "@DegreesMax": 0.0
+        }
+      }
+    },
+    "golden/moving-head.qxf": {
+      "Type": "Moving Head",
+      "Mode": [
+        {
+          "@Name": "Default",
+          "Head": []
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Width": 302.0,
+          "@Height": 302.0,
+          "@Depth": 361.0
+        },
+        "Layout": null,
+        "Lens": {
+          "@DegreesMin": 11.0,
+          "@DegreesMax": 58.0
+        }
+      }
+    }
+  }
+}
