@@ -6,6 +6,7 @@
 //! strobe gating — happens once here, against pre-resolved data.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::{Mat3, Mat4, Vec3};
 
@@ -23,10 +24,16 @@ pub const MAX_LIGHTS: usize = 256;
 
 /// One uploadable triangle list.
 pub struct MeshData {
+    /// Stable identity of this immutable mesh inside the asset/procedural bank.
+    ///
+    /// The live renderer uses this to retain GPU buffers across resolved
+    /// frames. Geometry with one key must never change during a renderer's
+    /// lifetime; a changed asset therefore needs a changed key.
+    pub key: String,
     /// Interleaved vertex data.
-    pub vertices: Vec<Vertex>,
+    pub vertices: Arc<[Vertex]>,
     /// Triangle list into `vertices`.
-    pub indices: Vec<u32>,
+    pub indices: Arc<[u32]>,
 }
 
 /// One mesh instance: what to draw, where, and with which material.
@@ -170,7 +177,12 @@ pub(crate) struct Bank {
 
 impl Bank {
     pub(crate) fn insert(&mut self, key: String, build: impl FnOnce() -> MeshData) -> usize {
-        intern(&mut self.meshes, &mut self.mesh_keys, key, build)
+        let identity = key.clone();
+        intern(&mut self.meshes, &mut self.mesh_keys, key, || {
+            let mut mesh = build();
+            mesh.key = identity;
+            mesh
+        })
     }
 
     fn insert_image(&mut self, key: String, build: impl FnOnce() -> Image) -> usize {
@@ -195,8 +207,9 @@ fn glb_draw(
 ) -> Draw {
     let prim = &glb.primitives[p];
     let mesh = bank.insert(format!("{asset}#{p}"), || MeshData {
-        vertices: prim.vertices.clone(),
-        indices: prim.indices.clone(),
+        key: String::new(),
+        vertices: Arc::clone(&prim.vertices),
+        indices: Arc::clone(&prim.indices),
     });
     let image = prim.base_color_image.map(|i| {
         bank.insert_image(format!("{asset}#img{i}"), || Image {
@@ -309,7 +322,11 @@ fn box_mesh(size: Vec3) -> MeshData {
         }
         indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
-    MeshData { vertices, indices }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
 }
 
 /// XY quad centred on the origin, normal +Z — a three `PlaneGeometry` before
@@ -318,6 +335,7 @@ pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
     let (w, h) = (width / 2.0, height / 2.0);
     let corners = [(-w, -h), (w, -h), (w, h), (-w, h)];
     MeshData {
+        key: String::new(),
         vertices: corners
             .iter()
             .map(|&(x, y)| Vertex {
@@ -325,8 +343,9 @@ pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
             })
-            .collect(),
-        indices: vec![0, 1, 2, 0, 2, 3],
+            .collect::<Vec<_>>()
+            .into(),
+        indices: vec![0, 1, 2, 0, 2, 3].into(),
     }
 }
 

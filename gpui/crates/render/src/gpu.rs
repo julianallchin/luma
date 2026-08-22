@@ -7,6 +7,8 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
@@ -120,6 +122,18 @@ pub(crate) enum Channels {
     Bgra,
 }
 
+/// Cumulative immutable-resource uploads made by a renderer instance.
+///
+/// This is an acceptance probe rather than a timing estimate: a steady-state
+/// live rig must leave both values unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UploadStats {
+    /// Combined geometry-bank uploads.
+    pub geometry: u64,
+    /// Base-colour texture uploads.
+    pub textures: u64,
+}
+
 impl Channels {
     fn format(self) -> wgpu::TextureFormat {
         match self {
@@ -174,7 +188,30 @@ pub struct Renderer {
     /// second. Entries the current frame does not name are dropped, so a venue
     /// change does not accumulate the old venue's textures.
     materials: HashMap<String, wgpu::BindGroup>,
+    /// Immutable scene geometry resident across live frames. A resolved frame
+    /// rebuilds transforms and light state, but its asset/procedural mesh keys
+    /// stay stable until the venue changes.
+    geometry: Option<ResidentGeometry>,
+    upload_stats: UploadStats,
     targets: Option<Targets>,
+}
+
+struct ResidentGeometry {
+    keys: Vec<String>,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    ranges: Vec<(u32, u32, i32)>,
+}
+
+impl ResidentGeometry {
+    fn matches(&self, frame: &Frame) -> bool {
+        self.keys.len() == frame.meshes.len()
+            && self
+                .keys
+                .iter()
+                .zip(&frame.meshes)
+                .all(|(resident, incoming)| resident == &incoming.key)
+    }
 }
 
 struct Targets {
@@ -189,13 +226,34 @@ struct Targets {
     scene: wgpu::TextureView,
     depth: wgpu::TextureView,
     haze: wgpu::TextureView,
-    output: wgpu::Texture,
-    output_view: wgpu::TextureView,
-    /// Sized for `bytes_per_row * height` and mapped once per frame. Allocated
-    /// with the targets because it is the same size question.
-    readback: wgpu::Buffer,
+    /// Three independent presentation resources. Intermediate passes may be
+    /// shared because queue submissions execute in order; each submission's
+    /// final output and readback must remain private until its async map retires.
+    presentations: [PresentationTarget; 3],
     /// 256-byte-aligned row pitch of [`Self::readback`].
     bytes_per_row: u32,
+}
+
+struct PresentationTarget {
+    output: wgpu::Texture,
+    output_view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+}
+
+pub(crate) struct PendingReadback {
+    readback: wgpu::Buffer,
+    mapped: mpsc::Receiver<Result<(), String>>,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    started: Instant,
+}
+
+pub(crate) struct CompletedReadback {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pixels: Vec<u8>,
+    pub(crate) draw_time: Duration,
 }
 
 impl Renderer {
@@ -614,7 +672,7 @@ impl Renderer {
             &Image {
                 width: 1,
                 height: 1,
-                rgba: vec![255; 4],
+                rgba: std::sync::Arc::from([255; 4]),
             },
         );
 
@@ -640,6 +698,11 @@ impl Renderer {
             texture_sampler,
             white_material,
             materials: HashMap::new(),
+            geometry: None,
+            upload_stats: UploadStats {
+                geometry: 0,
+                textures: 0,
+            },
             targets: None,
         })
     }
@@ -676,22 +739,38 @@ impl Renderer {
                     })
                     .create_view(&wgpu::TextureViewDescriptor::default())
             };
-            let output = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("output"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: channels.format(),
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
             let bytes_per_row = (width * 4).div_ceil(256) * 256;
+            let presentations = std::array::from_fn(|slot| {
+                let output = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("output"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: channels.format(),
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+                PresentationTarget {
+                    output,
+                    output_view,
+                    readback: self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(match slot {
+                            0 => "readback-0",
+                            1 => "readback-1",
+                            _ => "readback-2",
+                        }),
+                        size: u64::from(bytes_per_row * height),
+                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                        mapped_at_creation: false,
+                    }),
+                }
+            });
             self.targets = Some(Targets {
                 width,
                 height,
@@ -721,14 +800,7 @@ impl Renderer {
                     wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     "haze",
                 ),
-                output,
-                output_view,
-                readback: self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("readback"),
-                    size: u64::from(bytes_per_row * height),
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                }),
+                presentations,
                 bytes_per_row,
             });
         }
@@ -755,6 +827,12 @@ impl Renderer {
         Ok(out)
     }
 
+    /// Read cumulative immutable-resource upload counts.
+    #[must_use]
+    pub fn upload_stats(&self) -> UploadStats {
+        self.upload_stats
+    }
+
     /// [`Self::render`], reading back into a caller-owned buffer in a caller-
     /// chosen channel order.
     ///
@@ -774,6 +852,42 @@ impl Renderer {
         channels: Channels,
         out: &mut Vec<u8>,
     ) -> anyhow::Result<()> {
+        let mut pending = self.submit_readback(frame, width, height, subframes, channels, 0);
+        self.device.poll(wgpu::PollType::Wait)?;
+        let completed = pending
+            .try_complete()?
+            .expect("blocking poll must complete the mapped readback");
+        *out = completed.pixels;
+        Ok(())
+    }
+
+    pub(crate) fn submit_live(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+        slot: usize,
+    ) -> PendingReadback {
+        self.submit_readback(frame, width, height, subframes, Channels::Bgra, slot)
+    }
+
+    pub(crate) fn poll_live(&self) -> anyhow::Result<()> {
+        self.device.poll(wgpu::PollType::Poll)?;
+        Ok(())
+    }
+
+    fn submit_readback(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+        channels: Channels,
+        slot: usize,
+    ) -> PendingReadback {
+        assert!(slot < 3, "presentation slot is bounded to three");
+        let started = Instant::now();
         let aspect = width as f32 / height as f32;
         // three `PerspectiveCamera` defaults, and the same reversed-Y handedness
         // wgpu clip space wants.
@@ -827,17 +941,39 @@ impl Renderer {
             ],
         };
 
-        // --- geometry upload ------------------------------------------------
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        let mut ranges = Vec::new();
-        for mesh in &frame.meshes {
-            let base_vertex = vertices.len() as i32;
-            let first_index = indices.len() as u32;
-            vertices.extend_from_slice(&mesh.vertices);
-            indices.extend(mesh.indices.iter().copied());
-            ranges.push((first_index, indices.len() as u32, base_vertex));
+        // --- resident geometry ----------------------------------------------
+        // Frame assembly is intentionally cheap and ephemeral, but the meshes
+        // it names are immutable. Upload the combined bank only when those
+        // stable identities change (normally a venue/asset change), never for
+        // camera, transport or fixture-state updates.
+        if self
+            .geometry
+            .as_ref()
+            .is_none_or(|geometry| !geometry.matches(frame))
+        {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let mut ranges = Vec::new();
+            for mesh in &frame.meshes {
+                let base_vertex = vertices.len() as i32;
+                let first_index = indices.len() as u32;
+                vertices.extend_from_slice(&mesh.vertices);
+                indices.extend(mesh.indices.iter().copied());
+                ranges.push((first_index, indices.len() as u32, base_vertex));
+            }
+            let geometry = ResidentGeometry {
+                keys: frame.meshes.iter().map(|mesh| mesh.key.clone()).collect(),
+                vertices: self.storage(&vertices, wgpu::BufferUsages::VERTEX, "vertices"),
+                indices: self.storage(&indices, wgpu::BufferUsages::INDEX, "indices"),
+                ranges,
+            };
+            self.geometry = Some(geometry);
+            self.upload_stats.geometry += 1;
         }
+        let geometry = self.geometry.as_ref().expect("frame geometry uploaded");
+        let vertex_buf = geometry.vertices.clone();
+        let index_buf = geometry.indices.clone();
+        let ranges = geometry.ranges.clone();
 
         let instances: Vec<Instance> = frame.draws.iter().map(instance_of).collect();
         let overlay_instances: Vec<OverlayInstance> = frame
@@ -860,6 +996,7 @@ impl Renderer {
                     &texture.image,
                 );
                 self.materials.insert(texture.key.clone(), bind_group);
+                self.upload_stats.textures += 1;
             }
         }
         self.materials
@@ -873,8 +1010,6 @@ impl Renderer {
             .map(|t| self.materials[&t.key].clone())
             .collect();
 
-        let vertex_buf = self.storage(&vertices, wgpu::BufferUsages::VERTEX, "vertices");
-        let index_buf = self.storage(&indices, wgpu::BufferUsages::INDEX, "indices");
         let instance_buf = self.storage(&instances, wgpu::BufferUsages::STORAGE, "instances");
         let point_buf = self.storage(
             &pad_at_least_one(point_lights),
@@ -921,15 +1056,16 @@ impl Renderer {
             bytes_per_row,
         ) = {
             let t = self.targets(t_width, t_height, haze_size, channels);
+            let presentation = &t.presentations[slot];
             (
                 t.msaa_color.clone(),
                 t.msaa_depth.clone(),
                 t.scene.clone(),
                 t.depth.clone(),
                 t.haze.clone(),
-                t.output.clone(),
-                t.output_view.clone(),
-                t.readback.clone(),
+                presentation.output.clone(),
+                presentation.output_view.clone(),
+                presentation.readback.clone(),
                 t.bytes_per_row,
             )
         };
@@ -1184,25 +1320,20 @@ impl Renderer {
         }
 
         self.queue.submit([encoder.finish()]);
-        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::PollType::Wait)?;
-
-        let view = readback.slice(..).get_mapped_range();
-        let row_bytes = (t_width * 4) as usize;
-        out.clear();
-        out.reserve(row_bytes * t_height as usize);
-        if bytes_per_row as usize == row_bytes {
-            // A width whose row pitch is already 256-aligned needs no unpadding.
-            out.extend_from_slice(&view);
-        } else {
-            for row in 0..t_height {
-                let start = (row * bytes_per_row) as usize;
-                out.extend_from_slice(&view[start..start + row_bytes]);
-            }
+        let (mapped_tx, mapped) = mpsc::sync_channel(1);
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = mapped_tx.send(result.map_err(|error| error.to_string()));
+            });
+        PendingReadback {
+            readback,
+            mapped,
+            width: t_width,
+            height: t_height,
+            bytes_per_row,
+            started,
         }
-        drop(view);
-        readback.unmap();
-        Ok(())
     }
 
     fn scene_bind_group(
@@ -1271,7 +1402,7 @@ fn material_bind_group(
         view_formats: &[],
     });
 
-    let mut level = (image.width, image.height, image.rgba.clone());
+    let mut level = (image.width, image.height, image.rgba.to_vec());
     for mip in 0..levels {
         let (w, h, ref pixels) = level;
         // Rows go up 256-byte aligned: that is the copy alignment every backend
@@ -1351,6 +1482,38 @@ const ADD: wgpu::BlendComponent = wgpu::BlendComponent {
 /// the line topology, bit 1 is [`OverlayDepth::Free`].
 fn overlay_pipeline_index(overlay: &Overlay) -> usize {
     usize::from(overlay.lines) | (usize::from(overlay.depth == OverlayDepth::Free) << 1)
+}
+
+impl PendingReadback {
+    pub(crate) fn try_complete(&mut self) -> anyhow::Result<Option<CompletedReadback>> {
+        let mapped = match self.mapped.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err(anyhow::anyhow!("GPU map callback disconnected"));
+            }
+        };
+        mapped.map_err(anyhow::Error::msg)?;
+        let view = self.readback.slice(..).get_mapped_range();
+        let row_bytes = (self.width * 4) as usize;
+        let mut pixels = Vec::with_capacity(row_bytes * self.height as usize);
+        if self.bytes_per_row as usize == row_bytes {
+            pixels.extend_from_slice(&view);
+        } else {
+            for row in 0..self.height {
+                let start = (row * self.bytes_per_row) as usize;
+                pixels.extend_from_slice(&view[start..start + row_bytes]);
+            }
+        }
+        drop(view);
+        self.readback.unmap();
+        Ok(Some(CompletedReadback {
+            width: self.width,
+            height: self.height,
+            pixels,
+            draw_time: self.started.elapsed(),
+        }))
+    }
 }
 
 fn instance_of(draw: &Draw) -> Instance {
