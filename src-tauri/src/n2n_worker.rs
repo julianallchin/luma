@@ -7,13 +7,11 @@
 //! `src-tauri/python/n2n/` and are copied to the user's cache dir on first
 //! run via [`python_env::ensure_python_resource_dir`].
 
+use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use tauri::AppHandle;
-
-use crate::python_env;
 
 const WORKER_SOURCE: &str = include_str!("../python/n2n_worker.py");
 const WORKER_SCRIPT_NAME: &str = "n2n_worker.py";
@@ -31,15 +29,15 @@ struct WorkerResponse {
 }
 
 pub fn compute_drum_onsets(
-    app: &AppHandle,
+    env: &WorkerEnvironment,
     audio_path: &Path,
     mert_path: &Path,
 ) -> Result<DrumOnsets, String> {
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // Copy the vendored n2n package + bundled checkpoint into the cache dir
     // so `import n2n.infer` resolves and the checkpoint path is stable.
-    let n2n_dir = python_env::ensure_python_resource_dir(app, "n2n")?;
+    let n2n_dir = env.deploy_resource("n2n")?;
     let ckpt_path = n2n_dir.join("weights.pt");
     if !ckpt_path.exists() {
         return Err(format!(

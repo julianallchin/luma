@@ -14,7 +14,7 @@ use std::path::Path;
 
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::dispatch::{AppServices, CommandError};
-use crate::host_audio::{device_sample_rate, HostAudioSnapshot};
+use crate::host_audio::HostAudioSnapshot;
 use crate::models::node_graph::BeatGrid;
 
 /// Load a slice of a track for playback. `start_time` and `end_time` are
@@ -37,7 +37,11 @@ pub async fn host_load_segment(
     .map_err(|e| CommandError::Internal(format!("Failed to fetch track: {}", e)))?;
     drop(access);
 
-    let audio = decode(&info.file_path, &info.track_hash)?;
+    let audio = decode(
+        &info.file_path,
+        &info.track_hash,
+        services.host_audio.decode_sample_rate(),
+    )?;
 
     // Frame indices, then sample indices — the buffer is stereo interleaved.
     let num_frames = audio.samples.len() / 2;
@@ -86,7 +90,11 @@ pub async fn host_load_track(services: &AppServices, track_id: String) -> Result
     .await
     .map_err(|e| CommandError::Internal(format!("Failed to fetch track: {}", e)))?;
 
-    let audio = decode(&info.file_path, &info.track_hash)?;
+    let audio = decode(
+        &info.file_path,
+        &info.track_hash,
+        services.host_audio.decode_sample_rate(),
+    )?;
 
     let beat_grid =
         crate::services::tracks::get_track_beats_for_connection(access.connection(), &track_id)
@@ -111,13 +119,11 @@ pub async fn host_load_track(services: &AppServices, track_id: String) -> Result
 fn decode(
     file_path: &str,
     track_hash: &str,
+    sample_rate: u32,
 ) -> Result<std::sync::Arc<crate::audio::decoder::DecodedAudio>, CommandError> {
-    let audio = crate::audio::load_or_decode_audio_shared(
-        Path::new(file_path),
-        track_hash,
-        device_sample_rate(),
-    )
-    .map_err(|e| CommandError::Internal(format!("Failed to decode track: {}", e)))?;
+    let audio =
+        crate::audio::load_or_decode_audio_shared(Path::new(file_path), track_hash, sample_rate)
+            .map_err(|e| CommandError::Internal(format!("Failed to decode track: {}", e)))?;
     if audio.samples.is_empty() || audio.sample_rate == 0 {
         return Err(CommandError::Invalid("Track has no audio data".into()));
     }

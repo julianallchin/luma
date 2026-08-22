@@ -1,6 +1,5 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { create } from "zustand";
-import type { TrackSummary } from "@/bindings/schema";
+import type { TrackImportResult } from "@/bindings/schema";
 
 /**
  * Normalized track shape shared across DJ software sources.
@@ -29,14 +28,6 @@ export interface DjLibraryInfo {
 	trackCount: number;
 }
 
-interface ImportProgressEvent {
-	done: number;
-	total: number;
-	currentTrack: string | null;
-	phase: string;
-	error: string | null;
-}
-
 type ActiveView = "all" | "playlist";
 
 /**
@@ -47,9 +38,6 @@ export interface DjSourceAdapter {
 	name: string;
 	/** Label shown in the dialog header */
 	label: string;
-	/** Tauri event name for import progress */
-	progressEvent: string;
-
 	/**
 	 * Open the library. May auto-discover or prompt the user.
 	 * Returns a path/identifier for subsequent calls (null if none needed, e.g. Rekordbox).
@@ -69,12 +57,12 @@ export interface DjSourceAdapter {
 	search: (libraryPath: string | null, query: string) => Promise<DjTrack[]>;
 
 	/**
-	 * Import tracks by their keys. Returns imported TrackSummary[].
+	 * Import tracks by their keys through the shared durable result contract.
 	 */
 	importTracks: (
 		libraryPath: string | null,
 		trackKeys: string[],
-	) => Promise<TrackSummary[]>;
+	) => Promise<TrackImportResult>;
 }
 
 interface DjImportState {
@@ -100,7 +88,7 @@ interface DjImportState {
 	toggleTrackSelection: (key: string) => void;
 	selectAllTracks: () => void;
 	clearSelection: () => void;
-	importSelected: () => Promise<TrackSummary[]>;
+	importSelected: () => Promise<TrackImportResult | null>;
 	reset: () => void;
 }
 
@@ -233,7 +221,7 @@ export const useDjImportStore = create<DjImportState>((set, get) => ({
 
 	importSelected: async () => {
 		const { source, libraryPath, selectedKeys } = get();
-		if (!source || selectedKeys.size === 0) return [];
+		if (!source || selectedKeys.size === 0) return null;
 
 		const trackKeys = Array.from(selectedKeys);
 		set({
@@ -243,38 +231,26 @@ export const useDjImportStore = create<DjImportState>((set, get) => ({
 			error: null,
 		});
 
-		let unlisten: UnlistenFn | null = null;
 		try {
-			unlisten = await listen<ImportProgressEvent>(
-				source.progressEvent,
-				(event) => {
-					set({
-						importProgress: {
-							done: event.payload.done,
-							total: event.payload.total,
-						},
-						currentImportTrack: event.payload.currentTrack,
-					});
-				},
-			);
-
-			const imported = await source.importTracks(libraryPath, trackKeys);
+			const result = await source.importTracks(libraryPath, trackKeys);
 			set({
 				importing: false,
-				importProgress: { done: imported.length, total: trackKeys.length },
+				importProgress: { done: trackKeys.length, total: trackKeys.length },
 				currentImportTrack: null,
 				selectedKeys: new Set(),
+				error:
+					result.failures.length > 0
+						? result.failures.map((failure) => failure.message).join("\n")
+						: null,
 			});
-			return imported;
+			return result;
 		} catch (err) {
 			set({
 				importing: false,
 				currentImportTrack: null,
 				error: err instanceof Error ? err.message : String(err),
 			});
-			return [];
-		} finally {
-			unlisten?.();
+			return null;
 		}
 	},
 

@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**182 commands** across **31 domains** · **22 events** · **4 commands not on the seam**
+**186 commands** across **31 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -25,7 +25,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
 | `compositor` | 2 | `src-tauri/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `src-tauri/src/dispatch/handlers/controller.rs` |
-| `engine_dj` | 6 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
+| `engine_dj` | 7 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 9 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
 | `groups` | 10 | `src-tauri/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `src-tauri/src/dispatch/handlers/host_audio.rs` |
@@ -34,7 +34,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `node_graph` | 3 | `src-tauri/src/dispatch/handlers/node_graph.rs` |
 | `patterns` | 11 | `src-tauri/src/dispatch/handlers/patterns.rs` |
 | `perform` | 9 | `src-tauri/src/dispatch/handlers/perform.rs` |
-| `rekordbox` | 5 | `src-tauri/src/dispatch/handlers/rekordbox.rs` |
+| `rekordbox` | 6 | `src-tauri/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `src-tauri/src/dispatch/handlers/render_engine.rs` |
 | `score_dsl` | 3 | `src-tauri/src/dispatch/handlers/score_dsl.rs` |
 | `scores` | 9 | `src-tauri/src/dispatch/handlers/scores.rs` |
@@ -42,10 +42,10 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `stage` | 5 | `src-tauri/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `src-tauri/src/dispatch/handlers/telemetry.rs` |
-| `tracks` | 10 | `src-tauri/src/dispatch/handlers/tracks.rs` |
+| `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **182** | |
+| **total** | **186** | |
 
 ## Commands
 
@@ -166,6 +166,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `engine_dj_get_playlist_tracks` | `libraryPath: String`<br>`playlistId: i64` | `Vec<EngineDjTrack>` |
 | `engine_dj_search_tracks` | `libraryPath: String`<br>`query: String` | `Vec<EngineDjTrack>` |
 | `engine_dj_default_library_path` | — | `String` |
+| `engine_dj_import_tracks` | `libraryPath: String`<br>`trackIds: Vec<i64>` | `TrackImportResult` |
 
 ### `fixtures`
 
@@ -290,6 +291,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `rekordbox_list_playlists` | — | `Vec<RekordboxPlaylist>` |
 | `rekordbox_get_playlist_tracks` | `playlistId: String` | `Vec<RekordboxTrack>` |
 | `rekordbox_search_tracks` | `query: String` | `Vec<RekordboxTrack>` |
+| `rekordbox_import_tracks` | `trackUuids: Vec<String>` | `TrackImportResult` |
 
 ### `render_engine`
 
@@ -366,6 +368,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_classifier_thresholds` | — | `HashMap<String, f64>` |
 | `get_track_audio_base64` | `trackId: String` | `TrackAudioBase64` |
 | `get_venue_annotation_counts` | `venueId: String` | `HashMap<String, i64>` |
+| `import_tracks` | `filePaths: Vec<String>` | `TrackImportResult` |
+| `reprocess_track` | `trackId: String` | `()` |
 
 ### `venues`
 
@@ -390,16 +394,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 ## Not on the seam
 
-Still `#[tauri::command]` in `src-tauri/src/commands/`: the spawned-progress import path, which
-reports through events rather than a return value. See
-[`dispatcher-port-guide.md`](./dispatcher-port-guide.md).
-
-| Command | Source |
-| --- | --- |
-| `engine_dj_import_tracks` | `src-tauri/src/commands/engine_dj.rs:23` |
-| `rekordbox_import_tracks` | `src-tauri/src/commands/rekordbox.rs:26` |
-| `import_tracks` | `src-tauri/src/commands/tracks.rs:22` |
-| `reprocess_track` | `src-tauri/src/commands/tracks.rs:114` |
+Every host command is registered on the dispatcher seam.
 
 ## Events
 
@@ -414,19 +409,15 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `controller_port_change` | 1 | 0 | **orphan** — emitted, nobody listens |
 | `controller_state` | 3 | 1 |  |
 | `dmx://update` | 0 | 1 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
-| `engine-dj-import-progress` | 2 | 2 |  |
-| `file-import-progress` | 5 | 1 |  |
 | `host-audio://state` | 1 | 2 |  |
-| `library-changed` | 5 | 2 |  |
+| `library-changed` | 7 | 2 |  |
 | `midi_learn_captured` | 2 | 3 |  |
 | `mixer_learned` | 1 | 1 |  |
 | `mixer_state` | 2 | 1 |  |
 | `open-settings` | 1 | 1 |  |
 | `perform_event` | 2 | 1 |  |
 | `python-env-progress` | 5 | 1 |  |
-| `rekordbox-import-progress` | 2 | 1 |  |
-| `track-import-complete` | 1 | 2 |  |
-| `track-import-progress` | 2 | 2 |  |
+| `track-import-state` | 7 | 5 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 1 |  |
 | `universe-buffer` | 0 | 1 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
 | `universe-state-update` | 3 | 1 |  |

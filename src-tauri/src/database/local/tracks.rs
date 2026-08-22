@@ -216,44 +216,6 @@ pub async fn list_tracks_enriched_for_connection(
     Ok(rows)
 }
 
-pub async fn get_track_by_hash(
-    pool: &SqlitePool,
-    track_hash: &str,
-) -> Result<Option<TrackSummary>, String> {
-    sqlx::query_as::<_, TrackSummary>(
-        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
-                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
-                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
-                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
-         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         WHERE t.track_hash = ?",
-    )
-    .bind(track_hash)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch track by hash: {}", e))
-}
-
-pub async fn get_own_track_by_hash(
-    pool: &SqlitePool,
-    track_hash: &str,
-    uid: &str,
-) -> Result<Option<TrackSummary>, String> {
-    sqlx::query_as::<_, TrackSummary>(
-        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
-                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
-                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
-                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
-         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         WHERE t.track_hash = ? AND t.uid = ?",
-    )
-    .bind(track_hash)
-    .bind(uid)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch track by hash: {}", e))
-}
-
 pub async fn get_track_by_id(
     pool: &SqlitePool,
     track_id: &str,
@@ -288,7 +250,7 @@ pub async fn insert_track_record(
     source_type: Option<&str>,
     source_id: Option<&str>,
     source_filename: Option<&str>,
-) -> Result<String, String> {
+) -> Result<(String, bool), String> {
     let id = Uuid::new_v4().to_string();
 
     let mut transaction = pool
@@ -306,6 +268,45 @@ pub async fn insert_track_record(
     .map_err(|error| format!("Failed to authorize track insert: {error}"))?;
     if admitted.is_none() {
         return Err("Authenticated identity changed while importing track".into());
+    }
+
+    // Deduplication belongs to this immediate transaction. The write lock
+    // makes the lookup plus insert one atomic conflict-resolution operation,
+    // so two concurrent imports cannot both observe absence and publish two
+    // rows. Ownership is part of both identities: separate principals may
+    // legitimately import the same source item or bytes.
+    let source_match = match (source_type, source_id) {
+        (Some(source_type), Some(source_id)) => sqlx::query_scalar::<_, String>(
+            "SELECT id FROM tracks
+             WHERE uid IS ? AND source_type = ? AND source_id = ?
+             LIMIT 1",
+        )
+        .bind(uid.as_deref())
+        .bind(source_type)
+        .bind(source_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to resolve track source identity: {error}"))?,
+        _ => None,
+    };
+    let existing = if source_match.is_some() {
+        source_match
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT id FROM tracks WHERE uid IS ? AND track_hash = ? LIMIT 1",
+        )
+        .bind(uid.as_deref())
+        .bind(track_hash)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| format!("Failed to resolve track content identity: {error}"))?
+    };
+    if let Some(id) = existing {
+        transaction
+            .rollback()
+            .await
+            .map_err(|error| format!("Failed to close duplicate track insert: {error}"))?;
+        return Ok((id, false));
     }
 
     sqlx::query(
@@ -335,7 +336,7 @@ pub async fn insert_track_record(
         .await
         .map_err(|error| format!("Failed to commit track insert: {error}"))?;
 
-    Ok(id)
+    Ok((id, true))
 }
 
 /// Resolve and lock every decision needed to delete one track. Callers must
@@ -928,30 +929,6 @@ pub async fn get_track_bar_classifications_raw(
     .await
     .map_err(|e| format!("Failed to fetch bar classifications: {}", e))?;
     Ok(row)
-}
-
-// -----------------------------------------------------------------------------
-// Source-based lookups (DJ library imports)
-// -----------------------------------------------------------------------------
-
-pub async fn get_track_by_source_id(
-    pool: &SqlitePool,
-    source_type: &str,
-    source_id: &str,
-) -> Result<Option<TrackSummary>, String> {
-    sqlx::query_as::<_, TrackSummary>(
-        "SELECT t.id, t.uid, t.track_hash, t.title, t.artist, t.album, t.track_number,
-                t.disc_number, t.duration_seconds, t.file_path, t.storage_path,
-                t.album_art_path, t.album_art_mime, t.album_art_storage_path,
-                t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
-         FROM tracks t JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         WHERE t.source_type = ? AND t.source_id = ?",
-    )
-    .bind(source_type)
-    .bind(source_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch track by source_id: {}", e))
 }
 
 /// Fetch tracks whose duration is within `tolerance_secs` of `target_duration`.

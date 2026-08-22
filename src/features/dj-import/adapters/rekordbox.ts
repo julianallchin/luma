@@ -4,7 +4,7 @@ import type {
 	RekordboxPlaylist,
 	RekordboxTrack,
 } from "@/bindings/rekordbox";
-import type { TrackSummary } from "@/bindings/schema";
+import type { TrackImportResult } from "@/bindings/schema";
 import type {
 	DjPlaylist,
 	DjSourceAdapter,
@@ -35,8 +35,6 @@ function mapPlaylist(p: RekordboxPlaylist): DjPlaylist {
 export const rekordboxAdapter: DjSourceAdapter = {
 	name: "rekordbox",
 	label: "Rekordbox",
-	progressEvent: "rekordbox-import-progress",
-
 	openLibrary: async () => {
 		const info = await invoke<RekordboxLibraryInfo>("rekordbox_open_library");
 		const [rawPlaylists, rawTracks] = await Promise.all([
@@ -75,7 +73,7 @@ export const rekordboxAdapter: DjSourceAdapter = {
 	},
 
 	importTracks: async (_libraryPath, trackKeys) => {
-		return invoke<TrackSummary[]>("rekordbox_import_tracks", {
+		return invoke<TrackImportResult>("rekordbox_import_tracks", {
 			trackUuids: trackKeys,
 		});
 	},

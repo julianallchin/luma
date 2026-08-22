@@ -88,10 +88,9 @@ On failure, the failed artifact's downstream preprocessors are skipped for
 this run (the track's roots won't try to compute if stems blew up). The
 backoff record carries the track to a later retry.
 
-Frontend events emitted: `track-import-progress` with `(track_id,
-status_label)` per node, `track-status-changed` per completed node,
-`track-import-complete` once all queued tracks finish. **Do not change these
-event names.**
+Frontend events emitted: typed `track-import-state` payloads throughout an
+import and `track-status-changed` per completed node. Consumers branch on the
+structured phase/step/error fields, never human-readable status labels.
 
 ## Worked example: adding the n2n drum-onset node
 
@@ -126,7 +125,6 @@ reproduction of Yeung et al., Sony AI 2025). Five steps:
        fn inputs(&self) -> &'static [Artifact] { &[Artifact::Mert] }
        fn output(&self) -> Artifact { Artifact::DrumOnsets }
        fn artifact_table(&self) -> &'static str { "track_drum_onsets" }
-       fn status_label(&self) -> &'static str { "Transcribing drums…" }
        async fn run(&self, ctx, track_id) -> Result<(), String> { ... }
    }
    ```

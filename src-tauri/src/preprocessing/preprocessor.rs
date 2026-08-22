@@ -13,14 +13,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use sqlx::SqlitePool;
-use tauri::AppHandle;
-
 use crate::audio::StemCache;
+use crate::dispatch::Events;
 use crate::models::tracks::TrackSummary;
 use crate::preprocessing::artifact::Artifact;
-use crate::preprocessing::AnalysisGuard;
+use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
+use crate::storage::StorageRoot;
+use async_trait::async_trait;
+use sqlx::SqlitePool;
 
 /// Bundle of dependencies a preprocessor implementation needs at run time.
 ///
@@ -29,7 +29,9 @@ use crate::preprocessing::AnalysisGuard;
 /// `run` invocation.
 pub struct PreprocessorContext<'a> {
     pool: &'a SqlitePool,
-    app_handle: &'a AppHandle,
+    storage: &'a StorageRoot,
+    workers: &'a WorkerEnvironment,
+    events: &'a Events,
     stem_cache: &'a StemCache,
     track: &'a TrackSummary,
     analysis: AnalysisGuard,
@@ -41,7 +43,9 @@ pub struct PreprocessorContext<'a> {
 impl<'a> PreprocessorContext<'a> {
     pub fn new(
         pool: &'a SqlitePool,
-        app_handle: &'a AppHandle,
+        storage: &'a StorageRoot,
+        workers: &'a WorkerEnvironment,
+        events: &'a Events,
         stem_cache: &'a StemCache,
         track: &'a TrackSummary,
         stems_dir: PathBuf,
@@ -49,7 +53,9 @@ impl<'a> PreprocessorContext<'a> {
     ) -> Self {
         Self {
             pool,
-            app_handle,
+            storage,
+            workers,
+            events,
             stem_cache,
             track,
             stems_dir,
@@ -61,8 +67,16 @@ impl<'a> PreprocessorContext<'a> {
         self.pool
     }
 
-    pub fn app_handle(&self) -> &AppHandle {
-        self.app_handle
+    pub fn storage(&self) -> &StorageRoot {
+        self.storage
+    }
+
+    pub fn workers(&self) -> &WorkerEnvironment {
+        self.workers
+    }
+
+    pub fn events(&self) -> &Events {
+        self.events
     }
 
     pub fn stem_cache(&self) -> &StemCache {
@@ -106,10 +120,6 @@ pub trait Preprocessor: Send + Sync {
     /// The single artifact this preprocessor produces. To produce two
     /// artifacts, split into two preprocessors (keeps the DAG simple).
     fn output(&self) -> Artifact;
-
-    /// Human-readable string emitted to the UI as the run begins (e.g.
-    /// "Analyzing beats…"). Frontend listens for these progress events.
-    fn status_label(&self) -> &'static str;
 
     /// Local table this preprocessor writes its artifact rows into. The
     /// table must have `track_id TEXT` and `processor_version INTEGER`

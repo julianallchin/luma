@@ -19,10 +19,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::preprocessing::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
-
-use crate::python_env;
 
 const WORKER_SOURCE: &str = include_str!("../python/classifier_worker.py");
 const WORKER_SCRIPT_NAME: &str = "classifier_worker.py";
@@ -58,11 +56,7 @@ pub struct ClassifierAnalysis {
 /// Write the bundled bar-classifier weights into the app cache once and
 /// return the on-disk path. Refreshes the file if its size differs from the
 /// embedded bytes (defensive — covers a stale truncated write).
-fn ensure_weights_file(app: &AppHandle) -> Result<PathBuf, String> {
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("Failed to locate cache dir: {e}"))?;
+fn ensure_weights_file(cache_dir: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("Failed to create cache dir {}: {e}", cache_dir.display()))?;
     let weights_path = cache_dir.join(WEIGHTS_FILE_NAME);
@@ -83,13 +77,13 @@ fn ensure_weights_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn classify_bars(
-    app: &AppHandle,
+    env: &WorkerEnvironment,
     mert_path: &Path,
     bar_boundaries: &[(f64, f64)],
 ) -> Result<ClassifierAnalysis, String> {
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
-    let weights_path = ensure_weights_file(app)?;
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    let weights_path = ensure_weights_file(env.cache_dir())?;
 
     if !mert_path.exists() {
         return Err(format!(

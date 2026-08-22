@@ -110,8 +110,10 @@ fn handler_line(root: &Path, domain: &str, name: &str) -> usize {
 
 fn scan_unported(root: &Path) -> Vec<Unported> {
     let mut found = Vec::new();
-    let mut files: Vec<PathBuf> = fs::read_dir(root.join("src/commands"))
-        .expect("src/commands")
+    let Ok(entries) = fs::read_dir(root.join("src/commands")) else {
+        return found;
+    };
+    let mut files: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
         .collect();
@@ -398,14 +400,21 @@ fn render_markdown(table: &[Command], unported: &[Unported], events: &[Value]) -
         }
     }
 
-    out.push_str("\n## Not on the seam\n\nStill `#[tauri::command]` in `src-tauri/src/commands/`: the spawned-progress import path, which\nreports through events rather than a return value. See\n[`dispatcher-port-guide.md`](./dispatcher-port-guide.md).\n\n");
-    out.push_str("| Command | Source |\n| --- | --- |\n");
-    for command in unported {
-        let _ = writeln!(
-            out,
-            "| `{}` | `{}:{}` |",
-            command.name, command.file, command.line
+    out.push_str("\n## Not on the seam\n\n");
+    if unported.is_empty() {
+        out.push_str("Every host command is registered on the dispatcher seam.\n");
+    } else {
+        out.push_str(
+            "Still `#[tauri::command]` in `src-tauri/src/commands/`:\n\n\
+             | Command | Source |\n| --- | --- |\n",
         );
+        for command in unported {
+            let _ = writeln!(
+                out,
+                "| `{}` | `{}:{}` |",
+                command.name, command.file, command.line
+            );
+        }
     }
 
     out.push_str("\n## Events\n\nTauri events are the only push channel; there is no subscription command. Every long-running\ncommand reports progress here, not in its return value. The event *names* are hand-maintained —\nnothing enumerates them — but the sites below are found by searching the tree for each name, so a\nmoved emitter cannot leave a stale row. An event with no emitter or no listener is an orphan.\n\n");

@@ -31,6 +31,61 @@ pub struct TrackSummary {
     pub updated_at: String,
 }
 
+/// Durable phase-one result from any track import source.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct TrackImportResult {
+    pub import_id: String,
+    pub tracks: Vec<TrackSummary>,
+    pub failures: Vec<TrackImportFailure>,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct TrackImportFailure {
+    pub source_id: String,
+    pub message: String,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "snake_case")]
+pub enum TrackImportPhase {
+    Importing,
+    Analyzing,
+    Complete,
+}
+
+/// Host-neutral progress payload. Consumers branch on fields and enum values,
+/// never on human-readable status text.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct TrackImportProgress {
+    pub import_id: String,
+    pub source: String,
+    pub phase: TrackImportPhase,
+    /// Requested source items whose work for this import is complete. Phase-one
+    /// failures and deduplicated existing rows already count when analysis
+    /// begins; newly inserted rows count after their analysis attempt finishes.
+    /// A panicked/cancelled analysis task therefore leaves terminal `done`
+    /// below `total` rather than claiming work that never completed.
+    pub done: usize,
+    /// Original number of requested source items. Analysis must never replace
+    /// this with the smaller number of rows that were eligible to analyze.
+    pub total: usize,
+    pub track_id: Option<String>,
+    pub current_track: Option<String>,
+    pub step: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Beat analysis data for a track
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]

@@ -254,26 +254,25 @@ because every field inside them is already a shared handle.
 `AppServices::artnet` is `Option<Arc<ArtNetManager>>` and `headless` sets it to
 `None`. This replaces the runtime `app.try_state::<ArtNetManager>()` lookup.
 
-### The four spawned-progress commands are blocked
+### Spawned-progress commands own capabilities, not an app handle
 
 `import_tracks`, `reprocess_track`, `rekordbox_import_tracks` and
-`engine_dj_import_tracks` clone an `AppHandle` into a background task purely to
-emit progress. `Events` is `Clone + Send + 'static` and handles that fine — but
-their bodies also call `services::tracks::{file_fast_import,
-run_background_analysis}`, and `run_background_analysis` threads the `AppHandle`
-down through `preprocessing::scheduler` into every preprocessor, using it for
-storage paths as well as emits.
+`engine_dj_import_tracks` are on the seam. Fast import takes `StorageRoot`;
+preprocessing takes `StorageRoot`, `Events` and a path-based
+`WorkerEnvironment`; Engine DJ and Rekordbox catalog reads sit behind the
+`TrackSources` capability. None of those services receives an `AppHandle`.
 
-**Porting these four means first refactoring `services/tracks.rs` and
-`preprocessing/` to take `(&StorageRoot, &Events)` instead of `AppHandle`.** That
-is a real piece of work, not a mechanical rename, and it should land as its own
-change before these four commands move. Everything they need from the seam
-already exists.
+The command's identity lease covers every phase-one insert. It is handed off
+to an `AnalysisTaskGroup` lease without an admission gap, so dropping a caller
+future does not cancel analysis and an identity transition cannot strand a
+new catalog row or managed file. Progress is `TrackImportProgress`, including
+stable phase and worker-step fields; a GPUI host deserializes that payload and
+never branches on status prose.
 
-Scope it by what the handle is *used for*, not by which module it reaches:
-`services::tracks::{delete_track, recover_track_deletions}` only ever wanted
-`StorageRoot::from_app`, so they now take `&StorageRoot` and their commands
-ported with the rest.
+Tauri and GPUI construct the same worker layout from resolved cache/resource
+paths. Tauri waits for its concurrent environment bootstrap to publish the
+requirements marker; headless hosts use an already-deployed environment, the
+same policy as `agent_execution::headless_env`.
 
 ### Two different notions of "current user"
 

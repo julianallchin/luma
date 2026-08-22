@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri::async_runtime::JoinHandle;
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 
 const IDENTITY_CANCELLED: &str = "Audio analysis was cancelled by an identity transition";
 
@@ -39,6 +39,7 @@ struct TaskGroupState {
 struct TaskGroupInner {
     state: Mutex<TaskGroupState>,
     drained: Notify,
+    suspended_generation: watch::Sender<u64>,
 }
 
 /// Owns every background audio-analysis task admitted for one host identity.
@@ -61,6 +62,7 @@ impl Default for AnalysisTaskGroup {
                     cancelled: Arc::new(AtomicBool::new(false)),
                 }),
                 drained: Notify::new(),
+                suspended_generation: watch::channel(0).0,
             }),
         }
     }
@@ -114,7 +116,7 @@ impl AnalysisTaskGroup {
     /// dropped every lease. Dropping the returned barrier admits a fresh
     /// generation for the newly installed identity (or the restored one).
     pub async fn suspend_for_identity_switch(&self) -> Result<AnalysisIdentityBarrier<'_>, String> {
-        {
+        let suspended_generation = {
             let mut state = self.inner.state.lock().unwrap();
             if !state.accepting {
                 return Err(
@@ -128,7 +130,11 @@ impl AnalysisTaskGroup {
             state.accepting = false;
             state.cancelled.store(true, Ordering::SeqCst);
             state.generation = next_generation;
-        }
+            next_generation
+        };
+        self.inner
+            .suspended_generation
+            .send_replace(suspended_generation);
 
         loop {
             let notified = self.inner.drained.notified();
@@ -141,6 +147,14 @@ impl AnalysisTaskGroup {
         }
 
         Ok(AnalysisIdentityBarrier { group: self })
+    }
+
+    /// Observe the exact boundary where a transition stops admitting work.
+    /// Test-only: production callers coordinate through the barrier returned by
+    /// [`Self::suspend_for_identity_switch`].
+    #[cfg(test)]
+    pub(crate) fn subscribe_identity_suspension(&self) -> watch::Receiver<u64> {
+        self.inner.suspended_generation.subscribe()
     }
 }
 
@@ -197,9 +211,6 @@ mod tests {
         let running = group
             .spawn(old_epoch, move |guard| async move {
                 started_tx.send(()).unwrap();
-                while !guard.is_cancelled() {
-                    tokio::task::yield_now().await;
-                }
                 release_rx.await.unwrap();
                 guard.checkpoint().unwrap_err()
             })
@@ -207,19 +218,19 @@ mod tests {
         started_rx.await.unwrap();
 
         let switching_group = group.clone();
+        let mut suspended = group.subscribe_identity_suspension();
         let transition = tokio::spawn(async move {
             let barrier = switching_group.suspend_for_identity_switch().await.unwrap();
             tokio::time::sleep(Duration::from_millis(10)).await;
             drop(barrier);
         });
 
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while group.current_epoch().is_ok() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), suspended.changed())
+            .await
+            .expect("identity suspension was not published")
+            .expect("identity suspension signal closed");
+        assert_ne!(*suspended.borrow(), 0);
+        assert!(group.current_epoch().is_err());
         assert!(group.spawn(old_epoch, |_| async {}).is_err());
         assert!(!transition.is_finished(), "active work must drain first");
 

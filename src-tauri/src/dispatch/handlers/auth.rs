@@ -179,11 +179,10 @@ pub async fn set_session_item(
             crate::database::local::auth::capture_auth_state_for_connection(&mut session_guard)
                 .await?;
         let _authored_barrier = authored.begin_identity_switch().await;
-        // Closing app-database admission is the first cross-identity commit
-        // fence. Its write lock waits out any already-admitted Operate guard
-        // and prevents a later host-audio/render/device effect from racing in
-        // after the process-global caches are cleared.
-        crate::database::local::auth::suspend_write_admission(&db.0, &admission_backup).await?;
+        // Imports may have published a phase-one track row and still own a
+        // cancellation rollback. Drain them while the old principal remains
+        // admitted; closing admission first would make the compensating
+        // deletion fail and strand both the row and managed audio.
         let _analysis_barrier = match analysis_tasks.suspend_for_identity_switch().await {
             Ok(barrier) => barrier,
             Err(error) => {
@@ -197,6 +196,11 @@ pub async fn set_session_item(
                 .await);
             }
         };
+        // Closing app-database admission is the first cross-identity commit
+        // fence after import compensation. Its write lock waits out every
+        // other admitted operation and prevents a later host effect from
+        // racing in after process-global caches are cleared.
+        crate::database::local::auth::suspend_write_admission(&db.0, &admission_backup).await?;
         let _workspace_barrier = workspaces.suspend_for_identity_switch().await;
         graph_runs.clear();
         host_audio.unload();

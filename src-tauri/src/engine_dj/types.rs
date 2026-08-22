@@ -44,14 +44,3 @@ pub struct EngineDjLibraryInfo {
     #[ts(type = "number")]
     pub track_count: i64,
 }
-
-#[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportProgressEvent {
-    pub done: usize,
-    pub total: usize,
-    pub current_track: Option<String>,
-    pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}

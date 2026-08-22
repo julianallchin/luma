@@ -1,9 +1,7 @@
+use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
-use tauri::AppHandle;
-
-use crate::python_env;
 
 const WORKER_SOURCE: &str = include_str!("../python/beat_worker.py");
 const WORKER_SCRIPT_NAME: &str = "beat_worker.py";
@@ -26,9 +24,9 @@ struct WorkerResponse {
     beats_per_bar: i32,
 }
 
-pub fn compute_beats(app: &AppHandle, audio_path: &Path) -> Result<BeatAnalysis, String> {
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+pub fn compute_beats(env: &WorkerEnvironment, audio_path: &Path) -> Result<BeatAnalysis, String> {
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let mut cmd = Command::new(&python_path);
     crate::cmd_util::no_window(&mut cmd);
     let output = cmd

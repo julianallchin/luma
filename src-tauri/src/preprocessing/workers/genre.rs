@@ -28,7 +28,6 @@ use crate::genre_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 use crate::preprocessing::workers::{build_bar_boundaries, list_pending_bar_aligned};
-use crate::storage::StorageRoot;
 
 pub struct GenrePreprocessor;
 
@@ -45,9 +44,6 @@ impl Preprocessor for GenrePreprocessor {
     }
     fn output(&self) -> Artifact {
         Artifact::Genre
-    }
-    fn status_label(&self) -> &'static str {
-        "Detecting genre…"
     }
     fn artifact_table(&self) -> &'static str {
         "track_genres"
@@ -83,10 +79,15 @@ impl Preprocessor for GenrePreprocessor {
         }
 
         let audio_path = ctx.track().file_path.clone();
-        let handle = ctx.app_handle().clone();
-        let storage = StorageRoot::from_app(ctx.app_handle())?;
+        let workers = ctx.workers().clone();
+        let storage = ctx.storage().clone();
         let analysis = tauri::async_runtime::spawn_blocking(move || {
-            genre_worker::analyze_genres(&handle, &storage, Path::new(&audio_path), &bar_boundaries)
+            genre_worker::analyze_genres(
+                &workers,
+                &storage,
+                Path::new(&audio_path),
+                &bar_boundaries,
+            )
         })
         .await
         .map_err(|e| format!("Genre worker task failed: {e}"))??;

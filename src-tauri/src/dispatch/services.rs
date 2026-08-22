@@ -18,7 +18,7 @@ use crate::database::local::state::StateDb;
 use crate::database::Db;
 use crate::host_audio::HostAudioState;
 use crate::mixer_manager::MixerManager;
-use crate::preprocessing::AnalysisTaskGroup;
+use crate::preprocessing::{AnalysisTaskGroup, WorkerEnvironment};
 use crate::prodjlink_manager::ProDJLinkManager;
 use crate::render_engine::RenderEngine;
 use crate::services::authored_documents::AuthoredDocuments;
@@ -27,6 +27,86 @@ use crate::stagelinq_manager::StageLinqManager;
 use crate::storage::StorageRoot;
 use crate::sync::host::SyncHost;
 use crate::sync::orchestrator::SyncEngine;
+
+/// External DJ catalog reads needed by import handlers.
+///
+/// Production uses the installed Engine DJ/Rekordbox databases; a host test
+/// can substitute disposable rows without putting fixture logic in handlers.
+pub trait TrackSources: Send + Sync + 'static {
+    /// Load one Engine DJ catalog identity and its tracks.
+    fn engine_tracks<'a>(
+        &'a self,
+        library_path: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<(String, Vec<super::ImportedEngineDjTrack>), String>,
+                > + Send
+                + 'a,
+        >,
+    >;
+
+    /// Load every Rekordbox track from the auto-discovered catalog.
+    fn rekordbox_tracks(
+        &self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<super::ImportedRekordboxTrack>, String>>
+                + Send
+                + '_,
+        >,
+    >;
+}
+
+struct SystemTrackSources;
+
+/// The production Engine DJ/Rekordbox adapter.
+#[must_use]
+pub fn system_track_sources() -> Arc<dyn TrackSources> {
+    Arc::new(SystemTrackSources)
+}
+
+impl TrackSources for SystemTrackSources {
+    fn engine_tracks<'a>(
+        &'a self,
+        library_path: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<(String, Vec<super::ImportedEngineDjTrack>), String>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let pool = crate::engine_dj::db::open_engine_db(library_path).await?;
+            let result = async {
+                let info = crate::engine_dj::db::get_library_info(&pool, library_path).await?;
+                let tracks = crate::engine_dj::db::list_tracks(&pool).await?;
+                Ok((info.database_uuid, tracks))
+            }
+            .await;
+            pool.close().await;
+            result
+        })
+    }
+
+    fn rekordbox_tracks(
+        &self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<super::ImportedRekordboxTrack>, String>>
+                + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async {
+            tokio::task::spawn_blocking(crate::rekordbox::subprocess::list_tracks)
+                .await
+                .map_err(|error| format!("Task join error: {error}"))?
+        })
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Event emission
@@ -139,10 +219,10 @@ impl Host for ProcessExitHost {
 /// live for the process, so one struct passed by reference covers the whole
 /// command surface and no body carries an injection lifetime.
 ///
-/// Three of these fields stand in for a Tauri `AppHandle`, which the surface
-/// used for exactly three things: emitting events ([`Events`]), resolving the
-/// `storage` and `fixtures_root` paths, and terminating the process
-/// ([`HostControl`]). Nothing else about a host is abstracted here.
+/// Explicit capabilities replace the narrow jobs command bodies once reached
+/// through a Tauri `AppHandle`: [`Events`], resolved storage/fixture paths,
+/// [`WorkerEnvironment`] cache/resource paths, and [`HostControl`]. Nothing
+/// else about a host is abstracted here.
 ///
 /// Fields are `pub(crate)`: handlers read them directly, and an external host
 /// neither builds nor inspects them beyond the accessors below. That keeps
@@ -154,6 +234,8 @@ pub struct AppServices {
     pub(crate) workspaces: Arc<PythonWorkspaceService>,
     pub(crate) graph_runs: Arc<GraphRunStore>,
     pub(crate) analysis_tasks: AnalysisTaskGroup,
+    pub(crate) workers: WorkerEnvironment,
+    pub(crate) track_sources: Arc<dyn TrackSources>,
     pub(crate) fft: FftService,
     /// Decoded stem samples, shared so a track's stems are decoded once.
     pub(crate) stem_cache: StemCache,
@@ -229,6 +311,9 @@ impl AppServices {
             workspaces,
             graph_runs: Arc::new(GraphRunStore::new()),
             analysis_tasks: AnalysisTaskGroup::new(),
+            workers: WorkerEnvironment::from_env_default()
+                .expect("headless worker environment paths must resolve"),
+            track_sources: system_track_sources(),
             fft: FftService::new(),
             stem_cache: StemCache::new(),
             render_engine: render_engine.clone(),
@@ -266,6 +351,13 @@ impl AppServices {
     #[must_use]
     pub fn with_events(mut self, events: Events) -> Self {
         self.events = events;
+        self
+    }
+
+    #[must_use]
+    /// Replace external DJ catalog reads, primarily for a disposable host.
+    pub fn with_track_sources(mut self, sources: Arc<dyn TrackSources>) -> Self {
+        self.track_sources = sources;
         self
     }
 
@@ -443,14 +535,14 @@ mod tests {
 
         let background = events.clone();
         tokio::spawn(async move {
-            background.emit("file-import-progress", serde_json::json!({ "done": 1 }));
+            background.emit("spawned-test-event", serde_json::json!({ "done": 1 }));
         })
         .await
         .expect("spawned emit panicked");
 
         let recorded = log.lock().expect("poisoned");
         assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, "file-import-progress");
+        assert_eq!(recorded[0].0, "spawned-test-event");
     }
 
     /// A payload that cannot serialize must not take the caller down. A map

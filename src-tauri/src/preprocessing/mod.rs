@@ -19,6 +19,8 @@ pub mod preprocessor;
 pub mod registry;
 pub mod scheduler;
 pub mod task_group;
+pub mod worker_environment;
 pub mod workers;
 
 pub use task_group::{AnalysisGuard, AnalysisTaskGroup};
+pub use worker_environment::WorkerEnvironment;

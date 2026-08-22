@@ -1,9 +1,7 @@
+use crate::preprocessing::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
-use tauri::AppHandle;
-
-use crate::python_env;
 
 const WORKER_SOURCE: &str = include_str!("../python/ace_chord_sections_worker.py");
 const WORKER_SCRIPT_NAME: &str = "ace_chord_sections_worker.py";
@@ -38,11 +36,14 @@ struct WorkerSection {
     label: String,
 }
 
-pub fn compute_roots(app: &AppHandle, audio_paths: &[PathBuf]) -> Result<RootAnalysis, String> {
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+pub fn compute_roots(
+    env: &WorkerEnvironment,
+    audio_paths: &[PathBuf],
+) -> Result<RootAnalysis, String> {
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // Copy bundled consonance-ACE repo alongside the worker so imports like `ACE.*` resolve.
-    let resource_dir = python_env::ensure_python_resource_dir(app, "consonance-ACE")?;
+    let resource_dir = env.deploy_resource("consonance-ACE")?;
     let workdir = script_path
         .parent()
         .ok_or_else(|| "Worker script missing parent directory".to_string())?;

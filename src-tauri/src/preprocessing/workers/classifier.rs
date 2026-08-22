@@ -66,9 +66,6 @@ impl Preprocessor for ClassifierPreprocessor {
     fn output(&self) -> Artifact {
         Artifact::BarClassifications
     }
-    fn status_label(&self) -> &'static str {
-        "Classifying bars…"
-    }
     fn artifact_table(&self) -> &'static str {
         "track_bar_classifications"
     }
@@ -112,9 +109,9 @@ impl Preprocessor for ClassifierPreprocessor {
             ));
         }
 
-        let handle = ctx.app_handle().clone();
+        let workers = ctx.workers().clone();
         let analysis = tauri::async_runtime::spawn_blocking(move || {
-            classifier_worker::classify_bars(&handle, Path::new(&mert_path), &bar_boundaries)
+            classifier_worker::classify_bars(&workers, Path::new(&mert_path), &bar_boundaries)
         })
         .await
         .map_err(|e| format!("Classifier worker task failed: {e}"))??;

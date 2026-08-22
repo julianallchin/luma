@@ -1,14 +1,19 @@
 # Track import dispatch seam
 
-**Status:** next owner task; prerequisite for T5
+**Status:** dispatch/Library foundation implemented; GPUI T2–T5 UI remains the
+next slice
 
-The read side is now GPUI-callable through `Library` and presents Engine DJ
-and Rekordbox as `TrackSource`, `SourceLibrary`, `SourcePlaylist` and
-`SourceTrack`. The write side must not be exposed by wrapping the existing
-Tauri commands: doing so would either cancel analysis when the dialog closes
-or silently omit it in the GPUI host.
+The read and write sides are GPUI-callable through `Library`. Engine DJ and
+Rekordbox share `TrackSource`, `SourceLibrary`, `SourcePlaylist`, `SourceTrack`
+and one typed import request/result/progress contract. Analysis is owned by the
+service task group rather than a dialog or command future.
 
-## Required refactor
+This foundation does **not** implement the GPUI track-acquisition routes. The
+Luma-wide browser (T2), source selection (T3), unified source browser UI (T4),
+and background-import presentation/reconciliation (T5) remain a separate UI
+slice in the renderer/dialog gauntlet.
+
+## Implemented foundation
 
 1. Change `services::tracks::{file_fast_import,dj_fast_import,
    engine_dj_fast_import}` from `&AppHandle` to `&StorageRoot`. Album-art and
@@ -39,5 +44,5 @@ or silently omit it in the GPUI host.
 - the Tauri commands become thin adapters over the same handlers, not a second
   implementation.
 
-Until those tests pass, the add-track UI may browse sources and create durable
-venue membership, but must not claim GPUI background import is complete.
+These tests cover the host-neutral foundation only. They are not acceptance
+evidence for the outstanding GPUI T2–T5 routes.

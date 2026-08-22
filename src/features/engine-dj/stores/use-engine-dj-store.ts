@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import type {
@@ -7,15 +6,7 @@ import type {
 	EngineDjPlaylist,
 	EngineDjTrack,
 } from "@/bindings/engine_dj";
-import type { TrackSummary } from "@/bindings/schema";
-
-interface ImportProgressEvent {
-	done: number;
-	total: number;
-	currentTrack: string | null;
-	phase: string;
-	error: string | null;
-}
+import type { TrackImportResult, TrackSummary } from "@/bindings/schema";
 
 type ActiveView = "all" | "playlist";
 
@@ -223,32 +214,25 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 			error: null,
 		});
 
-		let unlisten: UnlistenFn | null = null;
 		try {
-			unlisten = await listen<ImportProgressEvent>(
-				"engine-dj-import-progress",
-				(event) => {
-					set({
-						importProgress: {
-							done: event.payload.done,
-							total: event.payload.total,
-						},
-						currentImportTrack: event.payload.currentTrack,
-					});
+			const result = await invoke<TrackImportResult>(
+				"engine_dj_import_tracks",
+				{
+					libraryPath,
+					trackIds,
 				},
 			);
-
-			const imported = await invoke<TrackSummary[]>("engine_dj_import_tracks", {
-				libraryPath,
-				trackIds,
-			});
 			set({
 				importing: false,
-				importProgress: { done: imported.length, total: trackIds.length },
+				importProgress: { done: trackIds.length, total: trackIds.length },
 				currentImportTrack: null,
 				selectedTrackIds: new Set(),
+				error:
+					result.failures.length > 0
+						? result.failures.map((failure) => failure.message).join("\n")
+						: null,
 			});
-			return imported;
+			return result.tracks;
 		} catch (err) {
 			set({
 				importing: false,
@@ -256,8 +240,6 @@ export const useEngineDjStore = create<EngineDjState>((set, get) => ({
 				error: err instanceof Error ? err.message : String(err),
 			});
 			return [];
-		} finally {
-			unlisten?.();
 		}
 	},
 

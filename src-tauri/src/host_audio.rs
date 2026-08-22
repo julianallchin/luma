@@ -69,6 +69,25 @@ impl Default for HostAudioState {
 }
 
 impl HostAudioState {
+    /// Sample rate audio should be decoded at for this host.
+    ///
+    /// A host with output disabled has no reason to query CoreAudio for a
+    /// device it will never open. The processing pipeline already standardizes
+    /// decoded audio at 48 kHz, so that is also the deterministic headless
+    /// playback rate.
+    pub fn decode_sample_rate(&self) -> u32 {
+        let output_enabled = self
+            .inner
+            .lock()
+            .expect("host audio state poisoned")
+            .audio_output_enabled;
+        if output_enabled {
+            device_sample_rate()
+        } else {
+            48_000
+        }
+    }
+
     /// Spawn a background task that broadcasts playback state at ~15fps
     pub fn spawn_broadcaster(&self, app_handle: AppHandle) {
         let state = self.inner.clone();
