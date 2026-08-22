@@ -111,6 +111,7 @@ fn material_scenes() -> Vec<Scene> {
             background: [0.004, 0.006, 0.01],
             ambient_color: [0.35, 0.45, 0.65],
             ambient_intensity: 0.08,
+            probe: None,
         };
         render.haze.enabled = false;
         render.show_grid = false;

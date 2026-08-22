@@ -2614,6 +2614,7 @@ mod tests {
             }],
             point_lights: Vec::new(),
             fixture_cones: Vec::new(),
+            environment: None,
             clear_color: scene_radiance,
             ambient: scene_radiance,
             directional: Some(DirectionalLight {
