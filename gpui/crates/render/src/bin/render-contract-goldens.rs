@@ -77,15 +77,23 @@ fn main() -> anyhow::Result<()> {
         definitions: copy_definitions(&source)?,
         scenes: Vec::new(),
     };
-    for (source_id, id, edit) in [
-        ("single-mover", "one-beam", None),
-        ("mover-fan", "overlapping-beams", None),
-        ("par-occlusion", "occluded-beam", None),
-        ("single-mover", "gobo-seam-negative", Some((1, -0.001))),
+    for (source_id, id, edit, fixture_shadows) in [
+        ("single-mover", "one-beam", None, false),
+        ("mover-fan", "overlapping-beams", None, false),
+        ("par-occlusion", "occluded-beam", None, false),
+        ("par-occlusion", "fixture-shadow-open", None, false),
+        ("par-occlusion", "fixture-shadowed-beam", None, true),
+        (
+            "single-mover",
+            "gobo-seam-negative",
+            Some((1, -0.001)),
+            false,
+        ),
         (
             "single-mover",
             "gobo-seam-positive",
             Some((1, std::f32::consts::TAU - 0.001)),
+            false,
         ),
     ] {
         if !requested.is_empty() && !requested.iter().any(|requested| requested == id) {
@@ -94,6 +102,18 @@ fn main() -> anyhow::Result<()> {
         let mut scene = copy_scene(find_scene(&source, source_id)?);
         scene.id = id.into();
         scene.times = vec![TIME];
+        if id.starts_with("fixture-shadow") {
+            let caster = scene
+                .pieces
+                .first_mut()
+                .expect("fixture-shadow contract keeps its caster");
+            caster.pos = [-0.20, -1.2, 1.4];
+            caster.scale = 0.20;
+        }
+        scene.render.fixture_shadows = fixture_shadows;
+        if fixture_shadows {
+            scene.render.fixture_surface_lighting = false;
+        }
         if let Some((gobo, rotation)) = edit {
             let state = scene
                 .state

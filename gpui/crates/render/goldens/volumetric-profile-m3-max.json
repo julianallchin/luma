@@ -18,7 +18,7 @@
     "target": "aarch64-apple-darwin",
     "wgpu_lock": "26.0.1"
   },
-  "captured_at_utc": "2026-08-22T11:12:14Z",
+  "captured_at_utc": "2026-08-22T17:25:32Z",
   "cases": [
     {
       "budgets_ms": {
@@ -26,24 +26,40 @@
         "gpu_total_p95": 8.0,
         "gpu_volumetric_p95": null
       },
-      "cones": 64,
-      "cpu_encode_submit": {
-        "max_ms": 1.085166,
-        "p50_ms": 0.170917,
-        "p95_ms": 0.387834
+      "case_id": "transport-32",
+      "cluster_stats": {
+        "light_references": 435642,
+        "max_lights_per_cluster": 32,
+        "occupied_clusters": 16320,
+        "rebuilds": 1
       },
+      "cold_cluster_build_ms": 1.023875,
+      "cones": 32,
+      "cpu_cluster": {
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "cpu_encode_submit": {
+        "max_ms": 1.488208,
+        "p50_ms": 0.21087499999999998,
+        "p95_ms": 0.407792
+      },
+      "fixture_shadows": false,
       "gpu_total": {
-        "max_ms": 1.178334,
-        "p50_ms": 0.49529199999999995,
-        "p95_ms": 0.7745
+        "max_ms": 10.652916999999999,
+        "p50_ms": 0.277459,
+        "p95_ms": 0.38641699999999995
       },
       "gpu_volumetric": {
-        "max_ms": 0.800125,
-        "p50_ms": 0.40033399999999997,
-        "p95_ms": 0.5454169999999999
+        "max_ms": 5.381125,
+        "p50_ms": 0.220292,
+        "p95_ms": 0.286958
       },
+      "opaque_draws": 1,
       "samples": 600,
-      "samples_fnv64": "0x8fff64f0eeceff85",
+      "samples_fnv64": "0x35f1c34608eed2d3",
+      "shadowed_fixtures": 0,
       "within_budget": true
     },
     {
@@ -52,24 +68,124 @@
         "gpu_total_p95": 6.5,
         "gpu_volumetric_p95": 3.0
       },
-      "cones": 256,
-      "cpu_encode_submit": {
-        "max_ms": 1.249042,
-        "p50_ms": 0.216708,
-        "p95_ms": 0.377167
+      "case_id": "transport-128",
+      "cluster_stats": {
+        "light_references": 1697114,
+        "max_lights_per_cluster": 128,
+        "occupied_clusters": 16320,
+        "rebuilds": 2
       },
+      "cold_cluster_build_ms": 6.813292000000001,
+      "cones": 128,
+      "cpu_cluster": {
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "cpu_encode_submit": {
+        "max_ms": 1.1225829999999999,
+        "p50_ms": 0.239333,
+        "p95_ms": 0.378334
+      },
+      "fixture_shadows": false,
       "gpu_total": {
-        "max_ms": 3.6395839999999997,
-        "p50_ms": 1.924791,
-        "p95_ms": 2.4265
+        "max_ms": 14.164124999999999,
+        "p50_ms": 0.939958,
+        "p95_ms": 1.161834
       },
       "gpu_volumetric": {
-        "max_ms": 3.150625,
-        "p50_ms": 1.6685409999999998,
-        "p95_ms": 2.2269579999999998
+        "max_ms": 14.14475,
+        "p50_ms": 0.780833,
+        "p95_ms": 1.0607499999999999
       },
+      "opaque_draws": 1,
       "samples": 600,
-      "samples_fnv64": "0x293980673c4940c5",
+      "samples_fnv64": "0x9cc122892519bc80",
+      "shadowed_fixtures": 0,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 2.0,
+        "gpu_total_p95": 8.0,
+        "gpu_volumetric_p95": 6.0
+      },
+      "case_id": "transport-512",
+      "cluster_stats": {
+        "light_references": 5793674,
+        "max_lights_per_cluster": 512,
+        "occupied_clusters": 17495,
+        "rebuilds": 3
+      },
+      "cold_cluster_build_ms": 13.824541,
+      "cones": 512,
+      "cpu_cluster": {
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.935542,
+        "p50_ms": 0.34975,
+        "p95_ms": 0.555292
+      },
+      "fixture_shadows": false,
+      "gpu_total": {
+        "max_ms": 140.48975,
+        "p50_ms": 3.887542,
+        "p95_ms": 6.358667
+      },
+      "gpu_volumetric": {
+        "max_ms": 139.952459,
+        "p50_ms": 3.053625,
+        "p95_ms": 5.074208
+      },
+      "opaque_draws": 1,
+      "samples": 600,
+      "samples_fnv64": "0xd51d15841ef10fbb",
+      "shadowed_fixtures": 0,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 1.5,
+        "gpu_total_p95": 8.0,
+        "gpu_volumetric_p95": 3.0
+      },
+      "case_id": "fixture-shadows-120",
+      "cluster_stats": {
+        "light_references": 1566554,
+        "max_lights_per_cluster": 120,
+        "occupied_clusters": 16320,
+        "rebuilds": 4
+      },
+      "cold_cluster_build_ms": 3.101,
+      "cones": 120,
+      "cpu_cluster": {
+        "max_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "cpu_encode_submit": {
+        "max_ms": 1.7733340000000002,
+        "p50_ms": 0.947708,
+        "p95_ms": 1.164334
+      },
+      "fixture_shadows": true,
+      "gpu_total": {
+        "max_ms": 14.917584,
+        "p50_ms": 0.24345899999999998,
+        "p95_ms": 1.317375
+      },
+      "gpu_volumetric": {
+        "max_ms": 14.767417,
+        "p50_ms": 0.143792,
+        "p95_ms": 1.216125
+      },
+      "opaque_draws": 17,
+      "samples": 600,
+      "samples_fnv64": "0x27b899c53182db71",
+      "shadowed_fixtures": 120,
       "within_budget": true
     }
   ],
@@ -99,101 +215,203 @@
   },
   "schema": "luma.renderer-profile/2",
   "source": {
-    "branch": "codex/renderer-r3b",
-    "commit": "ee69a806f9152b155b632dc565fc5a56c75a2ef2",
+    "branch": "codex/renderer-dialog-gauntlet",
+    "commit": "139eef990c15f23ba4076744c9fb7fc324f8ce86",
     "dirty": true,
     "provenance": {
       "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
       "entries": [
         {
-          "bytes": 53581,
-          "content_fnv64": "0xbc0289b4f6e0361f",
+          "bytes": 50167,
+          "content_fnv64": "0x28181405505b86d7",
+          "path": "gpui/crates/app/src/add_tracks.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 29007,
+          "content_fnv64": "0xe34c401437a2afd0",
+          "path": "gpui/crates/app/src/shell.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 88445,
+          "content_fnv64": "0x93cebccccb809b42",
           "path": "gpui/crates/app/src/visualizer.rs",
           "state": "tracked"
         },
         {
-          "bytes": 4065,
-          "content_fnv64": "0x23b3774761fce62b",
-          "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+          "bytes": 26911,
+          "content_fnv64": "0xf4089fb1927b4ef8",
+          "path": "gpui/crates/app/src/welcome.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 3297,
+          "content_fnv64": "0xa614a982035f6576",
+          "path": "gpui/crates/render/goldens/contracts/fixture-shadow-open-1.370.json",
           "state": "untracked"
         },
         {
-          "bytes": 3058,
-          "content_fnv64": "0x66ade6aaf91ddc84",
-          "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+          "bytes": 364253,
+          "content_fnv64": "0x441cb38ce5ea98de",
+          "path": "gpui/crates/render/goldens/contracts/fixture-shadow-open-1.370.png",
           "state": "untracked"
         },
         {
-          "bytes": 5022,
-          "content_fnv64": "0x4b80c28b530e12d1",
-          "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+          "bytes": 3300,
+          "content_fnv64": "0x4e562af0ae028de5",
+          "path": "gpui/crates/render/goldens/contracts/fixture-shadowed-beam-1.370.json",
           "state": "untracked"
         },
         {
-          "bytes": 1085,
-          "content_fnv64": "0x5a6ab76f36fee2b5",
-          "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+          "bytes": 366614,
+          "content_fnv64": "0x458f933f3ec1338d",
+          "path": "gpui/crates/render/goldens/contracts/fixture-shadowed-beam-1.370.png",
           "state": "untracked"
         },
         {
-          "bytes": 19388,
-          "content_fnv64": "0x1b7a397d6342969d",
+          "bytes": 3046,
+          "content_fnv64": "0x70fa2df1a2e8e627",
+          "path": "gpui/crates/render/goldens/contracts/gobo-seam-negative-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 3049,
+          "content_fnv64": "0xbd8e3c014430232d",
+          "path": "gpui/crates/render/goldens/contracts/gobo-seam-positive-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1703,
+          "content_fnv64": "0xf3a652e5e1dd77a6",
+          "path": "gpui/crates/render/goldens/contracts/metal-roughness-sweep-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 3285,
+          "content_fnv64": "0xcd3547685df13090",
+          "path": "gpui/crates/render/goldens/contracts/occluded-beam-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 3023,
+          "content_fnv64": "0x01eb28179c7cc1b6",
+          "path": "gpui/crates/render/goldens/contracts/one-beam-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 6750,
+          "content_fnv64": "0x0f36bc626280cff8",
+          "path": "gpui/crates/render/goldens/contracts/overlapping-beams-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 460226,
+          "content_fnv64": "0x9f617b56f284c3e0",
+          "path": "gpui/crates/render/goldens/contracts/overlapping-beams-1.370.png",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1698,
+          "content_fnv64": "0x8051c292512045b5",
+          "path": "gpui/crates/render/goldens/contracts/sun-direction-left-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1699,
+          "content_fnv64": "0x552d90b347c64826",
+          "path": "gpui/crates/render/goldens/contracts/sun-direction-right-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1433,
+          "content_fnv64": "0x8c9ad0f77cd38f9b",
+          "path": "gpui/crates/render/goldens/contracts/sun-off-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1940,
+          "content_fnv64": "0xb176839914906f3b",
+          "path": "gpui/crates/render/goldens/contracts/sun-shadow-hard-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1940,
+          "content_fnv64": "0x7726e4f71eec78a4",
+          "path": "gpui/crates/render/goldens/contracts/sun-shadow-soft-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1687,
+          "content_fnv64": "0x0006c2065dc328a2",
+          "path": "gpui/crates/render/goldens/contracts/textured-pbr-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 65684,
+          "content_fnv64": "0x169247cb2891090c",
+          "path": "gpui/crates/render/goldens/contracts/volumetric-performance-smooth-1.370.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1733157,
+          "content_fnv64": "0xd02c28e574245342",
+          "path": "gpui/crates/render/goldens/contracts/volumetric-performance-smooth-1.370.png",
+          "state": "tracked"
+        },
+        {
+          "bytes": 23570,
+          "content_fnv64": "0x6602fad5828fd5e4",
           "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
-          "state": "untracked"
+          "state": "tracked"
         },
         {
-          "bytes": 27488,
-          "content_fnv64": "0x588362cf54b342d1",
+          "bytes": 10985,
+          "content_fnv64": "0x4137df9c5149836f",
+          "path": "gpui/crates/render/src/bin/render-contract-goldens.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 30613,
+          "content_fnv64": "0xcc2650f36428c583",
           "path": "gpui/crates/render/src/frame.rs",
           "state": "tracked"
         },
         {
-          "bytes": 105856,
-          "content_fnv64": "0xc2dfc9aa98931c42",
+          "bytes": 155105,
+          "content_fnv64": "0x4705c335a72eb81c",
           "path": "gpui/crates/render/src/gpu.rs",
           "state": "tracked"
         },
         {
-          "bytes": 2516,
-          "content_fnv64": "0x43b8422d398f4e3d",
-          "path": "gpui/crates/render/src/lib.rs",
-          "state": "tracked"
-        },
-        {
-          "bytes": 16575,
-          "content_fnv64": "0xbae0eac8fdbd4af2",
+          "bytes": 21938,
+          "content_fnv64": "0x1c1f030124777b45",
           "path": "gpui/crates/render/src/scene_desc.rs",
           "state": "tracked"
         },
         {
-          "bytes": 5878,
-          "content_fnv64": "0x3ef2c251c0c79eb7",
-          "path": "gpui/crates/render/src/shaders/composite.wgsl",
-          "state": "tracked"
-        },
-        {
-          "bytes": 17738,
-          "content_fnv64": "0x4a4232260e1fd3ad",
+          "bytes": 17969,
+          "content_fnv64": "0x60d96a7fbcf695b3",
           "path": "gpui/crates/render/src/shaders/haze.wgsl",
           "state": "tracked"
         },
         {
-          "bytes": 1291,
-          "content_fnv64": "0x98835064c3f23662",
-          "path": "gpui/crates/render/src/shaders/haze_temporal.wgsl",
-          "state": "untracked"
-        },
-        {
-          "bytes": 21286,
-          "content_fnv64": "0xa56fd17bb5dddfa5",
-          "path": "gpui/crates/render/src/viewport.rs",
+          "bytes": 14965,
+          "content_fnv64": "0xd5af003486a9277c",
+          "path": "gpui/crates/render/src/shaders/scene.wgsl",
           "state": "tracked"
         },
         {
-          "bytes": 18049,
-          "content_fnv64": "0xf796a91c8a328517",
-          "path": "gpui/crates/render/tests/volumetric_transport.rs",
-          "state": "untracked"
+          "bytes": 3542,
+          "content_fnv64": "0x7ef223b64103b022",
+          "path": "gpui/crates/render/src/shaders/scene_bindings.wgsl",
+          "state": "tracked"
+        },
+        {
+          "bytes": 4893,
+          "content_fnv64": "0xa94a30cb4d1bcf33",
+          "path": "gpui/crates/render/tests/renderer_contract_goldens.rs",
+          "state": "tracked"
         }
       ],
       "excluded": [
@@ -206,7 +424,7 @@
         "json",
         "png"
       ],
-      "manifest_fnv64": "0xa0cd3845e19c9538",
+      "manifest_fnv64": "0xfb71a0ed93e48b85",
       "scopes": [
         "gpui/crates/render",
         "gpui/crates/app"

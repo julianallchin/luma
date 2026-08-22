@@ -53,6 +53,9 @@
       "sun": null,
       "showGrid": false,
       "debugView": "pbr",
+      "fixtureSurfaceLighting": false,
+      "fixtureShadows": false,
+      "clusterDebug": false,
       "fov": 50.0
     },
     "selectedFixtureIds": [],

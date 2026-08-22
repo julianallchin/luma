@@ -83,6 +83,12 @@ struct SurfaceClusterHeader {
 struct SurfaceClusterParams {
     grid: vec4<u32>,
     depth_and_flags: vec4<f32>,
+    // x: shadowed fixture count, y: shadow texel size.
+    shadow: vec4<f32>,
+};
+
+struct FixtureShadowMatrix {
+    view_proj: mat4x4<f32>,
 };
 
 @group(3) @binding(0) var<storage, read> fixture_cores: array<FixtureLightCore>;
@@ -90,3 +96,6 @@ struct SurfaceClusterParams {
 @group(3) @binding(2) var<storage, read> surface_cluster_headers: array<SurfaceClusterHeader>;
 @group(3) @binding(3) var<storage, read> surface_cluster_indices: array<u32>;
 @group(3) @binding(4) var<uniform> surface_clusters: SurfaceClusterParams;
+@group(3) @binding(5) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
+@group(3) @binding(6) var fixture_shadow_map: texture_depth_2d_array;
+@group(3) @binding(7) var fixture_shadow_sampler: sampler_comparison;

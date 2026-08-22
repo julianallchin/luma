@@ -213,6 +213,7 @@ pub fn host(
     let max_height = (viewport.height - px(TITLEBAR_CLEARANCE + VIEWPORT_GUTTER)).max(px(1.0));
 
     let card = gpui::div()
+        .relative()
         // The card is a sibling of the full-window scrim. Register its hitbox
         // as an occluder so controls inside it cannot also hit the dismissal
         // plane behind it.
@@ -231,7 +232,15 @@ pub fn host(
         // navigation stops on an invisible boundary instead of wrapping.
         .tab_stop(false)
         .focus_trap(id.clone(), focus)
-        .child(card);
+        .child(card)
+        .child(
+            gpui::div()
+                .absolute()
+                .inset_0()
+                .rounded(px(CARD_RADIUS))
+                .border_1()
+                .border_color(glass::hairline(0.10)),
+        );
     let card = frosted(CARD_RADIUS, CARD_BLUR, card);
     let card = motion::dialog_in(id, gpui::div().child(card))
         .agent_node(crate::node::Role::Card, semantic_label)
@@ -241,7 +250,7 @@ pub fn host(
         .id("dialog-scrim")
         .absolute()
         .inset_0()
-        .bg(glass::scrim(glass::SCRIM_ALPHA));
+        .bg(glass::scrim(glass::DIALOG_SCRIM_ALPHA));
     if let ScrimDismiss::Enabled(dismiss) = scrim_dismiss {
         scrim = scrim
             .on_click(move |_, window, cx| dismiss(window, cx))

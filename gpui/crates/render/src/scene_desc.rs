@@ -90,6 +90,8 @@ pub struct RenderSettings {
     pub debug_view: DebugView,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
     pub fixture_surface_lighting: bool,
+    /// Whether opaque venue geometry casts shadows into fixture light and haze.
+    pub fixture_shadows: bool,
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
     /// Vertical field of view, degrees.
@@ -256,6 +258,7 @@ impl RenderSettings {
             show_grid: false,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
+            fixture_shadows: true,
             cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
@@ -277,6 +280,7 @@ impl RenderSettings {
             show_grid: true,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
+            fixture_shadows: true,
             cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
@@ -302,6 +306,8 @@ struct RenderSettingsWire {
     debug_view: DebugView,
     #[serde(default)]
     fixture_surface_lighting: Option<bool>,
+    #[serde(default)]
+    fixture_shadows: Option<bool>,
     #[serde(default)]
     cluster_debug: bool,
     fov: f32,
@@ -331,6 +337,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 show_grid: wire.show_grid.unwrap_or(false),
                 debug_view: wire.debug_view,
                 fixture_surface_lighting: wire.fixture_surface_lighting.unwrap_or(false),
+                fixture_shadows: wire.fixture_shadows.unwrap_or(true),
                 cluster_debug: wire.cluster_debug,
                 fov: wire.fov,
                 legacy_shadow_eye: None,
@@ -353,6 +360,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         // off at this compatibility boundary preserves those captured inputs;
         // every new interactive preset enables the path.
         settings.fixture_surface_lighting = wire.fixture_surface_lighting.unwrap_or(false);
+        settings.fixture_shadows = wire.fixture_shadows.unwrap_or(false);
         settings.cluster_debug = wire.cluster_debug;
         settings.legacy_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
         Ok(settings)

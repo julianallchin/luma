@@ -383,6 +383,7 @@ struct RenderLab {
     probe_rotation_deg: f32,
     probe_visible: bool,
     fixture_surface_lighting: bool,
+    fixture_shadows: bool,
     cluster_debug: bool,
     haze_enabled: bool,
     haze_density: f32,
@@ -412,6 +413,7 @@ impl RenderLab {
             probe_rotation_deg: 0.0,
             probe_visible: false,
             fixture_surface_lighting: true,
+            fixture_shadows: true,
             cluster_debug: false,
             haze_enabled: true,
             haze_density: 0.8,
@@ -468,6 +470,7 @@ enum LabToggle {
     Probe,
     ProbeVisible,
     FixtureSurfaceLighting,
+    FixtureShadows,
     ClusterDebug,
     Haze,
     Grid,
@@ -499,6 +502,7 @@ impl RenderLab {
             LabToggle::Probe => &mut self.probe_enabled,
             LabToggle::ProbeVisible => &mut self.probe_visible,
             LabToggle::FixtureSurfaceLighting => &mut self.fixture_surface_lighting,
+            LabToggle::FixtureShadows => &mut self.fixture_shadows,
             LabToggle::ClusterDebug => &mut self.cluster_debug,
             LabToggle::Haze => &mut self.haze_enabled,
             LabToggle::Grid => &mut self.grid_enabled,
@@ -1728,6 +1732,12 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
         ))
         .child(lab_toggle(
             app,
+            "Fixture shadows",
+            lab.fixture_shadows,
+            LabToggle::FixtureShadows,
+        ))
+        .child(lab_toggle(
+            app,
             "Cluster occupancy",
             lab.cluster_debug,
             LabToggle::ClusterDebug,
@@ -2040,6 +2050,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let probe_rotation_deg = state.render_lab.probe_rotation_deg;
     let probe_visible = state.render_lab.probe_visible;
     let fixture_surface_lighting = state.render_lab.fixture_surface_lighting;
+    let fixture_shadows = state.render_lab.fixture_shadows;
     let cluster_debug = state.render_lab.cluster_debug;
     let haze_enabled = state.render_lab.haze_enabled;
     let haze_density = state.render_lab.haze_density;
@@ -2146,6 +2157,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         scene.render.show_grid = grid_enabled;
                         scene.render.debug_view = debug_view;
                         scene.render.fixture_surface_lighting = fixture_surface_lighting;
+                        scene.render.fixture_shadows = fixture_shadows;
                         scene.render.cluster_debug = cluster_debug;
                         scene.selected_fixture_ids = selected_fixture_ids.clone();
                         match gpu.frame(LiveFrameInputs {

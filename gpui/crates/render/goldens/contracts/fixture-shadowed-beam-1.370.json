@@ -1,6 +1,6 @@
 {
   "schema": "luma.renderer-frame/1",
-  "image": "gobo-seam-positive-1.370.png",
+  "image": "fixture-shadowed-beam-1.370.png",
   "viewport": {
     "width": 800,
     "height": 500
@@ -13,19 +13,19 @@
   "subframes": 16,
   "timeSeconds": 1.37,
   "scene": {
-    "id": "gobo-seam-positive",
+    "id": "fixture-shadowed-beam",
     "times": [
       1.37
     ],
     "camera": {
       "position": [
-        5.5,
-        2.2,
+        4.5,
+        1.8,
         5.5
       ],
       "target": [
         0.0,
-        1.5,
+        1.0,
         0.0
       ]
     },
@@ -54,20 +54,20 @@
       "showGrid": false,
       "debugView": "pbr",
       "fixtureSurfaceLighting": false,
-      "fixtureShadows": false,
+      "fixtureShadows": true,
       "clusterDebug": false,
       "fov": 50.0
     },
     "selectedFixtureIds": [],
     "fixtures": [
       {
-        "id": "mover",
-        "fixturePath": "golden/moving-head.qxf",
+        "id": "par",
+        "fixturePath": "golden/par.qxf",
         "modeName": "Default",
         "pos": [
           0.0,
-          0.0,
-          4.0
+          -1.2,
+          3.6
         ],
         "rot": [
           0.0,
@@ -91,7 +91,23 @@
         ]
       }
     ],
-    "pieces": [],
+    "pieces": [
+      {
+        "id": "deck",
+        "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "pos": [
+          -0.2,
+          -1.2,
+          1.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 0.2
+      }
+    ],
     "state": {
       "hazer:0": {
         "dimmer": 1.0,
@@ -108,7 +124,7 @@
         "gobo": 0,
         "gobo_rotation": 0.0
       },
-      "mover:0": {
+      "par:0": {
         "dimmer": 1.0,
         "color": [
           1.0,
@@ -118,10 +134,10 @@
         "strobe": 0.0,
         "position": [
           0.0,
-          30.0
+          0.0
         ],
-        "gobo": 1,
-        "gobo_rotation": 6.2821856
+        "gobo": 0,
+        "gobo_rotation": 0.0
       }
     }
   },
@@ -147,8 +163,8 @@
         }
       }
     },
-    "golden/moving-head.qxf": {
-      "Type": "Moving Head",
+    "golden/par.qxf": {
+      "Type": "Color Changer",
       "Mode": [
         {
           "@Name": "Default",
@@ -157,14 +173,14 @@
       ],
       "Physical": {
         "Dimensions": {
-          "@Width": 302.0,
-          "@Height": 302.0,
-          "@Depth": 361.0
+          "@Width": 265.0,
+          "@Height": 245.0,
+          "@Depth": 115.0
         },
         "Layout": null,
         "Lens": {
-          "@DegreesMin": 11.0,
-          "@DegreesMax": 58.0
+          "@DegreesMin": 40.0,
+          "@DegreesMax": 40.0
         }
       }
     }

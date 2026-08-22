@@ -138,6 +138,7 @@ pub struct DirectionalLight {
 /// recognise them uploads each mip chain once instead of once a frame. Without
 /// it the only way to know two frames mean the same texture is to compare the
 /// bytes.
+#[derive(Clone)]
 pub struct Texture {
     /// `"<asset>#img<n>"` — stable for as long as the asset is.
     pub key: String,
@@ -179,6 +180,8 @@ pub struct Frame {
     pub fixture_cones: Vec<FixtureCone>,
     /// Whether fixture cones illuminate opaque surfaces as well as haze.
     pub fixture_surface_lighting: bool,
+    /// Whether opaque venue geometry casts into fixture cones and haze.
+    pub fixture_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
     pub cluster_debug: bool,
     /// Linear, the `<color attach="background">` value.
@@ -745,6 +748,7 @@ pub fn build_with(
         point_lights,
         fixture_cones,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
+        fixture_shadows: scene.render.fixture_shadows,
         cluster_debug: scene.render.cluster_debug,
         clear_color: Vec3::from(scene.render.environment.background),
         ambient: Vec3::from(scene.render.environment.ambient_color)

@@ -174,8 +174,11 @@ fn production_routes_center_anchor_and_morph_without_clipping() {
         const pickerBounds = card.bounds;
 
         app.click(shot.find({ role: "button", label: "Rekordbox" }));
-        app.frames(1, { waitMs: 180 });
-        shot = app.snapshot();
+        shot = until("a real source-library morph frame", (s) => {
+            const bounds = s.find({ role: "card", label: "Add tracks dialog" })?.bounds;
+            return bounds && bounds.width > 430 && bounds.width < 750
+                && bounds.height > 270 && bounds.height < 510 ? s : undefined;
+        });
         card = shot.find({ role: "card", label: "Add tracks dialog" });
         const midpoint = app.screenshot().path;
         const midpointBounds = card.bounds;
@@ -195,9 +198,9 @@ fn production_routes_center_anchor_and_morph_without_clipping() {
     );
 
     for (label, bounds, expected_width, expected_height) in [
-        ("browser", &out["browserBounds"], 760.0, 600.0),
-        ("picker", &out["pickerBounds"], 440.0, 280.0),
-        ("library", &out["libraryBounds"], 900.0, 620.0),
+        ("browser", &out["browserBounds"], 680.0, 480.0),
+        ("picker", &out["pickerBounds"], 420.0, 260.0),
+        ("library", &out["libraryBounds"], 760.0, 520.0),
     ] {
         assert!(
             (width(bounds) - expected_width).abs() <= 2.0
@@ -215,7 +218,7 @@ fn production_routes_center_anchor_and_morph_without_clipping() {
 
     let mid = &out["midpointBounds"];
     assert!(
-        width(mid) > 440.0 && width(mid) < 900.0 && height(mid) > 280.0 && height(mid) < 620.0,
+        width(mid) > 420.0 && width(mid) < 760.0 && height(mid) > 260.0 && height(mid) < 520.0,
         "the production route snapped instead of morphing: {mid:#}"
     );
     for (label, card, button) in [

@@ -17,7 +17,7 @@ use wgpu::util::DeviceExt;
 use crate::assets::Image;
 use crate::clusters::{ClusterCache, CLUSTER_DEPTH_SLICES, CLUSTER_TILE_SIZE};
 use crate::environment::EnvironmentSystem;
-use crate::frame::{Draw, Frame};
+use crate::frame::{Draw, FixtureCone, Frame};
 use crate::overlay::{Overlay, OverlayDepth};
 
 /// Three bounded layers cover the part of a venue in which directional
@@ -27,6 +27,11 @@ const SHADOW_SIZE: u32 = 2048;
 const CASCADE_COUNT: usize = 3;
 const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
 const CASCADE_BLEND: f32 = 0.1;
+/// Spotlight shadows are deliberately numerous and compact. A 256² layer is
+/// enough for the soft-edged occluders visible inside haze, while 128 layers
+/// cost 32 MiB instead of multiplying the directional cascade allocation.
+const FIXTURE_SHADOW_SIZE: u32 = 256;
+const MAX_FIXTURE_SHADOWS: usize = 128;
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -83,6 +88,8 @@ struct HazeUniform {
     transport: [f32; 4],
     tiles: [f32; 4],
     depth: [f32; 4],
+    /// x: shadowed fixture count, y: shadow texel size.
+    shadow: [f32; 4],
 }
 
 #[repr(C)]
@@ -119,6 +126,20 @@ struct SurfaceClusterUniform {
     grid: [u32; 4],
     /// x/y: near/far, z: surface lighting enabled, w: occupancy debug.
     depth_and_flags: [f32; 4],
+    /// x: shadowed fixture count, y: shadow texel size.
+    shadow: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct FixtureShadowMatrix {
+    view_proj: [[f32; 4]; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FixtureShadowCacheKey {
+    matrix_bits: [u32; 16],
+    caster_hash: u64,
 }
 
 #[repr(C)]
@@ -275,6 +296,9 @@ pub struct Renderer {
     overlay_pipelines: [wgpu::RenderPipeline; 8],
     shadow_map: wgpu::TextureView,
     shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
+    fixture_shadow_map: wgpu::TextureView,
+    fixture_shadow_layers: Vec<wgpu::TextureView>,
+    fixture_shadow_cache: Vec<Option<FixtureShadowCacheKey>>,
     hard_shadow_sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
     dummy_shadow: wgpu::TextureView,
@@ -478,6 +502,7 @@ struct PendingProfile {
     timestamp_period_ns: f32,
     cpu_encode_submit: Duration,
     cpu_cluster: Duration,
+    strict_timestamps: bool,
 }
 
 pub(crate) struct CompletedReadback {
@@ -599,6 +624,9 @@ impl Renderer {
                 storage_entry(2, wgpu::ShaderStages::FRAGMENT),
                 storage_entry(3, wgpu::ShaderStages::FRAGMENT),
                 uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(5, wgpu::ShaderStages::FRAGMENT),
+                depth_array_entry(6, wgpu::ShaderStages::FRAGMENT),
+                comparison_sampler_entry(7, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -640,6 +668,9 @@ impl Renderer {
                 },
                 storage_entry(4, wgpu::ShaderStages::FRAGMENT),
                 storage_entry(5, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(6, wgpu::ShaderStages::FRAGMENT),
+                depth_array_entry(7, wgpu::ShaderStages::FRAGMENT),
+                comparison_sampler_entry(8, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -1014,6 +1045,8 @@ impl Renderer {
             "shadow-cascades",
         );
         let (dummy_shadow, _) = shadow_texture_array(&device, 1, 1, 1, "shadow-placeholder");
+        let (fixture_shadow_map, fixture_shadow_layers) =
+            fixture_shadow_texture_array(&device, MAX_FIXTURE_SHADOWS as u32);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -1103,6 +1136,9 @@ impl Renderer {
             overlay_pipelines,
             shadow_map,
             shadow_layers,
+            fixture_shadow_map,
+            fixture_shadow_layers,
+            fixture_shadow_cache: vec![None; MAX_FIXTURE_SHADOWS],
             hard_shadow_sampler,
             shadow_sampler,
             dummy_shadow,
@@ -1373,7 +1409,7 @@ impl Renderer {
         slot: usize,
         measure: bool,
     ) -> PendingReadback {
-        self.submit_readback(
+        let mut pending = self.submit_readback(
             frame,
             width,
             height,
@@ -1382,7 +1418,15 @@ impl Renderer {
             slot,
             true,
             measure,
-        )
+        );
+        // Profiling is diagnostic in the interactive viewport. A driver may
+        // occasionally return an incomplete timestamp set while several GPU
+        // test/device streams are active; that must not discard an otherwise
+        // valid rendered frame. The dedicated profiler remains strict.
+        if let Some(profile) = &mut pending.profile {
+            profile.strict_timestamps = false;
+        }
+        pending
     }
 
     pub(crate) fn poll_live(&self) -> anyhow::Result<()> {
@@ -1475,6 +1519,18 @@ impl Renderer {
                 wash: light.wash.clamp(0.0, 1.0),
                 gobo: light.gobo.min(2) as f32,
                 gobo_rotation: light.gobo_rotation.rem_euclid(std::f32::consts::TAU),
+            })
+            .collect();
+        let fixture_shadow_count = if frame.fixture_shadows {
+            fixture_cones.len().min(MAX_FIXTURE_SHADOWS)
+        } else {
+            0
+        };
+        let fixture_shadow_matrices: Vec<FixtureShadowMatrix> = fixture_cones
+            .iter()
+            .take(fixture_shadow_count)
+            .map(|light| FixtureShadowMatrix {
+                view_proj: fixture_shadow_matrix(light).to_cols_array_2d(),
             })
             .collect();
         let cluster_started = Instant::now();
@@ -1719,6 +1775,11 @@ impl Renderer {
             wgpu::BufferUsages::STORAGE,
             "light-rest",
         );
+        let fixture_shadow_matrix_buf = self.storage(
+            &pad_at_least_one(fixture_shadow_matrices.clone()),
+            wgpu::BufferUsages::STORAGE,
+            "fixture-shadow-matrices",
+        );
         let cluster_gpu = self.cluster_gpu.as_ref().expect("cluster cache populated");
         let cluster_uniform = self.storage(
             &[SurfaceClusterUniform {
@@ -1734,6 +1795,12 @@ impl Renderer {
                     f32::from(u8::from(frame.fixture_surface_lighting)),
                     f32::from(u8::from(frame.cluster_debug)),
                 ],
+                shadow: [
+                    fixture_shadow_count as f32,
+                    1.0 / FIXTURE_SHADOW_SIZE as f32,
+                    0.0,
+                    0.0,
+                ],
             }],
             wgpu::BufferUsages::UNIFORM,
             "surface-cluster-uniform",
@@ -1747,6 +1814,26 @@ impl Renderer {
                 binding(2, cluster_gpu.headers.as_entire_binding()),
                 binding(3, cluster_gpu.indices.as_entire_binding()),
                 binding(4, cluster_uniform.as_entire_binding()),
+                binding(5, fixture_shadow_matrix_buf.as_entire_binding()),
+                binding(
+                    6,
+                    wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
+                ),
+                binding(7, wgpu::BindingResource::Sampler(&self.shadow_sampler)),
+            ],
+        });
+        let shadow_cluster_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("surface-clusters-shadow-pass"),
+            layout: &self.cluster_layout,
+            entries: &[
+                binding(0, core_buf.as_entire_binding()),
+                binding(1, rest_buf.as_entire_binding()),
+                binding(2, cluster_gpu.headers.as_entire_binding()),
+                binding(3, cluster_gpu.indices.as_entire_binding()),
+                binding(4, cluster_uniform.as_entire_binding()),
+                binding(5, fixture_shadow_matrix_buf.as_entire_binding()),
+                binding(6, wgpu::BindingResource::TextureView(&self.dummy_shadow)),
+                binding(7, wgpu::BindingResource::Sampler(&self.shadow_sampler)),
             ],
         });
         let overlay_buf = self.storage(
@@ -1778,6 +1865,22 @@ impl Renderer {
                     &[shadow_globals],
                     wgpu::BufferUsages::UNIFORM,
                     "shadow-globals",
+                );
+                (
+                    buffer.clone(),
+                    self.scene_bind_group(&buffer, &instance_buf, &point_buf, false, false),
+                )
+            })
+            .collect();
+        let fixture_shadow_bgs: Vec<_> = fixture_shadow_matrices
+            .iter()
+            .map(|matrix| {
+                let mut shadow_globals = globals;
+                shadow_globals.light_view_proj[0] = matrix.view_proj;
+                let buffer = self.storage(
+                    &[shadow_globals],
+                    wgpu::BufferUsages::UNIFORM,
+                    "fixture-shadow-globals",
                 );
                 (
                     buffer.clone(),
@@ -1861,13 +1964,39 @@ impl Renderer {
 
         {
             let opaque = frame.draws.len() - frame.grid_draws;
-            let draw_range = |pass: &mut wgpu::RenderPass, range: std::ops::Range<usize>| {
+            let caster_hash = fixture_shadow_caster_hash(frame, opaque);
+            let fixture_shadow_keys: Vec<_> = fixture_shadow_matrices
+                .iter()
+                .map(|matrix| FixtureShadowCacheKey {
+                    matrix_bits: fixture_shadow_matrix_bits(matrix),
+                    caster_hash,
+                })
+                .collect();
+            let fixture_shadow_dirty: Vec<_> = fixture_shadow_keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| self.fixture_shadow_cache[index] != Some(*key))
+                .collect();
+            let has_fixture_shadow_pass = fixture_shadow_count > 0
+                && opaque > 0
+                && fixture_shadow_dirty.iter().any(|dirty| *dirty);
+            let draw_range = |pass: &mut wgpu::RenderPass,
+                              range: std::ops::Range<usize>,
+                              include_fixture_models: bool| {
                 pass.set_vertex_buffer(0, vertex_buf.slice(..));
                 pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 let mut bound: Option<usize> = None;
                 pass.set_bind_group(1, &self.white_material, &[]);
                 for i in range {
                     let draw = &frame.draws[i];
+                    if !include_fixture_models
+                        && matches!(
+                            &draw.editor_object,
+                            Some(crate::frame::EditorObject::Fixture(_))
+                        )
+                    {
+                        continue;
+                    }
                     if bound != Some(i) {
                         bound = Some(i);
                         pass.set_bind_group(1, &materials[i], &[]);
@@ -1877,13 +2006,55 @@ impl Renderer {
                 }
             };
 
+            if has_fixture_shadow_pass {
+                for (shadow, layer) in self
+                    .fixture_shadow_layers
+                    .iter()
+                    .take(fixture_shadow_count)
+                    .enumerate()
+                {
+                    if !fixture_shadow_dirty[shadow] {
+                        continue;
+                    }
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("fixture-shadow"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(depth_attachment(layer)),
+                        timestamp_writes: (shadow == 0)
+                            .then(|| {
+                                profile.as_ref().map(|(queries, ..)| {
+                                    wgpu::RenderPassTimestampWrites {
+                                        query_set: queries,
+                                        beginning_of_pass_write_index: Some(0),
+                                        end_of_pass_write_index: None,
+                                    }
+                                })
+                            })
+                            .flatten(),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&self.shadow_pipeline);
+                    pass.set_bind_group(0, &fixture_shadow_bgs[shadow].1, &[]);
+                    pass.set_bind_group(2, &environment_bg, &[]);
+                    pass.set_bind_group(3, &shadow_cluster_bg, &[]);
+                    // A luminaire's body sits at the apex of its own cone and
+                    // would otherwise shadow every sample. Fixture models are
+                    // editor geometry, not venue occluders; stage pieces still
+                    // cast normally into every cone.
+                    draw_range(&mut pass, 0..opaque, false);
+                }
+                for (index, key) in fixture_shadow_keys.into_iter().enumerate() {
+                    self.fixture_shadow_cache[index] = Some(key);
+                }
+            }
+
             if frame.directional.is_some_and(|light| light.shadows) {
                 for (cascade, layer) in self.shadow_layers.iter().enumerate() {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("shadow-cascade"),
                         color_attachments: &[],
                         depth_stencil_attachment: Some(depth_attachment(layer)),
-                        timestamp_writes: (cascade == 0)
+                        timestamp_writes: (cascade == 0 && !has_fixture_shadow_pass)
                             .then(|| {
                                 profile.as_ref().map(|(queries, ..)| {
                                     wgpu::RenderPassTimestampWrites {
@@ -1900,7 +2071,7 @@ impl Renderer {
                     pass.set_bind_group(0, &shadow_bgs[cascade].1, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
                     pass.set_bind_group(3, &cluster_bg, &[]);
-                    draw_range(&mut pass, 0..opaque);
+                    draw_range(&mut pass, 0..opaque, true);
                 }
             }
 
@@ -1910,13 +2081,13 @@ impl Renderer {
                     color_attachments: &[],
                     depth_stencil_attachment: Some(depth_attachment(&depth_view)),
                     timestamp_writes: profile.as_ref().and_then(|(queries, ..)| {
-                        (!frame.directional.is_some_and(|light| light.shadows)).then_some(
-                            wgpu::RenderPassTimestampWrites {
-                                query_set: queries,
-                                beginning_of_pass_write_index: Some(0),
-                                end_of_pass_write_index: None,
-                            },
-                        )
+                        (!has_fixture_shadow_pass
+                            && !frame.directional.is_some_and(|light| light.shadows))
+                        .then_some(wgpu::RenderPassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: Some(0),
+                            end_of_pass_write_index: None,
+                        })
                     }),
                     ..Default::default()
                 });
@@ -1924,7 +2095,7 @@ impl Renderer {
                 pass.set_bind_group(0, &unlit_bg, &[]);
                 pass.set_bind_group(2, &environment_bg, &[]);
                 pass.set_bind_group(3, &cluster_bg, &[]);
-                draw_range(&mut pass, 0..opaque);
+                draw_range(&mut pass, 0..opaque, true);
             }
 
             {
@@ -1951,10 +2122,10 @@ impl Renderer {
                 pass.set_bind_group(0, &lit_bg, &[]);
                 pass.set_bind_group(2, &environment_bg, &[]);
                 pass.set_bind_group(3, &cluster_bg, &[]);
-                draw_range(&mut pass, 0..opaque);
+                draw_range(&mut pass, 0..opaque, true);
                 if frame.grid_draws > 0 {
                     pass.set_pipeline(&self.grid_pipeline);
-                    draw_range(&mut pass, opaque..frame.draws.len());
+                    draw_range(&mut pass, opaque..frame.draws.len(), true);
                 }
             }
         }
@@ -2023,6 +2194,12 @@ impl Renderer {
                     0.0,
                 ],
                 depth: [CAMERA_NEAR, CAMERA_FAR, 0.0, 0.0],
+                shadow: [
+                    fixture_shadow_count as f32,
+                    1.0 / FIXTURE_SHADOW_SIZE as f32,
+                    0.0,
+                    0.0,
+                ],
             };
             let haze_buf = self.storage(&[uniform], wgpu::BufferUsages::UNIFORM, "haze");
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2035,6 +2212,12 @@ impl Renderer {
                     binding(3, wgpu::BindingResource::TextureView(&depth_view)),
                     binding(4, tile_header_buf.as_entire_binding()),
                     binding(5, tile_index_buf.as_entire_binding()),
+                    binding(6, fixture_shadow_matrix_buf.as_entire_binding()),
+                    binding(
+                        7,
+                        wgpu::BindingResource::TextureView(&self.fixture_shadow_map),
+                    ),
+                    binding(8, wgpu::BindingResource::Sampler(&self.shadow_sampler)),
                 ],
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2274,6 +2457,7 @@ impl Renderer {
                 timestamp_period_ns,
                 cpu_encode_submit,
                 cpu_cluster,
+                strict_timestamps: true,
             }
         });
         PendingReadback {
@@ -2498,18 +2682,20 @@ mod tests {
 
     use super::{
         cascade_matrices, downsample, haze_tile_key, haze_tiles, Channels, CompositeUniform,
-        Globals, HazeUniform, LightCore, LightRest, Renderer, TextureEncoding, TileHeader,
-        CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, CLUSTER_DEPTH_SLICES, CLUSTER_TILE_SIZE,
-        HAZE_TILE_SIZE, SHADOW_SIZE,
+        FixtureShadowMatrix, Globals, HazeUniform, LightCore, LightRest, Renderer,
+        SurfaceClusterUniform, TextureEncoding, TileHeader, CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT,
+        CLUSTER_DEPTH_SLICES, CLUSTER_TILE_SIZE, HAZE_TILE_SIZE, SHADOW_SIZE,
     };
 
     #[test]
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
         assert_eq!(std::mem::size_of::<Globals>(), 368);
-        assert_eq!(std::mem::size_of::<HazeUniform>(), 160);
+        assert_eq!(std::mem::size_of::<HazeUniform>(), 176);
         assert_eq!(std::mem::size_of::<CompositeUniform>(), 96);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 48);
+        assert_eq!(std::mem::size_of::<FixtureShadowMatrix>(), 64);
+        assert_eq!(std::mem::size_of::<SurfaceClusterUniform>(), 48);
         assert_eq!(std::mem::size_of::<TileHeader>(), 16);
     }
 
@@ -2814,6 +3000,85 @@ mod tests {
     }
 
     #[test]
+    fn fixture_geometry_casts_a_shadow_through_the_volumetric_integral() -> anyhow::Result<()> {
+        let mut renderer = Renderer::new()?;
+        let mut frame = fixture_surface_frame(1);
+        frame.fixture_cones[0].position = Vec3::new(0.0, 0.0, 3.0);
+        frame.draws.push(Draw {
+            mesh: 0,
+            model: Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0))
+                * Mat4::from_scale(Vec3::new(0.09, 0.09, 0.09)),
+            material: Material {
+                base_color: Vec3::splat(0.08),
+                roughness: 0.8,
+                ..Material::default()
+            },
+            textures: MaterialTextures::default(),
+            editor_object: None,
+        });
+        frame.camera = Camera {
+            eye: Vec3::new(3.8, -6.0, 3.2),
+            target: Vec3::new(0.0, 0.0, 1.35),
+            fov_y_deg: 45.0,
+        };
+        frame.ambient = Vec3::ZERO;
+        frame.haze_steps = 8;
+        frame.haze_resolution = 1.0;
+        let occluder_ndc = super::fixture_shadow_matrix(&frame.fixture_cones[0])
+            .project_point3(Vec3::new(0.0, 0.0, 2.0));
+        assert!(
+            occluder_ndc.x.abs() < 1.0
+                && occluder_ndc.y.abs() < 1.0
+                && (0.0..=1.0).contains(&occluder_ndc.z),
+            "the shadow contract's occluder must remain inside the fixture projection: {occluder_ndc:?}"
+        );
+
+        frame.haze_density = 0.0;
+        frame.fixture_surface_lighting = true;
+        frame.fixture_shadows = false;
+        let surface_open = renderer.render(&frame, 320, 240, 1)?;
+        frame.fixture_shadows = true;
+        let surface_shadowed = renderer.render(&frame, 320, 240, 1)?;
+        let surface_changed = surface_open
+            .chunks_exact(4)
+            .zip(surface_shadowed.chunks_exact(4))
+            .filter(|(left, right)| left[..3] != right[..3])
+            .count();
+        assert!(
+            surface_changed > 300,
+            "the fixture shadow map did not alter a lit surface: {surface_changed} pixels"
+        );
+
+        frame.haze_density = 0.8;
+        frame.fixture_surface_lighting = false;
+        frame.fixture_shadows = false;
+        let open = renderer.render(&frame, 320, 240, 2)?;
+        frame.fixture_shadows = true;
+        let shadowed = renderer.render(&frame, 320, 240, 2)?;
+
+        let changed = open
+            .chunks_exact(4)
+            .zip(shadowed.chunks_exact(4))
+            .filter(|(left, right)| left[..3] != right[..3])
+            .count();
+        let energy = |pixels: &[u8]| {
+            pixels
+                .chunks_exact(4)
+                .map(|pixel| u64::from(pixel[0]) + u64::from(pixel[1]) + u64::from(pixel[2]))
+                .sum::<u64>()
+        };
+        assert!(
+            changed > 300,
+            "the fixture shadow map did not alter a visible volume: {changed} pixels"
+        );
+        assert!(
+            energy(&shadowed) < energy(&open),
+            "shadow visibility added energy instead of removing in-scatter"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn cluster_gpu_cache_reuses_topology_for_shading_only_changes() -> anyhow::Result<()> {
         let mut renderer = Renderer::new()?;
         let mut frame = fixture_surface_frame(32);
@@ -2929,6 +3194,7 @@ mod tests {
             point_lights: Vec::new(),
             fixture_cones,
             fixture_surface_lighting: true,
+            fixture_shadows: true,
             cluster_debug: false,
             clear_color: Vec3::ZERO,
             ambient: Vec3::splat(0.002),
@@ -3019,6 +3285,7 @@ mod tests {
             point_lights: Vec::new(),
             fixture_cones: Vec::new(),
             fixture_surface_lighting: false,
+            fixture_shadows: true,
             cluster_debug: false,
             environment: None,
             clear_color: scene_radiance,
@@ -3128,17 +3395,23 @@ impl PendingReadback {
             }
             drop(view);
             profile.readback.unmap();
-            anyhow::ensure!(
-                timestamps.windows(2).all(|pair| pair[0] <= pair[1]),
-                "non-monotonic GPU pass timestamps: {timestamps:?}"
-            );
-            let milliseconds = f64::from(profile.timestamp_period_ns) / 1_000_000.0;
-            Some(FrameTimings {
-                gpu_total_ms: (timestamps[3] - timestamps[0]) as f64 * milliseconds,
-                gpu_volumetric_ms: (timestamps[2] - timestamps[1]) as f64 * milliseconds,
-                cpu_encode_submit_ms: profile.cpu_encode_submit.as_secs_f64() * 1000.0,
-                cpu_cluster_ms: profile.cpu_cluster.as_secs_f64() * 1000.0,
-            })
+            let timestamps_valid =
+                timestamps[0] > 0 && timestamps.windows(2).all(|pair| pair[0] <= pair[1]);
+            if !timestamps_valid {
+                anyhow::ensure!(
+                    !profile.strict_timestamps,
+                    "non-monotonic GPU pass timestamps: {timestamps:?}"
+                );
+                None
+            } else {
+                let milliseconds = f64::from(profile.timestamp_period_ns) / 1_000_000.0;
+                Some(FrameTimings {
+                    gpu_total_ms: (timestamps[3] - timestamps[0]) as f64 * milliseconds,
+                    gpu_volumetric_ms: (timestamps[2] - timestamps[1]) as f64 * milliseconds,
+                    cpu_encode_submit_ms: profile.cpu_encode_submit.as_secs_f64() * 1000.0,
+                    cpu_cluster_ms: profile.cpu_cluster.as_secs_f64() * 1000.0,
+                })
+            }
         } else {
             None
         };
@@ -3411,6 +3684,54 @@ fn shader(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
 /// Each slice uses a quantized bounding sphere instead of a tight AABB. Camera
 /// translation then changes only the snapped light-space centre; small camera
 /// rotations cannot resize the projection and make every shadow texel swim.
+fn fixture_shadow_matrix(light: &FixtureCone) -> Mat4 {
+    let direction = light.direction.try_normalize().unwrap_or(Vec3::NEG_Y);
+    let up = if direction.dot(Vec3::Z).abs() > 0.95 {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    let view = Mat4::look_at_rh(light.position, light.position + direction, up);
+    let field = (2.0 * light.cos_field.clamp(-0.98, 0.9999).acos())
+        .clamp(1.0_f32.to_radians(), 170.0_f32.to_radians());
+    let far = light.range.clamp(0.05, 100.0);
+    let near = (far * 0.0025).clamp(0.01, 0.1).min(far * 0.5);
+    // Reverse-Z, matching every other depth target in this renderer.
+    Mat4::perspective_rh(field, 1.0, far, near) * view
+}
+
+fn fixture_shadow_matrix_bits(matrix: &FixtureShadowMatrix) -> [u32; 16] {
+    let mut bits = [0; 16];
+    for (target, value) in bits.iter_mut().zip(matrix.view_proj.iter().flatten()) {
+        *target = value.to_bits();
+    }
+    bits
+}
+
+fn fixture_shadow_caster_hash(frame: &Frame, opaque: usize) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut push_byte = |byte: u8| {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    };
+    for draw in frame.draws.iter().take(opaque) {
+        if matches!(
+            &draw.editor_object,
+            Some(crate::frame::EditorObject::Fixture(_))
+        ) {
+            continue;
+        }
+        for byte in frame.meshes[draw.mesh].key.as_bytes() {
+            push_byte(*byte);
+        }
+        for value in draw.model.to_cols_array() {
+            for byte in value.to_bits().to_le_bytes() {
+                push_byte(byte);
+            }
+        }
+    }
+    hash
+}
+
 fn cascade_matrices(
     eye: Vec3,
     forward: Vec3,
@@ -3601,6 +3922,45 @@ fn shadow_texture_array(
     (array, render_layers)
 }
 
+fn fixture_shadow_texture_array(
+    device: &wgpu::Device,
+    layers: u32,
+) -> (wgpu::TextureView, Vec<wgpu::TextureView>) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("fixture-shadow-atlas"),
+        size: wgpu::Extent3d {
+            width: FIXTURE_SHADOW_SIZE,
+            height: FIXTURE_SHADOW_SIZE,
+            depth_or_array_layers: layers,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let array = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("fixture-shadow-atlas"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        base_array_layer: 0,
+        array_layer_count: Some(layers),
+        ..Default::default()
+    });
+    let render_layers = (0..layers)
+        .map(|layer| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("fixture-shadow-layer"),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        })
+        .collect();
+    (array, render_layers)
+}
+
 fn binding(index: u32, resource: wgpu::BindingResource) -> wgpu::BindGroupEntry {
     wgpu::BindGroupEntry {
         binding: index,
@@ -3630,6 +3990,31 @@ fn storage_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
             has_dynamic_offset: false,
             min_binding_size: None,
         },
+        count: None,
+    }
+}
+
+fn depth_array_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Depth,
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn comparison_sampler_entry(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
         count: None,
     }
 }

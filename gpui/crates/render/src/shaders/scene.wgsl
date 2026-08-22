@@ -134,6 +134,35 @@ fn occupancy_color(count: u32) -> vec3<f32> {
     return mix(vec3<f32>(0.0, 0.25, 0.9), vec3<f32>(1.0, 0.12, 0.0), t);
 }
 
+fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u32) -> f32 {
+    if f32(light_index) >= surface_clusters.shadow.x {
+        return 1.0;
+    }
+    let clip = fixture_shadow_matrices[light_index].view_proj
+        * vec4<f32>(world + normal * 0.006, 1.0);
+    let ndc = clip.xyz / clip.w;
+    if ndc.z < 0.0 || ndc.z > 1.0 {
+        return 1.0;
+    }
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+        return 1.0;
+    }
+    var visible = 0.0;
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            visible += textureSampleCompareLevel(
+                fixture_shadow_map,
+                fixture_shadow_sampler,
+                uv + vec2<f32>(f32(x), f32(y)) * surface_clusters.shadow.y,
+                i32(light_index),
+                ndc.z + 0.0015,
+            );
+        }
+    }
+    return visible / 9.0;
+}
+
 fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
     let c = cos(environment_params.rotation);
     let s = sin(environment_params.rotation);
@@ -358,7 +387,8 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
                 continue;
             }
             let profile = angular * aperture * distance_attenuation(distance, core.range);
-            let irradiance = dot_nl * rest.color * rest.intensity * profile;
+            let visibility = fixture_shadow_visibility(in.world, n, light_index);
+            let irradiance = dot_nl * rest.color * rest.intensity * profile * visibility;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness);
         }
