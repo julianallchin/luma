@@ -43,12 +43,12 @@
 //! [`coords::three_from_world`].
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 use gpui::{
     canvas, div, prelude::*, px, AnyElement, Bounds, Context, Corners, DispatchPhase, Div, Entity,
     Hitbox, HitboxBehavior, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -57,8 +57,18 @@ use gpui::{
 use luma_lib::models::fixtures::FixtureDefinition;
 use luma_lib::models::stage::StagePiece;
 use luma_lib::models::universe::UniverseState;
-use luma_render::{assets, build_frame_with, coords, scene_desc, AsyncViewport, FrameTimings};
-use luma_scene::Camera;
+use luma_render::{
+    assets, build_frame_with, coords,
+    frame::{EditorObject, MeshData},
+    overlay::{Overlay, OverlayDepth},
+    scene_desc, AsyncViewport, FrameTimings, SubmitOutcome,
+};
+use luma_scene::{
+    apply_rotation, apply_translation, bvh::MeshSource, hit_test_gizmo, selection_pivot,
+    snap_angle_15, Camera, ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, GizmoHandle, GizmoMode,
+    Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, ObjectKind, PivotMode, SceneGraph,
+    Selection, SelectionTarget, Transform, TransformTarget, TriMesh,
+};
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{ladder, Enabled};
 
@@ -97,6 +107,168 @@ enum Drag {
     Dolly,
 }
 
+/// CPU geometry and authored provenance for one submitted render frame.
+/// It is immutable after submission and only becomes interactive when the
+/// presentation carrying the same serial becomes the displayed image.
+struct PickSnapshot {
+    camera: Camera,
+    graph: SceneGraph,
+    meshes: Vec<Arc<TriMesh>>,
+    objects: Vec<Option<(EditorObject, SelectionTarget)>>,
+    canonical: HashMap<EditorObject, SelectionTarget>,
+    ordered: Vec<SelectionTarget>,
+    anchors: HashMap<SelectionTarget, Vec3>,
+}
+
+impl MeshSource for PickSnapshot {
+    fn mesh(&self, handle: MeshHandle) -> Option<&TriMesh> {
+        self.meshes.get(handle.0 as usize).map(AsRef::as_ref)
+    }
+}
+
+impl PickSnapshot {
+    fn from_frame(
+        frame: &luma_render::Frame,
+        scene: &scene_desc::Scene,
+        camera: Camera,
+        cache: &mut HashMap<String, Arc<TriMesh>>,
+    ) -> Self {
+        let meshes = frame
+            .meshes
+            .iter()
+            .map(|mesh| {
+                Arc::clone(cache.entry(mesh.key.clone()).or_insert_with(|| {
+                    Arc::new(TriMesh::new(
+                        mesh.vertices
+                            .iter()
+                            .map(|vertex| Vec3::from(vertex.position))
+                            .collect(),
+                        mesh.indices
+                            .chunks_exact(3)
+                            .map(|tri| [tri[0], tri[1], tri[2]])
+                            .collect(),
+                    ))
+                }))
+            })
+            .collect();
+        let mut graph = SceneGraph::new();
+        let mut objects = Vec::new();
+        let mut canonical = HashMap::new();
+        let mut anchors = HashMap::new();
+        let mut ordered = Vec::new();
+        for draw in &frame.draws[..frame.draws.len().saturating_sub(frame.grid_draws)] {
+            let Some(object) = draw.editor_object.clone() else {
+                continue;
+            };
+            let (scale, rotation, translation) = draw.model.to_scale_rotation_translation();
+            let node = graph.insert(
+                None,
+                Transform {
+                    translation,
+                    rotation,
+                    scale,
+                },
+                NodeContent::Mesh {
+                    mesh: MeshHandle(draw.mesh as u32),
+                    material: MaterialHandle(0),
+                },
+                NodeFlags::DEFAULT,
+            );
+            let kind = match object {
+                EditorObject::Fixture(_) => ObjectKind::Fixture,
+                EditorObject::StagePiece(_) => ObjectKind::StagePiece,
+            };
+            let canonical_target = *canonical.entry(object.clone()).or_insert_with(|| {
+                let target = SelectionTarget::new(kind, node);
+                ordered.push(target);
+                target
+            });
+            if canonical_target.node == node {
+                anchors.insert(
+                    canonical_target,
+                    object_pose(scene, &object).map_or(translation, |pose| pose.anchor),
+                );
+            }
+            if objects.len() <= node.0 as usize {
+                objects.resize(node.0 as usize + 1, None);
+            }
+            objects[node.0 as usize] = Some((object, canonical_target));
+        }
+        graph.update_world_transforms();
+        Self {
+            camera,
+            graph,
+            meshes,
+            objects,
+            canonical,
+            ordered,
+            anchors,
+        }
+    }
+
+    fn ray(&self, at: Vec2, viewport: Vec2) -> luma_scene::Ray {
+        let ndc = Vec2::new(
+            at.x / viewport.x.max(1.0) * 2.0 - 1.0,
+            1.0 - at.y / viewport.y.max(1.0) * 2.0,
+        );
+        self.camera.ray(ndc, viewport.x / viewport.y.max(1.0))
+    }
+
+    fn pick(&self, at: Vec2, viewport: Vec2) -> Option<SelectionTarget> {
+        self.graph
+            .raycast(self.ray(at, viewport), Default::default(), self)
+            .into_iter()
+            .find_map(|hit| self.objects.get(hit.node.0 as usize)?.as_ref().map(|v| v.1))
+    }
+
+    fn object(&self, target: SelectionTarget) -> Option<&EditorObject> {
+        self.canonical
+            .iter()
+            .find_map(|(object, candidate)| (*candidate == target).then_some(object))
+    }
+
+    fn marquee(&self, marquee: Marquee, viewport: Vec2) -> Vec<SelectionTarget> {
+        self.ordered
+            .iter()
+            .filter(|target| {
+                self.anchors
+                    .get(target)
+                    .is_some_and(|anchor| marquee.contains_world(&self.camera, viewport, *anchor))
+            })
+            .copied()
+            .collect()
+    }
+}
+
+struct SerialPairing<T> {
+    pending: BTreeMap<u64, T>,
+}
+
+impl<T> Default for SerialPairing<T> {
+    fn default() -> Self {
+        Self {
+            pending: BTreeMap::new(),
+        }
+    }
+}
+
+impl<T> SerialPairing<T> {
+    fn submitted(&mut self, serial: u64, snapshot: T, outcome: SubmitOutcome) {
+        if let SubmitOutcome::Replaced { dropped_serial } = outcome {
+            self.pending.remove(&dropped_serial);
+        }
+        self.pending.insert(serial, snapshot);
+    }
+
+    fn presented(&mut self, serial: u64) -> Option<T> {
+        let snapshot = self.pending.remove(&serial);
+        self.pending.retain(|candidate, _| *candidate > serial);
+        snapshot
+    }
+}
+
+type PickTimeline = SerialPairing<PickSnapshot>;
+
 impl Drag {
     /// three's `OrbitControls` defaults: LEFT rotate, MIDDLE dolly, RIGHT pan.
     fn of(button: MouseButton) -> Option<Self> {
@@ -134,10 +306,14 @@ pub(crate) struct Visualizer {
     /// The button held, and where the pointer last was — `MouseMoveEvent`
     /// carries no delta.
     drag: Option<(Drag, Point<Pixels>)>,
+    editor_drag: Option<EditorDrag>,
+    selection: Selection,
+    gizmo_mode: GizmoMode,
     /// The element's size as the last frame laid it out. Three's orbit rates
     /// are all per element *height*, and a rate needs the height a frame
     /// earlier than prepaint can supply it.
     size: gpui::Size<Pixels>,
+    viewport_origin: Point<Pixels>,
     render_lab: RenderLab,
     stage: Rc<RefCell<Stage>>,
 }
@@ -156,6 +332,8 @@ struct Stage {
     /// is on screen: gpui caches sprite-atlas entries by image id, and
     /// dropping the current one would leave the view blank for a frame.
     previous: Option<Arc<RenderImage>>,
+    /// Hit-test world paired to `previous` by AsyncViewport serial.
+    displayed_pick: Option<PickSnapshot>,
     /// Why the last frame did not draw. Written by the paint closure, which
     /// has no screen to put a message on, and read by the next `render`, which
     /// does — a viewport that failed silently is a black rectangle with no
@@ -169,6 +347,20 @@ struct Stage {
     last_gpu_ms: Option<f32>,
     /// Cold cluster rebuild time; zero on topology cache hits.
     last_cluster_ms: Option<f32>,
+}
+
+enum EditorDrag {
+    ClickOrbit {
+        gesture: ClickOrbit,
+        shift: bool,
+        start: Vec2,
+    },
+    Marquee(Marquee),
+    Gizmo {
+        handle: GizmoHandle,
+        start: Vec2,
+        originals: Vec<(EditorObject, Vec3, Quat)>,
+    },
 }
 
 /// Runtime renderer controls. They belong to the viewport, not persisted venue
@@ -407,7 +599,11 @@ impl Visualizer {
             camera: Framing::default().opening_camera(),
             framing: Framing::default(),
             drag: None,
+            editor_drag: None,
+            selection: Selection::default(),
+            gizmo_mode: GizmoMode::Translate,
             size: gpui::Size::default(),
+            viewport_origin: Point::default(),
             render_lab: RenderLab::new(editor_lit),
             stage: Rc::default(),
         }
@@ -465,6 +661,8 @@ impl Visualizer {
         self.stage.borrow_mut().gpu = Some(Gpu {
             viewport: AsyncViewport::new(),
             assets: assets::Library::new(meshes_root()),
+            picks: PickTimeline::default(),
+            pick_meshes: HashMap::new(),
         });
         true
     }
@@ -512,6 +710,243 @@ impl Visualizer {
                 self.camera.target += (right * -dx + up * dy) * (extent / height);
             }
             Drag::Dolly => self.dolly(zoom_scale(-dy)),
+        }
+    }
+
+    fn viewport_point(&self, point: Point<Pixels>) -> Vec2 {
+        Vec2::new(
+            f32::from(point.x - self.viewport_origin.x),
+            f32::from(point.y - self.viewport_origin.y),
+        )
+    }
+
+    fn viewport_size(&self) -> Vec2 {
+        Vec2::new(f32::from(self.size.width), f32::from(self.size.height))
+    }
+
+    fn editor_press(&mut self, point: Point<Pixels>, shift: bool) {
+        let at = self.viewport_point(point);
+        let viewport = self.viewport_size();
+        let stage = self.stage.borrow();
+        let Some(pick) = stage.displayed_pick.as_ref() else {
+            self.editor_drag = Some(EditorDrag::ClickOrbit {
+                gesture: ClickOrbit::new(at),
+                shift,
+                start: at,
+            });
+            return;
+        };
+        if let Some(primary) = self.selection.primary() {
+            if let Some(&pivot) = pick.anchors.get(&primary) {
+                let distance = (pick.camera.position() - pivot).length();
+                let scale = distance
+                    * (1.9 * (pick.camera.fov_y_deg.to_radians() / 2.0).tan()).min(7.0)
+                    * 0.5
+                    / 7.0;
+                if let Some(hit) = hit_test_gizmo(
+                    pick.ray(at, viewport),
+                    pivot,
+                    scale,
+                    pick.camera.position() - pivot,
+                    self.gizmo_mode,
+                ) {
+                    let originals = self
+                        .selection
+                        .selected()
+                        .iter()
+                        .filter_map(|target| {
+                            let object = pick.object(*target)?.clone();
+                            let pose = stage
+                                .scene
+                                .as_ref()
+                                .and_then(|scene| object_pose(scene, &object))?;
+                            Some((object, pose.position, pose.rotation))
+                        })
+                        .collect();
+                    self.editor_drag = Some(EditorDrag::Gizmo {
+                        handle: hit.handle,
+                        start: at,
+                        originals,
+                    });
+                    return;
+                }
+            }
+        }
+        self.editor_drag = Some(EditorDrag::ClickOrbit {
+            gesture: ClickOrbit::new(at),
+            shift,
+            start: at,
+        });
+    }
+
+    fn editor_moved(&mut self, point: Point<Pixels>) {
+        let at = self.viewport_point(point);
+        let viewport = self.viewport_size();
+        let Some(mut interaction) = self.editor_drag.take() else {
+            return;
+        };
+        match &mut interaction {
+            EditorDrag::ClickOrbit {
+                gesture,
+                shift,
+                start,
+            } => {
+                if *shift {
+                    let mut marquee = Marquee::new(*start);
+                    marquee.moved(at);
+                    if marquee.qualifies() {
+                        interaction = EditorDrag::Marquee(marquee);
+                    }
+                } else {
+                    match gesture.moved(at) {
+                        ClickOrbitUpdate::Pending => {}
+                        ClickOrbitUpdate::BeginOrbit(delta) | ClickOrbitUpdate::Orbit(delta) => {
+                            self.drag = Some((Drag::Orbit, point));
+                            self.dragged(Point::new(px(delta.x), px(delta.y)));
+                        }
+                    }
+                }
+            }
+            EditorDrag::Marquee(marquee) => marquee.moved(at),
+            EditorDrag::Gizmo {
+                handle,
+                start,
+                originals,
+            } => self.apply_gizmo(*handle, at - *start, viewport, originals),
+        }
+        self.editor_drag = Some(interaction);
+    }
+
+    fn editor_release(&mut self, point: Point<Pixels>) {
+        let at = self.viewport_point(point);
+        let viewport = self.viewport_size();
+        let Some(interaction) = self.editor_drag.take() else {
+            return;
+        };
+        let stage = self.stage.borrow();
+        let Some(pick) = stage.displayed_pick.as_ref() else {
+            return;
+        };
+        match interaction {
+            EditorDrag::ClickOrbit { gesture, shift, .. }
+                if gesture.released() == ClickOrbitRelease::Click =>
+            {
+                if let Some(target) = pick.pick(at, viewport) {
+                    self.selection.click(target, shift);
+                } else if !shift {
+                    self.selection.clear();
+                }
+            }
+            EditorDrag::Marquee(marquee) => self.selection.replace(pick.marquee(marquee, viewport)),
+            _ => {}
+        }
+        self.drag = None;
+    }
+
+    fn apply_gizmo(
+        &mut self,
+        handle: GizmoHandle,
+        pixels: Vec2,
+        viewport: Vec2,
+        originals: &[(EditorObject, Vec3, Quat)],
+    ) {
+        let mut stage = self.stage.borrow_mut();
+        let Some(camera) = stage.displayed_pick.as_ref().map(|pick| pick.camera) else {
+            return;
+        };
+        let Some(scene) = stage.scene.as_mut() else {
+            return;
+        };
+        let targets: Vec<_> = originals
+            .iter()
+            .map(|(_, position, rotation)| TransformTarget {
+                position: *position,
+                rotation: *rotation,
+                anchor: *position,
+            })
+            .collect();
+        let Some(pivot) = selection_pivot(&targets) else {
+            return;
+        };
+        let forward = (camera.target - camera.position()).normalize();
+        let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
+        let up = right.cross(forward).normalize_or(Vec3::Z);
+        let extent = 2.0
+            * (pivot - camera.position()).length()
+            * (camera.fov_y_deg.to_radians() / 2.0).tan();
+        let world_screen = (right * pixels.x - up * pixels.y) * (extent / viewport.y.max(1.0));
+        for ((object, _, _), target) in originals.iter().zip(targets) {
+            let changed = match handle {
+                GizmoHandle::TranslateAxis(axis) => {
+                    let axis = axis.vector();
+                    apply_translation(target, axis * world_screen.dot(axis))
+                }
+                GizmoHandle::TranslatePlane(normal) => {
+                    let normal = normal.vector();
+                    apply_translation(target, world_screen - normal * world_screen.dot(normal))
+                }
+                GizmoHandle::TranslateScreen => apply_translation(target, world_screen),
+                GizmoHandle::RotateAxis(axis) => apply_rotation(
+                    target,
+                    Quat::from_axis_angle(
+                        axis.vector(),
+                        snap_angle_15((pixels.x - pixels.y) * 0.01),
+                    ),
+                    pivot,
+                    PivotMode::Group,
+                ),
+                GizmoHandle::RotateScreen => apply_rotation(
+                    target,
+                    Quat::from_axis_angle(-forward, snap_angle_15((pixels.x - pixels.y) * 0.01)),
+                    pivot,
+                    PivotMode::Group,
+                ),
+            };
+            set_object_pose(scene, object, changed.position, changed.rotation);
+        }
+    }
+}
+
+fn object_pose(scene: &scene_desc::Scene, object: &EditorObject) -> Option<TransformTarget> {
+    let (pos, rot) = match object {
+        EditorObject::Fixture(id) => scene
+            .fixtures
+            .iter()
+            .find(|object| &object.id == id)
+            .map(|object| (object.pos, object.rot)),
+        EditorObject::StagePiece(id) => scene
+            .pieces
+            .iter()
+            .find(|object| &object.id == id)
+            .map(|object| (object.pos, object.rot)),
+    }?;
+    let position = Vec3::from(pos);
+    Some(TransformTarget {
+        position,
+        rotation: Quat::from_mat3(&coords::euler_xyz(rot[0], rot[1], rot[2])),
+        anchor: position,
+    })
+}
+
+fn set_object_pose(
+    scene: &mut scene_desc::Scene,
+    object: &EditorObject,
+    position: Vec3,
+    rotation: Quat,
+) {
+    let euler = coords::euler_xyz_of(Mat3::from_quat(rotation)).to_array();
+    match object {
+        EditorObject::Fixture(id) => {
+            if let Some(object) = scene.fixtures.iter_mut().find(|object| &object.id == id) {
+                object.pos = position.to_array();
+                object.rot = euler;
+            }
+        }
+        EditorObject::StagePiece(id) => {
+            if let Some(object) = scene.pieces.iter_mut().find(|object| &object.id == id) {
+                object.pos = position.to_array();
+                object.rot = euler;
+            }
         }
     }
 }
@@ -652,7 +1087,7 @@ fn scene(rig: &Rig, definitions: &BTreeMap<String, scene_desc::Definition>) -> s
             position: [0.0; 3],
             target: [0.0; 3],
         },
-        editing: false,
+        editing: true,
         // Interactive dark-stage defaults, with the haze resolution reduced
         // for the live path. Environment, sun and haze remain independent
         // controls on the renderer contract.
@@ -784,7 +1219,31 @@ fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
 struct Gpu {
     viewport: AsyncViewport,
     assets: assets::Library,
+    picks: PickTimeline,
+    /// Immutable per-asset CPU BVHs; frame snapshots only carry Arc handles.
+    pick_meshes: HashMap<String, Arc<TriMesh>>,
 }
+
+struct LiveFrameInputs<'a> {
+    scene: &'a scene_desc::Scene,
+    definitions: &'a BTreeMap<String, scene_desc::Definition>,
+    state: Option<&'a UniverseState>,
+    time: f32,
+    size: (u32, u32),
+    camera: Camera,
+    gizmo_mode: GizmoMode,
+    gizmo_pivot: Option<Vec3>,
+    generic_translate: bool,
+}
+
+struct CompletedFrame {
+    image: Arc<RenderImage>,
+    pick: PickSnapshot,
+    draw_ms: f32,
+    timings: Option<FrameTimings>,
+}
+
+type PaintedStage = Option<(Arc<RenderImage>, Option<PickSnapshot>)>;
 
 impl Gpu {
     /// Queue one frame and hand back the newest completed image, if any.
@@ -797,16 +1256,19 @@ impl Gpu {
     /// # Errors
     /// A mesh that would not load, or a readback that would not map, as a
     /// message fit to put on the screen.
-    fn frame(
-        &mut self,
-        scene: &scene_desc::Scene,
-        definitions: &BTreeMap<String, scene_desc::Definition>,
-        state: Option<&UniverseState>,
-        time: f32,
-        width: u32,
-        height: u32,
-    ) -> Result<Option<(Arc<RenderImage>, f32, Option<FrameTimings>)>, String> {
-        let frame = build_frame_with(
+    fn frame(&mut self, input: LiveFrameInputs<'_>) -> Result<Option<CompletedFrame>, String> {
+        let LiveFrameInputs {
+            scene,
+            definitions,
+            state,
+            time,
+            size: (width, height),
+            camera,
+            gizmo_mode,
+            gizmo_pivot,
+            generic_translate,
+        } = input;
+        let mut frame = build_frame_with(
             scene,
             definitions,
             &|id, head| lookup(state, id, head),
@@ -814,12 +1276,27 @@ impl Gpu {
             &mut self.assets,
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
+        if gizmo_mode == GizmoMode::Rotate {
+            install_rotation_gizmo(&mut frame, gizmo_pivot);
+        } else if generic_translate
+            || !frame
+                .overlays
+                .iter()
+                .any(|overlay| overlay.depth == OverlayDepth::Free)
+        {
+            frame
+                .overlays
+                .retain(|overlay| overlay.depth == OverlayDepth::Tested);
+            install_translation_gizmo(&mut frame, gizmo_pivot);
+        }
+        let pick = PickSnapshot::from_frame(&frame, scene, camera, &mut self.pick_meshes);
         let completed = self
             .viewport
             .take_latest()
             .transpose()
             .map_err(|error| format!("Could not render the frame: {error}"))?;
-        self.viewport.submit(frame, width, height);
+        let (serial, outcome) = self.viewport.submit_numbered(frame, width, height);
+        self.picks.submitted(serial, pick, outcome);
         let Some(presented) = completed else {
             return Ok(None);
         };
@@ -830,11 +1307,104 @@ impl Gpu {
             presented.pixels.as_ref().to_vec(),
         )
         .ok_or_else(|| "readback was not width * height * 4 bytes".to_string())?;
-        Ok(Some((
-            Arc::new(RenderImage::new([image::Frame::new(buffer)])),
+        let pick = self
+            .picks
+            .presented(presented.serial)
+            .ok_or_else(|| format!("presentation {} lost its pick snapshot", presented.serial))?;
+        Ok(Some(CompletedFrame {
+            image: Arc::new(RenderImage::new([image::Frame::new(buffer)])),
+            pick,
             draw_ms,
-            presented.timings,
-        )))
+            timings: presented.timings,
+        }))
+    }
+}
+
+fn gizmo_scale(frame: &luma_render::Frame, pivot: Vec3) -> f32 {
+    let distance = (frame.camera.eye - pivot).length();
+    distance * (1.9 * (frame.camera.fov_y_deg.to_radians() / 2.0).tan()).min(7.0) * 0.5 / 7.0
+}
+
+fn install_translation_gizmo(frame: &mut luma_render::Frame, pivot: Option<Vec3>) {
+    let Some(pivot) = pivot else { return };
+    let mesh = frame.meshes.len();
+    frame.meshes.push(MeshData {
+        key: "::gizmo-translate-segment".into(),
+        vertices: vec![
+            assets::Vertex {
+                position: [0.13, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0; 2],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+            },
+            assets::Vertex {
+                position: [1.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0; 2],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+            },
+        ]
+        .into(),
+        indices: vec![0, 1].into(),
+    });
+    let scale = gizmo_scale(frame, pivot);
+    for (rotation, color) in [
+        (Mat4::IDENTITY, Vec3::X),
+        (Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2), Vec3::Y),
+        (
+            Mat4::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+            Vec3::new(0.15, 0.35, 1.0),
+        ),
+    ] {
+        frame.overlays.push(Overlay {
+            mesh,
+            model: Mat4::from_translation(pivot) * rotation * Mat4::from_scale(Vec3::splat(scale)),
+            lines: true,
+            color,
+            opacity: 1.0,
+            depth: OverlayDepth::Free,
+        });
+    }
+}
+
+fn install_rotation_gizmo(frame: &mut luma_render::Frame, pivot: Option<Vec3>) {
+    frame
+        .overlays
+        .retain(|overlay| overlay.depth == OverlayDepth::Tested);
+    let Some(pivot) = pivot else { return };
+    const SEGMENTS: u32 = 64;
+    let mut vertices = Vec::with_capacity(SEGMENTS as usize);
+    let mut indices = Vec::with_capacity(SEGMENTS as usize * 2);
+    for i in 0..SEGMENTS {
+        let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        vertices.push(assets::Vertex {
+            position: [angle.cos() * 0.8, angle.sin() * 0.8, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0; 2],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        });
+        indices.extend([i, (i + 1) % SEGMENTS]);
+    }
+    let mesh = frame.meshes.len();
+    frame.meshes.push(MeshData {
+        key: "::gizmo-rotate-ring".into(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    });
+    let scale = gizmo_scale(frame, pivot);
+    for (rotation, color) in [
+        (Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2), Vec3::X),
+        (Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2), Vec3::Y),
+        (Mat4::IDENTITY, Vec3::new(0.15, 0.35, 1.0)),
+    ] {
+        frame.overlays.push(Overlay {
+            mesh,
+            model: Mat4::from_translation(pivot) * rotation * Mat4::from_scale(Vec3::splat(scale)),
+            lines: true,
+            color,
+            opacity: 1.0,
+            depth: OverlayDepth::Free,
+        });
     }
 }
 
@@ -1389,6 +1959,20 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
             })
             .agent_node(Role::Button, label)
     };
+    let mode = |label: &'static str, mode: GizmoMode| {
+        let app = app.clone();
+        luma_ui::luma_button(label, Enabled::Yes)
+            .id(label)
+            .on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| {
+                    if let Some(state) = this.visualizer_mut() {
+                        state.gizmo_mode = mode;
+                    }
+                    cx.notify();
+                });
+            })
+            .agent_node(Role::Button, label)
+    };
     div()
         .absolute()
         .bottom(px(16.))
@@ -1403,6 +1987,8 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     .gap(px(1.))
                     .bg(ladder::trim())
                     .p(px(1.))
+                    .child(mode("Translate", GizmoMode::Translate))
+                    .child(mode("Rotate", GizmoMode::Rotate))
                     .child(zoom("Zoom In", DOLLY_IN))
                     .child(zoom("Zoom Out", DOLLY_OUT)),
             )
@@ -1461,6 +2047,51 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let haze_resolution = state.render_lab.haze_resolution;
     let grid_enabled = state.render_lab.grid_enabled;
     let debug_view = state.render_lab.debug_view;
+    let selected_fixture_ids = {
+        let stage = state.stage.borrow();
+        stage.displayed_pick.as_ref().map_or_else(Vec::new, |pick| {
+            // Overlay builder expects primary first; Selection keeps primary
+            // at the tail for deterministic shift-toggle reassignment.
+            state
+                .selection
+                .selected()
+                .iter()
+                .rev()
+                .filter_map(|target| match pick.object(*target) {
+                    Some(EditorObject::Fixture(id)) => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+    };
+    let gizmo_pivot = {
+        let stage = state.stage.borrow();
+        stage.displayed_pick.as_ref().and_then(|pick| {
+            let targets: Vec<_> = state
+                .selection
+                .selected()
+                .iter()
+                .filter_map(|target| pick.anchors.get(target))
+                .map(|anchor| TransformTarget {
+                    position: *anchor,
+                    rotation: Quat::IDENTITY,
+                    anchor: *anchor,
+                })
+                .collect();
+            selection_pivot(&targets)
+        })
+    };
+    let generic_translate = {
+        let stage = state.stage.borrow();
+        stage.displayed_pick.as_ref().is_some_and(|pick| {
+            state
+                .selection
+                .selected()
+                .iter()
+                .any(|target| matches!(pick.object(*target), Some(EditorObject::StagePiece(_))))
+        })
+    };
+    let gizmo_mode = state.gizmo_mode;
     let sized = app.clone();
 
     canvas(
@@ -1470,6 +2101,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             sized.update(cx, |this, _| {
                 if let Some(state) = this.visualizer_mut() {
                     state.size = bounds.size;
+                    state.viewport_origin = bounds.origin;
                 }
             });
             let scale = window.scale_factor();
@@ -1515,24 +2147,28 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         scene.render.debug_view = debug_view;
                         scene.render.fixture_surface_lighting = fixture_surface_lighting;
                         scene.render.cluster_debug = cluster_debug;
-                        match gpu.frame(
+                        scene.selected_fixture_ids = selected_fixture_ids.clone();
+                        match gpu.frame(LiveFrameInputs {
                             scene,
-                            &stage.definitions,
-                            universe.as_ref(),
+                            definitions: &stage.definitions,
+                            state: universe.as_ref(),
                             time,
-                            width,
-                            height,
-                        ) {
-                            Ok(Some((image, draw_ms, timings))) => {
-                                stage.last_draw_ms = Some(draw_ms);
-                                if let Some(timings) = timings {
+                            size: (width, height),
+                            camera,
+                            gizmo_mode,
+                            gizmo_pivot,
+                            generic_translate,
+                        }) {
+                            Ok(Some(completed)) => {
+                                stage.last_draw_ms = Some(completed.draw_ms);
+                                if let Some(timings) = completed.timings {
                                     stage.last_cpu_ms = Some(timings.cpu_encode_submit_ms as f32);
                                     stage.last_gpu_ms = Some(timings.gpu_total_ms as f32);
                                     stage.last_cluster_ms = Some(timings.cpu_cluster_ms as f32);
                                 }
-                                Some(image)
+                                Some((completed.image, Some(completed.pick)))
                             }
-                            Ok(None) => stage.previous.clone(),
+                            Ok(None) => stage.previous.clone().map(|image| (image, None)),
                             Err(error) => {
                                 stage.error = Some(error);
                                 None
@@ -1550,8 +2186,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         {
             let stage = Rc::clone(&state.stage);
             let app = app.clone();
-            move |bounds, (image, hitbox): (Option<Arc<RenderImage>>, Hitbox), window, cx| {
-                if let Some(image) = image {
+            move |bounds, (image, hitbox): (PaintedStage, Hitbox), window, cx| {
+                if let Some((image, pick)) = image {
                     window
                         .paint_image(
                             bounds,
@@ -1568,6 +2204,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         .as_ref()
                         .is_some_and(|current| Arc::ptr_eq(current, &image));
                     if !already_presented {
+                        if let Some(pick) = pick {
+                            stage.displayed_pick = Some(pick);
+                        }
                         if let Some(old) = stage.previous.replace(image) {
                             window.drop_image(old).ok();
                         }
@@ -1594,13 +2233,15 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         if phase != DispatchPhase::Bubble || !inside.is_hovered(window) {
             return;
         }
-        let Some(drag) = Drag::of(event.button) else {
-            return;
-        };
         let at = event.position;
+        let shift = event.modifiers.shift;
         pressed.update(cx, |this, cx| {
             if let Some(state) = this.visualizer_mut() {
-                state.drag = Some((drag, at));
+                if event.button == MouseButton::Left {
+                    state.editor_press(at, shift);
+                } else if let Some(drag) = Drag::of(event.button) {
+                    state.drag = Some((drag, at));
+                }
                 cx.notify();
             }
         });
@@ -1616,6 +2257,11 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
             let Some(state) = this.visualizer_mut() else {
                 return;
             };
+            if state.editor_drag.is_some() {
+                state.editor_moved(at);
+                cx.notify();
+                return;
+            }
             let Some((drag, was)) = state.drag else {
                 return;
             };
@@ -1626,13 +2272,17 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
     });
 
     let released = app.clone();
-    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
         if phase != DispatchPhase::Bubble {
             return;
         }
         released.update(cx, |this, cx| {
             if let Some(state) = this.visualizer_mut() {
-                state.drag = None;
+                if event.button == MouseButton::Left {
+                    state.editor_release(event.position);
+                } else {
+                    state.drag = None;
+                }
                 cx.notify();
             }
         });
@@ -1671,6 +2321,34 @@ fn plate(message: String) -> AnyElement {
 #[cfg(test)]
 mod render_lab_tests {
     use super::*;
+
+    #[test]
+    fn pick_snapshots_follow_presented_serial_not_latest_submission() {
+        let mut pairing = SerialPairing::default();
+        pairing.submitted(1, "pixels-one", SubmitOutcome::Queued);
+        pairing.submitted(2, "pixels-two", SubmitOutcome::Queued);
+        pairing.submitted(
+            3,
+            "pixels-three",
+            SubmitOutcome::Replaced { dropped_serial: 2 },
+        );
+
+        assert_eq!(pairing.presented(1), Some("pixels-one"));
+        assert_eq!(pairing.presented(3), Some("pixels-three"));
+        assert_eq!(pairing.presented(2), None);
+    }
+
+    #[test]
+    fn presenting_newer_pixels_discards_stale_pick_worlds() {
+        let mut pairing = SerialPairing::default();
+        pairing.submitted(7, "old", SubmitOutcome::Queued);
+        pairing.submitted(8, "displayed", SubmitOutcome::Queued);
+        pairing.submitted(9, "future", SubmitOutcome::Queued);
+
+        assert_eq!(pairing.presented(8), Some("displayed"));
+        assert_eq!(pairing.presented(7), None);
+        assert_eq!(pairing.presented(9), Some("future"));
+    }
 
     #[test]
     fn render_lab_controls_are_independent_and_bounded() {

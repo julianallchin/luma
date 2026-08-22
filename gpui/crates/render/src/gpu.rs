@@ -2998,6 +2998,7 @@ mod tests {
                     ..Material::default()
                 },
                 textures: MaterialTextures::default(),
+                editor_object: None,
             })
             .into_iter()
             .collect();
