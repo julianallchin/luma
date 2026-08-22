@@ -1,0 +1,93 @@
+{
+  "schema": "luma.renderer-frame/1",
+  "image": "sun-direction-right-1.370.png",
+  "viewport": {
+    "width": 640,
+    "height": 400
+  },
+  "deviceScaleFactor": 1.0,
+  "outputSize": [
+    640,
+    400
+  ],
+  "subframes": 16,
+  "timeSeconds": 1.37,
+  "scene": {
+    "id": "sun-direction-right",
+    "times": [
+      1.37
+    ],
+    "camera": {
+      "position": [
+        4.5,
+        3.0,
+        7.5
+      ],
+      "target": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "editing": false,
+    "render": {
+      "environment": {
+        "background": [
+          0.004,
+          0.006,
+          0.01
+        ],
+        "ambientColor": [
+          0.35,
+          0.45,
+          0.65
+        ],
+        "ambientIntensity": 0.08
+      },
+      "haze": {
+        "enabled": false,
+        "steps": 8,
+        "resolution": 1.0,
+        "density": 0.8
+      },
+      "sun": {
+        "direction": [
+          5.0,
+          -2.0,
+          4.0
+        ],
+        "color": [
+          1.0,
+          0.93,
+          0.82
+        ],
+        "intensity": 2.4,
+        "shadows": false
+      },
+      "showGrid": false,
+      "debugView": "pbr",
+      "fov": 45.0
+    },
+    "selectedFixtureIds": [],
+    "fixtures": [],
+    "pieces": [
+      {
+        "id": "lab",
+        "meshPath": "../../gpui/crates/render/goldens/pbr-sweep.gltf",
+        "pos": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 0.72
+      }
+    ],
+    "state": {}
+  },
+  "definitions": {}
+}
