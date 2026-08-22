@@ -11,7 +11,12 @@
 // test pastes this in.
 globalThis.until = (what, pred) => {
 	let last = null;
-	for (let i = 0; i < 300; i++) {
+	// The full gauntlet deliberately runs several GPU-heavy pixel contracts
+	// before the navigation suite. A three-second ceiling made a healthy
+	// 180 ms restore lose to scheduler pressure on a thermally loaded host.
+	// Keep polling well inside the harness' 30-second call deadline instead of
+	// turning machine load into a navigation failure.
+	for (let i = 0; i < 1000; i++) {
 		last = app.snapshot();
 		if (pred(last)) return last;
 		app.frames(1, { waitMs: 10 });
