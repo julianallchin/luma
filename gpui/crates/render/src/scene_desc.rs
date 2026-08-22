@@ -355,6 +355,12 @@ pub struct PrimitiveState {
     pub strobe: f32,
     /// `[pan_deg, tilt_deg]`.
     pub position: [f32; 2],
+    /// Procedural gobo selector: 0 open, 1 radial spokes, 2 breakup grid.
+    #[serde(default)]
+    pub gobo: u32,
+    /// Gobo rotation in radians around the beam axis.
+    #[serde(default)]
+    pub gobo_rotation: f32,
 }
 
 /// The QLC+ `.qxf` subset the renderer reads.

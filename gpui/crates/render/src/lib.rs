@@ -39,7 +39,7 @@ pub mod scene_desc;
 pub mod viewport;
 
 pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
-pub use gpu::{Renderer, UploadStats};
+pub use gpu::{FrameTimings, Renderer, RendererProfile, UploadStats};
 pub use scene_desc::Catalogue;
 pub use viewport::{
     AsyncPresentation, AsyncViewport, Presentation, SubmitOutcome, Viewport, LIVE_HAZE_RESOLUTION,

@@ -6,6 +6,8 @@
 struct Composite {
     // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
+    // xy: camera near/far planes.
+    depth: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> cfg: Composite;
@@ -13,6 +15,12 @@ struct Composite {
 @group(0) @binding(2) var haze_tex: texture_2d<f32>;
 @group(0) @binding(3) var haze_sampler: sampler;
 @group(0) @binding(4) var depth_tex: texture_depth_2d;
+
+fn linear_view_depth(raw_depth: f32) -> f32 {
+    let near = cfg.depth.x;
+    let far = cfg.depth.y;
+    return near * far / max(far - raw_depth * (far - near), 1e-5);
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -104,7 +112,8 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // do. The tap depths in `haze_tex.a` are still what it compares against.
     // Subframe weights sum to 1, so the accumulated target is already a mean —
     // nothing here rescales it.
-    let depth = textureLoad(depth_tex, coord, 0);
+    let raw_depth = textureLoad(depth_tex, coord, 0);
+    let depth = linear_view_depth(raw_depth);
     let debug = u32(cfg.params.w + 0.5);
     if debug >= 1u && debug <= 5u {
         // Material probes are already display-range linear values. Keeping the
@@ -114,7 +123,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     if debug == 6u {
         // Perspective depth is intentionally raw: this is the attachment the
         // haze bilateral pass consumes, not a camera-specific beauty view.
-        return vec4<f32>(vec3<f32>(1.0 - depth), 1.0);
+        return vec4<f32>(vec3<f32>(1.0 - raw_depth), 1.0);
     }
     let haze = upsample_haze(uv, depth);
     if debug == 7u {

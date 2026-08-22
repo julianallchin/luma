@@ -1,0 +1,51 @@
+{
+  "schema": "luma.volumetric-stress/1",
+  "width": 96,
+  "height": 54,
+  "subframes": 1,
+  "camera": {
+    "position": [4.5, 3.0, 5.0],
+    "target": [0.0, 0.8, 0.0]
+  },
+  "render": {
+    "stage_size": 48.0,
+    "haze_density": 0.65,
+    "haze_resolution": 0.5,
+    "haze_steps": 8,
+    "debug_view": "volumetric_accumulation"
+  },
+  "light": {
+    "origin": [0.0, 0.0, 0.15],
+    "direction": [0.0, 0.0, 1.0],
+    "range": 8.0,
+    "cos_beam": 0.975,
+    "cos_field": 0.93,
+    "color": [0.2, 0.55, 1.0],
+    "intensity": 0.01,
+    "gobo_modulus": 3,
+    "gobo_rotation": 0.31
+  },
+  "lattice": {
+    "columns": 32,
+    "center_column": 15.5,
+    "center_row": 7.5,
+    "spacing": [0.18, 0.18]
+  },
+  "cases": [
+    {
+      "cones": 32,
+      "image": "volumetric-stress-32.png",
+      "expected_fnv64": "0x025e1cf3f4dbc3f0"
+    },
+    {
+      "cones": 128,
+      "image": "volumetric-stress-128.png",
+      "expected_fnv64": "0x8d93d1791a1765a8"
+    },
+    {
+      "cones": 512,
+      "image": "volumetric-stress-512.png",
+      "expected_fnv64": "0x99cc0a648580bd41"
+    }
+  ]
+}

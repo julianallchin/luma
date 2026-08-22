@@ -1,7 +1,9 @@
 // Volumetric haze — transliteration of `effects/volumetric-haze-pass.ts`.
 //
-// There is no global march. Each light's contribution is the 1D integral of
-// single-scatter along the exact span of the ray inside that light's
+// There is no global march. A conservative 16x16 screen-tile list restricts
+// each pixel to cones whose finite volumes can reach it. Each candidate's
+// contribution is the 1D integral of single-scatter along the exact span of
+// the ray inside that light's
 // cone∩range volume (analytic ray/convex-solid intersection), estimated with
 // equiangular + uniform MIS sampling. Empty pixels cost a handful of
 // intersection tests and zero march steps.
@@ -10,7 +12,7 @@
 //   * the light array is two SoA storage buffers, not a packed `DataTexture`.
 //     `LightCore` alone drives the sphere reject, so a pixel a light does not
 //     reach costs one 16-byte read rather than four. That property is what
-//     makes the 256-light loop viable and it survives the port.
+//     keeps the exact intersection cheap after tiling and it survives the port.
 //   * with storage buffers there is no sampling inside data-dependent control
 //     flow, so WGSL's uniformity rule never comes up. The one depth read stays
 //     at the top of `main`.
@@ -29,7 +31,14 @@ struct LightRest {
     intensity: f32,
     cos_field: f32,
     wash: f32,
-    _pad: vec2<f32>,
+    gobo: f32,
+    gobo_rotation: f32,
+};
+
+struct TileHeader {
+    offset: u32,
+    count: u32,
+    _pad: vec2<u32>,
 };
 
 struct Haze {
@@ -42,12 +51,18 @@ struct Haze {
     tuning: vec4<f32>,
     // x: white leak, y: phase g, zw: this target's height and width in px.
     transport: vec4<f32>,
+    // xy: tile grid, z: tile edge in pixels, w: fixed capture seed.
+    tiles: vec4<f32>,
+    // xy: camera near/far planes.
+    depth: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> haze: Haze;
 @group(0) @binding(1) var<storage, read> light_core: array<LightCore>;
 @group(0) @binding(2) var<storage, read> light_rest: array<LightRest>;
 @group(0) @binding(3) var depth_texture: texture_depth_2d;
+@group(0) @binding(4) var<storage, read> tile_headers: array<TileHeader>;
+@group(0) @binding(5) var<storage, read> tile_light_indices: array<u32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -105,6 +120,12 @@ fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
     return p.xyz / p.w;
 }
 
+fn linear_view_depth(raw_depth: f32) -> f32 {
+    let near = haze.depth.x;
+    let far = haze.depth.y;
+    return near * far / max(far - raw_depth * (far - near), 1e-5);
+}
+
 /// Peaked photometric profile with GDTF beam/field semantics: 100% on the
 /// axis, 50% at the beam angle, smoothly cut to zero approaching the field
 /// angle.
@@ -133,8 +154,49 @@ fn henyey_greenstein(cos_t: f32, g: f32) -> f32 {
     return (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
 }
 
-fn ign(frag: vec2<f32>) -> f32 {
-    return fract(52.9829189 * fract(0.06711056 * frag.x + 0.00583715 * frag.y));
+// Progressive best-candidate rank tile. Ranks are visited in a toroidal
+// farthest-point order, giving every prefix blue-noise spacing. A per-tile
+// Cranley rotation breaks the visible 8x8 repeat without changing that local
+// spectrum; capture mode fixes `frame`, so this is byte deterministic.
+const BLUE_NOISE_RANK = array<u32, 64>(
+    20u, 52u, 25u, 33u, 31u, 32u, 28u, 34u,
+    39u, 11u, 62u, 4u, 35u, 9u, 44u, 6u,
+    17u, 36u, 26u, 55u, 19u, 51u, 30u, 57u,
+    38u, 2u, 63u, 15u, 59u, 0u, 43u, 13u,
+    21u, 50u, 29u, 53u, 23u, 40u, 22u, 56u,
+    45u, 8u, 54u, 7u, 49u, 14u, 42u, 5u,
+    27u, 48u, 18u, 37u, 24u, 41u, 16u, 46u,
+    58u, 1u, 60u, 10u, 61u, 3u, 47u, 12u,
+);
+
+fn blue_noise(frag: vec2<f32>, frame: u32) -> f32 {
+    let pixel = vec2<u32>(frag) + vec2<u32>(frame * 3u, frame * 5u);
+    let index = (pixel.y & 7u) * 8u + (pixel.x & 7u);
+    let tile = floor(frag / 8.0);
+    let rotation = fract(sin(dot(tile, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    return fract((f32(BLUE_NOISE_RANK[index]) + 0.5) / 64.0 + rotation);
+}
+
+fn gobo_transmission(q: vec3<f32>, rest: LightRest) -> f32 {
+    if rest.gobo < 0.5 {
+        return 1.0;
+    }
+    let helper = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), abs(rest.direction.z) > 0.98);
+    let right = normalize(cross(rest.direction, helper));
+    let up = cross(right, rest.direction);
+    let axial = max(dot(q, rest.direction), 1e-4);
+    let field_sine = sqrt(max(1.0 - rest.cos_field * rest.cos_field, 0.0));
+    let field_radius = axial * field_sine / max(abs(rest.cos_field), 0.05);
+    let aperture = vec2<f32>(dot(q, right), dot(q, up)) / max(field_radius, 1e-4);
+    if rest.gobo < 1.5 {
+        let angle = atan2(aperture.y, aperture.x) + rest.gobo_rotation;
+        return smoothstep(0.18, 0.48, abs(cos(angle * 6.0)));
+    }
+    let c = cos(rest.gobo_rotation);
+    let s = sin(rest.gobo_rotation);
+    let rotated = mat2x2<f32>(vec2<f32>(c, s), vec2<f32>(-s, c)) * aperture;
+    let breakup = sin(rotated.x * 15.0) * sin(rotated.y * 11.0);
+    return smoothstep(-0.15, 0.25, breakup);
 }
 
 @fragment
@@ -149,13 +211,14 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let uv = frag.xy / size;
     let coord = vec2<i32>(uv * vec2<f32>(textureDimensions(depth_texture)));
     let raw_depth = textureLoad(depth_texture, coord, 0);
+    let view_depth = linear_view_depth(raw_depth);
     let weight = haze.tuning.y;
     let density = haze.params.y;
 
     let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 
     if density < 0.001 {
-        return vec4<f32>(0.0, 0.0, 0.0, raw_depth * weight);
+        return vec4<f32>(0.0, 0.0, 0.0, view_depth * weight);
     }
 
     let far_world = world_from_ndc(vec3<f32>(ndc_xy, 0.5));
@@ -173,7 +236,10 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // `gl_FragCoord` counts rows from the bottom and `@builtin(position)` from
     // the top, so the jitter pattern only lands on the same pixels as the
     // goldens' if the row index is flipped back.
-    let j = fract(ign(vec2<f32>(frag.x, haze.transport.z - frag.y)) + haze.tuning.x * 0.61803398875);
+    let j = blue_noise(
+        vec2<f32>(frag.x, haze.transport.z - frag.y),
+        u32(haze.tuning.x + haze.tiles.w),
+    );
 
     var scattered = vec3<f32>(0.0);
 
@@ -197,9 +263,17 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // turbulence lives. Balance-heuristic weights combine them.
     let n_eq = (sample_count + 1) / 2;
     let n_un = sample_count - n_eq;
-    let light_count = i32(haze.params.x);
+    let tile_xy = min(
+        vec2<u32>(frag.xy) / u32(haze.tiles.z),
+        vec2<u32>(haze.tiles.xy) - vec2<u32>(1u),
+    );
+    let tile = tile_headers[tile_xy.y * u32(haze.tiles.x) + tile_xy.x];
 
-    for (var li = 0; li < light_count; li = li + 1) {
+    for (var candidate = 0u; candidate < tile.count; candidate = candidate + 1u) {
+        let li = tile_light_indices[tile.offset + candidate];
+        if li >= u32(haze.params.x) {
+            continue;
+        }
         let core = light_core[li];
         let oc = haze.camera_pos.xyz - core.position;
         let b = dot(oc, ray_dir);
@@ -329,11 +403,12 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
             // Soft range taper — the beam dissolves into the dark instead of
             // popping at the hard cull sphere.
             let taper = 1.0 - smoothstep(core.range * 0.7, core.range, dist);
+            let gobo = gobo_transmission(q, rest);
 
             // True HDR radiance, no clamp to display range. The tonemapper is
             // the camera; blinding values are its problem and the white-hot
             // core is its correct answer.
-            let radiance = rest.intensity * angular * taper * beam_gain / max(d2, near_clamp);
+            let radiance = rest.intensity * angular * taper * gobo * beam_gain / max(d2, near_clamp);
             let nz = haze_noise(haze.camera_pos.xyz + ray_dir * t, haze.params.w);
             // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
             let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
@@ -343,8 +418,8 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         scattered += acc * sigma;
     }
 
-    // Alpha carries the depth this texel saw so the composite can do a
-    // depth-aware bilateral upsample without bleeding across silhouettes.
+    // Alpha carries linear view depth in metres so temporal rejection and the
+    // composite's bilateral upsample have a distance-independent threshold.
     // Both channels are pre-weighted for subframe accumulation (spec §6).
-    return vec4<f32>(scattered * weight, raw_depth * weight);
+    return vec4<f32>(scattered * weight, view_depth * weight);
 }

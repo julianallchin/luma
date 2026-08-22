@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
 use crate::assets::Image;
@@ -24,6 +24,8 @@ const SHADOW_SIZE: u32 = 4096;
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MSAA_SAMPLES: u32 = 4;
+const CAMERA_NEAR: f32 = 0.1;
+const CAMERA_FAR: f32 = 2000.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -70,6 +72,8 @@ struct HazeUniform {
     params: [f32; 4],
     tuning: [f32; 4],
     transport: [f32; 4],
+    tiles: [f32; 4],
+    depth: [f32; 4],
 }
 
 #[repr(C)]
@@ -88,12 +92,31 @@ struct LightRest {
     intensity: f32,
     cos_field: f32,
     wash: f32,
-    _pad: [f32; 2],
+    gobo: f32,
+    gobo_rotation: f32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct TileHeader {
+    offset: u32,
+    count: u32,
+    _pad: [u32; 2],
+}
+
+const HAZE_TILE_SIZE: u32 = 16;
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct CompositeUniform {
+    params: [f32; 4],
+    depth: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct TemporalUniform {
+    /// x: history weight, y: history valid, z: depth rejection threshold.
     params: [f32; 4],
 }
 
@@ -133,6 +156,36 @@ pub struct UploadStats {
     pub textures: u64,
 }
 
+/// Adapter identity attached to volumetric timing evidence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RendererProfile {
+    /// Human-readable adapter name.
+    pub name: String,
+    /// Graphics backend reported by wgpu.
+    pub backend: String,
+    /// Adapter class (integrated, discrete, CPU, and so on).
+    pub device_type: String,
+    /// Driver name.
+    pub driver: String,
+    /// Driver detail string.
+    pub driver_info: String,
+    /// Whether the adapter can provide hardware timestamp queries.
+    pub timestamp_query_supported: bool,
+    /// Nanoseconds represented by one timestamp tick, when supported.
+    pub timestamp_period_ns: Option<f32>,
+}
+
+/// Pass-boundary timings for one production live render.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameTimings {
+    /// GPU time from the first scene pass through the composite pass.
+    pub gpu_total_ms: f64,
+    /// GPU time for haze accumulation and temporal resolve.
+    pub gpu_volumetric_ms: f64,
+    /// CPU time for scene preparation, command encoding and queue submission.
+    pub cpu_encode_submit_ms: f64,
+}
+
 impl Channels {
     fn format(self) -> wgpu::TextureFormat {
         match self {
@@ -155,14 +208,17 @@ impl Channels {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    adapter_profile: RendererProfile,
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     haze_layout: wgpu::BindGroupLayout,
+    temporal_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     scene_pipeline: wgpu::RenderPipeline,
     depth_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     haze_pipeline: wgpu::RenderPipeline,
+    temporal_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`Channels::index`]: the same pass, targeting each output
     /// format.
     composite_pipelines: [wgpu::RenderPipeline; 2],
@@ -195,6 +251,45 @@ pub struct Renderer {
     geometry: Option<ResidentGeometry>,
     upload_stats: UploadStats,
     targets: Option<Targets>,
+    haze_history_valid: bool,
+    haze_history_index: usize,
+    haze_history_key: Option<HazeHistoryKey>,
+    last_live_time: Option<f32>,
+    live_noise_frame: u32,
+    profiler: Option<ProfilerResources>,
+    haze_tile_cache: Option<HazeTileCache>,
+}
+
+struct ProfilerResources {
+    query_set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    timestamp_period_ns: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HazeTileKey {
+    size: [u32; 2],
+    camera: [u32; 6],
+    fov: u32,
+    topology: u64,
+}
+
+struct HazeTileCache {
+    key: HazeTileKey,
+    headers: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    columns: u32,
+    rows: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HazeHistoryKey {
+    output: [u32; 4],
+    camera: [u32; 6],
+    fov: u32,
+    density: u32,
+    topology: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -286,6 +381,7 @@ struct Targets {
     scene: wgpu::TextureView,
     depth: wgpu::TextureView,
     haze: wgpu::TextureView,
+    haze_history: [wgpu::TextureView; 2],
     /// Three independent presentation resources. Intermediate passes may be
     /// shared because queue submissions execute in order; each submission's
     /// final output and readback must remain private until its async map retires.
@@ -307,6 +403,16 @@ pub(crate) struct PendingReadback {
     height: u32,
     bytes_per_row: u32,
     started: Instant,
+    mapped_result: Option<Result<(), String>>,
+    profile: Option<PendingProfile>,
+}
+
+struct PendingProfile {
+    readback: wgpu::Buffer,
+    mapped: mpsc::Receiver<Result<(), String>>,
+    mapped_result: Option<Result<(), String>>,
+    timestamp_period_ns: f32,
+    cpu_encode_submit: Duration,
 }
 
 pub(crate) struct CompletedReadback {
@@ -314,25 +420,84 @@ pub(crate) struct CompletedReadback {
     pub(crate) height: u32,
     pub(crate) pixels: Vec<u8>,
     pub(crate) draw_time: Duration,
+    profile: Option<FrameTimings>,
 }
 
 impl Renderer {
     /// # Errors
     /// Fails when no wgpu adapter or device can be acquired.
     pub fn new() -> anyhow::Result<Self> {
+        Self::new_inner(false)
+    }
+
+    /// Acquire a renderer with hardware timestamp queries enabled.
+    ///
+    /// This constructor is deliberately separate: normal and asynchronous
+    /// presentation pay no query or mapping overhead.
+    ///
+    /// # Errors
+    /// Fails when no GPU exists or the selected adapter has no timestamp-query
+    /// support. Profiling never substitutes CPU wall time for GPU evidence.
+    pub fn new_profiled() -> anyhow::Result<Self> {
+        Self::new_inner(true)
+    }
+
+    fn new_inner(profiled: bool) -> anyhow::Result<Self> {
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
         }))?;
+        let timestamp_query_supported =
+            adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        anyhow::ensure!(
+            !profiled || timestamp_query_supported,
+            "selected GPU adapter does not support timestamp queries"
+        );
+        let required_features = if profiled {
+            wgpu::Features::TIMESTAMP_QUERY
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("luma-render"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             }))?;
+        let adapter_info = adapter.get_info();
+        let adapter_profile = RendererProfile {
+            name: adapter_info.name,
+            backend: format!("{:?}", adapter_info.backend),
+            device_type: format!("{:?}", adapter_info.device_type),
+            driver: adapter_info.driver,
+            driver_info: adapter_info.driver_info,
+            timestamp_query_supported,
+            timestamp_period_ns: timestamp_query_supported.then(|| queue.get_timestamp_period()),
+        };
+
+        let profiler = profiled.then(|| ProfilerResources {
+            query_set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("luma-profile-timestamps"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 4,
+            }),
+            resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("luma-profile-resolve"),
+                size: 32,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            readback: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("luma-profile-readback"),
+                size: 32,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            timestamp_period_ns: queue.get_timestamp_period(),
+        });
 
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
@@ -395,6 +560,17 @@ impl Renderer {
                     },
                     count: None,
                 },
+                storage_entry(4, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(5, wgpu::ShaderStages::FRAGMENT),
+            ],
+        });
+
+        let temporal_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("haze-temporal"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(1),
+                texture_entry(2),
             ],
         });
 
@@ -432,6 +608,11 @@ impl Renderer {
             &format!("{bindings}{}", include_str!("shaders/scene.wgsl")),
         );
         let haze_module = shader(&device, "haze", include_str!("shaders/haze.wgsl"));
+        let temporal_module = shader(
+            &device,
+            "haze-temporal",
+            include_str!("shaders/haze_temporal.wgsl"),
+        );
         let composite_module = shader(&device, "composite", include_str!("shaders/composite.wgsl"));
         let grid_module = shader(
             &device,
@@ -560,6 +741,34 @@ impl Renderer {
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let temporal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("haze-temporal"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("haze-temporal"),
+                    bind_group_layouts: &[&temporal_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &temporal_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &temporal_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(SCENE_FORMAT.into())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -770,14 +979,17 @@ impl Renderer {
         Ok(Self {
             device,
             queue,
+            adapter_profile,
             scene_layout,
             material_layout,
             haze_layout,
+            temporal_layout,
             composite_layout,
             scene_pipeline,
             depth_pipeline,
             shadow_pipeline,
             haze_pipeline,
+            temporal_pipeline,
             composite_pipelines,
             grid_pipeline,
             overlay_layout,
@@ -797,6 +1009,13 @@ impl Renderer {
                 textures: 0,
             },
             targets: None,
+            haze_history_valid: false,
+            haze_history_index: 0,
+            haze_history_key: None,
+            last_live_time: None,
+            live_noise_frame: 0,
+            profiler,
+            haze_tile_cache: None,
         })
     }
 
@@ -814,6 +1033,8 @@ impl Renderer {
                 || (t.haze_width, t.haze_height) != haze
         });
         if stale {
+            self.haze_history_valid = false;
+            self.haze_history_key = None;
             let color = |w, h, samples, usage, label| {
                 self.device
                     .create_texture(&wgpu::TextureDescriptor {
@@ -893,6 +1114,16 @@ impl Renderer {
                     wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                     "haze",
                 ),
+                haze_history: std::array::from_fn(|_| {
+                    color(
+                        haze.0,
+                        haze.1,
+                        1,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        "haze-history",
+                    )
+                }),
                 presentations,
                 bytes_per_row,
             });
@@ -920,10 +1151,49 @@ impl Renderer {
         Ok(out)
     }
 
+    /// Measure one frame through the production temporal/live pass chain.
+    ///
+    /// # Errors
+    /// Fails if this renderer was not created by [`Self::new_profiled`] or if
+    /// either GPU readback cannot be mapped.
+    pub fn profile_live_frame(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+    ) -> anyhow::Result<FrameTimings> {
+        anyhow::ensure!(
+            self.profiler.is_some(),
+            "renderer was not created for profiling"
+        );
+        let mut pending = self.submit_readback(
+            frame,
+            width.max(1),
+            height.max(1),
+            subframes,
+            Channels::Rgba,
+            0,
+            true,
+        );
+        self.device.poll(wgpu::PollType::Wait)?;
+        pending
+            .try_complete()?
+            .expect("blocking poll must complete timestamp and pixel readbacks")
+            .profile
+            .ok_or_else(|| anyhow::anyhow!("profile query resources were unavailable"))
+    }
+
     /// Read cumulative immutable-resource upload counts.
     #[must_use]
     pub fn upload_stats(&self) -> UploadStats {
         self.upload_stats
+    }
+
+    /// Adapter identity for reproducible performance evidence.
+    #[must_use]
+    pub fn adapter_profile(&self) -> &RendererProfile {
+        &self.adapter_profile
     }
 
     /// [`Self::render`], reading back into a caller-owned buffer in a caller-
@@ -945,7 +1215,25 @@ impl Renderer {
         channels: Channels,
         out: &mut Vec<u8>,
     ) -> anyhow::Result<()> {
-        let mut pending = self.submit_readback(frame, width, height, subframes, channels, 0);
+        let mut pending = self.submit_readback(frame, width, height, subframes, channels, 0, false);
+        self.device.poll(wgpu::PollType::Wait)?;
+        let completed = pending
+            .try_complete()?
+            .expect("blocking poll must complete the mapped readback");
+        *out = completed.pixels;
+        Ok(())
+    }
+
+    pub(crate) fn render_live_into(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+        channels: Channels,
+        out: &mut Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let mut pending = self.submit_readback(frame, width, height, subframes, channels, 0, true);
         self.device.poll(wgpu::PollType::Wait)?;
         let completed = pending
             .try_complete()?
@@ -962,7 +1250,7 @@ impl Renderer {
         subframes: u32,
         slot: usize,
     ) -> PendingReadback {
-        self.submit_readback(frame, width, height, subframes, Channels::Bgra, slot)
+        self.submit_readback(frame, width, height, subframes, Channels::Bgra, slot, true)
     }
 
     pub(crate) fn poll_live(&self) -> anyhow::Result<()> {
@@ -978,13 +1266,27 @@ impl Renderer {
         subframes: u32,
         channels: Channels,
         slot: usize,
+        temporal: bool,
     ) -> PendingReadback {
         assert!(slot < 3, "presentation slot is bounded to three");
         let started = Instant::now();
+        let profile = self.profiler.as_ref().map(|profile| {
+            (
+                profile.query_set.clone(),
+                profile.resolve.clone(),
+                profile.readback.clone(),
+                profile.timestamp_period_ns,
+            )
+        });
         let aspect = width as f32 / height as f32;
         // three `PerspectiveCamera` defaults, and the same reversed-Y handedness
         // wgpu clip space wants.
-        let proj = Mat4::perspective_rh(frame.camera.fov_y_deg.to_radians(), aspect, 0.1, 2000.0);
+        let proj = Mat4::perspective_rh(
+            frame.camera.fov_y_deg.to_radians(),
+            aspect,
+            CAMERA_NEAR,
+            CAMERA_FAR,
+        );
         let view = Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z);
         let view_proj = proj * view;
 
@@ -1187,6 +1489,7 @@ impl Renderer {
             scene_view,
             depth_view,
             haze_view,
+            haze_history,
             output,
             output_view,
             readback,
@@ -1200,12 +1503,45 @@ impl Renderer {
                 t.scene.clone(),
                 t.depth.clone(),
                 t.haze.clone(),
+                t.haze_history.clone(),
                 presentation.output.clone(),
                 presentation.output_view.clone(),
                 presentation.readback.clone(),
                 t.bytes_per_row,
             )
         };
+        let haze_density = frame
+            .haze_density
+            .is_finite()
+            .then_some(frame.haze_density.clamp(0.0, 4.0))
+            .unwrap_or(0.0);
+        let haze_time = frame.time.is_finite().then_some(frame.time).unwrap_or(0.0);
+        let history_key = haze_history_key(frame, width, height, haze_size, haze_density);
+        let time_continuous = self
+            .last_live_time
+            .is_some_and(|previous| (-0.01..=0.25).contains(&(frame.time - previous)));
+        let history_valid = temporal
+            && self.haze_history_valid
+            && time_continuous
+            && self.haze_history_key.as_ref() == Some(&history_key);
+        let noise_seed = if temporal && history_valid {
+            self.live_noise_frame
+        } else {
+            0
+        };
+        if temporal {
+            self.haze_history_key = Some(history_key);
+            self.last_live_time = Some(frame.time);
+            self.live_noise_frame = if history_valid {
+                self.live_noise_frame.wrapping_add(1)
+            } else {
+                1
+            };
+        } else {
+            self.haze_history_valid = false;
+            self.haze_history_key = None;
+            self.last_live_time = None;
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1233,6 +1569,13 @@ impl Renderer {
                     label: Some("shadow"),
                     color_attachments: &[],
                     depth_stencil_attachment: Some(depth_attachment(&self.shadow_map)),
+                    timestamp_writes: profile.as_ref().map(|(queries, ..)| {
+                        wgpu::RenderPassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: Some(0),
+                            end_of_pass_write_index: None,
+                        }
+                    }),
                     ..Default::default()
                 });
                 pass.set_pipeline(&self.shadow_pipeline);
@@ -1245,6 +1588,16 @@ impl Renderer {
                     label: Some("depth-prepass"),
                     color_attachments: &[],
                     depth_stencil_attachment: Some(depth_attachment(&depth_view)),
+                    timestamp_writes: profile.as_ref().map(|(queries, ..)| {
+                        wgpu::RenderPassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: (!frame
+                                .directional
+                                .is_some_and(|light| light.shadows))
+                            .then_some(0),
+                            end_of_pass_write_index: None,
+                        }
+                    }),
                     ..Default::default()
                 });
                 pass.set_pipeline(&self.depth_pipeline);
@@ -1294,25 +1647,34 @@ impl Renderer {
         }
 
         // --- haze ------------------------------------------------------------
-        let cores: Vec<LightCore> = frame
+        let haze_lights: Vec<_> = frame
             .haze_lights
+            .iter()
+            .take(crate::frame::MAX_LIGHTS)
+            .map(sanitize_haze_light)
+            .collect();
+        let cores: Vec<LightCore> = haze_lights
             .iter()
             .map(|l| LightCore {
                 position: l.position.to_array(),
-                range: l.range,
+                range: l.range.clamp(0.05, 100.0),
             })
             .collect();
-        let rests: Vec<LightRest> = frame
-            .haze_lights
+        let rests: Vec<LightRest> = haze_lights
             .iter()
             .map(|l| LightRest {
-                direction: l.direction.to_array(),
-                cos_beam: l.cos_beam,
+                direction: l
+                    .direction
+                    .try_normalize()
+                    .unwrap_or(Vec3::NEG_Y)
+                    .to_array(),
+                cos_beam: l.cos_beam.clamp(-1.0, 1.0),
                 color: l.color.to_array(),
-                intensity: l.intensity,
-                cos_field: l.cos_field,
-                wash: l.wash,
-                _pad: [0.0; 2],
+                intensity: l.intensity.clamp(0.0, 100.0),
+                cos_field: l.cos_field.clamp(-1.0, 1.0),
+                wash: l.wash.clamp(0.0, 1.0),
+                gobo: l.gobo.min(2) as f32,
+                gobo_rotation: l.gobo_rotation.rem_euclid(std::f32::consts::TAU),
             })
             .collect();
         let core_buf = self.storage(
@@ -1325,6 +1687,34 @@ impl Renderer {
             wgpu::BufferUsages::STORAGE,
             "light-rest",
         );
+        let tile_key = haze_tile_key(&haze_lights, frame.camera, haze_size);
+        if self
+            .haze_tile_cache
+            .as_ref()
+            .is_none_or(|cache| cache.key != tile_key)
+        {
+            let (headers, indices, columns, rows) =
+                haze_tiles(&haze_lights, view_proj, haze_size.0, haze_size.1);
+            self.haze_tile_cache = Some(HazeTileCache {
+                key: tile_key,
+                headers: self.storage(
+                    &pad_at_least_one(headers),
+                    wgpu::BufferUsages::STORAGE,
+                    "haze-tile-headers",
+                ),
+                indices: self.storage(
+                    &pad_at_least_one(indices),
+                    wgpu::BufferUsages::STORAGE,
+                    "haze-tile-indices",
+                ),
+                columns,
+                rows,
+            });
+        }
+        let tile_cache = self.haze_tile_cache.as_ref().expect("tile cache populated");
+        let tile_header_buf = tile_cache.headers.clone();
+        let tile_index_buf = tile_cache.indices.clone();
+        let (tile_columns, tile_rows) = (tile_cache.columns, tile_cache.rows);
 
         let inv_view_proj = view_proj.inverse();
         let subframes = subframes.max(1);
@@ -1334,15 +1724,15 @@ impl Renderer {
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
                 camera_pos: frame.camera.eye.extend(1.0).to_array(),
                 params: [
-                    frame.haze_lights.len() as f32,
-                    frame.haze_density,
+                    haze_lights.len() as f32,
+                    haze_density,
                     frame.haze_steps as f32,
                     // Feeding track time makes the noise drift identical on
                     // every run (spec §6).
-                    frame.time,
+                    haze_time,
                 ],
                 tuning: [
-                    k as f32,
+                    (noise_seed.wrapping_add(k) & 4095) as f32,
                     weight,
                     Transport::NEAR_CLAMP,
                     Transport::BEAM_GAIN,
@@ -1353,6 +1743,13 @@ impl Renderer {
                     haze_size.1 as f32,
                     haze_size.0 as f32,
                 ],
+                tiles: [
+                    tile_columns as f32,
+                    tile_rows as f32,
+                    HAZE_TILE_SIZE as f32,
+                    0.0,
+                ],
+                depth: [CAMERA_NEAR, CAMERA_FAR, 0.0, 0.0],
             };
             let haze_buf = self.storage(&[uniform], wgpu::BufferUsages::UNIFORM, "haze");
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1363,6 +1760,8 @@ impl Renderer {
                     binding(1, core_buf.as_entire_binding()),
                     binding(2, rest_buf.as_entire_binding()),
                     binding(3, wgpu::BindingResource::TextureView(&depth_view)),
+                    binding(4, tile_header_buf.as_entire_binding()),
+                    binding(5, tile_index_buf.as_entire_binding()),
                 ],
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1381,6 +1780,13 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
+                timestamp_writes: profile.as_ref().and_then(|(queries, ..)| {
+                    (k == 0).then_some(wgpu::RenderPassTimestampWrites {
+                        query_set: queries,
+                        beginning_of_pass_write_index: Some(1),
+                        end_of_pass_write_index: None,
+                    })
+                }),
                 ..Default::default()
             });
             pass.set_pipeline(&self.haze_pipeline);
@@ -1388,15 +1794,63 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
+        let composite_haze = if temporal {
+            let read = self.haze_history_index;
+            let write = 1 - read;
+            let temporal_uniform = TemporalUniform {
+                // Reject history when the represented surface moves by more
+                // than 25 cm in linear view space.
+                params: [0.82, f32::from(u8::from(history_valid)), 0.25, 0.0],
+            };
+            let uniform_buf = self.storage(
+                &[temporal_uniform],
+                wgpu::BufferUsages::UNIFORM,
+                "haze-temporal",
+            );
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("haze-temporal"),
+                layout: &self.temporal_layout,
+                entries: &[
+                    binding(0, uniform_buf.as_entire_binding()),
+                    binding(1, wgpu::BindingResource::TextureView(&haze_view)),
+                    binding(2, wgpu::BindingResource::TextureView(&haze_history[read])),
+                ],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("haze-temporal"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &haze_history[write],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.temporal_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+            self.haze_history_index = write;
+            self.haze_history_valid = true;
+            haze_history[write].clone()
+        } else {
+            haze_view.clone()
+        };
+
         // --- composite + readback --------------------------------------------
         let composite_uniform = CompositeUniform {
             params: [
                 haze_size.0 as f32,
                 haze_size.1 as f32,
-                // Depth sigma in raw-depth units, as `HazeCompositeEffect` has it.
-                0.005,
+                // Bilateral sigma in metres of linear view depth.
+                0.25,
                 frame.debug_view.shader_code() as f32,
             ],
+            depth: [CAMERA_NEAR, CAMERA_FAR, 0.0, 0.0],
         };
         let composite_buf = self.storage(
             &[composite_uniform],
@@ -1409,7 +1863,7 @@ impl Renderer {
             entries: &[
                 binding(0, composite_buf.as_entire_binding()),
                 binding(1, wgpu::BindingResource::TextureView(&scene_view)),
-                binding(2, wgpu::BindingResource::TextureView(&haze_view)),
+                binding(2, wgpu::BindingResource::TextureView(&composite_haze)),
                 binding(3, wgpu::BindingResource::Sampler(&self.linear_sampler)),
                 binding(4, wgpu::BindingResource::TextureView(&depth_view)),
             ],
@@ -1428,11 +1882,50 @@ impl Renderer {
                         },
                     })],
                     depth_stencil_attachment: None,
+                    timestamp_writes: profile.as_ref().map(|(queries, ..)| {
+                        wgpu::RenderPassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: Some(2),
+                            end_of_pass_write_index: None,
+                        }
+                    }),
                     ..Default::default()
                 });
                 pass.set_pipeline(&self.composite_pipelines[channels.index()]);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..3, 0..1);
+            }
+            if let Some((queries, resolve, profile_readback, _)) = &profile {
+                // Metal returns zero for the end timestamp of the final pass
+                // and optimizes a fully empty fence away. A zero-vertex draw
+                // makes this next ordered pass observable without executing a
+                // shader. Its beginning proves composite completed; the fence
+                // body remains outside the measured interval.
+                let mut fence = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("luma-profile-fence"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &output_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
+                        query_set: queries,
+                        beginning_of_pass_write_index: Some(3),
+                        end_of_pass_write_index: None,
+                    }),
+                    ..Default::default()
+                });
+                fence.set_pipeline(&self.composite_pipelines[channels.index()]);
+                fence.set_bind_group(0, &bind_group, &[]);
+                fence.draw(0..0, 0..1);
+                drop(fence);
+                encoder.resolve_query_set(queries, 0..4, resolve, 0);
+                encoder.copy_buffer_to_buffer(resolve, 0, profile_readback, 0, 32);
             }
             encoder.copy_texture_to_buffer(
                 output.as_image_copy(),
@@ -1453,12 +1946,28 @@ impl Renderer {
         }
 
         self.queue.submit([encoder.finish()]);
+        let cpu_encode_submit = started.elapsed();
         let (mapped_tx, mapped) = mpsc::sync_channel(1);
         readback
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = mapped_tx.send(result.map_err(|error| error.to_string()));
             });
+        let pending_profile = profile.map(|(_, _, profile_readback, timestamp_period_ns)| {
+            let (mapped_tx, mapped) = mpsc::sync_channel(1);
+            profile_readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = mapped_tx.send(result.map_err(|error| error.to_string()));
+                });
+            PendingProfile {
+                readback: profile_readback,
+                mapped,
+                mapped_result: None,
+                timestamp_period_ns,
+                cpu_encode_submit,
+            }
+        });
         PendingReadback {
             readback,
             mapped,
@@ -1466,6 +1975,8 @@ impl Renderer {
             height: t_height,
             bytes_per_row,
             started,
+            mapped_result: None,
+            profile: pending_profile,
         }
     }
 
@@ -1655,7 +2166,65 @@ fn overlay_pipeline_index(overlay: &Overlay) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{downsample, TextureEncoding};
+    use glam::{Mat4, Vec3};
+
+    use crate::frame::{Camera, HazeLight};
+
+    use super::{
+        downsample, haze_tile_key, haze_tiles, CompositeUniform, HazeUniform, LightCore, LightRest,
+        TextureEncoding, TileHeader, HAZE_TILE_SIZE,
+    };
+
+    #[test]
+    fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
+        assert_eq!(std::mem::size_of::<HazeUniform>(), 160);
+        assert_eq!(std::mem::size_of::<CompositeUniform>(), 32);
+        assert_eq!(std::mem::size_of::<LightCore>(), 16);
+        assert_eq!(std::mem::size_of::<LightRest>(), 48);
+        assert_eq!(std::mem::size_of::<TileHeader>(), 16);
+    }
+
+    #[test]
+    fn tile_cache_key_ignores_shading_only_changes_and_tracks_projected_volume() {
+        let camera = Camera {
+            eye: Vec3::new(4.5, -5.0, 3.0),
+            target: Vec3::ZERO,
+            fov_y_deg: 48.0,
+        };
+        let light = HazeLight {
+            position: Vec3::ZERO,
+            range: 5.0,
+            direction: Vec3::Z,
+            cos_beam: 0.98,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            cos_field: 0.95,
+            wash: 0.0,
+            gobo: 0,
+            gobo_rotation: 0.0,
+        };
+        let original = haze_tile_key(&[light], camera, (320, 180));
+
+        let mut shading = light;
+        shading.color = Vec3::new(0.2, 0.4, 0.8);
+        shading.intensity = 0.25;
+        shading.cos_beam = 0.99;
+        shading.wash = 1.0;
+        shading.gobo = 2;
+        shading.gobo_rotation = 1.5;
+        assert_eq!(original, haze_tile_key(&[shading], camera, (320, 180)));
+
+        let mut moved = light;
+        moved.position.x += 0.1;
+        assert_ne!(original, haze_tile_key(&[moved], camera, (320, 180)));
+        let mut widened = light;
+        widened.cos_field -= 0.01;
+        assert_ne!(original, haze_tile_key(&[widened], camera, (320, 180)));
+        let mut moved_camera = camera;
+        moved_camera.eye.x += 0.1;
+        assert_ne!(original, haze_tile_key(&[light], moved_camera, (320, 180)));
+        assert_ne!(original, haze_tile_key(&[light], camera, (321, 180)));
+    }
 
     #[test]
     fn material_mips_filter_color_in_linear_light_and_data_as_bytes() {
@@ -1667,18 +2236,179 @@ mod tests {
         assert_eq!(color, [188, 188, 188, 255]);
         assert_eq!(data, [128, 128, 128, 255]);
     }
+
+    #[test]
+    fn projected_cone_lists_are_local_not_global() {
+        let view_proj = Mat4::perspective_rh(48f32.to_radians(), 16.0 / 9.0, 0.1, 100.0)
+            * Mat4::look_at_rh(Vec3::new(4.5, -5.0, 3.0), Vec3::ZERO, Vec3::Z);
+        let light = HazeLight {
+            position: Vec3::ZERO,
+            range: 5.0,
+            direction: Vec3::Z,
+            cos_beam: 0.98,
+            color: Vec3::ONE,
+            intensity: 1.0,
+            cos_field: 0.95,
+            wash: 0.0,
+            gobo: 0,
+            gobo_rotation: 0.0,
+        };
+        let (headers, indices, _, _) = haze_tiles(&[light], view_proj, 320, 180);
+        assert!(!indices.is_empty());
+        assert!(indices.len() < headers.len());
+    }
+
+    #[test]
+    fn projected_cone_lists_have_no_sampled_false_negatives_or_oob_ranges() {
+        const WIDTH: u32 = 96;
+        const HEIGHT: u32 = 54;
+        let eye = Vec3::new(4.5, -5.0, 3.0);
+        let view_proj = Mat4::perspective_rh(48f32.to_radians(), 16.0 / 9.0, 0.1, 100.0)
+            * Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Z);
+        let inv_view_proj = view_proj.inverse();
+        let lights: Vec<_> = (0..16)
+            .map(|index| {
+                let x = (index % 4) as f32 - 1.5;
+                let y = (index / 4) as f32 - 1.5;
+                let direction = (Vec3::new(x * 0.25, y * 0.2, 3.0)
+                    - Vec3::new(x * 0.5, y * 0.5, 0.0))
+                .normalize();
+                HazeLight {
+                    position: Vec3::new(x * 0.5, y * 0.5, 0.0),
+                    range: 5.0 + index as f32 * 0.1,
+                    direction,
+                    cos_beam: 0.97,
+                    color: Vec3::ONE,
+                    intensity: 1.0,
+                    cos_field: 0.88 + (index % 3) as f32 * 0.025,
+                    wash: 0.0,
+                    gobo: 0,
+                    gobo_rotation: 0.0,
+                }
+            })
+            .collect();
+        let (headers, indices, columns, _) = haze_tiles(&lights, view_proj, WIDTH, HEIGHT);
+
+        for header in &headers {
+            let end = header.offset as usize + header.count as usize;
+            assert!(end <= indices.len(), "tile header escaped its index buffer");
+            assert!(indices[header.offset as usize..end]
+                .iter()
+                .all(|index| (*index as usize) < lights.len()));
+        }
+
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let ndc = Vec3::new(
+                    ((x as f32 + 0.5) / WIDTH as f32) * 2.0 - 1.0,
+                    1.0 - ((y as f32 + 0.5) / HEIGHT as f32) * 2.0,
+                    0.5,
+                );
+                let world = inv_view_proj.project_point3(ndc);
+                let ray = (world - eye).normalize();
+                let tile_x = x / HAZE_TILE_SIZE;
+                let tile_y = y / HAZE_TILE_SIZE;
+                let header = headers[(tile_y * columns + tile_x) as usize];
+                let listed =
+                    &indices[header.offset as usize..(header.offset + header.count) as usize];
+                for (index, light) in lights.iter().enumerate() {
+                    if sampled_ray_hits_cone(eye, ray, light) {
+                        assert!(
+                            listed.contains(&(index as u32)),
+                            "tile ({tile_x},{tile_y}) omitted cone {index} at pixel ({x},{y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Independent conservative oracle: numerical samples can prove a ray is
+    /// inside a finite cone, but never claim a miss. Every proven hit must be
+    /// present in the CPU-generated tile list.
+    fn sampled_ray_hits_cone(eye: Vec3, ray: Vec3, light: &HazeLight) -> bool {
+        let oc = eye - light.position;
+        let b = oc.dot(ray);
+        let disc = b * b - (oc.length_squared() - light.range * light.range);
+        if disc <= 0.0 {
+            return false;
+        }
+        let root = disc.sqrt();
+        let start = (-b - root).max(0.0);
+        let end = -b + root;
+        if end <= start {
+            return false;
+        }
+        (0..=32).any(|sample| {
+            let t = start + (end - start) * sample as f32 / 32.0;
+            let q = oc + ray * t;
+            let axial = q.dot(light.direction);
+            axial > 0.0 && axial * axial >= light.cos_field * light.cos_field * q.length_squared()
+        })
+    }
 }
 
 impl PendingReadback {
     pub(crate) fn try_complete(&mut self) -> anyhow::Result<Option<CompletedReadback>> {
-        let mapped = match self.mapped.try_recv() {
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => return Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => {
-                return Err(anyhow::anyhow!("GPU map callback disconnected"));
+        if self.mapped_result.is_none() {
+            self.mapped_result = match self.mapped.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err(anyhow::anyhow!("GPU map callback disconnected"));
+                }
+            };
+        }
+        if let Some(profile) = &mut self.profile {
+            if profile.mapped_result.is_none() {
+                profile.mapped_result = match profile.mapped.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        return Err(anyhow::anyhow!("GPU timestamp map callback disconnected"));
+                    }
+                };
             }
+        }
+        if self.mapped_result.is_none()
+            || self
+                .profile
+                .as_ref()
+                .is_some_and(|profile| profile.mapped_result.is_none())
+        {
+            return Ok(None);
+        }
+        self.mapped_result
+            .take()
+            .expect("mapped result checked above")
+            .map_err(anyhow::Error::msg)?;
+        let profile = if let Some(profile) = &mut self.profile {
+            profile
+                .mapped_result
+                .take()
+                .expect("profile map result checked above")
+                .map_err(anyhow::Error::msg)?;
+            let view = profile.readback.slice(..32).get_mapped_range();
+            let mut timestamps = [0_u64; 4];
+            for (timestamp, bytes) in timestamps.iter_mut().zip(view.chunks_exact(8)) {
+                *timestamp =
+                    u64::from_ne_bytes(bytes.try_into().expect("timestamp is eight bytes"));
+            }
+            drop(view);
+            profile.readback.unmap();
+            anyhow::ensure!(
+                timestamps.windows(2).all(|pair| pair[0] <= pair[1]),
+                "non-monotonic GPU pass timestamps: {timestamps:?}"
+            );
+            let milliseconds = f64::from(profile.timestamp_period_ns) / 1_000_000.0;
+            Some(FrameTimings {
+                gpu_total_ms: (timestamps[3] - timestamps[0]) as f64 * milliseconds,
+                gpu_volumetric_ms: (timestamps[2] - timestamps[1]) as f64 * milliseconds,
+                cpu_encode_submit_ms: profile.cpu_encode_submit.as_secs_f64() * 1000.0,
+            })
+        } else {
+            None
         };
-        mapped.map_err(anyhow::Error::msg)?;
         let view = self.readback.slice(..).get_mapped_range();
         let row_bytes = (self.width * 4) as usize;
         let mut pixels = Vec::with_capacity(row_bytes * self.height as usize);
@@ -1697,6 +2427,7 @@ impl PendingReadback {
             height: self.height,
             pixels,
             draw_time: self.started.elapsed(),
+            profile,
         }))
     }
 }
@@ -1735,6 +2466,204 @@ fn pad_at_least_one<T: Pod + Zeroable>(mut v: Vec<T>) -> Vec<T> {
         v.push(T::zeroed());
     }
     v
+}
+
+/// Build a conservative screen-space light list for fixed 16x16 haze tiles.
+/// The projected AABB encloses each range sphere; if it crosses the eye plane,
+/// every tile receives the light rather than risking a false negative.
+fn haze_tiles(
+    lights: &[crate::frame::HazeLight],
+    view_proj: Mat4,
+    width: u32,
+    height: u32,
+) -> (Vec<TileHeader>, Vec<u32>, u32, u32) {
+    let columns = width.div_ceil(HAZE_TILE_SIZE).max(1);
+    let rows = height.div_ceil(HAZE_TILE_SIZE).max(1);
+    let mut tiles = vec![Vec::<u32>::new(); (columns * rows) as usize];
+    for (light_index, light) in lights.iter().enumerate() {
+        let range = light.range.clamp(0.05, 100.0);
+        let (bounds_min, bounds_max) = if light.cos_field > 0.05 {
+            let base = light.position + light.direction * range;
+            let radius =
+                range * (1.0 - light.cos_field * light.cos_field).max(0.0).sqrt() / light.cos_field;
+            (
+                light.position.min(base - Vec3::splat(radius)),
+                light.position.max(base + Vec3::splat(radius)),
+            )
+        } else {
+            (
+                light.position - Vec3::splat(range),
+                light.position + Vec3::splat(range),
+            )
+        };
+        let mut min = Vec2::splat(f32::INFINITY);
+        let mut max = Vec2::splat(f32::NEG_INFINITY);
+        let mut behind_eye = false;
+        let mut in_front = false;
+        for z in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for x in [-1.0, 1.0] {
+                    let corner = Vec3::new(
+                        if x < 0.0 { bounds_min.x } else { bounds_max.x },
+                        if y < 0.0 { bounds_min.y } else { bounds_max.y },
+                        if z < 0.0 { bounds_min.z } else { bounds_max.z },
+                    );
+                    let clip = view_proj * corner.extend(1.0);
+                    if clip.w <= 1e-4 {
+                        behind_eye = true;
+                        continue;
+                    }
+                    in_front = true;
+                    let ndc = clip.truncate() / clip.w;
+                    let pixel = Vec2::new(
+                        (ndc.x * 0.5 + 0.5) * width as f32,
+                        (0.5 - ndc.y * 0.5) * height as f32,
+                    );
+                    min = min.min(pixel);
+                    max = max.max(pixel);
+                }
+            }
+        }
+        if !in_front {
+            continue;
+        }
+        let (x0, y0, x1, y1) = if behind_eye {
+            (0, 0, columns - 1, rows - 1)
+        } else {
+            if max.x < 0.0 || max.y < 0.0 || min.x >= width as f32 || min.y >= height as f32 {
+                continue;
+            }
+            (
+                (min.x.max(0.0) as u32 / HAZE_TILE_SIZE).min(columns - 1),
+                (min.y.max(0.0) as u32 / HAZE_TILE_SIZE).min(rows - 1),
+                (max.x.max(0.0) as u32 / HAZE_TILE_SIZE).min(columns - 1),
+                (max.y.max(0.0) as u32 / HAZE_TILE_SIZE).min(rows - 1),
+            )
+        };
+        for tile_y in y0..=y1 {
+            for tile_x in x0..=x1 {
+                tiles[(tile_y * columns + tile_x) as usize].push(light_index as u32);
+            }
+        }
+    }
+
+    let mut headers = Vec::with_capacity(tiles.len());
+    let mut indices = Vec::new();
+    for tile in tiles {
+        headers.push(TileHeader {
+            offset: indices.len() as u32,
+            count: tile.len() as u32,
+            _pad: [0; 2],
+        });
+        indices.extend(tile);
+    }
+    (headers, indices, columns, rows)
+}
+
+fn sanitize_haze_light(light: &crate::frame::HazeLight) -> crate::frame::HazeLight {
+    let finite = |value: f32, fallback: f32| value.is_finite().then_some(value).unwrap_or(fallback);
+    let finite_vec =
+        |value: Vec3, fallback: Vec3| value.is_finite().then_some(value).unwrap_or(fallback);
+    let cos_beam = finite(light.cos_beam, 0.95).clamp(0.01, 1.0);
+    let cos_field = finite(light.cos_field, cos_beam)
+        .clamp(0.01, 1.0)
+        .min(cos_beam);
+    crate::frame::HazeLight {
+        position: finite_vec(light.position, Vec3::ZERO)
+            .clamp(Vec3::splat(-10_000.0), Vec3::splat(10_000.0)),
+        range: finite(light.range, 0.05).clamp(0.05, 100.0),
+        direction: finite_vec(light.direction, Vec3::NEG_Y)
+            .try_normalize()
+            .unwrap_or(Vec3::NEG_Y),
+        cos_beam,
+        color: finite_vec(light.color, Vec3::ZERO).clamp(Vec3::ZERO, Vec3::splat(100.0)),
+        intensity: finite(light.intensity, 0.0).clamp(0.0, 100.0),
+        cos_field,
+        wash: finite(light.wash, 0.0).clamp(0.0, 1.0),
+        gobo: light.gobo.min(2),
+        gobo_rotation: finite(light.gobo_rotation, 0.0).rem_euclid(std::f32::consts::TAU),
+    }
+}
+
+/// History is valid only while projection-affecting state and the physical
+/// light volumes are identical. Color/intensity may animate through history;
+/// moving a cone, changing a gobo, resizing, orbiting, or changing density
+/// resets it. Time continuity is checked separately at submission.
+fn haze_history_key(
+    frame: &Frame,
+    width: u32,
+    height: u32,
+    haze: (u32, u32),
+    density: f32,
+) -> HazeHistoryKey {
+    let mut topology = 0xcbf2_9ce4_8422_2325u64;
+    let mut push = |value: u32| {
+        topology = (topology ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3);
+    };
+    push(frame.haze_lights.len() as u32);
+    for light in &frame.haze_lights {
+        for value in light.position.to_array() {
+            push(value.to_bits());
+        }
+        push(light.range.to_bits());
+        for value in light.direction.to_array() {
+            push(value.to_bits());
+        }
+        push(light.cos_beam.to_bits());
+        push(light.cos_field.to_bits());
+        push(light.wash.to_bits());
+        push(light.gobo);
+        push(light.gobo_rotation.to_bits());
+    }
+    HazeHistoryKey {
+        output: [width, height, haze.0, haze.1],
+        camera: [
+            frame.camera.eye.x.to_bits(),
+            frame.camera.eye.y.to_bits(),
+            frame.camera.eye.z.to_bits(),
+            frame.camera.target.x.to_bits(),
+            frame.camera.target.y.to_bits(),
+            frame.camera.target.z.to_bits(),
+        ],
+        fov: frame.camera.fov_y_deg.to_bits(),
+        density: density.to_bits(),
+        topology,
+    }
+}
+
+fn haze_tile_key(
+    lights: &[crate::frame::HazeLight],
+    camera: crate::frame::Camera,
+    size: (u32, u32),
+) -> HazeTileKey {
+    let mut topology = 0xcbf2_9ce4_8422_2325_u64;
+    let mut push = |value: u32| {
+        topology = (topology ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3);
+    };
+    push(lights.len() as u32);
+    for light in lights {
+        for value in light.position.to_array() {
+            push(value.to_bits());
+        }
+        push(light.range.to_bits());
+        for value in light.direction.to_array() {
+            push(value.to_bits());
+        }
+        push(light.cos_field.to_bits());
+    }
+    HazeTileKey {
+        size: [size.0, size.1],
+        camera: [
+            camera.eye.x.to_bits(),
+            camera.eye.y.to_bits(),
+            camera.eye.z.to_bits(),
+            camera.target.x.to_bits(),
+            camera.target.y.to_bits(),
+            camera.target.z.to_bits(),
+        ],
+        fov: camera.fov_y_deg.to_bits(),
+        topology,
+    }
 }
 
 fn shader(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {

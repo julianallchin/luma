@@ -1,0 +1,216 @@
+{
+  "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M3 Max",
+    "timestamp_period_ns": 1.0,
+    "timestamp_query_supported": true
+  },
+  "all_within_budget": true,
+  "build": {
+    "arch": "aarch64",
+    "crate_version": "0.1.0",
+    "debug_assertions": false,
+    "profile": "release",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "target": "aarch64-apple-darwin",
+    "wgpu_lock": "26.0.1"
+  },
+  "captured_at_utc": "2026-08-22T11:12:14Z",
+  "cases": [
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 1.5,
+        "gpu_total_p95": 8.0,
+        "gpu_volumetric_p95": null
+      },
+      "cones": 64,
+      "cpu_encode_submit": {
+        "max_ms": 1.085166,
+        "p50_ms": 0.170917,
+        "p95_ms": 0.387834
+      },
+      "gpu_total": {
+        "max_ms": 1.178334,
+        "p50_ms": 0.49529199999999995,
+        "p95_ms": 0.7745
+      },
+      "gpu_volumetric": {
+        "max_ms": 0.800125,
+        "p50_ms": 0.40033399999999997,
+        "p95_ms": 0.5454169999999999
+      },
+      "samples": 600,
+      "samples_fnv64": "0x8fff64f0eeceff85",
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 1.5,
+        "gpu_total_p95": 6.5,
+        "gpu_volumetric_p95": 3.0
+      },
+      "cones": 256,
+      "cpu_encode_submit": {
+        "max_ms": 1.249042,
+        "p50_ms": 0.216708,
+        "p95_ms": 0.377167
+      },
+      "gpu_total": {
+        "max_ms": 3.6395839999999997,
+        "p50_ms": 1.924791,
+        "p95_ms": 2.4265
+      },
+      "gpu_volumetric": {
+        "max_ms": 3.150625,
+        "p50_ms": 1.6685409999999998,
+        "p95_ms": 2.2269579999999998
+      },
+      "samples": 600,
+      "samples_fnv64": "0x293980673c4940c5",
+      "within_budget": true
+    }
+  ],
+  "display": {
+    "interpretation": "offscreen physical pixels",
+    "scale_factor": 1.0
+  },
+  "host": {
+    "arch": "aarch64",
+    "os": "macos",
+    "os_version": "26.2"
+  },
+  "repro": {
+    "command": "cargo run -p luma-render --release --bin profile-volumetrics",
+    "cwd": "gpui",
+    "debug_view": "pbr",
+    "haze_resolution": 0.5,
+    "haze_steps": 8,
+    "height": 1080,
+    "measured_frames": 600,
+    "percentile": "nearest-rank ceil(q*n)-1",
+    "subframes": 2,
+    "temporal": true,
+    "time_step_seconds": 0.016666666666666666,
+    "warmup_frames": 120,
+    "width": 1920
+  },
+  "schema": "luma.renderer-profile/2",
+  "source": {
+    "branch": "codex/renderer-r3b",
+    "commit": "ee69a806f9152b155b632dc565fc5a56c75a2ef2",
+    "dirty": true,
+    "provenance": {
+      "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
+      "entries": [
+        {
+          "bytes": 53581,
+          "content_fnv64": "0xbc0289b4f6e0361f",
+          "path": "gpui/crates/app/src/visualizer.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 4065,
+          "content_fnv64": "0x23b3774761fce62b",
+          "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+          "state": "untracked"
+        },
+        {
+          "bytes": 3058,
+          "content_fnv64": "0x66ade6aaf91ddc84",
+          "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+          "state": "untracked"
+        },
+        {
+          "bytes": 5022,
+          "content_fnv64": "0x4b80c28b530e12d1",
+          "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+          "state": "untracked"
+        },
+        {
+          "bytes": 1085,
+          "content_fnv64": "0x5a6ab76f36fee2b5",
+          "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+          "state": "untracked"
+        },
+        {
+          "bytes": 19388,
+          "content_fnv64": "0x1b7a397d6342969d",
+          "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 27488,
+          "content_fnv64": "0x588362cf54b342d1",
+          "path": "gpui/crates/render/src/frame.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 105856,
+          "content_fnv64": "0xc2dfc9aa98931c42",
+          "path": "gpui/crates/render/src/gpu.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 2516,
+          "content_fnv64": "0x43b8422d398f4e3d",
+          "path": "gpui/crates/render/src/lib.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 16575,
+          "content_fnv64": "0xbae0eac8fdbd4af2",
+          "path": "gpui/crates/render/src/scene_desc.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 5878,
+          "content_fnv64": "0x3ef2c251c0c79eb7",
+          "path": "gpui/crates/render/src/shaders/composite.wgsl",
+          "state": "tracked"
+        },
+        {
+          "bytes": 17738,
+          "content_fnv64": "0x4a4232260e1fd3ad",
+          "path": "gpui/crates/render/src/shaders/haze.wgsl",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1291,
+          "content_fnv64": "0x98835064c3f23662",
+          "path": "gpui/crates/render/src/shaders/haze_temporal.wgsl",
+          "state": "untracked"
+        },
+        {
+          "bytes": 21286,
+          "content_fnv64": "0xa56fd17bb5dddfa5",
+          "path": "gpui/crates/render/src/viewport.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 18049,
+          "content_fnv64": "0xf796a91c8a328517",
+          "path": "gpui/crates/render/tests/volumetric_transport.rs",
+          "state": "untracked"
+        }
+      ],
+      "excluded": [
+        "gpui/crates/render/goldens/volumetric-profile-m3-max.json",
+        ".husky/**"
+      ],
+      "extensions": [
+        "rs",
+        "wgsl",
+        "json",
+        "png"
+      ],
+      "manifest_fnv64": "0xa0cd3845e19c9538",
+      "scopes": [
+        "gpui/crates/render",
+        "gpui/crates/app"
+      ]
+    }
+  }
+}
