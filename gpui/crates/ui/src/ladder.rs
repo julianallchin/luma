@@ -15,7 +15,7 @@ pub fn titlebar_background() -> Rgba {
 }
 
 /// `--gutter` — heavier gap / empty-area contrast, one notch deeper than
-/// [`trim`]. The welcome screen's ground.
+/// [`trim`]. Also the tone [`crate::glass::panel`] takes to the chrome tier.
 pub fn gutter() -> Rgba {
     rgb(0x191919)
 }

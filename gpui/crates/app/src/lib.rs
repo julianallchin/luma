@@ -58,9 +58,10 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     fonts::install(cx);
     keymap::init(cx);
+    motion::init(cx);
 }
 use luma_chat::AgentChat;
-use luma_ui::{fonts, ladder};
+use luma_ui::{fonts, ladder, motion};
 
 use shell::{Body, FocusSlot, Overlay};
 use tabs::Tabs;
@@ -72,10 +73,20 @@ pub struct Luma {
     /// keeps itself open: the two states are one fact read twice.
     pub(crate) sidebar: Option<tracks::Tracks>,
     pub(crate) sidebar_hidden: bool,
+    /// The sidebar's live width — the slide [`sidebar_hidden`](Self::sidebar_hidden)
+    /// asks for. Intent and geometry are kept apart because only one of them
+    /// is true mid-slide: the flag says where the region is going, this says
+    /// where it is.
+    pub(crate) sidebar_width: luma_ui::pane::PaneWidth,
     /// The workspace panel's open tabs. What each one shows *is* its identity
     /// — see [`tabs`].
     pub(crate) workspace: Tabs<Body>,
     pub(crate) workspace_hidden: bool,
+    /// The workspace panel's live width, and the width it returns to when it
+    /// opens — the one the seam drags. Session-lived: a width chosen for one
+    /// window is not a preference about every future window.
+    pub(crate) workspace_width: luma_ui::pane::PaneWidth,
+    pub(crate) workspace_open_width: f32,
     /// Whether an open workspace takes over everything right of the sidebar
     /// (this phase's default) or shares it with the thread column.
     pub(crate) expanded: bool,
@@ -105,8 +116,14 @@ impl Luma {
             library,
             sidebar: None,
             sidebar_hidden: false,
+            // Both regions start closed and slide open when they first have
+            // something to show, so first paint is one gesture rather than a
+            // window that assembles itself.
+            sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace: Tabs::default(),
             workspace_hidden: false,
+            workspace_width: luma_ui::pane::PaneWidth::new(0.0),
+            workspace_open_width: shell::WORKSPACE_WIDTH,
             expanded: false,
             overlay: None,
             chat: None,
@@ -138,19 +155,16 @@ impl Render for Luma {
         self.sync_chat(window, cx);
         self.take_focus(window, cx);
 
-        let root_holds_focus = self.overlay.is_none() && self.workspace.active().is_none();
+        let root_holds_focus = matches!(self.focus_slot(), FocusSlot::Shell);
         div()
             .size_full()
             .flex()
             .flex_col()
-            // The one shell plane. Every content surface is an inset card over
-            // it — see `shell::regions`. Painted at the tone comet's frost
-            // *reads* as (`surface`, grey 13) rather than as translucent
-            // `glass()`: over this window's opaque backing the 80% wash
-            // composites to the cards' own grey(6), and a frame the same
-            // colour as its cards is no frame. The real translucency returns
-            // with a blurred window backing.
-            .bg(luma_ui::glass::grey(13))
+            // The one shell plane, and the only surface the window's blurred
+            // backing shows through directly: the titlebar and the sidebar sit
+            // straight on it, every content surface is an inset card over it
+            // (see `shell::regions`).
+            .bg(luma_ui::glass::glass())
             .font_family(fonts::FAMILY)
             .text_color(ladder::foreground())
             .when(root_holds_focus, |root| root.track_focus(&self.focus))

@@ -44,7 +44,10 @@ pub fn welcome(
         .items_center()
         .justify_center()
         .gap(px(32.))
-        .bg(ladder::gutter())
+        // No ground of its own: the picker is *cards on the shell*, and the
+        // overlay plane under it is a scrim over the glass. A fill here would
+        // paint the shell out — and since this overlay is the app's opening
+        // state, it would be the launch screen deciding the app has no glass.
         .text_color(ladder::foreground())
         .child(wordmark())
         .child(match error {

@@ -285,6 +285,8 @@ pub fn session(mode: Mode, window: (f32, f32)) -> Session {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     std::env::set_var("LUMA_CONFIG_DIR", fixture());
+    // Snap the panel slides: see the note in `support::mod`'s `open`.
+    std::env::set_var("LUMA_MOTION", "off");
     let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
         luma_app::init(cx);
         let mut library = luma_app::Library::open().expect("failed to open the fixture library");

@@ -2,17 +2,19 @@
 //!
 //! Colors come straight from [`luma_md::theme`] — one palette for the markdown
 //! and the chrome around it, because a chip that disagreed with the prose it
-//! sits beside would be two surfaces pretending to be one. The numbers below
-//! are the chat's own, transcribed from `harness/gauntlet-chat/style-spec.md`
-//! with their `file:line` sources.
+//! sits beside would be two surfaces pretending to be one. That palette in
+//! turn names roles over [`luma_ui::glass`], which is the grey ladder at a
+//! coverage, so there is one chain of definitions and no crate on it mints a
+//! tone. The numbers below are the chat's own, transcribed from
+//! `harness/gauntlet-chat/style-spec.md` with their `file:line` sources.
 //!
-//! Nothing outside this crate and `luma-md` may read either. See the spec's §0:
-//! the app has two surfaces now, each internally singular, and the boundary is
-//! a crate boundary so a drift is a compile error.
+//! This module re-exports rather than redefines: a token spelled twice is the
+//! only way the chat and the shell could come to disagree about a surface they
+//! share.
 
 pub use luma_md::theme::{
-    card_bg, glass, glass_generation, glass_hover, grey, hairline, ink, neutral, oklch, scrim,
-    wash, window_background_appearance, Theme, GLASS_ALPHA, SCRIM_ALPHA,
+    card_bg, glass, glass_generation, glass_hover, hairline, ink, neutral, oklch, overlay, panel,
+    scrim, wash, window_background_appearance, Theme, GLASS_ALPHA, SCRIM_ALPHA,
 };
 
 // -- geometry (theme.rs:447-473) ---------------------------------------------
@@ -72,6 +74,11 @@ pub const TEXTAREA_PAD_V: f32 = 20.0;
 /// The text area's grow range.
 pub const TEXTAREA_MIN: f32 = 76.0;
 pub const TEXTAREA_MAX: f32 = 260.0;
+/// One wrapped line in the composer: comet's `text-[14px] leading-relaxed`,
+/// 14 × 1.625. The grow range is expressed in pixels above and in *rows* by the
+/// text area itself, so this is the conversion between them — spelled once, or
+/// the plate and the field it holds would disagree about how tall it can get.
+pub const INPUT_LINE_HEIGHT: f32 = 22.75;
 /// The row under the text area that carries the model chip and send / stop.
 pub const ACTIONS_ROW_HEIGHT: f32 = 46.0;
 /// The composer plate's radius. Its own value, larger than [`PANEL_RADIUS`]:

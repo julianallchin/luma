@@ -11,10 +11,11 @@
 //! depend on which color is painted.
 
 use gpui::{hsla, Hsla, SharedString};
+use luma_ui::ladder;
 
 pub use luma_ui::glass::{
-    card_bg, generation as glass_generation, glass, glass_hover, grey, hairline, ink, neutral,
-    oklch, scrim, wash, window_background_appearance, GLASS_ALPHA, SCRIM_ALPHA,
+    card_bg, generation as glass_generation, glass, glass_hover, hairline, ink, neutral, oklch,
+    overlay, panel, scrim, wash, window_background_appearance, GLASS_ALPHA, SCRIM_ALPHA,
 };
 
 use crate::syntax::TokenKind;
@@ -109,12 +110,25 @@ pub struct Theme {
     pub border: Hsla,
     /// Stronger border for focused or raised edges.
     pub border_strong: Hsla,
-    /// Primary text.
+    /// Primary text — [`luma_ui::ladder::foreground`], the app's one
+    /// foreground. The chat does not get a body colour of its own.
     pub text: Hsla,
     /// Timestamps and secondary labels.
+    ///
+    /// Its own value rather than [`luma_ui::ladder::muted_foreground`], and
+    /// the one token that legitimately has a ladder twin: a recessive grey is
+    /// calibrated against the ground it sits on, and this tier's ground is
+    /// four rungs deeper than the instrument panel's. The ladder's `#777`
+    /// would fall under 3:1 here.
     pub text_muted: Hsla,
-    /// Placeholders and disabled copy.
+    /// Placeholders and disabled copy. See [`Self::text_muted`] on why this
+    /// tier carries its own recessive rungs.
     pub text_faint: Hsla,
+    /// Ink on a *light* fill — the send button's glyph and its stop square,
+    /// the only place this palette paints dark on light. Opaque, and the
+    /// ladder's deepest rung: a translucent ink would show the plate through
+    /// the glyph.
+    pub knockout: Hsla,
     /// The composer plate.
     pub input_bg: Hsla,
     /// Accent — indigo. Bullets, quote rails, selection.
@@ -144,21 +158,24 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// The one appearance. Surfaces are zeron's sampled greys.
+    /// The one appearance. Surfaces come from [`luma_ui::glass`], which is
+    /// the grey ladder at a coverage — this palette names *roles*, it does not
+    /// mint tones for them.
     #[must_use]
     pub fn dark() -> Self {
         Self {
-            bg: grey(6),
-            surface: grey(13),
+            bg: panel(),
+            surface: glass(),
             surface_raised: neutral(0.235),
-            surface_overlay: grey(0x16),
+            surface_overlay: overlay(),
             element_hover: hsla(0.0, 0.0, 0.92, 0.11),
             element_active: hsla(0.0, 0.0, 0.92, 0.16),
             border: hsla(0.0, 0.0, 1.0, 0.08),
             border_strong: hsla(0.0, 0.0, 1.0, 0.14),
-            text: neutral(0.922),
+            text: ladder::foreground().into(),
             text_muted: neutral(0.708),
             text_faint: neutral(0.556),
+            knockout: ladder::titlebar_background().into(),
             input_bg: hsla(0.0, 0.0, 1.0, 0.03),
             accent: oklch(0.673, 0.182, 276.935),
             accent_strong: oklch(0.585, 0.233, 277.117),

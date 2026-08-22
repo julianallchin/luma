@@ -485,8 +485,14 @@ by which crate it lives in.
 - **`luma_ui::glass` — chrome surfaces.** Titlebar, sidebar, tab strip, panel
   seams, the thread column, overlays. Translucent (`GLASS_ALPHA` 0.80 macOS,
   1.0 elsewhere), comet's radii, and the one place motion is allowed:
-  `luma_ui::motion` drives region slides (`RESIZE`, 200ms ease-out) and tab
-  transitions (`TAB_SLIDE`, 150ms). Nothing else animates.
+  `luma_ui::motion` drives region slides (`RESIZE`, 200ms) and tab transitions
+  (`TAB_SLIDE`, 150ms). Nothing else animates.
+
+  **One curve, one ladder.** Everything that moves eases on `motion::ROOT` —
+  `cubic-bezier(0.16, 1, 0.3, 1)`, comet's signature expo-out — over a duration
+  from `SNAP`/`QUICK`/`BASE`/`SLOW`. Comet's panel slides ride plain `ease-out`;
+  the two are the same idea at different strengths, and one is the design. A
+  new animation picks a rung; a fifth rung is a decision, not a literal.
 
 A component that paints from both tiers is a component in the wrong place.
 
@@ -615,11 +621,10 @@ round-one verdict (scratchpad `shell-critic-verdict-r1.md`). Its deviations:
 23. **The turn rail is ticks + click-to-scroll**, gated on window (not pane)
     width; comet's hover-preview cards and scroll-tracked active tick are P7
     polish.
-24. **The shell plane is painted at comet's *effective* frost tone**
-    (`grey(13)`) rather than as translucent `glass()`: over an opaque window
-    backing the 80% wash composites to exactly the content cards' `grey(6)`,
-    and a frame the same colour as its cards is no frame. Real translucency
-    returns with a blurred window backing.
+24. ~~The shell plane is painted at comet's *effective* frost tone.~~
+    **Resolved.** The plane is `glass::glass()` and the thread column is
+    `glass::panel()`; the window backing is `Blurred`, so both are real
+    translucency. See §10.27 for what the tones became.
 25. **The sidebar's search and filter pills are hand-set glass controls** in
     `tracks.rs`, not `luma_ui` ladder components: the sidebar is chrome (§9),
     and the ladder's one-true-button rule governs instrument surfaces, not the
@@ -630,6 +635,27 @@ round-one verdict (scratchpad `shell-critic-verdict-r1.md`). Its deviations:
     venue-less and therefore sidebar-less, which the critic correctly read as
     "no sidebar anywhere".
 
+27. **The glass tier is the grey ladder at a coverage — it mints no tones.**
+    §9 named two tiers but left them two *palettes*: the ladder's `0e / 19 /
+    21 / 27` beside comet's sampled `06 / 08 / 0d`, which is why the timeline
+    read as a bright slab dropped into a near-black frame. `luma_ui::glass`
+    now derives every surface from a ladder rung — plane = `titlebar_background`
+    at 0.80, chrome card = `gutter` at 0.50, floating surface = `trim` at 0.85
+    — so the app is one progression `0e → 19 → 27` across both tiers, and
+    `glass::grey()` is gone. `luma_md::theme::Theme` names *roles* over those
+    tokens and defines no surface tone of its own.
+28. **A content card has no default fill.** Which ground a card takes is which
+    tier its contents are (§9), and only the caller knows: the thread column
+    paints `glass::panel()`, a workspace tab paints `ladder::background()`
+    opaque. `shell::card()` is geometry only — a default there would be the
+    wrong tier half the time and invisible when it was.
+29. **The overlay screens are still full-bleed opaque ladder planes.** §9 calls
+    overlays chrome, but venues / patterns / settings are re-homed instrument
+    screens and a translucent ground under ladder controls is a component
+    painting from both tiers. The overlay *plane* is now `glass::scrim()`, so
+    the day a body is inset as a card the surround is already right; insetting
+    them is geometry and unowned.
+
 ## 11. Smells flagged, not fixed
 
 - The transport and clip-editing `impl Luma` blocks live inside
@@ -637,6 +663,15 @@ round-one verdict (scratchpad `shell-critic-verdict-r1.md`). Its deviations:
   are the only thing in that file that knows about tabs; they belong on the
   workspace. (Already noted in §3.2 — confirmed against the code.)
 - Two `until` helpers with the same name and different signatures (§10.6).
+- `glass::ink` and `glass::hairline` are byte-identical functions
+  (`hsla(0, 0, 1, a)`), separated only by a doc comment predicting a light mode
+  that does not exist. Two names for one value, and every call site has to
+  guess which. They merge, or one of them acquires a different body.
+- The chat tier keeps its own recessive greys (`neutral(0.708)` /
+  `neutral(0.556)`) beside `ladder::muted_foreground` (`#777`). Defensible —
+  a recessive grey is calibrated to its ground and the two tiers' grounds are
+  four rungs apart — but it is still two answers to "what colour is a
+  secondary label", and nothing in the types says so.
 - `track_editor_lanes.rs`, `_stack.rs` and `_ux.rs` each declare their own
   `node(role, label)` snapshot accessor. Three copies of one accessor; it
   belongs beside `nav`.

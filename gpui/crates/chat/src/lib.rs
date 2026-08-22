@@ -1,14 +1,15 @@
 //! The agent chat panel.
 //!
-//! # The one style exception
+//! # Which tier this is
 //!
-//! This crate and `luma-md` paint comet's language — translucency, sliding
-//! motion, polished streaming markdown — and the rest of the app keeps the
-//! brutalist no-animation contract in `CLAUDE.md`. That is Julian's explicit
-//! call (`docs/specs/agent-chat-gpui.md` §0), and the scoping is the crate
-//! boundary: [`crate::theme`] is not `luma_ui::ladder`, nothing outside these
-//! two crates may import it, and the panel's outer edge against the app is a
-//! brutalist trim seam so the two languages meet on the app's terms.
+//! The thread is a **chrome** surface (`docs/specs/comet-shell.md` §9): comet's
+//! language — translucency, sliding motion, polished streaming markdown —
+//! against the instrument tier's square, unanimated `luma_ui::ladder`. That
+//! used to be a crate boundary, because the chat was the only comet-language
+//! surface in the app; the shell itself is chrome now, so the tier is named
+//! (`luma_ui::glass`) and shared, and [`crate::theme`] is the *roles* over it
+//! rather than a palette of its own. Both tiers read one grey ladder, so the
+//! thread column and the timeline beside it cannot drift apart.
 //!
 //! # Shape
 //!
@@ -21,7 +22,7 @@
 //!  ├ list       ListState    the virtualized transcript
 //!  ├ composer   TextareaState
 //!  ├ collapsed  HashSet      which tool chips the reader has closed
-//!  └ turn       TurnState    Idle | Streaming(Task)
+//!  └ turn       TurnState    Idle | Streaming { task, since, steer }
 //! ```
 //!
 //! The panel is **orthogonal to the screen**, not a variant of it: chat opens
@@ -40,9 +41,9 @@
 
 pub mod chip;
 pub mod composer;
-use luma_ui::motion;
 pub mod theme;
 pub mod transcript;
+pub mod working;
 
 use std::collections::HashSet;
 
@@ -109,32 +110,43 @@ impl Agent {
         async move { task.await.ok().flatten().map(ToString::to_string) }
     }
 
-    /// Start a turn. Nothing happens until [`Turn::next`] is awaited.
+    /// Start a turn. The stream is built here rather than inside the spawned
+    /// task so its steering handle can be handed back with it — a turn a host
+    /// could not redirect would force the composer to lock while one ran.
     #[must_use]
     pub fn turn(&self, thread_id: &str, prompt: String) -> Turn {
         let (events, rx) = tokio::sync::mpsc::unbounded_channel();
-        let service = self.service.clone();
-        let thread = thread_id.to_string();
+        let mut stream = self.service.turn(thread_id, UserPrompt::from(prompt));
+        let steer = stream.steering();
         self.runtime.spawn(async move {
             use futures::StreamExt as _;
-            let mut stream = service.turn(&thread, UserPrompt::from(prompt));
             while let Some(event) = stream.next().await {
                 if events.send(event).is_err() {
                     break;
                 }
             }
         });
-        Turn(rx)
+        Turn { events: rx, steer }
     }
 }
 
 /// One turn's events, in order. Dropping it cancels the turn.
-pub struct Turn(tokio::sync::mpsc::UnboundedReceiver<TurnEvent>);
+pub struct Turn {
+    events: tokio::sync::mpsc::UnboundedReceiver<TurnEvent>,
+    steer: luma_lib::agent::TurnSteer,
+}
 
 impl Turn {
     /// The next event, or `None` once the turn has ended.
     pub async fn next(&mut self) -> Option<TurnEvent> {
-        self.0.recv().await
+        self.events.recv().await
+    }
+
+    /// A handle that redirects this turn from elsewhere. Sending to a turn
+    /// that has already ended is a no-op, not an error — the race is ordinary.
+    #[must_use]
+    pub fn steering(&self) -> luma_lib::agent::TurnSteer {
+        self.steer.clone()
     }
 }
 
@@ -145,7 +157,16 @@ impl Turn {
 /// and there is no second call a caller could forget.
 enum TurnState {
     Idle,
-    Streaming(#[allow(dead_code)] Task<()>),
+    /// The task driving the turn, when it started — the working indicator's
+    /// timer origin — and the handle that redirects it. All three begin and
+    /// end with the turn; separate optional fields would be three things that
+    /// could outlive the one they describe.
+    Streaming {
+        #[allow(dead_code)]
+        task: Task<()>,
+        since: std::time::Instant,
+        steer: luma_lib::agent::TurnSteer,
+    },
 }
 
 pub struct AgentChat {
@@ -166,6 +187,11 @@ pub struct AgentChat {
     /// What the composer's chip names, once settings have been read.
     model: Option<SharedString>,
     turn: TurnState,
+    /// Which row currently carries the working indicator, so the one row whose
+    /// height it changes can be remeasured when it moves. Derived state, kept
+    /// only because `ListState` caches heights and cannot be asked what it
+    /// last measured.
+    trailer_row: Option<usize>,
     /// What went wrong, in the panel's own words. Cleared by the next send.
     error: Option<String>,
     /// Tool calls the reader has *closed*, by call id.
@@ -199,6 +225,7 @@ impl AgentChat {
             composer: composer::state(window, cx),
             model: None,
             turn: TurnState::Idle,
+            trailer_row: None,
             error: None,
             collapsed: HashSet::new(),
             focus: cx.focus_handle(),
@@ -268,6 +295,7 @@ impl AgentChat {
             px(theme::OVERDRAW_PX),
         );
         self.transcript = transcript;
+        self.trailer_row = None;
     }
 
     /// Which conversation this panel is showing, or `None` while it is
@@ -281,7 +309,7 @@ impl AgentChat {
     /// Whether a turn is running. The composer, the send button and the status
     /// strip all read this one fact.
     pub fn is_streaming(&self) -> bool {
-        matches!(self.turn, TurnState::Streaming(_))
+        matches!(self.turn, TurnState::Streaming { .. })
     }
 
     /// Escape inside the composer: stop a running turn. The thread is the
@@ -310,6 +338,7 @@ impl AgentChat {
     /// Drop the turn, which cancels it.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         self.turn = TurnState::Idle;
+        self.settle_trailer();
         cx.notify();
     }
 
@@ -324,13 +353,23 @@ impl AgentChat {
         cx.notify();
     }
 
-    /// Send what is in the composer.
+    /// Send what is in the composer — starting a turn, or steering the one
+    /// already running.
+    ///
+    /// Steering rather than queueing is the runtime's own shape: a redirect is
+    /// applied at the next assistant-row boundary, which is where the turn
+    /// keeps its durability invariant anyway. Queueing here would be a second
+    /// place that decides when a prompt takes effect.
     pub fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_streaming() {
-            return;
-        }
         let prompt = self.composer.read(cx).value().trim().to_string();
         if prompt.is_empty() {
+            return;
+        }
+        if let TurnState::Streaming { steer, .. } = &self.turn {
+            steer.send(prompt);
+            self.composer
+                .update(cx, |state, cx| state.set_value("", window, cx));
+            cx.notify();
             return;
         }
         let Some(thread) = self.thread.clone() else {
@@ -342,8 +381,10 @@ impl AgentChat {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.error = None;
 
-        let mut turn = self.agent.turn(&thread, prompt);
-        self.turn = TurnState::Streaming(cx.spawn(async move |this, cx| {
+        let turn = self.agent.turn(&thread, prompt);
+        let steer = turn.steering();
+        let mut turn = turn;
+        let task = cx.spawn(async move |this, cx| {
             while let Some(event) = turn.next().await {
                 if this
                     .update(cx, |this, cx| this.on_event(&event, cx))
@@ -354,11 +395,62 @@ impl AgentChat {
             }
             this.update(cx, |this, cx| {
                 this.turn = TurnState::Idle;
+                this.settle_trailer();
                 cx.notify();
             })
             .ok();
-        }));
+        });
+        self.turn = TurnState::Streaming {
+            task,
+            since: std::time::Instant::now(),
+            steer,
+        };
+        self.settle_trailer();
         cx.notify();
+    }
+
+    /// The working indicator's state, or `None` when no turn is running.
+    ///
+    /// [`working::Working::Sending`] until the model's own row exists: before
+    /// that there is nothing being written and a timer would be counting the
+    /// round trip out rather than the thinking.
+    fn trailer(&self) -> Option<working::Trailer> {
+        let TurnState::Streaming { since, .. } = &self.turn else {
+            return None;
+        };
+        let answering = matches!(
+            self.transcript.messages.last().map(|message| message.role),
+            Some(luma_lib::agent::Role::Assistant)
+        );
+        Some(working::Trailer {
+            state: if answering {
+                working::Working::Thinking
+            } else {
+                working::Working::Sending
+            },
+            since: *since,
+            seed: working::flavour_seed(self.thread.as_deref().unwrap_or_default()),
+        })
+    }
+
+    /// Remeasure the rows the indicator just moved between.
+    ///
+    /// Called after anything that can start, end or advance a turn. The
+    /// indicator is one line inside a row, so only its *arrival and departure*
+    /// change a height — the word and the timer rewrite within it.
+    fn settle_trailer(&mut self) {
+        let next = self
+            .trailer()
+            .and(self.transcript.messages.len().checked_sub(1));
+        if next == self.trailer_row {
+            return;
+        }
+        for row in self.trailer_row.into_iter().chain(next) {
+            if row < self.rows.len() {
+                self.list.remeasure_items(row..row + 1);
+            }
+        }
+        self.trailer_row = next;
     }
 
     /// Fold one event and remeasure exactly the row it changed.
@@ -386,6 +478,7 @@ impl AgentChat {
         {
             self.error = Some(message.clone());
         }
+        self.settle_trailer();
         cx.notify();
     }
 }
@@ -426,24 +519,35 @@ impl AgentChat {
         }
 
         let live = transcript::live_row(&self.transcript, streaming);
+        // The indicator trails the *last* row whichever role it has: between
+        // the send and the model's first row that is still the user's prompt,
+        // and comet's "Sending" bridge is exactly that gap named.
+        let trailer = self.trailer();
+        let last = self.transcript.messages.len().checked_sub(1);
+        let opening_trailer = last.is_none().then_some(trailer).flatten();
+        let view = cx.entity_id();
         let rows = this.clone();
         let transcript_list = list(self.list.clone(), move |ix, window, cx| {
-            let state = rows.read(cx);
-            match (state.rows.get(ix), state.transcript.messages.get(ix)) {
-                (Some(row), Some(message)) => transcript::row(
-                    row,
-                    message,
-                    &transcript::RowCtx {
-                        chat: &rows,
-                        ix,
-                        live: live == Some(ix),
-                        collapsed: &state.collapsed,
-                        theme: &state.theme,
-                    },
-                    window,
-                ),
-                _ => div().into_any_element(),
-            }
+            let held = rows.clone();
+            held.update(cx, |state, cx| {
+                match (state.rows.get(ix), state.transcript.messages.get(ix)) {
+                    (Some(row), Some(message)) => transcript::row(
+                        row,
+                        message,
+                        &transcript::RowCtx {
+                            chat: &rows,
+                            ix,
+                            live: live == Some(ix),
+                            trailer: (last == Some(ix)).then_some(trailer).flatten(),
+                            collapsed: &state.collapsed,
+                            theme: &state.theme,
+                        },
+                        window,
+                        cx,
+                    ),
+                    _ => div().into_any_element(),
+                }
+            })
         })
         .size_full();
 
@@ -465,7 +569,20 @@ impl AgentChat {
                     // empties it.
                     .child(luma_md::render::selection_frame_reset())
                     .when(self.transcript.messages.is_empty(), |el| {
+                        // A turn sent from the empty state has no row to trail
+                        // yet — the user's own row arrives with the turn's
+                        // first event, one hop later. Without this the panel
+                        // would go silent for that hop, which is exactly the
+                        // moment a person is looking for a sign it heard them.
+                        let opening_trailer = opening_trailer.map(|state| {
+                            div()
+                                .absolute()
+                                .bottom(px(theme::SPACE_LG))
+                                .left_0()
+                                .child(working::trailer(&state, &theme, view, cx))
+                        });
                         el.child(opening(&Opening::of(kind), Some(&this), &theme))
+                            .children(opening_trailer)
                     })
                     .when(!self.transcript.messages.is_empty(), |el| {
                         el.child(transcript_list)
@@ -482,13 +599,7 @@ impl AgentChat {
                 window,
                 cx,
             ))
-            .child(status_strip(
-                streaming,
-                self.error.as_deref(),
-                kind,
-                &theme,
-                cx,
-            ))
+            .child(status_strip(streaming, self.error.as_deref(), kind, &theme))
             .into_any_element()
     }
 
@@ -547,8 +658,8 @@ impl AgentChat {
             .flex()
             .flex_col()
             // No fill of its own: the shell's content card paints the ground
-            // (`grey(6)`, comet's `bg`), and a second plane here would put the
-            // thread one tone off the pane it *is*.
+            // (`theme::panel`), and a second plane here would stack a second
+            // coverage over the blur the card is there to let through.
             .text_color(theme.text)
             .child(self.header(theme))
     }
@@ -596,12 +707,13 @@ impl AgentChat {
 /// last line of a reply butts against the composer's plate and the two read as
 /// one control.
 ///
-/// The stop is the content card's own ground — `grey(6)`, what the shell
-/// paints under the thread — because the band has to arrive at exactly the
-/// colour the transcript is sitting on: one tone off and the fade reads as a
-/// seam stripe instead of a dissolve.
+/// The stop is [`theme::panel`] — the token the shell paints the thread's card
+/// with — because the band has to arrive at exactly the colour the transcript
+/// is sitting on: one tone off and the fade reads as a seam stripe instead of
+/// a dissolve. Reading the shared token rather than respelling its value is
+/// what keeps that true when the card's coverage moves.
 fn fade_band() -> impl IntoElement {
-    let ground = theme::grey(6);
+    let ground = theme::panel();
     div()
         .absolute()
         .bottom_0()
@@ -795,9 +907,8 @@ fn status_strip(
     error: Option<&str>,
     kind: luma_lib::agent::AgentKind,
     theme: &Theme,
-    cx: &mut Context<AgentChat>,
 ) -> AnyElement {
-    let mut strip = div()
+    let strip = div()
         .h(px(theme::STATUS_STRIP_HEIGHT))
         .flex_none()
         .flex()
@@ -820,38 +931,12 @@ fn status_strip(
             .agent_node(NodeRole::Text, error.to_string())
             .into_any_element();
     }
-    if streaming {
-        // One shared 30fps clock drives every cell, so multi-instance loaders
-        // stay phase-locked and an idle window schedules nothing at all.
-        let phase = motion::pulse_delta(&motion::PULSE, cx.entity_id(), cx);
-        // Cells in the text colour, not `busy`: a saturated hue at the pulse's
-        // 0.08 floor paints near-black on this ground and reads as three dead
-        // pixels rather than as a loader.
-        strip = strip.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(px(theme::SPACE_XS))
-                .children((0..3).map(|cell| {
-                    let alpha = motion::pulse_opacity(motion::staggered_phase(
-                        phase,
-                        cell,
-                        motion::PULSE_STAGGER,
-                    ));
-                    div()
-                        .size(px(5.0))
-                        .rounded_full()
-                        .bg(theme.text.opacity(0.25 + 0.75 * alpha))
-                })),
-        );
-        return strip
-            .text_color(theme.text_muted)
-            .child(SharedString::from("Working"))
-            .agent_node(NodeRole::Text, "Working")
-            .into_any_element();
-    }
-    // At rest: what this thread is, faintly — comet's checkout line, in the
-    // only vocabulary a light show has.
+    // No loader here: the working indicator trails the last row (see
+    // [`crate::working`]). A strip that also spun would be a second answer to
+    // "is it running?", and two answers can disagree.
+    //
+    // What the strip does drop while a turn runs is the send hint — a key
+    // legend for a field that is busy is an instruction that will not work.
     let subject = match kind {
         luma_lib::agent::AgentKind::TrackCopilot => "Track thread",
         luma_lib::agent::AgentKind::PatternGraph => "Pattern thread",
@@ -860,6 +945,6 @@ fn status_strip(
         .text_color(theme.text_faint)
         .child(SharedString::from(subject))
         .child(div().flex_1())
-        .child(SharedString::from("⏎ to send"))
+        .when(!streaming, |el| el.child(SharedString::from("⏎ to send")))
         .into_any_element()
 }
