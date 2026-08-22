@@ -58,3 +58,35 @@ struct EnvironmentParams {
 @group(2) @binding(2) var environment_brdf: texture_2d<f32>;
 @group(2) @binding(3) var environment_sampler: sampler;
 @group(2) @binding(4) var<uniform> environment_params: EnvironmentParams;
+
+struct FixtureLightCore {
+    position: vec3<f32>,
+    range: f32,
+};
+
+struct FixtureLightRest {
+    direction: vec3<f32>,
+    cos_beam: f32,
+    color: vec3<f32>,
+    intensity: f32,
+    cos_field: f32,
+    wash: f32,
+    gobo: f32,
+    gobo_rotation: f32,
+};
+
+struct SurfaceClusterHeader {
+    offset: u32,
+    count: u32,
+};
+
+struct SurfaceClusterParams {
+    grid: vec4<u32>,
+    depth_and_flags: vec4<f32>,
+};
+
+@group(3) @binding(0) var<storage, read> fixture_cores: array<FixtureLightCore>;
+@group(3) @binding(1) var<storage, read> fixture_rests: array<FixtureLightRest>;
+@group(3) @binding(2) var<storage, read> surface_cluster_headers: array<SurfaceClusterHeader>;
+@group(3) @binding(3) var<storage, read> surface_cluster_indices: array<u32>;
+@group(3) @binding(4) var<uniform> surface_clusters: SurfaceClusterParams;

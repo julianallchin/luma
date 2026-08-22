@@ -110,6 +110,30 @@ fn distance_attenuation(d: f32, cutoff: f32) -> f32 {
     return falloff;
 }
 
+fn surface_cluster_index(frag: vec4<f32>, world: vec3<f32>) -> u32 {
+    let columns = max(surface_clusters.grid.x, 1u);
+    let rows = max(surface_clusters.grid.y, 1u);
+    let tile_size = max(surface_clusters.grid.z, 1u);
+    let x = min(u32(max(frag.x, 0.0)) / tile_size, columns - 1u);
+    let y = min(u32(max(frag.y, 0.0)) / tile_size, rows - 1u);
+    let near = surface_clusters.depth_and_flags.x;
+    let far = surface_clusters.depth_and_flags.y;
+    let depth = clamp(
+        dot(world - globals.camera_pos.xyz, globals.camera_forward.xyz),
+        near,
+        far,
+    );
+    let scale = f32(surface_clusters.grid.w) / log(far / near);
+    let slice = min(u32(max(log(depth / near) * scale, 0.0)), surface_clusters.grid.w - 1u);
+    return (slice * rows + y) * columns + x;
+}
+
+fn occupancy_color(count: u32) -> vec3<f32> {
+    if count == 0u { return vec3<f32>(0.015, 0.02, 0.03); }
+    let t = saturate(log2(f32(count) + 1.0) / 6.0);
+    return mix(vec3<f32>(0.0, 0.25, 0.9), vec3<f32>(1.0, 0.12, 0.0), t);
+}
+
 fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
     let c = cos(environment_params.rotation);
     let s = sin(environment_params.rotation);
@@ -224,6 +248,11 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let diffuse_color = base_color * (1.0 - metallic);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     let shadow = shadow_factor(in.world, n);
+    let cluster = surface_cluster_headers[surface_cluster_index(in.clip, in.world)];
+
+    if surface_clusters.depth_and_flags.w > 0.5 {
+        return vec4<f32>(occupancy_color(cluster.count), 1.0);
+    }
 
     let debug = u32(globals.params.w + 0.5);
     if debug == 1u {
@@ -297,6 +326,42 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         let irradiance = dot_nl * light.color.rgb * distance_attenuation(d, light.position.w);
         out += irradiance * diffuse_color * RECIPROCAL_PI;
         out += irradiance * brdf_ggx(n, v, l, f0, roughness);
+    }
+
+    if surface_clusters.depth_and_flags.z > 0.5 {
+        let cluster_end = cluster.offset + cluster.count;
+        for (var entry = cluster.offset; entry < cluster_end; entry = entry + 1u) {
+            let light_index = surface_cluster_indices[entry];
+            let core = fixture_cores[light_index];
+            let rest = fixture_rests[light_index];
+            let q = in.world - core.position;
+            let distance = length(q);
+            if distance <= 1e-4 || distance >= core.range || rest.intensity <= 0.0 {
+                continue;
+            }
+            let from_light = q / distance;
+            let cos_angle = dot(from_light, rest.direction);
+            let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
+            if angular <= 0.0 {
+                continue;
+            }
+            let aperture = gobo_transmission(
+                q,
+                rest.direction,
+                rest.cos_field,
+                rest.gobo,
+                rest.gobo_rotation,
+            );
+            let l = -from_light;
+            let dot_nl = saturate(dot(n, l));
+            if dot_nl <= 0.0 || aperture <= 0.0 {
+                continue;
+            }
+            let profile = angular * aperture * distance_attenuation(distance, core.range);
+            let irradiance = dot_nl * rest.color * rest.intensity * profile;
+            out += irradiance * diffuse_color * RECIPROCAL_PI;
+            out += irradiance * brdf_ggx(n, v, l, f0, roughness);
+        }
     }
 
     return vec4<f32>(out, 1.0);

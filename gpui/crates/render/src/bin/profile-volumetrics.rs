@@ -38,6 +38,9 @@ struct CaseResult {
     gpu_total: MetricSummary,
     gpu_volumetric: MetricSummary,
     cpu_encode_submit: MetricSummary,
+    cpu_cluster: MetricSummary,
+    cold_cluster_build_ms: f64,
+    cluster_stats: luma_render::ClusterStats,
     budgets_ms: serde_json::Value,
     within_budget: bool,
 }
@@ -66,32 +69,44 @@ fn main() -> anyhow::Result<()> {
         "acceptance timings require a --release build"
     );
     let arguments: Vec<_> = std::env::args().collect();
-    let smoke_256 = arguments.iter().any(|argument| argument == "--smoke-256");
-    let smoke = smoke_256 || arguments.iter().any(|argument| argument == "--smoke");
+    let smoke_clusters = arguments
+        .iter()
+        .any(|argument| argument == "--smoke-clusters");
+    let smoke = smoke_clusters || arguments.iter().any(|argument| argument == "--smoke");
     let warmup_frames = if smoke { 2 } else { WARMUP_FRAMES };
     let measured_frames = if smoke { 20 } else { MEASURED_FRAMES };
     let base = base_frame()?;
     let mut renderer = Renderer::new_profiled()?;
     let adapter = renderer.adapter_profile().clone();
-    let first_cones = if smoke_256 { 256 } else { 64 };
+    let first_cones = 32;
     let mut cases = vec![profile_case(
         &mut renderer,
         &base,
         first_cones,
-        if smoke_256 { 6.5 } else { 8.0 },
-        smoke_256.then_some(3.0),
+        8.0,
+        smoke_clusters.then_some(3.0),
         1.5,
         warmup_frames,
         measured_frames,
     )?];
-    if !smoke {
+    if !smoke || smoke_clusters {
         cases.push(profile_case(
             &mut renderer,
             &base,
-            256,
+            128,
             6.5,
             Some(3.0),
             1.5,
+            warmup_frames,
+            measured_frames,
+        )?);
+        cases.push(profile_case(
+            &mut renderer,
+            &base,
+            512,
+            8.0,
+            Some(3.5),
+            2.0,
             warmup_frames,
             measured_frames,
         )?);
@@ -141,8 +156,8 @@ fn main() -> anyhow::Result<()> {
             "interpretation": "offscreen physical pixels",
         },
         "repro": {
-            "command": if smoke_256 {
-                "cargo run -p luma-render --release --bin profile-volumetrics -- --smoke-256"
+            "command": if smoke_clusters {
+                "cargo run -p luma-render --release --bin profile-volumetrics -- --smoke-clusters"
             } else if smoke {
                 "cargo run -p luma-render --release --bin profile-volumetrics -- --smoke"
             } else {
@@ -180,9 +195,13 @@ fn profile_case(
     measured_frames: usize,
 ) -> anyhow::Result<CaseResult> {
     let mut frame = frame_with_lights(base, cones);
+    let mut cold_cluster_build_ms = 0.0;
     for sample in 0..warmup_frames {
         frame.time = sample as f32 / 60.0;
-        renderer.profile_live_frame(&frame, WIDTH, HEIGHT, LIVE_SUBFRAMES)?;
+        let timing = renderer.profile_live_frame(&frame, WIDTH, HEIGHT, LIVE_SUBFRAMES)?;
+        if sample == 0 {
+            cold_cluster_build_ms = timing.cpu_cluster_ms;
+        }
     }
     let mut samples = Vec::with_capacity(measured_frames);
     for sample in 0..measured_frames {
@@ -192,6 +211,7 @@ fn profile_case(
     let total = summarize(samples.iter().map(|sample| sample.gpu_total_ms));
     let volumetric = summarize(samples.iter().map(|sample| sample.gpu_volumetric_ms));
     let cpu = summarize(samples.iter().map(|sample| sample.cpu_encode_submit_ms));
+    let cluster = summarize(samples.iter().map(|sample| sample.cpu_cluster_ms));
     let within_budget = total.p95_ms <= total_budget_ms
         && cpu.p95_ms <= cpu_budget_ms
         && volumetric_budget_ms.is_none_or(|budget| volumetric.p95_ms <= budget);
@@ -200,11 +220,13 @@ fn profile_case(
         gpu_total_ms,
         gpu_volumetric_ms,
         cpu_encode_submit_ms,
+        cpu_cluster_ms,
     } in &samples
     {
         sample_bytes.extend_from_slice(&gpu_total_ms.to_bits().to_le_bytes());
         sample_bytes.extend_from_slice(&gpu_volumetric_ms.to_bits().to_le_bytes());
         sample_bytes.extend_from_slice(&cpu_encode_submit_ms.to_bits().to_le_bytes());
+        sample_bytes.extend_from_slice(&cpu_cluster_ms.to_bits().to_le_bytes());
     }
     Ok(CaseResult {
         cones,
@@ -213,6 +235,9 @@ fn profile_case(
         gpu_total: total,
         gpu_volumetric: volumetric,
         cpu_encode_submit: cpu,
+        cpu_cluster: cluster,
+        cold_cluster_build_ms,
+        cluster_stats: renderer.cluster_stats(),
         budgets_ms: serde_json::json!({
             "gpu_total_p95": total_budget_ms,
             "gpu_volumetric_p95": volumetric_budget_ms,
@@ -518,6 +543,8 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         overlays: Vec::new(),
         point_lights: base.point_lights.clone(),
         fixture_cones: Vec::with_capacity(count),
+        fixture_surface_lighting: true,
+        cluster_debug: false,
         clear_color: base.clear_color,
         ambient: base.ambient,
         environment: base.environment.clone(),

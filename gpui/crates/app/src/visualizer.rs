@@ -167,6 +167,8 @@ struct Stage {
     last_cpu_ms: Option<f32>,
     /// GPU scene-through-composite time from the previous frame.
     last_gpu_ms: Option<f32>,
+    /// Cold cluster rebuild time; zero on topology cache hits.
+    last_cluster_ms: Option<f32>,
 }
 
 /// Runtime renderer controls. They belong to the viewport, not persisted venue
@@ -188,6 +190,8 @@ struct RenderLab {
     probe_intensity: f32,
     probe_rotation_deg: f32,
     probe_visible: bool,
+    fixture_surface_lighting: bool,
+    cluster_debug: bool,
     haze_enabled: bool,
     haze_density: f32,
     haze_steps: u32,
@@ -215,6 +219,8 @@ impl RenderLab {
             probe_intensity: 0.8,
             probe_rotation_deg: 0.0,
             probe_visible: false,
+            fixture_surface_lighting: true,
+            cluster_debug: false,
             haze_enabled: true,
             haze_density: 0.8,
             haze_steps: 8,
@@ -269,6 +275,8 @@ enum LabToggle {
     Environment,
     Probe,
     ProbeVisible,
+    FixtureSurfaceLighting,
+    ClusterDebug,
     Haze,
     Grid,
 }
@@ -298,6 +306,8 @@ impl RenderLab {
             LabToggle::Environment => &mut self.environment_enabled,
             LabToggle::Probe => &mut self.probe_enabled,
             LabToggle::ProbeVisible => &mut self.probe_visible,
+            LabToggle::FixtureSurfaceLighting => &mut self.fixture_surface_lighting,
+            LabToggle::ClusterDebug => &mut self.cluster_debug,
             LabToggle::Haze => &mut self.haze_enabled,
             LabToggle::Grid => &mut self.grid_enabled,
         };
@@ -1140,6 +1150,18 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             lab.haze_enabled,
             LabToggle::Haze,
         ))
+        .child(lab_toggle(
+            app,
+            "Fixture surface light",
+            lab.fixture_surface_lighting,
+            LabToggle::FixtureSurfaceLighting,
+        ))
+        .child(lab_toggle(
+            app,
+            "Cluster occupancy",
+            lab.cluster_debug,
+            LabToggle::ClusterDebug,
+        ))
         .child(lab_value(
             app,
             "Haze density",
@@ -1180,8 +1202,10 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
                 .text_color(ladder::muted_foreground())
                 .child({
                     let stage = state.stage.borrow();
-                    match (stage.last_cpu_ms, stage.last_gpu_ms) {
-                        (Some(cpu), Some(gpu)) => format!("CPU {cpu:.2} ms · GPU {gpu:.2} ms"),
+                    match (stage.last_cpu_ms, stage.last_gpu_ms, stage.last_cluster_ms) {
+                        (Some(cpu), Some(gpu), Some(cluster)) => {
+                            format!("CPU {cpu:.2} ms · GPU {gpu:.2} ms · CLUSTER {cluster:.2} ms")
+                        }
                         _ => "CPU/GPU timing unavailable".into(),
                     }
                 })
@@ -1429,6 +1453,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let probe_intensity = state.render_lab.probe_intensity;
     let probe_rotation_deg = state.render_lab.probe_rotation_deg;
     let probe_visible = state.render_lab.probe_visible;
+    let fixture_surface_lighting = state.render_lab.fixture_surface_lighting;
+    let cluster_debug = state.render_lab.cluster_debug;
     let haze_enabled = state.render_lab.haze_enabled;
     let haze_density = state.render_lab.haze_density;
     let haze_steps = state.render_lab.haze_steps;
@@ -1487,6 +1513,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         scene.render.haze.resolution = haze_resolution;
                         scene.render.show_grid = grid_enabled;
                         scene.render.debug_view = debug_view;
+                        scene.render.fixture_surface_lighting = fixture_surface_lighting;
+                        scene.render.cluster_debug = cluster_debug;
                         match gpu.frame(
                             scene,
                             &stage.definitions,
@@ -1500,6 +1528,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 if let Some(timings) = timings {
                                     stage.last_cpu_ms = Some(timings.cpu_encode_submit_ms as f32);
                                     stage.last_gpu_ms = Some(timings.gpu_total_ms as f32);
+                                    stage.last_cluster_ms = Some(timings.cpu_cluster_ms as f32);
                                 }
                                 Some(image)
                             }
@@ -1656,6 +1685,8 @@ mod render_lab_tests {
         lab.adjust(LabValue::ProbeRotation, 225.0);
         lab.toggle(LabToggle::Probe);
         lab.toggle(LabToggle::ProbeVisible);
+        lab.toggle(LabToggle::FixtureSurfaceLighting);
+        lab.toggle(LabToggle::ClusterDebug);
         lab.adjust(LabValue::HazeSteps, 100.0);
         lab.adjust(LabValue::HazeResolution, -10.0);
 
@@ -1668,6 +1699,8 @@ mod render_lab_tests {
         assert_eq!(lab.probe_rotation_deg, -135.0);
         assert!(lab.probe_enabled);
         assert!(lab.probe_visible);
+        assert!(!lab.fixture_surface_lighting);
+        assert!(lab.cluster_debug);
         assert_eq!(lab.haze_steps, 64);
         assert_eq!(lab.haze_resolution, 0.25);
 

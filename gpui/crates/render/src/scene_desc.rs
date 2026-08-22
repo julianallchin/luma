@@ -88,6 +88,10 @@ pub struct RenderSettings {
     pub show_grid: bool,
     /// Renderer diagnostic output. `Pbr` is the authored display path.
     pub debug_view: DebugView,
+    /// Whether fixture cones contribute punctual light to opaque surfaces.
+    pub fixture_surface_lighting: bool,
+    /// Paint cluster occupancy instead of authored PBR shading.
+    pub cluster_debug: bool,
     /// Vertical field of view, degrees.
     pub fov: f32,
     /// Original positional anchor from the legacy directional-light capture.
@@ -251,6 +255,8 @@ impl RenderSettings {
             sun: None,
             show_grid: false,
             debug_view: DebugView::Pbr,
+            fixture_surface_lighting: true,
+            cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
         }
@@ -270,6 +276,8 @@ impl RenderSettings {
             sun: Some(DirectionalLight::EDITOR),
             show_grid: true,
             debug_view: DebugView::Pbr,
+            fixture_surface_lighting: true,
+            cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
         }
@@ -292,6 +300,10 @@ struct RenderSettingsWire {
     show_grid: Option<bool>,
     #[serde(default)]
     debug_view: DebugView,
+    #[serde(default)]
+    fixture_surface_lighting: Option<bool>,
+    #[serde(default)]
+    cluster_debug: bool,
     fov: f32,
     #[serde(default)]
     dark_stage: Option<bool>,
@@ -318,6 +330,8 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 sun: wire.sun,
                 show_grid: wire.show_grid.unwrap_or(false),
                 debug_view: wire.debug_view,
+                fixture_surface_lighting: wire.fixture_surface_lighting.unwrap_or(false),
+                cluster_debug: wire.cluster_debug,
                 fov: wire.fov,
                 legacy_shadow_eye: None,
             });
@@ -335,6 +349,11 @@ impl<'de> Deserialize<'de> for RenderSettings {
         settings.haze.steps = wire.haze_steps.unwrap_or(8);
         settings.haze.density = wire.haze_density.unwrap_or(0.0);
         settings.debug_view = wire.debug_view;
+        // The legacy catalogue predates surface fixture lighting. Keeping it
+        // off at this compatibility boundary preserves those captured inputs;
+        // every new interactive preset enables the path.
+        settings.fixture_surface_lighting = wire.fixture_surface_lighting.unwrap_or(false);
+        settings.cluster_debug = wire.cluster_debug;
         settings.legacy_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
         Ok(settings)
     }

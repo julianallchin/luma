@@ -15,6 +15,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
 use crate::assets::Image;
+use crate::clusters::{ClusterCache, CLUSTER_DEPTH_SLICES, CLUSTER_TILE_SIZE};
 use crate::environment::EnvironmentSystem;
 use crate::frame::{Draw, Frame};
 use crate::overlay::{Overlay, OverlayDepth};
@@ -102,6 +103,22 @@ struct LightRest {
     wash: f32,
     gobo: f32,
     gobo_rotation: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SurfaceClusterHeader {
+    offset: u32,
+    count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SurfaceClusterUniform {
+    /// x/y: grid columns/rows, z: tile size, w: depth slices.
+    grid: [u32; 4],
+    /// x/y: near/far, z: surface lighting enabled, w: occupancy debug.
+    depth_and_flags: [f32; 4],
 }
 
 #[repr(C)]
@@ -195,6 +212,22 @@ pub struct FrameTimings {
     pub gpu_volumetric_ms: f64,
     /// CPU time for scene preparation, command encoding and queue submission.
     pub cpu_encode_submit_ms: f64,
+    /// CPU time spent rebuilding the deterministic surface-light cluster CSR.
+    /// A cache hit reports zero.
+    pub cpu_cluster_ms: f64,
+}
+
+/// Latest bounded clustered-light index metrics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ClusterStats {
+    /// Number of clusters containing at least one fixture cone.
+    pub occupied_clusters: usize,
+    /// Total packed light references across all clusters.
+    pub light_references: usize,
+    /// Largest list visited by one surface fragment.
+    pub max_lights_per_cluster: u32,
+    /// Cumulative topology rebuild count for this renderer.
+    pub rebuilds: u64,
 }
 
 impl Channels {
@@ -223,6 +256,7 @@ pub struct Renderer {
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     environment: EnvironmentSystem,
+    cluster_layout: wgpu::BindGroupLayout,
     haze_layout: wgpu::BindGroupLayout,
     temporal_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
@@ -272,6 +306,18 @@ pub struct Renderer {
     live_noise_frame: u32,
     profiler: Option<ProfilerResources>,
     haze_tile_cache: Option<HazeTileCache>,
+    cluster_cache: ClusterCache,
+    cluster_gpu: Option<SurfaceClusterGpu>,
+    cluster_stats: ClusterStats,
+}
+
+struct SurfaceClusterGpu {
+    headers: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    columns: u32,
+    rows: u32,
+    near: f32,
+    far: f32,
 }
 
 struct ProfilerResources {
@@ -431,6 +477,7 @@ struct PendingProfile {
     mapped_result: Option<Result<(), String>>,
     timestamp_period_ns: f32,
     cpu_encode_submit: Duration,
+    cpu_cluster: Duration,
 }
 
 pub(crate) struct CompletedReadback {
@@ -544,6 +591,16 @@ impl Renderer {
                 },
             ],
         });
+        let cluster_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("surface-clusters"),
+            entries: &[
+                storage_entry(0, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(1, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(2, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(3, wgpu::ShaderStages::FRAGMENT),
+                uniform_entry(4, wgpu::ShaderStages::FRAGMENT),
+            ],
+        });
 
         // Group 1 is the per-draw material texture. glTF's `baseColorTexture`
         // is sRGB-encoded, so the view format decodes on sample and the shader
@@ -652,7 +709,12 @@ impl Renderer {
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene"),
-                bind_group_layouts: &[&scene_layout, &material_layout, environment.scene_layout()],
+                bind_group_layouts: &[
+                    &scene_layout,
+                    &material_layout,
+                    environment.scene_layout(),
+                    &cluster_layout,
+                ],
                 push_constant_ranges: &[],
             });
 
@@ -1026,6 +1088,7 @@ impl Renderer {
             scene_layout,
             material_layout,
             environment,
+            cluster_layout,
             haze_layout,
             temporal_layout,
             composite_layout,
@@ -1063,6 +1126,9 @@ impl Renderer {
             live_noise_frame: 0,
             profiler,
             haze_tile_cache: None,
+            cluster_cache: ClusterCache::default(),
+            cluster_gpu: None,
+            cluster_stats: ClusterStats::default(),
         })
     }
 
@@ -1238,6 +1304,12 @@ impl Renderer {
         self.upload_stats
     }
 
+    /// Read metrics for the most recently submitted surface cluster grid.
+    #[must_use]
+    pub fn cluster_stats(&self) -> ClusterStats {
+        self.cluster_stats
+    }
+
     /// Adapter identity for reproducible performance evidence.
     #[must_use]
     pub fn adapter_profile(&self) -> &RendererProfile {
@@ -1374,6 +1446,107 @@ impl Renderer {
                 color: (l.color * l.intensity).extend(0.0).to_array(),
             })
             .collect();
+
+        let fixture_cones: Vec<_> = frame
+            .fixture_cones
+            .iter()
+            .take(crate::frame::MAX_FIXTURE_CONES)
+            .map(sanitize_fixture_cone)
+            .collect();
+        let cores: Vec<LightCore> = fixture_cones
+            .iter()
+            .map(|light| LightCore {
+                position: light.position.to_array(),
+                range: light.range.clamp(0.05, 100.0),
+            })
+            .collect();
+        let rests: Vec<LightRest> = fixture_cones
+            .iter()
+            .map(|light| LightRest {
+                direction: light
+                    .direction
+                    .try_normalize()
+                    .unwrap_or(Vec3::NEG_Y)
+                    .to_array(),
+                cos_beam: light.cos_beam.clamp(-1.0, 1.0),
+                color: light.color.to_array(),
+                intensity: light.intensity.clamp(0.0, 100.0),
+                cos_field: light.cos_field.clamp(-1.0, 1.0),
+                wash: light.wash.clamp(0.0, 1.0),
+                gobo: light.gobo.min(2) as f32,
+                gobo_rotation: light.gobo_rotation.rem_euclid(std::f32::consts::TAU),
+            })
+            .collect();
+        let cluster_started = Instant::now();
+        let (rebuilt, columns, rows, cluster_near, cluster_far, headers, indices, stats) = {
+            let (grid, rebuilt) = self
+                .cluster_cache
+                .get_or_build(
+                    &fixture_cones,
+                    frame.camera,
+                    [width, height],
+                    CAMERA_NEAR,
+                    CAMERA_FAR,
+                )
+                .expect("bounded render target must produce a safe cluster grid");
+            let stats = ClusterStats {
+                occupied_clusters: grid
+                    .headers
+                    .iter()
+                    .filter(|header| header.count > 0)
+                    .count(),
+                light_references: grid.light_indices.len(),
+                max_lights_per_cluster: grid
+                    .headers
+                    .iter()
+                    .map(|header| header.count)
+                    .max()
+                    .unwrap_or(0),
+                rebuilds: self.cluster_stats.rebuilds + u64::from(rebuilt),
+            };
+            (
+                rebuilt,
+                grid.columns,
+                grid.rows,
+                grid.near(),
+                grid.far(),
+                rebuilt.then(|| {
+                    grid.headers
+                        .iter()
+                        .map(|header| SurfaceClusterHeader {
+                            offset: header.offset,
+                            count: header.count,
+                        })
+                        .collect::<Vec<_>>()
+                }),
+                rebuilt.then(|| grid.light_indices.clone()),
+                stats,
+            )
+        };
+        self.cluster_stats = stats;
+        if rebuilt || self.cluster_gpu.is_none() {
+            self.cluster_gpu = Some(SurfaceClusterGpu {
+                headers: self.storage(
+                    &pad_at_least_one(headers.unwrap_or_default()),
+                    wgpu::BufferUsages::STORAGE,
+                    "surface-cluster-headers",
+                ),
+                indices: self.storage(
+                    &pad_at_least_one(indices.unwrap_or_default()),
+                    wgpu::BufferUsages::STORAGE,
+                    "surface-cluster-indices",
+                ),
+                columns,
+                rows,
+                near: cluster_near,
+                far: cluster_far,
+            });
+        }
+        let cpu_cluster = if rebuilt {
+            cluster_started.elapsed()
+        } else {
+            Duration::ZERO
+        };
 
         let globals = Globals {
             view_proj: view_proj.to_cols_array_2d(),
@@ -1536,6 +1709,46 @@ impl Renderer {
             "point-lights",
         );
         let globals_buf = self.storage(&[globals], wgpu::BufferUsages::UNIFORM, "globals");
+        let core_buf = self.storage(
+            &pad_at_least_one(cores),
+            wgpu::BufferUsages::STORAGE,
+            "light-core",
+        );
+        let rest_buf = self.storage(
+            &pad_at_least_one(rests),
+            wgpu::BufferUsages::STORAGE,
+            "light-rest",
+        );
+        let cluster_gpu = self.cluster_gpu.as_ref().expect("cluster cache populated");
+        let cluster_uniform = self.storage(
+            &[SurfaceClusterUniform {
+                grid: [
+                    cluster_gpu.columns,
+                    cluster_gpu.rows,
+                    CLUSTER_TILE_SIZE,
+                    CLUSTER_DEPTH_SLICES,
+                ],
+                depth_and_flags: [
+                    cluster_gpu.near,
+                    cluster_gpu.far,
+                    f32::from(u8::from(frame.fixture_surface_lighting)),
+                    f32::from(u8::from(frame.cluster_debug)),
+                ],
+            }],
+            wgpu::BufferUsages::UNIFORM,
+            "surface-cluster-uniform",
+        );
+        let cluster_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("surface-clusters"),
+            layout: &self.cluster_layout,
+            entries: &[
+                binding(0, core_buf.as_entire_binding()),
+                binding(1, rest_buf.as_entire_binding()),
+                binding(2, cluster_gpu.headers.as_entire_binding()),
+                binding(3, cluster_gpu.indices.as_entire_binding()),
+                binding(4, cluster_uniform.as_entire_binding()),
+            ],
+        });
         let overlay_buf = self.storage(
             &pad_at_least_one(overlay_instances),
             wgpu::BufferUsages::STORAGE,
@@ -1686,6 +1899,7 @@ impl Renderer {
                     pass.set_pipeline(&self.shadow_pipeline);
                     pass.set_bind_group(0, &shadow_bgs[cascade].1, &[]);
                     pass.set_bind_group(2, &environment_bg, &[]);
+                    pass.set_bind_group(3, &cluster_bg, &[]);
                     draw_range(&mut pass, 0..opaque);
                 }
             }
@@ -1709,6 +1923,7 @@ impl Renderer {
                 pass.set_pipeline(&self.depth_pipeline);
                 pass.set_bind_group(0, &unlit_bg, &[]);
                 pass.set_bind_group(2, &environment_bg, &[]);
+                pass.set_bind_group(3, &cluster_bg, &[]);
                 draw_range(&mut pass, 0..opaque);
             }
 
@@ -1735,6 +1950,7 @@ impl Renderer {
                 pass.set_pipeline(&self.scene_pipeline);
                 pass.set_bind_group(0, &lit_bg, &[]);
                 pass.set_bind_group(2, &environment_bg, &[]);
+                pass.set_bind_group(3, &cluster_bg, &[]);
                 draw_range(&mut pass, 0..opaque);
                 if frame.grid_draws > 0 {
                     pass.set_pipeline(&self.grid_pipeline);
@@ -1744,46 +1960,6 @@ impl Renderer {
         }
 
         // --- haze ------------------------------------------------------------
-        let fixture_cones: Vec<_> = frame
-            .fixture_cones
-            .iter()
-            .take(crate::frame::MAX_FIXTURE_CONES)
-            .map(sanitize_fixture_cone)
-            .collect();
-        let cores: Vec<LightCore> = fixture_cones
-            .iter()
-            .map(|l| LightCore {
-                position: l.position.to_array(),
-                range: l.range.clamp(0.05, 100.0),
-            })
-            .collect();
-        let rests: Vec<LightRest> = fixture_cones
-            .iter()
-            .map(|l| LightRest {
-                direction: l
-                    .direction
-                    .try_normalize()
-                    .unwrap_or(Vec3::NEG_Y)
-                    .to_array(),
-                cos_beam: l.cos_beam.clamp(-1.0, 1.0),
-                color: l.color.to_array(),
-                intensity: l.intensity.clamp(0.0, 100.0),
-                cos_field: l.cos_field.clamp(-1.0, 1.0),
-                wash: l.wash.clamp(0.0, 1.0),
-                gobo: l.gobo.min(2) as f32,
-                gobo_rotation: l.gobo_rotation.rem_euclid(std::f32::consts::TAU),
-            })
-            .collect();
-        let core_buf = self.storage(
-            &pad_at_least_one(cores),
-            wgpu::BufferUsages::STORAGE,
-            "light-core",
-        );
-        let rest_buf = self.storage(
-            &pad_at_least_one(rests),
-            wgpu::BufferUsages::STORAGE,
-            "light-rest",
-        );
         let tile_key = haze_tile_key(&fixture_cones, frame.camera, haze_size);
         if self
             .haze_tile_cache
@@ -2097,6 +2273,7 @@ impl Renderer {
                 mapped_result: None,
                 timestamp_period_ns,
                 cpu_encode_submit,
+                cpu_cluster,
             }
         });
         PendingReadback {
@@ -2322,7 +2499,8 @@ mod tests {
     use super::{
         cascade_matrices, downsample, haze_tile_key, haze_tiles, Channels, CompositeUniform,
         Globals, HazeUniform, LightCore, LightRest, Renderer, TextureEncoding, TileHeader,
-        CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, HAZE_TILE_SIZE, SHADOW_SIZE,
+        CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, CLUSTER_DEPTH_SLICES, CLUSTER_TILE_SIZE,
+        HAZE_TILE_SIZE, SHADOW_SIZE,
     };
 
     #[test]
@@ -2585,6 +2763,209 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn clustered_fixture_light_is_local_and_surface_toggle_is_independent() -> anyhow::Result<()> {
+        let mut renderer = Renderer::new()?;
+        let mut frame = fixture_surface_frame(1);
+        frame.fixture_cones[0].color = Vec3::new(1.0, 0.08, 0.02);
+        let lit = renderer.render(&frame, 160, 120, 1)?;
+        frame.fixture_surface_lighting = false;
+        let dark = renderer.render(&frame, 160, 120, 1)?;
+
+        let central = region_mean(&lit, 160, 52..108, 38..94);
+        let central_dark = region_mean(&dark, 160, 52..108, 38..94);
+        let corner = region_mean(&lit, 160, 0..24, 88..120);
+        assert!(
+            central > central_dark + 2.0,
+            "fixture surface light did not contribute locally: {central:.2} vs {central_dark:.2}"
+        );
+        assert!(
+            central > corner + 1.0,
+            "finite cone illuminated the whole surface: center {central:.2}, corner {corner:.2}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn clustered_surface_uses_shared_cone_and_gobo_photometry() -> anyhow::Result<()> {
+        let mut renderer = Renderer::new()?;
+        let open = fixture_surface_frame(1);
+        let open_pixels = renderer.render(&open, 160, 120, 1)?;
+        let mut spokes = fixture_surface_frame(1);
+        spokes.fixture_cones[0].gobo = 1;
+        spokes.fixture_cones[0].gobo_rotation = 0.31;
+        let spokes_pixels = renderer.render(&spokes, 160, 120, 1)?;
+        let mut outside = fixture_surface_frame(1);
+        outside.fixture_cones[0].direction = Vec3::new(0.0, 1.0, -0.08).normalize();
+        let outside_pixels = renderer.render(&outside, 160, 120, 1)?;
+
+        let open_energy = region_mean(&open_pixels, 160, 42..118, 32..104);
+        let spokes_energy = region_mean(&spokes_pixels, 160, 42..118, 32..104);
+        let outside_energy = region_mean(&outside_pixels, 160, 42..118, 32..104);
+        assert!(
+            open_energy > spokes_energy + 0.5,
+            "shared gobo did not remove surface energy: {open_energy:.2} vs {spokes_energy:.2}"
+        );
+        assert!(
+            open_energy > outside_energy + 1.0,
+            "shared cone cutoff did not reject an off-axis surface: {open_energy:.2} vs {outside_energy:.2}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cluster_gpu_cache_reuses_topology_for_shading_only_changes() -> anyhow::Result<()> {
+        let mut renderer = Renderer::new()?;
+        let mut frame = fixture_surface_frame(32);
+        renderer.render(&frame, 192, 128, 1)?;
+        let first = renderer.cluster_stats();
+        assert_eq!(first.rebuilds, 1);
+
+        for light in &mut frame.fixture_cones {
+            light.color = Vec3::new(0.1, 0.8, 0.3);
+            light.intensity *= 0.4;
+            light.cos_beam = 0.99;
+            light.wash = 1.0;
+            light.gobo = 2;
+            light.gobo_rotation = 1.7;
+        }
+        renderer.render(&frame, 192, 128, 1)?;
+        assert_eq!(renderer.cluster_stats().rebuilds, first.rebuilds);
+
+        frame.fixture_cones[0].position.x += 0.1;
+        renderer.render(&frame, 192, 128, 1)?;
+        assert_eq!(renderer.cluster_stats().rebuilds, first.rebuilds + 1);
+        Ok(())
+    }
+
+    #[test]
+    fn clustered_surface_lists_remain_bounded_at_32_128_and_512_cones() -> anyhow::Result<()> {
+        let mut renderer = Renderer::new()?;
+        for count in [32, 128, 512] {
+            let frame = fixture_surface_frame(count);
+            renderer.render(&frame, 320, 180, 1)?;
+            let stats = renderer.cluster_stats();
+            let clusters = 320_u32.div_ceil(CLUSTER_TILE_SIZE) as usize
+                * 180_u32.div_ceil(CLUSTER_TILE_SIZE) as usize
+                * CLUSTER_DEPTH_SLICES as usize;
+            assert!(stats.occupied_clusters <= clusters);
+            assert!(stats.max_lights_per_cluster <= count as u32);
+            assert!(stats.light_references <= clusters * count);
+            assert!(stats.light_references > 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cluster_occupancy_debug_is_topology_only() -> anyhow::Result<()> {
+        let mut renderer = Renderer::new()?;
+        let mut frame = fixture_surface_frame(32);
+        frame.cluster_debug = true;
+        frame.fixture_surface_lighting = false;
+        let first = renderer.render(&frame, 160, 120, 1)?;
+        for light in &mut frame.fixture_cones {
+            light.color = Vec3::ZERO;
+            light.intensity = 0.0;
+            light.gobo = 2;
+        }
+        let shading_only = renderer.render(&frame, 160, 120, 1)?;
+        assert_eq!(first, shading_only);
+        assert!(first.chunks_exact(4).any(|pixel| pixel[2] > 32));
+        Ok(())
+    }
+
+    fn fixture_surface_frame(count: usize) -> Frame {
+        let vertex = |position: [f32; 3]| Vertex {
+            position,
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0; 2],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        };
+        let mesh = MeshData {
+            key: "::clustered-surface-floor".into(),
+            vertices: vec![
+                vertex([-5.0, -5.0, 0.0]),
+                vertex([5.0, -5.0, 0.0]),
+                vertex([5.0, 5.0, 0.0]),
+                vertex([-5.0, 5.0, 0.0]),
+            ]
+            .into(),
+            indices: Arc::from([0, 1, 2, 0, 2, 3]),
+        };
+        let fixture_cones = (0..count)
+            .map(|index| {
+                let column = (index % 32) as f32;
+                let row = (index / 32) as f32;
+                FixtureCone {
+                    position: Vec3::new((column - 15.5) * 0.08, (row - 7.5) * 0.08, 3.0),
+                    range: 5.0,
+                    direction: Vec3::NEG_Z,
+                    cos_beam: 0.96,
+                    color: Vec3::ONE,
+                    intensity: 3.0 / count.max(1) as f32,
+                    cos_field: 0.88,
+                    wash: 0.0,
+                    gobo: 0,
+                    gobo_rotation: 0.0,
+                }
+            })
+            .collect();
+        Frame {
+            meshes: vec![mesh],
+            images: Vec::new(),
+            draws: vec![Draw {
+                mesh: 0,
+                model: Mat4::IDENTITY,
+                material: Material {
+                    base_color: Vec3::splat(0.65),
+                    roughness: 0.55,
+                    ..Material::default()
+                },
+                textures: MaterialTextures::default(),
+            }],
+            grid_draws: 0,
+            overlays: Vec::new(),
+            point_lights: Vec::new(),
+            fixture_cones,
+            fixture_surface_lighting: true,
+            cluster_debug: false,
+            clear_color: Vec3::ZERO,
+            ambient: Vec3::splat(0.002),
+            environment: None,
+            directional: None,
+            haze_density: 0.0,
+            haze_steps: 1,
+            haze_resolution: 0.5,
+            time: 0.0,
+            debug_view: DebugView::Pbr,
+            camera: Camera {
+                eye: Vec3::new(0.0, -6.0, 4.5),
+                target: Vec3::ZERO,
+                fov_y_deg: 48.0,
+            },
+        }
+    }
+
+    fn region_mean(
+        pixels: &[u8],
+        width: usize,
+        xs: std::ops::Range<usize>,
+        ys: std::ops::Range<usize>,
+    ) -> f64 {
+        let mut sum = 0_u64;
+        let mut samples = 0_u64;
+        for y in ys {
+            for x in xs.clone() {
+                let offset = (y * width + x) * 4;
+                sum += u64::from(pixels[offset])
+                    + u64::from(pixels[offset + 1])
+                    + u64::from(pixels[offset + 2]);
+                samples += 3;
+            }
+        }
+        sum as f64 / samples as f64
+    }
+
     fn overlay_test_frame(
         occluder: bool,
         depth: OverlayDepth,
@@ -2635,6 +3016,8 @@ mod tests {
             }],
             point_lights: Vec::new(),
             fixture_cones: Vec::new(),
+            fixture_surface_lighting: false,
+            cluster_debug: false,
             environment: None,
             clear_color: scene_radiance,
             ambient: scene_radiance,
@@ -2752,6 +3135,7 @@ impl PendingReadback {
                 gpu_total_ms: (timestamps[3] - timestamps[0]) as f64 * milliseconds,
                 gpu_volumetric_ms: (timestamps[2] - timestamps[1]) as f64 * milliseconds,
                 cpu_encode_submit_ms: profile.cpu_encode_submit.as_secs_f64() * 1000.0,
+                cpu_cluster_ms: profile.cpu_cluster.as_secs_f64() * 1000.0,
             })
         } else {
             None
