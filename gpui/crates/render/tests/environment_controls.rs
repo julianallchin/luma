@@ -183,6 +183,58 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
 }
 
 #[test]
+fn gpu_far_cascade_keeps_directional_occlusion() {
+    const WIDTH: u32 = 160;
+    const HEIGHT: u32 = 120;
+    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let definitions = BTreeMap::new();
+    let mut library = Library::new(meshes);
+    let mut renderer = luma_render::Renderer::new().unwrap();
+    let render = |shadows: bool, renderer: &mut luma_render::Renderer, library: &mut Library| {
+        let mut render = probe_settings([2.0, -3.0, 6.0], 2.0, shadows);
+        render.fov = 20.0;
+        render.debug_view = DebugView::Shadow;
+        let far_scene = Scene {
+            id: "far-cascade-proof".into(),
+            times: vec![0.0],
+            camera: CameraPose {
+                position: [0.0, -80.0, 20.0],
+                target: [0.0, 0.0, 0.0],
+            },
+            editing: false,
+            render,
+            selected_fixture_ids: Vec::new(),
+            fixtures: Vec::new(),
+            pieces: vec![Piece {
+                id: "far-shadow-caster".into(),
+                mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                pos: [0.0, 0.0, 0.0],
+                rot: [0.0, 0.0, 0.0],
+                scale: 8.0,
+            }],
+            state: BTreeMap::new(),
+        };
+        let frame = build_frame_with(&far_scene, &definitions, &|_, _| None, 0.0, library).unwrap();
+        renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap()
+    };
+    let shadowed = render(true, &mut renderer, &mut library);
+    let unshadowed = render(false, &mut renderer, &mut library);
+    let removed_light: u64 = shadowed
+        .chunks_exact(4)
+        .zip(unshadowed.chunks_exact(4))
+        .map(|(shadow, direct)| {
+            (0..3)
+                .map(|channel| u64::from(direct[channel].saturating_sub(shadow[channel])))
+                .sum::<u64>()
+        })
+        .sum();
+    assert!(
+        removed_light > 10_000,
+        "third-cascade shadowing did not survive at 80 m: {removed_light}"
+    );
+}
+
+#[test]
 fn checked_in_legacy_catalogue_is_adapted_at_load_boundary() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens/scenes.json");
     let catalogue = luma_render::Catalogue::load(&path).unwrap();
@@ -441,13 +493,13 @@ fn material_lab_maps_debug_views_and_uploads_are_deterministic() {
     assert_eq!(
         hashes,
         [
-            0xb753_1cbe_8117_99f5,
+            0xbb12_09d7_6211_83ca,
             0xadc8_cdaa_603a_d066,
             0xc75b_c91d_43aa_766f,
             0x3736_a13a_731a_8c57,
             0x9e3d_0e0a_4272_7a85,
-            0x655f_262b_2eb6_0846,
-            0x988b_937c_03c0_970c,
+            0x3afa_7678_5271_aed0,
+            0xe8f3_3348_8f85_b940,
             0xac0c_ad64_9319_a325,
         ],
         "material/debug golden output drifted"

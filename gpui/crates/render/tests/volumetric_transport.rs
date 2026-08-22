@@ -284,9 +284,9 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
     assert_eq!(
         (hash(&one), hash(&overlap), hash(&gobo)),
         (
-            0xa9af_c858_a280_12e0,
-            0xb22e_5dfc_5487_cc88,
-            0x6407_1d19_2375_2b77,
+            0x1eee_2591_7e01_e511,
+            0x0d99_caff_28ca_c25a,
+            0x8171_47f1_b1ef_0857,
         ),
         "one/overlap/gobo transport golden drifted"
     );
@@ -314,7 +314,7 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
         .unwrap();
     assert_eq!(
         (hash(&open), hash(&blocked)),
-        (0xb334_07a2_bb86_7098, 0x418d_fed4_5143_2cdd),
+        (0x7f4e_c6ae_9fdf_b901, 0xaa17_6206_f7b4_cf3a),
         "depth-occlusion transport golden drifted"
     );
     assert!(mean_rgb(&blocked) < mean_rgb(&open));

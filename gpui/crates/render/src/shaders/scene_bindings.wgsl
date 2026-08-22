@@ -6,8 +6,11 @@
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    light_view_proj: mat4x4<f32>,
+    light_view_proj: array<mat4x4<f32>, 3>,
     camera_pos: vec4<f32>,
+    camera_forward: vec4<f32>,
+    // xyz: far distance for each cascade, w: transition fraction.
+    cascade_splits: vec4<f32>,
     ambient: vec4<f32>,
     // xyz: direction toward the light. w: 1 when the directional light exists.
     dir_to_light: vec4<f32>,
@@ -40,5 +43,5 @@ struct PointLightData {
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var<storage, read> instances: array<Instance>;
 @group(0) @binding(2) var<storage, read> point_lights: array<PointLightData>;
-@group(0) @binding(3) var shadow_map: texture_depth_2d;
+@group(0) @binding(3) var shadow_map: texture_depth_2d_array;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
