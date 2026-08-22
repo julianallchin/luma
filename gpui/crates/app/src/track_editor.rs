@@ -3390,7 +3390,7 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
             origin: bounds.origin,
             size: size(bounds.size.width, px(HEADER_HEIGHT)),
         },
-        ladder::gutter(),
+        ladder::band(),
     ));
 
     let view = scene.view;
@@ -3605,7 +3605,7 @@ fn paint_time_ruler(
             if major {
                 ladder::border()
             } else {
-                ladder::muted()
+                ladder::card()
             },
         ));
         if major {
@@ -3639,7 +3639,7 @@ fn paint_waveform(
             origin: point(canvas.origin.x, canvas.origin.y + px(top)),
             size: size(canvas.size.width, px(WAVEFORM_HEIGHT)),
         },
-        ladder::muted(),
+        ladder::card(),
     ));
     window.paint_quad(fill(
         Bounds {
@@ -3649,7 +3649,10 @@ fn paint_waveform(
             ),
             size: size(canvas.size.width, px(1.)),
         },
-        WAVEFORM_FLOOR,
+        // The line under the waveform is a seam, not a plane: it divides the
+        // bed from the lanes below it, so it derives from both rather than
+        // being a value anyone chose.
+        ladder::seam(ladder::card(), ladder::background()),
     ));
 
     let Some(waveform) = &scene.waveform else {
@@ -3818,18 +3821,8 @@ fn columns(grid: Grid, view: View, width: f32) -> impl Iterator<Item = Column> {
     })
 }
 
-/// The line under the waveform. Literal on the web side too — it is darker
-/// than anything on the ladder, because it is the seam between two planes
-/// rather than a plane of its own.
-const WAVEFORM_FLOOR: Rgba = Rgba {
-    r: 0x17 as f32 / 255.,
-    g: 0x17 as f32 / 255.,
-    b: 0x17 as f32 / 255.,
-    a: 1.,
-};
-
-/// `drawAnnotations`' ground: the empty insertion lane, the alternating lane
-/// fills, and the darkened floor below the last one.
+/// `drawAnnotations`' ground: the alternating lane fills and the hairline
+/// under each. What is *not* a lane is left as the canvas's own ground.
 fn paint_lanes(canvas: Bounds<Pixels>, layout: Layout, window: &mut Window) {
     let width = canvas.size.width;
     let strip = |top: f32, height: f32, color: Hsla, window: &mut Window| {
@@ -3842,18 +3835,14 @@ fn paint_lanes(canvas: Bounds<Pixels>, layout: Layout, window: &mut Window) {
         ));
     };
 
-    // The dead-air lane above lane 0, which is nothing at all once the lanes
-    // overflow and it has been lifted off the top of the canvas.
-    strip(
-        TRACK_AREA_Y,
-        (layout.start - TRACK_AREA_Y).max(0.),
-        fade(rgb(0x000000), 0.3),
-        window,
-    );
+    // The dead-air lane above lane 0 and the floor below the last one are
+    // painted by *not* painting: a region with no lane in it is the ground,
+    // and the ground is already down. Darkening them would be depth below the
+    // floor, which this ladder does not have.
     for lane in 0..layout.rows {
         let top = layout.top(lane);
         let alpha = if lane % 2 == 0 { 0.2 } else { 0.15 };
-        strip(top, layout.lane, fade(ladder::muted(), alpha), window);
+        strip(top, layout.lane, fade(ladder::card(), alpha), window);
         window.paint_quad(fill(
             Bounds {
                 origin: point(
@@ -3865,13 +3854,6 @@ fn paint_lanes(canvas: Bounds<Pixels>, layout: Layout, window: &mut Window) {
             ladder::border(),
         ));
     }
-    let floor = layout.floor();
-    strip(
-        floor,
-        f32::from(canvas.size.height) - floor,
-        fade(rgb(0x000000), 0.3),
-        window,
-    );
 }
 
 /// One clip: an opaque header plate over a translucent body, inside a border,

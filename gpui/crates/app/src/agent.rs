@@ -7,10 +7,12 @@
 //! durable model enforces the same rule, and two statements of it would be two
 //! chances to disagree.
 //!
-//! A shell showing nothing an agent can work on — no tab open — has no scope,
-//! and the centre sits *unattached*: an opening that says what it could attach
-//! to, with no composer under it, because there is no thread for a send to
-//! land in.
+//! A shell that has *never* shown a subject has no scope, and the centre sits
+//! *unattached*: an opening that says what it could attach to, with no
+//! composer under it, because there is no thread for a send to land in. Once
+//! a thread exists it is sticky: a tab that names no subject (the visualizer)
+//! or an emptied workspace does not take the conversation away — only a
+//! *different* subject re-points the centre.
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::AgentChat;
@@ -51,8 +53,9 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
 
 impl Luma {
     /// Keep the centre pointed at the shell's subject: build the chat on the
-    /// first frame (its composer needs a `Window`), and re-point it when the
-    /// subject changes — up to and including to nothing.
+    /// first frame (its composer needs a `Window`), and re-point it when a
+    /// different subject appears. A subject-less view does not erase an
+    /// already attached conversation.
     ///
     /// Done at draw rather than at every navigation for the reason
     /// [`Luma::take_focus`] is: a navigation is a field assignment, and a
@@ -62,7 +65,16 @@ impl Luma {
     pub(crate) fn sync_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = scope_for(self);
         if let Some(chat) = &self.chat {
-            if chat.read(cx).scope() == wanted.as_ref() {
+            let current = chat.read(cx).scope();
+            if current == wanted.as_ref() {
+                return;
+            }
+            // The conversation is stickier than the eye: a tab that names no
+            // subject (the visualizer), or no tab at all, implies no *new*
+            // conversation — it does not end the one in progress. Rebuilding
+            // here would also drop a turn in flight, since a `TurnStream`
+            // cancels on drop.
+            if wanted.is_none() && current.is_some() {
                 return;
             }
         }

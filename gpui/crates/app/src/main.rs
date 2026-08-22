@@ -28,7 +28,7 @@ fn main() {
         luma_app::init(cx);
 
         let options = WindowOptions {
-            // No *visible* native chrome: `chrome::titlebar` draws it, the same
+            // No *visible* native chrome: `chrome`'s head bands draw it, the same
             // choice `decorations: false` makes for the Tauri window. The
             // titlebar is still requested, transparent and title-less, because
             // that is the only branch of gpui's macOS window that honours
