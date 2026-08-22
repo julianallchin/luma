@@ -38,9 +38,6 @@ impl Preprocessor for StemsPreprocessor {
     fn output(&self) -> Artifact {
         Artifact::Stems
     }
-    fn status_label(&self) -> &'static str {
-        "Separating stems…"
-    }
     fn artifact_table(&self) -> &'static str {
         "track_stems"
     }
@@ -63,10 +60,10 @@ impl Preprocessor for StemsPreprocessor {
         let track = ctx.track();
         let track_path = PathBuf::from(&track.file_path);
         let stems_root = ctx.stems_dir().join(&track.track_hash);
-        let handle = ctx.app_handle().clone();
+        let workers = ctx.workers().clone();
 
         let stem_files = tauri::async_runtime::spawn_blocking(move || {
-            stem_worker::separate_stems(&handle, &track_path, &stems_root)
+            stem_worker::separate_stems(&workers, &track_path, &stems_root)
         })
         .await
         .map_err(|e| format!("Stem worker task failed: {e}"))??;

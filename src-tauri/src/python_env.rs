@@ -151,7 +151,15 @@ pub fn ensure_worker_script(
         .path()
         .app_cache_dir()
         .map_err(|e| format!("Failed to locate cache dir: {}", e))?;
-    fs::create_dir_all(&cache_dir)
+    ensure_worker_script_at(&cache_dir, script_name, source)
+}
+
+pub fn ensure_worker_script_at(
+    cache_dir: &Path,
+    script_name: &str,
+    source: &str,
+) -> Result<PathBuf, String> {
+    fs::create_dir_all(cache_dir)
         .map_err(|e| format!("Failed to create cache dir {}: {}", cache_dir.display(), e))?;
 
     let script_path = cache_dir.join(script_name);
@@ -176,6 +184,15 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
         .path()
         .app_cache_dir()
         .map_err(|e| format!("Failed to locate cache dir: {}", e))?;
+    let resource_dir = app.path().resource_dir().ok();
+    ensure_python_resource_dir_at(&cache_dir, resource_dir.as_deref(), relative)
+}
+
+pub fn ensure_python_resource_dir_at(
+    cache_dir: &Path,
+    resource_dir: Option<&Path>,
+    relative: &str,
+) -> Result<PathBuf, String> {
     let dest_root = cache_dir.join(relative);
 
     // In a bundled Tauri build the source repo path baked into
@@ -184,7 +201,7 @@ pub fn ensure_python_resource_dir(app: &AppHandle, relative: &str) -> Result<Pat
     // tauri.conf.json land. In dev/cargo-test builds the manifest path is
     // valid and works as before.
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(resource_dir) = app.path().resource_dir() {
+    if let Some(resource_dir) = resource_dir {
         candidates.push(resource_dir.join("python").join(relative));
     }
     candidates.push(
@@ -269,11 +286,25 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<
 /// umbrella) and non-fatal — the classifier worker can still download on
 /// demand if it failed here.
 pub fn setup_python_env_background(app_handle: AppHandle) {
+    let error_path = app_handle
+        .path()
+        .app_cache_dir()
+        .ok()
+        .map(|cache| cache.join(".python-env-error"));
+    if let Some(path) = &error_path {
+        let _ = fs::remove_file(path);
+    }
     std::thread::spawn(move || {
         let python_path = match ensure_python_env(&app_handle) {
             Ok(path) => path,
             Err(err) => {
                 eprintln!("[python-env] Background setup failed: {}", err);
+                if let Some(path) = &error_path {
+                    if let Some(parent) = path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let _ = fs::write(path, &err);
+                }
                 let _ = app_handle.emit("python-env-progress", ("error", &err));
                 return;
             }

@@ -28,9 +28,6 @@ impl Preprocessor for BeatGridPreprocessor {
     fn output(&self) -> Artifact {
         Artifact::BeatGrid
     }
-    fn status_label(&self) -> &'static str {
-        "Analyzing beats…"
-    }
     fn artifact_table(&self) -> &'static str {
         "track_beats"
     }
@@ -38,10 +35,10 @@ impl Preprocessor for BeatGridPreprocessor {
     async fn run(&self, ctx: &PreprocessorContext<'_>, track_id: &str) -> Result<(), String> {
         let track = ctx.track();
         let path = Path::new(&track.file_path).to_path_buf();
-        let handle = ctx.app_handle().clone();
+        let workers = ctx.workers().clone();
 
         let beat_data = tauri::async_runtime::spawn_blocking(move || {
-            beat_worker::compute_beats(&handle, &path)
+            beat_worker::compute_beats(&workers, &path)
         })
         .await
         .map_err(|e| format!("Beat worker task failed: {e}"))??;

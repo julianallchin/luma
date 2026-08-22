@@ -25,19 +25,29 @@ use std::sync::Arc;
 
 use once_cell::sync::OnceCell;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::audio::StemCache;
 use crate::database::local::tracks as tracks_db;
+use crate::dispatch::Events;
+use crate::models::tracks::{TrackImportPhase, TrackImportProgress};
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::failures;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext, PreprocessorRef};
 use crate::preprocessing::registry;
-use crate::preprocessing::AnalysisGuard;
-use crate::services::tracks::{analysis_worker_count, ensure_storage, storage_dirs};
+use crate::preprocessing::{AnalysisGuard, WorkerEnvironment};
+use crate::services::tracks::analysis_worker_count;
+use crate::storage::StorageRoot;
 use crate::topo;
+
+#[derive(Clone, Debug)]
+pub struct ImportEventContext {
+    pub import_id: String,
+    pub source: String,
+    pub done: usize,
+    pub total: usize,
+}
 
 // -----------------------------------------------------------------------------
 // Topological sort
@@ -161,6 +171,50 @@ fn inflight() -> &'static InflightSet {
     SET.get_or_init(InflightSet::default)
 }
 
+/// Drain every task in one DAG layer. A [`JoinError`] has lost the task's
+/// `(name, output)` payload, so any such error makes the whole layer's outputs
+/// indeterminate. Conservatively blocking all of them is the only safe basis
+/// for deciding whether the next layer may run.
+async fn drain_layer(
+    set: &mut JoinSet<(&'static str, Artifact, Result<(), String>)>,
+    layer_outputs: &[Artifact],
+    track_id: &str,
+) -> (HashSet<Artifact>, Vec<String>) {
+    let mut failed_outputs = HashSet::new();
+    let mut errors = Vec::new();
+    let mut indeterminate = false;
+
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok((_name, _output, Ok(()))) => {}
+            Ok((name, output, Err(error))) => {
+                eprintln!("[preprocessing] {name} failed for track {track_id}: {error}");
+                sentry::capture_message(
+                    &format!("Preprocessor {name} failed for track {track_id}: {error}"),
+                    sentry::Level::Error,
+                );
+                failed_outputs.insert(output);
+                errors.push(format!("{name}: {error}"));
+            }
+            Err(error) => {
+                indeterminate = true;
+                errors.push(format!("preprocessor task join error: {error}"));
+            }
+        }
+    }
+
+    if indeterminate {
+        failed_outputs.extend(layer_outputs.iter().copied());
+    }
+    (failed_outputs, errors)
+}
+
+fn is_blocked(p: &dyn Preprocessor, failed_artifacts: &HashSet<Artifact>) -> bool {
+    p.inputs()
+        .iter()
+        .any(|input| failed_artifacts.contains(input))
+}
+
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
@@ -170,11 +224,14 @@ fn inflight() -> &'static InflightSet {
 /// and skips its downstream preprocessors for this run.
 pub async fn run_for_track(
     pool: &SqlitePool,
-    app_handle: &AppHandle,
+    storage: &StorageRoot,
+    workers: &WorkerEnvironment,
+    events: &Events,
     stem_cache: &StemCache,
     track_id: &str,
     preprocessors: &[PreprocessorRef],
     analysis: &AnalysisGuard,
+    import: Option<&ImportEventContext>,
 ) -> Result<(), String> {
     analysis.checkpoint()?;
     let Some(track) = tracks_db::get_track_by_id(pool, track_id).await? else {
@@ -182,13 +239,14 @@ pub async fn run_for_track(
         // Silent skip — there's nothing to preprocess and no failure to record.
         return Ok(());
     };
-    ensure_storage(app_handle)?;
-    let (_, _, stems_dir) = storage_dirs(app_handle)?;
+    storage.ensure_track_storage()?;
+    let stems_dir = storage.stems_root();
 
     let layered = topo_layers(preprocessors);
 
     // Track which artifacts failed in this run so we can skip dependents.
     let mut failed_artifacts: HashSet<Artifact> = HashSet::new();
+    let mut track_errors = Vec::new();
 
     for layer in layered.layers() {
         // Filter layer: skip preprocessors whose inputs failed, or whose
@@ -196,18 +254,16 @@ pub async fn run_for_track(
         let mut to_run: Vec<PreprocessorRef> = Vec::new();
         let ctx = PreprocessorContext::new(
             pool,
-            app_handle,
+            storage,
+            workers,
+            events,
             stem_cache,
             &track,
             stems_dir.clone(),
             analysis.clone(),
         );
         for p in layer {
-            let blocked = p
-                .inputs()
-                .iter()
-                .any(|input| failed_artifacts.contains(input));
-            if blocked {
+            if is_blocked(p.as_ref(), &failed_artifacts) {
                 eprintln!(
                     "[preprocessing] skipping {} for track {track_id}: upstream failed",
                     p.name()
@@ -224,46 +280,48 @@ pub async fn run_for_track(
         if to_run.is_empty() {
             continue;
         }
+        let layer_outputs: Vec<Artifact> = to_run.iter().map(|p| p.output()).collect();
 
         // Spawn one task per preprocessor in this layer. Each task takes its
         // own owned context so it can be `'static`.
         let mut set: JoinSet<(&'static str, Artifact, Result<(), String>)> = JoinSet::new();
         for p in to_run {
             let pool = pool.clone();
-            let app_handle = app_handle.clone();
+            let storage = storage.clone();
+            let workers = workers.clone();
+            let events = events.clone();
             let stem_cache = stem_cache.clone();
             let track = track.clone();
             let stems_dir = stems_dir.clone();
             let track_id_owned = track_id.to_string();
             let analysis = analysis.clone();
+            let import = import.cloned();
             set.spawn(async move {
                 let ctx = PreprocessorContext::new(
                     &pool,
-                    &app_handle,
+                    &storage,
+                    &workers,
+                    &events,
                     &stem_cache,
                     &track,
                     stems_dir,
                     analysis,
                 );
-                let res = run_one(&ctx, &track_id_owned, p.as_ref()).await;
+                let res = run_one(&ctx, &track_id_owned, p.as_ref(), import.as_ref()).await;
                 (p.name(), p.output(), res)
             });
         }
 
-        while let Some(joined) = set.join_next().await {
-            let (name, output, result) = joined.map_err(|e| format!("Join error: {e}"))?;
-            if let Err(err) = result {
-                eprintln!("[preprocessing] {name} failed for track {track_id}: {err}");
-                sentry::capture_message(
-                    &format!("Preprocessor {name} failed for track {track_id}: {err}"),
-                    sentry::Level::Error,
-                );
-                failed_artifacts.insert(output);
-            }
-        }
+        let (layer_failures, layer_errors) = drain_layer(&mut set, &layer_outputs, track_id).await;
+        failed_artifacts.extend(layer_failures);
+        track_errors.extend(layer_errors);
     }
 
-    Ok(())
+    if track_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(track_errors.join("; "))
+    }
 }
 
 /// Run a single preprocessor for a single track, with failure backoff,
@@ -272,6 +330,7 @@ async fn run_one(
     ctx: &PreprocessorContext<'_>,
     track_id: &str,
     p: &dyn Preprocessor,
+    import: Option<&ImportEventContext>,
 ) -> Result<(), String> {
     ctx.checkpoint()?;
     let Some(_claim) = inflight().claim(track_id, p.name()).await else {
@@ -287,9 +346,22 @@ async fn run_one(
         };
     };
 
-    let _ = ctx
-        .app_handle()
-        .emit("track-import-progress", (track_id, p.status_label()));
+    if let Some(import) = import {
+        ctx.events().emit(
+            "track-import-state",
+            TrackImportProgress {
+                import_id: import.import_id.clone(),
+                source: import.source.clone(),
+                phase: TrackImportPhase::Analyzing,
+                done: import.done,
+                total: import.total,
+                track_id: Some(track_id.to_string()),
+                current_track: None,
+                step: Some(p.name().to_string()),
+                error: None,
+            },
+        );
+    }
 
     let result = p.run(ctx, track_id).await;
 
@@ -302,7 +374,7 @@ async fn run_one(
     match result {
         Ok(()) => {
             failures::clear(ctx.pool(), track_id, p.name()).await?;
-            let _ = ctx.app_handle().emit("track-status-changed", track_id);
+            ctx.events().emit("track-status-changed", track_id);
             Ok(())
         }
         Err(err) => {
@@ -313,6 +385,22 @@ async fn run_one(
                     "{err}; additionally failed to record the preprocessing failure: {record_error}"
                 ));
             }
+            if let Some(import) = import {
+                ctx.events().emit(
+                    "track-import-state",
+                    TrackImportProgress {
+                        import_id: import.import_id.clone(),
+                        source: import.source.clone(),
+                        phase: TrackImportPhase::Analyzing,
+                        done: import.done,
+                        total: import.total,
+                        track_id: Some(track_id.to_string()),
+                        current_track: None,
+                        step: Some(p.name().to_string()),
+                        error: Some(err.clone()),
+                    },
+                );
+            }
             Err(err)
         }
     }
@@ -322,63 +410,132 @@ async fn run_one(
 /// scheduling delegates to [`run_for_track`].
 pub async fn run_for_tracks(
     pool: SqlitePool,
-    app_handle: AppHandle,
+    storage: StorageRoot,
+    workers: WorkerEnvironment,
+    events: Events,
     stem_cache: StemCache,
     track_ids: Vec<String>,
     analysis: AnalysisGuard,
+    import: Option<ImportEventContext>,
 ) {
-    let total = track_ids.len();
+    let analyzable_total = track_ids.len();
     let preprocessors = registry::registered_preprocessors();
     // Validate the DAG once up front — panics on cycle.
     let _ = topo_layers(&preprocessors);
     let max_parallel = analysis_worker_count();
     let semaphore = Arc::new(Semaphore::new(max_parallel));
-    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(
+        import.as_ref().map_or(0, |import| import.done),
+    ));
 
-    let mut handles = Vec::with_capacity(total);
+    let mut handles = Vec::with_capacity(analyzable_total);
     for track_id in track_ids {
         let pool = pool.clone();
-        let app_handle = app_handle.clone();
+        let storage = storage.clone();
+        let workers = workers.clone();
+        let events = events.clone();
         let stem_cache = stem_cache.clone();
         let preprocessors = preprocessors.clone();
         let sem = semaphore.clone();
         let completed = completed.clone();
         let analysis = analysis.clone();
+        let mut import = import.clone();
 
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.expect("semaphore closed");
-            let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            let _ = app_handle.emit(
-                "track-import-progress",
-                (
-                    track_id.as_str(),
-                    format!("Analyzing track {done}/{total}…"),
-                ),
-            );
-            if let Err(e) = run_for_track(
+        let task_track_id = track_id.clone();
+        let handle = tokio::spawn(async move {
+            let _permit = sem
+                .acquire()
+                .await
+                .map_err(|error| format!("analysis semaphore closed: {error}"))?;
+            let done = completed.load(std::sync::atomic::Ordering::Relaxed);
+            if let Some(import) = &mut import {
+                import.done = done;
+                events.emit(
+                    "track-import-state",
+                    TrackImportProgress {
+                        import_id: import.import_id.clone(),
+                        source: import.source.clone(),
+                        phase: TrackImportPhase::Analyzing,
+                        done,
+                        total: import.total,
+                        track_id: Some(track_id.clone()),
+                        current_track: None,
+                        step: None,
+                        error: None,
+                    },
+                );
+            }
+            let result = run_for_track(
                 &pool,
-                &app_handle,
+                &storage,
+                &workers,
+                &events,
                 &stem_cache,
                 &track_id,
                 &preprocessors,
                 &analysis,
+                import.as_ref(),
             )
-            .await
-            {
+            .await;
+            if let Err(e) = &result {
                 eprintln!("[preprocessing] track {track_id} failed: {e}");
                 sentry::capture_message(
                     &format!("Preprocessing failed for track {track_id}: {e}"),
                     sentry::Level::Error,
                 );
             }
-        }));
+            let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if let Some(import) = &import {
+                events.emit(
+                    "track-import-state",
+                    TrackImportProgress {
+                        import_id: import.import_id.clone(),
+                        source: import.source.clone(),
+                        phase: TrackImportPhase::Analyzing,
+                        done,
+                        total: import.total,
+                        track_id: Some(track_id),
+                        current_track: None,
+                        step: None,
+                        error: result.as_ref().err().cloned(),
+                    },
+                );
+            }
+            result
+        });
+        handles.push((task_track_id, handle));
     }
 
-    for handle in handles {
-        let _ = handle.await;
+    let mut terminal_errors = Vec::new();
+    for (track_id, handle) in handles {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => terminal_errors.push(format!("{track_id}: {error}")),
+            Err(error) => {
+                terminal_errors.push(format!("{track_id}: analysis task failed: {error}"))
+            }
+        }
     }
-    let _ = app_handle.emit("track-import-complete", total);
-    eprintln!("[preprocessing] finished all {total} tracks ({max_parallel} parallel workers)");
+    if let Some(import) = import {
+        let done = completed.load(std::sync::atomic::Ordering::Relaxed);
+        events.emit(
+            "track-import-state",
+            TrackImportProgress {
+                import_id: import.import_id,
+                source: import.source,
+                phase: TrackImportPhase::Complete,
+                done,
+                total: import.total,
+                track_id: None,
+                current_track: None,
+                step: None,
+                error: (!terminal_errors.is_empty()).then(|| terminal_errors.join("\n")),
+            },
+        );
+    }
+    eprintln!(
+        "[preprocessing] finished all {analyzable_total} tracks ({max_parallel} parallel workers)"
+    );
 }
 
 /// Startup reconciliation: each preprocessor returns the IDs of tracks that
@@ -386,7 +543,9 @@ pub async fn run_for_tracks(
 /// backoff). The union is queued for processing.
 pub async fn reconcile_on_startup(
     pool: SqlitePool,
-    app_handle: AppHandle,
+    storage: StorageRoot,
+    workers: WorkerEnvironment,
+    events: Events,
     stem_cache: StemCache,
     analysis: AnalysisGuard,
 ) -> Result<(), String> {
@@ -411,7 +570,10 @@ pub async fn reconcile_on_startup(
         "[preprocessing] {} tracks need preprocessing, queueing...",
         queued.len()
     );
-    run_for_tracks(pool, app_handle, stem_cache, queued, analysis).await;
+    run_for_tracks(
+        pool, storage, workers, events, stem_cache, queued, analysis, None,
+    )
+    .await;
     Ok(())
 }
 
@@ -445,9 +607,6 @@ mod tests {
         }
         fn output(&self) -> Artifact {
             self.output
-        }
-        fn status_label(&self) -> &'static str {
-            "stub"
         }
         fn artifact_table(&self) -> &'static str {
             "stub_artifact"
@@ -546,5 +705,58 @@ mod tests {
         drop(claim1);
         let claim2 = task.await.unwrap();
         assert!(claim2.is_none(), "second concurrent claim should coalesce");
+    }
+
+    #[tokio::test]
+    async fn layer_drain_aggregates_every_panic_and_failure_and_blocks_dependents() {
+        let layer_outputs = [Artifact::BeatGrid, Artifact::Stems, Artifact::Genre];
+        let mut set: JoinSet<(&'static str, Artifact, Result<(), String>)> = JoinSet::new();
+        set.spawn(async {
+            panic!("first layer panic");
+        });
+        set.spawn(async {
+            panic!("second layer panic");
+        });
+        set.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            (
+                "ordinary_failure",
+                Artifact::Genre,
+                Err("ordinary error".to_string()),
+            )
+        });
+
+        let (failed_outputs, errors) = drain_layer(&mut set, &layer_outputs, "panic-fixture").await;
+
+        assert_eq!(errors.len(), 3, "the layer did not drain every task");
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains("join error"))
+                .count(),
+            2,
+            "both panics must survive aggregation"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("ordinary_failure: ordinary error")),
+            "the non-panicking sibling failure was lost"
+        );
+        assert_eq!(
+            failed_outputs,
+            layer_outputs.into_iter().collect(),
+            "an unidentified panic must make every layer output indeterminate"
+        );
+        let downstream = StubProc {
+            name: "downstream",
+            version: 1,
+            inputs: &[Artifact::BeatGrid, Artifact::Stems],
+            output: Artifact::Roots,
+        };
+        assert!(
+            is_blocked(&downstream, &failed_outputs),
+            "downstream work was not suppressed after an indeterminate layer"
+        );
     }
 }

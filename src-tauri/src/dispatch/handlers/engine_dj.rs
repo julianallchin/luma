@@ -4,10 +4,6 @@
 //! `Database2/m.db`. Each command opens a read-only, single-connection pool and
 //! closes it again, so Luma never holds a lock on the user's library.
 //!
-//! `engine_dj_import_tracks` is deliberately absent: it is one of the four
-//! spawned-progress commands still waiting on the `services::tracks` /
-//! `preprocessing` `AppHandle` refactor. See the port guide.
-
 use std::future::Future;
 
 use sqlx::SqlitePool;
@@ -15,6 +11,12 @@ use sqlx::SqlitePool;
 use crate::dispatch::{AppServices, CommandError};
 use crate::engine_dj;
 use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
+use crate::models::tracks::{TrackImportFailure, TrackImportPhase, TrackImportResult};
+use crate::services::tracks as track_service;
+
+use super::tracks::{
+    emit_import_progress, finish_fast_import, push_unique, rollback_after_failure,
+};
 
 /// Open the library, run one read against it, close it.
 ///
@@ -104,4 +106,135 @@ pub async fn engine_dj_default_library_path(
     Ok(engine_dj::default_library_path()
         .to_string_lossy()
         .to_string())
+}
+
+pub async fn engine_dj_import_tracks(
+    services: &AppServices,
+    library_path: String,
+    track_ids: Vec<i64>,
+) -> Result<TrackImportResult, CommandError> {
+    let import_id = uuid::Uuid::new_v4().to_string();
+    let source = "engine_dj";
+    let principal = services.session_user_id().await?;
+    let epoch = services.analysis_tasks.current_epoch()?;
+    let lease = services.analysis_tasks.lease(epoch)?;
+    let guard = lease.guard();
+    let (database_uuid, source_tracks) =
+        services.track_sources.engine_tracks(&library_path).await?;
+    let total = track_ids.len();
+    let mut tracks = Vec::new();
+    let mut failures = Vec::new();
+    let mut new_ids = Vec::new();
+
+    for (done, source_track_id) in track_ids.into_iter().enumerate() {
+        if let Err(error) = guard.checkpoint() {
+            return Err(
+                rollback_after_failure(services, &new_ids, principal.as_deref(), error).await,
+            );
+        }
+        let Some(row) = source_tracks
+            .iter()
+            .find(|track| track.id == source_track_id)
+        else {
+            failures.push(TrackImportFailure {
+                source_id: source_track_id.to_string(),
+                message: format!("Engine DJ track {source_track_id} not found"),
+            });
+            continue;
+        };
+        let name = row.title.clone().unwrap_or_else(|| row.filename.clone());
+        emit_import_progress(
+            services,
+            &import_id,
+            source,
+            TrackImportPhase::Importing,
+            done,
+            total,
+            None,
+            Some(name),
+            None,
+        );
+        let audio_path = engine_dj::resolve_engine_path(&library_path, &row.path);
+        let source_id = format!("{}:{}", database_uuid, row.id);
+        let imported = if !audio_path.exists() {
+            Err(format!("Audio file not found: {}", audio_path.display()))
+        } else {
+            track_service::engine_dj_fast_import(
+                &services.db.0,
+                &services.storage,
+                row,
+                &audio_path,
+                &source_id,
+                principal.clone(),
+            )
+            .await
+        };
+        match imported {
+            Ok((track_id, is_new)) => {
+                if let Err(error) = guard.checkpoint() {
+                    if is_new {
+                        new_ids.push(track_id);
+                    }
+                    return Err(rollback_after_failure(
+                        services,
+                        &new_ids,
+                        principal.as_deref(),
+                        error,
+                    )
+                    .await);
+                }
+                if is_new {
+                    new_ids.push(track_id.clone());
+                }
+                if let Some(track) =
+                    crate::database::local::tracks::get_track_by_id(&services.db.0, &track_id)
+                        .await?
+                {
+                    push_unique(&mut tracks, track);
+                }
+                emit_import_progress(
+                    services,
+                    &import_id,
+                    source,
+                    TrackImportPhase::Importing,
+                    done + 1,
+                    total,
+                    Some(track_id),
+                    None,
+                    None,
+                );
+            }
+            Err(message) => {
+                emit_import_progress(
+                    services,
+                    &import_id,
+                    source,
+                    TrackImportPhase::Importing,
+                    done + 1,
+                    total,
+                    None,
+                    None,
+                    Some(message.clone()),
+                );
+                failures.push(TrackImportFailure { source_id, message });
+            }
+        }
+    }
+    finish_fast_import(
+        services,
+        epoch,
+        guard,
+        lease,
+        &import_id,
+        source,
+        total,
+        new_ids,
+        principal.as_deref(),
+    )
+    .await?;
+    Ok(TrackImportResult {
+        import_id,
+        tracks,
+        failures,
+    })
 }

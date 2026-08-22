@@ -1,11 +1,9 @@
+use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
-
-use crate::python_env;
 
 const WORKER_SOURCE: &str = include_str!("../python/audio_preprocessor.py");
 const WORKER_SCRIPT_NAME: &str = "audio_preprocessor.py";
@@ -29,12 +27,12 @@ struct WorkerResponse {
 }
 
 pub fn separate_stems(
-    app: &AppHandle,
+    env: &WorkerEnvironment,
     audio_path: &Path,
     target_dir: &Path,
 ) -> Result<Vec<StemFile>, String> {
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
 
     let mut cmd = Command::new(&python_path);
     crate::cmd_util::no_window(&mut cmd);

@@ -48,6 +48,8 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(feature = "agent")]
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Deserialize};
@@ -60,7 +62,11 @@ use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
-use luma_lib::dispatch::{dispatch, AppServices, CommandError};
+use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events};
+#[cfg(feature = "agent")]
+use luma_lib::dispatch::{
+    system_track_sources, ImportedEngineDjTrack, ImportedRekordboxTrack, TrackSources,
+};
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
 use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
@@ -70,7 +76,7 @@ use luma_lib::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
 };
 use luma_lib::models::stage::StagePiece;
-use luma_lib::models::tracks::TrackBrowserRow;
+use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
@@ -88,12 +94,39 @@ use luma_lib::storage::StorageRoot;
 /// long enough that a flick asks once instead of forty times.
 const WINDOW_DEBOUNCE: Duration = Duration::from_millis(40);
 
+struct LibraryEvents {
+    import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
+}
+
+impl EventSink for LibraryEvents {
+    fn emit(&self, event: &str, payload: Value) {
+        if event != "track-import-state" {
+            return;
+        }
+        match serde_json::from_value(payload) {
+            Ok(progress) => {
+                let _ = self.import_progress.send(progress);
+            }
+            Err(error) => eprintln!("invalid structured track-import-state event: {error}"),
+        }
+    }
+}
+
 /// DJ catalog selected by the import flow. Source-specific identifiers remain
 /// opaque strings above this seam.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackSource {
     EngineDj { library_path: String },
     Rekordbox,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrackImportRequest {
+    Files(Vec<PathBuf>),
+    Source {
+        source: TrackSource,
+        track_ids: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +166,53 @@ pub struct SourceAdapterFixture {
     pub tracks: Value,
     pub playlist_tracks: HashMap<String, Value>,
     pub searches: HashMap<String, Value>,
+}
+
+#[cfg(feature = "agent")]
+struct FixtureTrackSources {
+    fixture: Arc<Mutex<Option<SourceAdapterFixture>>>,
+    fallback: Arc<dyn TrackSources>,
+}
+
+#[cfg(feature = "agent")]
+impl TrackSources for FixtureTrackSources {
+    fn engine_tracks<'a>(
+        &'a self,
+        library_path: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn Future<Output = Result<(String, Vec<ImportedEngineDjTrack>), String>> + Send + 'a>,
+    > {
+        let fixture = self.fixture.lock().unwrap().clone();
+        if fixture.is_none() {
+            return self.fallback.engine_tracks(library_path);
+        }
+        Box::pin(async move {
+            let fixture =
+                fixture.ok_or_else(|| "Engine DJ source fixture is not installed".to_string())?;
+            let library: EngineDjLibraryWire = serde_json::from_value(fixture.library)
+                .map_err(|error| format!("invalid Engine DJ library fixture: {error}"))?;
+            let tracks = serde_json::from_value(fixture.tracks)
+                .map_err(|error| format!("invalid Engine DJ track fixture: {error}"))?;
+            Ok((library.database_uuid, tracks))
+        })
+    }
+
+    fn rekordbox_tracks(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn Future<Output = Result<Vec<ImportedRekordboxTrack>, String>> + Send + '_>,
+    > {
+        let fixture = self.fixture.lock().unwrap().clone();
+        if fixture.is_none() {
+            return self.fallback.rekordbox_tracks();
+        }
+        Box::pin(async move {
+            let fixture =
+                fixture.ok_or_else(|| "Rekordbox source fixture is not installed".to_string())?;
+            serde_json::from_value(fixture.tracks)
+                .map_err(|error| format!("invalid Rekordbox track fixture: {error}"))
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -244,6 +324,7 @@ impl From<RekordboxTrackWire> for SourceTrack {
     }
 }
 
+#[cfg(feature = "agent")]
 fn normalize_source_library(
     source: &TrackSource,
     value: Value,
@@ -268,6 +349,7 @@ fn normalize_source_library(
     }
 }
 
+#[cfg(feature = "agent")]
 fn normalize_source_playlists(
     source: &TrackSource,
     value: Value,
@@ -286,6 +368,7 @@ fn normalize_source_playlists(
     }
 }
 
+#[cfg(feature = "agent")]
 fn normalize_source_tracks(
     source: &TrackSource,
     command: &'static str,
@@ -303,6 +386,7 @@ fn normalize_source_tracks(
     }
 }
 
+#[cfg(feature = "agent")]
 fn decode_source_fixture<T: DeserializeOwned>(
     command: &'static str,
     value: Value,
@@ -374,6 +458,7 @@ pub struct Library {
     /// Owns the reactor every dispatched command runs on. Dropping it cancels
     /// in-flight work, so it lives exactly as long as the `Library`.
     runtime: tokio::runtime::Runtime,
+    import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
     /// Drives agent turns with this client instead of a configured provider.
     /// The one injection seam the harness needs, and the shipped app never
     /// sets: without it the loop resolves its model and key the way it does
@@ -384,7 +469,7 @@ pub struct Library {
     /// a surface built by a second path could drift from the parent's.
     tools: Option<ToolRegistry>,
     #[cfg(feature = "agent")]
-    source_fixture: Option<Arc<SourceAdapterFixture>>,
+    source_fixture: Arc<Mutex<Option<SourceAdapterFixture>>>,
 }
 
 impl Library {
@@ -406,6 +491,17 @@ impl Library {
         let storage = config_dir()?;
         let fixtures_root = fixtures_root()?;
 
+        let (progress_tx, _) = tokio::sync::broadcast::channel(256);
+        let events = Events::new(LibraryEvents {
+            import_progress: progress_tx.clone(),
+        });
+        #[cfg(feature = "agent")]
+        let source_fixture = Arc::new(Mutex::new(None));
+        #[cfg(feature = "agent")]
+        let import_sources: Arc<dyn TrackSources> = Arc::new(FixtureTrackSources {
+            fixture: Arc::clone(&source_fixture),
+            fallback: system_track_sources(),
+        });
         let (services, user_id) = runtime.block_on(async {
             let db = init_app_db_at(storage.path()).await?;
             let state_db = init_state_db_at(storage.path()).await?;
@@ -421,7 +517,10 @@ impl Library {
                 &storage,
                 headless_env::cache_dir()?,
             ));
-            let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces);
+            let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
+                .with_events(events);
+            #[cfg(feature = "agent")]
+            let services = services.with_track_sources(import_sources);
             // The audio host keeps its own copy of the settings it reads, and
             // is only ever told by a write. A host that skipped this would run
             // the whole session on the defaults and ignore what the user last
@@ -437,10 +536,11 @@ impl Library {
             services: Arc::new(services),
             user_id,
             runtime,
+            import_progress: progress_tx,
             model: None,
             tools: None,
             #[cfg(feature = "agent")]
-            source_fixture: None,
+            source_fixture,
         })
     }
 
@@ -478,7 +578,12 @@ impl Library {
     /// are substituted.
     #[cfg(feature = "agent")]
     pub fn set_source_adapter_fixture(&mut self, fixture: SourceAdapterFixture) {
-        self.source_fixture = Some(Arc::new(fixture));
+        *self.source_fixture.lock().unwrap() = Some(fixture);
+    }
+
+    #[cfg(feature = "agent")]
+    fn source_adapter_fixture(&self) -> Option<SourceAdapterFixture> {
+        self.source_fixture.lock().unwrap().clone()
     }
 
     /// The signed-in principal, or `None` for the guest namespace. Identity is
@@ -521,6 +626,81 @@ impl Library {
         self.call("list_tracks_enriched", json!({ "venueId": null }))
     }
 
+    /// Import from disk or either DJ source through one typed request/result
+    /// contract. The returned rows are already durable; analysis continues on
+    /// the service-owned task group after this future and its dialog are gone.
+    pub fn import_tracks(
+        &self,
+        request: TrackImportRequest,
+    ) -> impl Future<Output = Result<TrackImportResult, LibraryError>> + use<> {
+        let files = match &request {
+            TrackImportRequest::Files(paths) => Some(self.call(
+                "import_tracks",
+                json!({
+                    "filePaths": paths.iter().map(|path| path.to_string_lossy()).collect::<Vec<_>>()
+                }),
+            )),
+            _ => None,
+        };
+        let mut request_error = None;
+        let engine = match &request {
+            TrackImportRequest::Source {
+                source: TrackSource::EngineDj { library_path },
+                track_ids,
+            } => {
+                match track_ids
+                    .iter()
+                    .map(|id| id.parse::<i64>())
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(track_ids) => Some(self.call(
+                        "engine_dj_import_tracks",
+                        json!({ "libraryPath": library_path, "trackIds": track_ids }),
+                    )),
+                    Err(error) => {
+                        request_error = Some(LibraryError::at(
+                            "engine_dj_import_tracks",
+                            Cause::Shape(format!("Engine DJ track id is not an integer: {error}")),
+                        ));
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        let rekordbox = match &request {
+            TrackImportRequest::Source {
+                source: TrackSource::Rekordbox,
+                track_ids,
+            } => Some(self.call(
+                "rekordbox_import_tracks",
+                json!({ "trackUuids": track_ids }),
+            )),
+            _ => None,
+        };
+        async move {
+            if let Some(error) = request_error {
+                return Err(error);
+            }
+            if let Some(files) = files {
+                return files.await;
+            }
+            if let Some(engine) = engine {
+                return engine.await;
+            }
+            if let Some(rekordbox) = rekordbox {
+                return rekordbox.await;
+            }
+            unreachable!("every import request has one dispatch path")
+        }
+    }
+
+    /// Subscribe to host-neutral import progress. Lag is explicit rather than
+    /// silently replaying stale state; callers reconcile from `all_tracks`.
+    pub fn import_progress(&self) -> tokio::sync::broadcast::Receiver<TrackImportProgress> {
+        self.import_progress.subscribe()
+    }
+
     /// Open either supported DJ catalog through one GPUI-owned shape.
     pub fn source_library(
         &self,
@@ -528,9 +708,8 @@ impl Library {
     ) -> impl Future<Output = Result<SourceLibrary, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
         let fixture = self
-            .source_fixture
-            .as_ref()
-            .map(|fixture| normalize_source_library(&source, fixture.library.clone()));
+            .source_adapter_fixture()
+            .map(|fixture| normalize_source_library(&source, fixture.library));
         #[cfg(not(feature = "agent"))]
         let fixture: Option<Result<SourceLibrary, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
@@ -580,9 +759,8 @@ impl Library {
     ) -> impl Future<Output = Result<Vec<SourcePlaylist>, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
         let fixture = self
-            .source_fixture
-            .as_ref()
-            .map(|fixture| normalize_source_playlists(&source, fixture.playlists.clone()));
+            .source_adapter_fixture()
+            .map(|fixture| normalize_source_playlists(&source, fixture.playlists));
         #[cfg(not(feature = "agent"))]
         let fixture: Option<Result<Vec<SourcePlaylist>, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
@@ -622,9 +800,9 @@ impl Library {
         source: TrackSource,
     ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
-        let fixture = self.source_fixture.as_ref().map(|fixture| {
-            normalize_source_tracks(&source, "source_list_tracks", fixture.tracks.clone())
-        });
+        let fixture = self
+            .source_adapter_fixture()
+            .map(|fixture| normalize_source_tracks(&source, "source_list_tracks", fixture.tracks));
         #[cfg(not(feature = "agent"))]
         let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
@@ -661,7 +839,7 @@ impl Library {
         playlist_id: &str,
     ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
-        let fixture = self.source_fixture.as_ref().map(|fixture| {
+        let fixture = self.source_adapter_fixture().map(|fixture| {
             fixture
                 .playlist_tracks
                 .get(playlist_id)
@@ -724,7 +902,7 @@ impl Library {
         query: &str,
     ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
-        let fixture = self.source_fixture.as_ref().map(|fixture| {
+        let fixture = self.source_adapter_fixture().map(|fixture| {
             fixture
                 .searches
                 .get(query)

@@ -27,7 +27,6 @@ use crate::mert_worker;
 use crate::preprocessing::artifact::Artifact;
 use crate::preprocessing::preprocessor::{Preprocessor, PreprocessorContext};
 use crate::preprocessing::workers::stems::find_stem_file;
-use crate::storage::StorageRoot;
 
 pub struct MertPreprocessor;
 
@@ -54,9 +53,6 @@ impl Preprocessor for MertPreprocessor {
     }
     fn output(&self) -> Artifact {
         Artifact::Mert
-    }
-    fn status_label(&self) -> &'static str {
-        "Extracting MERT features…"
     }
     fn artifact_table(&self) -> &'static str {
         "track_mert"
@@ -90,14 +86,14 @@ impl Preprocessor for MertPreprocessor {
             )
         })?;
 
-        let storage = StorageRoot::from_app(ctx.app_handle())?;
+        let storage = ctx.storage().clone();
         let out_fullmix = storage.mert_fullmix_path(&track.track_hash);
         let out_drum = storage.mert_drum_path(&track.track_hash);
-        let handle = ctx.app_handle().clone();
+        let workers = ctx.workers().clone();
 
         let cache = tauri::async_runtime::spawn_blocking(move || {
             mert_worker::compute_mert_cache(
-                &handle,
+                &workers,
                 &audio_path,
                 &drum_path,
                 &out_fullmix,

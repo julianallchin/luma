@@ -67,9 +67,6 @@ impl Preprocessor for N2NPreprocessor {
     fn output(&self) -> Artifact {
         Artifact::DrumOnsets
     }
-    fn status_label(&self) -> &'static str {
-        "Transcribing drums…"
-    }
     fn artifact_table(&self) -> &'static str {
         "track_drum_onsets"
     }
@@ -94,11 +91,11 @@ impl Preprocessor for N2NPreprocessor {
             ));
         }
         let drum_mert_path: std::path::PathBuf = drum_mert_path.into();
-        let handle = ctx.app_handle().clone();
+        let workers = ctx.workers().clone();
 
         let onsets = tauri::async_runtime::spawn_blocking(move || {
             n2n_worker::compute_drum_onsets(
-                &handle,
+                &workers,
                 Path::new(&drum_audio),
                 Path::new(&drum_mert_path),
             )

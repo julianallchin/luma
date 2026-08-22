@@ -14,7 +14,6 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::audio::StemCache;
@@ -23,10 +22,11 @@ use crate::database::local::tracks::ArtifactVersions;
 use crate::database::local::venue_access::{
     AuthorizedVenue, Read as VenueRead, VenueAccess, VenueResource,
 };
+use crate::dispatch::Events;
 use crate::engine_dj::types::EngineDjTrack;
 use crate::models::tracks::{TrackBrowserRow, TrackSummary};
 use crate::node_graph::BeatGrid;
-use crate::preprocessing::{registry, scheduler, AnalysisGuard};
+use crate::preprocessing::{registry, scheduler, AnalysisGuard, WorkerEnvironment};
 use crate::storage::StorageRoot;
 
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
@@ -124,12 +124,12 @@ fn current_artifact_versions() -> ArtifactVersions {
 /// No analysis is run. Returns (track_id, is_new). Deduplicates by content hash.
 pub async fn file_fast_import(
     pool: &SqlitePool,
-    app_handle: &AppHandle,
+    storage: &StorageRoot,
     file_path: &str,
     uid: Option<String>,
 ) -> Result<(String, bool), String> {
-    ensure_storage(app_handle)?;
-    let (tracks_dir, _, _) = storage_dirs(app_handle)?;
+    storage.ensure_track_storage()?;
+    let tracks_dir = storage.tracks_dir();
 
     let source_path = Path::new(file_path);
     if !source_path.exists() {
@@ -151,13 +151,6 @@ pub async fn file_fast_import(
     }
 
     let track_hash = compute_track_hash(source_path)?;
-    let hash_match = match uid.as_deref() {
-        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
-        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
-    };
-    if let Some(existing) = hash_match {
-        return Ok((existing.id, false));
-    }
 
     let extension = source_path
         .extension()
@@ -181,7 +174,7 @@ pub async fn file_fast_import(
     let track_number = primary_tag.and_then(|tag| tag.track()).map(|n| n as i64);
     let disc_number = primary_tag.and_then(|tag| tag.disk()).map(|n| n as i64);
     let duration_seconds = Some(tagged_file.properties().duration().as_secs_f64());
-    let (album_art_path, album_art_mime) = extract_album_art(app_handle, &dest_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(storage, &dest_path)?;
     let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
     let basename = source_path
@@ -189,7 +182,7 @@ pub async fn file_fast_import(
         .and_then(|n| n.to_str())
         .map(|s| s.to_string());
 
-    let id = tracks_db::insert_track_record(
+    let (id, is_new) = tracks_db::insert_track_record(
         pool,
         &track_hash,
         &title,
@@ -207,22 +200,24 @@ pub async fn file_fast_import(
         basename.as_deref(),
     )
     .await?;
-    pending_audio.keep();
-    if let Some(art) = &mut pending_art {
-        art.keep();
+    if is_new {
+        pending_audio.keep();
+        if let Some(art) = &mut pending_art {
+            art.keep();
+        }
     }
 
-    Ok((id, true))
+    Ok((id, is_new))
 }
 
 /// Extract album art from an audio file and save it to the art directory.
 /// Returns `(art_path, art_mime)`; both `None` when no embedded artwork is
 /// present or the file can't be parsed.
 fn extract_album_art(
-    app_handle: &AppHandle,
+    storage: &StorageRoot,
     source_path: &Path,
 ) -> Result<(Option<String>, Option<String>), String> {
-    let (_, art_dir, _) = storage_dirs(app_handle)?;
+    let art_dir = storage.art_dir();
 
     let tagged_file = match Probe::open(source_path) {
         Ok(probe) => match probe.read() {
@@ -273,17 +268,12 @@ fn extract_album_art(
 /// Deduplicates by source_id first, then by content hash. Returns (id, is_new).
 pub async fn engine_dj_fast_import(
     pool: &SqlitePool,
-    app_handle: &AppHandle,
+    storage: &StorageRoot,
     engine_track: &EngineDjTrack,
     audio_path: &Path,
     source_id: &str,
     uid: Option<String>,
 ) -> Result<(String, bool), String> {
-    // Dedup by source_id — no file I/O needed
-    if let Some(existing) = tracks_db::get_track_by_source_id(pool, "engine_dj", source_id).await? {
-        return Ok((existing.id, false));
-    }
-
     if let Some(dur) = engine_track.length {
         if dur > MAX_TRACK_DURATION_SECS {
             return Err(format!(
@@ -294,24 +284,15 @@ pub async fn engine_dj_fast_import(
         }
     }
 
-    ensure_storage(app_handle)?;
+    storage.ensure_track_storage()?;
 
     let track_hash = compute_track_hash(audio_path)?;
 
-    // Fallback dedup by hash — catches re-imports after deletion
-    let hash_match = match uid.as_deref() {
-        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
-        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
-    };
-    if let Some(existing) = hash_match {
-        return Ok((existing.id, false));
-    }
-
     // Extract album art (only file I/O — reads just the tag header)
-    let (album_art_path, album_art_mime) = extract_album_art(app_handle, audio_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(storage, audio_path)?;
     let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
-    let id = tracks_db::insert_track_record(
+    let (id, is_new) = tracks_db::insert_track_record(
         pool,
         &track_hash,
         &engine_track.title,
@@ -329,11 +310,13 @@ pub async fn engine_dj_fast_import(
         Some(&engine_track.filename),
     )
     .await?;
-    if let Some(art) = &mut pending_art {
-        art.keep();
+    if is_new {
+        if let Some(art) = &mut pending_art {
+            art.keep();
+        }
     }
 
-    Ok((id, true))
+    Ok((id, is_new))
 }
 
 /// Generic fast import for any DJ library source (Rekordbox, Engine DJ, etc.).
@@ -341,7 +324,7 @@ pub async fn engine_dj_fast_import(
 /// Deduplicates by source_id first, then by content hash. Returns (id, is_new).
 pub async fn dj_fast_import(
     pool: &SqlitePool,
-    app_handle: &AppHandle,
+    storage: &StorageRoot,
     source_type: &str,
     source_id: &str,
     title: &Option<String>,
@@ -352,11 +335,6 @@ pub async fn dj_fast_import(
     audio_path: &Path,
     uid: Option<String>,
 ) -> Result<(String, bool), String> {
-    // Dedup by source_id
-    if let Some(existing) = tracks_db::get_track_by_source_id(pool, source_type, source_id).await? {
-        return Ok((existing.id, false));
-    }
-
     if let Some(dur) = duration_seconds {
         if dur > MAX_TRACK_DURATION_SECS {
             return Err(format!(
@@ -367,24 +345,15 @@ pub async fn dj_fast_import(
         }
     }
 
-    ensure_storage(app_handle)?;
+    storage.ensure_track_storage()?;
 
     let track_hash = compute_track_hash(audio_path)?;
 
-    // Fallback dedup by hash — catches re-imports after deletion
-    let hash_match = match uid.as_deref() {
-        Some(u) => tracks_db::get_own_track_by_hash(pool, &track_hash, u).await?,
-        None => tracks_db::get_track_by_hash(pool, &track_hash).await?,
-    };
-    if let Some(existing) = hash_match {
-        return Ok((existing.id, false));
-    }
-
     // Extract album art (reads just the tag header)
-    let (album_art_path, album_art_mime) = extract_album_art(app_handle, audio_path)?;
+    let (album_art_path, album_art_mime) = extract_album_art(storage, audio_path)?;
     let mut pending_art = PendingImportFile::from_optional(album_art_path.as_deref());
 
-    let id = tracks_db::insert_track_record(
+    let (id, is_new) = tracks_db::insert_track_record(
         pool,
         &track_hash,
         title,
@@ -402,11 +371,13 @@ pub async fn dj_fast_import(
         filename,
     )
     .await?;
-    if let Some(art) = &mut pending_art {
-        art.keep();
+    if is_new {
+        if let Some(art) = &mut pending_art {
+            art.keep();
+        }
     }
 
-    Ok((id, true))
+    Ok((id, is_new))
 }
 
 /// Determine how many tracks to analyze in parallel based on available system memory.
@@ -488,10 +459,13 @@ fn total_system_memory_gb() -> u64 {
 /// don't need to change.
 pub async fn run_background_analysis(
     pool: SqlitePool,
-    app_handle: AppHandle,
+    storage: StorageRoot,
+    workers: WorkerEnvironment,
+    events: Events,
     stem_cache: StemCache,
     track_ids: Vec<String>,
     analysis: AnalysisGuard,
+    import: scheduler::ImportEventContext,
 ) {
     if analysis.checkpoint().is_err() {
         return;
@@ -514,10 +488,13 @@ pub async fn run_background_analysis(
     let waveforms = run_waveform_jobs(&pool, &track_ids, &analysis);
     let preprocessing = scheduler::run_for_tracks(
         pool.clone(),
-        app_handle,
+        storage,
+        workers,
+        events,
         stem_cache,
         track_ids.clone(),
         analysis.clone(),
+        Some(import),
     );
     tokio::join!(waveforms, preprocessing);
 }
@@ -1246,17 +1223,6 @@ fn infer_grid_metadata(beats: &[f32], downbeats: &[f32]) -> (f32, f32, i64) {
 
 /// `(tracks_dir, art_dir, stems_dir)`. A convenience tuple over
 /// [`StorageRoot`], which owns the layout.
-pub fn storage_dirs(
-    app: &AppHandle,
-) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    let root = StorageRoot::from_app(app)?;
-    Ok((root.tracks_dir(), root.art_dir(), root.stems_root()))
-}
-
-pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
-    StorageRoot::from_app(app)?.ensure_track_storage()
-}
-
 fn compute_track_hash(path: &Path) -> Result<String, String> {
     let mut file =
         File::open(path).map_err(|e| format!("Failed to open track for hashing: {}", e))?;
@@ -1309,6 +1275,112 @@ pub async fn get_track_audio_base64(
 #[cfg(test)]
 mod deletion_tests {
     use super::*;
+
+    fn write_wav(path: &Path) {
+        let frames = 8_000_u32;
+        let data_len = frames * 2;
+        let mut bytes = Vec::with_capacity((44 + data_len) as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&8_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&16_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize((44 + data_len) as usize, 0);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_file_imports_resolve_one_atomic_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::local::database::init_app_db_at(directory.path())
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&db.0, None)
+            .await
+            .unwrap();
+        let storage = StorageRoot::from_path(directory.path().to_path_buf());
+        let source = directory.path().join("race.wav");
+        write_wav(&source);
+        let source = source.to_string_lossy().into_owned();
+
+        let (left, right) = tokio::join!(
+            file_fast_import(&db.0, &storage, &source, None),
+            file_fast_import(&db.0, &storage, &source, None),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_eq!(left.0, right.0);
+        assert_ne!(left.1, right.1, "exactly one insert must win the race");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tracks")
+            .fetch_one(&db.0)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let managed_files = std::fs::read_dir(storage.tracks_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .count();
+        assert_eq!(managed_files, 1, "losing import leaked its copied audio");
+    }
+
+    #[tokio::test]
+    async fn concurrent_source_imports_resolve_one_atomic_identity() {
+        async fn insert_source(
+            pool: &SqlitePool,
+            hash: &str,
+            path: &str,
+        ) -> Result<(String, bool), String> {
+            let empty = None;
+            tracks_db::insert_track_record(
+                pool,
+                hash,
+                &empty,
+                &empty,
+                &empty,
+                None,
+                None,
+                None,
+                path,
+                &empty,
+                &empty,
+                None,
+                Some("engine_dj"),
+                Some("library:42"),
+                None,
+            )
+            .await
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::database::local::database::init_app_db_at(directory.path())
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&db.0, None)
+            .await
+            .unwrap();
+        let (left, right) = tokio::join!(
+            insert_source(&db.0, "hash-a", "/a.wav"),
+            insert_source(&db.0, "hash-b", "/b.wav"),
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        assert_eq!(left.0, right.0);
+        assert_ne!(left.1, right.1, "exactly one source identity must win");
+        let row: (i64, String) = sqlx::query_as("SELECT COUNT(*), track_hash FROM tracks")
+            .fetch_one(&db.0)
+            .await
+            .unwrap();
+        assert_eq!(row.0, 1);
+        assert!(row.1 == "hash-a" || row.1 == "hash-b");
+    }
 
     #[test]
     fn staged_track_deletion_is_reversible_before_the_database_commit() {

@@ -7,7 +7,6 @@ mod beat_worker;
 mod canonical_json;
 mod classifier_worker;
 mod cmd_util;
-pub(crate) mod commands;
 mod compositor;
 pub mod config;
 mod controller_compositor;
@@ -49,7 +48,6 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::init as dialog_init;
 
 use crate::services::fixtures::FixtureState;
-use crate::services::tracks;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _sentry_guard = if cfg!(not(debug_assertions)) {
@@ -396,7 +394,7 @@ pub fn run() {
             let fft_service = audio::FftService::new();
             app.manage(fft_service.clone());
 
-            tracks::ensure_storage(app_handle)?;
+            storage::StorageRoot::from_app(app_handle)?.ensure_track_storage()?;
             {
                 let pool = app.state::<database::Db>().inner().0.clone();
                 if let Err(error) = tauri::async_runtime::block_on(
@@ -442,6 +440,15 @@ pub fn run() {
                 workspaces,
                 graph_runs,
                 analysis_tasks,
+                workers: preprocessing::WorkerEnvironment::new(
+                    app_handle
+                        .path()
+                        .app_cache_dir()
+                        .map_err(|error| format!("Failed to locate app cache dir: {error}"))?,
+                    app_handle.path().resource_dir().ok(),
+                )
+                .wait_for_setup(),
+                track_sources: dispatch::system_track_sources(),
                 fft: fft_service,
                 stem_cache,
                 render_engine,
@@ -478,13 +485,20 @@ pub fn run() {
             // Start Python environment setup in the background
             python_env::setup_python_env_background(app_handle.clone());
 
-            // Queue analysis for any tracks with local files but incomplete or
-            // out-of-date preprocessor runs. Runs after Python env is kicked
-            // off; each worker calls ensure_python_env internally and will
-            // wait if needed.
+            // Queue analysis for tracks with missing/stale artifacts against
+            // the same cache/resource paths the environment setup owns.
             {
                 let pool = app.state::<database::Db>().inner().0.clone();
-                let handle = app_handle.clone();
+                let storage = storage::StorageRoot::from_app(app_handle)?;
+                let workers = preprocessing::WorkerEnvironment::new(
+                    app_handle
+                        .path()
+                        .app_cache_dir()
+                        .map_err(|error| format!("Failed to locate app cache dir: {error}"))?,
+                    app_handle.path().resource_dir().ok(),
+                )
+                .wait_for_setup();
+                let events = dispatch::tauri_events(app_handle);
                 let cache = app.state::<audio::StemCache>().inner().clone();
                 let tasks = app
                     .state::<preprocessing::AnalysisTaskGroup>()
@@ -495,7 +509,9 @@ pub fn run() {
                     if let Err(e) =
                         preprocessing::scheduler::reconcile_on_startup(
                             pool,
-                            handle,
+                            storage,
+                            workers,
+                            events,
                             cache,
                             analysis,
                         )
@@ -529,8 +545,8 @@ pub fn run() {
             dispatch::adapter::list_tracks,
             dispatch::adapter::list_tracks_enriched,
             dispatch::adapter::get_venue_annotation_counts,
-            commands::tracks::import_tracks,
-            commands::tracks::reprocess_track,
+            dispatch::adapter::import_tracks,
+            dispatch::adapter::reprocess_track,
             dispatch::adapter::delete_track,
             dispatch::adapter::get_track_beats,
             dispatch::adapter::get_track_bar_classifications,
@@ -678,7 +694,7 @@ pub fn run() {
             dispatch::adapter::engine_dj_list_tracks,
             dispatch::adapter::engine_dj_get_playlist_tracks,
             dispatch::adapter::engine_dj_search_tracks,
-            commands::engine_dj::engine_dj_import_tracks,
+            dispatch::adapter::engine_dj_import_tracks,
             dispatch::adapter::engine_dj_default_library_path,
             // Rekordbox
             dispatch::adapter::rekordbox_open_library,
@@ -686,7 +702,7 @@ pub fn run() {
             dispatch::adapter::rekordbox_list_playlists,
             dispatch::adapter::rekordbox_get_playlist_tracks,
             dispatch::adapter::rekordbox_search_tracks,
-            commands::rekordbox::rekordbox_import_tracks,
+            dispatch::adapter::rekordbox_import_tracks,
             // Agent threads
             dispatch::adapter::agent_thread_create,
             dispatch::adapter::agent_thread_get,

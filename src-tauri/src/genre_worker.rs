@@ -19,11 +19,9 @@ use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
-use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
-
-use crate::python_env;
+use crate::preprocessing::WorkerEnvironment;
 use crate::storage::StorageRoot;
+use serde::{Deserialize, Serialize};
 
 const WORKER_SOURCE: &str = include_str!("../python/genre_worker.py");
 const WORKER_SCRIPT_NAME: &str = "genre_worker.py";
@@ -120,7 +118,7 @@ pub struct GenreAnalysis {
 }
 
 pub fn analyze_genres(
-    app: &AppHandle,
+    env: &WorkerEnvironment,
     storage: &StorageRoot,
     audio_path: &Path,
     bar_boundaries: &[(f64, f64)],
@@ -128,8 +126,8 @@ pub fn analyze_genres(
     let models_dir = storage.models_dir();
     ensure_model(&models_dir)?;
 
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let boundaries_json = serde_json::to_vec(bar_boundaries)
         .map_err(|e| format!("Failed to encode bar boundaries: {e}"))?;
 

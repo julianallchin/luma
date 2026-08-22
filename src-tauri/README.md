@@ -15,7 +15,7 @@ The local SQLite DB (`luma.db`) is initialized in `database::init_app_db()` and 
 
 ### Tracks
 
-Service: orchestrates imports (hash/copy, lofty metadata, album art), storage layout, and workers (beats, roots, stems, waveforms, mel spec) with mutex guards to avoid duplicate work. DB: `database/local/tracks.rs` holds only the queries/upserts. Commands: thin wrappers in `commands/tracks.rs` delegate to the service with `&db.0`/state.
+Service: orchestrates imports (hash/copy, lofty metadata, album art), storage layout, and workers (beats, roots, stems, waveforms, mel spec) with mutex guards to avoid duplicate work. DB: `database/local/tracks.rs` holds only the queries/upserts. Commands are declared in `dispatch/mod.rs`; host-neutral bodies in `dispatch/handlers/tracks.rs` receive `AppServices` capabilities and both Tauri and GPUI use that same path.
 
 ### Patterns
 

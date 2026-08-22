@@ -31,9 +31,6 @@ impl Preprocessor for RootsPreprocessor {
     fn output(&self) -> Artifact {
         Artifact::Roots
     }
-    fn status_label(&self) -> &'static str {
-        "Detecting key changes…"
-    }
     fn artifact_table(&self) -> &'static str {
         "track_roots"
     }
@@ -46,10 +43,10 @@ impl Preprocessor for RootsPreprocessor {
         let other = find_stem_file(&track_stems_dir, "other")
             .ok_or_else(|| format!("Missing other stem for track {track_id}"))?;
         let sources: Vec<PathBuf> = vec![bass, other];
-        let handle = ctx.app_handle().clone();
+        let workers = ctx.workers().clone();
 
         let root_data = tauri::async_runtime::spawn_blocking(move || {
-            root_worker::compute_roots(&handle, &sources)
+            root_worker::compute_roots(&workers, &sources)
         })
         .await
         .map_err(|e| format!("Root worker task failed: {e}"))??;

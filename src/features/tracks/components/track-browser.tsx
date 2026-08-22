@@ -12,7 +12,11 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { TrackBrowserRow, TrackSummary } from "@/bindings/schema";
+import type {
+	TrackBrowserRow,
+	TrackImportProgress,
+	TrackImportResult,
+} from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { useAuthStore } from "@/features/auth/stores/use-auth-store";
 import { engineDjAdapter } from "@/features/dj-import/adapters/engine-dj";
@@ -308,26 +312,74 @@ export function TrackBrowser() {
 		);
 
 		let unlisten: UnlistenFn | null = null;
-		try {
-			unlisten = await listen<{
-				done: number;
-				total: number;
-				currentTrack: string | null;
-				phase: string;
-				error: string | null;
-			}>("file-import-progress", (event) => {
-				const { done, total, currentTrack, error } = event.payload;
-				if (error) {
-					toast.error(error);
-				} else if (currentTrack) {
-					const prefix = total > 1 ? `[${done + 1}/${total}] ` : "";
-					toast.loading(`${prefix}Importing ${currentTrack}…`, { id: toastId });
+		let importId: string | null = null;
+		let importedCount = 0;
+		let keepProgressListener = false;
+		const pending: TrackImportProgress[] = [];
+		const analysisToastId = "bg-analysis";
+		const showProgress = (progress: TrackImportProgress) => {
+			if (progress.phase === "importing") {
+				if (progress.error) {
+					toast.error(progress.error);
+				} else if (progress.currentTrack) {
+					const prefix =
+						progress.total > 1
+							? `[${progress.done + 1}/${progress.total}] `
+							: "";
+					toast.loading(`${prefix}Importing ${progress.currentTrack}…`, {
+						id: toastId,
+					});
 				}
-			});
+			} else if (progress.phase === "analyzing") {
+				toast.loading(progress.step ?? "Analyzing tracks…", {
+					id: analysisToastId,
+				});
+			} else if (progress.phase === "complete") {
+				if (progress.error) {
+					toast.error("Analysis completed with errors", {
+						id: analysisToastId,
+						description: progress.error,
+					});
+				} else if (importedCount > 0) {
+					toast.success("Analysis complete", { id: analysisToastId });
+					void refresh();
+					void refreshBrowser();
+				}
+				keepProgressListener = false;
+				unlisten?.();
+				unlisten = null;
+			}
+		};
+		try {
+			unlisten = await listen<TrackImportProgress>(
+				"track-import-state",
+				(event) => {
+					if (importId === null) {
+						if (event.payload.source === "file") {
+							pending.push(event.payload);
+						}
+					} else if (event.payload.importId === importId) {
+						showProgress(event.payload);
+					}
+				},
+			);
 
-			const imported = await invoke<TrackSummary[]>("import_tracks", {
+			const result = await invoke<TrackImportResult>("import_tracks", {
 				filePaths: files,
 			});
+			importId = result.importId;
+			importedCount = result.tracks.length;
+			if (importedCount > 0) {
+				keepProgressListener = true;
+				toast.loading(
+					`Analyzing ${importedCount} track${importedCount !== 1 ? "s" : ""}…`,
+					{ id: analysisToastId },
+				);
+			}
+			for (const progress of pending) {
+				if (progress.importId === importId) showProgress(progress);
+			}
+			const imported = result.tracks;
 
 			// Empty score per imported track binds them to this venue's setlist.
 			// Driven by the post-selection dialog's choice, not the filter toggle.
@@ -348,43 +400,29 @@ export function TrackBrowser() {
 			if (imported.length === 0) {
 				toast.error("Import failed", { id: toastId });
 			} else {
-				const failed = files.length - imported.length;
+				const failed = result.failures.length;
 				const label =
 					imported.length === 1 && files.length === 1
 						? `Imported ${files[0].split("/").pop()}`
 						: failed > 0
 							? `Imported ${imported.length}/${files.length} tracks`
 							: `Imported ${imported.length} tracks`;
-				toast.success(label, { id: toastId });
-
-				const analysisToastId = "bg-analysis";
-				toast.loading(
-					`Analyzing ${imported.length} track${imported.length !== 1 ? "s" : ""}…`,
-					{ id: analysisToastId },
-				);
-				const unlistenProgress = await listen<[string, string]>(
-					"track-import-progress",
-					(event) => {
-						const [, step] = event.payload;
-						toast.loading(step, { id: analysisToastId });
-					},
-				);
-				const unlistenComplete = await listen<number>(
-					"track-import-complete",
-					() => {
-						toast.success("Analysis complete", { id: analysisToastId });
-						unlistenProgress();
-						unlistenComplete();
-						void refresh();
-						void refreshBrowser();
-					},
-				);
+				if (failed > 0) {
+					toast.warning(label, {
+						id: toastId,
+						description: result.failures
+							.map((failure) => failure.message)
+							.join("\n"),
+					});
+				} else {
+					toast.success(label, { id: toastId });
+				}
 			}
 		} catch (err) {
 			console.error("Failed to import tracks:", err);
 			toast.error("Import failed", { id: toastId });
 		} finally {
-			unlisten?.();
+			if (!keepProgressListener) unlisten?.();
 			setImporting(false);
 		}
 	};

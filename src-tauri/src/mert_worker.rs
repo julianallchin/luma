@@ -6,12 +6,10 @@
 //! — and the resulting caches feed the bar classifier (full mix) and the
 //! n2n drum-onset preprocessor (drum stem).
 
+use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::AppHandle;
-
-use crate::python_env;
 
 const WORKER_SOURCE: &str = include_str!("../python/mert_worker.py");
 const WORKER_SCRIPT_NAME: &str = "mert_worker.py";
@@ -43,19 +41,19 @@ struct WorkerResponse {
 }
 
 pub fn compute_mert_cache(
-    app: &AppHandle,
+    env: &WorkerEnvironment,
     fullmix_path: &Path,
     drum_path: &Path,
     out_fullmix: &Path,
     out_drum: &Path,
 ) -> Result<MertCache, String> {
-    let python_path = python_env::ensure_python_env(app)?;
-    let script_path = python_env::ensure_worker_script(app, WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    let python_path = env.python()?;
+    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // The worker imports `n2n.infer.compute_mert_features` so it shares the
     // exact chunking parameters the training pipeline uses; ensure the n2n
     // resource dir is unpacked alongside the script and run with workdir =
     // script's parent so the import resolves.
-    let _ = python_env::ensure_python_resource_dir(app, "n2n")?;
+    let _ = env.deploy_resource("n2n")?;
     let workdir = script_path
         .parent()
         .ok_or_else(|| "Worker script missing parent directory".to_string())?;

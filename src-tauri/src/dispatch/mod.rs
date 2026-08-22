@@ -41,8 +41,11 @@ mod manifest;
 mod services;
 mod tauri_host;
 
+pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
+pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
 pub use error::CommandError;
-pub use services::{AppServices, EventSink, Events, Host, HostControl};
+pub use services::system_track_sources;
+pub use services::{AppServices, EventSink, Events, Host, HostControl, TrackSources};
 pub(crate) use tauri_host::{tauri_events, tauri_host};
 
 use serde::de::DeserializeOwned;
@@ -179,7 +182,7 @@ use crate::models::scores::{
     UpdateTrackScoreInput,
 };
 use crate::models::stage::StagePiece;
-use crate::models::tracks::{TrackBrowserRow, TrackSummary};
+use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
 use crate::models::universe::UniverseState;
 use crate::models::venues::Venue;
 use crate::models::waveforms::{TrackWaveform, WaveformWindow};
@@ -667,6 +670,7 @@ commands! {
     rekordbox::rekordbox_list_playlists() -> Vec<RekordboxPlaylist>;
     rekordbox::rekordbox_get_playlist_tracks(playlist_id: String) -> Vec<RekordboxTrack>;
     rekordbox::rekordbox_search_tracks(query: String) -> Vec<RekordboxTrack>;
+    rekordbox::rekordbox_import_tracks(track_uuids: Vec<String>) -> TrackImportResult;
 
     engine_dj::engine_dj_open_library(library_path: String) -> EngineDjLibraryInfo;
     engine_dj::engine_dj_list_playlists(library_path: String) -> Vec<EngineDjPlaylist>;
@@ -680,6 +684,13 @@ commands! {
         query: String,
     ) -> Vec<EngineDjTrack>;
     engine_dj::engine_dj_default_library_path() -> String;
+    engine_dj::engine_dj_import_tracks(
+        library_path: String,
+        track_ids: Vec<i64>,
+    ) -> TrackImportResult;
+
+    tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
+    tracks::reprocess_track(track_id: String) -> ();
 
     auth::get_session_item(key: String) -> Option<String>;
     auth::set_session_item(key: String, value: String) -> ();
@@ -759,11 +770,27 @@ mod tests {
     }
 
     #[test]
-    fn unported_commands_are_absent() {
+    fn background_import_commands_are_dispatched() {
         assert!(dispatched().contains(&"get_node_types"));
-        // Blocked on the `services/tracks.rs` `AppHandle` refactor — see the
-        // port guide's "spawned-progress commands" case.
-        assert!(!dispatched().contains(&"import_tracks"));
+        for command in [
+            "import_tracks",
+            "reprocess_track",
+            "engine_dj_import_tracks",
+            "rekordbox_import_tracks",
+        ] {
+            assert!(dispatched().contains(&command), "missing `{command}`");
+        }
+        for command in [
+            "import_tracks",
+            "engine_dj_import_tracks",
+            "rekordbox_import_tracks",
+        ] {
+            let row = TABLE.iter().find(|row| row.name == command).unwrap();
+            assert_eq!(
+                row.returns, "TrackImportResult",
+                "Tauri adapter `{command}` regressed to the pre-dispatch result shape"
+            );
+        }
     }
 
     /// `docs/specs/ipc-manifest.{json,md}` are the command surface written

@@ -5,7 +5,7 @@ import type {
 	EngineDjPlaylist,
 	EngineDjTrack,
 } from "@/bindings/engine_dj";
-import type { TrackSummary } from "@/bindings/schema";
+import type { TrackImportResult } from "@/bindings/schema";
 import type {
 	DjPlaylist,
 	DjSourceAdapter,
@@ -36,8 +36,6 @@ function mapPlaylist(p: EngineDjPlaylist): DjPlaylist {
 export const engineDjAdapter: DjSourceAdapter = {
 	name: "engine_dj",
 	label: "Engine DJ",
-	progressEvent: "engine-dj-import-progress",
-
 	openLibrary: async () => {
 		// Try default path first
 		const defaultPath = await invoke<string>("engine_dj_default_library_path");
@@ -98,7 +96,7 @@ export const engineDjAdapter: DjSourceAdapter = {
 	},
 
 	importTracks: async (libraryPath, trackKeys) => {
-		return invoke<TrackSummary[]>("engine_dj_import_tracks", {
+		return invoke<TrackImportResult>("engine_dj_import_tracks", {
 			libraryPath,
 			trackIds: trackKeys.map(Number),
 		});

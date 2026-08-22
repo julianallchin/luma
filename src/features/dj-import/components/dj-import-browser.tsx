@@ -1,7 +1,8 @@
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Folder, Library, Loader2 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { TrackImportProgress } from "@/bindings/schema";
 import { useTracksStore } from "@/features/tracks/stores/use-tracks-store";
 import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
@@ -60,38 +61,68 @@ export function DjImportBrowser({ open, onOpenChange }: DjImportBrowserProps) {
 
 	const handleImport = useCallback(async () => {
 		const count = selectedKeys.size;
-		const imported = await importSelected();
-		if (imported.length > 0) {
+		let importId: string | null = null;
+		let importedCount = 0;
+		let unlisten: UnlistenFn | null = null;
+		const pending: TrackImportProgress[] = [];
+		const toastId = "bg-analysis";
+		const showProgress = (progress: TrackImportProgress) => {
+			if (progress.phase === "analyzing") {
+				toast.loading(progress.step ?? "Analyzing tracks…", { id: toastId });
+			} else if (progress.phase === "complete") {
+				if (progress.error) {
+					toast.error("Analysis completed with errors", {
+						id: toastId,
+						description: progress.error,
+					});
+				} else if (importedCount > 0) {
+					toast.success("Analysis complete", { id: toastId });
+				}
+				unlisten?.();
+				unlisten = null;
+			}
+		};
+		unlisten = await listen<TrackImportProgress>(
+			"track-import-state",
+			(event) => {
+				if (event.payload.source !== source?.name) return;
+				if (importId === null) {
+					pending.push(event.payload);
+				} else if (event.payload.importId === importId) {
+					showProgress(event.payload);
+				}
+			},
+		);
+		const result = await importSelected();
+		if (result?.tracks.length) {
 			await Promise.all([refreshTracks(), refreshBrowser()]);
 		} else if (count > 0) {
 			toast.error("Import failed");
 		}
+		if (result && result.failures.length > 0 && result.tracks.length > 0) {
+			toast.warning(
+				`Imported ${result.tracks.length}/${count} tracks; ${result.failures.length} failed`,
+			);
+		}
 		onOpenChange(false);
 
-		// Show analysis toast for background processing (runs after dialog closes)
-		if (imported.length > 0) {
-			const toastId = "bg-analysis";
-			toast.loading(
-				`Analyzing ${imported.length} track${imported.length !== 1 ? "s" : ""}…`,
-				{
-					id: toastId,
-				},
-			);
-			const unlistenProgress = await listen<[string, string]>(
-				"track-import-progress",
-				(event) => {
-					const [, step] = event.payload;
-					toast.loading(step, { id: toastId });
-				},
-			);
-			const unlistenComplete = await listen<number>(
-				"track-import-complete",
-				() => {
-					toast.success("Analysis complete", { id: toastId });
-					unlistenProgress();
-					unlistenComplete();
-				},
-			);
+		if (result) {
+			importId = result.importId;
+			importedCount = result.tracks.length;
+			if (result.tracks.length > 0) {
+				toast.loading(
+					`Analyzing ${result.tracks.length} track${result.tracks.length !== 1 ? "s" : ""}…`,
+					{ id: toastId },
+				);
+			} else {
+				unlisten();
+				unlisten = null;
+			}
+			for (const progress of pending) {
+				if (progress.importId === importId) showProgress(progress);
+			}
+		} else {
+			unlisten();
 		}
 	}, [
 		importSelected,
@@ -99,6 +130,7 @@ export function DjImportBrowser({ open, onOpenChange }: DjImportBrowserProps) {
 		refreshBrowser,
 		selectedKeys.size,
 		onOpenChange,
+		source?.name,
 	]);
 
 	const handleClose = useCallback(

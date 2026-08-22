@@ -1143,7 +1143,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 67
+        "line": 71
       },
       "name": "delete_track",
       "prose": {
@@ -1209,7 +1209,7 @@
       "domain": "engine_dj",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
-        "line": 101
+        "line": 103
       },
       "name": "engine_dj_default_library_path",
       "prose": {
@@ -1233,7 +1233,7 @@
       "domain": "engine_dj",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
-        "line": 74
+        "line": 76
       },
       "name": "engine_dj_get_playlist_tracks",
       "prose": {
@@ -1250,12 +1250,34 @@
         {
           "name": "libraryPath",
           "rust": "String"
+        },
+        {
+          "name": "trackIds",
+          "rust": "Vec<i64>"
         }
       ],
       "domain": "engine_dj",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
-        "line": 51
+        "line": 111
+      },
+      "name": "engine_dj_import_tracks",
+      "prose": {
+        "returns": "TrackImportResult"
+      },
+      "returns": "TrackImportResult"
+    },
+    {
+      "args": [
+        {
+          "name": "libraryPath",
+          "rust": "String"
+        }
+      ],
+      "domain": "engine_dj",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "line": 53
       },
       "name": "engine_dj_list_playlists",
       "prose": {
@@ -1277,7 +1299,7 @@
       "domain": "engine_dj",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
-        "line": 62
+        "line": 64
       },
       "name": "engine_dj_list_tracks",
       "prose": {
@@ -1299,7 +1321,7 @@
       "domain": "engine_dj",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
-        "line": 36
+        "line": 38
       },
       "name": "engine_dj_open_library",
       "prose": {
@@ -1325,7 +1347,7 @@
       "domain": "engine_dj",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
-        "line": 87
+        "line": 89
       },
       "name": "engine_dj_search_tracks",
       "prose": {
@@ -1440,7 +1462,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 59
+        "line": 63
       },
       "name": "get_classifier_thresholds",
       "prose": {
@@ -1719,7 +1741,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 93
+        "line": 97
       },
       "name": "get_track_audio_base64",
       "prose": {
@@ -1741,7 +1763,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 38
+        "line": 42
       },
       "name": "get_track_bar_classifications",
       "prose": {
@@ -1761,7 +1783,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 29
+        "line": 33
       },
       "name": "get_track_beats",
       "prose": {
@@ -1781,7 +1803,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 48
+        "line": 52
       },
       "name": "get_track_drum_onsets",
       "prose": {
@@ -1906,7 +1928,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 19
+        "line": 23
       },
       "name": "get_venue_annotation_counts",
       "prose": {
@@ -2124,6 +2146,24 @@
       "returns": "HostAudioSnapshot"
     },
     {
+      "args": [
+        {
+          "name": "filePaths",
+          "rust": "Vec<String>"
+        }
+      ],
+      "domain": "tracks",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "line": 120
+      },
+      "name": "import_tracks",
+      "prose": {
+        "returns": "TrackImportResult"
+      },
+      "returns": "TrackImportResult"
+    },
+    {
       "args": [],
       "domain": "fixtures",
       "handler": {
@@ -2339,7 +2379,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 13
+        "line": 17
       },
       "name": "list_tracks",
       "prose": {
@@ -2359,7 +2399,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 107
+        "line": 111
       },
       "name": "list_tracks_enriched",
       "prose": {
@@ -3498,7 +3538,7 @@
       "domain": "rekordbox",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
-        "line": 53
+        "line": 57
       },
       "name": "rekordbox_get_playlist_tracks",
       "prose": {
@@ -3512,11 +3552,29 @@
       "returns": "Vec<RekordboxTrack>"
     },
     {
+      "args": [
+        {
+          "name": "trackUuids",
+          "rust": "Vec<String>"
+        }
+      ],
+      "domain": "rekordbox",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "line": 72
+      },
+      "name": "rekordbox_import_tracks",
+      "prose": {
+        "returns": "TrackImportResult"
+      },
+      "returns": "TrackImportResult"
+    },
+    {
       "args": [],
       "domain": "rekordbox",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
-        "line": 47
+        "line": 51
       },
       "name": "rekordbox_list_playlists",
       "prose": {
@@ -3534,7 +3592,7 @@
       "domain": "rekordbox",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
-        "line": 39
+        "line": 43
       },
       "name": "rekordbox_list_tracks",
       "prose": {
@@ -3552,7 +3610,7 @@
       "domain": "rekordbox",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
-        "line": 32
+        "line": 36
       },
       "name": "rekordbox_open_library",
       "prose": {
@@ -3576,7 +3634,7 @@
       "domain": "rekordbox",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
-        "line": 61
+        "line": 65
       },
       "name": "rekordbox_search_tracks",
       "prose": {
@@ -3659,7 +3717,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 301
+        "line": 305
       },
       "name": "remove_session_item",
       "prose": {
@@ -3937,6 +3995,24 @@
         ]
       },
       "returns": "TrackEditResult"
+    },
+    {
+      "args": [
+        {
+          "name": "trackId",
+          "rust": "String"
+        }
+      ],
+      "domain": "tracks",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "line": 236
+      },
+      "name": "reprocess_track",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
     },
     {
       "args": [
@@ -4563,7 +4639,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 116
+        "line": 413
       },
       "name": "update_track_metadata",
       "prose": {
@@ -4695,7 +4771,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 456
+        "line": 460
       },
       "name": "wipe_database",
       "prose": {
@@ -4770,7 +4846,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/controller.rs"
     },
     {
-      "commandCount": 6,
+      "commandCount": 7,
       "domain": "engine_dj",
       "handlers": "src-tauri/src/dispatch/handlers/engine_dj.rs"
     },
@@ -4815,7 +4891,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/perform.rs"
     },
     {
-      "commandCount": 5,
+      "commandCount": 6,
       "domain": "rekordbox",
       "handlers": "src-tauri/src/dispatch/handlers/rekordbox.rs"
     },
@@ -4855,7 +4931,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/telemetry.rs"
     },
     {
-      "commandCount": 10,
+      "commandCount": 12,
       "domain": "tracks",
       "handlers": "src-tauri/src/dispatch/handlers/tracks.rs"
     },
@@ -4912,32 +4988,6 @@
     },
     {
       "emitters": [
-        "src-tauri/src/commands/engine_dj.rs:66",
-        "src-tauri/src/commands/engine_dj.rs:109"
-      ],
-      "listeners": [
-        "src/features/dj-import/adapters/engine-dj.ts:39",
-        "src/features/engine-dj/stores/use-engine-dj-store.ts:229"
-      ],
-      "name": "engine-dj-import-progress",
-      "orphan": false
-    },
-    {
-      "emitters": [
-        "src-tauri/src/commands/tracks.rs:49",
-        "src-tauri/src/commands/tracks.rs:72",
-        "src-tauri/src/commands/tracks.rs:87",
-        "src-tauri/src/dispatch/services.rs:446",
-        "src-tauri/src/dispatch/services.rs:453"
-      ],
-      "listeners": [
-        "src/features/tracks/components/track-browser.tsx:318"
-      ],
-      "name": "file-import-progress",
-      "orphan": false
-    },
-    {
-      "emitters": [
         "src-tauri/src/host_audio.rs:25"
       ],
       "listeners": [
@@ -4949,7 +4999,9 @@
     },
     {
       "emitters": [
-        "src-tauri/src/dispatch/handlers/tracks.rs:131",
+        "src-tauri/src/dispatch/handlers/tracks.rs:325",
+        "src-tauri/src/dispatch/handlers/tracks.rs:363",
+        "src-tauri/src/dispatch/handlers/tracks.rs:428",
         "src-tauri/src/sync/orchestrator.rs:140",
         "src-tauri/src/sync/orchestrator.rs:187",
         "src-tauri/src/sync/push.rs:714",
@@ -4957,7 +5009,7 @@
       ],
       "listeners": [
         "src/App.tsx:468",
-        "src/features/tracks/components/track-browser.tsx:153"
+        "src/features/tracks/components/track-browser.tsx:157"
       ],
       "name": "library-changed",
       "orphan": false
@@ -4998,7 +5050,7 @@
     },
     {
       "emitters": [
-        "src-tauri/src/lib.rs:161"
+        "src-tauri/src/lib.rs:159"
       ],
       "listeners": [
         "src/App.tsx:640"
@@ -5019,11 +5071,11 @@
     },
     {
       "emitters": [
-        "src-tauri/src/python_env.rs:277",
-        "src-tauri/src/python_env.rs:373",
-        "src-tauri/src/python_env.rs:392",
-        "src-tauri/src/python_env.rs:416",
-        "src-tauri/src/python_env.rs:470"
+        "src-tauri/src/python_env.rs:308",
+        "src-tauri/src/python_env.rs:404",
+        "src-tauri/src/python_env.rs:423",
+        "src-tauri/src/python_env.rs:447",
+        "src-tauri/src/python_env.rs:501"
       ],
       "listeners": [
         "src/App.tsx:575"
@@ -5033,44 +5085,31 @@
     },
     {
       "emitters": [
-        "src-tauri/src/commands/rekordbox.rs:65",
-        "src-tauri/src/commands/rekordbox.rs:113"
+        "src-tauri/src/dispatch/handlers/tracks.rs:279",
+        "src-tauri/src/dispatch/handlers/tracks.rs:450",
+        "src-tauri/src/dispatch/handlers/tracks.rs:520",
+        "src-tauri/src/preprocessing/scheduler.rs:313",
+        "src-tauri/src/preprocessing/scheduler.rs:352",
+        "src-tauri/src/preprocessing/scheduler.rs:410",
+        "src-tauri/src/preprocessing/scheduler.rs:451"
       ],
       "listeners": [
-        "src/features/dj-import/adapters/rekordbox.ts:38"
-      ],
-      "name": "rekordbox-import-progress",
-      "orphan": false
-    },
-    {
-      "emitters": [
-        "src-tauri/src/preprocessing/scheduler.rs:380"
-      ],
-      "listeners": [
-        "src/features/dj-import/components/dj-import-browser.tsx:88",
-        "src/features/tracks/components/track-browser.tsx:373"
-      ],
-      "name": "track-import-complete",
-      "orphan": false
-    },
-    {
-      "emitters": [
-        "src-tauri/src/preprocessing/scheduler.rs:292",
-        "src-tauri/src/preprocessing/scheduler.rs:352"
-      ],
-      "listeners": [
+        "gpui/crates/app/src/library.rs:103",
         "src/features/dj-import/components/dj-import-browser.tsx:81",
-        "src/features/tracks/components/track-browser.tsx:366"
+        "src/features/dj-import/stores/use-dj-import-store.ts:241",
+        "src/features/engine-dj/stores/use-engine-dj-store.ts:225",
+        "src/features/tracks/components/track-browser.tsx:347"
       ],
-      "name": "track-import-progress",
+      "name": "track-import-state",
+      "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose.",
       "orphan": false
     },
     {
       "emitters": [
-        "src-tauri/src/preprocessing/scheduler.rs:305"
+        "src-tauri/src/preprocessing/scheduler.rs:339"
       ],
       "listeners": [
-        "src/features/tracks/components/track-browser.tsx:153"
+        "src/features/tracks/components/track-browser.tsx:157"
       ],
       "name": "track-status-changed",
       "orphan": false
@@ -5119,32 +5158,11 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 182,
+    "commandCount": 186,
     "domainCount": 31,
-    "eventCount": 22,
-    "unportedCount": 4
+    "eventCount": 18,
+    "unportedCount": 0
   },
-  "unported": [
-    {
-      "file": "src-tauri/src/commands/engine_dj.rs",
-      "line": 23,
-      "name": "engine_dj_import_tracks"
-    },
-    {
-      "file": "src-tauri/src/commands/rekordbox.rs",
-      "line": 26,
-      "name": "rekordbox_import_tracks"
-    },
-    {
-      "file": "src-tauri/src/commands/tracks.rs",
-      "line": 22,
-      "name": "import_tracks"
-    },
-    {
-      "file": "src-tauri/src/commands/tracks.rs",
-      "line": 114,
-      "name": "reprocess_track"
-    }
-  ],
+  "unported": [],
   "version": 2
 }
