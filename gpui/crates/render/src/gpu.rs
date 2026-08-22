@@ -2922,6 +2922,7 @@ mod tests {
                     ..Material::default()
                 },
                 textures: MaterialTextures::default(),
+                editor_object: None,
             }],
             grid_draws: 0,
             overlays: Vec::new(),
