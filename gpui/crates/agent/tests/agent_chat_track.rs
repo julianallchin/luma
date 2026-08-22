@@ -113,7 +113,6 @@ fn the_chat_follows_the_screen_onto_the_track_editor() {
         &format!(
             r#"
             nav.track({track:?});
-            app.action("luma::ToggleExpand");
             until("the track agent", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
                 return send !== undefined && send.bounds.width > 0

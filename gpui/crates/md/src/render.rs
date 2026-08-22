@@ -266,16 +266,17 @@ pub fn render_block(
             .flex_col()
             .gap(px(4.0))
             .children(items.iter().enumerate().map(|(item_ix, item)| {
-                // Accent markers (the inline-code hue): ordered numbers as
-                // tinted text, unordered as a REAL 5px disc — the glyph "•"
-                // reads too small at 14px.
+                // Neutral markers, as comet draws them — hue is for meaning,
+                // and a bullet means nothing. Ordered numbers as dimmed text,
+                // unordered as a REAL 5px disc — the glyph "•" reads too
+                // small at 14px.
                 let marker: gpui::AnyElement = match ordered_start {
                     Some(start) => div()
                         .flex_none()
                         .min_w(px(18.0))
                         .text_size(px(MD_TEXT_SIZE))
                         .line_height(px(MD_LINE_HEIGHT))
-                        .text_color(theme.accent.opacity(0.85))
+                        .text_color(theme.text_faint)
                         .child(SharedString::from(format!("{}.", start + item_ix as u64)))
                         .into_any_element(),
                     None => div()
@@ -291,7 +292,7 @@ pub fn render_block(
                                 .w(px(5.0))
                                 .h(px(5.0))
                                 .rounded_full()
-                                .bg(theme.accent.opacity(0.85)),
+                                .bg(theme.text_faint),
                         )
                         .into_any_element(),
                 };

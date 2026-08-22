@@ -413,7 +413,7 @@ impl AgentChat {
                     div()
                         .flex_1()
                         .min_h_0()
-                        .px(px(theme::SPACE_LG))
+                        .px(px(theme::CONTENT_GUTTER))
                         .child(opening(&Opening::UNATTACHED, None, &theme)),
                 )
                 .into_any_element();
@@ -453,7 +453,11 @@ impl AgentChat {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .px(px(theme::SPACE_LG))
+                    // The reading column's minimum gutters. The 736 cap lives
+                    // on each row (`transcript::row`) because a `list` hands
+                    // its items the full width; the gutters live here because
+                    // the turn rail lives inside the left one.
+                    .px(px(theme::CONTENT_GUTTER))
                     // Painted first, so each frame's selection registry holds
                     // exactly that frame's visible text in paint order. Not
                     // optional: the registry is a thread-local that every
@@ -464,10 +468,11 @@ impl AgentChat {
                         el.child(opening(&Opening::of(kind), Some(&this), &theme))
                     })
                     .when(!self.transcript.messages.is_empty(), |el| {
-                        el.child(transcript_list).child(fade_band())
+                        el.child(transcript_list)
+                            .child(fade_band())
+                            .child(self.rail(&theme))
                     }),
             )
-            .child(status_strip(streaming, self.error.as_deref(), &theme, cx))
             .child(composer::composer(
                 &this,
                 &self.composer,
@@ -477,7 +482,60 @@ impl AgentChat {
                 window,
                 cx,
             ))
+            .child(status_strip(
+                streaming,
+                self.error.as_deref(),
+                kind,
+                &theme,
+                cx,
+            ))
             .into_any_element()
+    }
+
+    /// The turn rail: comet's minimap of the conversation, one tick per user
+    /// prompt, living in the reading column's left gutter. Clicking a tick
+    /// scrolls its turn into view.
+    fn rail(&self, _theme: &Theme) -> gpui::Div {
+        let mut ticks = div()
+            .absolute()
+            .left(px(theme::SPACE_MD))
+            .top_0()
+            .bottom_0()
+            .w(px(theme::SPACE_LG))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap(px(6.));
+        let last_user = self
+            .transcript
+            .messages
+            .iter()
+            .rposition(|message| matches!(message.role, luma_lib::agent::Role::User));
+        for (ix, message) in self.transcript.messages.iter().enumerate() {
+            if !matches!(message.role, luma_lib::agent::Role::User) {
+                continue;
+            }
+            let list = self.list.clone();
+            let active = Some(ix) == last_user;
+            ticks = ticks.child(
+                div()
+                    .id(SharedString::from(format!("rail-{ix}")))
+                    .w(px(14.))
+                    .h(px(10.))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .on_click(move |_, _, _| {
+                        list.scroll_to_reveal_item(ix);
+                    })
+                    .child(div().w(px(14.)).h(px(2.)).rounded(px(1.)).bg(if active {
+                        theme::ink(0.55)
+                    } else {
+                        theme::ink(0.18)
+                    })),
+            );
+        }
+        ticks
     }
 
     /// The thread's surface and its header — everything both the attached and
@@ -488,11 +546,9 @@ impl AgentChat {
             .size_full()
             .flex()
             .flex_col()
-            // The glass tier: on macOS this ground is 80% coverage, so the
-            // plane the panel is docked over tints it and the panel reads as a
-            // surface laid on the app rather than as a hole cut in it. See
-            // `luma_md::theme::glass`.
-            .bg(theme::glass())
+            // No fill of its own: the shell's content card paints the ground
+            // (`grey(6)`, comet's `bg`), and a second plane here would put the
+            // thread one tone off the pane it *is*.
             .text_color(theme.text)
             .child(self.header(theme))
     }
@@ -503,19 +559,33 @@ impl AgentChat {
             Some(luma_lib::agent::AgentKind::PatternGraph) => "Pattern agent".into(),
             None => "Agent".into(),
         };
+        let badge: Option<SharedString> = match self.scope.as_ref().map(|scope| scope.agent_kind) {
+            Some(luma_lib::agent::AgentKind::TrackCopilot) => Some("Track".into()),
+            Some(luma_lib::agent::AgentKind::PatternGraph) => Some("Pattern".into()),
+            None => None,
+        };
         div()
             .h(px(theme::HEADER_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
+            .gap(px(theme::SPACE_SM))
             .px(px(theme::SPACE_LG))
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme::card_bg())
             .text_size(px(12.0))
             .text_color(theme.text_muted)
-            .child(title.clone())
-            .agent_node(NodeRole::Text, title)
+            .child(div().child(title.clone()).agent_node(NodeRole::Text, title))
+            .children(badge.map(|badge| {
+                div()
+                    .h(px(18.0))
+                    .px(px(theme::SPACE_SM))
+                    .flex()
+                    .items_center()
+                    .rounded(px(theme::CONTROL_RADIUS))
+                    .bg(theme::wash(0.06))
+                    .text_size(px(10.0))
+                    .text_color(theme.text_faint)
+                    .child(badge)
+            }))
     }
 }
 
@@ -526,11 +596,12 @@ impl AgentChat {
 /// last line of a reply butts against the composer's plate and the two read as
 /// one control.
 ///
-/// The stop is [`theme::glass`] and not [`Theme::bg`] for the reason the band
-/// exists at all — it has to arrive at the colour the transcript is sitting on,
-/// and over the glass tier that colour carries the ground's own alpha.
+/// The stop is the content card's own ground — `grey(6)`, what the shell
+/// paints under the thread — because the band has to arrive at exactly the
+/// colour the transcript is sitting on: one tone off and the fade reads as a
+/// seam stripe instead of a dissolve.
 fn fade_band() -> impl IntoElement {
-    let ground = theme::glass();
+    let ground = theme::grey(6);
     div()
         .absolute()
         .bottom_0()
@@ -722,6 +793,7 @@ fn suggestion(
 fn status_strip(
     streaming: bool,
     error: Option<&str>,
+    kind: luma_lib::agent::AgentKind,
     theme: &Theme,
     cx: &mut Context<AgentChat>,
 ) -> AnyElement {
@@ -732,14 +804,14 @@ fn status_strip(
         .flex_row()
         .items_center()
         .gap(px(theme::SPACE_SM))
-        // The transcript's inset: the strip is the tail of what is being read,
-        // not a label on the composer below it.
-        .px(px(theme::SPACE_LG))
-        // …and the transcript's rhythm below it. Without this the working row
-        // sits closer to the composer's plate than any two blocks in a reply
-        // sit to each other, and reads as the plate's caption. Constant, and
-        // the strip is always present, so the composer still never shifts.
-        .mb(px(theme::GAP_BLOCK))
+        // Under the composer, as comet keeps it: the strip is the thread's
+        // context line, not the transcript's tail. Centered on the same
+        // reading column as the plate above it.
+        .mx_auto()
+        .w_full()
+        .max_w(px(theme::MAX_CONTENT_WIDTH + 2.0 * theme::CONTENT_GUTTER))
+        .px(px(theme::CONTENT_GUTTER + theme::SPACE_LG))
+        .mb(px(theme::SPACE_XS))
         .text_size(px(11.0));
     if let Some(error) = error {
         return strip
@@ -778,5 +850,16 @@ fn status_strip(
             .agent_node(NodeRole::Text, "Working")
             .into_any_element();
     }
-    strip.into_any_element()
+    // At rest: what this thread is, faintly — comet's checkout line, in the
+    // only vocabulary a light show has.
+    let subject = match kind {
+        luma_lib::agent::AgentKind::TrackCopilot => "Track thread",
+        luma_lib::agent::AgentKind::PatternGraph => "Pattern thread",
+    };
+    strip
+        .text_color(theme.text_faint)
+        .child(SharedString::from(subject))
+        .child(div().flex_1())
+        .child(SharedString::from("⏎ to send"))
+        .into_any_element()
 }

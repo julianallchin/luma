@@ -40,8 +40,11 @@ pub const TRANSCRIPT_FADE_BAND: f32 = 24.0;
 
 // -- transcript (transcript.rs:56-131) ---------------------------------------
 
-/// The reading column: 46rem. A wider panel gutters, it does not stretch prose.
+/// The reading column: 46rem. A wider pane gutters, it does not stretch prose.
 pub const MAX_CONTENT_WIDTH: f32 = 736.0;
+/// The column's minimum gutters, either side — comet's 48px. The turn rail
+/// lives inside the left one.
+pub const CONTENT_GUTTER: f32 = 48.0;
 /// Between turns.
 pub const GAP_TURN: f32 = 14.0;
 /// Within a turn.

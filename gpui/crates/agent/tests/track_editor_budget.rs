@@ -114,6 +114,7 @@ const SCRIPT: &str = r#"
         // runtime gpui does not own — waited for by its result rather than by
         // a frame count.
         until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+        nav.expand();
     }
 
     /** Every frame drawn while `run` ran, as total CPU milliseconds. */

@@ -75,6 +75,18 @@ globalThis.nav = {
 		app.frames(4);
 	},
 
+	// Put the workspace into takeover — the tab body gets everything right
+	// of the sidebar. Idempotent across one session: the flag survives tab
+	// closes, so a test calls this once after its first open and every later
+	// tab inherits the room.
+	expand() {
+		if (!globalThis.__expanded) {
+			app.action("luma::ToggleExpand");
+			globalThis.__expanded = true;
+			app.frames(2);
+		}
+	},
+
 	// Dismiss the overlay that is up — what Escape means, minus the keyboard
 	// (a focused text field keeps Escape for itself; the action does not care
 	// where focus is).

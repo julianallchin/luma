@@ -101,6 +101,7 @@ fn the_rig_is_lit_by_the_playing_track() {
             // silent no-op.
             until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
             app.action("luma::OpenVisualizer");
+            nav.expand();
             app.frames(10, {{ waitMs: 60 }});
         "#
         ),

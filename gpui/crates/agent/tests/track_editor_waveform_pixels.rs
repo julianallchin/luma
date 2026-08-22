@@ -53,10 +53,10 @@ fn harness() -> Harness {
         TRACK_SECONDS,
         vec![Clip::new("pattern-strobe", "Strobe", 11.5, 12.5)],
     )
-    // The zoom arithmetic here was authored against a 1200-wide canvas; the
-    // shell's sidebar takes 256 of the row and the tab strip 28 of the
-    // column, so the window grows by exactly that much.
-    .window(1456., 828.)
+    // The zoom arithmetic here was authored against a 1200-wide canvas; in
+    // takeover the shell spends 280 of the row (sidebar + card gaps), so the
+    // window grows by exactly that much.
+    .window(1480., 828.)
     .open(Mode::Pixel)
 }
 
@@ -96,6 +96,7 @@ const SCRIPT: &str = r#"
     // first frames take long enough that a fixed frame count can click at
     // nothing. Every step waits for what it is about to press.
     nav.trackEditor("Test Venue", "Aurora");
+    nav.expand();
 
     // Three minutes of audio to decode an envelope for, on a runtime gpui does
     // not own — waited for by its result rather than by a frame count.

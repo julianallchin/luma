@@ -5366,6 +5366,7 @@ dependencies = [
 name = "luma-chat"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "futures",
  "gpui",
  "gpui-component",

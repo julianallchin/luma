@@ -55,6 +55,13 @@ fn the_chat_panel_is_captured_across_one_turn() {
     let result = session.app.exec(
         &format!(
             r#"
+            {until}
+            // The shell as a user with a venue sees it: sidebar rows on the
+            // frost, and a second tab so the strip shows active beside
+            // inactive.
+            nav.venue("Studio A");
+            nav.step("the venue filter", "toggle", "In Venue");
+            nav.pattern("chat-turn");
             {open}
             const idle = app.screenshot();
             {send}
@@ -71,6 +78,7 @@ fn the_chat_panel_is_captured_across_one_turn() {
             const finished = app.screenshot();
             ({{ idle, streaming, finished }})
         "#,
+            until = chat::UNTIL,
             open = chat::open_chat(chat::CAPTURED),
             send = chat::send(),
         ),

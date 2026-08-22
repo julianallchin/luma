@@ -38,74 +38,88 @@ pub fn composer(
     let focused = state.read(cx).focus_handle(cx).is_focused(window);
     let value = state.read(cx).value().to_string();
     let keyed = chat.clone();
-    div().flex().flex_col().p(px(theme::SPACE_MD)).child(
-        div()
-            .key_context(luma_ui::TEXT_INPUT)
-            .flex()
-            .flex_col()
-            .rounded(px(theme::COMPOSER_RADIUS))
-            .bg(theme.input_bg)
-            .border_1()
-            .border_color(if focused {
-                theme.border_strong
-            } else {
-                theme.border
-            })
-            // Capture, not bubble: the editor binds `enter` itself, and a
-            // bubble handler would run after it had already inserted a
-            // newline.
-            .capture_key_down(move |event: &KeyDownEvent, window, cx| {
-                let key = event.keystroke.key.as_str();
-                let modified = event.keystroke.modifiers.shift;
-                match key {
-                    "enter" if !modified => {
-                        cx.stop_propagation();
-                        keyed.update(cx, |this, cx| this.send(window, cx));
+    // The plate sits on the same reading column as the transcript above it —
+    // a full-bleed composer under a centered column is two column rules on
+    // one pane.
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        // The transcript's own gutters, so the plate sits on the same reading
+        // column as the prose above it — one column rule per pane.
+        .px(px(theme::CONTENT_GUTTER))
+        .py(px(theme::SPACE_MD))
+        .child(
+            div()
+                .key_context(luma_ui::TEXT_INPUT)
+                .w_full()
+                .max_w(px(theme::MAX_CONTENT_WIDTH))
+                .flex()
+                .flex_col()
+                .rounded(px(theme::COMPOSER_RADIUS))
+                .bg(theme.input_bg)
+                .border_1()
+                .border_color(if focused {
+                    theme.border_strong
+                } else {
+                    theme.border
+                })
+                // Capture, not bubble: the editor binds `enter` itself, and a
+                // bubble handler would run after it had already inserted a
+                // newline.
+                .capture_key_down(move |event: &KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let modified = event.keystroke.modifiers.shift;
+                    match key {
+                        "enter" if !modified => {
+                            cx.stop_propagation();
+                            keyed.update(cx, |this, cx| this.send(window, cx));
+                        }
+                        "escape" => {
+                            cx.stop_propagation();
+                            keyed.update(cx, |this, cx| this.escape(cx));
+                        }
+                        _ => {}
                     }
-                    "escape" => {
-                        cx.stop_propagation();
-                        keyed.update(cx, |this, cx| this.escape(cx));
-                    }
-                    _ => {}
-                }
-            })
-            .child(
-                div()
-                    .px(px(theme::SPACE_LG))
-                    .pt(px(theme::SPACE_MD))
-                    .min_h(px(theme::TEXTAREA_MIN))
-                    .max_h(px(theme::TEXTAREA_MAX))
-                    .text_size(px(14.0))
-                    .line_height(px(22.75))
-                    .text_color(theme.text)
-                    .child(
-                        Textarea::new(state)
-                            .appearance(false)
-                            .bordered(false)
-                            .disabled(streaming),
-                    )
-                    .agent_node(
-                        NodeRole::Input,
-                        if value.is_empty() {
-                            SharedString::from(PLACEHOLDER)
-                        } else {
-                            SharedString::from(value.clone())
-                        },
-                    )
-                    .agent_focused(focused),
-            )
-            .child(actions(
-                chat,
-                streaming,
-                value.trim().is_empty(),
-                model,
-                theme,
-            )),
-    )
+                })
+                .child(
+                    div()
+                        .px(px(theme::SPACE_LG))
+                        .pt(px(theme::SPACE_MD))
+                        .min_h(px(theme::TEXTAREA_MIN))
+                        .max_h(px(theme::TEXTAREA_MAX))
+                        .text_size(px(14.0))
+                        .line_height(px(22.75))
+                        .text_color(theme.text)
+                        .child(
+                            Textarea::new(state)
+                                .appearance(false)
+                                .bordered(false)
+                                .disabled(streaming),
+                        )
+                        .agent_node(
+                            NodeRole::Input,
+                            if value.is_empty() {
+                                SharedString::from(PLACEHOLDER)
+                            } else {
+                                SharedString::from(value.clone())
+                            },
+                        )
+                        .agent_focused(focused),
+                )
+                .child(actions(
+                    chat,
+                    streaming,
+                    value.trim().is_empty(),
+                    model,
+                    theme,
+                )),
+        )
 }
 
-/// What the plate carries under the field: what will answer, on the left, and
-/// the one button that starts or stops it, on the right.
+/// What the plate carries under the field: everything clustered on the right,
+/// in comet's order — what will answer, then the one button that starts or
+/// stops it.
 fn actions(
     chat: &Entity<AgentChat>,
     streaming: bool,
@@ -118,16 +132,10 @@ fn actions(
         .flex()
         .flex_row()
         .items_center()
-        .justify_between()
-        // The field's own inset, so the chip's left edge and the first
-        // character of a prompt sit on one line.
+        .gap(px(theme::SPACE_SM))
         .px(px(theme::SPACE_LG))
-        .child(match model {
-            Some(model) => model_chip(model, theme).into_any_element(),
-            // Not yet resolved. The row's height is declared, so the chip
-            // arriving late moves nothing.
-            None => div().into_any_element(),
-        })
+        .child(div().flex_1())
+        .children(model.map(|model| model_chip(model, theme)))
         .child(send(chat, streaming, empty, theme))
 }
 

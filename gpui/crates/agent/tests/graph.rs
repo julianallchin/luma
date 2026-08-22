@@ -191,6 +191,7 @@ const SCRIPT: &str = r#"
         nav.patterns();
         app.frames(6);
         nav.step("the pattern Fixture Chain", "row", "Fixture Chain");
+        nav.expand();
         app.frames(8);
         return read();
     }

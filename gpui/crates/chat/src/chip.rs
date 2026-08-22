@@ -1,8 +1,7 @@
-//! Tool calls, as chips on a rail.
-//!
-//! A chip is the whole of what the transcript shows for a tool call: a state
-//! dot, a phrase, a clipped line of detail, and — under a chevron, open by
-//! default — the call's input and what came back.
+//! Tool calls, as comet's rail: an icon tile, the verb, the argument, and a
+//! trailing chevron — unboxed rows at a declared height, with the call's
+//! input and output one chevron away. Consecutive calls share one rail and,
+//! past one of them, a summary line above it.
 //!
 //! # The detail card is generic, not per-tool
 //!
@@ -27,6 +26,7 @@
 use gpui::{div, prelude::*, px, AnyElement, Hsla, SharedString};
 use gpui_component::{Icon, IconName};
 use luma_lib::agent::{ToolPart, ToolState};
+use luma_ui::node::{Instrument as _, Role as NodeRole};
 
 use crate::theme::{self, Theme};
 use crate::transcript::RowCtx;
@@ -109,37 +109,95 @@ fn clip(line: &str, max: usize) -> String {
     format!("{head}…")
 }
 
-/// The state dot's colour: amber while the call is in flight, emerald once it
-/// answered, red when it failed. The one place the chip carries hue.
-fn dot(state: &ToolState, theme: &Theme) -> Hsla {
-    match state {
-        ToolState::InputStreaming | ToolState::InputAvailable => theme.warning,
-        ToolState::OutputError => theme.danger,
-        _ => theme.success,
+/// A run of consecutive tool calls, as one rail. With more than one call the
+/// rail carries comet's group header — a chevron tile and a summary — above
+/// the rows; a lone call is its own row and needs no introduction.
+pub fn rail(tools: &[&ToolPart], ctx: &RowCtx) -> AnyElement {
+    let theme = ctx.theme;
+    let mut rail = div().flex().flex_none().flex_col();
+    if tools.len() > 1 {
+        let running = tools.iter().any(|tool| {
+            matches!(
+                tool.state,
+                ToolState::InputStreaming | ToolState::InputAvailable
+            )
+        });
+        let summary = if running {
+            format!("Running {} tools", tools.len())
+        } else {
+            format!("Ran {} tools", tools.len())
+        };
+        rail = rail.child(
+            div()
+                .h(px(theme::CHIP_HEIGHT))
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .gap(px(theme::SPACE_SM))
+                .child(tile(IconName::ChevronDown, theme))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(theme.text_muted)
+                        .child(SharedString::from(summary)),
+                ),
+        );
+    }
+    for tool in tools {
+        rail = rail.child(row(tool, ctx));
+    }
+    rail.into_any_element()
+}
+
+/// The 24px icon tile at a row's leading edge — a rounded wash square holding
+/// the tool's mark. The one place a failed call shows its colour.
+fn tile(icon: IconName, theme: &Theme) -> gpui::Div {
+    tinted_tile(icon, theme.text_muted, theme)
+}
+
+fn tinted_tile(icon: IconName, tint: Hsla, _theme: &Theme) -> gpui::Div {
+    div()
+        .size(px(24.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme::CONTROL_RADIUS))
+        .bg(theme::wash(0.06))
+        .child(Icon::new(icon).size(px(13.0)).text_color(tint))
+}
+
+/// The mark a tool wears in its tile.
+fn tool_icon(tool: &str) -> IconName {
+    match tool {
+        "python" => IconName::SquareTerminal,
+        "skill" => IconName::BookOpen,
+        _ => IconName::Bot,
     }
 }
 
-/// One tool call: the summary row, and its detail when it is open.
-pub fn chip(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
+/// One tool call: an unboxed 38px row — tile, narration, trailing chevron —
+/// and its detail card when the chevron has been answered.
+fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
     let theme = ctx.theme;
     let text = label(tool);
     let open = ctx.is_expanded(&tool.call_id);
     let chat = ctx.chat.clone();
     let call_id = SharedString::from(tool.call_id.clone());
     let id = SharedString::from(format!("chat-chip-{call_id}"));
-    let row = ctx.ix;
+    let row_ix = ctx.ix;
+    let tint = match tool.state {
+        ToolState::OutputError => theme.danger,
+        _ => theme.text_muted,
+    };
     div()
         .flex()
         .flex_none()
         .flex_col()
-        .rounded(px(theme::CONTROL_RADIUS))
-        .bg(theme::card_bg())
-        .border_1()
-        .border_color(theme.border)
-        .overflow_hidden()
-        // The *summary* is the control, not the whole card: a click handler on
-        // the container would collapse the chip out from under anyone reading
-        // — or selecting from — the detail it just opened.
+        // The *summary* is the control, not the whole block: a click handler
+        // on the container would collapse the detail out from under anyone
+        // reading — or selecting from — what they just opened.
         .child(
             div()
                 .id(id)
@@ -149,28 +207,21 @@ pub fn chip(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
                 .flex_row()
                 .items_center()
                 .gap(px(theme::SPACE_SM))
-                .px(px(theme::SPACE_MD))
+                .rounded(px(theme::CONTROL_RADIUS))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme::glass_hover()))
+                .hover(|style| style.bg(theme::wash(0.04)))
                 .on_click(move |_, _, cx| {
-                    chat.update(cx, |this, cx| this.toggle_tool(call_id.clone(), row, cx));
+                    chat.update(cx, |this, cx| this.toggle_tool(call_id.clone(), row_ix, cx));
                 })
-                .child(
-                    div()
-                        .w(px(6.0))
-                        .h(px(6.0))
-                        .flex_none()
-                        .rounded_full()
-                        .bg(dot(&tool.state, theme)),
-                )
+                .child(tinted_tile(tool_icon(tool.tool_name()), tint, theme))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
-                        .text_size(px(11.5))
+                        .text_size(px(12.0))
                         .text_color(theme.text_muted)
-                        .child(text),
+                        .child(text.clone()),
                 )
                 .child(
                     div()
@@ -188,9 +239,16 @@ pub fn chip(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
                             .size(px(theme::CHIP_CHEVRON - 2.0))
                             .text_color(theme.text_faint),
                         ),
-                ),
+                )
+                .agent_node(NodeRole::Chip, text),
         )
-        .when(open, |el| el.child(detail_card(tool, theme)))
+        .when(open, |el| {
+            el.child(
+                // Indented under the narration, past the tile, so the detail
+                // reads as the row's own and not as a new block.
+                div().pl(px(32.0)).child(detail_card(tool, theme)),
+            )
+        })
         .into_any_element()
 }
 

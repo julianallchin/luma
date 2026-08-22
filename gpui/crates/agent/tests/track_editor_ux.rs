@@ -65,10 +65,11 @@ fn harness() -> Harness {
             .collect(),
     )
     // Every pixel-arithmetic premise in SCRIPT was authored against a
-    // 1200×762 canvas; the shell's sidebar takes 256 of the row and the tab
-    // strip 28 of the column, so the window grows by exactly that much and
-    // the timeline keeps its size.
-    .window(1456., 828.)
+    // 1200-wide canvas. In takeover the shell spends 280 of the row (the
+    // sidebar and the card gaps) and 46 of the column (the titlebar band and
+    // the bottom gap), so the window grows by exactly that much and the
+    // timeline keeps its size.
+    .window(1480., 818.)
     .open(Mode::Headless)
 }
 
@@ -136,6 +137,7 @@ const SCRIPT: &str = r#"
         // which is earlier than the old hand-rolled walk got here, so a bare
         // frame count can land inside the load.
         until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+        nav.expand();
     }
 
     nav.venue("Test Venue");

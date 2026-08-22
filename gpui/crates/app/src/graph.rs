@@ -108,10 +108,16 @@ pub struct Editor {
     /// the canvas knows both its own size and the measured graph's — which is
     /// inside a draw.
     view: Rc<Cell<Viewport>>,
-    /// Frame the whole graph the next time it is measured, as the web editor
-    /// does with `fitView` on mount. Cleared once spent, so a later rebuild (a
-    /// save coming back) does not yank the eye.
+    /// Frame the whole graph, as the web editor does with `fitView` on mount
+    /// — and keep it framed when the *canvas* changes size (the workspace
+    /// pane resizing under it), until the user takes the view with a pan or a
+    /// zoom. Cleared by those gestures, not by the fit itself, so a rebuild
+    /// (a save coming back) or a pane resize does not yank an eye the user
+    /// has placed.
     fit: bool,
+    /// The canvas size the last fit was computed for — how a resize is told
+    /// apart from a repaint. Written inside the draw, like [`Self::view`].
+    fitted_size: Rc<Cell<gpui::Size<Pixels>>>,
     /// Where the canvas last painted, in window space. A mouse event arrives
     /// in window coordinates and has to be put back into graph coordinates,
     /// which needs this; the canvas knows it and the event handlers do not, so
@@ -367,6 +373,7 @@ impl Luma {
                 zoom: 1.,
             })),
             fit: true,
+            fitted_size: Rc::new(Cell::new(gpui::Size::default())),
             origin: Rc::new(Cell::new(Bounds::default().origin)),
             saving: false,
             dirty: false,
@@ -437,6 +444,7 @@ impl Luma {
                 // way to have one.
                 None => {
                     editor.selected = None;
+                    editor.fit = false;
                     editor.gesture = Some(Gesture::Pan { last: at });
                 }
             }
@@ -503,6 +511,7 @@ impl Luma {
 
     fn graph_zoom(&mut self, at: Point<Pixels>, wheel: f32, cx: &mut Context<Self>) {
         self.with_editor(cx, |editor| {
+            editor.fit = false;
             let origin = editor.origin.get();
             let mut view = editor.view.get();
             // Exponential in the scroll distance, so a fast flick and a slow
@@ -1582,8 +1591,8 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let selected = state.selected.clone();
     let origin = Rc::clone(&state.origin);
     let fit = state.fit;
+    let fitted_size = Rc::clone(&state.fitted_size);
     let app = app.clone();
-    let fitted = app.clone();
 
     div().flex_1().overflow_hidden().child(
         canvas(
@@ -1598,18 +1607,16 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                     let mut scene = registered.borrow_mut();
                     if !scene.measured {
                         scene.measure(window);
-                        // The first framing waits on that measure: a fit is a
-                        // function of boxes that do not exist until the text
-                        // system has been asked about them.
-                        if let (true, Some((at, extent))) = (fit, scene.extent()) {
+                    }
+                    // The framing waits on that measure: a fit is a function
+                    // of boxes that do not exist until the text system has
+                    // been asked about them. Re-framed whenever the canvas
+                    // itself changes size — the pane resizing under the tab —
+                    // for as long as the user has not taken the view.
+                    if fit && bounds.size != fitted_size.get() {
+                        if let Some((at, extent)) = scene.extent() {
                             measured_view.set(Viewport::fit(bounds.size, at, extent));
-                            fitted.update(cx, |this, _| {
-                                if let Some(TabBody::Graph(editor)) =
-                                    this.workspace.active_body_mut()
-                                {
-                                    editor.fit = false;
-                                }
-                            });
+                            fitted_size.set(bounds.size);
                         }
                     }
                 }
