@@ -107,7 +107,7 @@ impl Luma {
             sidebar_hidden: false,
             workspace: Tabs::default(),
             workspace_hidden: false,
-            expanded: true,
+            expanded: false,
             overlay: None,
             chat: None,
             focus: cx.focus_handle(),
@@ -122,24 +122,6 @@ impl Luma {
     fn select_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         self.workspace.select_index(index);
         cx.notify();
-    }
-
-    /// The window title: the visible tab's subject, else the venue, else the
-    /// app.
-    fn title(&self) -> String {
-        if let Some(Overlay::Settings(_)) = &self.overlay {
-            return "Luma — Settings".to_string();
-        }
-        if let Some(Overlay::Patterns(_)) = &self.overlay {
-            return "Luma — Patterns".to_string();
-        }
-        if let Some(body) = self.workspace.active_body() {
-            return format!("Luma — {}", body.title());
-        }
-        match &self.sidebar {
-            Some(browser) => format!("Luma — {}", browser.venue_name()),
-            None => "Luma".to_string(),
-        }
     }
 }
 
@@ -156,14 +138,19 @@ impl Render for Luma {
         self.sync_chat(window, cx);
         self.take_focus(window, cx);
 
-        let title = self.title();
-        let this = cx.entity();
         let root_holds_focus = self.overlay.is_none() && self.workspace.active().is_none();
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(ladder::background())
+            // The one shell plane. Every content surface is an inset card over
+            // it — see `shell::regions`. Painted at the tone comet's frost
+            // *reads* as (`surface`, grey 13) rather than as translucent
+            // `glass()`: over this window's opaque backing the 80% wash
+            // composites to the cards' own grey(6), and a frame the same
+            // colour as its cards is no frame. The real translucency returns
+            // with a blurred window backing.
+            .bg(luma_ui::glass::grey(13))
             .font_family(fonts::FAMILY)
             .text_color(ladder::foreground())
             .when(root_holds_focus, |root| root.track_focus(&self.focus))
@@ -238,9 +225,7 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::CommitInsertOption, _, cx| {
                 this.commit_insert_menu(cx)
             }))
-            .child(chrome::titlebar(&title, move |_, cx| {
-                this.update(cx, |this, cx| this.open_settings(cx));
-            }))
+            .child(chrome::titlebar(self, cx))
             .child(shell::regions(self, window, cx))
     }
 }

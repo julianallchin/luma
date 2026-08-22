@@ -72,12 +72,19 @@ pub struct Row {
     parsers: Vec<Option<IncrementalParser>>,
     veil: Rc<RefCell<luma_md::veil::RowVeil>>,
     cache: Rc<RefCell<RenderCache>>,
+    /// When the panel saw this row arrive. `None` for restored history — the
+    /// durable transcript does not carry times yet, and a stamped guess would
+    /// be a timestamp that lies. Rendered under a settled assistant turn.
+    time: Option<chrono::DateTime<chrono::Local>>,
 }
 
 impl Row {
-    /// A row for a message that arrived over the wire — its text fades in.
+    /// A row for a message that arrived over the wire — its text fades in,
+    /// and its arrival is the turn's timestamp.
     pub fn streaming(id: &str) -> Self {
-        Self::with_veil(id, luma_md::veil::RowVeil::default())
+        let mut row = Self::with_veil(id, luma_md::veil::RowVeil::default());
+        row.time = Some(chrono::Local::now());
+        row
     }
 
     /// A row read back from storage. Seeded, so history does not dissolve onto
@@ -92,6 +99,7 @@ impl Row {
             parsers: Vec::new(),
             veil: Rc::new(RefCell::new(veil)),
             cache: Rc::new(RefCell::new(RenderCache::default())),
+            time: None,
         }
     }
 
@@ -237,10 +245,37 @@ pub fn row(row: &Row, message: &AgentChatMessage, ctx: &RowCtx, window: &Window)
         Role::User => user_bubble(message, ctx.theme),
         Role::Assistant => assistant(row, message, ctx, window),
     };
+    // A settled assistant turn is signed with when it arrived — comet's faint
+    // line under the reply. A live row is not: its time is "now".
+    let stamp = (!ctx.live && matches!(message.role, Role::Assistant))
+        .then_some(row.time)
+        .flatten()
+        .map(|time| {
+            div()
+                .pt(px(theme::SPACE_XS))
+                .text_size(px(11.0))
+                .text_color(ctx.theme.text_faint)
+                .child(SharedString::from(
+                    time.format("%b %-d, %-I:%M %p").to_string(),
+                ))
+        });
+    // The reading column: the `list` hands every item the pane's full width,
+    // so the 736 cap and the centering live on the row itself.
     div()
         .w_full()
         .pb(px(theme::GAP_TURN))
-        .child(body)
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(
+            div()
+                .w_full()
+                .max_w(px(theme::MAX_CONTENT_WIDTH))
+                .flex()
+                .flex_col()
+                .child(body)
+                .children(stamp),
+        )
         .agent_node(NodeRole::Text, row.plain_text(message))
         .into_any_element()
 }
@@ -280,17 +315,26 @@ fn assistant(state: &Row, message: &AgentChatMessage, ctx: &RowCtx, window: &Win
     let now = Instant::now();
     let theme = ctx.theme;
     let mut stack = div().w_full().flex().flex_col().gap(px(theme::GAP_BLOCK));
-    for (ix, part) in message.parts.iter().enumerate() {
+    // Consecutive tool calls render as one rail — comet's group — so the
+    // grouping is decided here, where the sequence is visible, and the rail
+    // only ever draws what it is handed.
+    let mut tools: Vec<&luma_lib::agent::ToolPart> = Vec::new();
+    let mut parts = message.parts.iter().enumerate().peekable();
+    while let Some((ix, part)) = parts.next() {
+        if let AgentChatPart::Tool(tool) = part {
+            tools.push(tool);
+            let group_continues = matches!(parts.peek(), Some((_, AgentChatPart::Tool(_))));
+            if !group_continues {
+                stack = stack.child(chip::rail(&tools, ctx));
+                tools.clear();
+            }
+            continue;
+        }
         let element = match part {
             AgentChatPart::Text { .. } => markdown(state, ix, now, ctx, window, theme.text),
             AgentChatPart::Reasoning { .. } => {
                 markdown(state, ix, now, ctx, window, theme.text_faint)
             }
-            AgentChatPart::Tool(tool) => Some(
-                chip::chip(tool, ctx)
-                    .agent_node(NodeRole::Chip, chip::label(tool))
-                    .into_any_element(),
-            ),
             _ => None,
         };
         if let Some(element) = element {

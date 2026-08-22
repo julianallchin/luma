@@ -264,6 +264,9 @@ const SCRIPT: &str = r#"
         return read();
     }
 
+    // The venue list is a load on a runtime gpui does not own — the entry
+    // reading waits for its result rather than racing it.
+    until("the venue picker", (s) => s.find({ role: "card", label: "Test Venue" }) !== undefined);
     const home = app.snapshot();
     const entry = {
         wordmark: home.find({ role: "text", label: "luma" }) !== undefined,

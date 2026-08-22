@@ -92,6 +92,7 @@ const SCRIPT: &str = r#"
         // which is earlier than the old hand-rolled walk got here, so a bare
         // frame count can land inside the load.
         until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+        nav.expand();
     }
 
     nav.venue("Test Venue");

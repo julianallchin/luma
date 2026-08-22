@@ -27,10 +27,10 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
-use luma_ui::Enabled;
 
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
@@ -266,8 +266,9 @@ pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .size_full()
         .flex()
         .flex_col()
-        .bg(ladder::background())
-        .text_color(ladder::foreground())
+        // Glass tier: the sidebar sits transparent on the shell's frost —
+        // depth comes from the content cards beside it, not from a fill.
+        .text_color(luma_ui::glass::ink(0.85))
         .child(head(state, app))
         .child(filters(state, app, window))
         .child(match &state.error {
@@ -293,6 +294,9 @@ pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
 /// The venue at the head of the sidebar. Pressing it reopens the venue picker
 /// — the picker overlay is the one venue-choosing mechanism, so the head is a
 /// door to it rather than a second selector that could disagree with it.
+///
+/// Glass language, hand-set: the sidebar is chrome (spec §9), and a ladder
+/// slab up here would be the instrument tier leaking into the frame.
 fn head(state: &Tracks, app: &Entity<Luma>) -> Div {
     let picker = app.clone();
     div()
@@ -302,18 +306,39 @@ fn head(state: &Tracks, app: &Entity<Luma>) -> Div {
         .gap(px(GAP))
         .px(px(PAD_X))
         .py(px(8.))
-        .border_b_1()
-        .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button(&state.venue_name, Enabled::Yes)
+            div()
                 .id("venue")
+                .h(px(24.))
+                .px(px(8.))
+                .rounded(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(luma_ui::glass::ink(0.85))
+                .hover(|button| button.bg(luma_ui::glass::wash(0.06)))
                 .on_click(move |_, _, cx| picker.update(cx, |this, cx| this.show_venues(cx)))
+                .child(state.venue_name.clone())
+                .child(
+                    gpui_component::Icon::new(gpui_component::IconName::ChevronDown)
+                        .size(px(11.))
+                        .text_color(luma_ui::glass::ink(0.45)),
+                )
                 .agent_node(Role::Button, state.venue_name.clone()),
         )
         .child(div().flex_1())
         // How many rows the filters admit — the web browser's footer, kept in
         // the head because the sidebar has no second bar to spare.
-        .child(luma_ui::silkscreen(format!("{} TRACKS", state.shown.len())))
+        .child({
+            let count = format!("{} TRACKS", state.shown.len());
+            div()
+                .text_size(px(10.))
+                .text_color(luma_ui::glass::ink(0.35))
+                .child(count.clone())
+                .agent_node(Role::Text, count)
+        })
 }
 
 /// The search over the filters, stacked — at sidebar width they do not share
@@ -326,8 +351,6 @@ fn filters(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         .gap(px(6.))
         .px(px(PAD_X))
         .py(px(8.))
-        .border_b_1()
-        .border_color(ladder::trim())
         .child(search(state, app, window))
         .child(
             div()
@@ -351,8 +374,24 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
     let typed = app.clone();
-    luma_ui::luma_input(text, empty, crate::shell::SIDEBAR_WIDTH - 2. * PAD_X)
+    div()
         .id("search")
+        .w(px(crate::shell::SIDEBAR_WIDTH - 2. * PAD_X))
+        .h(px(26.))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .bg(luma_ui::glass::wash(0.04))
+        .border_1()
+        .border_color(luma_ui::glass::hairline(0.08))
+        .text_size(px(12.))
+        .text_color(if empty {
+            luma_ui::glass::ink(0.35)
+        } else {
+            luma_ui::glass::ink(0.85)
+        })
+        .child(SharedString::from(text.to_string()))
         .track_focus(&focus)
         // While this field has the keyboard, a key a person could be typing
         // is text and not a shortcut — see `keymap`. Escape is the reason
@@ -369,26 +408,44 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
         .agent_focused(focus.is_focused(window))
 }
 
-/// `<Toggle>`s for `mine` / `all`: one axis, always exactly one pressed.
+/// One glass filter pill: quiet ink that washes when pressed. The sidebar's
+/// own control, not `luma_toggle` — the ladder's slabs belong inside the
+/// content cards, and this is the frame.
+fn filter_pill(id: &'static str, label: &'static str, on: bool) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(20.))
+        .px(px(8.))
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .text_size(px(11.))
+        .when(on, |pill| {
+            pill.bg(luma_ui::glass::wash(0.10))
+                .text_color(luma_ui::glass::ink(0.90))
+        })
+        .when(!on, |pill| {
+            pill.text_color(luma_ui::glass::ink(0.45))
+                .hover(|pill| pill.bg(luma_ui::glass::wash(0.06)))
+        })
+        .child(SharedString::from(label))
+}
+
+/// The `mine` / `all` axis: always exactly one pressed.
 fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
-    div().flex().children(
-        Ownership::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, ownership)| {
-                let app = app.clone();
-                luma_ui::luma_toggle_segment(
-                    ownership.label(),
-                    ownership == state.ownership,
-                    index == 0,
-                )
-                .id(ownership.label())
-                .on_click(move |_, _, cx| {
-                    app.update(cx, |this, cx| this.show_ownership(ownership, cx))
-                })
-                .agent_node(Role::Toggle, ownership.label())
-            }),
-    )
+    div()
+        .flex()
+        .gap(px(2.))
+        .children(Ownership::ALL.into_iter().map(|ownership| {
+            let app = app.clone();
+            filter_pill(
+                ownership.label(),
+                ownership.label(),
+                ownership == state.ownership,
+            )
+            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_ownership(ownership, cx)))
+            .agent_node(Role::Toggle, ownership.label())
+        }))
 }
 
 /// The other axis, and independent of ownership: whether to show only tracks
@@ -396,8 +453,7 @@ fn ownership_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
 fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
     let app = app.clone();
     div().child(
-        luma_ui::luma_toggle("In Venue", state.in_venue)
-            .id("in-venue")
+        filter_pill("in-venue", "In Venue", state.in_venue)
             .on_click(move |_, _, cx| app.update(cx, |this, cx| this.toggle_in_venue(cx)))
             .agent_node(Role::Toggle, "In Venue"),
     )
@@ -421,12 +477,7 @@ fn body(state: &Tracks, app: &Entity<Luma>) -> Div {
     )
 }
 
-fn track_row(index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyElement {
-    let stripe = if index.is_multiple_of(2) {
-        ladder::background()
-    } else {
-        ladder::stripe()
-    };
+fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyElement {
     let name = track_name(track);
     let opened = app.clone();
     let track_id = track.id.clone();
@@ -451,8 +502,8 @@ fn track_row(index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyEl
             let track_id = track_id.clone();
             opened.update(cx, |this, cx| this.open_track(&track_id, cx));
         })
-        .bg(stripe)
-        .hover(|s| s.bg(ladder::hover()))
+        .rounded(px(6.))
+        .hover(|row| row.bg(luma_ui::glass::wash(0.06)))
         .child(
             div()
                 .flex_shrink_0()
@@ -470,13 +521,13 @@ fn track_row(index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyEl
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(ladder::foreground_90())
+                        .text_color(luma_ui::glass::ink(0.88))
                         .child(name.clone()),
                 )
                 .child(
                     div()
                         .text_size(px(10.))
-                        .text_color(ladder::muted_foreground())
+                        .text_color(luma_ui::glass::ink(0.45))
                         .child(sub),
                 ),
         )

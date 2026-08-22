@@ -31,7 +31,6 @@ use gpui::{div, px, AnyElement, Context, Div, SharedString, Window};
 
 use luma_lib::models::venues::Venue;
 use luma_ui::ladder;
-use luma_ui::node::{Instrument, Role};
 
 use crate::tabs::Target;
 use crate::{graph, keymap, patterns, settings, track_editor, tracks, visualizer, welcome, Luma};
@@ -40,8 +39,10 @@ use crate::{graph, keymap, patterns, settings, track_editor, tracks, visualizer,
 /// drag-resize and persisted widths land with the polish phase.
 pub(crate) const SIDEBAR_WIDTH: f32 = 256.0;
 pub(crate) const WORKSPACE_WIDTH: f32 = 520.0;
-/// The tab strip's band, above the active tab's body.
-const STRIP_HEIGHT: f32 = 28.0;
+/// The content cards' corner radius and their inset from the glass plane —
+/// comet's `PANEL_RADIUS` and pane gap.
+pub(crate) const CARD_RADIUS: f32 = 10.0;
+pub(crate) const CARD_GAP: f32 = 8.0;
 
 /// One plane over the whole shell. The regions persist beneath it — closing
 /// an overlay reveals them exactly as they were.
@@ -234,9 +235,22 @@ impl Luma {
 // -- rendering ----------------------------------------------------------------
 
 /// The row of regions under the titlebar, and the overlay over them.
+///
+/// One glass plane frames everything: the sidebar sits transparent on the
+/// frost, and the centre and the workspace are **inset rounded cards** over
+/// it. Depth is the plane showing between cards — not borders, and not value
+/// steps butted edge to edge.
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
-    let mut row = div().flex_1().min_h_0().flex().flex_row().relative();
+    let mut row = div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_row()
+        .relative()
+        .gap(px(CARD_GAP))
+        .px(px(CARD_GAP))
+        .pb(px(CARD_GAP));
 
     if !app.sidebar_hidden {
         if let Some(browser) = &app.sidebar {
@@ -247,8 +261,6 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                     .h_full()
                     .flex()
                     .flex_col()
-                    .border_r_1()
-                    .border_color(ladder::trim())
                     .key_context(keymap::context::SIDEBAR)
                     .child(tracks::sidebar(browser, &entity, window)),
             );
@@ -256,16 +268,14 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
 
     // Takeover: an open workspace covers everything right of the sidebar and
-    // the thread column collapses behind it. This is P3's default — the shared
-    // 520px split arrives with the fidelity phase — so the centre renders only
-    // when no tab is claiming the space.
+    // the thread column collapses behind it. The default is comet's split;
+    // `ToggleExpand` trades the thread's room for the tab's.
     let takeover = app.expanded && !app.workspace_hidden && !app.workspace.is_empty();
     if !takeover {
         row = row.child(
-            div()
+            card()
                 .flex_1()
                 .min_w_0()
-                .h_full()
                 .key_context(keymap::context::THREAD)
                 .children(app.chat.clone()),
         );
@@ -273,20 +283,12 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
 
     if !app.workspace_hidden && !app.workspace.is_empty() {
         let pane = if takeover {
-            div().flex_1().min_w_0()
+            card().flex_1().min_w_0()
         } else {
-            div()
-                .w(px(WORKSPACE_WIDTH))
-                .flex_none()
-                .border_l_1()
-                .border_color(ladder::trim())
+            card().w(px(WORKSPACE_WIDTH)).flex_none()
         };
         row = row.child(
-            pane.h_full()
-                .flex()
-                .flex_col()
-                .key_context(keymap::context::WORKSPACE)
-                .child(tab_strip(app, &entity))
+            pane.key_context(keymap::context::WORKSPACE)
                 .child(active_tab(app, window, cx)),
         );
     }
@@ -297,73 +299,17 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     row
 }
 
-/// The strip of chips above the tab body: one per open tab, in strip order.
-fn tab_strip(app: &Luma, entity: &gpui::Entity<Luma>) -> Div {
-    let active = app.workspace.active().cloned();
-    let mut strip = div()
-        .h(px(STRIP_HEIGHT))
-        .flex_none()
+/// One content card: a rounded plane inset from the glass ground. The ladder
+/// (or the thread) lives *inside* it, clipped by the radius, so instrument
+/// surfaces never touch the window edge.
+fn card() -> Div {
+    div()
+        .h_full()
+        .rounded(px(CARD_RADIUS))
+        .overflow_hidden()
         .flex()
-        .items_center()
-        .gap(px(2.))
-        .px(px(6.))
-        .bg(ladder::gutter())
-        .border_b_1()
-        .border_color(ladder::trim());
-    for tab in app.workspace.iter() {
-        let target = tab.target.clone();
-        let is_active = active.as_ref() == Some(&target);
-        let title = tab.body.title();
-        let select = entity.clone();
-        let selected = target.clone();
-        let close = entity.clone();
-        let closed = target.clone();
-        strip = strip.child(
-            div()
-                .id(SharedString::from(format!("tab:{}", target.element_key())))
-                .h(px(20.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .text_size(px(9.))
-                .font_weight(gpui::FontWeight::BOLD)
-                .when(is_active, |chip| {
-                    chip.bg(ladder::hover()).text_color(ladder::foreground())
-                })
-                .when(!is_active, |chip| {
-                    chip.text_color(ladder::muted_foreground())
-                        .hover(|chip| chip.bg(ladder::hover()))
-                })
-                .on_click(move |_, _, cx| {
-                    select.update(cx, |this, cx| {
-                        this.workspace.select(&selected);
-                        cx.notify();
-                    });
-                })
-                .child(title.clone())
-                .child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "close:{}",
-                            target.element_key()
-                        )))
-                        .text_color(ladder::muted_foreground())
-                        .hover(|glyph| glyph.text_color(ladder::foreground()))
-                        .on_click(move |_, _, cx| {
-                            close.update(cx, |this, cx| {
-                                if let Some(body) = this.workspace.close(&closed) {
-                                    this.teardown(body, cx);
-                                }
-                                cx.notify();
-                            });
-                        })
-                        .child("✕"),
-                )
-                .agent_node(Role::Button, title),
-        );
-    }
-    strip
+        .flex_col()
+        .bg(luma_ui::glass::grey(6))
 }
 
 /// The visible tab's body, with the tab's own key context nested inside the

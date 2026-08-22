@@ -243,7 +243,6 @@ fn an_open_panel_re_points_at_the_screen_it_lands_on() {
             until("the unattached centre", (s) =>
                 s.findAll({{ role: "text" }}).some((n) => n.label === "Agent"));
             nav.step("the pattern chat-repoint", "row", "chat-repoint");
-            app.action("luma::ToggleExpand");
             until("the pattern agent", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
                 return send && send.bounds.width > 0;

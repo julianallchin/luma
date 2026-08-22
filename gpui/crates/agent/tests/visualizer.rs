@@ -52,6 +52,7 @@ fn open_viewport(harness: &mut Harness) {
             nav.venue("Test Venue");
             app.frames(4, { waitMs: 60 });
             app.action("luma::OpenVisualizer");
+            nav.expand();
             app.frames(8, { waitMs: 60 });
         "#,
         ),

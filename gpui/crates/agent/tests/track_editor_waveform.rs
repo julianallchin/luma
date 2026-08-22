@@ -56,10 +56,10 @@ fn harness() -> Harness {
             CLIP.0 + CLIP.1,
         )],
     )
-    // The zoom arithmetic here was authored against a 1200-wide canvas; the
-    // shell's sidebar takes 256 of the row and the tab strip 28 of the
-    // column, so the window grows by exactly that much.
-    .window(1456., 828.)
+    // The zoom arithmetic here was authored against a 1200-wide canvas; in
+    // takeover the shell spends 280 of the row (sidebar + card gaps), so the
+    // window grows by exactly that much.
+    .window(1480., 828.)
     .open(Mode::Headless)
 }
 
@@ -87,6 +87,7 @@ const SCRIPT: &str = r#"
     }
 
     nav.trackEditor("Test Venue", "Aurora");
+    nav.expand();
 
     // Three minutes of audio to decode and render an envelope for, on a runtime
     // gpui does not own — waited for by its result rather than by a frame count.

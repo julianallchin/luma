@@ -13,6 +13,7 @@ luma-ui = { workspace = true }
 # The agent loop. Consumed as a typed Rust stream — see `luma_lib::agent`.
 luma_lib = { package = "luma", path = "../../../src-tauri" }
 
+chrono = "0.4"
 futures = "0.3"
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "sync"] }

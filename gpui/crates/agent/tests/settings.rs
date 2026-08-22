@@ -61,10 +61,13 @@ const SCRIPT: &str = r#"
     const opened = openSettings();
     const before = opened.find({ role: "select", label: "Kimi K3 Fast" });
 
-    // Open the picker, then choose the option that is not selected.
+    // Open the picker, then choose the option that is not selected. The pick
+    // is a write plus a re-read on a runtime gpui does not own — waited for
+    // by its result, not by a frame count.
     app.click(before);
     app.click(app.snapshot().find({ role: "button", label: "Claude Opus 5" }));
-    app.frames(4);
+    until("the picked model", (s) =>
+        s.find({ role: "select", label: "Claude Opus 5" }) !== undefined);
 
     const chosen = app.snapshot().findAll({ role: "select" }).map((n) => n.label);
 

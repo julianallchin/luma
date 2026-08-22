@@ -591,6 +591,45 @@ P3 landed the shell swap. Its deviations, in the same numbering:
     a picker that camped over it would be the welcome screen refusing to
     leave.
 
+P4 landed chat fidelity and the chrome anatomy, against the blind critic's
+round-one verdict (scratchpad `shell-critic-verdict-r1.md`). Its deviations:
+
+18. **§10.7 is repaid: the split (520) is the default again**, with
+    `ToggleExpand` as the takeover switch. Geometry tests state takeover
+    explicitly (`nav.expand()`), which is a user gesture and not a test
+    backdoor.
+19. **The titlebar's back/forward are permanently dimmed.** Comet's chrome
+    carries them; this shell has no navigation history — nothing is destroyed,
+    so there is nothing to go back to. Dimmed-at-rest keeps the anatomy
+    without a control that lies.
+20. **No composer paperclip or effort control** (verdict #8, partially
+    declined). The chat cannot take attachments and has no effort knob — the
+    model chip is the whole of that vocabulary here — and a control with no
+    verb behind it is a silent-failure stub. The actions row order and the
+    status strip are comet's; the missing controls arrive with their features.
+21. **The status strip's idle line is the thread's subject** ("Pattern
+    thread") — comet shows a VCS checkout, which a light show does not have.
+22. **Turn timestamps stamp only witnessed turns.** The durable transcript
+    carries no message times yet; a restored row shows none rather than a
+    fabricated one. Adding times to the model is flagged as follow-up.
+23. **The turn rail is ticks + click-to-scroll**, gated on window (not pane)
+    width; comet's hover-preview cards and scroll-tracked active tick are P7
+    polish.
+24. **The shell plane is painted at comet's *effective* frost tone**
+    (`grey(13)`) rather than as translucent `glass()`: over an opaque window
+    backing the 80% wash composites to exactly the content cards' `grey(6)`,
+    and a frame the same colour as its cards is no frame. Real translucency
+    returns with a blurred window backing.
+25. **The sidebar's search and filter pills are hand-set glass controls** in
+    `tracks.rs`, not `luma_ui` ladder components: the sidebar is chrome (§9),
+    and the ladder's one-true-button rule governs instrument surfaces, not the
+    frame. If a second glass surface needs these, they move to a
+    `luma_ui::glass` widgets module.
+26. **The capture fixture seeds a venue and three bare tracks** so the plates
+    show the shell a user with a venue sees — round one's captures were
+    venue-less and therefore sidebar-less, which the critic correctly read as
+    "no sidebar anywhere".
+
 ## 11. Smells flagged, not fixed
 
 - The transport and clip-editing `impl Luma` blocks live inside

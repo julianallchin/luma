@@ -159,6 +159,29 @@ async fn seed(config_dir: &Path) {
     luma_lib::database::local::auth::bootstrap_host_admission(&db.0, &state_db.0)
         .await
         .expect("failed to arm admission");
+    // …and a few tracks, so the sidebar has rows rather than an empty plate.
+    // Bare metadata: nothing here plays them, they are session rows.
+    for (index, (title, artist)) in [
+        ("Aurora", "Nightliner"),
+        ("Glasshouse", "Vantage"),
+        ("Undertow", "Nightliner"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
+             VALUES (?, NULL, ?, ?, ?, 210.0, ?)",
+        )
+        .bind(format!("chat-track-{index}"))
+        .bind(format!("chat-track-{index}-hash"))
+        .bind(title)
+        .bind(artist)
+        .bind(format!("/fixture/chat-track-{index}.mp3"))
+        .execute(&db.0)
+        .await
+        .expect("failed to seed a sidebar track");
+    }
     let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
     let workspaces = Arc::new(
         luma_lib::agent_execution::workspace::PythonWorkspaceService::new(
@@ -173,6 +196,16 @@ async fn seed(config_dir: &Path) {
         config_dir.to_path_buf(),
         workspaces,
     );
+    // A venue, so the shell has a sidebar to show: the captures are judged as
+    // "the app as a user with a venue sees it", and a venue-less fixture was
+    // exactly how round one shipped three sidebar-less plates.
+    luma_lib::dispatch::dispatch(
+        &services,
+        "create_venue",
+        &json!({ "name": "Studio A", "description": null }),
+    )
+    .await
+    .expect("failed to seed the venue");
     for (index, name) in PATTERNS.iter().enumerate() {
         let created = luma_lib::dispatch::dispatch(
             &services,
@@ -315,7 +348,6 @@ pub fn open_chat(pattern: &str) -> String {
         r#"
         {until}
         nav.pattern({pattern:?});
-        app.action("luma::ToggleExpand");
         until("the chat centre", (s) => {{
             // Not merely present: a control inside a clipped region exists
             // without being pressable. Zero width is what "clipped away"
