@@ -46,6 +46,7 @@ fn settings() -> RenderSettings {
         color: [1.0, 0.5, 0.25],
         intensity: 2.0,
         shadows: false,
+        shadow_softness: 1.0,
     });
     settings
 }
@@ -75,6 +76,7 @@ fn probe_settings(direction: [f32; 3], intensity: f32, shadows: bool) -> RenderS
         color: [1.0; 3],
         intensity,
         shadows,
+        shadow_softness: 1.0,
     });
     settings
 }
@@ -181,6 +183,86 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
         mean_rgb(&left_direct) > mean_rgb(&left_shadow),
         "disabling shadows did not remove shadow darkening"
     );
+}
+
+#[test]
+fn gpu_shadow_softness_is_stable_distinct_bounded_and_sun_independent() {
+    const WIDTH: u32 = 256;
+    const HEIGHT: u32 = 192;
+    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let piece = || Piece {
+        id: "softness-caster".into(),
+        mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        pos: [0.0, 0.0, 0.0],
+        rot: [0.0, 0.0, 0.0],
+        scale: 1.0,
+    };
+    let definitions = BTreeMap::new();
+    let mut library = Library::new(meshes);
+    let mut renderer = luma_render::Renderer::new().unwrap();
+    let mut render = |settings: RenderSettings| {
+        let frame = build_frame_with(
+            &scene(settings, vec![piece()]),
+            &definitions,
+            &|_, _| None,
+            0.0,
+            &mut library,
+        )
+        .unwrap();
+        renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap()
+    };
+
+    let mut hard_settings = probe_settings([-6.0, -4.0, 8.0], 2.0, true);
+    hard_settings.sun.as_mut().unwrap().shadow_softness = 0.0;
+    let mut soft_settings = hard_settings.clone();
+    soft_settings.sun.as_mut().unwrap().shadow_softness = 3.0;
+    let mut direct_settings = hard_settings.clone();
+    direct_settings.sun.as_mut().unwrap().shadows = false;
+    let mut sunless_hard_settings = hard_settings.clone();
+    sunless_hard_settings.sun.as_mut().unwrap().intensity = 0.0;
+    let mut sunless_soft_settings = sunless_hard_settings.clone();
+    sunless_soft_settings.sun.as_mut().unwrap().shadow_softness = 3.0;
+
+    let hard = render(hard_settings);
+    let soft = render(soft_settings.clone());
+    let soft_again = render(soft_settings);
+    let direct = render(direct_settings);
+    let sunless_hard = render(sunless_hard_settings);
+    // With zero sun intensity, its softness cannot leak into ambient or
+    // background evaluation.
+    let sunless_soft = render(sunless_soft_settings);
+
+    assert_eq!(soft, soft_again, "soft PCF must be byte-stable");
+    assert_eq!(
+        sunless_hard, sunless_soft,
+        "softness leaked into sun-off rendering"
+    );
+    let changed = hard
+        .chunks_exact(4)
+        .zip(soft.chunks_exact(4))
+        .filter(|(hard, soft)| hard != soft)
+        .count();
+    assert!(
+        changed > 32,
+        "hard and soft shadows differed at only {changed} pixels"
+    );
+
+    for ((soft, ambient), direct) in soft
+        .chunks_exact(4)
+        .zip(sunless_hard.chunks_exact(4))
+        .zip(direct.chunks_exact(4))
+    {
+        for channel in 0..3 {
+            assert!(
+                soft[channel].saturating_add(2) >= ambient[channel]
+                    && soft[channel] <= direct[channel].saturating_add(2),
+                "soft shadow escaped its ambient/direct energy bounds: {} not in {}..={}",
+                soft[channel],
+                ambient[channel],
+                direct[channel]
+            );
+        }
+    }
 }
 
 #[test]
@@ -438,6 +520,7 @@ fn material_lab_maps_debug_views_and_uploads_are_deterministic() {
         color: [1.0; 3],
         intensity: 1.0,
         shadows: true,
+        shadow_softness: 1.0,
     });
 
     let mut library = Library::new(root);

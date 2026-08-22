@@ -14,6 +14,7 @@ struct Globals {
     ambient: vec4<f32>,
     // xyz: direction toward the light. w: 1 when the directional light exists.
     dir_to_light: vec4<f32>,
+    // rgb: directional radiance, w: shadow-filter radius in texels.
     dir_color: vec4<f32>,
     // x: point-light count, y: shadow-map texel size, z: shadows enabled,
     // w: material debug-view code.

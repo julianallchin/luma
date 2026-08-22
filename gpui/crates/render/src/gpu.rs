@@ -241,6 +241,7 @@ pub struct Renderer {
     overlay_pipelines: [wgpu::RenderPipeline; 8],
     shadow_map: wgpu::TextureView,
     shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
+    hard_shadow_sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
     dummy_shadow: wgpu::TextureView,
     linear_sampler: wgpu::Sampler,
@@ -958,6 +959,11 @@ impl Renderer {
             compare: Some(wgpu::CompareFunction::GreaterEqual),
             ..Default::default()
         });
+        let hard_shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("hard-shadow"),
+            compare: Some(wgpu::CompareFunction::GreaterEqual),
+            ..Default::default()
+        });
         // glTF sampler `wrapS/wrapT = REPEAT`, trilinear — three's default for
         // an imported texture, and the mip chain is what keeps the deck's wood
         // grain from aliasing into a bright fizz at grazing angles.
@@ -1034,6 +1040,7 @@ impl Renderer {
             overlay_pipelines,
             shadow_map,
             shadow_layers,
+            hard_shadow_sampler,
             shadow_sampler,
             dummy_shadow,
             linear_sampler,
@@ -1386,7 +1393,9 @@ impl Renderer {
                 .to_array(),
             dir_color: frame
                 .directional
-                .map_or(Vec4::ZERO, |light| light.radiance.extend(0.0))
+                .map_or(Vec4::ZERO, |light| {
+                    light.radiance.extend(light.shadow_softness)
+                })
                 .to_array(),
             params: [
                 point_lights.len() as f32,
@@ -1541,8 +1550,12 @@ impl Renderer {
             ],
         });
 
-        let lit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, true);
-        let unlit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, false);
+        let hard_shadows = frame
+            .directional
+            .is_some_and(|light| light.shadow_softness == 0.0);
+        let lit_bg =
+            self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, true, hard_shadows);
+        let unlit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, false, false);
         let shadow_bgs: Vec<_> = light_view_proj
             .iter()
             .map(|matrix| {
@@ -1555,7 +1568,7 @@ impl Renderer {
                 );
                 (
                     buffer.clone(),
-                    self.scene_bind_group(&buffer, &instance_buf, &point_buf, false),
+                    self.scene_bind_group(&buffer, &instance_buf, &point_buf, false, false),
                 )
             })
             .collect();
@@ -2104,6 +2117,7 @@ impl Renderer {
         instances: &wgpu::Buffer,
         point_lights: &wgpu::Buffer,
         shadows: bool,
+        hard_shadows: bool,
     ) -> wgpu::BindGroup {
         // The shadow map is a render target during the shadow pass, so the
         // passes that write depth bind a 1x1 placeholder instead.
@@ -2120,7 +2134,14 @@ impl Renderer {
                 binding(1, instances.as_entire_binding()),
                 binding(2, point_lights.as_entire_binding()),
                 binding(3, wgpu::BindingResource::TextureView(map)),
-                binding(4, wgpu::BindingResource::Sampler(&self.shadow_sampler)),
+                binding(
+                    4,
+                    wgpu::BindingResource::Sampler(if hard_shadows {
+                        &self.hard_shadow_sampler
+                    } else {
+                        &self.shadow_sampler
+                    }),
+                ),
             ],
         })
     }
@@ -2622,6 +2643,7 @@ mod tests {
                 radiance: scene_radiance,
                 shadow_eye: Vec3::new(0.0, -4.0, 5.0),
                 shadows: false,
+                shadow_softness: 1.0,
             }),
             haze_density: 0.0,
             haze_steps: 1,

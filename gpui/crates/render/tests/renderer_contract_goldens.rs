@@ -14,6 +14,8 @@ const CASES: &[&str] = &[
     "sun-direction-left",
     "sun-direction-right",
     "sun-off",
+    "sun-shadow-hard",
+    "sun-shadow-soft",
     "one-beam",
     "overlapping-beams",
     "occluded-beam",
@@ -93,6 +95,15 @@ fn tracked_contract_frames_match_their_canonical_descriptors() {
         captured["sun-direction-right"]
     );
     assert!(mean_rgb(&captured["sun-off"]) < mean_rgb(&captured["sun-direction-left"]));
+    let changed_shadow_pixels = captured["sun-shadow-hard"]
+        .chunks_exact(4)
+        .zip(captured["sun-shadow-soft"].chunks_exact(4))
+        .filter(|(hard, soft)| hard != soft)
+        .count();
+    assert!(
+        changed_shadow_pixels > 1_000,
+        "authored hard and soft shadows changed only {changed_shadow_pixels} pixels"
+    );
     assert_eq!(
         captured["gobo-seam-negative"], captured["gobo-seam-positive"],
         "equivalent angles on opposite sides of the gobo wrap must meet without a seam"

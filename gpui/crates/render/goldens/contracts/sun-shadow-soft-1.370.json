@@ -1,0 +1,109 @@
+{
+  "schema": "luma.renderer-frame/1",
+  "image": "sun-shadow-soft-1.370.png",
+  "viewport": {
+    "width": 640,
+    "height": 400
+  },
+  "deviceScaleFactor": 1.0,
+  "outputSize": [
+    640,
+    400
+  ],
+  "subframes": 16,
+  "timeSeconds": 1.37,
+  "scene": {
+    "id": "sun-shadow-soft",
+    "times": [
+      1.37
+    ],
+    "camera": {
+      "position": [
+        6.5,
+        4.0,
+        8.5
+      ],
+      "target": [
+        0.0,
+        0.8,
+        0.0
+      ]
+    },
+    "editing": false,
+    "render": {
+      "environment": {
+        "background": [
+          0.004,
+          0.006,
+          0.01
+        ],
+        "ambientColor": [
+          0.3,
+          0.38,
+          0.5
+        ],
+        "ambientIntensity": 0.12
+      },
+      "haze": {
+        "enabled": false,
+        "steps": 8,
+        "resolution": 1.0,
+        "density": 0.8
+      },
+      "sun": {
+        "direction": [
+          -5.0,
+          -3.0,
+          8.0
+        ],
+        "color": [
+          1.0,
+          0.93,
+          0.82
+        ],
+        "intensity": 2.8,
+        "shadows": true,
+        "shadowSoftness": 3.0
+      },
+      "showGrid": false,
+      "debugView": "pbr",
+      "fov": 42.0
+    },
+    "selectedFixtureIds": [],
+    "fixtures": [],
+    "pieces": [
+      {
+        "id": "receiver",
+        "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "pos": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 2.4
+      },
+      {
+        "id": "caster",
+        "meshPath": "stage_lab/speaker_dbr15.glb",
+        "pos": [
+          0.0,
+          1.1,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.35,
+          0.0
+        ],
+        "scale": 1.2
+      }
+    ],
+    "state": {}
+  },
+  "definitions": {}
+}

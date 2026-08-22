@@ -179,6 +179,7 @@ struct RenderLab {
     sun_intensity: f32,
     sun_color: [f32; 3],
     sun_shadows: bool,
+    sun_shadow_softness: f32,
     environment_enabled: bool,
     background_color: [f32; 3],
     ambient_color: [f32; 3],
@@ -205,6 +206,7 @@ impl RenderLab {
             sun_intensity: 1.4,
             sun_color: [1.0; 3],
             sun_shadows: true,
+            sun_shadow_softness: 1.0,
             environment_enabled: editor_lit,
             background_color: scene_desc::Environment::EDITOR.background,
             ambient_color: scene_desc::Environment::EDITOR.ambient_color,
@@ -277,6 +279,7 @@ enum LabValue {
     Elevation,
     SunIntensity,
     SunColor(usize),
+    SunShadowSoftness,
     BackgroundColor(usize),
     AmbientColor(usize),
     Ambient,
@@ -315,6 +318,9 @@ impl RenderLab {
             }
             LabValue::SunColor(channel) => {
                 self.sun_color[channel] = (self.sun_color[channel] + delta).clamp(0.0, 1.0);
+            }
+            LabValue::SunShadowSoftness => {
+                self.sun_shadow_softness = (self.sun_shadow_softness + delta).clamp(0.0, 3.0);
             }
             LabValue::BackgroundColor(channel) => {
                 self.background_color[channel] =
@@ -1062,6 +1068,15 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             lab.sun_shadows,
             LabToggle::Shadows,
         ))
+        .child(lab_value(
+            app,
+            "Shadow softness",
+            lab.sun_shadow_softness,
+            0.0,
+            3.0,
+            1.0,
+            LabValue::SunShadowSoftness,
+        ))
         .child(lab_toggle(
             app,
             "Environment",
@@ -1405,6 +1420,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let sun_intensity = state.render_lab.sun_intensity;
     let sun_color = state.render_lab.sun_color;
     let sun_shadows = state.render_lab.sun_shadows;
+    let sun_shadow_softness = state.render_lab.sun_shadow_softness;
     let environment_enabled = state.render_lab.environment_enabled;
     let ambient_intensity = state.render_lab.ambient_intensity;
     let ambient_color = state.render_lab.ambient_color;
@@ -1463,6 +1479,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             color: sun_color,
                             intensity: sun_intensity,
                             shadows: sun_shadows,
+                            shadow_softness: sun_shadow_softness,
                         });
                         scene.render.haze.enabled = haze_enabled;
                         scene.render.haze.density = haze_density;
@@ -1632,6 +1649,7 @@ mod render_lab_tests {
         let original_background = lab.background_color;
 
         lab.adjust(LabValue::SunColor(0), -0.35);
+        lab.adjust(LabValue::SunShadowSoftness, 10.0);
         lab.adjust(LabValue::BackgroundColor(2), 0.2);
         lab.adjust(LabValue::AmbientColor(1), -0.4);
         lab.adjust(LabValue::ProbeIntensity, 10.0);
@@ -1642,6 +1660,7 @@ mod render_lab_tests {
         lab.adjust(LabValue::HazeResolution, -10.0);
 
         assert!((lab.sun_color[0] - 0.65).abs() < f32::EPSILON);
+        assert_eq!(lab.sun_shadow_softness, 3.0);
         assert!((lab.background_color[2] - (original_background[2] + 0.2)).abs() < f32::EPSILON);
         assert!((lab.ambient_color[1] - 0.6).abs() < f32::EPSILON);
         assert_eq!(lab.background_color[..2], original_background[..2]);
