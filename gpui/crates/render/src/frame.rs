@@ -46,6 +46,17 @@ pub struct Draw {
     pub material: Material,
     /// Indices into [`Frame::images`] for the five glTF material-map roles.
     pub textures: MaterialTextures,
+    /// Stable authored identity. Several draws may share one object.
+    pub editor_object: Option<EditorObject>,
+}
+
+/// Authored editor identity carried through frame expansion.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EditorObject {
+    /// One patched fixture, regardless of its number of mesh primitives.
+    Fixture(String),
+    /// One authored stage piece, regardless of its glTF node count.
+    StagePiece(String),
 }
 
 /// Optional glTF material maps in their fixed shader roles.
@@ -250,6 +261,7 @@ fn glb_draw(
     p: usize,
     model: Mat4,
     material: impl FnOnce(Material) -> Material,
+    editor_object: Option<EditorObject>,
 ) -> Draw {
     let prim = &glb.primitives[p];
     let mesh = bank.insert(format!("{asset}#{p}"), || MeshData {
@@ -276,6 +288,7 @@ fn glb_draw(
         model,
         material: material(prim.material),
         textures,
+        editor_object,
     }
 }
 
@@ -474,6 +487,7 @@ pub fn build_with(
             occlusion_strength: 1.0,
             flat_shading: false,
         },
+        editor_object: None,
     });
 
     // --- global haze density ----------------------------------------------
@@ -515,6 +529,7 @@ pub fn build_with(
                     base_color: hex_srgb(0x05_05_05),
                     ..Material::default()
                 },
+                editor_object: Some(EditorObject::Fixture(fixture.id.clone())),
             });
 
             let pixels_per_head = pixels.len() as f32 / head_count as f32;
@@ -543,6 +558,7 @@ pub fn build_with(
                         occlusion_strength: 1.0,
                         flat_shading: false,
                     },
+                    editor_object: Some(EditorObject::Fixture(fixture.id.clone())),
                 });
             }
 
@@ -610,12 +626,18 @@ pub fn build_with(
                 // Every fixture body is forced near-black so only beams and
                 // emissives read (`static-fixture.tsx`). `setRGB` is in the
                 // linear working space, so no sRGB decode here.
-                draws.push(glb_draw(&mut bank, &mesh_rel, glb, p, *world, |m| {
-                    Material {
+                draws.push(glb_draw(
+                    &mut bank,
+                    &mesh_rel,
+                    glb,
+                    p,
+                    *world,
+                    |m| Material {
                         base_color: Vec3::splat(0.08),
                         ..m
-                    }
-                }));
+                    },
+                    Some(EditorObject::Fixture(fixture.id.clone())),
+                ));
             }
         }
 
@@ -663,7 +685,15 @@ pub fn build_with(
         let worlds = glb.world_matrices(root, &HashMap::new());
         for (node, world) in glb.nodes.iter().zip(&worlds) {
             for &p in &node.primitives {
-                draws.push(glb_draw(&mut bank, &piece.mesh_path, glb, p, *world, |m| m));
+                draws.push(glb_draw(
+                    &mut bank,
+                    &piece.mesh_path,
+                    glb,
+                    p,
+                    *world,
+                    |m| m,
+                    Some(EditorObject::StagePiece(piece.id.clone())),
+                ));
             }
         }
     }
@@ -685,6 +715,7 @@ pub fn build_with(
                 * Mat4::from_translation(Vec3::new(0.0, 0.002, 0.0))
                 * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             material: Material::default(),
+            editor_object: None,
         });
     }
 

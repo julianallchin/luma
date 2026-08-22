@@ -537,6 +537,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
                 model: draw.model,
                 material: draw.material,
                 textures: draw.textures,
+                editor_object: draw.editor_object.clone(),
             })
             .collect(),
         grid_draws: base.grid_draws,

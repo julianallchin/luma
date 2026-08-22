@@ -353,14 +353,27 @@ impl AsyncViewport {
 
     /// Queue one live frame without waiting for the renderer or GPU.
     pub fn submit(&mut self, frame: Frame, width: u32, height: u32) -> SubmitOutcome {
+        self.submit_numbered(frame, width, height).1
+    }
+
+    /// Queue one live frame and return the serial that will accompany its
+    /// presentation. Editor hit-test snapshots use this to stay paired with
+    /// the exact pixels that eventually reach the screen.
+    pub fn submit_numbered(
+        &mut self,
+        frame: Frame,
+        width: u32,
+        height: u32,
+    ) -> (u64, SubmitOutcome) {
         self.next_serial = self.next_serial.wrapping_add(1);
+        let serial = self.next_serial;
         let mut slots = self
             .shared
             .slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (outcome, displaced) = slots.submit(
-            self.next_serial,
+            serial,
             FrameRequest {
                 frame,
                 width: width.max(1),
@@ -371,7 +384,7 @@ impl AsyncViewport {
         drop(slots);
         drop(displaced);
         self.shared.work.notify_one();
-        outcome
+        (serial, outcome)
     }
 
     /// Take the newest completed frame, if one exists, without polling or
