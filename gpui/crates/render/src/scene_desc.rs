@@ -138,7 +138,7 @@ impl DebugView {
 }
 
 /// Scene-wide background and ambient contribution, in linear RGB.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
     /// Linear RGB clear colour behind the scene.
@@ -148,6 +148,24 @@ pub struct Environment {
     /// Scalar ambient strength. Zero disables ambient light without changing
     /// the background.
     pub ambient_intensity: f32,
+    /// Optional HDR image-based light. When absent, `ambient_color` and
+    /// `ambient_intensity` remain the complete indirect-light fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<EnvironmentProbe>,
+}
+
+/// One Radiance HDR environment used for image-based lighting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentProbe {
+    /// Path relative to the renderer asset library root.
+    pub asset: String,
+    /// Scalar multiplier on both diffuse and specular image-based light.
+    pub intensity: f32,
+    /// Rotation around world Z, in degrees.
+    pub rotation_deg: f32,
+    /// Whether the probe is also painted behind scene geometry.
+    pub visible: bool,
 }
 
 impl Environment {
@@ -156,6 +174,7 @@ impl Environment {
         background: [0.0; 3],
         ambient_color: [1.0; 3],
         ambient_intensity: 0.0,
+        probe: None,
     };
 
     /// The legacy editor's neutral lit-stage environment.
@@ -164,6 +183,7 @@ impl Environment {
         background: [0.009_721_217; 3],
         ambient_color: [1.0; 3],
         ambient_intensity: 0.2,
+        probe: None,
     };
 }
 

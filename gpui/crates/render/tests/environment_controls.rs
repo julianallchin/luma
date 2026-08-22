@@ -6,8 +6,8 @@ use glam::{Mat4, Vec3};
 use luma_render::assets::Library;
 use luma_render::build_frame_with;
 use luma_render::scene_desc::{
-    CameraPose, DebugView, DirectionalLight, Environment, HazeSettings, Piece, RenderSettings,
-    Scene,
+    CameraPose, DebugView, DirectionalLight, Environment, EnvironmentProbe, HazeSettings, Piece,
+    RenderSettings, Scene,
 };
 
 fn scene(render: RenderSettings, pieces: Vec<Piece>) -> Scene {
@@ -33,6 +33,7 @@ fn settings() -> RenderSettings {
         background: [0.01, 0.02, 0.03],
         ambient_color: [0.25, 0.5, 1.0],
         ambient_intensity: 0.4,
+        probe: None,
     };
     settings.haze = HazeSettings {
         enabled: true,
@@ -429,6 +430,7 @@ fn material_lab_maps_debug_views_and_uploads_are_deterministic() {
         background: [0.0; 3],
         ambient_color: [1.0; 3],
         ambient_intensity: 0.5,
+        probe: None,
     };
     base.haze.enabled = false;
     base.sun = Some(DirectionalLight {
@@ -565,6 +567,71 @@ fn material_lab_maps_debug_views_and_uploads_are_deterministic() {
         mean_channel(&original_pixels, 1),
         mean_channel(&mirrored_pixels, 1),
     );
+}
+
+#[test]
+fn hdr_ibl_is_resident_deterministic_and_energy_monotonic() {
+    const WIDTH: u32 = 128;
+    const HEIGHT: u32 = 96;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens");
+    let mut settings = RenderSettings::dark_stage(45.0, 1.0);
+    settings.haze.enabled = false;
+    settings.environment.ambient_intensity = 0.0;
+    settings.environment.probe = Some(EnvironmentProbe {
+        asset: "../../../../resources/meshes/environments/studio.hdr".into(),
+        intensity: 0.25,
+        rotation_deg: 0.0,
+        visible: true,
+    });
+    let mut library = Library::new(root);
+    let mut frame = build_frame_with(
+        &scene(
+            settings,
+            vec![Piece {
+                id: "material-lab".into(),
+                mesh_path: "material-lab.gltf".into(),
+                pos: [0.0, 0.0, 0.75],
+                rot: [0.0, 0.0, 0.0],
+                scale: 1.0,
+            }],
+        ),
+        &BTreeMap::new(),
+        &|_, _| None,
+        0.0,
+        &mut library,
+    )
+    .unwrap();
+    let mut renderer = luma_render::Renderer::new().unwrap();
+
+    let low = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    assert_eq!(renderer.upload_stats().environments, 1);
+    let low_repeat = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    assert_eq!(low, low_repeat);
+    assert_eq!(renderer.upload_stats().environments, 1);
+
+    frame.environment.as_mut().unwrap().intensity = 1.0;
+    let high = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    assert!(mean_rgb(&high) > mean_rgb(&low) + 2.0);
+    assert!(
+        high.chunks_exact(4)
+            .any(|pixel| pixel[..3].iter().copied().max().unwrap() > 32),
+        "rough specular preprocessing returned a black probe"
+    );
+    assert_eq!(renderer.upload_stats().environments, 1);
+
+    let resident = frame.environment.take();
+    let ambient_fallback = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    frame.environment = resident;
+    let enabled_again = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    assert_eq!(renderer.upload_stats().environments, 1);
+    assert_eq!(high, enabled_again);
+    assert!(mean_rgb(&ambient_fallback) < mean_rgb(&high));
+
+    frame.environment.as_mut().unwrap().rotation = 90f32.to_radians();
+    let rotated = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+    assert_ne!(stable_pixel_hash(&high), stable_pixel_hash(&rotated));
+    assert_eq!(stable_pixel_hash(&high), 0xa814_fc7d_8070_f668);
+    assert_eq!(stable_pixel_hash(&rotated), 0x29c7_ea1c_8747_31bb);
 }
 
 #[test]

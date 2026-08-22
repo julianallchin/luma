@@ -45,3 +45,15 @@ struct PointLightData {
 @group(0) @binding(2) var<storage, read> point_lights: array<PointLightData>;
 @group(0) @binding(3) var shadow_map: texture_depth_2d_array;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
+
+struct EnvironmentParams {
+    intensity: f32,
+    rotation: f32,
+    enabled: f32,
+    visible: f32,
+};
+@group(2) @binding(0) var environment_irradiance: texture_cube<f32>;
+@group(2) @binding(1) var environment_specular: texture_cube<f32>;
+@group(2) @binding(2) var environment_brdf: texture_2d<f32>;
+@group(2) @binding(3) var environment_sampler: sampler;
+@group(2) @binding(4) var<uniform> environment_params: EnvironmentParams;

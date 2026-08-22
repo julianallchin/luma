@@ -520,6 +520,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         fixture_cones: Vec::with_capacity(count),
         clear_color: base.clear_color,
         ambient: base.ambient,
+        environment: base.environment.clone(),
         directional: base.directional,
         haze_density: base.haze_density,
         haze_steps: base.haze_steps,

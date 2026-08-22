@@ -32,6 +32,7 @@
 pub mod assets;
 pub mod clusters;
 pub mod coords;
+mod environment;
 pub mod frame;
 mod gpu;
 pub mod luminaire;
