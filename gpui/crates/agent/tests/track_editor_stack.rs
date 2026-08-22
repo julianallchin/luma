@@ -67,8 +67,9 @@ const SCRIPT: &str = r#"
         pixels: the whole question is which clips ended up sharing one. */
     function stack() {
         const tops = {};
+        const clips = new Set(["Alpha", "Bravo", "Charlie", "Cap"]);
         for (const card of shot().findAll({ role: "card" })) {
-            if (card.label === "Waveform" || card.label === "Ruler") continue;
+            if (!clips.has(card.label)) continue;
             tops[card.label] = card.bounds.y;
         }
         const order = [...new Set(Object.values(tops))].sort((a, b) => a - b);

@@ -126,7 +126,14 @@ pub struct Fixture {
     /// fixture in this file is testing rows and geometry, and a rig would only
     /// be a slower seed.
     rig: bool,
+    seed_track: bool,
+    track_created_at: Option<String>,
     window: Option<gpui::Size<gpui::Pixels>>,
+    source_fixture: Option<luma_app::SourceAdapterFixture>,
+    source_fixture_delay: Option<Duration>,
+    source_search_responses: Vec<luma_app::SourceSearchFixtureResponse>,
+    source_import_fixture_delay: Option<Duration>,
+    equal_timestamp_track: bool,
 }
 
 impl Fixture {
@@ -136,7 +143,14 @@ impl Fixture {
             seconds,
             clips,
             rig: false,
+            seed_track: true,
+            track_created_at: None,
             window: None,
+            source_fixture: None,
+            source_fixture_delay: None,
+            source_search_responses: Vec::new(),
+            source_import_fixture_delay: None,
+            equal_timestamp_track: false,
         }
     }
 
@@ -162,6 +176,54 @@ impl Fixture {
         self
     }
 
+    /// Install raw DJ-adapter answers before constructing the app. The UI
+    /// still crosses the production Library normalization and import seams;
+    /// only the external Engine/Rekordbox database read is substituted.
+    pub fn with_source_fixture(mut self, fixture: luma_app::SourceAdapterFixture) -> Self {
+        self.source_fixture = Some(fixture);
+        self
+    }
+
+    /// Hold the first normalized source read for a deterministic loading-state
+    /// snapshot; the fixture still resolves through the production facade.
+    pub fn with_source_fixture_delay(mut self, delay: Duration) -> Self {
+        self.source_fixture_delay = Some(delay);
+        self
+    }
+
+    pub fn with_source_search_responses(
+        mut self,
+        responses: Vec<luma_app::SourceSearchFixtureResponse>,
+    ) -> Self {
+        self.source_search_responses = responses;
+        self
+    }
+
+    pub fn with_source_import_fixture_delay(mut self, delay: Duration) -> Self {
+        self.source_import_fixture_delay = Some(delay);
+        self
+    }
+
+    pub fn with_equal_timestamp_track(mut self) -> Self {
+        self.equal_timestamp_track = true;
+        self
+    }
+
+    /// Keep the venue but omit the library track and its score. Used by
+    /// outside-in empty-library flows whose only entry point is the sidebar
+    /// head rather than an existing track row.
+    pub fn without_track(mut self) -> Self {
+        self.seed_track = false;
+        self
+    }
+
+    /// Pin the seeded library row's insertion time when a test needs to prove
+    /// ordering against a later import without relying on wall-clock sleeps.
+    pub fn with_track_created_at(mut self, created_at: impl Into<String>) -> Self {
+        self.track_created_at = Some(created_at.into());
+        self
+    }
+
     /// Seed the library and open the app on it.
     ///
     /// Sets `LUMA_CONFIG_DIR`, so exactly one fixture may be open per process.
@@ -176,11 +238,31 @@ impl Fixture {
         if std::env::var_os("LUMA_MOTION").is_none() {
             std::env::set_var("LUMA_MOTION", "off");
         }
-        let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
-            luma_app::init(cx);
-            let library = luma_app::Library::open().expect("failed to open the fixture library");
-            cx.new(|cx| luma_app::Luma::new(library, cx)).into()
-        });
+        let source_fixture = self.source_fixture.clone();
+        let source_fixture_delay = self.source_fixture_delay;
+        let source_search_responses = self.source_search_responses.clone();
+        let source_import_fixture_delay = self.source_import_fixture_delay;
+        let root: gpui_agent::RootFactory =
+            Arc::new(move |window: &mut Window, cx: &mut App| -> AnyView {
+                luma_app::init(cx);
+                let mut library =
+                    luma_app::Library::open().expect("failed to open the fixture library");
+                if let Some(fixture) = source_fixture.clone() {
+                    library.set_source_adapter_fixture(fixture);
+                }
+                if let Some(delay) = source_fixture_delay {
+                    library.set_source_adapter_fixture_delay(delay);
+                }
+                if !source_search_responses.is_empty() {
+                    library.set_source_search_fixture_responses(source_search_responses.clone());
+                }
+                if let Some(delay) = source_import_fixture_delay {
+                    library.set_source_import_fixture_delay(delay);
+                }
+                let luma = cx.new(|cx| luma_app::Luma::new(library, cx));
+                cx.new(|cx| gpui_component::Root::new(luma, window, cx).bordered(false))
+                    .into()
+            });
         let mut config = Config {
             mode,
             call_timeout: Duration::from_secs(120),
@@ -234,18 +316,37 @@ impl Fixture {
                 .await
                 .expect("failed to seed a pattern");
         }
-        sqlx::query(
-            "INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
-             VALUES (?, NULL, 'aurora-hash', ?, 'Nightliner', ?, ?)",
-        )
-        .bind(TRACK)
-        .bind(TRACK_NAME)
-        .bind(f64::from(self.seconds))
-        .bind(audio.to_string_lossy().to_string())
-        .execute(pool)
-        .await
-        .expect("failed to seed the track");
-        self.seed_beats(pool).await;
+        if self.seed_track {
+            sqlx::query(
+                "INSERT INTO tracks
+                    (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
+                 VALUES (?, NULL, 'aurora-hash', ?, 'Nightliner', ?, ?,
+                         COALESCE(?, CURRENT_TIMESTAMP))",
+            )
+            .bind(TRACK)
+            .bind(TRACK_NAME)
+            .bind(f64::from(self.seconds))
+            .bind(audio.to_string_lossy().to_string())
+            .bind(self.track_created_at.as_deref())
+            .execute(pool)
+            .await
+            .expect("failed to seed the track");
+            self.seed_beats(pool).await;
+            if self.equal_timestamp_track {
+                sqlx::query(
+                    "INSERT INTO tracks
+                        (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
+                     VALUES ('track-zulu', NULL, 'zulu-hash', 'Zulu', 'Nightliner', ?, ?,
+                             COALESCE(?, CURRENT_TIMESTAMP))",
+                )
+                .bind(f64::from(self.seconds))
+                .bind(audio.to_string_lossy().to_string())
+                .bind(self.track_created_at.as_deref())
+                .execute(pool)
+                .await
+                .expect("failed to seed the equal-timestamp track");
+            }
+        }
         if self.rig {
             self.seed_rig(pool, config_dir).await;
         }
@@ -279,20 +380,29 @@ impl Fixture {
         )
         .await;
 
-        let score = call(
-            &services,
-            "create_score",
-            json!({
-                "requestId": request_id(0),
-                "trackId": TRACK,
-                "venueId": VENUE,
-                "name": "Fixture Score",
-            }),
-        )
-        .await;
-        let score_id = score["id"].as_str().expect("a created score has an id");
+        let score_id = if self.seed_track {
+            let score = call(
+                &services,
+                "create_score",
+                json!({
+                    "requestId": request_id(0),
+                    "trackId": TRACK,
+                    "venueId": VENUE,
+                    "name": "Fixture Score",
+                }),
+            )
+            .await;
+            Some(
+                score["id"]
+                    .as_str()
+                    .expect("a created score has an id")
+                    .to_string(),
+            )
+        } else {
+            None
+        };
 
-        for (index, clip) in self.clips.iter().enumerate() {
+        for (index, clip) in self.clips.iter().enumerate().filter(|_| self.seed_track) {
             // `create_pattern` mints its own id, so a lit clip's score row
             // names that one rather than `clip.pattern` — which for a lit clip
             // is only the request key that keeps re-seeding idempotent.
@@ -318,7 +428,7 @@ impl Fixture {
                 "create_track_score",
                 json!({ "payload": {
                     "requestId": request_id(index + 1),
-                    "scoreId": score_id,
+                    "scoreId": score_id.as_deref().expect("track fixture has a score"),
                     "trackId": TRACK,
                     "patternId": pattern,
                     "startTime": clip.start,

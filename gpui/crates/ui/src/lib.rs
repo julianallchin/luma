@@ -39,6 +39,7 @@
 //! is a slider's drag. `<Select>`'s open menu is here ([`luma_select_menu`]);
 //! `luma_dropdown` still renders its closed trigger only.
 
+pub mod dialog;
 pub mod fonts;
 pub mod glass;
 pub mod ladder;

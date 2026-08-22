@@ -417,7 +417,7 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `open-settings` | 1 | 1 |  |
 | `perform_event` | 2 | 1 |  |
 | `python-env-progress` | 5 | 1 |  |
-| `track-import-state` | 7 | 5 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
+| `track-import-state` | 8 | 3 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
 | `track-status-changed` | 1 | 1 |  |
 | `universe-buffer` | 0 | 1 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
 | `universe-state-update` | 3 | 1 |  |

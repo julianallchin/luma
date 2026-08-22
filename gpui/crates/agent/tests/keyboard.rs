@@ -74,9 +74,9 @@ const SCRIPT: &str = r#"
         return read();
     }
 
-    // 0. Before anything has been clicked. A window whose screens focus
-    //    nothing has no dispatch path to route an action along, so this is the
-    //    reading that says the venue grid took the keyboard on its own.
+    // 0. Before anything has been clicked, onboarding owns the modal focus
+    //    scope and commits focus to its useful first control. An app-wide
+    //    shortcut must not replace the required first-venue dialog.
     app.key("secondary-,");
     app.frames(6);
     const cold = read();
@@ -151,10 +151,14 @@ fn keys_and_actions_route_to_the_focused_screen_and_a_text_field_keeps_its_own()
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    // 0. The venue grid held the keyboard before a single click.
+    // 0. Required onboarding held the keyboard before a single click. Its
+    // focused search field proves the async picker committed focus, while the
+    // absent SETTINGS label proves a shell shortcut could not replace it.
     assert!(
-        text(&out["cold"]).contains(&"SETTINGS".to_string()),
-        "no screen was focused at launch, so cmd-, routed nowhere: {:#}",
+        out["cold"]["onVenueGrid"] == true
+            && out["cold"]["search"]["focused"] == true
+            && !text(&out["cold"]).contains(&"SETTINGS".to_string()),
+        "required onboarding did not retain its focused modal scope: {:#}",
         out["cold"]
     );
 

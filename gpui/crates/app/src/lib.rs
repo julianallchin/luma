@@ -28,6 +28,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+mod add_tracks;
 mod agent;
 mod chrome;
 mod graph;
@@ -36,17 +37,25 @@ mod library;
 mod patterns;
 mod settings;
 mod shell;
+mod tab_chrome;
 mod tabs;
 mod track_editor;
 mod tracks;
+mod universe;
 mod visualizer;
 mod welcome;
 
 pub use chrome::hide_native_window_buttons;
 pub use graph::ViewData;
 #[cfg(feature = "agent")]
-pub use library::SourceAdapterFixture;
-pub use library::{Library, LibraryError, SourceLibrary, SourcePlaylist, SourceTrack, TrackSource};
+pub use library::NavigationFixture;
+pub use library::{
+    Library, LibraryError, SourceLibrary, SourcePlaylist, SourceTrack, TrackImportRequest,
+    TrackSource,
+};
+#[cfg(feature = "agent")]
+pub use library::{SourceAdapterFixture, SourceSearchFixtureResponse};
+pub use luma_lib::models::tracks::{TrackImportPhase, TrackImportProgress, TrackImportResult};
 
 /// Everything the app's views need present in an `App` before a window opens:
 /// gpui-component's theme (every `Icon` reads it), Inter (not a system font,
@@ -70,6 +79,8 @@ use tabs::Tabs;
 
 pub struct Luma {
     pub(crate) library: Library,
+    pub(crate) track_import: Option<add_tracks::TrackImportActivity>,
+    pub(crate) next_track_import: u64,
     /// The selected venue's track browser — the sidebar's body. `None` while
     /// no venue is selected, which is also when the venue picker overlay
     /// keeps itself open: the two states are one fact read twice.
@@ -83,6 +94,12 @@ pub struct Luma {
     /// The workspace panel's open tabs. What each one shows *is* its identity
     /// — see [`tabs`].
     pub(crate) workspace: Tabs<Body>,
+    /// Visual-only state for keyed chip reflow and the floating `+` menu.
+    /// Logical tab identity and teardown remain owned by `workspace`.
+    pub(crate) tab_chrome: tab_chrome::TabChrome,
+    /// The most recently opened subjects seed the `+` menu's editor choices.
+    pub(crate) selected_track: Option<String>,
+    pub(crate) selected_pattern: Option<luma_lib::models::patterns::PatternSummary>,
     pub(crate) workspace_hidden: bool,
     /// The workspace panel's live width, and the width it returns to when it
     /// opens — the one the seam drags. Session-lived: a width chosen for one
@@ -102,10 +119,27 @@ pub struct Luma {
     /// [`Luma::focus_slot`] names this frame, so actions always have a
     /// dispatch path and a binding can scope to the region it runs through.
     pub(crate) focus: FocusHandle,
+    /// The modal plane's own focus target. Keeping this distinct from the
+    /// shell handle lets dismissal return to the exact field/button that
+    /// opened the dialog instead of merely focusing its containing region.
+    pub(crate) dialog_focus: FocusHandle,
+    /// Stable handle for the first reachable dialog control. Besides making
+    /// initial traversal deterministic, this lets the harness prove the trap
+    /// moves and wraps rather than merely retaining the container focus.
+    pub(crate) dialog_first_focus: FocusHandle,
+    pub(crate) dialog_last_focus: FocusHandle,
+    pub(crate) overlay_return_focus: Option<WeakFocusHandle>,
     /// Which slot [`Self::focus`] was last taken for. A change of subject has
     /// to take the keyboard back; a field the user clicked into keeps it
     /// otherwise.
     pub(crate) focused_slot: FocusSlot,
+    /// Correlates venue catalogue reloads and startup restoration. An answer
+    /// belongs to the picker instance that requested it, never merely to
+    /// whichever venue overlay happens to be visible when it lands.
+    pub(crate) venue_picker_generation: u64,
+    /// Correlates per-venue track reads. Venue identity is checked as well;
+    /// the generation distinguishes reopening the same venue twice.
+    pub(crate) venue_selection_generation: u64,
 }
 
 impl Luma {
@@ -116,6 +150,8 @@ impl Luma {
     pub fn new(library: Library, cx: &mut Context<Self>) -> Self {
         let mut app = Self {
             library,
+            track_import: None,
+            next_track_import: 0,
             sidebar: None,
             sidebar_hidden: false,
             // Both regions start closed and slide open when they first have
@@ -123,6 +159,9 @@ impl Luma {
             // window that assembles itself.
             sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace: Tabs::default(),
+            tab_chrome: tab_chrome::TabChrome::default(),
+            selected_track: None,
+            selected_pattern: None,
             workspace_hidden: false,
             workspace_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace_open_width: shell::WORKSPACE_WIDTH,
@@ -130,9 +169,18 @@ impl Luma {
             overlay: None,
             chat: None,
             focus: cx.focus_handle(),
+            dialog_focus: cx.focus_handle(),
+            // Explicit tracked handles keep their own tab-stop bit in current
+            // GPUI; the element's `.tab_stop(true)` only decorates implicitly
+            // created handles. Mark these stable sentinels at their owner.
+            dialog_first_focus: cx.focus_handle().tab_stop(true),
+            dialog_last_focus: cx.focus_handle().tab_stop(true),
+            overlay_return_focus: None,
             focused_slot: FocusSlot::Shell,
+            venue_picker_generation: 0,
+            venue_selection_generation: 0,
         };
-        app.show_venues(cx);
+        app.restore_venue(cx);
         app
     }
 
@@ -196,6 +244,10 @@ impl Render for Luma {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &keymap::CloseTab, _, cx| this.close_active_tab(cx)))
+            .on_action(cx.listener(|this, _: &keymap::NewTab, _, cx| {
+                this.tab_chrome.toggle_menu();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &keymap::SelectTab1, _, cx| this.select_tab(0, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab2, _, cx| this.select_tab(1, cx)))
             .on_action(cx.listener(|this, _: &keymap::SelectTab3, _, cx| this.select_tab(2, cx)))

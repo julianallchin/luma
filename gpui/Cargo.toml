@@ -25,6 +25,14 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ddba2ef356d637392c08ef773fe1bbf3dd536deb" }
 luma-ui = { path = "crates/ui" }
 
+# Local gauntlet proof only: 32a0e813 plus Comet's a6c1ad5 BackdropBlur,
+# 9b672fa bounded scratch work, and Luma's isolated content-filter layer.
+# Production needs the same commit on a durable remote before this can ship.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "file:///tmp/luma-zed-backdrop.cZvDGQ/zed", rev = "2b23084c75af31c7db4934023d41b38c1bfa3eda", version = "=0.2.2" }
+gpui_macros = { git = "file:///tmp/luma-zed-backdrop.cZvDGQ/zed", rev = "2b23084c75af31c7db4934023d41b38c1bfa3eda", version = "=0.1.0" }
+gpui_platform = { git = "file:///tmp/luma-zed-backdrop.cZvDGQ/zed", rev = "2b23084c75af31c7db4934023d41b38c1bfa3eda", version = "=0.1.0" }
+
 # gpui is unusably slow at opt-level 0 (comet and gpui-component both do this).
 [profile.dev.package."*"]
 opt-level = 2

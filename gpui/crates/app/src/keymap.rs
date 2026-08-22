@@ -58,6 +58,7 @@ pub(crate) mod context {
     pub const VENUES: &str = "Venues";
     pub const PATTERNS: &str = "Patterns";
     pub const SETTINGS: &str = "Settings";
+    pub const ADD_TRACKS: &str = "AddTracks";
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
     /// because the chat's composer, in another crate, declares the same
@@ -82,6 +83,8 @@ actions!(
         ToggleExpand,
         /// Close the focused tab.
         CloseTab,
+        /// Toggle the workspace's new-tab menu.
+        NewTab,
         /// Reveal the nth tab in strip order.
         SelectTab1,
         SelectTab2,
@@ -136,6 +139,24 @@ pub(crate) fn init(cx: &mut App) {
     // `secondary-` is cmd on macOS and ctrl elsewhere: gpui resolves it per
     // platform, which is why there is no `cfg` here.
     let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
+    let shell = format!(
+        "{} && !{} && !{} && !{} && !{}",
+        context::ROOT,
+        context::VENUES,
+        context::PATTERNS,
+        context::SETTINGS,
+        context::ADD_TRACKS
+    );
+    // A dialog owns Escape even when its current child is a text field. Route
+    // dismissal policy remains in `Luma::dismiss_overlay` (notably, the
+    // required first-venue screen refuses to close).
+    let dialog = format!(
+        "{} || {} || {} || {}",
+        context::VENUES,
+        context::PATTERNS,
+        context::SETTINGS,
+        context::ADD_TRACKS
+    );
     // Every track-editor binding shares one predicate: it means something in
     // that tab and nothing anywhere else, and a field taking typed text
     // out-ranks all of it — `f` is a letter, `delete` is a correction, and
@@ -157,27 +178,29 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("alt-up", MoveClipsUp, Some(&editing)),
         KeyBinding::new("alt-down", MoveClipsDown, Some(&editing)),
         KeyBinding::new("escape", DismissOverlay, Some(&escape)),
-        KeyBinding::new("secondary-b", ToggleSidebar, Some(context::ROOT)),
-        KeyBinding::new("secondary-shift-b", ToggleWorkspace, Some(context::ROOT)),
+        KeyBinding::new("escape", DismissOverlay, Some(&dialog)),
+        KeyBinding::new("secondary-b", ToggleSidebar, Some(&shell)),
+        KeyBinding::new("secondary-shift-b", ToggleWorkspace, Some(&shell)),
         // Scoped to the panel, so the window's own ⌘W still closes the window
         // from anywhere else. gpui resolves by specificity — this is a
         // binding, not a branch, which is what keeps "which ⌘W did I get"
         // answerable from the focus path alone.
         KeyBinding::new("secondary-w", CloseTab, Some(context::WORKSPACE)),
-        KeyBinding::new("secondary-p", OpenPatterns, Some(context::ROOT)),
-        KeyBinding::new("secondary-,", OpenSettings, Some(context::ROOT)),
+        KeyBinding::new("secondary-t", NewTab, Some(&shell)),
+        KeyBinding::new("secondary-p", OpenPatterns, Some(&shell)),
+        KeyBinding::new("secondary-,", OpenSettings, Some(&shell)),
         // Not a bare letter: the track editor's alphabet is already spoken
         // for, and this opens a tab beside that editor.
-        KeyBinding::new("secondary-shift-v", OpenVisualizer, Some(context::ROOT)),
-        KeyBinding::new("secondary-1", SelectTab1, Some(context::ROOT)),
-        KeyBinding::new("secondary-2", SelectTab2, Some(context::ROOT)),
-        KeyBinding::new("secondary-3", SelectTab3, Some(context::ROOT)),
-        KeyBinding::new("secondary-4", SelectTab4, Some(context::ROOT)),
-        KeyBinding::new("secondary-5", SelectTab5, Some(context::ROOT)),
-        KeyBinding::new("secondary-6", SelectTab6, Some(context::ROOT)),
-        KeyBinding::new("secondary-7", SelectTab7, Some(context::ROOT)),
-        KeyBinding::new("secondary-8", SelectTab8, Some(context::ROOT)),
-        KeyBinding::new("secondary-9", SelectTab9, Some(context::ROOT)),
+        KeyBinding::new("secondary-shift-v", OpenVisualizer, Some(&shell)),
+        KeyBinding::new("secondary-1", SelectTab1, Some(&shell)),
+        KeyBinding::new("secondary-2", SelectTab2, Some(&shell)),
+        KeyBinding::new("secondary-3", SelectTab3, Some(&shell)),
+        KeyBinding::new("secondary-4", SelectTab4, Some(&shell)),
+        KeyBinding::new("secondary-5", SelectTab5, Some(&shell)),
+        KeyBinding::new("secondary-6", SelectTab6, Some(&shell)),
+        KeyBinding::new("secondary-7", SelectTab7, Some(&shell)),
+        KeyBinding::new("secondary-8", SelectTab8, Some(&shell)),
+        KeyBinding::new("secondary-9", SelectTab9, Some(&shell)),
     ];
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);

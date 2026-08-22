@@ -1986,7 +1986,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 78
+        "line": 82
       },
       "name": "host_load_track",
       "prose": {
@@ -2006,7 +2006,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 157
+        "line": 163
       },
       "name": "host_pause",
       "prose": {
@@ -2023,7 +2023,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 152
+        "line": 158
       },
       "name": "host_play",
       "prose": {
@@ -2045,7 +2045,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 163
+        "line": 169
       },
       "name": "host_seek",
       "prose": {
@@ -2067,7 +2067,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 168
+        "line": 174
       },
       "name": "host_set_loop",
       "prose": {
@@ -2093,7 +2093,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 177
+        "line": 183
       },
       "name": "host_set_loop_region",
       "prose": {
@@ -2116,7 +2116,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 191
+        "line": 197
       },
       "name": "host_set_playback_rate",
       "prose": {
@@ -2133,7 +2133,7 @@
       "domain": "host_audio",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 198
+        "line": 204
       },
       "name": "host_snapshot",
       "prose": {
@@ -4006,7 +4006,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 236
+        "line": 235
       },
       "name": "reprocess_track",
       "prose": {
@@ -4024,7 +4024,7 @@
       "domain": "waveforms",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
-        "line": 44
+        "line": 45
       },
       "name": "reprocess_waveform",
       "prose": {
@@ -4639,7 +4639,7 @@
       "domain": "tracks",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 413
+        "line": 412
       },
       "name": "update_track_metadata",
       "prose": {
@@ -4999,9 +4999,9 @@
     },
     {
       "emitters": [
-        "src-tauri/src/dispatch/handlers/tracks.rs:325",
-        "src-tauri/src/dispatch/handlers/tracks.rs:363",
-        "src-tauri/src/dispatch/handlers/tracks.rs:428",
+        "src-tauri/src/dispatch/handlers/tracks.rs:324",
+        "src-tauri/src/dispatch/handlers/tracks.rs:362",
+        "src-tauri/src/dispatch/handlers/tracks.rs:427",
         "src-tauri/src/sync/orchestrator.rs:140",
         "src-tauri/src/sync/orchestrator.rs:187",
         "src-tauri/src/sync/push.rs:714",
@@ -5085,20 +5085,19 @@
     },
     {
       "emitters": [
-        "src-tauri/src/dispatch/handlers/tracks.rs:279",
-        "src-tauri/src/dispatch/handlers/tracks.rs:450",
+        "src-tauri/src/dispatch/handlers/tracks.rs:278",
+        "src-tauri/src/dispatch/handlers/tracks.rs:449",
         "src-tauri/src/dispatch/handlers/tracks.rs:520",
-        "src-tauri/src/preprocessing/scheduler.rs:313",
-        "src-tauri/src/preprocessing/scheduler.rs:352",
-        "src-tauri/src/preprocessing/scheduler.rs:410",
-        "src-tauri/src/preprocessing/scheduler.rs:451"
+        "src-tauri/src/preprocessing/scheduler.rs:351",
+        "src-tauri/src/preprocessing/scheduler.rs:390",
+        "src-tauri/src/preprocessing/scheduler.rs:454",
+        "src-tauri/src/preprocessing/scheduler.rs:490",
+        "src-tauri/src/preprocessing/scheduler.rs:522"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:103",
-        "src/features/dj-import/components/dj-import-browser.tsx:81",
-        "src/features/dj-import/stores/use-dj-import-store.ts:241",
-        "src/features/engine-dj/stores/use-engine-dj-store.ts:225",
-        "src/features/tracks/components/track-browser.tsx:347"
+        "gpui/crates/app/src/library.rs:129",
+        "src/features/dj-import/components/dj-import-browser.tsx:86",
+        "src/features/tracks/components/track-browser.tsx:355"
       ],
       "name": "track-import-state",
       "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose.",
@@ -5106,7 +5105,7 @@
     },
     {
       "emitters": [
-        "src-tauri/src/preprocessing/scheduler.rs:339"
+        "src-tauri/src/preprocessing/scheduler.rs:377"
       ],
       "listeners": [
         "src/features/tracks/components/track-browser.tsx:157"

@@ -24,6 +24,17 @@ impl<'a> VisibleTrackAccess<'a, Read> {
             .map_err(|error| format!("Failed to begin track read: {error}"))?;
         authorize(transaction, track_id).await
     }
+
+    /// Finish the visibility snapshot and wait until SQLx has returned its
+    /// connection to the pool. Dropping a transaction starts rollback in the
+    /// background; callers that immediately open another capability need this
+    /// explicit boundary so a one-connection pool cannot wait on itself.
+    pub async fn finish(self) -> Result<(), String> {
+        self.transaction
+            .rollback()
+            .await
+            .map_err(|error| format!("Failed to finish track read: {error}"))
+    }
 }
 
 impl<'a> VisibleTrackAccess<'a, Operate> {
@@ -80,4 +91,52 @@ async fn authorize<'a, Mode>(
         principal,
         _mode: PhantomData,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_finished_read_can_be_immediately_reacquired_from_a_single_connection_pool() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE auth_visible_tracks (track_id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE auth_write_admission (singleton INTEGER PRIMARY KEY, active_uid TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO auth_visible_tracks (track_id) VALUES ('track-a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO auth_write_admission (singleton, active_uid) VALUES (1, NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let first = VisibleTrackAccess::<Read>::read(&pool, "track-a")
+            .await
+            .unwrap();
+        first.finish().await.unwrap();
+
+        let second = tokio::time::timeout(
+            Duration::from_secs(1),
+            VisibleTrackAccess::<Read>::read(&pool, "track-a"),
+        )
+        .await
+        .expect("finished read did not return its only connection")
+        .unwrap();
+        second.finish().await.unwrap();
+    }
 }

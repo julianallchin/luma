@@ -346,6 +346,7 @@ impl Luma {
     /// landed. Reopening a pattern that already has a tab reveals it and
     /// reloads nothing: the tab's identity is its target.
     pub(crate) fn open_pattern(&mut self, pattern: PatternSummary, cx: &mut Context<Self>) {
+        self.selected_pattern = Some(pattern.clone());
         // The picker's job ends the moment it names a pattern.
         if matches!(self.overlay, Some(crate::shell::Overlay::Patterns(_))) {
             self.overlay = None;

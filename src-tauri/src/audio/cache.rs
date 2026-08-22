@@ -1,8 +1,9 @@
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use super::decoder::DecodedAudio;
 use super::resample::resample_stereo_to_target;
@@ -134,8 +135,44 @@ pub fn write_pcm_file(
 /// (playback *and* analysis — they hit the same `(hash, rate)`) reuses it. Without
 /// this, opening a track for playback and then compositing it decodes the same
 /// audio twice. Bounded LRU; entries are `Arc` so a hit is an O(1) clone.
-static DECODE_RAM_CACHE: Lazy<Mutex<Vec<(String, Arc<DecodedAudio>)>>> =
-    Lazy::new(|| Mutex::new(Vec::new()));
+#[derive(Default)]
+struct SharedDecodeState {
+    cache: Vec<(String, Arc<DecodedAudio>)>,
+    in_flight: HashMap<String, Arc<DecodeFlight>>,
+}
+
+#[derive(Default)]
+struct DecodeFlight {
+    result: Mutex<Option<Result<Arc<DecodedAudio>, String>>>,
+    ready: Condvar,
+}
+
+impl DecodeFlight {
+    fn wait(&self) -> Result<Arc<DecodedAudio>, String> {
+        let mut result = lock(&self.result);
+        while result.is_none() {
+            result = self
+                .ready
+                .wait(result)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        result.as_ref().expect("decode flight was signaled").clone()
+    }
+
+    fn publish(&self, result: Result<Arc<DecodedAudio>, String>) {
+        *lock(&self.result) = Some(result);
+        self.ready.notify_all();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+static SHARED_DECODES: Lazy<Mutex<SharedDecodeState>> =
+    Lazy::new(|| Mutex::new(SharedDecodeState::default()));
 const DECODE_RAM_CACHE_MAX: usize = 3;
 
 /// [`load_or_decode_audio`] with a shared RAM cache (returns an `Arc`). Use this
@@ -146,19 +183,58 @@ pub fn load_or_decode_audio_shared(
     target_rate: u32,
 ) -> Result<Arc<DecodedAudio>, String> {
     let key = format!("{track_hash}@{target_rate}");
-    if let Ok(cache) = DECODE_RAM_CACHE.lock() {
-        if let Some((_, a)) = cache.iter().find(|(k, _)| *k == key) {
-            return Ok(a.clone());
+    load_or_decode_audio_shared_by_key(key, || {
+        load_or_decode_audio(track_path, track_hash, target_rate)
+    })
+}
+
+fn load_or_decode_audio_shared_by_key(
+    key: String,
+    decode: impl FnOnce() -> Result<DecodedAudio, String>,
+) -> Result<Arc<DecodedAudio>, String> {
+    let (flight, leader) = {
+        let mut shared = lock(&SHARED_DECODES);
+        if let Some(index) = shared.cache.iter().position(|(cached, _)| cached == &key) {
+            let hit = shared.cache.remove(index);
+            let decoded = hit.1.clone();
+            shared.cache.push(hit);
+            return Ok(decoded);
         }
-    }
-    let decoded = Arc::new(load_or_decode_audio(track_path, track_hash, target_rate)?);
-    if let Ok(mut cache) = DECODE_RAM_CACHE.lock() {
-        if cache.len() >= DECODE_RAM_CACHE_MAX {
-            cache.remove(0); // evict oldest
+        if let Some(flight) = shared.in_flight.get(&key) {
+            (flight.clone(), false)
+        } else {
+            let flight = Arc::new(DecodeFlight::default());
+            shared.in_flight.insert(key.clone(), flight.clone());
+            (flight, true)
         }
-        cache.push((key, decoded.clone()));
+    };
+
+    if !leader {
+        return flight.wait();
     }
-    Ok(decoded)
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode))
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("unknown panic");
+            format!("Audio decode panicked: {message}")
+        })
+        .and_then(|decoded| decoded)
+        .map(Arc::new);
+    flight.publish(result.clone());
+
+    let mut shared = lock(&SHARED_DECODES);
+    shared.in_flight.remove(&key);
+    if let Ok(decoded) = &result {
+        if shared.cache.len() >= DECODE_RAM_CACHE_MAX {
+            shared.cache.remove(0);
+        }
+        shared.cache.push((key, decoded.clone()));
+    }
+    result
 }
 
 /// Directory for a `.pcm` cache derived from the audio file's **own** location:
@@ -263,6 +339,27 @@ pub fn load_or_decode_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Barrier;
+    use std::time::Duration;
+
+    static TEST_KEY: AtomicUsize = AtomicUsize::new(0);
+
+    fn unique_key(label: &str) -> String {
+        format!(
+            "test-{label}-{}-{}",
+            std::process::id(),
+            TEST_KEY.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    fn decoded(sample: f32) -> DecodedAudio {
+        DecodedAudio {
+            samples: vec![sample, sample],
+            sample_rate: 48_000,
+            channels: 2,
+        }
+    }
 
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("luma-pcm-{}", std::process::id()));
@@ -348,5 +445,113 @@ mod tests {
         let err = read_pcm_file(&path).unwrap_err();
         assert!(err.contains("Failed to read pcm samples"), "{err}");
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn concurrent_same_key_misses_share_one_decode() {
+        let key = unique_key("same-key");
+        let callers = 8;
+        let start = Arc::new(Barrier::new(callers));
+        let decodes = Arc::new(AtomicUsize::new(0));
+
+        let threads: Vec<_> = (0..callers)
+            .map(|_| {
+                let key = key.clone();
+                let start = start.clone();
+                let decodes = decodes.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    load_or_decode_audio_shared_by_key(key, || {
+                        decodes.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(50));
+                        Ok(decoded(0.25))
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert_eq!(decodes.load(Ordering::SeqCst), 1);
+        assert!(results
+            .iter()
+            .skip(1)
+            .all(|result| Arc::ptr_eq(&results[0], result)));
+    }
+
+    #[test]
+    fn different_keys_decode_concurrently() {
+        let keys = [unique_key("key-a"), unique_key("key-b")];
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(2));
+
+        let threads: Vec<_> = keys
+            .into_iter()
+            .map(|key| {
+                let active = active.clone();
+                let peak = peak.clone();
+                let start = start.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    load_or_decode_audio_shared_by_key(key, || {
+                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(50));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(decoded(0.5))
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_panicking_leader_releases_waiters_and_allows_retry() {
+        let key = unique_key("panic");
+        let (leader_started_tx, leader_started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let leader_key = key.clone();
+        let leader = std::thread::spawn(move || {
+            load_or_decode_audio_shared_by_key(leader_key, || {
+                leader_started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                panic!("broken decoder")
+            })
+        });
+        leader_started_rx.recv().unwrap();
+
+        let waiter_key = key.clone();
+        let waiter = std::thread::spawn(move || {
+            load_or_decode_audio_shared_by_key(waiter_key, || {
+                panic!("waiter must not become the leader")
+            })
+        });
+        std::thread::sleep(Duration::from_millis(10));
+        release_tx.send(()).unwrap();
+
+        let leader_error = match leader.join().unwrap() {
+            Ok(_) => panic!("panicking leader unexpectedly decoded audio"),
+            Err(error) => error,
+        };
+        let waiter_error = match waiter.join().unwrap() {
+            Ok(_) => panic!("waiter unexpectedly decoded audio"),
+            Err(error) => error,
+        };
+        assert!(leader_error.contains("broken decoder"), "{leader_error}");
+        assert_eq!(waiter_error, leader_error);
+
+        let retry = load_or_decode_audio_shared_by_key(key, || Ok(decoded(0.75))).unwrap();
+        assert_eq!(retry.samples, vec![0.75, 0.75]);
     }
 }

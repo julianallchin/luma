@@ -174,7 +174,8 @@ pub fn settings(state: &Settings, app: &Entity<Luma>) -> Div {
         .size_full()
         .flex()
         .flex_col()
-        .bg(ladder::background())
+        // The shared dialog host paints the card surface; route content stays
+        // transparent so a future renderer effect can be upgraded centrally.
         .text_color(ladder::foreground())
         .child(toolbar(state, app))
         .child(match (&state.values, &state.error) {
@@ -217,6 +218,7 @@ fn tabs(state: &Settings, app: &Entity<Luma>) -> Div {
             let app = app.clone();
             luma_ui::luma_toggle_segment(tab.label(), tab == state.tab, index == 0)
                 .id(tab.label())
+                .tab_index(0)
                 .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_tab(tab, cx)))
                 .agent_node(Role::Toggle, tab.label())
         }))

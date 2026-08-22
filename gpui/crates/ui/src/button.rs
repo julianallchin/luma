@@ -49,7 +49,9 @@ pub fn luma_button(label: &str, enabled: Enabled) -> Div {
         .bg(ladder::control())
         .text_color(ladder::foreground_90())
         .map(|el| match enabled {
-            Enabled::Yes => el.hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground())),
+            Enabled::Yes => el
+                .tab_index(0)
+                .hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground())),
             Enabled::No => el.opacity(ladder::DISABLED_OPACITY),
         })
         .child(label.to_uppercase())

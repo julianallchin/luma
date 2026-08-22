@@ -1724,6 +1724,7 @@ impl Luma {
         let Some(track) = browser.find(track_id) else {
             return;
         };
+        self.selected_track = Some(track.id.clone());
         let venue_id = browser.venue_id().to_string();
         let target = Target::TrackEditor {
             track: track_id.to_string(),
