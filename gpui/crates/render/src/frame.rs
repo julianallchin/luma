@@ -77,6 +77,20 @@ pub struct PointLight {
     pub cutoff_distance: f32,
 }
 
+/// Resolved directional light submitted to the scene and optional shadow pass.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectionalLight {
+    /// Unit world-space direction from the scene toward the light.
+    pub direction: Vec3,
+    /// Linear RGB colour multiplied by the configured intensity.
+    pub radiance: Vec3,
+    /// Directional shadow-camera anchor. Shading uses normalized `direction`;
+    /// this exists only to retain the captured legacy projection exactly.
+    pub shadow_eye: Vec3,
+    /// Whether the shadow map is rendered and sampled.
+    pub shadows: bool,
+}
+
 /// One base-colour texture, with the identity it was interned under.
 ///
 /// The key travels with the pixels because it is what makes an upload reusable:
@@ -110,11 +124,10 @@ pub struct Frame {
     pub haze_lights: Vec<HazeLight>,
     /// Linear, the `<color attach="background">` value.
     pub clear_color: Vec3,
-    /// `<ambientLight intensity>`; zero on a dark stage.
-    pub ambient: f32,
-    /// `(world position, colour * intensity)` of the one shadow-casting
-    /// directional light, present only on a lit stage.
-    pub directional: Option<(Vec3, Vec3)>,
+    /// Linear ambient-light colour multiplied by its intensity.
+    pub ambient: Vec3,
+    /// The independently controlled directional light, if enabled.
+    pub directional: Option<DirectionalLight>,
     /// Effective density after the hazer-dimmer scaling; zero disables the pass.
     pub haze_density: f32,
     /// Equiangular samples per beam.
@@ -400,7 +413,7 @@ pub fn build_with(
             }
         }
     }
-    let haze_density = scene.render.haze_density * (0.3 + 0.7 * hazer_level);
+    let haze_density = scene.render.haze.density * (0.3 + 0.7 * hazer_level);
 
     // --- fixtures ----------------------------------------------------------
     for fixture in &scene.fixtures {
@@ -579,11 +592,10 @@ pub fn build_with(
         fov_y_deg: scene.render.fov,
     };
 
-    // The fading grid is an editor affordance on the lit stage only, and it is
-    // transparent — hence the tail slot, after every opaque draw.
-    let dark = scene.render.dark_stage;
-    let grid_draws = usize::from(!dark);
-    if !dark {
+    // The fading grid is an editor affordance, independent of environment
+    // lighting, and transparent — hence the tail slot after every opaque draw.
+    let grid_draws = usize::from(scene.render.show_grid);
+    if scene.render.show_grid {
         draws.push(Draw {
             mesh: floor,
             image: None,
@@ -603,26 +615,28 @@ pub fn build_with(
         grid_draws,
         point_lights,
         haze_lights,
-        clear_color: if dark {
-            Vec3::ZERO
-        } else {
-            hex_srgb(0x19_19_19)
-        },
-        ambient: if dark { 0.0 } else { 0.2 },
-        directional: (!dark).then(|| {
-            (
-                world_from_three(Vec3::new(8.0, 12.0, 6.0)),
-                Vec3::splat(1.4),
-            )
+        clear_color: Vec3::from(scene.render.environment.background),
+        ambient: Vec3::from(scene.render.environment.ambient_color)
+            * scene.render.environment.ambient_intensity.max(0.0),
+        directional: scene.render.sun.and_then(|sun| {
+            let direction = Vec3::from(sun.direction).normalize_or_zero();
+            (direction != Vec3::ZERO && sun.intensity > 0.0).then_some(DirectionalLight {
+                direction,
+                radiance: Vec3::from(sun.color).max(Vec3::ZERO) * sun.intensity,
+                shadow_eye: scene
+                    .render
+                    .legacy_shadow_eye
+                    .map_or(direction * 244.0_f32.sqrt(), Vec3::from),
+                shadows: sun.shadows,
+            })
         }),
-        // `volumetricHaze && darkStage` — a lit stage has no haze pass at all.
-        haze_density: if dark && scene.render.volumetric_haze {
+        haze_density: if scene.render.haze.enabled {
             haze_density
         } else {
             0.0
         },
-        haze_steps: scene.render.haze_steps,
-        haze_resolution: scene.render.haze_resolution,
+        haze_steps: scene.render.haze.steps,
+        haze_resolution: scene.render.haze.resolution,
         time,
         camera,
         overlays,

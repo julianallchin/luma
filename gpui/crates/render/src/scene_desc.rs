@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 /// The whole golden-scene catalogue, as `dump-golden-scenes.ts` writes it.
 #[derive(Debug, Deserialize)]
@@ -74,22 +74,193 @@ pub struct CameraPose {
 /// The subset of `use-render-settings-store.ts` the renderer reads. `bloom` and
 /// `maxDpr` are deliberately absent: bloom is dropped (spec §2.5) and DPR is the
 /// capture's business, not the renderer's.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderSettings {
-    /// Black background, no ambient or directional light — and the only mode
-    /// where the haze pass runs at all.
-    pub dark_stage: bool,
-    /// Whether the haze pass is mounted.
-    pub volumetric_haze: bool,
-    /// Equiangular samples per beam.
-    pub haze_steps: u32,
-    /// Haze render-target scale; 1.0 in every golden.
-    pub haze_resolution: f32,
-    /// Nominal density, before hazer-dimmer scaling.
-    pub haze_density: f32,
+    /// Background and image-based ambient approximation. It is independent of
+    /// both the sun and fixture haze, so a black venue can still have either.
+    pub environment: Environment,
+    /// Analytic participating medium used by fixture beams.
+    pub haze: HazeSettings,
+    /// The editor's directional key light. `None` means genuinely off.
+    pub sun: Option<DirectionalLight>,
+    /// Whether the fading editor ground grid is drawn.
+    pub show_grid: bool,
     /// Vertical field of view, degrees.
     pub fov: f32,
+    /// Original positional anchor from the legacy directional-light capture.
+    /// Skipped by the new contract; only the golden adapter populates it so
+    /// its orthographic shadow projection remains byte-exact.
+    #[serde(skip)]
+    pub(crate) legacy_shadow_eye: Option<[f32; 3]>,
+}
+
+/// Scene-wide background and ambient contribution, in linear RGB.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Environment {
+    /// Linear RGB clear colour behind the scene.
+    pub background: [f32; 3],
+    /// Linear RGB ambient-light colour.
+    pub ambient_color: [f32; 3],
+    /// Scalar ambient strength. Zero disables ambient light without changing
+    /// the background.
+    pub ambient_intensity: f32,
+}
+
+impl Environment {
+    /// A black environment with no ambient contribution.
+    pub const DARK: Self = Self {
+        background: [0.0; 3],
+        ambient_color: [1.0; 3],
+        ambient_intensity: 0.0,
+    };
+
+    /// The legacy editor's neutral lit-stage environment.
+    pub const EDITOR: Self = Self {
+        // Linear form of the old sRGB `#191919` clear colour.
+        background: [0.009_721_217; 3],
+        ambient_color: [1.0; 3],
+        ambient_intensity: 0.2,
+    };
+}
+
+/// Serializable controls for the analytic fixture haze pass.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HazeSettings {
+    /// Whether the participating-medium pass is evaluated.
+    pub enabled: bool,
+    /// Equiangular samples per beam.
+    pub steps: u32,
+    /// Render-target scale; one is native output resolution.
+    pub resolution: f32,
+    /// Nominal density before hazer-fixture scaling.
+    pub density: f32,
+}
+
+/// One directional light. Direction points from the scene toward the light and
+/// is normalized at the renderer boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectionalLight {
+    /// World-space direction from a shaded point toward the light.
+    pub direction: [f32; 3],
+    /// Linear RGB light colour.
+    pub color: [f32; 3],
+    /// Scalar illuminance used by the renderer's relative-lighting model.
+    pub intensity: f32,
+    /// Whether this light renders and samples the directional shadow map.
+    pub shadows: bool,
+}
+
+impl DirectionalLight {
+    /// The neutral editor key light used by the legacy lit-stage preset.
+    pub const EDITOR: Self = Self {
+        // `world_from_three([8, 12, 6])` from the original renderer.
+        direction: [8.0, -6.0, 12.0],
+        color: [1.0; 3],
+        intensity: 1.4,
+        shadows: true,
+    };
+}
+
+impl RenderSettings {
+    /// Interactive dark-stage defaults. Haze stays independently enabled.
+    #[must_use]
+    pub const fn dark_stage(fov: f32, haze_resolution: f32) -> Self {
+        Self {
+            environment: Environment::DARK,
+            haze: HazeSettings {
+                enabled: true,
+                steps: 8,
+                resolution: haze_resolution,
+                density: 0.8,
+            },
+            sun: None,
+            show_grid: false,
+            fov,
+            legacy_shadow_eye: None,
+        }
+    }
+
+    /// Interactive editor-light defaults.
+    #[must_use]
+    pub const fn editor_lit(fov: f32, haze_resolution: f32) -> Self {
+        Self {
+            environment: Environment::EDITOR,
+            haze: HazeSettings {
+                enabled: true,
+                steps: 8,
+                resolution: haze_resolution,
+                density: 0.8,
+            },
+            sun: Some(DirectionalLight::EDITOR),
+            show_grid: true,
+            fov,
+            legacy_shadow_eye: None,
+        }
+    }
+}
+
+/// The checked-in golden catalogue predates the independent environment
+/// contract. Keep that compatibility at this file boundary; every caller and
+/// every newly serialized descriptor sees only [`RenderSettings`].
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderSettingsWire {
+    #[serde(default)]
+    environment: Option<Environment>,
+    #[serde(default)]
+    haze: Option<HazeSettings>,
+    #[serde(default)]
+    sun: Option<DirectionalLight>,
+    #[serde(default)]
+    show_grid: Option<bool>,
+    fov: f32,
+    #[serde(default)]
+    dark_stage: Option<bool>,
+    #[serde(default)]
+    volumetric_haze: Option<bool>,
+    #[serde(default)]
+    haze_steps: Option<u32>,
+    #[serde(default)]
+    haze_resolution: Option<f32>,
+    #[serde(default)]
+    haze_density: Option<f32>,
+}
+
+impl<'de> Deserialize<'de> for RenderSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RenderSettingsWire::deserialize(deserializer)?;
+        if let Some(environment) = wire.environment {
+            return Ok(Self {
+                environment,
+                haze: wire.haze.ok_or_else(|| D::Error::missing_field("haze"))?,
+                sun: wire.sun,
+                show_grid: wire.show_grid.unwrap_or(false),
+                fov: wire.fov,
+                legacy_shadow_eye: None,
+            });
+        }
+
+        let dark = wire
+            .dark_stage
+            .ok_or_else(|| D::Error::missing_field("environment"))?;
+        let mut settings = if dark {
+            Self::dark_stage(wire.fov, wire.haze_resolution.unwrap_or(1.0))
+        } else {
+            Self::editor_lit(wire.fov, wire.haze_resolution.unwrap_or(1.0))
+        };
+        settings.haze.enabled = wire.volumetric_haze.unwrap_or(false) && dark;
+        settings.haze.steps = wire.haze_steps.unwrap_or(8);
+        settings.haze.density = wire.haze_density.unwrap_or(0.0);
+        settings.legacy_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
+        Ok(settings)
+    }
 }
 
 /// Z-up data space; `pos[2]` is height, rotations are Euler XYZ radians.

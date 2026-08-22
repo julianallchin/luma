@@ -86,8 +86,8 @@ fn differing_fraction(a: &image::RgbaImage, b: &image::RgbaImage) -> f32 {
     differing as f32 / (a.width() * a.height()) as f32
 }
 
-/// The gate: the viewport draws something, and it draws something *different*
-/// when the camera moves.
+/// The gate: the viewport draws something, its independent sun control changes
+/// the lighting, and orbiting changes the camera view.
 ///
 /// Both halves matter and neither implies the other. A viewport wired to a
 /// stale image passes "non-black" forever; one that renders a fresh frame with
@@ -103,6 +103,75 @@ fn orbiting_changes_what_is_drawn() {
         mean_luma(&before) > 1.0,
         "the viewport drew a black frame (mean luma {})",
         mean_luma(&before)
+    );
+
+    run(
+        &mut harness,
+        r#"
+            const lab = app.snapshot().find({ role: "toggle", label: "Open Renderer Lab" });
+            if (!lab) { throw new Error("the renderer lab trigger is not on screen"); }
+            app.click(lab, { restale: "match" });
+            app.frames(2);
+            const snapshot = app.snapshot();
+            for (const label of ["Sun azimuth", "Sun elevation", "Sun intensity", "Ambient intensity", "Haze density"]) {
+                if (!snapshot.find({ role: "slider", label })) {
+                    throw new Error(`renderer lab is missing ${label}`);
+                }
+            }
+            for (const label of ["Sun", "Sun shadows", "Environment", "Fixture haze", "Editor grid"]) {
+                if (!snapshot.find({ role: "checkbox", label })) {
+                    throw new Error(`renderer lab is missing ${label}`);
+                }
+            }
+            if (!snapshot.find({ role: "text", label: "Renderer draw timing" })) {
+                throw new Error("renderer lab is missing draw timing");
+            }
+            const sun = snapshot.find({ role: "checkbox", label: "Sun" });
+            if (!sun) { throw new Error("the sun control is not in the renderer lab"); }
+            app.click(sun, { restale: "match" });
+            app.frames(2);
+            const close = app.snapshot().find({ role: "toggle", label: "Close Renderer Lab" });
+            app.click(close, { restale: "match" });
+            app.frames(4, { waitMs: 30 });
+        "#,
+    );
+    let sunless = run(&mut harness, "app.screenshot()");
+    let sunless = pixels(sunless["path"].as_str().expect("a screenshot has a path"));
+    assert!(
+        mean_luma(&sunless) < mean_luma(&before),
+        "turning the sun off did not lower mean luminance: {:.2} -> {:.2}",
+        mean_luma(&before),
+        mean_luma(&sunless)
+    );
+    assert!(
+        differing_fraction(&before, &sunless) > 0.005,
+        "turning the sun off did not materially change the rendered frame"
+    );
+
+    run(
+        &mut harness,
+        r#"
+            app.click(app.snapshot().find({ role: "toggle", label: "Open Renderer Lab" }), { restale: "match" });
+            app.frames(2);
+            const restoredSun = app.snapshot().find({ role: "checkbox", label: "Sun" });
+            if (!restoredSun) { throw new Error("the renderer lab did not preserve the sun-off state"); }
+            app.click(restoredSun, { restale: "match" });
+            app.frames(2);
+            app.click(app.snapshot().find({ role: "toggle", label: "Close Renderer Lab" }), { restale: "match" });
+            app.frames(4, { waitMs: 30 });
+        "#,
+    );
+    let restored = run(&mut harness, "app.screenshot()");
+    let restored = pixels(restored["path"].as_str().expect("a screenshot has a path"));
+    assert!(
+        (mean_luma(&restored) - mean_luma(&before)).abs() < 0.5,
+        "restoring the sun did not restore frame energy: {:.2} -> {:.2}",
+        mean_luma(&before),
+        mean_luma(&restored)
+    );
+    assert!(
+        differing_fraction(&before, &restored) < 0.005,
+        "restoring the sun did not restore the initial image"
     );
 
     // Left-drag on the viewport is orbit. The drag starts at the centre of

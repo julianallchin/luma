@@ -783,7 +783,8 @@ impl Renderer {
 
         // `shadow-camera-{left,right,top,bottom}=±15`, near 0.5, far 60, from
         // wherever `<directionalLight position>` puts the light.
-        let light_view_proj = frame.directional.map_or(Mat4::IDENTITY, |(eye, _)| {
+        let light_view_proj = frame.directional.map_or(Mat4::IDENTITY, |light| {
+            let eye = light.shadow_eye;
             let up = if eye.normalize().z.abs() > 0.99 {
                 Vec3::Y
             } else {
@@ -807,19 +808,21 @@ impl Renderer {
             view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
             camera_pos: frame.camera.eye.extend(1.0).to_array(),
-            ambient: (Vec3::splat(frame.ambient)).extend(0.0).to_array(),
+            ambient: frame.ambient.extend(0.0).to_array(),
             dir_to_light: frame
                 .directional
-                .map_or(Vec4::ZERO, |(p, _)| p.normalize().extend(1.0))
+                .map_or(Vec4::ZERO, |light| light.direction.extend(1.0))
                 .to_array(),
             dir_color: frame
                 .directional
-                .map_or(Vec4::ZERO, |(_, c)| c.extend(0.0))
+                .map_or(Vec4::ZERO, |light| light.radiance.extend(0.0))
                 .to_array(),
             params: [
                 point_lights.len() as f32,
                 1.0 / SHADOW_SIZE as f32,
-                f32::from(u8::from(frame.directional.is_some())),
+                f32::from(u8::from(
+                    frame.directional.is_some_and(|light| light.shadows),
+                )),
                 0.0,
             ],
         };
@@ -956,7 +959,7 @@ impl Renderer {
                 }
             };
 
-            if frame.directional.is_some() {
+            if frame.directional.is_some_and(|light| light.shadows) {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("shadow"),
                     color_attachments: &[],

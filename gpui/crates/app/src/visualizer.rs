@@ -139,6 +139,7 @@ pub(crate) struct Visualizer {
     /// are all per element *height*, and a rate needs the height a frame
     /// earlier than prepaint can supply it.
     size: gpui::Size<Pixels>,
+    render_lab: RenderLab,
     stage: Rc<RefCell<Stage>>,
 }
 
@@ -161,6 +162,105 @@ struct Stage {
     /// does — a viewport that failed silently is a black rectangle with no
     /// account of itself.
     error: Option<String>,
+    /// End-to-end renderer wall time from the previous completed frame.
+    last_draw_ms: Option<f32>,
+}
+
+/// Runtime renderer controls. They belong to the viewport, not persisted venue
+/// data, so experimentation cannot silently rewrite a show.
+struct RenderLab {
+    open: bool,
+    sun_enabled: bool,
+    sun_azimuth_deg: f32,
+    sun_elevation_deg: f32,
+    sun_intensity: f32,
+    sun_shadows: bool,
+    environment_enabled: bool,
+    ambient_intensity: f32,
+    haze_enabled: bool,
+    haze_density: f32,
+    grid_enabled: bool,
+}
+
+impl RenderLab {
+    fn new(editor_lit: bool) -> Self {
+        Self {
+            open: false,
+            sun_enabled: editor_lit,
+            sun_azimuth_deg: -36.87,
+            sun_elevation_deg: 50.19,
+            sun_intensity: 1.4,
+            sun_shadows: true,
+            environment_enabled: editor_lit,
+            ambient_intensity: if editor_lit { 0.2 } else { 0.0 },
+            haze_enabled: true,
+            haze_density: 0.8,
+            grid_enabled: editor_lit,
+        }
+    }
+
+    fn sun_direction(&self) -> [f32; 3] {
+        let azimuth = self.sun_azimuth_deg.to_radians();
+        let elevation = self.sun_elevation_deg.to_radians();
+        let horizontal = elevation.cos();
+        [
+            horizontal * azimuth.cos(),
+            horizontal * azimuth.sin(),
+            elevation.sin(),
+        ]
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LabToggle {
+    Sun,
+    Shadows,
+    Environment,
+    Haze,
+    Grid,
+}
+
+#[derive(Clone, Copy)]
+enum LabValue {
+    Azimuth,
+    Elevation,
+    SunIntensity,
+    Ambient,
+    HazeDensity,
+}
+
+impl RenderLab {
+    fn toggle(&mut self, control: LabToggle) {
+        let value = match control {
+            LabToggle::Sun => &mut self.sun_enabled,
+            LabToggle::Shadows => &mut self.sun_shadows,
+            LabToggle::Environment => &mut self.environment_enabled,
+            LabToggle::Haze => &mut self.haze_enabled,
+            LabToggle::Grid => &mut self.grid_enabled,
+        };
+        *value = !*value;
+    }
+
+    fn adjust(&mut self, control: LabValue, delta: f32) {
+        match control {
+            LabValue::Azimuth => {
+                self.sun_azimuth_deg =
+                    (self.sun_azimuth_deg + delta + 180.0).rem_euclid(360.0) - 180.0;
+            }
+            LabValue::Elevation => {
+                self.sun_elevation_deg = (self.sun_elevation_deg + delta).clamp(-85.0, 85.0);
+            }
+            LabValue::SunIntensity => {
+                self.sun_intensity = (self.sun_intensity + delta).clamp(0.0, 10.0);
+            }
+            LabValue::Ambient => {
+                self.ambient_intensity = (self.ambient_intensity + delta).clamp(0.0, 2.0);
+            }
+            LabValue::HazeDensity => {
+                self.haze_density = (self.haze_density + delta).clamp(0.0, 2.0);
+            }
+        }
+    }
 }
 
 impl Visualizer {
@@ -178,6 +278,7 @@ impl Visualizer {
         cx: &mut Context<Luma>,
     ) -> Self {
         let rig = library.venue_rig(venue_id);
+        let editor_lit = subject.is_none();
         let composite = subject.map(|(track, venue)| library.composite_track(&track, &venue));
         let target = Target::Visualizer {
             venue: venue_id.to_string(),
@@ -208,6 +309,7 @@ impl Visualizer {
             framing: Framing::default(),
             drag: None,
             size: gpui::Size::default(),
+            render_lab: RenderLab::new(editor_lit),
             stage: Rc::default(),
         }
     }
@@ -461,18 +563,13 @@ fn scene(rig: &Rig, definitions: &BTreeMap<String, scene_desc::Definition>) -> s
             target: [0.0; 3],
         },
         editing: false,
-        // `use-render-settings-store.ts`'s defaults, verbatim, except the one
-        // dial an interactive frame does not have the budget for — see
-        // [`luma_render::LIVE_HAZE_RESOLUTION`]. `dark_stage` is the one that
-        // moves per frame — see the assignment in `body`.
-        render: scene_desc::RenderSettings {
-            dark_stage: true,
-            volumetric_haze: true,
-            haze_steps: 8,
-            haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
-            haze_density: 0.8,
-            fov: FOV_Y_DEG,
-        },
+        // Interactive dark-stage defaults, with the haze resolution reduced
+        // for the live path. Environment, sun and haze remain independent
+        // controls on the renderer contract.
+        render: scene_desc::RenderSettings::dark_stage(
+            FOV_Y_DEG,
+            luma_render::LIVE_HAZE_RESOLUTION,
+        ),
         selected_fixture_ids: Vec::new(),
         // A fixture whose definition did not resolve has no mesh and no cone,
         // so it is left out rather than drawn as a guess.
@@ -618,7 +715,7 @@ impl Gpu {
         time: f32,
         width: u32,
         height: u32,
-    ) -> Result<Arc<RenderImage>, String> {
+    ) -> Result<(Arc<RenderImage>, f32), String> {
         let frame = build_frame_with(
             scene,
             definitions,
@@ -631,13 +728,17 @@ impl Gpu {
             .viewport
             .draw(&frame, width, height)
             .map_err(|error| format!("Could not render the frame: {error}"))?;
+        let draw_ms = presented.draw_time.as_secs_f32() * 1_000.0;
         let buffer = image::RgbaImage::from_raw(
             presented.width,
             presented.height,
             presented.pixels.to_vec(),
         )
         .ok_or_else(|| "readback was not width * height * 4 bytes".to_string())?;
-        Ok(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
+        Ok((
+            Arc::new(RenderImage::new([image::Frame::new(buffer)])),
+            draw_ms,
+        ))
     }
 }
 
@@ -744,6 +845,10 @@ pub(crate) fn visualizer(
     window.request_animation_frame();
     let chrome = toolbar(state, app, library);
     let floating = overlay_toolbar(state, app);
+    let lab = state
+        .render_lab
+        .open
+        .then(|| renderer_lab(state, app).into_any_element());
     div()
         .size_full()
         .flex()
@@ -756,7 +861,8 @@ pub(crate) fn visualizer(
                 .min_h_0()
                 .relative()
                 .child(body(state, app, library))
-                .child(floating),
+                .child(floating)
+                .children(lab),
         )
 }
 
@@ -786,7 +892,191 @@ fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
                 .agent_node(Role::Text, state.venue_name.clone()),
         )
         .child(transport(app, library))
+        .child(renderer_lab_trigger(state, app))
         .child(luma_ui::silkscreen(readout))
+        .child(luma_ui::silkscreen(
+            state
+                .stage
+                .borrow()
+                .last_draw_ms
+                .map_or_else(|| "DRAW —".into(), |ms| format!("DRAW {ms:.1} MS")),
+        ))
+}
+
+fn renderer_lab_trigger(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+    let label = if state.render_lab.open {
+        "Close Renderer Lab"
+    } else {
+        "Open Renderer Lab"
+    };
+    let app = app.clone();
+    luma_ui::luma_button(label, Enabled::Yes)
+        .id("renderer-lab")
+        .on_click(move |_, _, cx| {
+            app.update(cx, |this, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.render_lab.open = !state.render_lab.open;
+                }
+                cx.notify();
+            });
+        })
+        .agent_node(Role::Toggle, label)
+}
+
+fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
+    let lab = &state.render_lab;
+    div()
+        .absolute()
+        .top(px(12.))
+        .right(px(12.))
+        .w(px(360.))
+        .p(px(12.))
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .border_1()
+        .border_color(ladder::border())
+        .bg(ladder::apex())
+        .child(luma_ui::silkscreen("RENDERER LAB"))
+        .child(lab_toggle(app, "Sun", lab.sun_enabled, LabToggle::Sun))
+        .child(lab_value(
+            app,
+            "Sun azimuth",
+            lab.sun_azimuth_deg,
+            -180.0,
+            180.0,
+            15.0,
+            LabValue::Azimuth,
+        ))
+        .child(lab_value(
+            app,
+            "Sun elevation",
+            lab.sun_elevation_deg,
+            -85.0,
+            85.0,
+            5.0,
+            LabValue::Elevation,
+        ))
+        .child(lab_value(
+            app,
+            "Sun intensity",
+            lab.sun_intensity,
+            0.0,
+            10.0,
+            0.2,
+            LabValue::SunIntensity,
+        ))
+        .child(lab_toggle(
+            app,
+            "Sun shadows",
+            lab.sun_shadows,
+            LabToggle::Shadows,
+        ))
+        .child(lab_toggle(
+            app,
+            "Environment",
+            lab.environment_enabled,
+            LabToggle::Environment,
+        ))
+        .child(lab_value(
+            app,
+            "Ambient intensity",
+            lab.ambient_intensity,
+            0.0,
+            2.0,
+            0.05,
+            LabValue::Ambient,
+        ))
+        .child(lab_toggle(
+            app,
+            "Fixture haze",
+            lab.haze_enabled,
+            LabToggle::Haze,
+        ))
+        .child(lab_value(
+            app,
+            "Haze density",
+            lab.haze_density,
+            0.0,
+            2.0,
+            0.1,
+            LabValue::HazeDensity,
+        ))
+        .child(lab_toggle(
+            app,
+            "Editor grid",
+            lab.grid_enabled,
+            LabToggle::Grid,
+        ))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(ladder::muted_foreground())
+                .child(state.stage.borrow().last_draw_ms.map_or_else(
+                    || "Draw timing pending".into(),
+                    |ms| format!("Draw {ms:.2} ms"),
+                ))
+                .agent_node(Role::Text, "Renderer draw timing"),
+        )
+}
+
+fn lab_toggle(
+    app: &Entity<Luma>,
+    label: &'static str,
+    checked: bool,
+    control: LabToggle,
+) -> impl IntoElement {
+    let app = app.clone();
+    div()
+        .id(label)
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(luma_ui::luma_checkbox(checked))
+        .child(div().text_size(px(11.)).child(label))
+        .on_click(move |_, _, cx| {
+            app.update(cx, |this, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.render_lab.toggle(control);
+                }
+                cx.notify();
+            });
+        })
+        .agent_node(Role::Checkbox, label)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lab_value(
+    app: &Entity<Luma>,
+    label: &'static str,
+    value: f32,
+    min: f32,
+    max: f32,
+    step: f32,
+    control: LabValue,
+) -> Div {
+    let button = |button_label: String, delta: f32| {
+        let app = app.clone();
+        luma_ui::luma_button(&button_label, Enabled::Yes)
+            .id(button_label.clone())
+            .on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| {
+                    if let Some(state) = this.visualizer_mut() {
+                        state.render_lab.adjust(control, delta);
+                    }
+                    cx.notify();
+                });
+            })
+            .agent_node(Role::Button, button_label)
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(div().w(px(104.)).text_size(px(10.)).child(label))
+        .child(luma_ui::luma_slider(value, min, max, 140.0).agent_node(Role::Slider, label))
+        .child(button(format!("Decrease {label}"), -step))
+        .child(button(format!("Increase {label}"), step))
 }
 
 /// Play/pause and the clock, over the *host's* transport rather than the track
@@ -905,10 +1195,19 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         lit: universe.is_some(),
     };
 
-    // Only these three cross into the `'static` paint closure: a handle to the
-    // stage, this frame's camera pose (`Camera` is `Copy`), and its light.
+    // Only resolved values cross into the `'static` paint closure; the mutable
+    // lab remains owned by the screen.
     let stage = Rc::clone(&state.stage);
     let camera = state.camera;
+    let sun_enabled = state.render_lab.sun_enabled;
+    let sun_direction = state.render_lab.sun_direction();
+    let sun_intensity = state.render_lab.sun_intensity;
+    let sun_shadows = state.render_lab.sun_shadows;
+    let environment_enabled = state.render_lab.environment_enabled;
+    let ambient_intensity = state.render_lab.ambient_intensity;
+    let haze_enabled = state.render_lab.haze_enabled;
+    let haze_density = state.render_lab.haze_density;
+    let grid_enabled = state.render_lab.grid_enabled;
     let sized = app.clone();
 
     canvas(
@@ -933,12 +1232,24 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             coords::three_from_world(camera.position()).to_array();
                         scene.camera.target = coords::three_from_world(camera.target).to_array();
                         scene.render.fov = camera.fov_y_deg;
-                        // A dark stage shows beams and nothing else, which is
-                        // the right picture only when there are beams. With no
-                        // scene installed the rig itself is the subject, so the
-                        // stage lights up — the same call
-                        // `universe-designer.tsx` makes with `forceLightStage`.
-                        scene.render.dark_stage = universe.is_some();
+                        scene.render.environment = scene_desc::Environment {
+                            background: if environment_enabled {
+                                scene_desc::Environment::EDITOR.background
+                            } else {
+                                scene_desc::Environment::DARK.background
+                            },
+                            ambient_color: [1.0; 3],
+                            ambient_intensity,
+                        };
+                        scene.render.sun = sun_enabled.then_some(scene_desc::DirectionalLight {
+                            direction: sun_direction,
+                            color: [1.0; 3],
+                            intensity: sun_intensity,
+                            shadows: sun_shadows,
+                        });
+                        scene.render.haze.enabled = haze_enabled;
+                        scene.render.haze.density = haze_density;
+                        scene.render.show_grid = grid_enabled;
                         match gpu.frame(
                             scene,
                             &stage.definitions,
@@ -947,7 +1258,10 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             width,
                             height,
                         ) {
-                            Ok(image) => Some(image),
+                            Ok((image, draw_ms)) => {
+                                stage.last_draw_ms = Some(draw_ms);
+                                Some(image)
+                            }
                             Err(error) => {
                                 stage.error = Some(error);
                                 None
