@@ -550,6 +550,7 @@ pub fn run() {
             dispatch::adapter::host_snapshot,
             dispatch::adapter::list_scores_for_track,
             dispatch::adapter::create_score,
+            dispatch::adapter::ensure_venue_score,
             dispatch::adapter::list_track_scores,
             dispatch::adapter::create_track_score,
             dispatch::adapter::update_track_score,

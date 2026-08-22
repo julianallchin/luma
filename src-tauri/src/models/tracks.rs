@@ -140,6 +140,13 @@ pub struct TrackBrowserRow {
     /// Annotation count for the currently active venue (0 if no venue)
     #[ts(type = "number")]
     pub venue_annotation_count: i64,
+    /// Number of scores for this track in the active venue. This is the
+    /// durable venue-membership signal: an empty score still counts.
+    #[ts(type = "number")]
+    pub venue_score_count: i64,
+    /// Convenience form of `venue_score_count > 0` for hosts that should not
+    /// need to reproduce the membership rule.
+    pub is_in_venue: bool,
     /// Total seconds of the track covered by venue annotations (intervals
     /// merged so overlaps don't double-count). 0 if no venue. Filled in Rust
     /// by `list_tracks_enriched`, not selected from SQL.

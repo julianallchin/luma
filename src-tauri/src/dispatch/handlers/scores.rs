@@ -44,6 +44,27 @@ pub async fn create_score(
         .await?)
 }
 
+/// Idempotent venue-membership operation. Unlike [`create_score`], a fresh
+/// request id still returns an existing score for the track/venue pair.
+pub async fn ensure_venue_score(
+    services: &AppServices,
+    request_id: String,
+    track_id: String,
+    venue_id: String,
+    name: Option<String>,
+) -> Result<Score, CommandError> {
+    Ok(services
+        .authored
+        .ensure_venue_score(
+            &services.db.0,
+            &request_id,
+            &track_id,
+            &venue_id,
+            name.as_deref(),
+        )
+        .await?)
+}
+
 /// Archives the authored document — history is preserved, not rewritten — and
 /// wakes the sync push loop.
 pub async fn delete_score(services: &AppServices, id: String) -> Result<(), CommandError> {

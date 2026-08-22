@@ -471,6 +471,12 @@ commands! {
         venue_id: String,
         name: Option<String>,
     ) -> Score;
+    scores::ensure_venue_score(
+        request_id: String,
+        track_id: String,
+        venue_id: String,
+        name: Option<String>,
+    ) -> Score;
     scores::delete_score(id: String) -> ();
     scores::list_track_scores(score_id: String) -> Vec<TrackScore>;
     scores::create_track_score(payload: CreateTrackScoreInput) -> TrackEditResult;

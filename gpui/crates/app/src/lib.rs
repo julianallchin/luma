@@ -44,7 +44,9 @@ mod welcome;
 
 pub use chrome::hide_native_window_buttons;
 pub use graph::ViewData;
-pub use library::{Library, LibraryError};
+#[cfg(feature = "agent")]
+pub use library::SourceAdapterFixture;
+pub use library::{Library, LibraryError, SourceLibrary, SourcePlaylist, SourceTrack, TrackSource};
 
 /// Everything the app's views need present in an `App` before a window opens:
 /// gpui-component's theme (every `Icon` reads it), Inter (not a system font,

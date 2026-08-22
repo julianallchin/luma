@@ -11,13 +11,10 @@
 //!
 //! `list_tracks_enriched(venue_id)` returns the *whole visible library* and
 //! decorates each row with that venue's clip count; the venue id scopes the
-//! decoration, not the result set. So "in venue" means
-//! `venue_annotation_count > 0`, exactly as the web browser computes it, and a
-//! host that skipped that filter would show the entire library on a venue
-//! screen. (That count is clips, not scores: a track added to a setlist with an
-//! empty score reads as *not* in the venue until something is annotated on it.
-//! The web app has the same gap — its import flow creates the empty score this
-//! filter then hides.)
+//! decoration, not the result set. "In venue" is the durable score-existence
+//! signal returned as `is_in_venue`; clip counts remain presentation metadata
+//! and never decide membership. This keeps a newly added track visible before
+//! its first annotation is authored.
 //!
 //! Album art comes from `album_art_path` — a path on disk, never inlined bytes
 //! (see CLAUDE.md on why bulk responses carry paths). The web side has to route
@@ -126,7 +123,7 @@ impl Tracks {
             .enumerate()
             .filter(|(_, row)| {
                 self.ownership.admits(row, self.user.as_deref())
-                    && (!self.in_venue || row.venue_annotation_count > 0)
+                    && (!self.in_venue || row.is_in_venue)
                     && matches(row, &query)
             })
             .map(|(index, _)| index)
