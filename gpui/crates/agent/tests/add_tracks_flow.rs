@@ -108,9 +108,24 @@ const SCRIPT: &str = r#"
             && Math.abs(row.bounds.width - auroraRow.bounds.width) < 1)
         .map((row) => row.label);
 
+    // The browser searches the global Luma library, not only the active
+    // venue's membership, and updates the assembled production row list.
+    app.click(initial.find({ role: "input", label: "Search all tracks…" }));
+    app.key("z");
+    const globalSearch = until("the global Luma track search", (s) =>
+        s.findAll({ role: "row", label: "Zulu" }).some((row) => row.bounds.width > 300)
+            && !s.findAll({ role: "row", label: "Aurora" }).some((row) => row.bounds.width > 300)
+            ? s : undefined);
+    app.key("backspace");
+    const restoredGlobal = until("the restored global library", (s) =>
+        s.findAll({ role: "row", label: "Zulu" }).some((row) => row.bounds.width > 300)
+            && s.findAll({ role: "row", label: "Aurora" }).some((row) => row.bounds.width > 300)
+            ? s : undefined);
+
     // Existing rows use the same explicit membership operation as imported
     // rows. It is idempotent for Aurora's already-present empty score.
-    app.click(auroraRow);
+    app.click(restoredGlobal.findAll({ role: "row", label: "Aurora" })
+        .find((row) => row.bounds.width > 300));
     const auroraMember = until("the idempotent existing membership", (s) =>
         s.find({ role: "text", label: "Aurora venue scores: 1" }) !== undefined
             && s.find({ role: "input", label: "Search all tracks…" }) === undefined);
@@ -182,6 +197,7 @@ const SCRIPT: &str = r#"
 
     ({ closed: closed.find({ role: "button", label: "Close" }) === undefined,
        initialRows,
+       globalSearch: globalSearch.find({ role: "row", label: "Zulu" }) !== undefined,
        auroraIdempotent: auroraMember.find({ role: "text", label: "Aurora venue scores: 1" }) !== undefined,
        reopenedBeforeInsert: reopenedBeforeInsert.find({ role: "row", label: "Needle" }) === undefined,
        analyzing: analyzing.find({ role: "chip", label: "Track import phase: analyzing" }) !== undefined,
@@ -199,6 +215,7 @@ fn source_import_survives_close_reconciles_newest_and_joins_the_venue() {
     let out: Value = result.result;
     assert_eq!(out["closed"], true);
     assert_eq!(out["initialRows"], json!(["Zulu", "Aurora"]));
+    assert_eq!(out["globalSearch"], true);
     assert_eq!(out["auroraIdempotent"], true);
     assert_eq!(out["reopenedBeforeInsert"], true);
     assert_eq!(out["analyzing"], true);

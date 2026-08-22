@@ -646,6 +646,14 @@ fn overlay_layer(
             "Add tracks dialog",
         ),
     };
+    let scrim_dismiss = if matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none() {
+        luma_ui::dialog::ScrimDismiss::Disabled
+    } else {
+        let dismissed = entity.clone();
+        luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
+            dismissed.update(cx, |this, cx| this.dismiss_overlay(cx));
+        }))
+    };
     div()
         .absolute()
         .inset_0()
@@ -657,6 +665,7 @@ fn overlay_layer(
             &app.dialog_focus,
             app.dialog_focus.contains_focused(window, _cx),
             label,
+            scrim_dismiss,
             card,
         ))
         .into_any_element()

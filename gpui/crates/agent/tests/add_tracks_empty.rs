@@ -70,4 +70,39 @@ fn empty_library_centers_import_and_engine_source_normalizes_rows() {
     assert_eq!(out["empty"], true);
     assert_eq!(out["engineRow"], true);
     assert_eq!(out["importEnabled"], false);
+
+    drop(harness);
+    let mut empty_source = support::Fixture::new("add-tracks-source-empty", 1, vec![])
+        .without_track()
+        .with_source_fixture(luma_app::SourceAdapterFixture {
+            library: json!({"trackCount": 0}),
+            playlists: json!([]),
+            tracks: json!([]),
+            playlist_tracks: HashMap::new(),
+            searches: HashMap::new(),
+        })
+        .with_source_fixture_delay(Duration::from_millis(150))
+        .open(Mode::Headless);
+    let result = empty_source.exec(
+        &support::script(
+            r#"
+            nav.venue("Test Venue");
+            nav.step("the add-track affordance", "button", "Add track");
+            const browser = until("the empty browser", (s) =>
+                s.find({ role: "button", label: "Import tracks" }) ? s : undefined);
+            app.click(browser.find({ role: "button", label: "Import tracks" }));
+            const picker = until("the source picker", (s) =>
+                s.find({ role: "button", label: "Rekordbox" }) ? s : undefined);
+            app.click(picker.find({ role: "button", label: "Rekordbox" }));
+            const loading = app.snapshot().find({ role: "text", label: "Loading source library…" }) !== undefined;
+            const empty = until("the explicit empty source route", (s) =>
+                s.find({ role: "text", label: "No source tracks" }) ? s : undefined);
+            ({ loading, empty: empty.find({ role: "text", label: "No source tracks" }) !== undefined })
+            "#,
+        ),
+        Duration::from_secs(180),
+    );
+    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
+    assert_eq!(result.result["loading"], true);
+    assert_eq!(result.result["empty"], true);
 }

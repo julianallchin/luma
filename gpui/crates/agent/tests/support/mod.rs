@@ -134,6 +134,7 @@ pub struct Fixture {
     source_search_responses: Vec<luma_app::SourceSearchFixtureResponse>,
     source_import_fixture_delay: Option<Duration>,
     equal_timestamp_track: bool,
+    force_motion: bool,
 }
 
 impl Fixture {
@@ -151,6 +152,7 @@ impl Fixture {
             source_search_responses: Vec::new(),
             source_import_fixture_delay: None,
             equal_timestamp_track: false,
+            force_motion: false,
         }
     }
 
@@ -209,6 +211,14 @@ impl Fixture {
         self
     }
 
+    /// Force authored motion on for a pixel test that measures a transition.
+    /// This is deliberately opt-in: normal automation continues to honor the
+    /// snapped harness policy and production still honors OS reduced motion.
+    pub fn with_motion(mut self) -> Self {
+        self.force_motion = true;
+        self
+    }
+
     /// Keep the venue but omit the library track and its score. Used by
     /// outside-in empty-library flows whose only entry point is the sidebar
     /// head rather than an existing track row.
@@ -242,9 +252,13 @@ impl Fixture {
         let source_fixture_delay = self.source_fixture_delay;
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
+        let force_motion = self.force_motion;
         let root: gpui_agent::RootFactory =
             Arc::new(move |window: &mut Window, cx: &mut App| -> AnyView {
                 luma_app::init(cx);
+                if force_motion {
+                    luma_ui::motion::set_reduced_motion(cx, false);
+                }
                 let mut library =
                     luma_app::Library::open().expect("failed to open the fixture library");
                 if let Some(fixture) = source_fixture.clone() {

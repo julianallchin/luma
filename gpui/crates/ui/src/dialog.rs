@@ -21,6 +21,20 @@ pub const CARD_RADIUS: f32 = 16.0;
 pub const SHELL_BLUR: f32 = 18.0;
 pub const SIDEBAR_BLUR: f32 = 26.0;
 pub const CARD_BLUR: f32 = 44.0;
+/// Per-element backdrop sampling currently has a native implementation on
+/// macOS. Other platforms deliberately render the already-opaque glass palette
+/// without asking a sharp translucent fallback to masquerade as blur.
+pub const BACKDROP_BLUR_SUPPORTED: bool = cfg!(target_os = "macos");
+
+/// Route-owned policy for clicks on the modal ground.
+///
+/// The host owns the hit target and card boundary, while the route decides
+/// whether dismissal is legal. Venue onboarding, for example, remains modal
+/// until a venue exists.
+pub enum ScrimDismiss {
+    Disabled,
+    Enabled(Box<dyn Fn(&mut Window, &mut App)>),
+}
 
 pub fn frosted(corner_radius: f32, blur_radius: f32, child: impl IntoElement) -> Frosted {
     Frosted {
@@ -155,6 +169,10 @@ impl Element for Frosted {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if !BACKDROP_BLUR_SUPPORTED {
+            self.child.paint(window, cx);
+            return;
+        }
         window.paint_layer(bounds, |window| {
             window.paint_backdrop_blur(
                 bounds,
@@ -187,6 +205,7 @@ pub fn host(
     focus: &FocusHandle,
     focused: bool,
     semantic_label: impl Into<SharedString>,
+    scrim_dismiss: ScrimDismiss,
     card: AnyElement,
 ) -> AnyElement {
     let id = id.into();
@@ -214,8 +233,31 @@ pub fn host(
         .agent_node(crate::node::Role::Card, semantic_label)
         .agent_focused(focused);
 
+    let mut scrim = gpui::div()
+        .id("dialog-scrim")
+        .absolute()
+        .inset_0()
+        .bg(glass::scrim(glass::SCRIM_ALPHA));
+    if let ScrimDismiss::Enabled(dismiss) = scrim_dismiss {
+        scrim = scrim
+            .on_click(move |_, window, cx| dismiss(window, cx))
+            // A semantic target restricted to the guaranteed empty left
+            // gutter lets automation exercise a real scrim click without
+            // aiming at the full-screen node's centre (which is the card).
+            .child(
+                gpui::div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(px(VIEWPORT_GUTTER))
+                    .h_full()
+                    .agent_node(crate::node::Role::Button, "Dismiss dialog"),
+            );
+    }
+
     let modal = gpui::div()
         .occlude()
+        .relative()
         .w(viewport.width)
         .h(viewport.height)
         .flex()
@@ -224,7 +266,7 @@ pub fn host(
         .pt(px(TITLEBAR_CLEARANCE))
         .px(px(VIEWPORT_GUTTER))
         .pb(px(VIEWPORT_GUTTER))
-        .bg(glass::scrim(glass::SCRIM_ALPHA))
+        .child(scrim)
         .child(card)
         .into_any_element();
     let leading_width = leading_width.min(viewport.width).max(px(0.0));
@@ -262,5 +304,14 @@ mod tests {
             (viewport.height - px(TITLEBAR_CLEARANCE + VIEWPORT_GUTTER)).max(px(1.0)),
             px(1.0)
         );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn unsupported_platforms_choose_an_opaque_readable_fallback() {
+        assert!(!BACKDROP_BLUR_SUPPORTED);
+        assert_eq!(crate::glass::GLASS_ALPHA, 1.0);
+        assert_eq!(crate::glass::PANEL_ALPHA, 1.0);
+        assert_eq!(crate::glass::OVERLAY_ALPHA, 1.0);
     }
 }
