@@ -1,0 +1,53 @@
+{
+  "asset": { "version": "2.0", "generator": "Luma renderer material lab" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [{ "mesh": 0 }],
+  "meshes": [{
+    "primitives": [{
+      "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 },
+      "indices": 3,
+      "material": 0
+    }]
+  }],
+  "materials": [{
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+      "baseColorTexture": { "index": 0 },
+      "metallicFactor": 0.8,
+      "roughnessFactor": 0.8,
+      "metallicRoughnessTexture": { "index": 2 }
+    },
+    "normalTexture": { "index": 1, "scale": 0.75 },
+    "occlusionTexture": { "index": 3, "strength": 0.5 },
+    "emissiveFactor": [0.25, 0.25, 0.25],
+    "emissiveTexture": { "index": 4 }
+  }],
+  "textures": [
+    { "source": 0 }, { "source": 1 }, { "source": 2 },
+    { "source": 3 }, { "source": 4 }
+  ],
+  "images": [
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNocFD4DwAEBAHg8uuA+QAAAABJRU5ErkJggg==" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNo+N/wHwAHAQL/Jx/KFwAAAABJRU5ErkJggg==" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP473DgPwAHQAL/TFLmaQAAAABJRU5ErkJggg==" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNo+P//PwAH/wN+E3MBswAAAABJRU5ErkJggg==" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNwaPj/HwAFggK/465+UQAAAABJRU5ErkJggg==" }
+  ],
+  "buffers": [{
+    "byteLength": 140,
+    "uri": "data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAACAPwAAgD8AAAAAAACAvwAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAEAAgAAAAIAAwA="
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 48, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 32, "target": 34962 },
+    { "buffer": 0, "byteOffset": 128, "byteLength": 12, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-1,-1,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR" }
+  ]
+}

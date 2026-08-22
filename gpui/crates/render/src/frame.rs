@@ -44,8 +44,23 @@ pub struct Draw {
     pub model: Mat4,
     /// Resolved material, after any per-fixture override.
     pub material: Material,
-    /// Index into [`Frame::images`] of the base-colour texture, if any.
-    pub image: Option<usize>,
+    /// Indices into [`Frame::images`] for the five glTF material-map roles.
+    pub textures: MaterialTextures,
+}
+
+/// Optional glTF material maps in their fixed shader roles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct MaterialTextures {
+    /// sRGB base-colour map.
+    pub base_color: Option<usize>,
+    /// Linear tangent-space normal map.
+    pub normal: Option<usize>,
+    /// Linear packed green-roughness/blue-metallic map.
+    pub metallic_roughness: Option<usize>,
+    /// Linear red-channel ambient-occlusion map.
+    pub occlusion: Option<usize>,
+    /// sRGB emissive map.
+    pub emissive: Option<usize>,
 }
 
 /// A cone in the haze pass. Field order mirrors the two `SoA` storage buffers the
@@ -116,7 +131,7 @@ pub struct Texture {
 pub struct Frame {
     /// Deduplicated geometry referenced by [`Draw::mesh`].
     pub meshes: Vec<MeshData>,
-    /// Deduplicated base-colour textures referenced by [`Draw::image`].
+    /// Deduplicated material images referenced by [`Draw::textures`].
     pub images: Vec<Texture>,
     /// Opaque draws first, then the trailing `grid_draws` transparent ones.
     /// Depth-only passes take the opaque prefix; the grid never writes depth.
@@ -150,6 +165,8 @@ pub struct Frame {
     pub haze_resolution: f32,
     /// The clock the golden was captured at; drives noise drift and strobe.
     pub time: f32,
+    /// Diagnostic output selected by the renderer lab.
+    pub debug_view: crate::scene_desc::DebugView,
     /// Where the frame is seen from.
     pub camera: Camera,
 }
@@ -211,18 +228,25 @@ fn glb_draw(
         vertices: Arc::clone(&prim.vertices),
         indices: Arc::clone(&prim.indices),
     });
-    let image = prim.base_color_image.map(|i| {
+    let mut image = |i: usize| {
         bank.insert_image(format!("{asset}#img{i}"), || Image {
             width: glb.images[i].width,
             height: glb.images[i].height,
             rgba: glb.images[i].rgba.clone(),
         })
-    });
+    };
+    let textures = MaterialTextures {
+        base_color: prim.base_color_image.map(&mut image),
+        normal: prim.normal_image.map(&mut image),
+        metallic_roughness: prim.metallic_roughness_image.map(&mut image),
+        occlusion: prim.occlusion_image.map(&mut image),
+        emissive: prim.emissive_image.map(&mut image),
+    };
     Draw {
         mesh,
         model,
         material: material(prim.material),
-        image,
+        textures,
     }
 }
 
@@ -318,6 +342,7 @@ fn box_mesh(size: Vec3) -> MeshData {
                 position: (centre + du * su + dv * sv).to_array(),
                 normal: n.to_array(),
                 uv: [0.0, 0.0],
+                tangent: u.extend(1.0).to_array(),
             });
         }
         indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -342,6 +367,7 @@ pub(crate) fn plane_mesh(width: f32, height: f32) -> MeshData {
                 position: [x, y, 0.0],
                 normal: [0.0, 0.0, 1.0],
                 uv: [0.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
             })
             .collect::<Vec<_>>()
             .into(),
@@ -408,13 +434,15 @@ pub fn build_with(
     let floor = bank.insert("::floor".into(), || plane_mesh(200.0, 200.0));
     draws.push(Draw {
         mesh: floor,
-        image: None,
+        textures: MaterialTextures::default(),
         model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
         material: Material {
             base_color: hex_srgb(0x03_03_03),
             metallic: 0.0,
             roughness: 0.95,
             emissive: Vec3::ZERO,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
             flat_shading: false,
         },
     });
@@ -452,7 +480,7 @@ pub fn build_with(
             });
             draws.push(Draw {
                 mesh: body,
-                image: None,
+                textures: MaterialTextures::default(),
                 model: base,
                 material: Material {
                     base_color: hex_srgb(0x05_05_05),
@@ -475,13 +503,15 @@ pub fn build_with(
                 let intensity = strobe_gate(head_state, time, 10.0);
                 draws.push(Draw {
                     mesh: quad,
-                    image: None,
+                    textures: MaterialTextures::default(),
                     model: base * Mat4::from_translation(*local),
                     material: Material {
                         base_color: Vec3::ZERO,
                         metallic: 0.0,
                         roughness: 1.0,
                         emissive: Vec3::from(head_state.color) * intensity * 5.0,
+                        normal_scale: 1.0,
+                        occlusion_strength: 1.0,
                         flat_shading: false,
                     },
                 });
@@ -617,7 +647,7 @@ pub fn build_with(
     if scene.render.show_grid {
         draws.push(Draw {
             mesh: floor,
-            image: None,
+            textures: MaterialTextures::default(),
             model: to_world
                 * Mat4::from_translation(Vec3::new(0.0, 0.002, 0.0))
                 * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
@@ -657,6 +687,7 @@ pub fn build_with(
         haze_steps: scene.render.haze.steps,
         haze_resolution: scene.render.haze.resolution,
         time,
+        debug_view: scene.render.debug_view,
         camera,
         overlays,
     })

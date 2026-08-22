@@ -86,6 +86,8 @@ pub struct RenderSettings {
     pub sun: Option<DirectionalLight>,
     /// Whether the fading editor ground grid is drawn.
     pub show_grid: bool,
+    /// Renderer diagnostic output. `Pbr` is the authored display path.
+    pub debug_view: DebugView,
     /// Vertical field of view, degrees.
     pub fov: f32,
     /// Original positional anchor from the legacy directional-light capture.
@@ -93,6 +95,46 @@ pub struct RenderSettings {
     /// its orthographic shadow projection remains byte-exact.
     #[serde(skip)]
     pub(crate) legacy_shadow_eye: Option<[f32; 3]>,
+}
+
+/// Runtime-selectable renderer diagnostic output.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DebugView {
+    /// Lit PBR surfaces plus fixture haze through the AgX display transform.
+    #[default]
+    Pbr,
+    /// Linear base colour after factor and sRGB texture decode.
+    BaseColor,
+    /// Final world-space shading normal, remapped to zero-to-one.
+    Normals,
+    /// Metallic factor after the linear metallic-roughness map.
+    Metallic,
+    /// Perceptual roughness after the linear metallic-roughness map.
+    Roughness,
+    /// Directional shadow visibility.
+    Shadow,
+    /// Full-resolution scene depth.
+    Depth,
+    /// Fixture volumetric accumulation without opaque surfaces.
+    VolumetricAccumulation,
+}
+
+impl DebugView {
+    /// Numeric shader selector shared by the scene and composite passes.
+    #[must_use]
+    pub const fn shader_code(self) -> u32 {
+        match self {
+            Self::Pbr => 0,
+            Self::BaseColor => 1,
+            Self::Normals => 2,
+            Self::Metallic => 3,
+            Self::Roughness => 4,
+            Self::Shadow => 5,
+            Self::Depth => 6,
+            Self::VolumetricAccumulation => 7,
+        }
+    }
 }
 
 /// Scene-wide background and ambient contribution, in linear RGB.
@@ -179,6 +221,7 @@ impl RenderSettings {
             },
             sun: None,
             show_grid: false,
+            debug_view: DebugView::Pbr,
             fov,
             legacy_shadow_eye: None,
         }
@@ -197,6 +240,7 @@ impl RenderSettings {
             },
             sun: Some(DirectionalLight::EDITOR),
             show_grid: true,
+            debug_view: DebugView::Pbr,
             fov,
             legacy_shadow_eye: None,
         }
@@ -217,6 +261,8 @@ struct RenderSettingsWire {
     sun: Option<DirectionalLight>,
     #[serde(default)]
     show_grid: Option<bool>,
+    #[serde(default)]
+    debug_view: DebugView,
     fov: f32,
     #[serde(default)]
     dark_stage: Option<bool>,
@@ -242,6 +288,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 haze: wire.haze.ok_or_else(|| D::Error::missing_field("haze"))?,
                 sun: wire.sun,
                 show_grid: wire.show_grid.unwrap_or(false),
+                debug_view: wire.debug_view,
                 fov: wire.fov,
                 legacy_shadow_eye: None,
             });
@@ -258,6 +305,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         settings.haze.enabled = wire.volumetric_haze.unwrap_or(false) && dark;
         settings.haze.steps = wire.haze_steps.unwrap_or(8);
         settings.haze.density = wire.haze_density.unwrap_or(0.0);
+        settings.debug_view = wire.debug_view;
         settings.legacy_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
         Ok(settings)
     }

@@ -6,7 +6,7 @@
 //! [`Channels`] order.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -44,8 +44,7 @@ struct Instance {
     normal_matrix: [[f32; 4]; 4],
     base_color: [f32; 4],
     emissive: [f32; 4],
-    /// x: `flat_shading`. The rest is reserved padding — a storage-buffer
-    /// element has to be 16-byte aligned anyway.
+    /// x: `flat_shading`, y: normal-map scale, z: AO strength.
     flags: [f32; 4],
 }
 
@@ -130,7 +129,7 @@ pub(crate) enum Channels {
 pub struct UploadStats {
     /// Combined geometry-bank uploads.
     pub geometry: u64,
-    /// Base-colour texture uploads.
+    /// Material-map uploads, counted per source/color-space role.
     pub textures: u64,
 }
 
@@ -177,23 +176,84 @@ pub struct Renderer {
     dummy_shadow: wgpu::TextureView,
     linear_sampler: wgpu::Sampler,
     texture_sampler: wgpu::Sampler,
-    /// Bound by every draw whose material has no base-colour texture, and by
-    /// the depth-only passes, which never sample one.
+    /// Neutral glTF maps, bound by procedural/depth-only draws.
     white_material: wgpu::BindGroup,
-    /// Uploaded base-colour textures, by [`crate::frame::Texture::key`].
+    material_defaults: MaterialDefaults,
+    /// Uploaded images by stable source identity and color-space role.
+    texture_views: HashMap<TextureKey, wgpu::TextureView>,
+    /// Material bind groups by their five immutable map identities.
     ///
     /// A frame of a live rig names the same textures as the frame before it,
     /// and each upload carries a full mip chain built on the CPU. Keeping them
     /// is the difference between paying that once and paying it sixty times a
     /// second. Entries the current frame does not name are dropped, so a venue
     /// change does not accumulate the old venue's textures.
-    materials: HashMap<String, wgpu::BindGroup>,
+    materials: HashMap<MaterialKey, wgpu::BindGroup>,
     /// Immutable scene geometry resident across live frames. A resolved frame
     /// rebuilds transforms and light state, but its asset/procedural mesh keys
     /// stay stable until the venue changes.
     geometry: Option<ResidentGeometry>,
     upload_stats: UploadStats,
     targets: Option<Targets>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TextureEncoding {
+    Srgb,
+    Linear,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextureKey {
+    source: String,
+    encoding: TextureEncoding,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MaterialKey {
+    base_color: Option<TextureKey>,
+    normal: Option<TextureKey>,
+    metallic_roughness: Option<TextureKey>,
+    occlusion: Option<TextureKey>,
+    emissive: Option<TextureKey>,
+}
+
+impl MaterialKey {
+    fn of(draw: &Draw, frame: &Frame) -> Self {
+        let key = |index: Option<usize>, encoding| {
+            index.map(|index| TextureKey {
+                source: frame.images[index].key.clone(),
+                encoding,
+            })
+        };
+        Self {
+            base_color: key(draw.textures.base_color, TextureEncoding::Srgb),
+            normal: key(draw.textures.normal, TextureEncoding::Linear),
+            metallic_roughness: key(draw.textures.metallic_roughness, TextureEncoding::Linear),
+            occlusion: key(draw.textures.occlusion, TextureEncoding::Linear),
+            emissive: key(draw.textures.emissive, TextureEncoding::Srgb),
+        }
+    }
+
+    fn textures(&self) -> impl Iterator<Item = &TextureKey> {
+        [
+            self.base_color.as_ref(),
+            self.normal.as_ref(),
+            self.metallic_roughness.as_ref(),
+            self.occlusion.as_ref(),
+            self.emissive.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+struct MaterialDefaults {
+    base_color: wgpu::TextureView,
+    normal: wgpu::TextureView,
+    metallic_roughness: wgpu::TextureView,
+    occlusion: wgpu::TextureView,
+    emissive: wgpu::TextureView,
 }
 
 struct ResidentGeometry {
@@ -306,8 +366,12 @@ impl Renderer {
             label: Some("material"),
             entries: &[
                 texture_entry(0),
+                texture_entry(1),
+                texture_entry(2),
+                texture_entry(3),
+                texture_entry(4),
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -383,7 +447,7 @@ impl Renderer {
             });
 
         let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: 32,
+            array_stride: 48,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -400,6 +464,11 @@ impl Renderer {
                     format: wgpu::VertexFormat::Float32x2,
                     offset: 24,
                     shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
                 },
             ],
         };
@@ -576,7 +645,7 @@ impl Renderer {
                 push_constant_ranges: &[],
             });
         let overlay_position_layout = wgpu::VertexBufferLayout {
-            array_stride: 32,
+            array_stride: 48,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x3,
@@ -664,16 +733,38 @@ impl Renderer {
             ..Default::default()
         });
 
+        let one_pixel = |rgba: [u8; 4], encoding| {
+            upload_texture_view(
+                &device,
+                &queue,
+                &Image {
+                    width: 1,
+                    height: 1,
+                    rgba: std::sync::Arc::from(rgba),
+                },
+                encoding,
+            )
+        };
+        let material_defaults = MaterialDefaults {
+            base_color: one_pixel([255; 4], TextureEncoding::Srgb),
+            normal: one_pixel([128, 128, 255, 255], TextureEncoding::Linear),
+            metallic_roughness: one_pixel([255; 4], TextureEncoding::Linear),
+            occlusion: one_pixel([255; 4], TextureEncoding::Linear),
+            // The glTF identity for an absent emissive texture is white. The
+            // factor, not a synthetic black map, is what disables emission.
+            // This also preserves procedural emissive materials, which never
+            // carry a glTF image.
+            emissive: one_pixel([255; 4], TextureEncoding::Srgb),
+        };
         let white_material = material_bind_group(
             &device,
-            &queue,
             &material_layout,
             &texture_sampler,
-            &Image {
-                width: 1,
-                height: 1,
-                rgba: std::sync::Arc::from([255; 4]),
-            },
+            &material_defaults.base_color,
+            &material_defaults.normal,
+            &material_defaults.metallic_roughness,
+            &material_defaults.occlusion,
+            &material_defaults.emissive,
         );
 
         Ok(Self {
@@ -697,6 +788,8 @@ impl Renderer {
             linear_sampler,
             texture_sampler,
             white_material,
+            material_defaults,
+            texture_views: HashMap::new(),
             materials: HashMap::new(),
             geometry: None,
             upload_stats: UploadStats {
@@ -937,7 +1030,7 @@ impl Renderer {
                 f32::from(u8::from(
                     frame.directional.is_some_and(|light| light.shadows),
                 )),
-                0.0,
+                frame.debug_view.shader_code() as f32,
             ],
         };
 
@@ -984,30 +1077,74 @@ impl Renderer {
                 color: o.color.extend(o.opacity).to_array(),
             })
             .collect();
-        // Upload only what is not already resident, then forget what this frame
-        // did not name.
-        for texture in &frame.images {
-            if !self.materials.contains_key(&texture.key) {
-                let bind_group = material_bind_group(
-                    &self.device,
-                    &self.queue,
-                    &self.material_layout,
-                    &self.texture_sampler,
-                    &texture.image,
-                );
-                self.materials.insert(texture.key.clone(), bind_group);
-                self.upload_stats.textures += 1;
+        // Upload each immutable image once per color-space role. A source can
+        // legitimately be used as both base color (sRGB) and a data map
+        // (linear), and those require different GPU formats.
+        let material_keys: Vec<MaterialKey> = frame
+            .draws
+            .iter()
+            .map(|draw| MaterialKey::of(draw, frame))
+            .collect();
+        for (draw, key) in frame.draws.iter().zip(&material_keys) {
+            let roles = [
+                (draw.textures.base_color, key.base_color.as_ref()),
+                (draw.textures.normal, key.normal.as_ref()),
+                (
+                    draw.textures.metallic_roughness,
+                    key.metallic_roughness.as_ref(),
+                ),
+                (draw.textures.occlusion, key.occlusion.as_ref()),
+                (draw.textures.emissive, key.emissive.as_ref()),
+            ];
+            for (index, texture_key) in roles {
+                let Some((index, texture_key)) = index.zip(texture_key) else {
+                    continue;
+                };
+                if !self.texture_views.contains_key(texture_key) {
+                    let view = upload_texture_view(
+                        &self.device,
+                        &self.queue,
+                        &frame.images[index].image,
+                        texture_key.encoding,
+                    );
+                    self.texture_views.insert(texture_key.clone(), view);
+                    self.upload_stats.textures += 1;
+                }
             }
         }
-        self.materials
-            .retain(|key, _| frame.images.iter().any(|t| &t.key == key));
-        // Cloned rather than borrowed: these are refcounted handles, and holding
-        // a borrow of `self.materials` here would collide with the `&mut self`
-        // that reallocates the render targets below.
-        let materials: Vec<wgpu::BindGroup> = frame
-            .images
+        let used_textures: HashSet<&TextureKey> = material_keys
             .iter()
-            .map(|t| self.materials[&t.key].clone())
+            .flat_map(MaterialKey::textures)
+            .collect();
+        self.texture_views
+            .retain(|key, _| used_textures.contains(key));
+        self.materials
+            .retain(|key, _| material_keys.iter().any(|used| used == key));
+        for key in &material_keys {
+            if self.materials.contains_key(key) {
+                continue;
+            }
+            let view = |texture: Option<&TextureKey>, default| {
+                texture.map_or(default, |key| &self.texture_views[key])
+            };
+            let bind_group = material_bind_group(
+                &self.device,
+                &self.material_layout,
+                &self.texture_sampler,
+                view(key.base_color.as_ref(), &self.material_defaults.base_color),
+                view(key.normal.as_ref(), &self.material_defaults.normal),
+                view(
+                    key.metallic_roughness.as_ref(),
+                    &self.material_defaults.metallic_roughness,
+                ),
+                view(key.occlusion.as_ref(), &self.material_defaults.occlusion),
+                view(key.emissive.as_ref(), &self.material_defaults.emissive),
+            );
+            self.materials.insert(key.clone(), bind_group);
+        }
+        let materials: Vec<wgpu::BindGroup> = material_keys
+            .iter()
+            .map(|key| self.materials[key].clone())
             .collect();
 
         let instance_buf = self.storage(&instances, wgpu::BufferUsages::STORAGE, "instances");
@@ -1082,13 +1219,9 @@ impl Renderer {
                 pass.set_bind_group(1, &self.white_material, &[]);
                 for i in range {
                     let draw = &frame.draws[i];
-                    if draw.image != bound {
-                        bound = draw.image;
-                        pass.set_bind_group(
-                            1,
-                            draw.image.map_or(&self.white_material, |t| &materials[t]),
-                            &[],
-                        );
+                    if bound != Some(i) {
+                        bound = Some(i);
+                        pass.set_bind_group(1, &materials[i], &[]);
                     }
                     let (first, last, base) = ranges[draw.mesh];
                     pass.draw_indexed(first..last, base, i as u32..i as u32 + 1);
@@ -1262,7 +1395,7 @@ impl Renderer {
                 haze_size.1 as f32,
                 // Depth sigma in raw-depth units, as `HazeCompositeEffect` has it.
                 0.005,
-                0.0,
+                frame.debug_view.shader_code() as f32,
             ],
         };
         let composite_buf = self.storage(
@@ -1373,22 +1506,17 @@ impl Renderer {
     }
 }
 
-/// Upload one base-colour texture with a full mip chain and bind it with the
-/// shared repeat sampler.
-///
-/// Mips are box-filtered on the stored sRGB bytes rather than in linear light:
-/// that is what `gl.generateMipmap` does to an `SRGB8_ALPHA8` texture, and the
-/// goldens are what it produced.
-fn material_bind_group(
+/// Upload one immutable material map with a full mip chain. Color maps use an
+/// sRGB view, while normal/metallic-roughness/AO maps remain linear data.
+fn upload_texture_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
     image: &Image,
-) -> wgpu::BindGroup {
+    encoding: TextureEncoding,
+) -> wgpu::TextureView {
     let levels = 32 - image.width.max(image.height).leading_zeros();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("base-color"),
+        label: Some("material-map"),
         size: wgpu::Extent3d {
             width: image.width,
             height: image.height,
@@ -1397,7 +1525,10 @@ fn material_bind_group(
         mip_level_count: levels,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: match encoding {
+            TextureEncoding::Srgb => wgpu::TextureFormat::Rgba8UnormSrgb,
+            TextureEncoding::Linear => wgpu::TextureFormat::Rgba8Unorm,
+        },
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -1435,28 +1566,40 @@ fn material_bind_group(
             },
         );
         if mip + 1 < levels {
-            level = downsample(w, h, pixels);
+            level = downsample(w, h, pixels, encoding);
         }
     }
 
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+fn material_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    base_color: &wgpu::TextureView,
+    normal: &wgpu::TextureView,
+    metallic_roughness: &wgpu::TextureView,
+    occlusion: &wgpu::TextureView,
+    emissive: &wgpu::TextureView,
+) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("material"),
         layout,
         entries: &[
-            binding(
-                0,
-                wgpu::BindingResource::TextureView(
-                    &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            ),
-            binding(1, wgpu::BindingResource::Sampler(sampler)),
+            binding(0, wgpu::BindingResource::TextureView(base_color)),
+            binding(1, wgpu::BindingResource::TextureView(normal)),
+            binding(2, wgpu::BindingResource::TextureView(metallic_roughness)),
+            binding(3, wgpu::BindingResource::TextureView(occlusion)),
+            binding(4, wgpu::BindingResource::TextureView(emissive)),
+            binding(5, wgpu::BindingResource::Sampler(sampler)),
         ],
     })
 }
 
 /// One 2x2 box-filter step. Odd dimensions collapse to 1 and then repeat the
 /// row/column, which is how GL's mip chain treats them.
-fn downsample(w: u32, h: u32, pixels: &[u8]) -> (u32, u32, Vec<u8>) {
+fn downsample(w: u32, h: u32, pixels: &[u8], encoding: TextureEncoding) -> (u32, u32, Vec<u8>) {
     let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
     let mut out = Vec::with_capacity((nw * nh * 4) as usize);
     for y in 0..nh {
@@ -1464,8 +1607,34 @@ fn downsample(w: u32, h: u32, pixels: &[u8]) -> (u32, u32, Vec<u8>) {
             let (x0, y0) = (x * 2, y * 2);
             let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
             for c in 0..4 {
-                let at = |px: u32, py: u32| u32::from(pixels[((py * w + px) * 4 + c) as usize]);
-                out.push(((at(x0, y0) + at(x1, y0) + at(x0, y1) + at(x1, y1) + 2) / 4) as u8);
+                let at = |px: u32, py: u32| pixels[((py * w + px) * 4 + c) as usize];
+                if encoding == TextureEncoding::Srgb && c < 3 {
+                    let linear = |value: u8| {
+                        let value = f32::from(value) / 255.0;
+                        if value <= 0.04045 {
+                            value / 12.92
+                        } else {
+                            ((value + 0.055) / 1.055).powf(2.4)
+                        }
+                    };
+                    let mean = (linear(at(x0, y0))
+                        + linear(at(x1, y0))
+                        + linear(at(x0, y1))
+                        + linear(at(x1, y1)))
+                        * 0.25;
+                    let encoded = if mean <= 0.003_130_8 {
+                        mean * 12.92
+                    } else {
+                        1.055 * mean.powf(1.0 / 2.4) - 0.055
+                    };
+                    out.push((encoded * 255.0).round().clamp(0.0, 255.0) as u8);
+                } else {
+                    let mean = u32::from(at(x0, y0))
+                        + u32::from(at(x1, y0))
+                        + u32::from(at(x0, y1))
+                        + u32::from(at(x1, y1));
+                    out.push(((mean + 2) / 4) as u8);
+                }
             }
         }
     }
@@ -1482,6 +1651,22 @@ const ADD: wgpu::BlendComponent = wgpu::BlendComponent {
 /// the line topology, bit 1 is [`OverlayDepth::Free`].
 fn overlay_pipeline_index(overlay: &Overlay) -> usize {
     usize::from(overlay.lines) | (usize::from(overlay.depth == OverlayDepth::Free) << 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{downsample, TextureEncoding};
+
+    #[test]
+    fn material_mips_filter_color_in_linear_light_and_data_as_bytes() {
+        let pixels = [
+            0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255,
+        ];
+        let (_, _, color) = downsample(2, 2, &pixels, TextureEncoding::Srgb);
+        let (_, _, data) = downsample(2, 2, &pixels, TextureEncoding::Linear);
+        assert_eq!(color, [188, 188, 188, 255]);
+        assert_eq!(data, [128, 128, 128, 255]);
+    }
 }
 
 impl PendingReadback {
@@ -1532,8 +1717,12 @@ fn instance_of(draw: &Draw) -> Instance {
             .to_array(),
         flags: [
             f32::from(u8::from(draw.material.flat_shading)),
-            0.0,
-            0.0,
+            if draw.textures.normal.is_some() {
+                draw.material.normal_scale
+            } else {
+                0.0
+            },
+            draw.material.occlusion_strength,
             0.0,
         ],
     }
