@@ -74,7 +74,8 @@
 	},
 	"lint-staged": {
 		"*.{js,jsx,ts,tsx,json,css}": "biome check --write --no-errors-on-unmatched",
-		"*.rs": "cargo fmt --manifest-path src-tauri/Cargo.toml --"
+		"src-tauri/**/*.rs": "sh -c 'cargo fmt --manifest-path src-tauri/Cargo.toml' --",
+		"gpui/crates/**/*.rs": "sh -c 'cargo fmt --manifest-path gpui/Cargo.toml --all' --"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.5",

@@ -88,3 +88,51 @@ fn modal_traps_both_tab_directions_and_restores_the_exact_opener() {
     assert_eq!(out["restored"]["focused"], true);
     assert!(out["dismissed"].is_null());
 }
+
+#[test]
+fn route_policy_dismisses_optional_scrims_but_keeps_onboarding_modal() {
+    let mut optional = Fixture::new(
+        "dialog-scrim-policy",
+        8,
+        vec![Clip::new("pattern-strobe", "Strobe", 1.0, 4.0)],
+    )
+    .open(Mode::Headless);
+    let optional = run(
+        &mut optional,
+        &support::script(
+            r#"
+            nav.venue("Test Venue");
+            const shell = until("the venue shell", (s) =>
+                s.find({ role: "input", label: "Search tracks…" }) ? s : undefined);
+            app.click(shell.find({ role: "input", label: "Search tracks…" }));
+            app.action("luma::OpenPatterns");
+            const opened = until("the optional scrim", (s) =>
+                s.find({ role: "button", label: "Dismiss dialog" }) ? s : undefined);
+            app.click(opened.find({ role: "button", label: "Dismiss dialog" }));
+            app.frames(2);
+            const dismissed = app.snapshot();
+            ({ dialogGone: dismissed.find({ role: "card", label: "Pattern dialog" }) === undefined,
+               shellRestored: dismissed.find({ role: "input", label: "Search tracks…" })?.focused === true })
+            "#,
+        ),
+    );
+    assert_eq!(optional["dialogGone"], true);
+    assert_eq!(optional["shellRestored"], true);
+
+    let mut onboarding = Fixture::new("dialog-scrim-onboarding", 1, vec![])
+        .without_track()
+        .open(Mode::Headless);
+    let onboarding = run(
+        &mut onboarding,
+        &support::script(
+            r#"
+            const shot = until("required venue onboarding", (s) =>
+                s.find({ role: "card", label: "Venue dialog" }) ? s : undefined);
+            ({ venuePresent: shot.find({ role: "card", label: "Venue dialog" }) !== undefined,
+               dismissAbsent: shot.find({ role: "button", label: "Dismiss dialog" }) === undefined })
+            "#,
+        ),
+    );
+    assert_eq!(onboarding["venuePresent"], true);
+    assert_eq!(onboarding["dismissAbsent"], true);
+}

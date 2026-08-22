@@ -335,6 +335,7 @@ impl Render for Proof {
             &self.trap,
             self.trap.contains_focused(window, cx),
             "Morph host",
+            luma_ui::dialog::ScrimDismiss::Disabled,
             card,
         );
 
