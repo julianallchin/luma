@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use luma_render::assets::Library;
-use luma_render::frame::HazeLight;
+use luma_render::frame::FixtureCone;
 use luma_render::scene_desc::{CameraPose, DebugView, Environment, Piece, RenderSettings, Scene};
 use luma_render::{
     build_frame_with, AsyncPresentation, AsyncViewport, Frame, Renderer, SubmitOutcome, Viewport,
@@ -41,8 +41,8 @@ fn scene(pieces: Vec<Piece>) -> Scene {
     }
 }
 
-fn light(gobo: u32) -> HazeLight {
-    HazeLight {
+fn light(gobo: u32) -> FixtureCone {
+    FixtureCone {
         position: Vec3::new(0.0, 0.0, 0.15),
         range: 8.0,
         direction: Vec3::Z,
@@ -56,7 +56,7 @@ fn light(gobo: u32) -> HazeLight {
     }
 }
 
-fn frame(pieces: Vec<Piece>, lights: Vec<HazeLight>) -> Frame {
+fn frame(pieces: Vec<Piece>, lights: Vec<FixtureCone>) -> Frame {
     let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
     let mut library = Library::new(meshes);
     let mut frame = build_frame_with(
@@ -67,7 +67,7 @@ fn frame(pieces: Vec<Piece>, lights: Vec<HazeLight>) -> Frame {
         &mut library,
     )
     .unwrap();
-    frame.haze_lights = lights;
+    frame.fixture_cones = lights;
     frame.haze_density = 0.65;
     frame
 }
@@ -185,11 +185,11 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
     let mut library = Library::new(meshes);
     let mut frame =
         build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library).unwrap();
-    frame.haze_lights.reserve(count);
+    frame.fixture_cones.reserve(count);
     for index in 0..count {
         let column = (index % descriptor.lattice.columns) as f32;
         let row = (index / descriptor.lattice.columns) as f32;
-        frame.haze_lights.push(HazeLight {
+        frame.fixture_cones.push(FixtureCone {
             position: Vec3::from_array(descriptor.light.origin)
                 + Vec3::new(
                     (column - descriptor.lattice.center_column) * descriptor.lattice.spacing[0],

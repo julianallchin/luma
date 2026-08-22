@@ -127,25 +127,6 @@ fn linear_view_depth(raw_depth: f32) -> f32 {
     return near * far / max(near + raw_depth * (far - near), 1e-5);
 }
 
-/// Peaked photometric profile with GDTF beam/field semantics: 100% on the
-/// axis, 50% at the beam angle, smoothly cut to zero approaching the field
-/// angle.
-///
-/// This function is the gobo seam: replace it with a texture lookup in
-/// cone-local polar coordinates (default = this smooth circle) to project
-/// arbitrary gobo shapes through the volume without touching any call site.
-fn angular_profile(cos_angle: f32, cos_beam: f32, cos_field: f32) -> f32 {
-    if cos_angle <= cos_field {
-        return 0.0;
-    }
-    // (1-cos) scales as angle², so this ratio is (theta/thetaBeam)² — exactly
-    // the Gaussian argument. exp(-ln2·t) puts the 50% point at the beam angle.
-    let t = (1.0 - cos_angle) / max(1.0 - cos_beam, 1e-5);
-    let peak = exp(-0.6931472 * t);
-    let cut = smoothstep(cos_field, mix(cos_field, cos_beam, 0.35), cos_angle);
-    return peak * cut;
-}
-
 /// Henyey-Greenstein, normalised so isotropic (g=0) == 1 rather than 1/4pi:
 /// the "intensity" here is a 0..1 dimmer, not radiance in watts, so the
 /// absolute scale lives in the beam gain and only the angular shape matters.
@@ -176,28 +157,6 @@ fn blue_noise(frag: vec2<f32>, frame: u32) -> f32 {
     let tile = floor(frag / 8.0);
     let rotation = fract(sin(dot(tile, vec2<f32>(12.9898, 78.233))) * 43758.5453);
     return fract((f32(BLUE_NOISE_RANK[index]) + 0.5) / 64.0 + rotation);
-}
-
-fn gobo_transmission(q: vec3<f32>, rest: LightRest) -> f32 {
-    if rest.gobo < 0.5 {
-        return 1.0;
-    }
-    let helper = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), abs(rest.direction.z) > 0.98);
-    let right = normalize(cross(rest.direction, helper));
-    let up = cross(right, rest.direction);
-    let axial = max(dot(q, rest.direction), 1e-4);
-    let field_sine = sqrt(max(1.0 - rest.cos_field * rest.cos_field, 0.0));
-    let field_radius = axial * field_sine / max(abs(rest.cos_field), 0.05);
-    let aperture = vec2<f32>(dot(q, right), dot(q, up)) / max(field_radius, 1e-4);
-    if rest.gobo < 1.5 {
-        let angle = atan2(aperture.y, aperture.x) + rest.gobo_rotation;
-        return smoothstep(0.18, 0.48, abs(cos(angle * 6.0)));
-    }
-    let c = cos(rest.gobo_rotation);
-    let s = sin(rest.gobo_rotation);
-    let rotated = mat2x2<f32>(vec2<f32>(c, s), vec2<f32>(-s, c)) * aperture;
-    let breakup = sin(rotated.x * 15.0) * sin(rotated.y * 11.0);
-    return smoothstep(-0.15, 0.25, breakup);
 }
 
 @fragment
@@ -404,7 +363,13 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
             // Soft range taper — the beam dissolves into the dark instead of
             // popping at the hard cull sphere.
             let taper = 1.0 - smoothstep(core.range * 0.7, core.range, dist);
-            let gobo = gobo_transmission(q, rest);
+            let gobo = gobo_transmission(
+                q,
+                rest.direction,
+                rest.cos_field,
+                rest.gobo,
+                rest.gobo_rotation,
+            );
 
             // True HDR radiance, no clamp to display range. The tonemapper is
             // the camera; blinding values are its problem and the white-hot

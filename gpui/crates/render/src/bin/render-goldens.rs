@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
                 format!(
                     "{} draws, {} cones",
                     frame.draws.len(),
-                    frame.haze_lights.len()
+                    frame.fixture_cones.len()
                 )
             } else {
                 anyhow::ensure!(
