@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**181 commands** across **31 domains** · **22 events** · **4 commands not on the seam**
+**182 commands** across **31 domains** · **22 events** · **4 commands not on the seam**
 
 ## Domains
 
@@ -37,7 +37,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `rekordbox` | 5 | `src-tauri/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `src-tauri/src/dispatch/handlers/render_engine.rs` |
 | `score_dsl` | 3 | `src-tauri/src/dispatch/handlers/score_dsl.rs` |
-| `scores` | 8 | `src-tauri/src/dispatch/handlers/scores.rs` |
+| `scores` | 9 | `src-tauri/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
 | `stage` | 5 | `src-tauri/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
@@ -45,7 +45,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 10 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **181** | |
+| **total** | **182** | |
 
 ## Commands
 
@@ -314,6 +314,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `list_scores_for_track` | `trackId: String`<br>`venueId: String` | `Vec<ScoreSummary>` |
 | `create_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
+| `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |
 | `list_track_scores` | `scoreId: String` | `Vec<TrackScore>` |
 | `create_track_score` | `payload: CreateTrackScoreInput` | `TrackEditResult` |

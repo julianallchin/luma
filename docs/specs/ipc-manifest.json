@@ -1000,7 +1000,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 68
+        "line": 89
       },
       "name": "create_track_score",
       "prose": {
@@ -1096,7 +1096,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 49
+        "line": 70
       },
       "name": "delete_score",
       "prose": {
@@ -1167,7 +1167,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 82
+        "line": 103
       },
       "name": "delete_track_score",
       "prose": {
@@ -1336,6 +1336,36 @@
         ]
       },
       "returns": "Vec<EngineDjTrack>"
+    },
+    {
+      "args": [
+        {
+          "name": "requestId",
+          "rust": "String"
+        },
+        {
+          "name": "trackId",
+          "rust": "String"
+        },
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "name",
+          "rust": "Option<String>"
+        }
+      ],
+      "domain": "scores",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "line": 49
+      },
+      "name": "ensure_venue_score",
+      "prose": {
+        "returns": "Score"
+      },
+      "returns": "Score"
     },
     {
       "args": [],
@@ -2294,7 +2324,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 59
+        "line": 80
       },
       "name": "list_track_scores",
       "prose": {
@@ -3893,7 +3923,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 92
+        "line": 113
       },
       "name": "replace_track_scores",
       "prose": {
@@ -3918,7 +3948,7 @@
       "domain": "waveforms",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
-        "line": 294
+        "line": 44
       },
       "name": "reprocess_waveform",
       "prose": {
@@ -4556,7 +4586,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 75
+        "line": 96
       },
       "name": "update_track_score",
       "prose": {
@@ -4800,7 +4830,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/score_dsl.rs"
     },
     {
-      "commandCount": 8,
+      "commandCount": 9,
       "domain": "scores",
       "handlers": "src-tauri/src/dispatch/handlers/scores.rs"
     },
@@ -5089,7 +5119,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 181,
+    "commandCount": 182,
     "domainCount": 31,
     "eventCount": 22,
     "unportedCount": 4

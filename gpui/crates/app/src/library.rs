@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 use luma_lib::agent::model::ModelClient;
@@ -67,7 +67,7 @@ use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
 use luma_lib::models::node_graph::{BeatGrid, Graph, NodeTypeDef};
 use luma_lib::models::patterns::PatternSummary;
 use luma_lib::models::scores::{
-    CreateTrackScoreInput, DeleteTrackScoreInput, ScoreSummary, TrackScore,
+    CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
 };
 use luma_lib::models::stage::StagePiece;
 use luma_lib::models::tracks::TrackBrowserRow;
@@ -87,6 +87,229 @@ use luma_lib::storage::StorageRoot;
 /// enough that a deliberate zoom is answered within a frame or two of settling,
 /// long enough that a flick asks once instead of forty times.
 const WINDOW_DEBOUNCE: Duration = Duration::from_millis(40);
+
+/// DJ catalog selected by the import flow. Source-specific identifiers remain
+/// opaque strings above this seam.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrackSource {
+    EngineDj { library_path: String },
+    Rekordbox,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceLibrary {
+    pub identity: Option<String>,
+    pub track_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourcePlaylist {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub track_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceTrack {
+    pub id: String,
+    pub file_path: Option<String>,
+    pub filename: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub bpm: Option<f64>,
+    pub duration_seconds: Option<f64>,
+}
+
+/// Raw adapter answers used only by the GPUI agent harness. Keeping the
+/// fixture at the JSON boundary proves the public Library methods perform the
+/// same source-specific decoding and normalization as production dispatch.
+#[cfg(feature = "agent")]
+#[derive(Clone, Debug)]
+pub struct SourceAdapterFixture {
+    pub library: Value,
+    pub playlists: Value,
+    pub tracks: Value,
+    pub playlist_tracks: HashMap<String, Value>,
+    pub searches: HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineDjLibraryWire {
+    database_uuid: String,
+    track_count: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineDjPlaylistWire {
+    id: i64,
+    title: String,
+    parent_id: Option<i64>,
+    track_count: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineDjTrackWire {
+    id: i64,
+    path: String,
+    filename: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    bpm_analyzed: Option<f64>,
+    length: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RekordboxLibraryWire {
+    track_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RekordboxPlaylistWire {
+    id: String,
+    name: String,
+    parent_id: Option<String>,
+    track_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RekordboxTrackWire {
+    uuid: String,
+    file_path: Option<String>,
+    filename: Option<String>,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    bpm: Option<f64>,
+    duration_seconds: Option<f64>,
+}
+
+impl From<EngineDjPlaylistWire> for SourcePlaylist {
+    fn from(row: EngineDjPlaylistWire) -> Self {
+        Self {
+            id: row.id.to_string(),
+            name: row.title,
+            parent_id: row.parent_id.map(|id| id.to_string()),
+            track_count: row.track_count.try_into().unwrap_or(0),
+        }
+    }
+}
+
+impl From<RekordboxPlaylistWire> for SourcePlaylist {
+    fn from(row: RekordboxPlaylistWire) -> Self {
+        Self {
+            id: row.id,
+            name: row.name,
+            parent_id: row.parent_id,
+            track_count: row.track_count,
+        }
+    }
+}
+
+impl From<EngineDjTrackWire> for SourceTrack {
+    fn from(row: EngineDjTrackWire) -> Self {
+        Self {
+            id: row.id.to_string(),
+            file_path: Some(row.path),
+            filename: Some(row.filename),
+            title: row.title,
+            artist: row.artist,
+            album: row.album,
+            bpm: row.bpm_analyzed,
+            duration_seconds: row.length,
+        }
+    }
+}
+
+impl From<RekordboxTrackWire> for SourceTrack {
+    fn from(row: RekordboxTrackWire) -> Self {
+        Self {
+            id: row.uuid,
+            file_path: row.file_path,
+            filename: row.filename,
+            title: row.title,
+            artist: row.artist,
+            album: row.album,
+            bpm: row.bpm,
+            duration_seconds: row.duration_seconds,
+        }
+    }
+}
+
+fn normalize_source_library(
+    source: &TrackSource,
+    value: Value,
+) -> Result<SourceLibrary, LibraryError> {
+    match source {
+        TrackSource::EngineDj { .. } => {
+            let opened: EngineDjLibraryWire =
+                decode_source_fixture("engine_dj_open_library", value)?;
+            Ok(SourceLibrary {
+                identity: Some(opened.database_uuid),
+                track_count: opened.track_count.try_into().unwrap_or(0),
+            })
+        }
+        TrackSource::Rekordbox => {
+            let opened: RekordboxLibraryWire =
+                decode_source_fixture("rekordbox_open_library", value)?;
+            Ok(SourceLibrary {
+                identity: None,
+                track_count: opened.track_count,
+            })
+        }
+    }
+}
+
+fn normalize_source_playlists(
+    source: &TrackSource,
+    value: Value,
+) -> Result<Vec<SourcePlaylist>, LibraryError> {
+    match source {
+        TrackSource::EngineDj { .. } => {
+            let rows: Vec<EngineDjPlaylistWire> =
+                decode_source_fixture("engine_dj_list_playlists", value)?;
+            Ok(rows.into_iter().map(SourcePlaylist::from).collect())
+        }
+        TrackSource::Rekordbox => {
+            let rows: Vec<RekordboxPlaylistWire> =
+                decode_source_fixture("rekordbox_list_playlists", value)?;
+            Ok(rows.into_iter().map(SourcePlaylist::from).collect())
+        }
+    }
+}
+
+fn normalize_source_tracks(
+    source: &TrackSource,
+    command: &'static str,
+    value: Value,
+) -> Result<Vec<SourceTrack>, LibraryError> {
+    match source {
+        TrackSource::EngineDj { .. } => {
+            let rows: Vec<EngineDjTrackWire> = decode_source_fixture(command, value)?;
+            Ok(rows.into_iter().map(SourceTrack::from).collect())
+        }
+        TrackSource::Rekordbox => {
+            let rows: Vec<RekordboxTrackWire> = decode_source_fixture(command, value)?;
+            Ok(rows.into_iter().map(SourceTrack::from).collect())
+        }
+    }
+}
+
+fn decode_source_fixture<T: DeserializeOwned>(
+    command: &'static str,
+    value: Value,
+) -> Result<T, LibraryError> {
+    serde_json::from_value(value)
+        .map_err(|error| LibraryError::at(command, Cause::Shape(error.to_string())))
+}
 
 /// Why a [`Library`] call did not produce a value.
 ///
@@ -160,6 +383,8 @@ pub struct Library {
     /// subagent will use too, which is why it is the registry and not a flag:
     /// a surface built by a second path could drift from the parent's.
     tools: Option<ToolRegistry>,
+    #[cfg(feature = "agent")]
+    source_fixture: Option<Arc<SourceAdapterFixture>>,
 }
 
 impl Library {
@@ -214,6 +439,8 @@ impl Library {
             runtime,
             model: None,
             tools: None,
+            #[cfg(feature = "agent")]
+            source_fixture: None,
         })
     }
 
@@ -246,6 +473,14 @@ impl Library {
         self.tools = Some(tools);
     }
 
+    /// Replace DJ source I/O with raw adapter answers in the agent harness.
+    /// Normalization remains production code; only external database reads
+    /// are substituted.
+    #[cfg(feature = "agent")]
+    pub fn set_source_adapter_fixture(&mut self, fixture: SourceAdapterFixture) {
+        self.source_fixture = Some(Arc::new(fixture));
+    }
+
     /// The signed-in principal, or `None` for the guest namespace. Identity is
     /// fixed for the life of the process here — this host has no sign-in — so
     /// it is a field rather than a query.
@@ -258,6 +493,18 @@ impl Library {
         self.call("list_venues", json!({}))
     }
 
+    /// Create a venue and return the durable row written by the catalog.
+    pub fn create_venue(
+        &self,
+        name: &str,
+        description: Option<&str>,
+    ) -> impl Future<Output = Result<Venue, LibraryError>> + use<> {
+        self.call(
+            "create_venue",
+            json!({ "name": name, "description": description }),
+        )
+    }
+
     /// The track browser's rows for `venue_id`, carrying that venue's
     /// annotation counts.
     pub fn tracks(
@@ -265,6 +512,259 @@ impl Library {
         venue_id: &str,
     ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, LibraryError>> + use<> {
         self.call("list_tracks_enriched", json!({ "venueId": venue_id }))
+    }
+
+    /// Every visible track in Luma, newest first, without a venue decoration.
+    pub fn all_tracks(
+        &self,
+    ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, LibraryError>> + use<> {
+        self.call("list_tracks_enriched", json!({ "venueId": null }))
+    }
+
+    /// Open either supported DJ catalog through one GPUI-owned shape.
+    pub fn source_library(
+        &self,
+        source: TrackSource,
+    ) -> impl Future<Output = Result<SourceLibrary, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self
+            .source_fixture
+            .as_ref()
+            .map(|fixture| normalize_source_library(&source, fixture.library.clone()));
+        #[cfg(not(feature = "agent"))]
+        let fixture: Option<Result<SourceLibrary, LibraryError>> = None;
+        let engine = match (&source, fixture.is_none()) {
+            (TrackSource::EngineDj { library_path }, true) => {
+                Some(self.call::<EngineDjLibraryWire>(
+                    "engine_dj_open_library",
+                    json!({ "libraryPath": library_path }),
+                ))
+            }
+            _ => None,
+        };
+        let rekordbox = match (&source, fixture.is_none()) {
+            (TrackSource::Rekordbox, true) => {
+                Some(self.call::<RekordboxLibraryWire>("rekordbox_open_library", json!({})))
+            }
+            _ => None,
+        };
+        async move {
+            if let Some(fixture) = fixture {
+                return fixture;
+            }
+            match (engine, rekordbox) {
+                (Some(opened), None) => {
+                    let opened = opened.await?;
+                    Ok(SourceLibrary {
+                        identity: Some(opened.database_uuid),
+                        track_count: opened.track_count.try_into().unwrap_or(0),
+                    })
+                }
+                (None, Some(opened)) => {
+                    let opened = opened.await?;
+                    Ok(SourceLibrary {
+                        identity: None,
+                        track_count: opened.track_count,
+                    })
+                }
+                _ => unreachable!("one source produces exactly one call"),
+            }
+        }
+    }
+
+    /// Flat source playlists; `parent_id` is enough for the dialog to build a
+    /// shared tree without knowing which DJ product produced it.
+    pub fn source_playlists(
+        &self,
+        source: TrackSource,
+    ) -> impl Future<Output = Result<Vec<SourcePlaylist>, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self
+            .source_fixture
+            .as_ref()
+            .map(|fixture| normalize_source_playlists(&source, fixture.playlists.clone()));
+        #[cfg(not(feature = "agent"))]
+        let fixture: Option<Result<Vec<SourcePlaylist>, LibraryError>> = None;
+        let engine = match (&source, fixture.is_none()) {
+            (TrackSource::EngineDj { library_path }, true) => {
+                Some(self.call::<Vec<EngineDjPlaylistWire>>(
+                    "engine_dj_list_playlists",
+                    json!({ "libraryPath": library_path }),
+                ))
+            }
+            _ => None,
+        };
+        let rekordbox = match (&source, fixture.is_none()) {
+            (TrackSource::Rekordbox, true) => {
+                Some(self.call::<Vec<RekordboxPlaylistWire>>("rekordbox_list_playlists", json!({})))
+            }
+            _ => None,
+        };
+        async move {
+            if let Some(fixture) = fixture {
+                return fixture;
+            }
+            match (engine, rekordbox) {
+                (Some(rows), None) => {
+                    Ok(rows.await?.into_iter().map(SourcePlaylist::from).collect())
+                }
+                (None, Some(rows)) => {
+                    Ok(rows.await?.into_iter().map(SourcePlaylist::from).collect())
+                }
+                _ => unreachable!("one source produces exactly one call"),
+            }
+        }
+    }
+
+    /// The whole selected source library in its native stable ordering.
+    pub fn source_tracks(
+        &self,
+        source: TrackSource,
+    ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.source_fixture.as_ref().map(|fixture| {
+            normalize_source_tracks(&source, "source_list_tracks", fixture.tracks.clone())
+        });
+        #[cfg(not(feature = "agent"))]
+        let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
+        let engine = match (&source, fixture.is_none()) {
+            (TrackSource::EngineDj { library_path }, true) => {
+                Some(self.call::<Vec<EngineDjTrackWire>>(
+                    "engine_dj_list_tracks",
+                    json!({ "libraryPath": library_path }),
+                ))
+            }
+            _ => None,
+        };
+        let rekordbox = match (&source, fixture.is_none()) {
+            (TrackSource::Rekordbox, true) => {
+                Some(self.call::<Vec<RekordboxTrackWire>>("rekordbox_list_tracks", json!({})))
+            }
+            _ => None,
+        };
+        async move {
+            if let Some(fixture) = fixture {
+                return fixture;
+            }
+            match (engine, rekordbox) {
+                (Some(rows), None) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                (None, Some(rows)) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                _ => unreachable!("one source produces exactly one call"),
+            }
+        }
+    }
+
+    /// One playlist/crate through the same row shape as [`Self::source_tracks`].
+    pub fn source_playlist_tracks(
+        &self,
+        source: TrackSource,
+        playlist_id: &str,
+    ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.source_fixture.as_ref().map(|fixture| {
+            fixture
+                .playlist_tracks
+                .get(playlist_id)
+                .cloned()
+                .ok_or_else(|| {
+                    LibraryError::at(
+                        "source_playlist_tracks",
+                        Cause::Shape(format!("fixture has no playlist {playlist_id}")),
+                    )
+                })
+                .and_then(|value| normalize_source_tracks(&source, "source_playlist_tracks", value))
+        });
+        #[cfg(not(feature = "agent"))]
+        let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
+        let engine_id = match &source {
+            TrackSource::EngineDj { .. } => playlist_id.parse::<i64>().ok(),
+            TrackSource::Rekordbox => None,
+        };
+        let invalid_engine_id = fixture.is_none()
+            && matches!(&source, TrackSource::EngineDj { .. })
+            && engine_id.is_none();
+        let engine = match (&source, engine_id, fixture.is_none()) {
+            (TrackSource::EngineDj { library_path }, Some(playlist_id), true) => {
+                Some(self.call::<Vec<EngineDjTrackWire>>(
+                    "engine_dj_get_playlist_tracks",
+                    json!({ "libraryPath": library_path, "playlistId": playlist_id }),
+                ))
+            }
+            _ => None,
+        };
+        let rekordbox = match (&source, fixture.is_none()) {
+            (TrackSource::Rekordbox, true) => Some(self.call::<Vec<RekordboxTrackWire>>(
+                "rekordbox_get_playlist_tracks",
+                json!({ "playlistId": playlist_id }),
+            )),
+            _ => None,
+        };
+        async move {
+            if let Some(fixture) = fixture {
+                return fixture;
+            }
+            if invalid_engine_id {
+                return Err(LibraryError::at(
+                    "engine_dj_get_playlist_tracks",
+                    Cause::Shape("playlist id was not an Engine DJ integer".into()),
+                ));
+            }
+            match (engine, rekordbox) {
+                (Some(rows), None) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                (None, Some(rows)) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                _ => unreachable!("one source produces exactly one call"),
+            }
+        }
+    }
+
+    /// Search either source and return the same row contract.
+    pub fn search_source_tracks(
+        &self,
+        source: TrackSource,
+        query: &str,
+    ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.source_fixture.as_ref().map(|fixture| {
+            fixture
+                .searches
+                .get(query)
+                .cloned()
+                .ok_or_else(|| {
+                    LibraryError::at(
+                        "source_search_tracks",
+                        Cause::Shape(format!("fixture has no search {query:?}")),
+                    )
+                })
+                .and_then(|value| normalize_source_tracks(&source, "source_search_tracks", value))
+        });
+        #[cfg(not(feature = "agent"))]
+        let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
+        let engine = match (&source, fixture.is_none()) {
+            (TrackSource::EngineDj { library_path }, true) => {
+                Some(self.call::<Vec<EngineDjTrackWire>>(
+                    "engine_dj_search_tracks",
+                    json!({ "libraryPath": library_path, "query": query }),
+                ))
+            }
+            _ => None,
+        };
+        let rekordbox = match (&source, fixture.is_none()) {
+            (TrackSource::Rekordbox, true) => Some(self.call::<Vec<RekordboxTrackWire>>(
+                "rekordbox_search_tracks",
+                json!({ "query": query }),
+            )),
+            _ => None,
+        };
+        async move {
+            if let Some(fixture) = fixture {
+                return fixture;
+            }
+            match (engine, rekordbox) {
+                (Some(rows), None) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                (None, Some(rows)) => Ok(rows.await?.into_iter().map(SourceTrack::from).collect()),
+                _ => unreachable!("one source produces exactly one call"),
+            }
+        }
     }
 
     /// Display names for other people's uids, as `uid -> name`. Sparse: a uid
@@ -347,6 +847,47 @@ impl Library {
         self.call(
             "list_scores_for_track",
             json!({ "trackId": track_id, "venueId": venue_id }),
+        )
+    }
+
+    /// Create another score for a track. Multiple scores per track/venue are
+    /// intentional; use [`Self::ensure_track_in_venue`] for the Add action.
+    /// `request_id` only makes a retry of this exact creation idempotent.
+    pub fn create_score(
+        &self,
+        request_id: &str,
+        track_id: &str,
+        venue_id: &str,
+        name: Option<&str>,
+    ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
+        self.call(
+            "create_score",
+            json!({
+                "requestId": request_id,
+                "trackId": track_id,
+                "venueId": venue_id,
+                "name": name,
+            }),
+        )
+    }
+
+    /// Atomically add a track to a venue. Repeated Add actions return the
+    /// existing score even when they carry different request ids.
+    pub fn ensure_track_in_venue(
+        &self,
+        request_id: &str,
+        track_id: &str,
+        venue_id: &str,
+        name: Option<&str>,
+    ) -> impl Future<Output = Result<Score, LibraryError>> + use<> {
+        self.call(
+            "ensure_venue_score",
+            json!({
+                "requestId": request_id,
+                "trackId": track_id,
+                "venueId": venue_id,
+                "name": name,
+            }),
         )
     }
 
@@ -526,6 +1067,32 @@ impl Library {
     /// Every app setting, typed and defaulted.
     pub fn settings(&self) -> impl Future<Output = Result<AppSettings, LibraryError>> + use<> {
         self.call("get_settings", json!({}))
+    }
+
+    /// Read one host-session value. App navigation uses this for last-open
+    /// state; it is intentionally not an app setting with subsystem effects.
+    pub fn get_session_item(
+        &self,
+        key: &str,
+    ) -> impl Future<Output = Result<Option<String>, LibraryError>> + use<> {
+        self.call("get_session_item", json!({ "key": key }))
+    }
+
+    /// Persist one host-session value.
+    pub fn set_session_item(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("set_session_item", json!({ "key": key, "value": value }))
+    }
+
+    /// Remove one host-session value.
+    pub fn remove_session_item(
+        &self,
+        key: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("remove_session_item", json!({ "key": key }))
     }
 
     /// Write one setting. The seam owns what a key means and what a write

@@ -36,7 +36,7 @@ pub async fn list_tracks(pool: &SqlitePool) -> Result<Vec<TrackSummary>, String>
                 t.source_type, t.source_id, t.source_filename, t.created_at, t.updated_at
          FROM tracks t
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
-         ORDER BY t.created_at DESC",
+         ORDER BY t.created_at DESC, t.id DESC",
     )
     .fetch_all(pool)
     .await
@@ -70,6 +70,7 @@ pub async fn get_venue_annotation_counts(
         "SELECT s.track_id, COUNT(tsc.id) AS cnt
          FROM scores s
          JOIN track_scores tsc ON tsc.score_id = s.id
+         JOIN auth_venue_access access ON access.venue_id = s.venue_id
          WHERE s.venue_id = ?
          GROUP BY s.track_id",
     )
@@ -107,6 +108,8 @@ pub async fn list_tracks_enriched_for_connection(
             tb.bpm,
             COALESCE(ac.cnt, 0) AS annotation_count,
             COALESCE(vac.cnt, 0) AS venue_annotation_count,
+            COALESCE(vsc.cnt, 0) AS venue_score_count,
+            COALESCE(vsc.cnt, 0) > 0 AS is_in_venue,
             (t.storage_path IS NOT NULL) AS has_storage,
             EXISTS(SELECT 1 FROM track_beats x WHERE x.track_id = t.id AND x.processor_version >= ?) AS has_beats,
             (SELECT COUNT(*) FROM track_stems x WHERE x.track_id = t.id AND x.processor_version >= ?) >= 4 AS has_stems,
@@ -128,10 +131,18 @@ pub async fn list_tracks_enriched_for_connection(
              SELECT s.track_id, COUNT(tsc.id) AS cnt
              FROM scores s
              JOIN track_scores tsc ON tsc.score_id = s.id
+             JOIN auth_venue_access access ON access.venue_id = s.venue_id
              WHERE s.venue_id = ?
              GROUP BY s.track_id
          ) vac ON vac.track_id = t.id
-         ORDER BY t.created_at DESC",
+         LEFT JOIN (
+             SELECT s.track_id, COUNT(s.id) AS cnt
+             FROM scores s
+             JOIN auth_venue_access access ON access.venue_id = s.venue_id
+             WHERE s.venue_id = ?
+             GROUP BY s.track_id
+         ) vsc ON vsc.track_id = t.id
+         ORDER BY t.created_at DESC, t.id DESC",
     )
     .bind(versions.beats)
     .bind(versions.stems)
@@ -139,6 +150,7 @@ pub async fn list_tracks_enriched_for_connection(
     .bind(versions.drum_onsets)
     .bind(versions.bar_classifications)
     .bind(versions.genres)
+    .bind(vid)
     .bind(vid)
     .fetch_all(&mut *connection)
     .await
@@ -1140,6 +1152,140 @@ mod tests {
         assert!(plan.delete_album_art);
         assert!(plan.delete_hash_artifacts);
         last.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_empty_score_is_durable_venue_membership() {
+        let (_directory, pool) = test_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, None)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', NULL, 'Venue')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO tracks (id, uid, track_hash, file_path)
+             VALUES ('track', NULL, 'hash', '/track.mp3')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name)
+             VALUES ('empty-score', NULL, 'track', 'venue', 'Score')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let rows = list_tracks_enriched(
+            &pool,
+            Some("venue"),
+            ArtifactVersions {
+                beats: 0,
+                stems: 0,
+                roots: 0,
+                drum_onsets: 0,
+                bar_classifications: 0,
+                genres: 0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].venue_annotation_count, 0);
+        assert_eq!(rows[0].venue_score_count, 1);
+        assert!(rows[0].is_in_venue);
+
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name)
+             VALUES ('duplicate', NULL, 'track', 'venue', 'Duplicate')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let rows = list_tracks_enriched(
+            &pool,
+            Some("venue"),
+            ArtifactVersions {
+                beats: 0,
+                stems: 0,
+                roots: 0,
+                drum_onsets: 0,
+                bar_classifications: 0,
+                genres: 0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows[0].venue_score_count, 2);
+        assert!(rows[0].is_in_venue);
+    }
+
+    #[tokio::test]
+    async fn venue_aggregates_do_not_leak_across_principals() {
+        let (_directory, pool) = test_pool().await;
+        for (id, uid) in [("alice-venue", "alice"), ("bob-venue", "bob")] {
+            sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)")
+                .bind(id)
+                .bind(uid)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO tracks (id, uid, track_hash, file_path)
+             VALUES ('alice-track', 'alice', 'hash', '/track.mp3')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO patterns (id, uid, name) VALUES ('bob-pattern', 'bob', 'Pattern')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO scores (id, uid, track_id, venue_id, name)
+             VALUES ('bob-score', 'bob', 'alice-track', 'bob-venue', 'Private')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO track_scores
+             (id, uid, score_id, pattern_id, start_time, end_time)
+             VALUES ('bob-clip', 'bob', 'bob-score', 'bob-pattern', 0, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+
+        let rows = list_tracks_enriched(
+            &pool,
+            Some("bob-venue"),
+            ArtifactVersions {
+                beats: 0,
+                stems: 0,
+                roots: 0,
+                drum_onsets: 0,
+                bar_classifications: 0,
+                genres: 0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1, "Alice's own track remains visible");
+        assert_eq!(rows[0].venue_score_count, 0);
+        assert_eq!(rows[0].venue_annotation_count, 0);
+        assert_eq!(rows[0].venue_annotation_coverage_seconds, 0.0);
+        assert!(!rows[0].is_in_venue);
     }
 
     /// Shape taken verbatim from a real `track_roots.sections_json`: a labelled

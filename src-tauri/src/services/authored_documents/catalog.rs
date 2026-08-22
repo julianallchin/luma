@@ -627,6 +627,36 @@ impl AuthoredDocuments {
         venue_id: &str,
         name: Option<&str>,
     ) -> Result<Score> {
+        self.create_score_inner(pool, request_id, track_id, venue_id, name, false)
+            .await
+    }
+
+    /// Ensure the track has durable membership in the venue without changing
+    /// [`Self::create_score`]'s intentional multi-score behavior. The lookup
+    /// and optional creation share one `BEGIN IMMEDIATE` venue transaction, so
+    /// repeated Add actions with different request ids cannot race into two
+    /// memberships.
+    pub async fn ensure_venue_score(
+        &self,
+        pool: &SqlitePool,
+        request_id: &str,
+        track_id: &str,
+        venue_id: &str,
+        name: Option<&str>,
+    ) -> Result<Score> {
+        self.create_score_inner(pool, request_id, track_id, venue_id, name, true)
+            .await
+    }
+
+    async fn create_score_inner(
+        &self,
+        pool: &SqlitePool,
+        request_id: &str,
+        track_id: &str,
+        venue_id: &str,
+        name: Option<&str>,
+        reuse_existing_membership: bool,
+    ) -> Result<Score> {
         let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id))
             .await
             .map_err(AuthoredDocumentsError::Scope)?;
@@ -656,6 +686,25 @@ impl AuthoredDocuments {
             self.verify_creation_replay(pool, &scope, "create_score", &request_id, &fingerprint)
                 .await?;
             return load_score(pool, &score_id).await;
+        }
+        if reuse_existing_membership {
+            let existing: Option<String> = sqlx::query_scalar(
+                "SELECT s.id
+                 FROM scores s
+                 JOIN auth_venue_access allowed ON allowed.venue_id = s.venue_id
+                 WHERE s.track_id = ? AND s.venue_id = ?
+                 ORDER BY s.created_at, s.id
+                 LIMIT 1",
+            )
+            .bind(track_id)
+            .bind(venue_id)
+            .fetch_optional(access.connection())
+            .await
+            .map_err(storage("find existing venue membership"))?;
+            if let Some(existing) = existing {
+                drop(access);
+                return load_score(pool, &existing).await;
+            }
         }
         let track_visible: Option<i64> =
             sqlx::query_scalar("SELECT 1 FROM auth_visible_tracks WHERE track_id = ?")

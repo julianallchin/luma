@@ -1,7 +1,7 @@
 //! The track browser, driven end to end against a seeded library.
 //!
 //! The point of this test is the *filters*: `list_tracks_enriched` returns the
-//! whole visible library and decorates it with one venue's clip counts, so
+//! whole visible library and decorates it with one venue's score and clip counts, so
 //! every number on this screen is the view's arithmetic over that. A fixture
 //! with known counts is the only way to tell a working filter from a missing
 //! one — which is the bug this test was written for, where opening a venue
@@ -97,9 +97,9 @@ struct Expected;
 
 impl Expected {
     /// Mine and in this venue: the browser's default.
-    const DEFAULT: usize = 2 + FILLER;
+    const DEFAULT: usize = 3 + FILLER;
     /// Everyone's, in this venue.
-    const IN_VENUE: usize = 3 + FILLER;
+    const IN_VENUE: usize = 4 + FILLER;
     /// Mine, anywhere.
     const MINE: usize = 4 + FILLER;
     /// The whole visible library.
@@ -152,6 +152,9 @@ async fn seed(config_dir: &Path) {
         insert_track(pool, &id, &title, "Filler", None, &created_at).await;
         insert_clip(pool, &id, "venue-main").await;
     }
+    // Membership is score existence, not clip existence. Cascade has an
+    // intentionally empty score and must survive the In Venue filter.
+    insert_empty_score(pool, "track-cascade", "venue-main").await;
     pool.close().await;
 }
 
@@ -179,8 +182,6 @@ async fn insert_track(
     .expect("failed to seed a track");
 }
 
-/// One score with one clip on it: the clip is what `venue_annotation_count`
-/// counts, and therefore what "in venue" means.
 async fn insert_clip(pool: &SqlitePool, track: &str, venue: &str) {
     let score = format!("score-{track}-{venue}");
     sqlx::query(
@@ -201,6 +202,18 @@ async fn insert_clip(pool: &SqlitePool, track: &str, venue: &str) {
     .execute(pool)
     .await
     .expect("failed to seed a clip");
+}
+
+async fn insert_empty_score(pool: &SqlitePool, track: &str, venue: &str) {
+    sqlx::query(
+        "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, NULL, ?, ?, 'Score')",
+    )
+    .bind(format!("score-{track}-{venue}"))
+    .bind(track)
+    .bind(venue)
+    .execute(pool)
+    .await
+    .expect("failed to seed an empty score");
 }
 
 async fn run<const N: usize>(pool: &SqlitePool, sql: &'static str, binds: [&str; N]) {
@@ -314,7 +327,10 @@ fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
         out["opened"]["count"],
         format!("{} TRACKS", Expected::DEFAULT)
     );
-    assert_eq!(rows(&out["opened"])[..2], ["Aurora", "Basslines"]);
+    assert_eq!(
+        rows(&out["opened"])[..3],
+        ["Aurora", "Basslines", "Cascade"]
+    );
 
     // 3. Each filter axis moves the count by exactly the rows it admits.
     assert_eq!(
