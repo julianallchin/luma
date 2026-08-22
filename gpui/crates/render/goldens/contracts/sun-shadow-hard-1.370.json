@@ -67,6 +67,9 @@
       },
       "showGrid": false,
       "debugView": "pbr",
+      "fixtureSurfaceLighting": true,
+      "fixtureShadows": true,
+      "clusterDebug": false,
       "fov": 42.0
     },
     "selectedFixtureIds": [],

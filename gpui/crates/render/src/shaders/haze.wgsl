@@ -55,6 +55,12 @@ struct Haze {
     tiles: vec4<f32>,
     // xy: camera near/far planes.
     depth: vec4<f32>,
+    // x: shadowed fixture count, y: shadow texel size.
+    shadow: vec4<f32>,
+};
+
+struct FixtureShadowMatrix {
+    view_proj: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> haze: Haze;
@@ -63,6 +69,9 @@ struct Haze {
 @group(0) @binding(3) var depth_texture: texture_depth_2d;
 @group(0) @binding(4) var<storage, read> tile_headers: array<TileHeader>;
 @group(0) @binding(5) var<storage, read> tile_light_indices: array<u32>;
+@group(0) @binding(6) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
+@group(0) @binding(7) var fixture_shadow_map: texture_depth_2d_array;
+@group(0) @binding(8) var fixture_shadow_sampler: sampler_comparison;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -118,6 +127,30 @@ fn haze_noise(p_world: vec3<f32>, elapsed: f32) -> f32 {
 fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
     let p = haze.inv_view_proj * vec4<f32>(ndc, 1.0);
     return p.xyz / p.w;
+}
+
+fn fixture_shadow_visibility(world: vec3<f32>, light_index: u32) -> f32 {
+    if f32(light_index) >= haze.shadow.x {
+        return 1.0;
+    }
+    let clip = fixture_shadow_matrices[light_index].view_proj * vec4<f32>(world, 1.0);
+    let ndc = clip.xyz / clip.w;
+    if ndc.z < 0.0 || ndc.z > 1.0 {
+        return 1.0;
+    }
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+        return 1.0;
+    }
+    // One nearest depth lookup per integration sample keeps shadow cost
+    // proportional to actual in-volume work. Reverse-Z stores the closest
+    // caster as the greatest depth; a farther volume sample is therefore
+    // shadowed when its reference falls below that stored value. Temporal
+    // accumulation supplies the soft edge without multiplying atlas reads.
+    let dimensions = vec2<i32>(textureDimensions(fixture_shadow_map));
+    let coord = clamp(vec2<i32>(uv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - 1);
+    let stored = textureLoad(fixture_shadow_map, coord, i32(light_index), 0);
+    return select(0.0, 1.0, ndc.z + 0.001 >= stored);
 }
 
 fn linear_view_depth(raw_depth: f32) -> f32 {
@@ -374,8 +407,16 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
             // True HDR radiance, no clamp to display range. The tonemapper is
             // the camera; blinding values are its problem and the white-hot
             // core is its correct answer.
-            let radiance = rest.intensity * angular * taper * gobo * beam_gain / max(d2, near_clamp);
-            let nz = haze_noise(haze.camera_pos.xyz + ray_dir * t, haze.params.w);
+            let sample_world = haze.camera_pos.xyz + ray_dir * t;
+            var radiance = rest.intensity * angular * taper * gobo * beam_gain
+                / max(d2, near_clamp);
+            // Preserve the established shadow-off arithmetic exactly: even a
+            // multiply by 1 can change half-float rounding and invalidate a
+            // capture without changing the authored image.
+            if haze.shadow.x > 0.0 {
+                radiance *= fixture_shadow_visibility(sample_world, li);
+            }
+            let nz = haze_noise(sample_world, haze.params.w);
             // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
             let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
             acc += tint * (radiance * phase * nz * exp(-sigma * t) * mis_w);

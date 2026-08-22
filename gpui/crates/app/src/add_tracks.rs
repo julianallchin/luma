@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::scroll::ScrollableElement as _;
+use gpui_component::{scroll::ScrollableElement as _, Icon, IconName};
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportPhase, TrackImportProgress};
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::node::{AgentNode, Instrument, Role};
@@ -16,9 +16,9 @@ use luma_ui::{ladder, Enabled};
 
 use crate::{Luma, SourceLibrary, SourcePlaylist, SourceTrack, TrackImportRequest, TrackSource};
 
-const BROWSER_SIZE: MorphSize = MorphSize::new(760.0, 600.0);
-const SOURCE_PICKER_SIZE: MorphSize = MorphSize::new(440.0, 280.0);
-const SOURCE_LIBRARY_SIZE: MorphSize = MorphSize::new(900.0, 620.0);
+const BROWSER_SIZE: MorphSize = MorphSize::new(680.0, 480.0);
+const SOURCE_PICKER_SIZE: MorphSize = MorphSize::new(420.0, 260.0);
+const SOURCE_LIBRARY_SIZE: MorphSize = MorphSize::new(760.0, 520.0);
 const ROW_HEIGHT: f32 = 46.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -677,14 +677,15 @@ fn route_content(
 
 fn toolbar(title: &str, back: Option<Route>, mode: ContentMode, app: &Entity<Luma>) -> Div {
     let mut bar = div()
-        .h(px(48.0))
+        .h(px(46.0))
         .flex_none()
         .flex()
         .items_center()
         .gap(px(10.0))
-        .px(px(16.0))
+        .px(px(12.0))
+        .bg(luma_ui::glass::band())
         .border_b_1()
-        .border_color(ladder::trim());
+        .border_color(luma_ui::glass::hairline(0.08));
     if let Some(route) = back {
         let app = app.clone();
         bar = bar.child(
@@ -700,19 +701,23 @@ fn toolbar(title: &str, back: Option<Route>, mode: ContentMode, app: &Entity<Lum
         );
     }
     let close = app.clone();
-    bar.child(luma_ui::silkscreen(title.to_string()))
-        .child(div().flex_1())
-        .child(
-            morph_button("Close", Enabled::Yes, mode)
-                .id("add-tracks-close")
-                .when(mode == ContentMode::Interactive, |button| {
-                    button.on_click(move |_, _, cx| {
-                        close.update(cx, |this, cx| this.dismiss_overlay(cx))
-                    })
-                })
-                .agent_node(Role::Button, "Close")
-                .agent_disabled(mode != ContentMode::Interactive),
-        )
+    bar.child(
+        div()
+            .text_size(px(14.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .child(title.to_string()),
+    )
+    .child(div().flex_1())
+    .child(
+        morph_button("Close", Enabled::Yes, mode)
+            .id("add-tracks-close")
+            .when(mode == ContentMode::Interactive, |button| {
+                button
+                    .on_click(move |_, _, cx| close.update(cx, |this, cx| this.dismiss_overlay(cx)))
+            })
+            .agent_node(Role::Button, "Close")
+            .agent_disabled(mode != ContentMode::Interactive),
+    )
 }
 
 fn import_activity(activity: &TrackImportActivity) -> Div {
@@ -775,20 +780,22 @@ fn track_browser(
         .size_full()
         .flex()
         .flex_col()
-        .bg(luma_ui::glass::overlay())
-        .child(toolbar("ADD TRACK", None, mode, app))
+        .bg(luma_ui::glass::dialog())
+        .child(toolbar("Add tracks", None, mode, app))
         .children(activity.map(import_activity))
         .child(
             div()
                 .id("all-track-search")
-                .h(px(34.0))
-                .mx(px(16.0))
-                .mt(px(12.0))
-                .px(px(10.0))
+                .h(px(38.0))
+                .mx(px(10.0))
+                .mt(px(10.0))
+                .px(px(12.0))
                 .flex()
                 .items_center()
-                .rounded(px(6.0))
-                .bg(luma_ui::glass::wash(0.05))
+                .rounded(px(8.0))
+                .bg(luma_ui::glass::wash(0.04))
+                .border_1()
+                .border_color(luma_ui::glass::hairline(0.08))
                 .when(mode == ContentMode::Interactive, |field| {
                     field
                         .track_focus(&state.browser_focus)
@@ -818,7 +825,7 @@ fn track_browser(
                 .items_center()
                 .justify_center()
                 .child(
-                    morph_button("Import tracks", Enabled::Yes, mode)
+                    primary_morph_button("Import tracks", Enabled::Yes, mode)
                         .id("add-tracks-import-empty")
                         .when(mode == ContentMode::Interactive, |button| {
                             button.on_click(move |_, _, cx| {
@@ -848,10 +855,11 @@ fn track_browser(
                         .items_center()
                         .justify_end()
                         .px(px(16.0))
+                        .bg(luma_ui::glass::band())
                         .border_t_1()
-                        .border_color(ladder::trim())
+                        .border_color(luma_ui::glass::hairline(0.08))
                         .child(
-                            morph_button("Import tracks", Enabled::Yes, mode)
+                            primary_morph_button("Import tracks", Enabled::Yes, mode)
                                 .id("add-tracks-import-bottom")
                                 .when(mode == ContentMode::Interactive, |button| {
                                     button.on_click(move |_, _, cx| {
@@ -904,9 +912,9 @@ fn import_source(state: &AddTracks, mode: ContentMode, app: &Entity<Luma>, windo
         .size_full()
         .flex()
         .flex_col()
-        .bg(luma_ui::glass::overlay())
+        .bg(luma_ui::glass::dialog())
         .child(toolbar(
-            "IMPORT SOURCE",
+            "Import source",
             Some(Route::TrackBrowser),
             mode,
             app,
@@ -915,38 +923,105 @@ fn import_source(state: &AddTracks, mode: ContentMode, app: &Entity<Luma>, windo
             div()
                 .flex_1()
                 .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(12.0))
+                .flex_col()
+                .gap(px(8.0))
+                .p(px(12.0))
                 .child(
-                    morph_button("Engine DJ", Enabled::Yes, mode)
-                        .id("add-tracks-engine")
-                        .when(mode == ContentMode::Interactive, |button| {
-                            button.track_focus(&state.picker_focus)
+                    source_choice(
+                        "Engine DJ",
+                        "Browse playlists from an Engine DJ database",
+                        IconName::FolderOpen,
+                        mode,
+                    )
+                    .id("add-tracks-engine")
+                    .when(mode == ContentMode::Interactive, |button| {
+                        button.track_focus(&state.picker_focus)
+                    })
+                    .when(mode == ContentMode::Interactive, |button| {
+                        button.on_click(move |_, _, cx| {
+                            engine.update(cx, |this, cx| this.choose_source(true, cx))
                         })
-                        .when(mode == ContentMode::Interactive, |button| {
-                            button.on_click(move |_, _, cx| {
-                                engine.update(cx, |this, cx| this.choose_source(true, cx))
-                            })
-                        })
-                        .agent_node(Role::Button, "Engine DJ")
-                        .agent_disabled(mode != ContentMode::Interactive)
-                        .agent_focused(
-                            mode == ContentMode::Interactive
-                                && state.picker_focus.is_focused(window),
-                        ),
+                    })
+                    .agent_node(Role::Button, "Engine DJ")
+                    .agent_disabled(mode != ContentMode::Interactive)
+                    .agent_focused(
+                        mode == ContentMode::Interactive && state.picker_focus.is_focused(window),
+                    ),
                 )
                 .child(
-                    morph_button("Rekordbox", Enabled::Yes, mode)
-                        .id("add-tracks-rekordbox")
-                        .when(mode == ContentMode::Interactive, |button| {
-                            button.on_click(move |_, _, cx| {
-                                rekordbox.update(cx, |this, cx| this.choose_source(false, cx))
-                            })
+                    source_choice(
+                        "Rekordbox",
+                        "Open playlists and crates from Rekordbox",
+                        IconName::BookOpen,
+                        mode,
+                    )
+                    .id("add-tracks-rekordbox")
+                    .when(mode == ContentMode::Interactive, |button| {
+                        button.on_click(move |_, _, cx| {
+                            rekordbox.update(cx, |this, cx| this.choose_source(false, cx))
                         })
-                        .agent_node(Role::Button, "Rekordbox")
-                        .agent_disabled(mode != ContentMode::Interactive),
+                    })
+                    .agent_node(Role::Button, "Rekordbox")
+                    .agent_disabled(mode != ContentMode::Interactive),
                 ),
+        )
+}
+
+fn source_choice(title: &str, description: &str, icon: IconName, mode: ContentMode) -> Div {
+    div()
+        .h(px(76.0))
+        .w_full()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .px(px(12.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(luma_ui::glass::hairline(0.08))
+        .bg(luma_ui::glass::wash(0.035))
+        .when(mode == ContentMode::Interactive, |row| {
+            row.tab_index(0)
+                .cursor_pointer()
+                .hover(|hover| hover.bg(luma_ui::glass::wash(0.08)))
+        })
+        .child(
+            div()
+                .size(px(38.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.0))
+                .bg(luma_ui::glass::wash(0.07))
+                .text_color(ladder::muted_foreground())
+                .child(Icon::new(icon).size(px(17.0))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(title.to_string()),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(10.0))
+                        .text_color(ladder::muted_foreground())
+                        .child(description.to_string()),
+                ),
+        )
+        .child(
+            Icon::new(IconName::ChevronRight)
+                .size(px(14.0))
+                .text_color(ladder::muted_foreground()),
         )
 }
 
@@ -960,15 +1035,15 @@ fn source_library(
     let search = app.clone();
     let import = app.clone();
     let title = match &state.source {
-        Some(TrackSource::EngineDj { .. }) => "ENGINE DJ LIBRARY",
-        Some(TrackSource::Rekordbox) => "REKORDBOX LIBRARY",
-        None => "SOURCE LIBRARY",
+        Some(TrackSource::EngineDj { .. }) => "Engine DJ library",
+        Some(TrackSource::Rekordbox) => "Rekordbox library",
+        None => "Source library",
     };
     div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(luma_ui::glass::overlay())
+        .bg(luma_ui::glass::dialog())
         .child(toolbar(title, Some(Route::ImportSource), mode, app))
         .children(activity.map(import_activity))
         .child(
@@ -1004,13 +1079,15 @@ fn source_library(
                         .child(
                             div()
                                 .id("source-search")
-                                .h(px(34.0))
-                                .m(px(12.0))
-                                .px(px(10.0))
+                                .h(px(38.0))
+                                .m(px(10.0))
+                                .px(px(12.0))
                                 .flex()
                                 .items_center()
-                                .rounded(px(6.0))
-                                .bg(luma_ui::glass::wash(0.05))
+                                .rounded(px(8.0))
+                                .bg(luma_ui::glass::wash(0.04))
+                                .border_1()
+                                .border_color(luma_ui::glass::hairline(0.08))
                                 .when(mode == ContentMode::Interactive, |field| {
                                     field
                                         .track_focus(&state.source_focus)
@@ -1058,11 +1135,12 @@ fn source_library(
                 .justify_end()
                 .gap(px(12.0))
                 .px(px(16.0))
+                .bg(luma_ui::glass::band())
                 .border_t_1()
-                .border_color(ladder::trim())
+                .border_color(luma_ui::glass::hairline(0.08))
                 .child(format!("{} selected", state.selected.len()))
                 .child(
-                    morph_button(
+                    primary_morph_button(
                         if activity.is_some_and(|activity| activity.active) {
                             "Importing…"
                         } else {
@@ -1102,11 +1180,13 @@ fn source_sidebar(state: &AddTracks, mode: ContentMode, app: &Entity<Luma>) -> i
     let all = app.clone();
     div()
         .id("add-tracks-source-sidebar")
-        .w(px(220.0))
+        .w(px(196.0))
         .flex_none()
         .overflow_y_scrollbar()
         .border_r_1()
-        .border_color(ladder::trim())
+        .border_color(luma_ui::glass::hairline(0.08))
+        .p(px(8.0))
+        .gap(px(2.0))
         .child(
             row_shell("All tracks", None)
                 .id("add-tracks-source-all")
@@ -1172,11 +1252,12 @@ fn row_shell(title: &str, subtitle: Option<&str>) -> Div {
     div()
         .h(px(ROW_HEIGHT))
         .w_full()
-        .px(px(12.0))
+        .px(px(10.0))
         .flex()
         .flex_col()
         .justify_center()
         .overflow_hidden()
+        .rounded(px(8.0))
         .hover(|row| row.bg(luma_ui::glass::wash(0.06)))
         .child(
             div()
@@ -1198,16 +1279,48 @@ fn row_shell(title: &str, subtitle: Option<&str>) -> Div {
 /// is attached, so those copies need a separate inert rendering rather than
 /// merely omitting the listener.
 fn morph_button(label: &str, enabled: Enabled, mode: ContentMode) -> Div {
-    if mode == ContentMode::Interactive {
-        return luma_ui::luma_button(label, enabled);
-    }
-    luma_ui::slab()
-        .bg(ladder::control())
-        .text_color(ladder::foreground_90())
+    div()
+        .px(px(10.0))
+        .py(px(6.0))
+        .rounded(px(8.0))
+        .text_size(px(13.0))
+        .text_color(ladder::muted_foreground())
+        .when(
+            mode == ContentMode::Interactive && enabled == Enabled::Yes,
+            |button| {
+                button.tab_index(0).cursor_pointer().hover(|state| {
+                    state
+                        .bg(luma_ui::glass::wash(0.08))
+                        .text_color(ladder::foreground())
+                })
+            },
+        )
         .when(enabled == Enabled::No, |button| {
             button.opacity(ladder::DISABLED_OPACITY)
         })
-        .child(label.to_uppercase())
+        .child(label.to_string())
+}
+
+fn primary_morph_button(label: &str, enabled: Enabled, mode: ContentMode) -> Div {
+    div()
+        .px(px(12.0))
+        .py(px(6.0))
+        .rounded(px(8.0))
+        .bg(ladder::foreground())
+        .text_size(px(13.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(ladder::background())
+        .when(
+            mode == ContentMode::Interactive && enabled == Enabled::Yes,
+            |button| {
+                button
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .hover(|state| state.opacity(0.9))
+            },
+        )
+        .when(enabled == Enabled::No, |button| button.opacity(0.38))
+        .child(label.to_string())
 }
 
 fn track_title(track: &TrackBrowserRow) -> String {

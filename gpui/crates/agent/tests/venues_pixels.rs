@@ -163,7 +163,7 @@ fn assert_card_geometry(label: &str, card: &Value) {
         "{label} escaped bottom gutter: {card:#}"
     );
     assert!(
-        width > 700.0 && height > 500.0,
+        width > 600.0 && height > 400.0,
         "{label} collapsed: {card:#}"
     );
 }

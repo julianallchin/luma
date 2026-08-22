@@ -62,10 +62,14 @@
           0.82
         ],
         "intensity": 2.4,
-        "shadows": false
+        "shadows": false,
+        "shadowSoftness": 1.0
       },
       "showGrid": false,
       "debugView": "pbr",
+      "fixtureSurfaceLighting": true,
+      "fixtureShadows": true,
+      "clusterDebug": false,
       "fov": 45.0
     },
     "selectedFixtureIds": [],

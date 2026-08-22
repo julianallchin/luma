@@ -103,6 +103,10 @@ pub fn wash(alpha: f32) -> Hsla {
 /// Alpha of the standard modal backdrop.
 pub const SCRIM_ALPHA: f32 = 0.60;
 
+/// Dialogs use the lighter Comet palette treatment: enough dimming to detach
+/// the overlay without erasing the colour the frosted card is meant to carry.
+pub const DIALOG_SCRIM_ALPHA: f32 = 0.35;
+
 /// Coverage of a chrome surface over whatever is behind the window.
 ///
 /// macOS is the only platform where the compositor guarantees a blur behind a
@@ -122,6 +126,10 @@ pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 /// text ghosting over whatever the popover happens to cover is worse than a
 /// thinner blur.
 pub const OVERLAY_ALPHA: f32 = if cfg!(target_os = "macos") { 0.85 } else { 1.0 };
+
+/// Coverage of a large frosted picker. Menus need the heavier overlay tint;
+/// a dialog has enough area for blur and backdrop colour to become its body.
+pub const DIALOG_ALPHA: f32 = if cfg!(target_os = "macos") { 0.34 } else { 1.0 };
 
 /// The chrome plane: what a surface takes to read as *frame* rather than
 /// content. [`ladder::chrome_plane`] at [`GLASS_ALPHA`] — the sidebar's own
@@ -153,6 +161,18 @@ pub fn panel() -> Hsla {
 #[must_use]
 pub fn overlay() -> Hsla {
     tinted(ladder::apex(), OVERLAY_ALPHA)
+}
+
+/// Translucent material for large modal cards.
+#[must_use]
+pub fn dialog() -> Hsla {
+    neutral(0.33).opacity(DIALOG_ALPHA)
+}
+
+/// Recessed translucent header/footer band used by palette-shaped dialogs.
+#[must_use]
+pub fn band() -> Hsla {
+    hsla(0.0, 0.0, 0.0, 0.16)
 }
 
 /// A ladder tone taken to the glass tier at `alpha`. The single conversion

@@ -17,10 +17,7 @@ use luma_ui::{ladder, Enabled};
 use crate::{shell::Overlay, Luma};
 
 pub(crate) const LAST_VENUE: &str = "last-venue";
-const CARD_WIDTH: f32 = 213.;
-const CARD_HEIGHT: f32 = 112.;
-const GAP: f32 = 16.;
-const GRID_WIDTH: f32 = CARD_WIDTH * 3. + GAP * 2.;
+const CARD_HEIGHT: f32 = 54.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
@@ -355,14 +352,15 @@ fn toolbar(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
         .flex_shrink_0()
         .items_center()
         .gap(px(12.))
-        .px(px(20.))
-        .py(px(12.))
+        .h(px(48.0))
+        .px(px(12.))
+        .bg(luma_ui::glass::band())
         .border_b_1()
-        .border_color(ladder::trim())
+        .border_color(luma_ui::glass::hairline(0.08))
         .child(
             div()
-                .text_size(px(16.))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(if state.route == Route::Create {
                     "Create venue"
                 } else {
@@ -386,7 +384,7 @@ fn toolbar(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
             state.route == Route::Browse && state.loaded && state.error.is_none(),
             |bar| {
                 bar.child(
-                    luma_ui::luma_button("Patterns", Enabled::Yes)
+                    picker_button("Patterns", false, Enabled::Yes)
                         .id("patterns")
                         .track_focus(&state.patterns_focus)
                         .on_click(move |_, _, cx| {
@@ -396,7 +394,7 @@ fn toolbar(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
                         .agent_focused(state.patterns_focus.is_focused(window)),
                 )
                 .child(
-                    luma_ui::luma_button("Create venue", Enabled::Yes)
+                    picker_button("Create venue", true, Enabled::Yes)
                         .id("create-venue")
                         .track_focus(&state.browse_create_focus)
                         .on_click(move |_, _, cx| {
@@ -420,15 +418,15 @@ fn search(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> impl Into
     div()
         .id("venue-search")
         .tab_index(0)
-        .w(px(260.))
-        .h(px(30.))
-        .px(px(10.))
+        .w(px(240.))
+        .h(px(32.))
+        .px(px(11.))
         .flex()
         .items_center()
         .rounded(px(7.))
-        .bg(ladder::trim())
+        .bg(luma_ui::glass::wash(0.04))
         .border_1()
-        .border_color(ladder::border())
+        .border_color(luma_ui::glass::hairline(0.08))
         .text_size(px(12.))
         .text_color(if empty {
             ladder::muted_foreground()
@@ -482,7 +480,7 @@ fn browser(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
                         .agent_node(Role::Card, "Venue error viewport"),
                 )
                 .child(
-                    luma_ui::luma_button("Retry", Enabled::Yes)
+                    picker_button("Retry", true, Enabled::Yes)
                         .id("retry-venues")
                         .on_click(move |_, _, cx| retry.update(cx, |this, cx| this.show_venues(cx)))
                         .agent_node(Role::Button, "Retry"),
@@ -517,13 +515,12 @@ fn browser(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
 }
 
 fn venue_grid(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
-    div().size_full().overflow_y_scrollbar().p(px(28.)).child(
+    div().size_full().overflow_y_scrollbar().p(px(8.)).child(
         div()
-            .w(px(GRID_WIDTH))
-            .mx_auto()
+            .w_full()
             .flex()
-            .flex_wrap()
-            .gap(px(GAP))
+            .flex_col()
+            .gap(px(2.0))
             .children(state.shown.iter().map(|venue| {
                 venue_card(
                     venue,
@@ -550,23 +547,22 @@ fn venue_card(
         .id(ElementId::Name(SharedString::from(id.clone())))
         .track_focus(focus)
         .tab_index(0)
-        .w(px(CARD_WIDTH))
+        .w_full()
         .h(px(CARD_HEIGHT))
-        .p(px(16.))
+        .px(px(10.))
         .flex()
-        .flex_col()
-        .justify_between()
-        .bg(ladder::background())
-        .border_1()
-        .border_color(ladder::border())
-        .rounded(px(10.))
-        .hover(|card| card.bg(ladder::hover()))
+        .items_center()
+        .gap(px(12.0))
+        .rounded(px(8.))
+        .hover(|card| card.bg(luma_ui::glass::wash(0.08)))
         .on_click(move |_, _, cx| opened.update(cx, |this, cx| this.open_picker_venue(&id, cx)))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(5.))
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
                 .child(
                     div()
                         .text_size(px(14.))
@@ -584,7 +580,8 @@ fn venue_card(
         )
         .child(
             div()
-                .text_size(px(10.))
+                .flex_none()
+                .text_size(px(11.))
                 .text_color(ladder::muted_foreground())
                 .child(local_date(&venue.updated_at)),
         )
@@ -635,9 +632,9 @@ fn create(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
                     .flex()
                     .items_center()
                     .rounded(px(8.))
-                    .bg(ladder::trim())
+                    .bg(luma_ui::glass::wash(0.04))
                     .border_1()
-                    .border_color(ladder::border())
+                    .border_color(luma_ui::glass::hairline(0.08))
                     .text_color(if empty {
                         ladder::muted_foreground()
                     } else {
@@ -668,8 +665,9 @@ fn create(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
                     .gap(px(8.))
                     .when(!state.venues.is_empty(), |actions| {
                         actions.child(
-                            luma_ui::luma_button(
+                            picker_button(
                                 "Cancel",
+                                false,
                                 if state.creating {
                                     Enabled::No
                                 } else {
@@ -686,12 +684,13 @@ fn create(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
                         )
                     })
                     .child(
-                        luma_ui::luma_button(
+                        picker_button(
                             if state.creating {
                                 "Creating…"
                             } else {
                                 "Create venue"
                             },
+                            true,
                             if !empty && !state.creating {
                                 Enabled::Yes
                             } else {
@@ -715,6 +714,35 @@ fn create(state: &VenuePicker, app: &Entity<Luma>, window: &Window) -> Div {
                     ),
             ),
     )
+}
+
+fn picker_button(label: &str, primary: bool, enabled: Enabled) -> Div {
+    div()
+        .px(px(11.0))
+        .py(px(6.0))
+        .rounded(px(8.0))
+        .text_size(px(13.0))
+        .when(primary, |button| {
+            button
+                .bg(ladder::foreground())
+                .text_color(ladder::background())
+        })
+        .when(!primary, |button| {
+            button.text_color(ladder::muted_foreground())
+        })
+        .when(enabled == Enabled::Yes, |button| {
+            button.tab_index(0).cursor_pointer().hover(move |state| {
+                if primary {
+                    state.opacity(0.9)
+                } else {
+                    state
+                        .bg(luma_ui::glass::wash(0.08))
+                        .text_color(ladder::foreground())
+                }
+            })
+        })
+        .when(enabled == Enabled::No, |button| button.opacity(0.38))
+        .child(label.to_string())
 }
 
 fn local_date(timestamp: &str) -> String {

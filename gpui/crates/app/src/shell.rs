@@ -624,7 +624,7 @@ fn overlay_layer(
     let (card, label) = match overlay {
         Overlay::Venues(state) => {
             let body = welcome::welcome(state, entity, window);
-            (fixed_dialog(body, 920.0, 620.0), "Venue dialog")
+            (fixed_dialog(body, 680.0, 460.0), "Venue dialog")
         }
         Overlay::Patterns(state) => {
             let body = patterns::patterns(
@@ -678,7 +678,7 @@ fn fixed_dialog(body: impl IntoElement, width: f32, height: f32) -> AnyElement {
         .max_w_full()
         .max_h_full()
         .overflow_hidden()
-        .bg(glass::overlay())
+        .bg(glass::dialog())
         .child(body)
         .into_any_element()
 }

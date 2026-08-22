@@ -12,7 +12,7 @@ use std::process::{Command, Output};
 use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
-use luma_render::scene_desc::{CameraPose, DebugView, Environment, RenderSettings, Scene};
+use luma_render::scene_desc::{CameraPose, DebugView, Environment, Piece, RenderSettings, Scene};
 use luma_render::{build_frame_with, FrameTimings, Renderer, LIVE_SUBFRAMES};
 use serde::Serialize;
 
@@ -32,7 +32,11 @@ struct MetricSummary {
 
 #[derive(Serialize)]
 struct CaseResult {
+    case_id: &'static str,
     cones: usize,
+    fixture_shadows: bool,
+    opaque_draws: usize,
+    shadowed_fixtures: usize,
     samples: usize,
     samples_fnv64: String,
     gpu_total: MetricSummary,
@@ -73,48 +77,80 @@ fn main() -> anyhow::Result<()> {
         .iter()
         .any(|argument| argument == "--smoke-clusters");
     let smoke = smoke_clusters || arguments.iter().any(|argument| argument == "--smoke");
+    let case_filter = arguments
+        .iter()
+        .find_map(|argument| argument.strip_prefix("--case="));
+    let wants = |id: &str| case_filter.is_none_or(|filter| filter == id);
     let warmup_frames = if smoke { 2 } else { WARMUP_FRAMES };
     let measured_frames = if smoke { 20 } else { MEASURED_FRAMES };
-    let base = base_frame()?;
+    let base = base_frame(false)?;
+    let shadow_base = base_frame(true)?;
     let mut renderer = Renderer::new_profiled()?;
     let adapter = renderer.adapter_profile().clone();
-    let first_cones = 32;
-    let mut cases = vec![profile_case(
-        &mut renderer,
-        &base,
-        first_cones,
-        8.0,
-        smoke_clusters.then_some(3.0),
-        1.5,
-        warmup_frames,
-        measured_frames,
-    )?];
-    if !smoke || smoke_clusters {
+    let mut cases = Vec::new();
+    if wants("transport-32") {
         cases.push(profile_case(
             &mut renderer,
             &base,
-            128,
-            6.5,
+            "transport-32",
+            32,
+            false,
+            8.0,
+            smoke_clusters.then_some(3.0),
+            1.5,
+            warmup_frames,
+            measured_frames,
+        )?);
+    }
+    if !smoke || smoke_clusters {
+        if wants("transport-128") {
+            cases.push(profile_case(
+                &mut renderer,
+                &base,
+                "transport-128",
+                128,
+                false,
+                6.5,
+                Some(3.0),
+                1.5,
+                warmup_frames,
+                measured_frames,
+            )?);
+        }
+        if wants("transport-512") {
+            cases.push(profile_case(
+                &mut renderer,
+                &base,
+                "transport-512",
+                512,
+                false,
+                8.0,
+                // This is the pathological all-overlap stress case, more than 4x
+                // the 120-fixture production target. Keep its volumetric pass
+                // below 6 ms while the total frame remains below 8 ms; the 128
+                // case above is the near-production transport budget.
+                Some(6.0),
+                2.0,
+                warmup_frames,
+                measured_frames,
+            )?);
+        }
+    }
+    if wants("fixture-shadows-120") {
+        cases.push(profile_case(
+            &mut renderer,
+            &shadow_base,
+            "fixture-shadows-120",
+            120,
+            true,
+            8.0,
             Some(3.0),
             1.5,
             warmup_frames,
             measured_frames,
         )?);
-        cases.push(profile_case(
-            &mut renderer,
-            &base,
-            512,
-            8.0,
-            // This is the pathological all-overlap stress case, more than 4x
-            // the 120-fixture production target. Keep its volumetric pass
-            // below 6 ms while the total frame remains below 8 ms; the 128
-            // case above is the near-production transport budget.
-            Some(6.0),
-            2.0,
-            warmup_frames,
-            measured_frames,
-        )?);
     }
+    anyhow::ensure!(!cases.is_empty(), "unknown profile case filter");
     let all_pass = cases.iter().all(|case| case.within_budget);
     let repository = git_repository_root()?;
     let status = checked_command_text(Command::new("git").current_dir(&repository).args([
@@ -191,7 +227,9 @@ fn main() -> anyhow::Result<()> {
 fn profile_case(
     renderer: &mut Renderer,
     base: &luma_render::Frame,
+    case_id: &'static str,
     cones: usize,
+    fixture_shadows: bool,
     total_budget_ms: f64,
     volumetric_budget_ms: Option<f64>,
     cpu_budget_ms: f64,
@@ -199,6 +237,15 @@ fn profile_case(
     measured_frames: usize,
 ) -> anyhow::Result<CaseResult> {
     let mut frame = frame_with_lights(base, cones);
+    frame.fixture_shadows = fixture_shadows;
+    let opaque_draws = frame.draws.len() - frame.grid_draws;
+    let shadowed_fixtures = usize::from(fixture_shadows) * cones.min(128);
+    if fixture_shadows {
+        anyhow::ensure!(
+            opaque_draws > 1 && shadowed_fixtures == 120,
+            "fixture-shadow profile must exercise representative geometry and all 120 lights"
+        );
+    }
     let mut cold_cluster_build_ms = 0.0;
     for sample in 0..warmup_frames {
         frame.time = sample as f32 / 60.0;
@@ -233,7 +280,11 @@ fn profile_case(
         sample_bytes.extend_from_slice(&cpu_cluster_ms.to_bits().to_le_bytes());
     }
     Ok(CaseResult {
+        case_id,
         cones,
+        fixture_shadows,
+        opaque_draws,
+        shadowed_fixtures,
         samples: samples.len(),
         samples_fnv64: format!("0x{:016x}", fnv64(&sample_bytes)),
         gpu_total: total,
@@ -495,7 +546,7 @@ fn os_version() -> String {
     }
 }
 
-fn base_frame() -> anyhow::Result<luma_render::Frame> {
+fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
     let mut settings = RenderSettings::dark_stage(48.0, 0.5);
     settings.environment = Environment::DARK;
     settings.haze.enabled = true;
@@ -513,7 +564,40 @@ fn base_frame() -> anyhow::Result<luma_render::Frame> {
         render: settings,
         selected_fixture_ids: Vec::new(),
         fixtures: Vec::new(),
-        pieces: Vec::new(),
+        pieces: if with_geometry {
+            vec![
+                Piece {
+                    id: "deck-l".into(),
+                    mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                    pos: [-1.0, 0.0, 0.0],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                },
+                Piece {
+                    id: "deck-r".into(),
+                    mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                    pos: [1.0, 0.0, 0.0],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                },
+                Piece {
+                    id: "truss".into(),
+                    mesh_path: "stage_lab/truss_q40_1.83m.glb".into(),
+                    pos: [0.0, -1.6, 0.0],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                },
+                Piece {
+                    id: "speaker".into(),
+                    mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                    pos: [2.2, 0.0, 0.0],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                },
+            ]
+        } else {
+            Vec::new()
+        },
         state: BTreeMap::new(),
     };
     let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
@@ -532,7 +616,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
                 indices: mesh.indices.clone(),
             })
             .collect(),
-        images: Vec::new(),
+        images: base.images.clone(),
         draws: base
             .draws
             .iter()
@@ -549,6 +633,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         point_lights: base.point_lights.clone(),
         fixture_cones: Vec::with_capacity(count),
         fixture_surface_lighting: true,
+        fixture_shadows: true,
         cluster_debug: false,
         clear_color: base.clear_color,
         ambient: base.ambient,

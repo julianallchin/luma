@@ -19,6 +19,8 @@ const CASES: &[&str] = &[
     "one-beam",
     "overlapping-beams",
     "occluded-beam",
+    "fixture-shadow-open",
+    "fixture-shadowed-beam",
     "gobo-seam-negative",
     "gobo-seam-positive",
     "volumetric-performance-smooth",
@@ -107,6 +109,21 @@ fn tracked_contract_frames_match_their_canonical_descriptors() {
     assert_eq!(
         captured["gobo-seam-negative"], captured["gobo-seam-positive"],
         "equivalent angles on opposite sides of the gobo wrap must meet without a seam"
+    );
+    let open = &captured["fixture-shadow-open"];
+    let shadowed = &captured["fixture-shadowed-beam"];
+    let fixture_shadow_pixels = open
+        .chunks_exact(4)
+        .zip(shadowed.chunks_exact(4))
+        .filter(|(left, right)| left[..3] != right[..3])
+        .count();
+    assert!(
+        fixture_shadow_pixels > 500,
+        "fixture-cast volumetric shadows changed only {fixture_shadow_pixels} pixels"
+    );
+    assert!(
+        mean_rgb(shadowed) < mean_rgb(open),
+        "fixture shadows must remove occluded in-scatter"
     );
 }
 
