@@ -1,0 +1,668 @@
+{
+  "schema": "luma.renderer-frame/1",
+  "image": "venue-no-haze-1.370.png",
+  "viewport": {
+    "width": 800,
+    "height": 500
+  },
+  "deviceScaleFactor": 2.0,
+  "outputSize": [
+    1600,
+    1000
+  ],
+  "subframes": 64,
+  "timeSeconds": 1.37,
+  "scene": {
+    "id": "venue-no-haze",
+    "times": [
+      0.0,
+      1.37,
+      4.2
+    ],
+    "camera": {
+      "position": [
+        0.0,
+        3.2,
+        10.0
+      ],
+      "target": [
+        0.0,
+        1.4,
+        0.0
+      ]
+    },
+    "editing": false,
+    "render": {
+      "environment": {
+        "background": [
+          0.009721217,
+          0.009721217,
+          0.009721217
+        ],
+        "ambientColor": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "ambientIntensity": 0.2
+      },
+      "haze": {
+        "enabled": false,
+        "steps": 8,
+        "resolution": 1.0,
+        "density": 0.0
+      },
+      "sun": {
+        "direction": [
+          8.0,
+          -6.0,
+          12.0
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "intensity": 1.4,
+        "shadows": true
+      },
+      "showGrid": true,
+      "debugView": "pbr",
+      "fov": 50.0
+    },
+    "selectedFixtureIds": [],
+    "fixtures": [
+      {
+        "id": "v-mover-0",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          -4.0,
+          1.5,
+          4.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-mover-1",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          -2.4,
+          1.5,
+          4.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-mover-2",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          -0.8,
+          1.5,
+          4.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-mover-3",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          0.8,
+          1.5,
+          4.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-mover-4",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          2.4,
+          1.5,
+          4.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-mover-5",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          4.0,
+          1.5,
+          4.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-par-0",
+        "fixturePath": "golden/par.qxf",
+        "modeName": "Default",
+        "pos": [
+          -4.0,
+          -1.5,
+          3.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-par-1",
+        "fixturePath": "golden/par.qxf",
+        "modeName": "Default",
+        "pos": [
+          -2.4,
+          -1.5,
+          3.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-par-2",
+        "fixturePath": "golden/par.qxf",
+        "modeName": "Default",
+        "pos": [
+          -0.8,
+          -1.5,
+          3.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-par-3",
+        "fixturePath": "golden/par.qxf",
+        "modeName": "Default",
+        "pos": [
+          0.8,
+          -1.5,
+          3.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-par-4",
+        "fixturePath": "golden/par.qxf",
+        "modeName": "Default",
+        "pos": [
+          2.4,
+          -1.5,
+          3.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-par-5",
+        "fixturePath": "golden/par.qxf",
+        "modeName": "Default",
+        "pos": [
+          4.0,
+          -1.5,
+          3.4
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "v-bar",
+        "fixturePath": "golden/led-bar.qxf",
+        "modeName": "Pixels",
+        "pos": [
+          0.0,
+          0.5,
+          0.15
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "pieces": [],
+    "state": {
+      "v-bar:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.05,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:1": {
+        "dimmer": 1.0,
+        "color": [
+          0.05,
+          1.0,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:2": {
+        "dimmer": 1.0,
+        "color": [
+          0.1,
+          0.2,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:3": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.1,
+          0.8
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:4": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.05,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:5": {
+        "dimmer": 1.0,
+        "color": [
+          0.05,
+          1.0,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:6": {
+        "dimmer": 1.0,
+        "color": [
+          0.1,
+          0.2,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-bar:7": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.1,
+          0.8
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-mover-0:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.05,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          -30.0,
+          34.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-mover-1:0": {
+        "dimmer": 1.0,
+        "color": [
+          0.05,
+          1.0,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          -18.0,
+          34.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-mover-2:0": {
+        "dimmer": 1.0,
+        "color": [
+          0.1,
+          0.2,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          -6.0,
+          34.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-mover-3:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.1,
+          0.8
+        ],
+        "strobe": 0.0,
+        "position": [
+          6.0,
+          34.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-mover-4:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          0.05,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          18.0,
+          34.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-mover-5:0": {
+        "dimmer": 1.0,
+        "color": [
+          0.05,
+          1.0,
+          0.05
+        ],
+        "strobe": 0.0,
+        "position": [
+          30.0,
+          34.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-par-0:0": {
+        "dimmer": 0.8,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-par-1:0": {
+        "dimmer": 0.8,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-par-2:0": {
+        "dimmer": 0.8,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-par-3:0": {
+        "dimmer": 0.8,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-par-4:0": {
+        "dimmer": 0.8,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "v-par-5:0": {
+        "dimmer": 0.8,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      }
+    }
+  },
+  "definitions": {
+    "golden/led-bar.qxf": {
+      "Type": "LED Bar (Pixels)",
+      "Mode": [
+        {
+          "@Name": "Pixels",
+          "Head": [
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            },
+            {
+              "Channel": []
+            }
+          ]
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Width": 1064.0,
+          "@Height": 65.0,
+          "@Depth": 88.0
+        },
+        "Layout": {
+          "@Width": 8,
+          "@Height": 1
+        },
+        "Lens": {
+          "@DegreesMin": 30.0,
+          "@DegreesMax": 30.0
+        }
+      }
+    },
+    "golden/moving-head.qxf": {
+      "Type": "Moving Head",
+      "Mode": [
+        {
+          "@Name": "Default",
+          "Head": []
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Width": 302.0,
+          "@Height": 302.0,
+          "@Depth": 361.0
+        },
+        "Layout": null,
+        "Lens": {
+          "@DegreesMin": 11.0,
+          "@DegreesMax": 58.0
+        }
+      }
+    },
+    "golden/par.qxf": {
+      "Type": "Color Changer",
+      "Mode": [
+        {
+          "@Name": "Default",
+          "Head": []
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Width": 265.0,
+          "@Height": 245.0,
+          "@Depth": 115.0
+        },
+        "Layout": null,
+        "Lens": {
+          "@DegreesMin": 40.0,
+          "@DegreesMax": 40.0
+        }
+      }
+    }
+  }
+}
