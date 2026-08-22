@@ -123,7 +123,8 @@ fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
 fn linear_view_depth(raw_depth: f32) -> f32 {
     let near = haze.depth.x;
     let far = haze.depth.y;
-    return near * far / max(far - raw_depth * (far - near), 1e-5);
+    // The scene attachment is reverse-Z: near is one, infinity approaches zero.
+    return near * far / max(near + raw_depth * (far - near), 1e-5);
 }
 
 /// Peaked photometric profile with GDTF beam/field semantics: 100% on the

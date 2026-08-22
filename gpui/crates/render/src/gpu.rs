@@ -18,8 +18,13 @@ use crate::assets::Image;
 use crate::frame::{Draw, Frame};
 use crate::overlay::{Overlay, OverlayDepth};
 
-/// Shadow map edge, matching `shadow-mapSize-{width,height}={4096}`.
-const SHADOW_SIZE: u32 = 4096;
+/// Three bounded layers cover the part of a venue in which directional
+/// shadows remain useful. 2048² per layer costs 48 MiB in `Depth32Float`, versus
+/// an unbounded camera-sized allocation or 192 MiB for three legacy 4096 maps.
+const SHADOW_SIZE: u32 = 2048;
+const CASCADE_COUNT: usize = 3;
+const CASCADE_SPLITS: [f32; CASCADE_COUNT] = [12.0, 45.0, 180.0];
+const CASCADE_BLEND: f32 = 0.1;
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -31,8 +36,10 @@ const CAMERA_FAR: f32 = 2000.0;
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
-    light_view_proj: [[f32; 4]; 4],
+    light_view_proj: [[[f32; 4]; 4]; CASCADE_COUNT],
     camera_pos: [f32; 4],
+    camera_forward: [f32; 4],
+    cascade_splits: [f32; 4],
     ambient: [f32; 4],
     dir_to_light: [f32; 4],
     dir_color: [f32; 4],
@@ -228,6 +235,7 @@ pub struct Renderer {
     /// the two depth behaviours of [`OverlayDepth`].
     overlay_pipelines: [wgpu::RenderPipeline; 4],
     shadow_map: wgpu::TextureView,
+    shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
     shadow_sampler: wgpu::Sampler,
     dummy_shadow: wgpu::TextureView,
     linear_sampler: wgpu::Sampler,
@@ -516,7 +524,7 @@ impl Renderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -918,13 +926,19 @@ impl Renderer {
             })
         });
 
-        let shadow_map = depth_texture(&device, SHADOW_SIZE, SHADOW_SIZE, 1, "shadow");
-        let dummy_shadow = depth_texture(&device, 1, 1, 1, "shadow-placeholder");
+        let (shadow_map, shadow_layers) = shadow_texture_array(
+            &device,
+            SHADOW_SIZE,
+            SHADOW_SIZE,
+            CASCADE_COUNT as u32,
+            "shadow-cascades",
+        );
+        let (dummy_shadow, _) = shadow_texture_array(&device, 1, 1, 1, "shadow-placeholder");
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            compare: Some(wgpu::CompareFunction::LessEqual),
+            compare: Some(wgpu::CompareFunction::GreaterEqual),
             ..Default::default()
         });
         // glTF sampler `wrapS/wrapT = REPEAT`, trilinear — three's default for
@@ -1001,6 +1015,7 @@ impl Renderer {
             overlay_layout,
             overlay_pipelines,
             shadow_map,
+            shadow_layers,
             shadow_sampler,
             dummy_shadow,
             linear_sampler,
@@ -1300,29 +1315,29 @@ impl Renderer {
             )
         });
         let aspect = width as f32 / height as f32;
-        // three `PerspectiveCamera` defaults, and the same reversed-Y handedness
-        // wgpu clip space wants.
+        // Passing the bounds in reverse order produces a finite reverse-Z
+        // projection: near maps to one and the bounded far plane maps to zero.
         let proj = Mat4::perspective_rh(
             frame.camera.fov_y_deg.to_radians(),
             aspect,
-            CAMERA_NEAR,
             CAMERA_FAR,
+            CAMERA_NEAR,
         );
         let view = Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z);
         let view_proj = proj * view;
 
-        // `shadow-camera-{left,right,top,bottom}=±15`, near 0.5, far 60, from
-        // wherever `<directionalLight position>` puts the light.
-        let light_view_proj = frame.directional.map_or(Mat4::IDENTITY, |light| {
-            let eye = light.shadow_eye;
-            let up = if eye.normalize().z.abs() > 0.99 {
-                Vec3::Y
-            } else {
-                Vec3::Z
-            };
-            Mat4::orthographic_rh(-15.0, 15.0, -15.0, 15.0, 0.5, 60.0)
-                * Mat4::look_at_rh(eye, Vec3::ZERO, up)
-        });
+        let camera_forward = (frame.camera.target - frame.camera.eye).normalize_or(Vec3::Y);
+        let light_view_proj = frame
+            .directional
+            .map_or([Mat4::IDENTITY; CASCADE_COUNT], |light| {
+                cascade_matrices(
+                    frame.camera.eye,
+                    camera_forward,
+                    frame.camera.fov_y_deg.to_radians(),
+                    aspect,
+                    light.direction,
+                )
+            });
 
         let point_lights: Vec<PointLightGpu> = frame
             .point_lights
@@ -1336,8 +1351,15 @@ impl Renderer {
 
         let globals = Globals {
             view_proj: view_proj.to_cols_array_2d(),
-            light_view_proj: light_view_proj.to_cols_array_2d(),
+            light_view_proj: light_view_proj.map(|matrix| matrix.to_cols_array_2d()),
             camera_pos: frame.camera.eye.extend(1.0).to_array(),
+            camera_forward: camera_forward.extend(0.0).to_array(),
+            cascade_splits: [
+                CASCADE_SPLITS[0],
+                CASCADE_SPLITS[1],
+                CASCADE_SPLITS[2],
+                CASCADE_BLEND,
+            ],
             ambient: frame.ambient.extend(0.0).to_array(),
             dir_to_light: frame
                 .directional
@@ -1493,6 +1515,22 @@ impl Renderer {
 
         let lit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, true);
         let unlit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, false);
+        let shadow_bgs: Vec<_> = light_view_proj
+            .iter()
+            .map(|matrix| {
+                let mut shadow_globals = globals;
+                shadow_globals.light_view_proj[0] = matrix.to_cols_array_2d();
+                let buffer = self.storage(
+                    &[shadow_globals],
+                    wgpu::BufferUsages::UNIFORM,
+                    "shadow-globals",
+                );
+                (
+                    buffer.clone(),
+                    self.scene_bind_group(&buffer, &instance_buf, &point_buf, false),
+                )
+            })
+            .collect();
 
         let (t_width, t_height) = (width, height);
         // Below a quarter the bilateral upsample has too few taps per output
@@ -1586,22 +1624,28 @@ impl Renderer {
             };
 
             if frame.directional.is_some_and(|light| light.shadows) {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("shadow"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(depth_attachment(&self.shadow_map)),
-                    timestamp_writes: profile.as_ref().map(|(queries, ..)| {
-                        wgpu::RenderPassTimestampWrites {
-                            query_set: queries,
-                            beginning_of_pass_write_index: Some(0),
-                            end_of_pass_write_index: None,
-                        }
-                    }),
-                    ..Default::default()
-                });
-                pass.set_pipeline(&self.shadow_pipeline);
-                pass.set_bind_group(0, &unlit_bg, &[]);
-                draw_range(&mut pass, 0..opaque);
+                for (cascade, layer) in self.shadow_layers.iter().enumerate() {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("shadow-cascade"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(depth_attachment(layer)),
+                        timestamp_writes: (cascade == 0)
+                            .then(|| {
+                                profile.as_ref().map(|(queries, ..)| {
+                                    wgpu::RenderPassTimestampWrites {
+                                        query_set: queries,
+                                        beginning_of_pass_write_index: Some(0),
+                                        end_of_pass_write_index: None,
+                                    }
+                                })
+                            })
+                            .flatten(),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&self.shadow_pipeline);
+                    pass.set_bind_group(0, &shadow_bgs[cascade].1, &[]);
+                    draw_range(&mut pass, 0..opaque);
+                }
             }
 
             {
@@ -2191,17 +2235,63 @@ mod tests {
     use crate::frame::{Camera, HazeLight};
 
     use super::{
-        downsample, haze_tile_key, haze_tiles, CompositeUniform, HazeUniform, LightCore, LightRest,
-        TextureEncoding, TileHeader, HAZE_TILE_SIZE,
+        cascade_matrices, downsample, haze_tile_key, haze_tiles, CompositeUniform, Globals,
+        HazeUniform, LightCore, LightRest, TextureEncoding, TileHeader, CAMERA_FAR, CAMERA_NEAR,
+        CASCADE_COUNT, HAZE_TILE_SIZE, SHADOW_SIZE,
     };
 
     #[test]
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
+        assert_eq!(std::mem::size_of::<Globals>(), 368);
         assert_eq!(std::mem::size_of::<HazeUniform>(), 160);
         assert_eq!(std::mem::size_of::<CompositeUniform>(), 32);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 48);
         assert_eq!(std::mem::size_of::<TileHeader>(), 16);
+    }
+
+    #[test]
+    fn reverse_z_projection_is_monotonic_and_maps_bounded_planes() {
+        let projection =
+            Mat4::perspective_rh(48f32.to_radians(), 16.0 / 9.0, CAMERA_FAR, CAMERA_NEAR);
+        let depth = |distance: f32| projection.project_point3(Vec3::new(0.0, 0.0, -distance)).z;
+        assert!((depth(CAMERA_NEAR) - 1.0).abs() < 1e-5);
+        assert!(depth(CAMERA_FAR).abs() < 1e-6);
+        let samples = [CAMERA_NEAR, 1.0, 10.0, 100.0, CAMERA_FAR];
+        assert!(samples
+            .windows(2)
+            .all(|pair| depth(pair[0]) > depth(pair[1])));
+    }
+
+    #[test]
+    fn cascades_are_finite_bounded_and_texel_stable_under_small_translation() {
+        let eye = Vec3::new(4.5, -5.0, 3.0);
+        let forward = (Vec3::new(0.0, 0.8, 0.0) - eye).normalize();
+        let to_light = Vec3::new(2.0, -3.0, 6.0).normalize();
+        let matrices = cascade_matrices(eye, forward, 48f32.to_radians(), 16.0 / 9.0, to_light);
+        assert_eq!(matrices.len(), CASCADE_COUNT);
+        assert!(matrices.iter().all(Mat4::is_finite));
+
+        // Move perpendicular to the light by much less than a near-cascade
+        // texel. The snapped world-to-shadow transform must not shimmer.
+        let lateral = to_light.cross(Vec3::Z).normalize_or(Vec3::X);
+        let shifted = cascade_matrices(
+            eye + lateral * (1.0 / SHADOW_SIZE as f32),
+            forward,
+            48f32.to_radians(),
+            16.0 / 9.0,
+            to_light,
+        );
+        let max_delta = matrices[0]
+            .to_cols_array()
+            .into_iter()
+            .zip(shifted[0].to_cols_array())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_delta < 1e-5,
+            "sub-texel camera motion changed the near cascade by {max_delta}"
+        );
     }
 
     #[test]
@@ -2693,15 +2783,107 @@ fn shader(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
     })
 }
 
+/// Fit three stable orthographic sun cameras to bounded view-frustum slices.
+///
+/// Each slice uses a quantized bounding sphere instead of a tight AABB. Camera
+/// translation then changes only the snapped light-space centre; small camera
+/// rotations cannot resize the projection and make every shadow texel swim.
+fn cascade_matrices(
+    eye: Vec3,
+    forward: Vec3,
+    fov_y: f32,
+    aspect: f32,
+    to_light: Vec3,
+) -> [Mat4; CASCADE_COUNT] {
+    let forward = forward.normalize_or(Vec3::Y);
+    let world_up = if forward.z.abs() > 0.99 {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    let right = forward.cross(world_up).normalize_or(Vec3::X);
+    let up = right.cross(forward).normalize_or(Vec3::Z);
+    let light_dir = to_light.normalize_or(Vec3::new(0.4, -0.6, 0.7));
+    let light_up = if light_dir.z.abs() > 0.99 {
+        Vec3::Y
+    } else {
+        Vec3::Z
+    };
+    let tan_half = (fov_y * 0.5).tan();
+
+    std::array::from_fn(|cascade| {
+        let near = if cascade == 0 {
+            CAMERA_NEAR
+        } else {
+            CASCADE_SPLITS[cascade - 1]
+        };
+        let far = CASCADE_SPLITS[cascade];
+        let corners = [near, far].map(|distance| {
+            let center = eye + forward * distance;
+            let half_y = tan_half * distance;
+            let half_x = half_y * aspect;
+            [
+                center - right * half_x - up * half_y,
+                center + right * half_x - up * half_y,
+                center - right * half_x + up * half_y,
+                center + right * half_x + up * half_y,
+            ]
+        });
+        let corners = [
+            corners[0][0],
+            corners[0][1],
+            corners[0][2],
+            corners[0][3],
+            corners[1][0],
+            corners[1][1],
+            corners[1][2],
+            corners[1][3],
+        ];
+        let center = corners.iter().copied().sum::<Vec3>() / corners.len() as f32;
+        // Quantization prevents floating-point radius noise from changing the
+        // projection scale. 1/16 m is well below one far-cascade texel.
+        let radius = corners
+            .iter()
+            .map(|corner| corner.distance(center))
+            .fold(0.0_f32, f32::max);
+        let radius = (radius * 16.0).ceil() / 16.0;
+        // Keep light orientation and origin independent of the camera. The
+        // orthographic bounds carry the moving slice; this is what lets their
+        // centre snap in world-shadow space instead of remaining perpetually
+        // zero in a camera-following look-at matrix.
+        let light_view = Mat4::look_at_rh(light_dir, Vec3::ZERO, light_up);
+        let center_light = light_view.transform_point3(center);
+        let texel = (2.0 * radius) / SHADOW_SIZE as f32;
+        let snapped_x = (center_light.x / texel).round() * texel;
+        let snapped_y = (center_light.y / texel).round() * texel;
+        let (min_depth, max_depth) = corners
+            .iter()
+            .map(|corner| -light_view.transform_point3(*corner).z)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), depth| {
+                (min.min(depth), max.max(depth))
+            });
+        // Swap near/far to map the nearest receiver to one and the furthest to
+        // zero, matching the scene's GreaterEqual reverse-Z convention. The
+        // signed distances are valid for an orthographic projection and let
+        // this fixed light frame cover venues on either side of its origin.
+        Mat4::orthographic_rh(
+            snapped_x - radius,
+            snapped_x + radius,
+            snapped_y - radius,
+            snapped_y + radius,
+            max_depth + 25.0,
+            min_depth - 25.0,
+        ) * light_view
+    })
+}
+
 fn depth_state(write: bool) -> wgpu::DepthStencilState {
     wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: write,
-        // three's `material.depthFunc` default is `LessEqualDepth`, and the
-        // stage GLBs lean on it: the speaker's photo panels are modelled
-        // exactly coplanar with the cabinet they sit on, so `Less` would keep
-        // whichever the draw order happened to reach first.
-        depth_compare: wgpu::CompareFunction::LessEqual,
+        // Equal preserves the intentional coplanar photo panels in stage GLBs.
+        // Greater is the single convention for camera and sun reverse-Z.
+        depth_compare: wgpu::CompareFunction::GreaterEqual,
         stencil: wgpu::StencilState::default(),
         bias: wgpu::DepthBiasState::default(),
     }
@@ -2736,11 +2918,52 @@ fn depth_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassDepthStencilAtt
     wgpu::RenderPassDepthStencilAttachment {
         view,
         depth_ops: Some(wgpu::Operations {
-            load: wgpu::LoadOp::Clear(1.0),
+            load: wgpu::LoadOp::Clear(0.0),
             store: wgpu::StoreOp::Store,
         }),
         stencil_ops: None,
     }
+}
+
+fn shadow_texture_array(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    layers: u32,
+    label: &str,
+) -> (wgpu::TextureView, [wgpu::TextureView; CASCADE_COUNT]) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: layers,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let array = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some(label),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        base_array_layer: 0,
+        array_layer_count: Some(layers),
+        ..Default::default()
+    });
+    let render_layers = std::array::from_fn(|index| {
+        let layer = (index as u32).min(layers - 1);
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("shadow-cascade-layer"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    });
+    (array, render_layers)
 }
 
 fn binding(index: u32, resource: wgpu::BindingResource) -> wgpu::BindGroupEntry {

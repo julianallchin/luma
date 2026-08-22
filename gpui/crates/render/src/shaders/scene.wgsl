@@ -68,7 +68,7 @@ fn vs_depth(
     _ = normal;
     _ = uv;
     _ = tangent;
-    return globals.light_view_proj * instances[instance].model * vec4<f32>(position, 1.0);
+    return globals.light_view_proj[0] * instances[instance].model * vec4<f32>(position, 1.0);
 }
 
 fn f_schlick(f0: vec3<f32>, f90: f32, dot_vh: f32) -> vec3<f32> {
@@ -112,14 +112,11 @@ fn distance_attenuation(d: f32, cutoff: f32) -> f32 {
 
 /// 3x3 PCF, matching the kernel three's `PCFSoftShadowMap` settles on closely
 /// enough that only the outermost shadow pixel differs.
-fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
-    if globals.params.z < 0.5 {
-        return 1.0;
-    }
+fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     // `shadow-normalBias={0.01}`: push the sample along the surface normal so
     // near-grazing faces do not shadow themselves.
     let biased = world + n * 0.01;
-    let clip = globals.light_view_proj * vec4<f32>(biased, 1.0);
+    let clip = globals.light_view_proj[cascade] * vec4<f32>(biased, 1.0);
     let ndc = clip.xyz / clip.w;
     if ndc.z > 1.0 || ndc.z < 0.0 {
         return 1.0;
@@ -133,10 +130,45 @@ fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
     for (var j = -1; j <= 1; j = j + 1) {
         for (var i = -1; i <= 1; i = i + 1) {
             let offset = vec2<f32>(f32(i), f32(j)) * texel;
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + offset, ndc.z - 0.0015);
+            sum += textureSampleCompareLevel(
+                shadow_map,
+                shadow_sampler,
+                uv + offset,
+                i32(cascade),
+                ndc.z + 0.0015,
+            );
         }
     }
     return sum / 9.0;
+}
+
+fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
+    if globals.params.z < 0.5 {
+        return 1.0;
+    }
+    let view_depth = dot(world - globals.camera_pos.xyz, globals.camera_forward.xyz);
+    if view_depth < 0.0 || view_depth > globals.cascade_splits.z {
+        return 1.0;
+    }
+    var cascade = 0u;
+    if view_depth > globals.cascade_splits.x {
+        cascade = 1u;
+    }
+    if view_depth > globals.cascade_splits.y {
+        cascade = 2u;
+    }
+    let current = cascade_shadow(world, n, cascade);
+    if cascade == 2u {
+        return current;
+    }
+    let far = globals.cascade_splits[cascade];
+    var near = 0.1;
+    if cascade > 0u {
+        near = globals.cascade_splits[cascade - 1u];
+    }
+    let blend_width = (far - near) * globals.cascade_splits.w;
+    let blend = smoothstep(far - blend_width, far, view_depth);
+    return mix(current, cascade_shadow(world, n, cascade + 1u), blend);
 }
 
 @fragment

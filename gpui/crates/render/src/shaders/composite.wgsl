@@ -19,7 +19,7 @@ struct Composite {
 fn linear_view_depth(raw_depth: f32) -> f32 {
     let near = cfg.depth.x;
     let far = cfg.depth.y;
-    return near * far / max(far - raw_depth * (far - near), 1e-5);
+    return near * far / max(near + raw_depth * (far - near), 1e-5);
 }
 
 @vertex
