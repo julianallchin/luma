@@ -166,6 +166,10 @@ pub struct Frame {
     pub point_lights: Vec<PointLight>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
     pub fixture_cones: Vec<FixtureCone>,
+    /// Whether fixture cones illuminate opaque surfaces as well as haze.
+    pub fixture_surface_lighting: bool,
+    /// Whether the surface shader visualizes cluster occupancy.
+    pub cluster_debug: bool,
     /// Linear, the `<color attach="background">` value.
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
@@ -709,6 +713,8 @@ pub fn build_with(
         grid_draws,
         point_lights,
         fixture_cones,
+        fixture_surface_lighting: scene.render.fixture_surface_lighting,
+        cluster_debug: scene.render.cluster_debug,
         clear_color: Vec3::from(scene.render.environment.background),
         ambient: Vec3::from(scene.render.environment.ambient_color)
             * scene.render.environment.ambient_intensity.max(0.0),
