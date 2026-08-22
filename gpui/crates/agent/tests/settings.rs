@@ -30,14 +30,14 @@ fn harness() -> Harness {
 const SCRIPT: &str = r#"
     nav.venue("Test Venue");
 
-    function openSettings() {
-        app.click(app.snapshot().find({ role: "button", label: "Settings" }));
-        app.frames(4);
-        app.click(app.snapshot().find({ role: "toggle", label: "AI" }));
-        return app.snapshot();
+    function openSettings(model) {
+		nav.step("the settings button", "button", "Settings");
+		nav.step("the AI settings section", "toggle", "AI");
+		return until("the loaded AI settings", (s) =>
+			s.find({ role: "select", label: model }) !== undefined ? s : undefined);
     }
 
-    const opened = openSettings();
+    const opened = openSettings("Kimi K3 Fast");
     const before = opened.find({ role: "select", label: "Kimi K3 Fast" });
 
     // Open the picker, then choose the option that is not selected. The pick
@@ -55,7 +55,7 @@ const SCRIPT: &str = r#"
     const home = app.snapshot().nodes.map((n) => n.label);
 
     // …and in again, which re-reads the seam.
-    const reopened = openSettings().findAll({ role: "select" }).map((n) => n.label);
+    const reopened = openSettings("Claude Opus 5").findAll({ role: "select" }).map((n) => n.label);
 
     ({ before: before.label, chosen, home, reopened })
 "#;
