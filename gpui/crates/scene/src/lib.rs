@@ -25,15 +25,25 @@
 pub mod aabb;
 pub mod bvh;
 pub mod camera;
+pub mod gesture;
+pub mod gizmo;
 pub mod graph;
+pub mod selection;
 pub mod snap;
 pub mod sockets;
 
 pub use aabb::Aabb;
 pub use bvh::{MeshBvh, Ray, RayHit, TriMesh};
 pub use camera::Camera;
+pub use gesture::{ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Marquee, ScreenRect};
+pub use gizmo::{
+    apply_rotation, apply_translation, hit_test_gizmo, selection_pivot, snap_angle_15, Axis,
+    DragFrame, DragTarget, GizmoHandle, GizmoHit, GizmoMode, GizmoState, PivotMode,
+    TransformTarget,
+};
 pub use graph::{
     MaterialHandle, MeshHandle, Node, NodeContent, NodeFlags, NodeId, SceneGraph, Transform,
 };
+pub use selection::{ObjectKind, Selection, SelectionTarget};
 pub use snap::{solve_snap, ScenePiece, SnapInput, SnapMatch, SnapResult, SnapSurface};
 pub use sockets::{BboxAnchor, ResolvedSocket, SocketDef, SocketMode, SocketType};
