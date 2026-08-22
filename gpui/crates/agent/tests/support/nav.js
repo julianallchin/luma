@@ -29,7 +29,13 @@ globalThis.nav = {
 	// clicking a node found in a snapshot taken before the load landed is the
 	// suite's one recurring flake.
 	step(what, role, label, options) {
-		const shot = until(what, (s) => s.find({ role, label }) !== undefined);
+		const shot = until(what, (s) => {
+			const node = s.find({ role, label });
+			return node !== undefined
+				&& node.enabled !== false
+				&& node.bounds.width > 0
+				&& node.bounds.height > 0;
+		});
 		app.click(shot.find({ role, label }), options);
 	},
 
