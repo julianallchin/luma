@@ -785,6 +785,10 @@ fn lookup(
         color: p.color,
         strobe: p.strobe,
         position: p.position,
+        // Fixture wheel slots are not in `UniverseState` yet. Open is the
+        // explicit identity until that evaluated-state contract grows them.
+        gobo: 0,
+        gobo_rotation: 0.0,
     })
 }
 

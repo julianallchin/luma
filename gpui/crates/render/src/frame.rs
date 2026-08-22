@@ -20,7 +20,7 @@ use crate::scene_desc::{Definition, PrimitiveState, Scene};
 pub type Definitions = std::collections::BTreeMap<String, Definition>;
 
 /// Shader cap on the haze light array.
-pub const MAX_LIGHTS: usize = 256;
+pub const MAX_LIGHTS: usize = 512;
 
 /// One uploadable triangle list.
 pub struct MeshData {
@@ -83,6 +83,10 @@ pub struct HazeLight {
     pub cos_field: f32,
     /// 0 for a hard beam, 1 for a near-isotropic wash.
     pub wash: f32,
+    /// Bounded procedural gobo: 0 open, 1 radial spokes, 2 breakup grid.
+    pub gobo: u32,
+    /// Gobo rotation in radians around the beam axis.
+    pub gobo_rotation: f32,
 }
 
 /// A fixture's face light: lights its own housing from behind the lens and
@@ -173,6 +177,7 @@ pub struct Frame {
 
 /// A look-at camera. The orbit parameterisation of spec §2.4 belongs in
 /// `luma-scene`; this is only what the projection needs.
+#[derive(Debug, Clone, Copy)]
 pub struct Camera {
     /// Eye position, world space.
     pub eye: Vec3,
@@ -543,6 +548,8 @@ pub fn build_with(
                     intensity: intensity * cone.gain / (head_count as f32).sqrt(),
                     cos_field: cone.cos_field,
                     wash: cone.wash,
+                    gobo: head_state.gobo.min(2),
+                    gobo_rotation: head_state.gobo_rotation,
                 });
             }
             continue;
@@ -617,6 +624,8 @@ pub fn build_with(
             intensity: intensity * cone.gain,
             cos_field: cone.cos_field,
             wash: cone.wash,
+            gobo: head_state.gobo.min(2),
+            gobo_rotation: head_state.gobo_rotation,
         });
     }
 
@@ -698,6 +707,8 @@ const DARK: PrimitiveState = PrimitiveState {
     color: [0.0; 3],
     strobe: 0.0,
     position: [0.0; 2],
+    gobo: 0,
+    gobo_rotation: 0.0,
 };
 
 fn layout_of(def: &Definition, head_count: usize) -> (u32, u32) {

@@ -34,11 +34,10 @@ use crate::gpu::{Channels, PendingReadback, Renderer};
 ///
 /// [`crate::DEFAULT_SUBFRAMES`] is an export dial — sixteen passes over the
 /// whole scene, chosen because a golden has all the time in the world. Live has
-/// 16 ms for everything, and the residual variance of two jittered samples is
-/// what the three.js path's temporal EMA settled to within a few frames anyway.
-///
-/// If two grains visibly, the fix is the temporal pass of spec §2.5 — a real
-/// missing stage — and not this number.
+/// 16 ms for everything. Two blue-noise samples feed the depth-rejecting live
+/// history resolve; history resets on resize, camera/FOV changes, medium or
+/// cone-topology changes, and track-time discontinuities. Capture bypasses
+/// history entirely and fixes its sample seeds.
 pub const LIVE_SUBFRAMES: u32 = 2;
 
 /// Fraction of the output resolution a live frame's haze pass runs at.
@@ -160,7 +159,7 @@ impl Viewport {
         let width = width.max(1);
         let height = height.max(1);
         let started = Instant::now();
-        let result = self.renderer.render_into(
+        let result = self.renderer.render_live_into(
             frame,
             width,
             height,
