@@ -324,7 +324,7 @@ fn palette(image: &RgbaImage) -> (HashMap<[u8; 4], f64>, f64) {
         *counts.entry(pixel.0).or_default() += 1;
     }
     let total = (image.width() * image.height()) as f64;
-    let bed = bytes(luma_ui::ladder::muted());
+    let bed = bytes(luma_ui::ladder::card());
     let ink = total - counts.get(&bed).copied().unwrap_or(0) as f64;
     let palette = counts
         .into_iter()

@@ -1709,7 +1709,7 @@ fn paint(
     window: &mut Window,
     cx: &mut App,
 ) {
-    window.paint_quad(fill(bounds, ladder::trim()));
+    window.paint_quad(fill(bounds, ladder::background()));
 
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for link in &scene.links {
@@ -1760,12 +1760,12 @@ fn paint_card(
     window.paint_quad(quad(
         box_,
         Corners::default(),
-        ladder::background(),
+        ladder::card(),
         Edges::all(px(CARD_BORDER * zoom)),
         if selected {
             ladder::primary()
         } else {
-            ladder::gutter()
+            ladder::trim()
         },
         BorderStyle::Solid,
     ));
@@ -1780,7 +1780,7 @@ fn paint_card(
                 px(HEADER_HEIGHT * zoom),
             ),
         },
-        ladder::trim(),
+        ladder::band(),
     ));
 
     // Ghosts and rings are shape, not text, so they are drawn at every zoom.
@@ -2323,7 +2323,7 @@ fn paint_slider(
     window.paint_quad(quad(
         box_,
         Corners::default(),
-        ladder::input(),
+        ladder::apex(),
         Edges::all(px(CONTROL_BORDER * zoom)),
         ladder::control_border(),
         BorderStyle::Solid,

@@ -175,7 +175,7 @@ impl Theme {
             text: ladder::foreground().into(),
             text_muted: neutral(0.708),
             text_faint: neutral(0.556),
-            knockout: ladder::titlebar_background().into(),
+            knockout: ladder::background().into(),
             input_bg: hsla(0.0, 0.0, 1.0, 0.03),
             accent: oklch(0.673, 0.182, 276.935),
             accent_strong: oklch(0.585, 0.233, 277.117),

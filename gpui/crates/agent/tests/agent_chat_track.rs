@@ -54,8 +54,9 @@ fn labels(nodes: &Value, role: &str) -> Vec<String> {
 /// track's tab is open beside it.
 ///
 /// One test rather than three because it is one centre being carried across
-/// three states — that it is the same centre is half of what is being
-/// asserted, and three sessions could not tell.
+/// four states — including a subject-less visualizer after attachment. That
+/// it is the same centre is half of what is being asserted, and separate
+/// sessions could not tell.
 #[test]
 fn the_chat_follows_the_screen_onto_the_track_editor() {
     let mut app = Fixture::new(
@@ -134,5 +135,25 @@ fn the_chat_follows_the_screen_onto_the_track_editor() {
     assert!(
         !text.iter().any(|l| l == luma_chat::UNATTACHED_BLURB),
         "the attached panel is still offering the unattached copy: {text:?}"
+    );
+
+    // -- a subject-less tab: keep the attached track conversation -----------
+    let visualizer = run(
+        &mut app,
+        r#"
+            app.action("luma::OpenVisualizer");
+            until("the visualizer tab", (s) =>
+                s.findAll({ role: "text" }).some((n) => n.label === "Track agent"))
+                .nodes
+        "#,
+    );
+    let text = labels(&visualizer, "text");
+    assert!(
+        text.iter().any(|l| l == "Track agent"),
+        "the subject-less visualizer detached the track conversation: {text:?}"
+    );
+    assert!(
+        !text.iter().any(|l| l == luma_chat::UNATTACHED_BLURB),
+        "the visualizer replaced the attached conversation with an unattached one: {text:?}"
     );
 }

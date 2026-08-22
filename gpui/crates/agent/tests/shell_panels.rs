@@ -75,16 +75,39 @@ const SCRIPT: &str = r#"
     const workspaceReopened = read();
 
     // 3. The seam, dragged left, widens the panel by what the pointer moved.
+    //    Sidebar closed first: the panel's only ceiling is the room the
+    //    thread column must keep, and this step is about the pointer, not
+    //    the ceiling.
+    app.action("luma::ToggleSidebar");
+    app.frames(2);
     app.drag(app.snapshot().find({ role: "slider", label: "Workspace width" }), { dx: -150, dy: 0 }, { steps: 10 });
     app.frames(2);
     const widened = read();
+
+    // 3b. Dragged absurdly far, the seam stops where the thread column's
+    //     minimum begins instead of following the pointer off the edge.
+    app.drag(app.snapshot().find({ role: "slider", label: "Workspace width" }), { dx: -500, dy: 0 }, { steps: 10 });
+    app.frames(2);
+    const maxed = read();
+    app.action("luma::ToggleSidebar");
+    app.frames(2);
 
     // 4. …and double-clicking it puts the panel back at its default width.
     app.click(app.snapshot().find({ role: "slider", label: "Workspace width" }), { count: 2 });
     app.frames(2);
     const reset = read();
 
-    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, widened, reset })
+    // 5. An overlay owns its pointer plane. The sidebar toggle is still in the
+    //    automation tree underneath it, but pressing those coordinates must
+    //    not close the covered sidebar.
+    app.action("luma::OpenPatterns");
+    until("the pattern picker", (s) =>
+        s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) !== undefined);
+    app.click(app.snapshot().find({ role: "button", label: "sidebar-toggle" }));
+    app.frames(2);
+    const overlayBlocked = read();
+
+    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, widened, maxed, reset, overlayBlocked })
 "#;
 
 fn number(value: &Value, key: &str) -> f64 {
@@ -140,10 +163,27 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
         "the seam drag did not widen the panel by what the pointer moved: {before} -> {after}"
     );
 
+    // 3b. Past the clamp the seam parts company with the pointer: it stops
+    //     where the thread column's minimum begins (CENTER_MIN in shell.rs is
+    //     360; unclamped, the same drag would park the seam near x = 0).
+    assert!(
+        (number(&out["maxed"], "seam") - 360.0).abs() <= 2.0,
+        "the seam followed the pointer into the thread column: {:#}",
+        out["maxed"]
+    );
+
     // 4. Double-click restores the default.
     assert!(
         (number(&out["reset"], "tab") - before).abs() <= 2.0,
         "double-clicking the seam did not restore the default width: {:#}",
         out["reset"]
+    );
+
+    // 5. The modal overlay swallowed the pointer instead of toggling the
+    //    sidebar hidden behind it.
+    assert!(
+        number(&out["overlayBlocked"], "sidebar") > 0.0,
+        "the overlay let a press reach the covered sidebar toggle: {:#}",
+        out["overlayBlocked"]
     );
 }

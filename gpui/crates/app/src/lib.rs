@@ -160,11 +160,12 @@ impl Render for Luma {
             .size_full()
             .flex()
             .flex_col()
-            // The one shell plane, and the only surface the window's blurred
-            // backing shows through directly: the titlebar and the sidebar sit
-            // straight on it, every content surface is an inset card over it
-            // (see `shell::regions`).
-            .bg(luma_ui::glass::glass())
+            // The floor. Every region either leaves it showing (the thread
+            // column, the workspace panel) or raises itself off it (the
+            // sidebar) — see `shell::regions`. Opaque, and from the ladder
+            // rather than the glass tier, because a plane whose brightness is
+            // decided by the desktop behind the window has no rung.
+            .bg(ladder::background())
             .font_family(fonts::FAMILY)
             .text_color(ladder::foreground())
             .when(root_holds_focus, |root| root.track_focus(&self.focus))
@@ -239,7 +240,6 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::CommitInsertOption, _, cx| {
                 this.commit_insert_menu(cx)
             }))
-            .child(chrome::titlebar(self, cx))
             .child(shell::regions(self, window, cx))
     }
 }

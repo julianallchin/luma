@@ -1,11 +1,33 @@
-//! The window's own edges: comet's titlebar band, drawn by us.
+//! The window's own edges: the head band each region wears, drawn by us.
 //!
 //! The window is `decorations: false` on every platform, so nothing draws
-//! chrome but this module. The band is **glass tier** (spec §9): traffic
-//! lights, the sidebar toggle, back/forward, the shell tab strip and the
-//! settings gear all live in it, painted from `luma_ui::glass` — never from
-//! the ladder, and never as `BUTTON_CLASS` slabs. Ladder language ends at the
-//! content cards below this band.
+//! chrome but this module. Everything here is **glass tier** (spec §9):
+//! traffic lights, the sidebar toggle, back/forward, the shell tab strip and
+//! the settings gear are painted from `luma_ui::glass` — never from the
+//! ladder, and never as `BUTTON_CLASS` slabs. Ladder language starts inside
+//! the regions' bodies.
+//!
+//! # There is no titlebar
+//!
+//! The window splits vertically first: each region is a full-height column
+//! carrying its own [`band`] across its own width. A full-width bar would cut
+//! every seam off at `y = HEIGHT`, and a seam that stops is not a seam — it is
+//! a border on a box. The bands align because they share one height, not
+//! because they are one element.
+//!
+//! # The traffic lights are the topmost layer
+//!
+//! [`window_controls`] is positioned by the shell at the window's top-left
+//! corner, above the regions *and* above any overlay. An overlay that covered
+//! them would be a modal that can neither be moved nor closed, which is how a
+//! first-run picker becomes a trapped window.
+//!
+//! Room for them is reserved by [`band`], not by each surface: **anything that
+//! starts at `y = 0` wears a band**, and the leftmost one leaves
+//! [`LIGHTS_WIDTH`] free. A region does, and so does an overlay plane — one
+//! mechanism rather than an opt-in every future surface has to remember. The
+//! strip itself is inert apart from the three dots, so forgetting is a visible
+//! overlap and never a corner that silently swallows presses.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -16,7 +38,7 @@ use luma_ui::node::{Instrument, Role};
 use crate::tabs::Target;
 use crate::Luma;
 
-/// Height of the titlebar band — comet's `TITLEBAR_HEIGHT`.
+/// Height of a region's head band — comet's `TITLEBAR_HEIGHT`.
 pub const HEIGHT: f32 = 38.;
 /// A tab chip: comet's 24px rounded-6 chip.
 const CHIP_HEIGHT: f32 = 24.;
@@ -25,6 +47,17 @@ const CHIP_RADIUS: f32 = 6.;
 const CHIP_MAX_WIDTH: f32 = 148.;
 /// One icon-button box in the band.
 const CONTROL: f32 = 24.;
+/// A band's inset from its region's edge, and the gap between its controls.
+const BAND_PAD: f32 = 12.;
+const BAND_GAP: f32 = 10.;
+/// One traffic light, and the gap between them.
+const LIGHT: f32 = 12.;
+const LIGHT_GAP: f32 = 8.;
+
+/// Room [`window_controls`] claims at the window's top-left corner, inset
+/// included. Derived rather than measured so the two cannot drift: the shell
+/// pads the leftmost band by exactly what the lights occupy.
+pub(crate) const LIGHTS_WIDTH: f32 = BAND_PAD + 3. * LIGHT + 2. * LIGHT_GAP;
 
 /// Hide the close / minimise / zoom buttons AppKit puts in the content view.
 ///
@@ -68,68 +101,95 @@ pub fn hide_native_window_buttons(window: &Window) {
 #[cfg(not(target_os = "macos"))]
 pub fn hide_native_window_buttons(_window: &Window) {}
 
-/// The band. One drag region carrying, left to right: traffic lights, the
-/// sidebar toggle, back/forward, a flexible drag area, the tab strip with its
-/// `+` and collapse chevron, and the settings gear.
-pub(crate) fn titlebar(app: &Luma, cx: &mut Context<Luma>) -> Div {
-    let entity = cx.entity();
+/// One region's head band: the empty drag strip its controls sit in.
+///
+/// No fill and no border — the band *is* the region's own ground, and a rule
+/// under it would be the one horizontal border this shell does not have. Pass
+/// `leftmost` for the region at `x = 0`, which yields the corner to
+/// [`window_controls`].
+pub(crate) fn band(leftmost: bool) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(10.))
+        .gap(px(BAND_GAP))
         .h(px(HEIGHT))
-        .px(px(12.))
-        // The band sits directly on the glass plane — no fill of its own, no
-        // border. Comet separates it from the content by the cards' inset.
-        // The whole bar is the drag region; every control stops propagation
+        .px(px(BAND_PAD))
+        .when(leftmost, |band| band.pl(px(LIGHTS_WIDTH)))
+        // The whole band is the drag region; every control stops propagation
         // so a press doesn't also start a move.
         .on_mouse_down(MouseButton::Left, |_, window, _| {
             window.start_window_move();
         })
-        .child(traffic_lights())
-        .child(
-            icon_button("sidebar-toggle", IconName::PanelLeft)
-                .on_click({
-                    let toggled = entity.clone();
-                    move |_, _, cx| {
-                        toggled.update(cx, |this, cx| {
-                            this.sidebar_hidden = !this.sidebar_hidden;
-                            cx.notify();
-                        });
-                    }
-                })
-                .agent_node(Role::Button, "sidebar-toggle"),
-        )
-        // Back/forward: comet's chrome carries them always, dimmed when there
-        // is nowhere to go. This shell has no navigation history — nothing is
-        // destroyed, so there is nothing to go back to — and the pair is
-        // permanently at rest until a history exists to drive it.
+}
+
+/// The sidebar's show/hide toggle. Rendered by the leftmost *visible* region,
+/// so hiding the sidebar hands the control to the thread rather than taking
+/// it away with the region it opens.
+pub(crate) fn sidebar_toggle(app: &Entity<Luma>) -> impl IntoElement {
+    icon_button("sidebar-toggle", IconName::PanelLeft)
+        .on_click({
+            let toggled = app.clone();
+            move |_, _, cx| {
+                toggled.update(cx, |this, cx| {
+                    this.sidebar_hidden = !this.sidebar_hidden;
+                    cx.notify();
+                });
+            }
+        })
+        .agent_node(Role::Button, "sidebar-toggle")
+}
+
+/// Back/forward: comet's chrome carries them always, dimmed when there is
+/// nowhere to go. This shell has no navigation history — nothing is destroyed,
+/// so there is nothing to go back to — and the pair is permanently at rest
+/// until a history exists to drive it.
+pub(crate) fn history_pair() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(BAND_GAP))
         .child(dim_icon(IconName::ArrowLeft))
         .child(dim_icon(IconName::ArrowRight))
-        .child(div().flex_1())
-        .child(tab_strip(app, &entity))
-        .child(
-            icon_button("settings", IconName::Settings)
-                .on_click({
-                    let opened = entity.clone();
-                    move |_, _, cx| {
-                        opened.update(cx, |this, cx| this.open_settings(cx));
-                    }
-                })
-                .agent_node(Role::Button, "Settings"),
-        )
+}
+
+/// The settings gear, rendered at the trailing edge of the rightmost region's
+/// band — the window's far corner, wherever the regions put it.
+pub(crate) fn settings_button(app: &Entity<Luma>) -> impl IntoElement {
+    icon_button("settings", IconName::Settings)
+        .on_click({
+            let opened = app.clone();
+            move |_, _, cx| {
+                opened.update(cx, |this, cx| this.open_settings(cx));
+            }
+        })
+        .agent_node(Role::Button, "Settings")
 }
 
 /// macOS traffic lights, ours: the native ones are hidden (see
 /// [`hide_native_window_buttons`]) so these three dots are the window's
 /// close / minimise / zoom. Hue is meaning here — the one place the shell
 /// keeps color.
-fn traffic_lights() -> Div {
+///
+/// Absolutely placed at the window's corner and painted last, for the reason
+/// in the module docs.
+///
+/// **Nothing here is interactive but the three dots.** The strip carries no
+/// handler of its own, so a press anywhere else in the corner reaches whatever
+/// this is painted over — which is what keeps a surface that forgot to reserve
+/// the corner a *visible* overlap rather than a silent dead zone that eats its
+/// buttons. Dragging the corner still moves the window, because the [`band`]
+/// underneath is the drag region and the press now gets there.
+pub(crate) fn window_controls() -> Div {
     div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .h(px(HEIGHT))
+        .pl(px(BAND_PAD))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(px(LIGHT_GAP))
         .child(light("close", rgb(0xff5f57), |window| {
             window.remove_window()
         }))
@@ -144,7 +204,7 @@ fn traffic_lights() -> Div {
 fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoElement {
     div()
         .id(id)
-        .size(px(12.))
+        .size(px(LIGHT))
         .rounded_full()
         .bg(color)
         .hover(|dot| dot.opacity(0.8))
@@ -181,10 +241,10 @@ fn dim_icon(icon: IconName) -> Div {
 }
 
 /// The shell tab strip: one rounded chip per open tab, the `+`, and the
-/// collapse chevron. In the titlebar band because the band owns that strip in
-/// comet — controls mounted in the pane itself would sit under the drag
-/// region.
-fn tab_strip(app: &Luma, entity: &Entity<Luma>) -> Div {
+/// collapse chevron. It rides the workspace's own band, which is the width the
+/// strip is *about* — comet right-aligns it into a full-width bar to fake the
+/// same thing.
+pub(crate) fn tab_strip(app: &Luma, entity: &Entity<Luma>) -> Div {
     let active = app.workspace.active().cloned();
     let mut strip = div().flex().items_center().gap(px(4.));
     for tab in app.workspace.iter() {

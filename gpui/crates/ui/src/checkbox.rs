@@ -15,7 +15,7 @@ pub fn luma_checkbox(checked: bool) -> Div {
     div()
         .flex_shrink_0()
         .size(px(12.))
-        .bg(ladder::input())
+        .bg(ladder::apex())
         .when(checked, |el| {
             el.border(px(4.)).border_color(ladder::primary())
         })

@@ -20,7 +20,7 @@ pub fn luma_slider(value: f32, min: f32, max: f32, width: f32) -> Div {
         .h(px(28.))
         .border_1()
         .border_color(ladder::control_border())
-        .bg(ladder::input())
+        .bg(ladder::apex())
         .child(
             div()
                 .absolute()

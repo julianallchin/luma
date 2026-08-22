@@ -5,11 +5,12 @@
 //! Luma paints two surfaces, and which one a component belongs to is decided by
 //! *what it is*, not by which crate it lives in:
 //!
-//! - [`crate::ladder`] — **instrument surfaces.** Tab contents, controls,
-//!   tables, the graph canvas, the timeline. Square, no motion, the six greys.
-//! - [`glass`] — **chrome surfaces.** Titlebar, sidebar, tab strip, panel
-//!   seams, the thread column, overlays. Translucent, [`crate::motion`]'s
-//!   curves, comet's radii.
+//! - [`crate::ladder`] — **planes and instrument surfaces.** The shell's three
+//!   structural planes, tab contents, controls, tables, the graph canvas, the
+//!   timeline. Square, no motion, the ladder's greys.
+//! - [`glass`] — **what floats.** Menus, popovers, overlay grounds, the washes
+//!   and inks interactive states take on a translucent surface.
+//!   [`crate::motion`]'s curves, comet's radii.
 //!
 //! It lived behind the `luma-md` / `luma-chat` crate boundary while the chat
 //! was the only comet-language surface in the app. The shell itself is chrome
@@ -19,11 +20,20 @@
 //! # One ladder, two coverages
 //!
 //! This tier does **not** mint tones of its own. Every surface here is a rung
-//! of [`crate::ladder`] taken to a coverage — [`glass`] is the ladder's
-//! deepest rung, [`panel`] the next, [`overlay`] the next — so the two tiers
-//! read as one progression (`0e → 19 → 27`) and there is exactly one place a
-//! grey is written down. The tier decides *how much desktop shows through*,
-//! never *what colour a surface is*.
+//! of [`crate::ladder`] taken to a coverage — [`panel`] is the ladder's ground,
+//! [`glass`] the chrome plane above it, [`overlay`] the apex above that — so
+//! the two tiers read as one climb (`18 → 26 → 2d`) and there is exactly one
+//! place a grey is written down. The tier decides *how much desktop shows
+//! through*, never *what colour a surface is*.
+//!
+//! # Coverage cannot place a plane
+//!
+//! A translucent surface's brightness is set by whatever is behind the window,
+//! so a plane painted at a coverage has no rung — it has a wallpaper. The
+//! shell's three structural planes (sidebar, thread column, workspace) are
+//! therefore painted straight from [`crate::ladder`], opaque, and this tier
+//! covers what genuinely *floats* over them plus the washes and inks a
+//! translucent surface's own states have to be.
 //!
 //! [`ink`], [`wash`] and [`hairline`] are the exception, and deliberately so:
 //! they are alpha over neutral white, which is what a translucent surface's
@@ -93,7 +103,7 @@ pub fn wash(alpha: f32) -> Hsla {
 /// Alpha of the standard modal backdrop.
 pub const SCRIM_ALPHA: f32 = 0.60;
 
-/// Coverage of the shell's ground plane over whatever is behind the window.
+/// Coverage of a chrome surface over whatever is behind the window.
 ///
 /// macOS is the only platform where the compositor guarantees a blur behind a
 /// translucent window; everywhere else a merely *transparent* panel shows the
@@ -101,10 +111,10 @@ pub const SCRIM_ALPHA: f32 = 0.60;
 /// site below keeps painting without knowing which happened.
 pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
 
-/// Coverage of a chrome card floating on [`glass`]. Lower than
-/// [`GLASS_ALPHA`] on purpose: the card is already a value step up from the
-/// plane, so it can spend more of its coverage on the blur behind it and still
-/// read as raised.
+/// Coverage of the content ground. Lower than [`GLASS_ALPHA`] on purpose: the
+/// ground is the plane the eye reads *through* the least, so it can spend more
+/// of its coverage on the blur behind it — and where the shell has already
+/// painted it opaque, the coverage costs nothing at all.
 pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 
 /// Coverage of a floating chrome surface — menu, popover, picker. Heavier than
@@ -113,37 +123,36 @@ pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 /// thinner blur.
 pub const OVERLAY_ALPHA: f32 = if cfg!(target_os = "macos") { 0.85 } else { 1.0 };
 
-/// The shell's ground plane, and the deepest surface there is: the sidebar and
-/// the titlebar sit straight on it and the content cards float over it.
+/// The chrome plane: what a surface takes to read as *frame* rather than
+/// content. [`ladder::chrome_plane`] at [`GLASS_ALPHA`] — the sidebar's own
+/// rung, so a chrome surface anywhere in the app lands where the sidebar is.
 ///
-/// [`ladder::titlebar_background`] at [`GLASS_ALPHA`], so the blurred desktop
-/// tints it. The tone is the ladder's own deepest rung rather than a sampled
-/// comet grey — that is what keeps `0e → 19 → 27` one value ladder across
-/// both tiers instead of a cliff between a near-black chrome and a much
-/// lighter instrument panel.
+/// The shell paints its sidebar opaque from the ladder (see the module docs);
+/// this is the same plane for anything that can afford the desktop through it.
 #[must_use]
 pub fn glass() -> Hsla {
-    tinted(ladder::titlebar_background(), GLASS_ALPHA)
+    tinted(ladder::chrome_plane(), GLASS_ALPHA)
 }
 
-/// A chrome card floating on [`glass`] — the thread column, and any pane whose
-/// contents are chrome rather than instrument. One rung up the ladder
-/// ([`ladder::gutter`]) at [`PANEL_ALPHA`].
+/// The content ground under a chrome surface — the thread column's own floor.
+/// [`ladder::background`] at [`PANEL_ALPHA`].
 ///
-/// The instrument tier's answer to the same question is
-/// [`ladder::background`], opaque: a timeline or a graph canvas is a lit panel
-/// inset in the frame, not a pane of it.
+/// The coverage is a no-op wherever the shell has already painted the ground
+/// opaque underneath, which is everywhere it matters: a tone at any alpha over
+/// *itself* resolves to itself. That is what lets the transcript's fade band
+/// arrive at exactly the colour it is sitting on without knowing which of the
+/// two painted it.
 #[must_use]
 pub fn panel() -> Hsla {
-    tinted(ladder::gutter(), PANEL_ALPHA)
+    tinted(ladder::background(), PANEL_ALPHA)
 }
 
 /// A floating chrome surface: menu, popover, the plane an overlay screen sits
-/// on. [`ladder::trim`] at [`OVERLAY_ALPHA`] — one rung above [`panel`], so a
-/// thing that floats over a card still reads above it.
+/// on. [`ladder::apex`] at [`OVERLAY_ALPHA`] — the ladder's brightest plane,
+/// so a thing that floats over the chrome still reads above it.
 #[must_use]
 pub fn overlay() -> Hsla {
-    tinted(ladder::trim(), OVERLAY_ALPHA)
+    tinted(ladder::apex(), OVERLAY_ALPHA)
 }
 
 /// A ladder tone taken to the glass tier at `alpha`. The single conversion
@@ -282,9 +291,9 @@ mod tests {
     #[test]
     fn glass_surfaces_are_ladder_rungs_at_a_coverage() {
         for (surface, rung, alpha) in [
-            (glass(), ladder::titlebar_background(), GLASS_ALPHA),
-            (panel(), ladder::gutter(), PANEL_ALPHA),
-            (overlay(), ladder::trim(), OVERLAY_ALPHA),
+            (glass(), ladder::chrome_plane(), GLASS_ALPHA),
+            (panel(), ladder::background(), PANEL_ALPHA),
+            (overlay(), ladder::apex(), OVERLAY_ALPHA),
         ] {
             assert_eq!(surface.l, Hsla::from(rung).l);
             assert_eq!(surface.a, alpha);

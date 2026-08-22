@@ -346,10 +346,11 @@ comet. The new rule, which keeps the same one-canonical-way force:
   comet's radii.
 
 Two named surfaces, each internally singular, and which one a component belongs
-to is decided by *what it is*, not by which crate it happens to live in. This
-requires an edit to `CLAUDE.md`'s UI-design-system section; do not land the
-shell without it, or the next agent reads a contract the code has already
-broken.
+to is decided by *what it is*, not by which crate it happens to live in. The
+GPUI implementation now diverges from `CLAUDE.md`'s web-derived ladder; the
+proposed contract text is parked with the Codex-reference gauntlet pending an
+explicit design decision. This spec records the implementation in the meantime
+instead of claiming that the repository-wide contract already changed.
 
 ---
 
@@ -471,22 +472,27 @@ Separate work item; the tab type and its seam exist from P3.
 
 ## 9. Style boundary (normative)
 
-`CLAUDE.md` is Julian's file; an agent does not edit it. Until the UI-design
-section carries this, **the boundary below is normative for the shell work** and
-supersedes `docs/specs/agent-chat-gpui.md` §0's crate-boundary rule.
+The GPUI app's implemented ladder is Codex-derived and inverts the web app's.
+`CLAUDE.md` does **not** yet carry that split; its proposed amendment is parked
+pending explicit approval. What follows documents the GPUI implementation's
+tier split and supersedes `docs/specs/agent-chat-gpui.md` §0's crate-boundary
+rule without pretending the broader repository contract has already moved.
 
-Two surfaces. Which one a component belongs to is decided by *what it is*, not
-by which crate it lives in.
+Two tiers. Which one a component belongs to is decided by *what it is*, not by
+which crate it lives in.
 
-- **`luma_ui::ladder` — instrument surfaces.** Tab contents: the timeline, the
-  graph canvas, tables, controls, the visualizer's plates. Square, no motion,
-  the six greys. Every "Hard rule" in `CLAUDE.md` applies here without
-  exception.
-- **`luma_ui::glass` — chrome surfaces.** Titlebar, sidebar, tab strip, panel
-  seams, the thread column, overlays. Translucent (`GLASS_ALPHA` 0.80 macOS,
-  1.0 elsewhere), comet's radii, and the one place motion is allowed:
-  `luma_ui::motion` drives region slides (`RESIZE`, 200ms) and tab transitions
-  (`TAB_SLIDE`, 150ms). Nothing else animates.
+- **`luma_ui::ladder` — planes and instrument surfaces.** The shell's three
+  structural planes (sidebar, thread column, workspace) plus tab contents: the
+  timeline, the graph canvas, tables, controls, the visualizer's plates.
+  Square, no motion, opaque. A structural plane never paints at a coverage — a
+  surface whose brightness is decided by the desktop behind the window has no
+  rung on any ladder.
+- **`luma_ui::glass` — what floats.** Menus, popovers, overlay grounds, the tab
+  strip's chips, and the washes and inks interactive states take on a
+  translucent surface. Coverage (`GLASS_ALPHA` 0.80 macOS, 1.0 elsewhere),
+  comet's radii, and the one place motion is allowed: `luma_ui::motion` drives
+  region slides (`RESIZE`, 200ms) and tab transitions (`TAB_SLIDE`, 150ms).
+  Nothing else animates.
 
   **One curve, one ladder.** Everything that moves eases on `motion::ROOT` —
   `cubic-bezier(0.16, 1, 0.3, 1)`, comet's signature expo-out — over a duration
@@ -655,6 +661,53 @@ round-one verdict (scratchpad `shell-critic-verdict-r1.md`). Its deviations:
     painting from both tiers. The overlay *plane* is now `glass::scrim()`, so
     the day a body is inset as a card the surround is already right; insetting
     them is geometry and unowned.
+
+The shell frame was re-cut against the measured Codex reference
+(scratchpad `codex-reference.md`), which disagrees with §1 and §5 above. Its
+deviations, in the same numbering:
+
+30. **There is no titlebar band.** §1's diagram puts a full-width bar across
+    the top with the regions beneath it. The window now splits **vertically
+    first**: each region is a full-height column carrying its own head band
+    across its own width (`chrome::band`). The bar was not a style choice that
+    could be repainted — a full-width bar cuts every vertical seam off at
+    `y = HEIGHT`, and a seam that stops is a border on a box. The bands still
+    align, because they share one height rather than one element.
+31. **Regions are flush and square; the thread column is not an inset card.**
+    §5 and §10.28 have the centre and the workspace as rounded cards inset on
+    the glass plane, with depth carried by the plane showing between them.
+    Depth is now a value step across a **seam** — one full-height rule, `y = 0`
+    to the bottom, and the only border the shell draws in either axis. There
+    are zero horizontal borders: a region's head is separated from its body by
+    whitespace alone. `shell::card`, `CARD_RADIUS` and `CARD_GAP` are gone.
+32. **A seam's brightness is a function of what it separates**, so it is a
+    *pair* of derived ladder values and not one trim constant. The reference's
+    depth inversion **was adopted**: content ground is `#181818`, sidebar
+    chrome is raised at `#262626`. `ladder::seam_plane()` derives `#474747`
+    between those planes — deliberately one value below the measured
+    `#484848` — while `ladder::seam_hint()` derives the exact `#2b2b2b` rule
+    between the two `#181818` content grounds. The derivation and its one-value
+    cost are pinned in `ladder.rs` tests.
+33. **The traffic lights are the shell's topmost layer, not a region's child.**
+    With no full-width bar above the overlay plane, an overlay would cover the
+    only controls that move and close the window — and the venue picker cannot
+    be dismissed while no venue is selected (§10.17), so first run would be a
+    trapped window. `chrome::window_controls` is painted last, at the window's
+    corner; the leftmost region's band reserves `chrome::LIGHTS_WIDTH` for it,
+    and an overlay plane insets its body by `chrome::HEIGHT` so its own toolbar
+    starts where a region's body does. The strip itself carries **no handler
+    but the three dots**: a surface that forgets to reserve the corner then
+    reads as a visible overlap instead of silently losing its buttons to a
+    drag region. (It did: the settings screen's Back button sat under it.)
+    Overlay bodies reserve with padding rather than by wearing a `band`,
+    because a band is a window-drag region. The modal plane owns a hitbox and
+    swallows presses so covered shell controls cannot mutate behind it. The
+    otherwise-undismissable venue picker carries its own settings door in the
+    reserved head row; it no longer borrows the covered shell gear through a
+    click-through scrim.
+    The sidebar toggle and the settings gear ride the *leftmost* and
+    *rightmost* visible region's band respectively, so hiding a region never
+    takes away the control that brings it back.
 
 ## 11. Smells flagged, not fixed
 

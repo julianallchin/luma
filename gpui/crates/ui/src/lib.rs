@@ -1,11 +1,14 @@
 //! Luma's design system, in GPUI.
 //!
-//! The web app's UI contract (CLAUDE.md, "UI design system") is a brutalist
-//! instrument panel: a six-step grey ladder carries the whole hierarchy, depth
-//! comes from stacked planes separated by darker trim, corners are square,
+//! The UI contract (CLAUDE.md, "UI design system") is a brutalist instrument
+//! panel: a grey ladder carries the whole hierarchy, corners are square,
 //! nothing animates, and there is exactly *one* style per control. This crate
 //! is that contract expressed once for the native stack, so the screenshot
 //! harness and the real app cannot render two different buttons.
+//!
+//! Which *way* the ladder points is the one thing this stack does not share
+//! with the web app: here the content ground is the darkest plane and chrome is
+//! raised above it. See [`ladder`], which is where that lives and why.
 //!
 //! # Interface
 //!
