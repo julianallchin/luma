@@ -616,12 +616,20 @@ impl Renderer {
         // Both scene-geometry shaders open with the shared bind-group
         // declarations; see `scene_bindings.wgsl`.
         let bindings = include_str!("shaders/scene_bindings.wgsl");
+        let fixture_light = include_str!("shaders/fixture_light.wgsl");
         let scene_module = shader(
             &device,
             "scene",
-            &format!("{bindings}{}", include_str!("shaders/scene.wgsl")),
+            &format!(
+                "{bindings}{fixture_light}{}",
+                include_str!("shaders/scene.wgsl")
+            ),
         );
-        let haze_module = shader(&device, "haze", include_str!("shaders/haze.wgsl"));
+        let haze_module = shader(
+            &device,
+            "haze",
+            &format!("{fixture_light}{}", include_str!("shaders/haze.wgsl")),
+        );
         let temporal_module = shader(
             &device,
             "haze-temporal",
@@ -1711,20 +1719,20 @@ impl Renderer {
         }
 
         // --- haze ------------------------------------------------------------
-        let haze_lights: Vec<_> = frame
-            .haze_lights
+        let fixture_cones: Vec<_> = frame
+            .fixture_cones
             .iter()
-            .take(crate::frame::MAX_LIGHTS)
-            .map(sanitize_haze_light)
+            .take(crate::frame::MAX_FIXTURE_CONES)
+            .map(sanitize_fixture_cone)
             .collect();
-        let cores: Vec<LightCore> = haze_lights
+        let cores: Vec<LightCore> = fixture_cones
             .iter()
             .map(|l| LightCore {
                 position: l.position.to_array(),
                 range: l.range.clamp(0.05, 100.0),
             })
             .collect();
-        let rests: Vec<LightRest> = haze_lights
+        let rests: Vec<LightRest> = fixture_cones
             .iter()
             .map(|l| LightRest {
                 direction: l
@@ -1751,14 +1759,14 @@ impl Renderer {
             wgpu::BufferUsages::STORAGE,
             "light-rest",
         );
-        let tile_key = haze_tile_key(&haze_lights, frame.camera, haze_size);
+        let tile_key = haze_tile_key(&fixture_cones, frame.camera, haze_size);
         if self
             .haze_tile_cache
             .as_ref()
             .is_none_or(|cache| cache.key != tile_key)
         {
             let (headers, indices, columns, rows) =
-                haze_tiles(&haze_lights, view_proj, haze_size.0, haze_size.1);
+                haze_tiles(&fixture_cones, view_proj, haze_size.0, haze_size.1);
             self.haze_tile_cache = Some(HazeTileCache {
                 key: tile_key,
                 headers: self.storage(
@@ -1788,7 +1796,7 @@ impl Renderer {
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
                 camera_pos: frame.camera.eye.extend(1.0).to_array(),
                 params: [
-                    haze_lights.len() as f32,
+                    fixture_cones.len() as f32,
                     haze_density,
                     frame.haze_steps as f32,
                     // Feeding track time makes the noise drift identical on
@@ -2232,7 +2240,7 @@ fn overlay_pipeline_index(overlay: &Overlay) -> usize {
 mod tests {
     use glam::{Mat4, Vec3};
 
-    use crate::frame::{Camera, HazeLight};
+    use crate::frame::{Camera, FixtureCone};
 
     use super::{
         cascade_matrices, downsample, haze_tile_key, haze_tiles, CompositeUniform, Globals,
@@ -2301,7 +2309,7 @@ mod tests {
             target: Vec3::ZERO,
             fov_y_deg: 48.0,
         };
-        let light = HazeLight {
+        let light = FixtureCone {
             position: Vec3::ZERO,
             range: 5.0,
             direction: Vec3::Z,
@@ -2351,7 +2359,7 @@ mod tests {
     fn projected_cone_lists_are_local_not_global() {
         let view_proj = Mat4::perspective_rh(48f32.to_radians(), 16.0 / 9.0, 0.1, 100.0)
             * Mat4::look_at_rh(Vec3::new(4.5, -5.0, 3.0), Vec3::ZERO, Vec3::Z);
-        let light = HazeLight {
+        let light = FixtureCone {
             position: Vec3::ZERO,
             range: 5.0,
             direction: Vec3::Z,
@@ -2383,7 +2391,7 @@ mod tests {
                 let direction = (Vec3::new(x * 0.25, y * 0.2, 3.0)
                     - Vec3::new(x * 0.5, y * 0.5, 0.0))
                 .normalize();
-                HazeLight {
+                FixtureCone {
                     position: Vec3::new(x * 0.5, y * 0.5, 0.0),
                     range: 5.0 + index as f32 * 0.1,
                     direction,
@@ -2436,7 +2444,7 @@ mod tests {
     /// Independent conservative oracle: numerical samples can prove a ray is
     /// inside a finite cone, but never claim a miss. Every proven hit must be
     /// present in the CPU-generated tile list.
-    fn sampled_ray_hits_cone(eye: Vec3, ray: Vec3, light: &HazeLight) -> bool {
+    fn sampled_ray_hits_cone(eye: Vec3, ray: Vec3, light: &FixtureCone) -> bool {
         let oc = eye - light.position;
         let b = oc.dot(ray);
         let disc = b * b - (oc.length_squared() - light.range * light.range);
@@ -2582,7 +2590,7 @@ fn pad_at_least_one<T: Pod + Zeroable>(mut v: Vec<T>) -> Vec<T> {
 /// The projected AABB encloses each range sphere; if it crosses the eye plane,
 /// every tile receives the light rather than risking a false negative.
 fn haze_tiles(
-    lights: &[crate::frame::HazeLight],
+    lights: &[crate::frame::FixtureCone],
     view_proj: Mat4,
     width: u32,
     height: u32,
@@ -2670,7 +2678,7 @@ fn haze_tiles(
     (headers, indices, columns, rows)
 }
 
-fn sanitize_haze_light(light: &crate::frame::HazeLight) -> crate::frame::HazeLight {
+fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::FixtureCone {
     let finite = |value: f32, fallback: f32| value.is_finite().then_some(value).unwrap_or(fallback);
     let finite_vec =
         |value: Vec3, fallback: Vec3| value.is_finite().then_some(value).unwrap_or(fallback);
@@ -2678,7 +2686,7 @@ fn sanitize_haze_light(light: &crate::frame::HazeLight) -> crate::frame::HazeLig
     let cos_field = finite(light.cos_field, cos_beam)
         .clamp(0.01, 1.0)
         .min(cos_beam);
-    crate::frame::HazeLight {
+    crate::frame::FixtureCone {
         position: finite_vec(light.position, Vec3::ZERO)
             .clamp(Vec3::splat(-10_000.0), Vec3::splat(10_000.0)),
         range: finite(light.range, 0.05).clamp(0.05, 100.0),
@@ -2710,8 +2718,8 @@ fn haze_history_key(
     let mut push = |value: u32| {
         topology = (topology ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3);
     };
-    push(frame.haze_lights.len() as u32);
-    for light in &frame.haze_lights {
+    push(frame.fixture_cones.len() as u32);
+    for light in &frame.fixture_cones {
         for value in light.position.to_array() {
             push(value.to_bits());
         }
@@ -2742,7 +2750,7 @@ fn haze_history_key(
 }
 
 fn haze_tile_key(
-    lights: &[crate::frame::HazeLight],
+    lights: &[crate::frame::FixtureCone],
     camera: crate::frame::Camera,
     size: (u32, u32),
 ) -> HazeTileKey {

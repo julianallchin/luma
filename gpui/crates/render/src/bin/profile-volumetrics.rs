@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 
 use glam::Vec3;
 use luma_render::assets::Library;
-use luma_render::frame::HazeLight;
+use luma_render::frame::FixtureCone;
 use luma_render::scene_desc::{CameraPose, DebugView, Environment, RenderSettings, Scene};
 use luma_render::{build_frame_with, FrameTimings, Renderer, LIVE_SUBFRAMES};
 use serde::Serialize;
@@ -517,7 +517,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         grid_draws: base.grid_draws,
         overlays: Vec::new(),
         point_lights: base.point_lights.clone(),
-        haze_lights: Vec::with_capacity(count),
+        fixture_cones: Vec::with_capacity(count),
         clear_color: base.clear_color,
         ambient: base.ambient,
         directional: base.directional,
@@ -531,7 +531,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
     for index in 0..count {
         let column = (index % 32) as f32;
         let row = (index / 32) as f32;
-        frame.haze_lights.push(HazeLight {
+        frame.fixture_cones.push(FixtureCone {
             position: Vec3::new((column - 15.5) * 0.18, (row - 7.5) * 0.18, 0.15),
             range: 8.0,
             direction: Vec3::Z,

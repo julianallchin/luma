@@ -19,8 +19,8 @@ use crate::scene_desc::{Definition, PrimitiveState, Scene};
 /// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
 pub type Definitions = std::collections::BTreeMap<String, Definition>;
 
-/// Shader cap on the haze light array.
-pub const MAX_LIGHTS: usize = 512;
+/// Shader cap shared by fixture surface lighting and volumetric transport.
+pub const MAX_FIXTURE_CONES: usize = 512;
 
 /// One uploadable triangle list.
 pub struct MeshData {
@@ -63,10 +63,11 @@ pub struct MaterialTextures {
     pub emissive: Option<usize>,
 }
 
-/// A cone in the haze pass. Field order mirrors the two `SoA` storage buffers the
-/// shader binds: the `position`/`range` pair alone drives the sphere reject.
+/// One fixture's finite light cone, shared by opaque surface lighting and haze.
+/// Field order mirrors the two `SoA` storage buffers the shaders bind: the
+/// `position`/`range` pair alone drives the sphere reject.
 #[derive(Debug, Clone, Copy)]
-pub struct HazeLight {
+pub struct FixtureCone {
     /// Apex of the cone, in world space.
     pub position: Vec3,
     /// Cull radius; the beam tapers to nothing over its last 30%.
@@ -146,8 +147,8 @@ pub struct Frame {
     pub overlays: Vec<Overlay>,
     /// Fixture face lights, in submission order.
     pub point_lights: Vec<PointLight>,
-    /// Cones the haze pass integrates, capped at [`MAX_LIGHTS`].
-    pub haze_lights: Vec<HazeLight>,
+    /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
+    pub fixture_cones: Vec<FixtureCone>,
     /// Linear, the `<color attach="background">` value.
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
@@ -428,7 +429,7 @@ pub fn build_with(
     let mut bank = Bank::default();
     let mut draws = Vec::new();
     let mut point_lights = Vec::new();
-    let mut haze_lights = Vec::new();
+    let mut fixture_cones = Vec::new();
 
     // --- floor -------------------------------------------------------------
     // `<mesh rotation={[-PI/2,0,0]}><planeGeometry args={[200,200]}/>`. Model
@@ -527,7 +528,7 @@ pub fn build_with(
             let cone = cone_from_opening(PIXEL);
             let dir = (r * (rot_three * Vec3::Z)).normalize();
             for head in 0..head_count {
-                if haze_lights.len() >= MAX_LIGHTS {
+                if fixture_cones.len() >= MAX_FIXTURE_CONES {
                     break;
                 }
                 let head_state = state(&fixture.id, head).unwrap_or(DARK);
@@ -537,7 +538,7 @@ pub fn build_with(
                 }
                 let idx = ((head as f32 * pixels_per_head + pixels_per_head / 2.0) as usize)
                     .min(pixels.len() - 1);
-                haze_lights.push(HazeLight {
+                fixture_cones.push(FixtureCone {
                     position: base.transform_point3(pixels[idx]),
                     range: cone.range,
                     direction: dir,
@@ -607,7 +608,7 @@ pub fn build_with(
             });
         }
 
-        if !kind.emits_beam() || intensity < 0.01 || haze_lights.len() >= MAX_LIGHTS {
+        if !kind.emits_beam() || intensity < 0.01 || fixture_cones.len() >= MAX_FIXTURE_CONES {
             continue;
         }
         let cone = cone_from_opening(luminaire_for(def, Some(kind)));
@@ -615,7 +616,7 @@ pub fn build_with(
             * Mat3::from_rotation_y(head_state.position[0].to_radians())
             * Mat3::from_rotation_x(-head_state.position[1].to_radians())
             * Vec3::NEG_Y;
-        haze_lights.push(HazeLight {
+        fixture_cones.push(FixtureCone {
             position: base.transform_point3(Vec3::ZERO),
             range: cone.range,
             direction: (r * dir_three).normalize(),
@@ -672,7 +673,7 @@ pub fn build_with(
         draws,
         grid_draws,
         point_lights,
-        haze_lights,
+        fixture_cones,
         clear_color: Vec3::from(scene.render.environment.background),
         ambient: Vec3::from(scene.render.environment.ambient_color)
             * scene.render.environment.ambient_intensity.max(0.0),
