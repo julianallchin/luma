@@ -12,7 +12,8 @@ struct Globals {
     // xyz: direction toward the light. w: 1 when the directional light exists.
     dir_to_light: vec4<f32>,
     dir_color: vec4<f32>,
-    // x: point-light count, y: shadow map texel size, z: shadows enabled.
+    // x: point-light count, y: shadow-map texel size, z: shadows enabled,
+    // w: material debug-view code.
     params: vec4<f32>,
 };
 
@@ -25,7 +26,7 @@ struct Instance {
     base_color: vec4<f32>,
     // rgb: emissive radiance, a: roughness.
     emissive: vec4<f32>,
-    // x: 1 when the material is flat-shaded, 0 when the vertex normal is real.
+    // x: flat shading, y: normal-map scale, z: occlusion strength.
     flags: vec4<f32>,
 };
 

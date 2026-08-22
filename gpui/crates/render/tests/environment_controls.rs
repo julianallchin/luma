@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use luma_render::assets::Library;
 use luma_render::build_frame_with;
 use luma_render::scene_desc::{
-    CameraPose, DirectionalLight, Environment, HazeSettings, Piece, RenderSettings, Scene,
+    CameraPose, DebugView, DirectionalLight, Environment, HazeSettings, Piece, RenderSettings,
+    Scene,
 };
 
 fn scene(render: RenderSettings, pieces: Vec<Piece>) -> Scene {
@@ -156,6 +157,21 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
     );
 
     let ambient_only = render(probe_settings(left, 0.0, false));
+    let mut black = probe_settings(left, 0.0, false);
+    black.environment.ambient_intensity = 0.0;
+    let dark = render(black);
+    let mut ambient_settings = probe_settings(left, 0.0, false);
+    ambient_settings.environment.ambient_intensity = 0.5;
+    let ambient_visible = render(ambient_settings);
+    assert!(
+        ambient_visible
+            .chunks_exact(4)
+            .zip(dark.chunks_exact(4))
+            .any(|(ambient, dark)| (0..3).any(|channel| ambient[channel] > dark[channel])),
+        "ambient did not remain independently controllable with the sun off: {:.4} vs {:.4}",
+        mean_rgb(&ambient_visible),
+        mean_rgb(&dark),
+    );
     assert!(
         mean_rgb(&left_direct) > mean_rgb(&ambient_only) + 1.0,
         "disabling shadows also removed direct light"
@@ -274,7 +290,10 @@ fn textured_pbr_proof_scene_resolves_deterministically() {
         "proof asset must exercise sRGB textures"
     );
     assert!(
-        first.draws.iter().any(|draw| draw.image.is_some()),
+        first
+            .draws
+            .iter()
+            .any(|draw| draw.textures.base_color.is_some()),
         "proof asset must bind a base-colour texture"
     );
     assert!(
@@ -291,7 +310,7 @@ fn textured_pbr_proof_scene_resolves_deterministically() {
             .iter()
             .map(|draw| {
                 (
-                    draw.image,
+                    draw.textures,
                     draw.material.base_color.to_array(),
                     draw.material.metallic.to_bits(),
                     draw.material.roughness.to_bits(),
@@ -324,6 +343,216 @@ fn textured_pbr_proof_scene_resolves_deterministically() {
         renderer.upload_stats(),
         first_uploads,
         "unchanged mesh and texture identities must not upload again"
+    );
+}
+
+fn stable_pixel_hash(pixels: &[u8]) -> u64 {
+    pixels.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn mean_channel(pixels: &[u8], channel: usize) -> f64 {
+    pixels
+        .chunks_exact(4)
+        .map(|pixel| f64::from(pixel[channel]))
+        .sum::<f64>()
+        / (pixels.len() / 4) as f64
+}
+
+#[test]
+fn material_lab_maps_debug_views_and_uploads_are_deterministic() {
+    const WIDTH: u32 = 128;
+    const HEIGHT: u32 = 96;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens");
+    let piece = || Piece {
+        id: "material-lab".into(),
+        mesh_path: "material-lab.gltf".into(),
+        pos: [0.0, 0.0, 0.75],
+        rot: [0.0, 0.0, 0.0],
+        scale: 1.0,
+    };
+    let mut base = RenderSettings::dark_stage(45.0, 1.0);
+    base.environment = Environment {
+        background: [0.0; 3],
+        ambient_color: [1.0; 3],
+        ambient_intensity: 0.5,
+    };
+    base.haze.enabled = false;
+    base.sun = Some(DirectionalLight {
+        direction: [2.0, -3.0, 6.0],
+        color: [1.0; 3],
+        intensity: 1.0,
+        shadows: true,
+    });
+
+    let mut library = Library::new(root);
+    let definitions = BTreeMap::new();
+    let mut renderer = luma_render::Renderer::new().unwrap();
+    let mut hashes = Vec::new();
+    for debug_view in [
+        DebugView::Pbr,
+        DebugView::BaseColor,
+        DebugView::Normals,
+        DebugView::Metallic,
+        DebugView::Roughness,
+        DebugView::Shadow,
+        DebugView::Depth,
+        DebugView::VolumetricAccumulation,
+    ] {
+        let mut settings = base.clone();
+        settings.debug_view = debug_view;
+        let frame = build_frame_with(
+            &scene(settings, vec![piece()]),
+            &definitions,
+            &|_, _| None,
+            0.0,
+            &mut library,
+        )
+        .unwrap();
+        let material = frame
+            .draws
+            .iter()
+            .find(|draw| draw.textures.base_color.is_some())
+            .expect("material-lab primitive");
+        assert!(material.textures.normal.is_some());
+        assert!(material.textures.metallic_roughness.is_some());
+        assert!(material.textures.occlusion.is_some());
+        assert!(material.textures.emissive.is_some());
+        assert!(frame.meshes[material.mesh]
+            .vertices
+            .iter()
+            .all(|vertex| vertex.tangent.iter().all(|value| value.is_finite())));
+
+        let first = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+        let uploads = renderer.upload_stats();
+        let second = renderer.render(&frame, WIDTH, HEIGHT, 1).unwrap();
+        assert_eq!(
+            first, second,
+            "{debug_view:?} changed across identical draws"
+        );
+        assert_eq!(
+            renderer.upload_stats(),
+            uploads,
+            "{debug_view:?} re-uploaded resident resources"
+        );
+        hashes.push(stable_pixel_hash(&first));
+    }
+    assert_eq!(
+        hashes,
+        [
+            0xb753_1cbe_8117_99f5,
+            0xadc8_cdaa_603a_d066,
+            0xc75b_c91d_43aa_766f,
+            0x3736_a13a_731a_8c57,
+            0x9e3d_0e0a_4272_7a85,
+            0x655f_262b_2eb6_0846,
+            0x988b_937c_03c0_970c,
+            0xac0c_ad64_9319_a325,
+        ],
+        "material/debug golden output drifted"
+    );
+
+    // The lab's normal map points strongly along tangent-space +Y. Reflecting
+    // model X must leave that physical bitangent direction unchanged: T flips,
+    // so tangent.w must flip too. Reverse triangle winding only compensates
+    // raster culling; it does not change the tangent frame under test.
+    let mut normal_settings = base;
+    normal_settings.debug_view = DebugView::Normals;
+    let mut original = build_frame_with(
+        &scene(normal_settings.clone(), vec![piece()]),
+        &definitions,
+        &|_, _| None,
+        0.0,
+        &mut library,
+    )
+    .unwrap();
+    let mut mirrored = build_frame_with(
+        &scene(normal_settings, vec![piece()]),
+        &definitions,
+        &|_, _| None,
+        0.0,
+        &mut library,
+    )
+    .unwrap();
+    let original_draw = original
+        .draws
+        .iter()
+        .position(|draw| draw.textures.normal.is_some())
+        .unwrap();
+    let mirrored_draw = mirrored
+        .draws
+        .iter()
+        .position(|draw| draw.textures.normal.is_some())
+        .unwrap();
+    let mesh = mirrored.draws[mirrored_draw].mesh;
+    mirrored.draws[mirrored_draw].model *= Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+    let mut reversed = Vec::with_capacity(mirrored.meshes[mesh].indices.len());
+    for triangle in mirrored.meshes[mesh].indices.chunks_exact(3) {
+        reversed.extend([triangle[0], triangle[2], triangle[1]]);
+    }
+    mirrored.meshes[mesh].indices = reversed.into();
+    mirrored.meshes[mesh].key.push_str("#mirrored-x");
+    let original_mesh = original.draws[original_draw].mesh;
+    original.meshes[original_mesh]
+        .key
+        .push_str("#original-normal");
+    let original_pixels = renderer.render(&original, WIDTH, HEIGHT, 1).unwrap();
+    let mirrored_pixels = renderer.render(&mirrored, WIDTH, HEIGHT, 1).unwrap();
+    assert_eq!(
+        (
+            stable_pixel_hash(&original_pixels),
+            stable_pixel_hash(&mirrored_pixels),
+        ),
+        (0xc75b_c91d_43aa_766f, 0x0e74_ae02_1965_fcc4),
+        "normal-map orientation golden drifted"
+    );
+    assert!(
+        (mean_channel(&original_pixels, 1) - mean_channel(&mirrored_pixels, 1)).abs() < 1.0,
+        "mirroring reversed the mapped bitangent: {:.2} vs {:.2}",
+        mean_channel(&original_pixels, 1),
+        mean_channel(&mirrored_pixels, 1),
+    );
+}
+
+#[test]
+fn procedural_emissive_survives_the_absent_texture_identity() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens/scenes.json");
+    let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
+    let mut catalogue = luma_render::Catalogue::load(&path).unwrap();
+    let scene = catalogue
+        .scenes
+        .iter_mut()
+        .find(|scene| scene.id == "led-bar")
+        .unwrap();
+    scene.render.environment = Environment::DARK;
+    scene.render.sun = None;
+    scene.render.haze.enabled = false;
+    scene.render.show_grid = false;
+    scene.render.debug_view = DebugView::Pbr;
+    let mut library = Library::new(meshes);
+    let frame = luma_render::build_frame(scene, &catalogue.definitions, 4.2, &mut library).unwrap();
+    assert!(
+        frame
+            .draws
+            .iter()
+            .any(|draw| draw.textures.emissive.is_none()
+                && draw.material.emissive.max_element() > 1.0)
+    );
+    let pixels = luma_render::Renderer::new()
+        .unwrap()
+        .render(&frame, 128, 96, 1)
+        .unwrap();
+    assert_eq!(
+        stable_pixel_hash(&pixels),
+        0x18ca_fdc6_452f_4226,
+        "legacy procedural-emissive output drifted"
+    );
+    assert!(
+        pixels
+            .chunks_exact(4)
+            .any(|pixel| pixel[0].max(pixel[1]).max(pixel[2]) > 96),
+        "procedural emitters went black when no emissive texture was bound"
     );
 }
 

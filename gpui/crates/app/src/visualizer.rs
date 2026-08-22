@@ -179,6 +179,7 @@ struct RenderLab {
     haze_enabled: bool,
     haze_density: f32,
     grid_enabled: bool,
+    debug_view: scene_desc::DebugView,
 }
 
 impl RenderLab {
@@ -195,6 +196,7 @@ impl RenderLab {
             haze_enabled: true,
             haze_density: 0.8,
             grid_enabled: editor_lit,
+            debug_view: scene_desc::DebugView::Pbr,
         }
     }
 
@@ -207,6 +209,32 @@ impl RenderLab {
             horizontal * azimuth.sin(),
             elevation.sin(),
         ]
+    }
+
+    fn cycle_debug_view(&mut self) {
+        self.debug_view = match self.debug_view {
+            scene_desc::DebugView::Pbr => scene_desc::DebugView::BaseColor,
+            scene_desc::DebugView::BaseColor => scene_desc::DebugView::Normals,
+            scene_desc::DebugView::Normals => scene_desc::DebugView::Metallic,
+            scene_desc::DebugView::Metallic => scene_desc::DebugView::Roughness,
+            scene_desc::DebugView::Roughness => scene_desc::DebugView::Shadow,
+            scene_desc::DebugView::Shadow => scene_desc::DebugView::Depth,
+            scene_desc::DebugView::Depth => scene_desc::DebugView::VolumetricAccumulation,
+            scene_desc::DebugView::VolumetricAccumulation => scene_desc::DebugView::Pbr,
+        };
+    }
+
+    fn debug_label(&self) -> &'static str {
+        match self.debug_view {
+            scene_desc::DebugView::Pbr => "PBR",
+            scene_desc::DebugView::BaseColor => "Base color",
+            scene_desc::DebugView::Normals => "Normals",
+            scene_desc::DebugView::Metallic => "Metallic",
+            scene_desc::DebugView::Roughness => "Roughness",
+            scene_desc::DebugView::Shadow => "Shadow",
+            scene_desc::DebugView::Depth => "Depth",
+            scene_desc::DebugView::VolumetricAccumulation => "Volume accumulation",
+        }
     }
 }
 
@@ -1003,6 +1031,7 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
             lab.grid_enabled,
             LabToggle::Grid,
         ))
+        .child(debug_view_button(app, lab.debug_label()))
         .child(
             div()
                 .text_size(px(10.))
@@ -1013,6 +1042,22 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
                 ))
                 .agent_node(Role::Text, "Renderer draw timing"),
         )
+}
+
+fn debug_view_button(app: &Entity<Luma>, view: &'static str) -> impl IntoElement {
+    let app = app.clone();
+    let label = format!("Debug view: {view}");
+    luma_ui::luma_button(&label, Enabled::Yes)
+        .id("renderer-debug-view")
+        .on_click(move |_, _, cx| {
+            app.update(cx, |this, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.render_lab.cycle_debug_view();
+                }
+                cx.notify();
+            });
+        })
+        .agent_node(Role::Button, label)
 }
 
 fn lab_toggle(
@@ -1203,6 +1248,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let haze_enabled = state.render_lab.haze_enabled;
     let haze_density = state.render_lab.haze_density;
     let grid_enabled = state.render_lab.grid_enabled;
+    let debug_view = state.render_lab.debug_view;
     let sized = app.clone();
 
     canvas(
@@ -1245,6 +1291,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         scene.render.haze.enabled = haze_enabled;
                         scene.render.haze.density = haze_density;
                         scene.render.show_grid = grid_enabled;
+                        scene.render.debug_view = debug_view;
                         match gpu.frame(
                             scene,
                             &stage.definitions,

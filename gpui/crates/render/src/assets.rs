@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 
-/// Interleaved position + normal + `TEXCOORD_0`.
+/// Interleaved position + normal + `TEXCOORD_0` + tangent basis.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -21,6 +21,9 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// `TEXCOORD_0`, or zero when the primitive carries none.
     pub uv: [f32; 2],
+    /// Unit tangent xyz and bitangent handedness in w. Generated when glTF
+    /// omits `TANGENT` so normal maps never depend on an optional attribute.
+    pub tangent: [f32; 4],
 }
 
 /// A decoded `baseColorTexture`, sRGB-encoded RGBA8, tightly packed.
@@ -46,6 +49,10 @@ pub struct Material {
     pub roughness: f32,
     /// glTF `emissiveFactor`, added to the shaded result unlit.
     pub emissive: Vec3,
+    /// Scalar applied to the tangent-space normal map's XY channels.
+    pub normal_scale: f32,
+    /// Strength of the occlusion map's red channel on ambient contribution.
+    pub occlusion_strength: f32,
     /// three's `flatShading`. `GLTFLoader` sets it on any primitive that ships
     /// without a `NORMAL` attribute — every `stage_lab` GLB — and the shader
     /// then takes the normal from screen-space derivatives, ignoring whatever
@@ -63,6 +70,8 @@ impl Default for Material {
             metallic: 0.0,
             roughness: 1.0,
             emissive: Vec3::ZERO,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
             flat_shading: false,
         }
     }
@@ -80,6 +89,14 @@ pub struct Primitive {
     /// reference, so it lives beside the material constants rather than in
     /// them: the frame re-indexes it into its own image table.
     pub base_color_image: Option<usize>,
+    /// Linear normal map image.
+    pub normal_image: Option<usize>,
+    /// Linear packed map: green roughness, blue metallic.
+    pub metallic_roughness_image: Option<usize>,
+    /// Linear occlusion map image; red is visibility.
+    pub occlusion_image: Option<usize>,
+    /// sRGB emissive map image.
+    pub emissive_image: Option<usize>,
 }
 
 /// One glTF node. Names matter: fixture articulation hangs off `arm`/`head`.
@@ -261,6 +278,91 @@ fn to_rgba8(data: &gltf::image::Data) -> Image {
     }
 }
 
+fn generated_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut normals = vec![Vec3::ZERO; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = [
+            triangle[0] as usize,
+            triangle[1] as usize,
+            triangle[2] as usize,
+        ];
+        let [pa, pb, pc] = [
+            Vec3::from(positions[a]),
+            Vec3::from(positions[b]),
+            Vec3::from(positions[c]),
+        ];
+        let face = (pb - pa).cross(pc - pa);
+        normals[a] += face;
+        normals[b] += face;
+        normals[c] += face;
+    }
+    normals
+        .into_iter()
+        .map(|normal| normal.try_normalize().unwrap_or(Vec3::Z).to_array())
+        .collect()
+}
+
+/// Generate a stable tangent frame using the glTF reference accumulation
+/// method. Degenerate/missing UVs receive a deterministic normal-orthogonal
+/// tangent, which keeps neutral normal maps neutral instead of producing NaNs.
+fn generated_tangents(
+    positions: &[[f32; 3]],
+    normals: &[[f32; 3]],
+    uvs: &[[f32; 2]],
+    indices: &[u32],
+) -> Vec<[f32; 4]> {
+    let mut tangent = vec![Vec3::ZERO; positions.len()];
+    let mut bitangent = vec![Vec3::ZERO; positions.len()];
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = [
+            triangle[0] as usize,
+            triangle[1] as usize,
+            triangle[2] as usize,
+        ];
+        let [pa, pb, pc] = [
+            Vec3::from(positions[a]),
+            Vec3::from(positions[b]),
+            Vec3::from(positions[c]),
+        ];
+        let [ta, tb, tc] = [Vec2::from(uvs[a]), Vec2::from(uvs[b]), Vec2::from(uvs[c])];
+        let [edge1, edge2] = [pb - pa, pc - pa];
+        let [duv1, duv2] = [tb - ta, tc - ta];
+        let determinant = duv1.x * duv2.y - duv1.y * duv2.x;
+        if determinant.abs() <= 1e-10 {
+            continue;
+        }
+        let reciprocal = determinant.recip();
+        let s = (edge1 * duv2.y - edge2 * duv1.y) * reciprocal;
+        let t = (edge2 * duv1.x - edge1 * duv2.x) * reciprocal;
+        for index in [a, b, c] {
+            tangent[index] += s;
+            bitangent[index] += t;
+        }
+    }
+    normals
+        .iter()
+        .zip(tangent)
+        .zip(bitangent)
+        .map(|((&normal, tangent), bitangent)| {
+            let normal = Vec3::from(normal).try_normalize().unwrap_or(Vec3::Z);
+            let fallback = if normal.z.abs() < 0.999 {
+                normal.cross(Vec3::Z).normalize()
+            } else {
+                normal.cross(Vec3::Y).normalize()
+            };
+            let tangent = (tangent - normal * normal.dot(tangent))
+                .try_normalize()
+                .unwrap_or(fallback);
+            let handedness = if normal.cross(tangent).dot(bitangent) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            tangent.extend(handedness).to_array()
+        })
+        .collect()
+}
+
 fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Option<Primitive> {
     if prim.mode() != gltf::mesh::Mode::Triangles {
         return None;
@@ -276,25 +378,34 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
     // filled with a smoothing the shader would discard.
     let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(Iterator::collect);
     let flat_shading = normals.is_none();
-    let normals = normals.unwrap_or_else(|| vec![[0.0; 3]; positions.len()]);
+    let normals = normals.unwrap_or_else(|| generated_normals(&positions, &indices));
 
     let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
         Some(t) => t.into_f32().collect(),
         None => vec![[0.0, 0.0]; positions.len()],
     };
+    let tangents: Vec<[f32; 4]> = reader
+        .read_tangents()
+        .map(Iterator::collect)
+        .unwrap_or_else(|| generated_tangents(&positions, &normals, &uvs, &indices));
 
-    let pbr = prim.material().pbr_metallic_roughness();
+    let material = prim.material();
+    let pbr = material.pbr_metallic_roughness();
     let base = pbr.base_color_factor();
-    let emissive = prim.material().emissive_factor();
+    let emissive = material.emissive_factor();
+    let normal = material.normal_texture();
+    let occlusion = material.occlusion_texture();
     Some(Primitive {
         vertices: positions
             .into_iter()
             .zip(normals)
             .zip(uvs)
-            .map(|((position, normal), uv)| Vertex {
+            .zip(tangents)
+            .map(|(((position, normal), uv), tangent)| Vertex {
                 position,
                 normal,
                 uv,
+                tangent,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -302,12 +413,54 @@ fn read_primitive(prim: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Opt
         base_color_image: pbr
             .base_color_texture()
             .map(|t| t.texture().source().index()),
+        normal_image: normal.as_ref().map(|t| t.texture().source().index()),
+        metallic_roughness_image: pbr
+            .metallic_roughness_texture()
+            .map(|t| t.texture().source().index()),
+        occlusion_image: occlusion.as_ref().map(|t| t.texture().source().index()),
+        emissive_image: material
+            .emissive_texture()
+            .map(|t| t.texture().source().index()),
         material: Material {
             base_color: Vec4::from(base).truncate(),
             metallic: pbr.metallic_factor(),
             roughness: pbr.roughness_factor(),
             emissive: Vec3::from(emissive),
+            normal_scale: normal.map_or(1.0, |texture| texture.scale()),
+            occlusion_strength: occlusion.map_or(1.0, |texture| texture.strength()),
             flat_shading,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generated_tangents;
+
+    #[test]
+    fn generated_tangents_pin_orientation_and_uv_handedness() {
+        let positions = [
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+        ];
+        let normals = [[0.0, 0.0, 1.0]; 4];
+        let indices = [0, 1, 2, 0, 2, 3];
+        let standard = generated_tangents(
+            &positions,
+            &normals,
+            &[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            &indices,
+        );
+        assert!(standard.iter().all(|t| *t == [1.0, 0.0, 0.0, 1.0]));
+
+        let mirrored_uv = generated_tangents(
+            &positions,
+            &normals,
+            &[[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            &indices,
+        );
+        assert!(mirrored_uv.iter().all(|t| *t == [-1.0, 0.0, 0.0, -1.0]));
+    }
 }

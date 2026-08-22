@@ -392,6 +392,7 @@ fn vertex(p: Vec3) -> crate::assets::Vertex {
         position: p.to_array(),
         normal: [0.0; 3],
         uv: [0.0; 2],
+        tangent: [1.0, 0.0, 0.0, 1.0],
     }
 }
 

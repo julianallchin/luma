@@ -4,7 +4,7 @@
 // anyway.
 
 struct Composite {
-    // xy: haze buffer size in px, z: bilateral depth sigma, w: unused.
+    // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
 };
 
@@ -105,5 +105,20 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // Subframe weights sum to 1, so the accumulated target is already a mean —
     // nothing here rescales it.
     let depth = textureLoad(depth_tex, coord, 0);
-    return vec4<f32>(agx(scene + upsample_haze(uv, depth)), 1.0);
+    let debug = u32(cfg.params.w + 0.5);
+    if debug >= 1u && debug <= 5u {
+        // Material probes are already display-range linear values. Keeping the
+        // display transform out makes channel inspection exact.
+        return vec4<f32>(scene, 1.0);
+    }
+    if debug == 6u {
+        // Perspective depth is intentionally raw: this is the attachment the
+        // haze bilateral pass consumes, not a camera-specific beauty view.
+        return vec4<f32>(vec3<f32>(1.0 - depth), 1.0);
+    }
+    let haze = upsample_haze(uv, depth);
+    if debug == 7u {
+        return vec4<f32>(agx(haze), 1.0);
+    }
+    return vec4<f32>(agx(scene + haze), 1.0);
 }
