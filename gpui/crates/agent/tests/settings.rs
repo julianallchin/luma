@@ -12,38 +12,15 @@
 // navigation helpers it drives the app with are the suite's, not its own.
 mod support;
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{AnyView, App, AppContext as _, Window};
-use gpui_agent::{Config, Harness, Mode};
+use gpui_agent::{Harness, Mode};
 use serde_json::Value;
 
-/// A library of its own, so the run cannot see — or corrupt — the developer's.
-/// Named after the process so two runs never share one.
-fn disposable_config_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("luma-gpui-settings-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("failed to create the temporary config directory");
-    dir
-}
-
 fn harness() -> Harness {
-    std::env::set_var("LUMA_CONFIG_DIR", disposable_config_dir());
-    let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
-        luma_app::init(cx);
-        let library = luma_app::Library::open().expect("failed to open the disposable library");
-        cx.new(|cx| luma_app::Luma::new(library, cx)).into()
-    });
-    Harness::headless(
-        Config {
-            mode: Mode::Headless,
-            call_timeout: Duration::from_secs(20),
-            ..Config::default()
-        },
-        root,
-    )
-    .expect("failed to start the harness")
+    support::Fixture::new("settings", 1, vec![])
+        .without_track()
+        .open(Mode::Headless)
 }
 
 /// Open settings, switch to AI, pick the other model, and read the picker
@@ -51,6 +28,8 @@ fn harness() -> Harness {
 /// read is the one that matters: it is served by a fresh `get_settings`, so it
 /// can only say what the database says.
 const SCRIPT: &str = r#"
+    nav.venue("Test Venue");
+
     function openSettings() {
         app.click(app.snapshot().find({ role: "button", label: "Settings" }));
         app.frames(4);
@@ -95,14 +74,19 @@ fn the_model_picker_writes_through_the_seam_and_reads_back() {
         out["chosen"],
         serde_json::json!(["Vercel AI Gateway", "Claude Opus 5"])
     );
-    // Back landed on the venue grid, whose wordmark is instrumented.
+    // Back landed on the venue shell settings covered, with its venue intact.
     assert!(
         out["home"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|label| label == "luma"),
-        "Back did not return to the welcome screen: {:?}",
+            .any(|label| label == "Test Venue")
+            && !out["home"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|label| label == "SETTINGS"),
+        "Back did not return to the venue shell: {:?}",
         out["home"]
     );
     // The choice survived a fresh `get_settings`.

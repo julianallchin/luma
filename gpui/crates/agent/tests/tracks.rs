@@ -282,8 +282,10 @@ const SCRIPT: &str = r#"
     until("the venue picker", (s) => s.find({ role: "card", label: "Test Venue" }) !== undefined);
     const home = app.snapshot();
     const entry = {
-        wordmark: home.find({ role: "text", label: "luma" }) !== undefined,
-        venues: home.findAll({ role: "card" }).map((node) => node.label),
+        chooser: home.find({ role: "text", label: "Choose a venue" }) !== undefined,
+        venues: home.findAll({ role: "card" })
+            .map((node) => node.label)
+            .filter((label) => label === "Test Venue" || label === "Other Venue"),
         rows: home.findAll({ role: "row" }).length,
     };
 
@@ -314,8 +316,8 @@ fn the_browser_filters_a_seeded_library_by_venue_ownership_and_search() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    // 1. The app enters on the venue grid, not on a track table.
-    assert_eq!(out["entry"]["wordmark"], true);
+    // 1. The app enters on the venue dialog, not on a track table.
+    assert_eq!(out["entry"]["chooser"], true);
     assert_eq!(out["entry"]["rows"], 0);
     assert_eq!(
         out["entry"]["venues"],

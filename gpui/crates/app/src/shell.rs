@@ -27,16 +27,16 @@
 //! picker into an empty shell" is a state that cannot be reached.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Div, DragMoveEvent, MouseButton, SharedString, Window};
+use gpui::{div, px, AnyElement, Context, Div, DragMoveEvent, SharedString, Window};
 
-use luma_lib::models::venues::Venue;
 use luma_ui::node::{Instrument, Role};
 use luma_ui::pane;
 use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    chrome, graph, keymap, patterns, settings, track_editor, tracks, visualizer, welcome, Luma,
+    add_tracks, chrome, graph, keymap, patterns, settings, track_editor, tracks, universe,
+    visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar and the shared workspace open. Comet's defaults; the
@@ -48,6 +48,7 @@ pub(crate) const WORKSPACE_WIDTH: f32 = 520.0;
 /// the bound is stated as what must *remain*, not what may be taken.
 const WORKSPACE_MIN: f32 = 320.0;
 const CENTER_MIN: f32 = 360.0;
+const TAB_CONTROL_WIDTH: f32 = 24.0;
 /// How wide a seam between two regions is. One device pixel's worth of rule at
 /// 1×, and the only structural line the shell draws.
 const SEAM_WIDTH: f32 = 1.0;
@@ -58,13 +59,11 @@ pub(crate) enum Overlay {
     /// The venue picker: the old welcome grid, re-homed. Auto-opens while no
     /// venue is selected, because a shell with no subject list has nothing
     /// else to offer.
-    Venues {
-        venues: Vec<Venue>,
-        error: Option<String>,
-    },
+    Venues(welcome::VenuePicker),
     /// The pattern picker. Picking a row opens a [`Target::Graph`] tab.
     Patterns(patterns::Patterns),
     Settings(settings::Settings),
+    AddTracks(Box<add_tracks::AddTracks>),
 }
 
 impl Overlay {
@@ -75,19 +74,20 @@ impl Overlay {
             Self::Venues { .. } => keymap::context::VENUES,
             Self::Patterns(_) => keymap::context::PATTERNS,
             Self::Settings(_) => keymap::context::SETTINGS,
+            Self::AddTracks(_) => keymap::context::ADD_TRACKS,
         }
     }
 }
 
 /// A workspace tab's state: the editor behind one [`Target`].
 ///
-/// The variants mirror `Target`'s — a target is *what* the tab shows, a body
-/// is the state showing it — minus `Universe`, which has no opening gesture
-/// until the `+` menu lands and would otherwise be a plate nothing can reach.
+/// The variants mirror `Target`'s — a target is *what* the tab shows, and a
+/// body is the state showing it.
 pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
     Graph(Box<graph::Editor>),
     Visualizer(Box<visualizer::Visualizer>),
+    Universe(Box<universe::Universe>),
 }
 
 impl Body {
@@ -97,6 +97,7 @@ impl Body {
             Self::TrackEditor(state) => state.track_name().to_string().into(),
             Self::Graph(state) => state.pattern_name().to_string().into(),
             Self::Visualizer(state) => state.venue_name().to_string().into(),
+            Self::Universe(state) => state.venue_name().to_string().into(),
         }
     }
 }
@@ -139,7 +140,29 @@ impl Luma {
         if slot == self.focused_slot && window.focused(cx).is_some() {
             return;
         }
+        let leaving_overlay = matches!(self.focused_slot, FocusSlot::Overlay(_))
+            && !matches!(slot, FocusSlot::Overlay(_));
+        let entering_overlay = !matches!(self.focused_slot, FocusSlot::Overlay(_))
+            && matches!(slot, FocusSlot::Overlay(_));
+        if entering_overlay {
+            self.overlay_return_focus = window.focused(cx).map(|focus| focus.downgrade());
+        }
         self.focused_slot = slot;
+        if matches!(self.focused_slot, FocusSlot::Overlay(_)) {
+            window.focus(&self.dialog_focus, cx);
+            return;
+        }
+        let return_focus = leaving_overlay
+            .then(|| {
+                self.overlay_return_focus
+                    .take()
+                    .and_then(|focus| focus.upgrade())
+            })
+            .flatten();
+        if let Some(focus) = return_focus {
+            window.focus(&focus, cx);
+            return;
+        }
         window.focus(&self.focus, cx);
     }
 
@@ -164,16 +187,7 @@ impl Luma {
         let Some(target) = self.workspace.active().cloned() else {
             return;
         };
-        if let Some(body) = self.workspace.close(&target) {
-            self.teardown(body, cx);
-        }
-        if self.workspace.is_empty() {
-            // Closing the last tab destroys what the panel was showing, so
-            // there is nothing left to slide shut — an empty card easing out
-            // would be the animation drawing attention to its own machinery.
-            self.workspace_width.set(0.0);
-        }
-        cx.notify();
+        self.close_tab(&target, None, cx);
     }
 
     /// A closed tab's exit rites. The only caller of anything here is a
@@ -198,7 +212,7 @@ impl Luma {
                     .detach();
                 }
             }
-            Body::Graph(_) | Body::Visualizer(_) => {}
+            Body::Graph(_) | Body::Visualizer(_) | Body::Universe(_) => {}
         }
     }
 
@@ -206,50 +220,22 @@ impl Luma {
     /// the overlay. The venue picker with nothing selected stays — see the
     /// module docs.
     pub(crate) fn dismiss_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.tab_chrome.dismiss_menu() {
+            cx.notify();
+            return;
+        }
         if self.dismiss_insert_menu() {
             cx.notify();
             return;
         }
         match &self.overlay {
-            Some(Overlay::Venues { .. }) if self.sidebar.is_none() => {}
+            Some(Overlay::Venues(_)) if self.sidebar.is_none() => {}
             Some(_) => {
                 self.overlay = None;
                 cx.notify();
             }
             None => {}
         }
-    }
-
-    /// Show the venue picker and re-read the venue list.
-    pub(crate) fn show_venues(&mut self, cx: &mut Context<Self>) {
-        self.overlay = Some(Overlay::Venues {
-            venues: Vec::new(),
-            error: None,
-        });
-        cx.notify();
-        let pending = self.library.venues();
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                if let Some(Overlay::Venues { venues, error }) = &mut this.overlay {
-                    match result {
-                        Ok(loaded) => *venues = loaded,
-                        Err(failed) => *error = Some(failed.to_string()),
-                    }
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// The loaded venue a picker card names.
-    pub(crate) fn find_venue(&self, id: &str) -> Option<Venue> {
-        let Some(Overlay::Venues { venues, .. }) = &self.overlay else {
-            return None;
-        };
-        venues.iter().find(|venue| venue.id == id).cloned()
     }
 }
 
@@ -284,6 +270,19 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     let show_sidebar = app.sidebar.is_some() && sidebar_w > px(0.0);
     let show_thread = !takeover;
     let show_workspace = !app.workspace.is_empty() && (takeover || workspace_w > px(0.0));
+    let workspace_leftmost = !show_sidebar && !show_thread;
+    let workspace_panel_width = if takeover {
+        viewport - f32::from(sidebar_w) - if show_sidebar { SEAM_WIDTH } else { 0.0 }
+    } else {
+        f32::from(workspace_w)
+    };
+    let (workspace_strip_width, workspace_show_settings) =
+        workspace_band_tab_strip(workspace_panel_width, workspace_leftmost);
+    // Exactly one band owns the shared strip. A workspace that exists but is
+    // still only a sliver during pane motion cannot own it yet: the thread
+    // keeps painting the same TabChrome until the receiving band can reserve
+    // the complete add control, then ownership transfers in one frame.
+    let workspace_owns_tab_strip = show_workspace && workspace_strip_width >= TAB_CONTROL_WIDTH;
 
     let mut row = div()
         .size_full()
@@ -312,13 +311,77 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
 
     if show_thread {
-        let mut head = chrome::band(!show_sidebar);
+        let leftmost = !show_sidebar;
+        let mut head = chrome::band(leftmost);
         if !show_sidebar {
             head = head.child(chrome::sidebar_toggle(&entity));
         }
-        head = head.child(chrome::history_pair()).child(div().flex_1());
-        if !show_workspace {
-            head = head.child(chrome::settings_button(&entity));
+        head = head.child(chrome::history_pair());
+        if !workspace_owns_tab_strip {
+            let leading_width = 2.0 * 24.0 + 10.0 + if show_sidebar { 0.0 } else { 24.0 };
+            let panel_width = viewport
+                - f32::from(sidebar_w)
+                - if show_sidebar { SEAM_WIDTH } else { 0.0 }
+                - if show_workspace {
+                    f32::from(workspace_w) + SEAM_WIDTH
+                } else {
+                    0.0
+                };
+            let leading_children = if show_sidebar { 1 } else { 2 };
+            let (strip_width, show_settings) = if show_workspace {
+                (
+                    chrome::tab_strip_room(
+                        panel_width,
+                        leftmost,
+                        leading_width,
+                        0.0,
+                        leading_children,
+                    ),
+                    false,
+                )
+            } else {
+                let gaps_with_settings = if show_sidebar { 3 } else { 4 };
+                let room_with_settings = chrome::tab_strip_room(
+                    panel_width,
+                    leftmost,
+                    leading_width,
+                    TAB_CONTROL_WIDTH,
+                    gaps_with_settings,
+                );
+                let show_settings = room_with_settings >= TAB_CONTROL_WIDTH;
+                (
+                    if show_settings {
+                        room_with_settings
+                    } else {
+                        chrome::tab_strip_room(
+                            panel_width,
+                            leftmost,
+                            leading_width,
+                            0.0,
+                            leading_children,
+                        )
+                    },
+                    show_settings,
+                )
+            };
+            let panel_x = f32::from(sidebar_w) + if show_sidebar { SEAM_WIDTH } else { 0.0 };
+            let strip_x =
+                chrome::tab_strip_origin(panel_x, leftmost, leading_width, leading_children);
+            head = head.child(chrome::tab_strip(
+                app,
+                &entity,
+                strip_width,
+                strip_x,
+                window,
+                cx,
+            ));
+            if show_settings {
+                head = head
+                    .child(div().flex_1())
+                    .child(chrome::settings_button(&entity));
+            }
+        } else {
+            head = head.child(div().flex_1());
         }
         row = row.child(
             column(head)
@@ -332,10 +395,30 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
 
     if show_workspace {
-        let head = chrome::band(!show_sidebar && !show_thread)
-            .child(chrome::tab_strip(app, &entity))
-            .child(div().flex_1())
-            .child(chrome::settings_button(&entity));
+        let mut head = chrome::band(workspace_leftmost);
+        if workspace_owns_tab_strip {
+            let strip_x = chrome::tab_strip_origin(
+                viewport - workspace_panel_width,
+                workspace_leftmost,
+                0.0,
+                0,
+            );
+            head = head.child(chrome::tab_strip(
+                app,
+                &entity,
+                workspace_strip_width,
+                strip_x,
+                window,
+                cx,
+            ));
+        }
+        if workspace_show_settings {
+            head = head
+                .child(div().flex_1())
+                .child(chrome::settings_button(&entity));
+        } else if !workspace_owns_tab_strip {
+            head = head.child(div().flex_1());
+        }
         if show_thread {
             // Both sides are lit surfaces whose own value step already divides
             // them, so this rule is a hint — and it is what the pointer grabs.
@@ -357,8 +440,23 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         });
     }
 
+    // Window-space tab exits and their stable close target sit above both pane
+    // rails, but below popovers and modal overlays.
+    row = row.child(chrome::tab_transition_layer(app, &entity, window, cx));
+
+    if app.overlay.is_none() {
+        row = row.child(chrome::tab_menu_layer(app, &entity));
+    }
+
+    let dialog_focus = app.dialog_focus.clone();
+    if let Some(Overlay::Venues(state)) = &mut app.overlay {
+        welcome::tick(state, window, cx);
+    }
+    if let Some(Overlay::AddTracks(state)) = &mut app.overlay {
+        add_tracks::tick(state, &dialog_focus, window, cx);
+    }
     if let Some(overlay) = &app.overlay {
-        row = row.child(overlay_layer(app, overlay, &entity, cx));
+        row = row.child(overlay_layer(app, overlay, &entity, sidebar_w, window, cx));
     }
     // Last, so nothing — least of all an overlay — can cover the only controls
     // that move and close the window. See [`crate::chrome`].
@@ -381,6 +479,21 @@ fn seam(color: gpui::Rgba) -> Div {
 fn workspace_max(viewport: f32, sidebar: f32) -> f32 {
     let sidebar_seam = if sidebar > 0.0 { SEAM_WIDTH } else { 0.0 };
     (viewport - sidebar - sidebar_seam - CENTER_MIN - SEAM_WIDTH).max(0.0)
+}
+
+/// Allocate the workspace band from its live width. Settings yields before the
+/// add control; callers use the returned room as the sole ownership boundary
+/// for the shared strip.
+fn workspace_band_tab_strip(panel_width: f32, leftmost: bool) -> (f32, bool) {
+    let room_with_settings =
+        chrome::tab_strip_room(panel_width, leftmost, 0.0, TAB_CONTROL_WIDTH, 2);
+    let show_settings = room_with_settings >= TAB_CONTROL_WIDTH;
+    let strip_width = if show_settings {
+        room_with_settings
+    } else {
+        chrome::tab_strip_room(panel_width, leftmost, 0.0, 0.0, 0)
+    };
+    (strip_width, show_settings)
 }
 
 /// The workspace panel's seam, which is also its drag handle: a hint-toned
@@ -485,6 +598,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         Body::Visualizer(state) => {
             visualizer::visualizer(state, &entity, library, window).into_any_element()
         }
+        Body::Universe(state) => universe::universe(state).into_any_element(),
     };
     div()
         .flex_1()
@@ -503,67 +617,61 @@ fn overlay_layer(
     app: &Luma,
     overlay: &Overlay,
     entity: &gpui::Entity<Luma>,
+    sidebar_width: gpui::Pixels,
+    window: &Window,
     _cx: &mut Context<Luma>,
-) -> Div {
-    let venue_picker = matches!(overlay, Overlay::Venues { .. });
-    let body = match overlay {
-        Overlay::Venues { venues, error } => {
-            let opened = entity.clone();
-            let pattern_picker = entity.clone();
-            welcome::welcome(
-                venues,
-                error.as_deref(),
-                move |id, _, cx| {
-                    let id = id.to_string();
-                    opened.update(cx, |this, cx| {
-                        if let Some(venue) = this.find_venue(&id) {
-                            this.open_venue(venue, cx);
-                        }
-                    });
-                },
-                move |_, cx| pattern_picker.update(cx, |this, cx| this.show_patterns(cx)),
-            )
-            .into_any_element()
+) -> AnyElement {
+    let (card, label) = match overlay {
+        Overlay::Venues(state) => {
+            let body = welcome::welcome(state, entity, window);
+            (fixed_dialog(body, 920.0, 620.0), "Venue dialog")
         }
-        Overlay::Patterns(state) => patterns::patterns(state, entity).into_any_element(),
-        Overlay::Settings(state) => settings::settings(state, entity).into_any_element(),
+        Overlay::Patterns(state) => {
+            let body = patterns::patterns(
+                state,
+                entity,
+                &app.dialog_first_focus,
+                app.dialog_first_focus.is_focused(window),
+                &app.dialog_last_focus,
+                app.dialog_last_focus.is_focused(window),
+            );
+            (fixed_dialog(body, 760.0, 600.0), "Pattern dialog")
+        }
+        Overlay::Settings(state) => (
+            fixed_dialog(settings::settings(state, entity), 900.0, 680.0),
+            "Settings dialog",
+        ),
+        Overlay::AddTracks(state) => (
+            add_tracks::render(state, app.track_import.as_ref(), entity, window),
+            "Add tracks dialog",
+        ),
     };
     div()
         .absolute()
         .inset_0()
-        .flex()
-        .flex_col()
-        // The plane the overlay's body sits on, not the body's own ground:
-        // every screen re-homed here fills it with an opaque ladder surface of
-        // its own. A scrim rather than a ladder tone so the day one of them is
-        // inset as a card, what shows around it is the shell, dimmed.
-        .bg(glass::scrim(glass::SCRIM_ALPHA))
         .key_context(overlay.key_context())
-        .track_focus(&app.focus)
-        // This is a modal plane. Owning a hitbox and stopping the press keeps
-        // covered rows, tabs and editors from mutating behind the overlay;
-        // child controls receive the press first and continue to work.
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        // The venue picker cannot be dismissed before a venue exists, so it
-        // carries its own settings door instead of borrowing the covered
-        // shell gear through a click-through scrim.
-        .when(venue_picker, |overlay| {
-            overlay.child(
-                div()
-                    .h(px(chrome::HEIGHT))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .px(px(12.0))
-                    .child(div().flex_1())
-                    .child(chrome::settings_button(entity)),
-            )
-        })
-        // Every overlay body begins where a region's body does. The venue
-        // picker consumed that height with its settings row; the others need
-        // only the inset because their own toolbars supply their exits.
-        .when(!venue_picker, |overlay| overlay.pt(px(chrome::HEIGHT)))
-        .child(div().flex_1().min_h_0().child(body))
+        .child(luma_ui::dialog::host(
+            format!("{}-host", overlay.key_context()),
+            window.viewport_size(),
+            sidebar_width,
+            &app.dialog_focus,
+            app.dialog_focus.contains_focused(window, _cx),
+            label,
+            card,
+        ))
+        .into_any_element()
+}
+
+fn fixed_dialog(body: impl IntoElement, width: f32, height: f32) -> AnyElement {
+    div()
+        .w(px(width))
+        .h(px(height))
+        .max_w_full()
+        .max_h_full()
+        .overflow_hidden()
+        .bg(glass::overlay())
+        .child(body)
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -576,5 +684,16 @@ mod tests {
         assert_eq!(workspace_max(1200.0, SIDEBAR_WIDTH), 582.0);
         assert_eq!(workspace_max(600.0, 0.0), 239.0);
         assert_eq!(workspace_max(300.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn workspace_strip_ownership_changes_only_at_a_complete_add_control() {
+        let (below, below_settings) = workspace_band_tab_strip(47.0, false);
+        let (boundary, boundary_settings) = workspace_band_tab_strip(48.0, false);
+        assert_eq!(below, 23.0);
+        assert!(!below_settings);
+        assert!(below < TAB_CONTROL_WIDTH);
+        assert_eq!(boundary, TAB_CONTROL_WIDTH);
+        assert!(!boundary_settings);
     }
 }

@@ -12,9 +12,10 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::ladder;
-use luma_ui::node::{Instrument, Role};
+use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::Enabled;
 
 use luma_lib::models::patterns::PatternSummary;
@@ -74,14 +75,22 @@ const AUTHOR_WIDTH: f32 = 140.;
 const GAP: f32 = 8.;
 const PAD_X: f32 = 16.;
 
-pub fn patterns(state: &Patterns, app: &Entity<Luma>) -> Div {
+pub fn patterns(
+    state: &Patterns,
+    app: &Entity<Luma>,
+    first_focus: &FocusHandle,
+    first_focused: bool,
+    last_focus: &FocusHandle,
+    last_focused: bool,
+) -> Div {
     div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(ladder::background())
+        // The dialog host owns the card surface; route content supplies only
+        // its interior so the renderer effect can be upgraded in one place.
         .text_color(ladder::foreground())
-        .child(toolbar(state, app))
+        .child(toolbar(state, app, first_focus, first_focused))
         .child(header())
         .child(match &state.error {
             Some(message) => luma_ui::plate(
@@ -94,11 +103,16 @@ pub fn patterns(state: &Patterns, app: &Entity<Luma>) -> Div {
             None if state.rows.is_empty() => {
                 luma_ui::plate("No patterns".to_string(), ladder::muted_foreground())
             }
-            None => body(state, app).into_any_element(),
+            None => body(state, app, last_focus, last_focused).into_any_element(),
         })
 }
 
-fn toolbar(state: &Patterns, app: &Entity<Luma>) -> Div {
+fn toolbar(
+    state: &Patterns,
+    app: &Entity<Luma>,
+    first_focus: &FocusHandle,
+    first_focused: bool,
+) -> Div {
     let close = app.clone();
     let label = format!("{} PATTERNS", state.rows.len());
     div()
@@ -113,8 +127,11 @@ fn toolbar(state: &Patterns, app: &Entity<Luma>) -> Div {
         .child(
             luma_ui::luma_button("Close", Enabled::Yes)
                 .id("close")
+                .track_focus(first_focus)
+                .tab_stop(true)
                 .on_click(move |_, _, cx| close.update(cx, |this, cx| this.dismiss_overlay(cx)))
-                .agent_node(Role::Button, "Close"),
+                .agent_node(Role::Button, "Close")
+                .agent_focused(first_focused),
         )
         .child(luma_ui::silkscreen(label))
 }
@@ -133,20 +150,34 @@ fn header() -> Div {
         .child(div().w(px(AUTHOR_WIDTH)).child("AUTHOR"))
 }
 
-fn body(state: &Patterns, app: &Entity<Luma>) -> Div {
+fn body(state: &Patterns, app: &Entity<Luma>, last_focus: &FocusHandle, last_focused: bool) -> Div {
     let rows = Rc::clone(&state.rows);
+    let row_count = rows.len();
     let app = app.clone();
+    let last_focus = last_focus.clone();
     div().flex_1().overflow_hidden().child(
         uniform_list("patterns", rows.len(), move |range, _, _| {
             range
-                .map(|index| pattern_row(index, &rows[index], &app))
+                .map(|index| {
+                    pattern_row(
+                        index,
+                        &rows[index],
+                        &app,
+                        (index + 1 == row_count).then_some((&last_focus, last_focused)),
+                    )
+                })
                 .collect()
         })
         .size_full(),
     )
 }
 
-fn pattern_row(index: usize, pattern: &PatternSummary, app: &Entity<Luma>) -> AnyElement {
+fn pattern_row(
+    index: usize,
+    pattern: &PatternSummary,
+    app: &Entity<Luma>,
+    focus: Option<(&FocusHandle, bool)>,
+) -> AnyElement {
     let stripe = if index.is_multiple_of(2) {
         ladder::background()
     } else {
@@ -156,6 +187,10 @@ fn pattern_row(index: usize, pattern: &PatternSummary, app: &Entity<Luma>) -> An
     let id = pattern.id.clone();
     row_shell()
         .id(SharedString::from(pattern.id.clone()))
+        .tab_index(0)
+        .when_some(focus.map(|(handle, _)| handle), |row, handle| {
+            row.track_focus(handle).tab_stop(true)
+        })
         .h(px(ROW_HEIGHT))
         .bg(stripe)
         .hover(|s| s.bg(ladder::hover()))
@@ -183,6 +218,7 @@ fn pattern_row(index: usize, pattern: &PatternSummary, app: &Entity<Luma>) -> An
                 .child(pattern.author_name.clone().unwrap_or_else(|| "—".into())),
         )
         .agent_node(Role::Row, pattern.name.clone())
+        .agent_focused(focus.is_some_and(|(_, focused)| focused))
         .into_any_element()
 }
 

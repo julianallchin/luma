@@ -35,6 +35,7 @@ pub async fn get_track_waveform_window(
         start_seconds,
         end_seconds,
         buckets,
+        services.host_audio.decode_sample_rate(),
     )
     .await?)
 }

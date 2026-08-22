@@ -295,6 +295,12 @@ impl AppServices {
     ) -> Self {
         let authored = AuthoredDocuments::new(storage.clone());
         let render_engine = RenderEngine::default();
+        let host_audio = HostAudioState::default();
+        // A host with no window or broadcaster must never probe or open the
+        // machine's audio device. It still advances transport from wall time,
+        // and the deterministic 48 kHz decode path is the same one desktop
+        // uses when output is disabled in settings.
+        host_audio.set_audio_output_enabled(false);
         let sync = SyncEngine::new(
             db.0.clone(),
             state_db.0.clone(),
@@ -323,7 +329,7 @@ impl AppServices {
             prodjlink: Arc::new(ProDJLinkManager::new()),
             sync,
             artnet: None,
-            host_audio: HostAudioState::default(),
+            host_audio,
             storage,
             fixtures_root,
             fixtures: Arc::new(FixtureState::empty()),

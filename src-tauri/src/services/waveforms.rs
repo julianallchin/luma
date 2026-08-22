@@ -315,7 +315,7 @@ async fn band_gains(
 ) -> Result<BandGains, String> {
     let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
     let stored = local::waveforms::fetch_band_gains(access.connection(), track_id).await?;
-    drop(access);
+    access.finish().await?;
 
     match stored {
         Some(gains) => Ok(gains),
@@ -354,6 +354,7 @@ pub async fn get_track_waveform_window(
     start_seconds: f64,
     end_seconds: f64,
     buckets: u32,
+    target_rate: u32,
 ) -> Result<WaveformWindow, String> {
     let gains = band_gains(pool, tasks, track_id).await?;
     let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
@@ -368,9 +369,8 @@ pub async fn get_track_waveform_window(
     // The same `(hash, rate)` key the audio host decodes under, so the track
     // being played is the track being measured and neither pays for the other's
     // copy.
-    let rate = crate::host_audio::device_sample_rate();
     let audio = tauri::async_runtime::spawn_blocking(move || {
-        crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash, rate)
+        crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash, target_rate)
     })
     .await
     .map_err(|error| format!("Waveform window decode task failed: {error}"))??;

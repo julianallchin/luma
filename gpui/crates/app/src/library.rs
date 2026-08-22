@@ -44,6 +44,8 @@
 //! back untouched through [`LibraryError::command`].
 
 use std::collections::HashMap;
+#[cfg(feature = "agent")]
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -85,6 +87,30 @@ use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
 use luma_lib::services::track_edits::TrackEditResult;
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
+
+#[cfg(feature = "agent")]
+#[derive(Clone, Debug, Default)]
+pub struct NavigationFixture {
+    /// Hold the venue catalogue so an outside-in test can observe the real
+    /// loading route instead of racing a local SQLite read.
+    pub venues_delay: Duration,
+    /// Substitute a catalogue failure at the Library boundary. The shipped
+    /// app never installs a fixture.
+    pub venues_error: Option<String>,
+    /// Per-venue delays for forcing two real track reads to land out of order.
+    pub track_delays: HashMap<String, Duration>,
+    /// Per-call catalogue timing/failure, consumed in request order. This is
+    /// the deterministic seam for proving a dismissed picker cannot be
+    /// overwritten by its older answer.
+    pub catalogue_responses: Vec<(Duration, Option<String>)>,
+    /// Per-call venue reads, matched and consumed by venue id. Rows still come
+    /// from the real dispatcher; the optional title rewrite makes two reads of
+    /// the same venue observably distinct to the outside-in harness.
+    pub track_responses: Vec<(String, Duration, Option<String>)>,
+    /// Per-write delays consumed by the FIFO session actor. A delayed A then
+    /// immediate B must still persist B.
+    pub session_write_delays: Vec<Duration>,
+}
 
 /// How long a fine waveform window waits before it is sent.
 ///
@@ -169,8 +195,17 @@ pub struct SourceAdapterFixture {
 }
 
 #[cfg(feature = "agent")]
+#[derive(Clone, Debug)]
+pub struct SourceSearchFixtureResponse {
+    pub query: String,
+    pub delay: Duration,
+    pub rows: Value,
+}
+
+#[cfg(feature = "agent")]
 struct FixtureTrackSources {
     fixture: Arc<Mutex<Option<SourceAdapterFixture>>>,
+    import_delay: Arc<Mutex<Option<Duration>>>,
     fallback: Arc<dyn TrackSources>,
 }
 
@@ -183,10 +218,14 @@ impl TrackSources for FixtureTrackSources {
         Box<dyn Future<Output = Result<(String, Vec<ImportedEngineDjTrack>), String>> + Send + 'a>,
     > {
         let fixture = self.fixture.lock().unwrap().clone();
+        let delay = *self.import_delay.lock().unwrap();
         if fixture.is_none() {
             return self.fallback.engine_tracks(library_path);
         }
         Box::pin(async move {
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
             let fixture =
                 fixture.ok_or_else(|| "Engine DJ source fixture is not installed".to_string())?;
             let library: EngineDjLibraryWire = serde_json::from_value(fixture.library)
@@ -203,10 +242,14 @@ impl TrackSources for FixtureTrackSources {
         Box<dyn Future<Output = Result<Vec<ImportedRekordboxTrack>, String>> + Send + '_>,
     > {
         let fixture = self.fixture.lock().unwrap().clone();
+        let delay = *self.import_delay.lock().unwrap();
         if fixture.is_none() {
             return self.fallback.rekordbox_tracks();
         }
         Box::pin(async move {
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
             let fixture =
                 fixture.ok_or_else(|| "Rekordbox source fixture is not installed".to_string())?;
             serde_json::from_value(fixture.tracks)
@@ -459,6 +502,10 @@ pub struct Library {
     /// in-flight work, so it lives exactly as long as the `Library`.
     runtime: tokio::runtime::Runtime,
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
+    /// Session navigation writes are an actor, not detached calls. Its FIFO is
+    /// the durable ordering boundary: selecting B after A cannot leave A as
+    /// the last-open venue merely because A's SQLite task completed later.
+    session_writes: tokio::sync::mpsc::UnboundedSender<SessionWrite>,
     /// Drives agent turns with this client instead of a configured provider.
     /// The one injection seam the harness needs, and the shipped app never
     /// sets: without it the loop resolves its model and key the way it does
@@ -470,6 +517,20 @@ pub struct Library {
     tools: Option<ToolRegistry>,
     #[cfg(feature = "agent")]
     source_fixture: Arc<Mutex<Option<SourceAdapterFixture>>>,
+    #[cfg(feature = "agent")]
+    source_fixture_delay: Option<Duration>,
+    #[cfg(feature = "agent")]
+    source_search_fixture: Arc<Mutex<VecDeque<SourceSearchFixtureResponse>>>,
+    #[cfg(feature = "agent")]
+    source_import_fixture_delay: Arc<Mutex<Option<Duration>>>,
+    #[cfg(feature = "agent")]
+    navigation_fixture: Arc<Mutex<NavigationFixture>>,
+}
+
+struct SessionWrite {
+    command: &'static str,
+    args: Value,
+    reply: tokio::sync::oneshot::Sender<Result<(), LibraryError>>,
 }
 
 impl Library {
@@ -498,8 +559,13 @@ impl Library {
         #[cfg(feature = "agent")]
         let source_fixture = Arc::new(Mutex::new(None));
         #[cfg(feature = "agent")]
+        let source_import_fixture_delay = Arc::new(Mutex::new(None));
+        #[cfg(feature = "agent")]
+        let navigation_fixture = Arc::new(Mutex::new(NavigationFixture::default()));
+        #[cfg(feature = "agent")]
         let import_sources: Arc<dyn TrackSources> = Arc::new(FixtureTrackSources {
             fixture: Arc::clone(&source_fixture),
+            import_delay: Arc::clone(&source_import_fixture_delay),
             fallback: system_track_sources(),
         });
         let (services, user_id) = runtime.block_on(async {
@@ -532,15 +598,51 @@ impl Library {
             Ok::<_, String>((services, user_id))
         })?;
 
+        let services = Arc::new(services);
+        let (session_writes, mut session_write_rx) =
+            tokio::sync::mpsc::unbounded_channel::<SessionWrite>();
+        let session_services = Arc::clone(&services);
+        #[cfg(feature = "agent")]
+        let session_navigation_fixture = Arc::clone(&navigation_fixture);
+        runtime.spawn(async move {
+            while let Some(write) = session_write_rx.recv().await {
+                #[cfg(feature = "agent")]
+                let delay = {
+                    let mut fixture = session_navigation_fixture.lock().unwrap();
+                    if fixture.session_write_delays.is_empty() {
+                        Duration::ZERO
+                    } else {
+                        fixture.session_write_delays.remove(0)
+                    }
+                };
+                #[cfg(not(feature = "agent"))]
+                let delay = Duration::ZERO;
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                let result = command(&session_services, write.command, &write.args).await;
+                let _ = write.reply.send(result);
+            }
+        });
+
         Ok(Self {
-            services: Arc::new(services),
+            services,
             user_id,
             runtime,
             import_progress: progress_tx,
+            session_writes,
             model: None,
             tools: None,
             #[cfg(feature = "agent")]
             source_fixture,
+            #[cfg(feature = "agent")]
+            source_fixture_delay: None,
+            #[cfg(feature = "agent")]
+            source_search_fixture: Arc::new(Mutex::new(VecDeque::new())),
+            #[cfg(feature = "agent")]
+            source_import_fixture_delay,
+            #[cfg(feature = "agent")]
+            navigation_fixture,
         })
     }
 
@@ -581,6 +683,31 @@ impl Library {
         *self.source_fixture.lock().unwrap() = Some(fixture);
     }
 
+    /// Keep a fixture read pending long enough for an outside-in loading-state
+    /// assertion. Production adapters and their timing are untouched.
+    #[cfg(feature = "agent")]
+    pub fn set_source_adapter_fixture_delay(&mut self, delay: Duration) {
+        self.source_fixture_delay = Some(delay);
+    }
+
+    #[cfg(feature = "agent")]
+    pub fn set_source_search_fixture_responses(
+        &mut self,
+        responses: Vec<SourceSearchFixtureResponse>,
+    ) {
+        *self.source_search_fixture.lock().unwrap() = responses.into();
+    }
+
+    #[cfg(feature = "agent")]
+    pub fn set_source_import_fixture_delay(&mut self, delay: Duration) {
+        *self.source_import_fixture_delay.lock().unwrap() = Some(delay);
+    }
+
+    #[cfg(feature = "agent")]
+    pub fn set_navigation_fixture(&mut self, fixture: NavigationFixture) {
+        *self.navigation_fixture.lock().unwrap() = fixture;
+    }
+
     #[cfg(feature = "agent")]
     fn source_adapter_fixture(&self) -> Option<SourceAdapterFixture> {
         self.source_fixture.lock().unwrap().clone()
@@ -595,7 +722,25 @@ impl Library {
 
     /// Every venue in the library, newest activity first.
     pub fn venues(&self) -> impl Future<Output = Result<Vec<Venue>, LibraryError>> + use<> {
-        self.call("list_venues", json!({}))
+        #[cfg(feature = "agent")]
+        let (delay, error) = {
+            let mut fixture = self.navigation_fixture.lock().unwrap();
+            if fixture.catalogue_responses.is_empty() {
+                (fixture.venues_delay, fixture.venues_error.clone())
+            } else {
+                fixture.catalogue_responses.remove(0)
+            }
+        };
+        #[cfg(not(feature = "agent"))]
+        let (delay, error): (Duration, Option<String>) = (Duration::ZERO, None);
+        let pending = self.call_after("list_venues", json!({}), delay);
+        async move {
+            let result = pending.await;
+            if let Some(error) = error {
+                return Err(LibraryError::at("list_venues", Cause::Shape(error)));
+            }
+            result
+        }
     }
 
     /// Create a venue and return the durable row written by the catalog.
@@ -616,7 +761,41 @@ impl Library {
         &self,
         venue_id: &str,
     ) -> impl Future<Output = Result<Vec<TrackBrowserRow>, LibraryError>> + use<> {
-        self.call("list_tracks_enriched", json!({ "venueId": venue_id }))
+        #[cfg(feature = "agent")]
+        let (delay, first_title) = {
+            let mut fixture = self.navigation_fixture.lock().unwrap();
+            if let Some(index) = fixture
+                .track_responses
+                .iter()
+                .position(|response| response.0 == venue_id)
+            {
+                let (_, delay, first_title) = fixture.track_responses.remove(index);
+                (delay, first_title)
+            } else {
+                (
+                    fixture
+                        .track_delays
+                        .get(venue_id)
+                        .copied()
+                        .unwrap_or_default(),
+                    None,
+                )
+            }
+        };
+        #[cfg(not(feature = "agent"))]
+        let (delay, first_title): (Duration, Option<String>) = (Duration::ZERO, None);
+        let pending = self.call_after(
+            "list_tracks_enriched",
+            json!({ "venueId": venue_id }),
+            delay,
+        );
+        async move {
+            let mut rows: Vec<TrackBrowserRow> = pending.await?;
+            if let (Some(title), Some(first)) = (first_title, rows.first_mut()) {
+                first.title = Some(title);
+            }
+            Ok(rows)
+        }
     }
 
     /// Every visible track in Luma, newest first, without a venue decoration.
@@ -701,11 +880,40 @@ impl Library {
         self.import_progress.subscribe()
     }
 
+    /// Resolve the installed Engine DJ library root. The source picker owns no
+    /// product-specific path rules; it asks the adapter for its default and
+    /// carries the opaque result in [`TrackSource`].
+    pub fn default_engine_dj_source(
+        &self,
+    ) -> impl Future<Output = Result<TrackSource, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture = self.source_adapter_fixture().is_some();
+        #[cfg(not(feature = "agent"))]
+        let fixture = false;
+        let path =
+            (!fixture).then(|| self.call::<String>("engine_dj_default_library_path", json!({})));
+        async move {
+            let library_path = match path {
+                Some(path) => path.await?,
+                None => "/fixture/engine-dj".to_string(),
+            };
+            Ok(TrackSource::EngineDj { library_path })
+        }
+    }
+
     /// Open either supported DJ catalog through one GPUI-owned shape.
     pub fn source_library(
         &self,
         source: TrackSource,
     ) -> impl Future<Output = Result<SourceLibrary, LibraryError>> + use<> {
+        #[cfg(feature = "agent")]
+        let fixture_delay = self.source_fixture_delay.map(|delay| {
+            self.runtime.spawn(async move {
+                tokio::time::sleep(delay).await;
+            })
+        });
+        #[cfg(not(feature = "agent"))]
+        let fixture_delay: Option<tokio::task::JoinHandle<()>> = None;
         #[cfg(feature = "agent")]
         let fixture = self
             .source_adapter_fixture()
@@ -729,6 +937,9 @@ impl Library {
         };
         async move {
             if let Some(fixture) = fixture {
+                if let Some(delay) = fixture_delay {
+                    let _ = delay.await;
+                }
                 return fixture;
             }
             match (engine, rekordbox) {
@@ -902,19 +1113,43 @@ impl Library {
         query: &str,
     ) -> impl Future<Output = Result<Vec<SourceTrack>, LibraryError>> + use<> {
         #[cfg(feature = "agent")]
-        let fixture = self.source_adapter_fixture().map(|fixture| {
-            fixture
-                .searches
-                .get(query)
-                .cloned()
-                .ok_or_else(|| {
-                    LibraryError::at(
-                        "source_search_tracks",
-                        Cause::Shape(format!("fixture has no search {query:?}")),
-                    )
-                })
-                .and_then(|value| normalize_source_tracks(&source, "source_search_tracks", value))
+        let sequenced = {
+            let mut responses = self.source_search_fixture.lock().unwrap();
+            responses
+                .front()
+                .is_some_and(|response| response.query == query)
+                .then(|| responses.pop_front().unwrap())
+        };
+        #[cfg(feature = "agent")]
+        let sequenced = sequenced.map(|response| {
+            let delay = self.runtime.spawn(async move {
+                tokio::time::sleep(response.delay).await;
+            });
+            (
+                normalize_source_tracks(&source, "source_search_tracks", response.rows),
+                delay,
+            )
         });
+        #[cfg(feature = "agent")]
+        let fixture = sequenced
+            .is_none()
+            .then(|| self.source_adapter_fixture())
+            .flatten()
+            .map(|fixture| {
+                fixture
+                    .searches
+                    .get(query)
+                    .cloned()
+                    .ok_or_else(|| {
+                        LibraryError::at(
+                            "source_search_tracks",
+                            Cause::Shape(format!("fixture has no search {query:?}")),
+                        )
+                    })
+                    .and_then(|value| {
+                        normalize_source_tracks(&source, "source_search_tracks", value)
+                    })
+            });
         #[cfg(not(feature = "agent"))]
         let fixture: Option<Result<Vec<SourceTrack>, LibraryError>> = None;
         let engine = match (&source, fixture.is_none()) {
@@ -934,6 +1169,11 @@ impl Library {
             _ => None,
         };
         async move {
+            #[cfg(feature = "agent")]
+            if let Some((rows, delay)) = sequenced {
+                let _ = delay.await;
+                return rows;
+            }
             if let Some(fixture) = fixture {
                 return fixture;
             }
@@ -1262,7 +1502,7 @@ impl Library {
         key: &str,
         value: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("set_session_item", json!({ "key": key, "value": value }))
+        self.ordered_session_write("set_session_item", json!({ "key": key, "value": value }))
     }
 
     /// Remove one host-session value.
@@ -1270,7 +1510,7 @@ impl Library {
         &self,
         key: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.call("remove_session_item", json!({ "key": key }))
+        self.ordered_session_write("remove_session_item", json!({ "key": key }))
     }
 
     /// Write one setting. The seam owns what a key means and what a write
@@ -1283,6 +1523,26 @@ impl Library {
         value: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> {
         self.call("set_setting", json!({ "key": key, "value": value }))
+    }
+
+    fn ordered_session_write(
+        &self,
+        command: &'static str,
+        args: Value,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let queued = self.session_writes.send(SessionWrite {
+            command,
+            args,
+            reply,
+        });
+        async move {
+            queued
+                .map_err(|error| LibraryError::at(command, Cause::Cancelled(error.to_string())))?;
+            answer
+                .await
+                .map_err(|error| LibraryError::at(command, Cause::Cancelled(error.to_string())))?
+        }
     }
 
     /// Every conversation `scope` names, newest first.

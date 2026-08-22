@@ -100,14 +100,39 @@ const SCRIPT: &str = r#"
     // 5. An overlay owns its pointer plane. The sidebar toggle is still in the
     //    automation tree underneath it, but pressing those coordinates must
     //    not close the covered sidebar.
+    app.click(app.snapshot().find({ role: "input", label: "Search tracks…" }));
     app.action("luma::OpenPatterns");
     until("the pattern picker", (s) =>
         s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) !== undefined);
+    until("a focusable pattern row", (s) =>
+        s.find({ role: "row", label: "Strobe" }) !== undefined);
+    const dialog = app.snapshot().find({ role: "card", label: "Pattern dialog" });
     app.click(app.snapshot().find({ role: "button", label: "sidebar-toggle" }));
     app.frames(2);
     const overlayBlocked = read();
 
-    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, widened, maxed, reset, overlayBlocked })
+    // The same modal boundary applies to keyboard bindings. Escape then
+    // restores the exact search field which opened the overlay.
+    app.key("secondary-b");
+    app.frames(2);
+    const overlayKeyBlocked = read();
+    app.key("tab");
+    app.frames(2);
+    const dialogAfterTab = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+    const firstAfterTab = app.snapshot().find({ role: "button", label: "Close" });
+    app.key("shift-tab");
+    app.frames(2);
+    const dialogAfterReverse = app.snapshot().find({ role: "card", label: "Pattern dialog" });
+    const firstAfterReverse = app.snapshot().find({ role: "button", label: "Close" });
+    const lastAfterReverse = app.snapshot().find((n) => n.role === "row" && n.focused);
+    app.key("tab");
+    app.frames(2);
+    const firstAfterWrap = app.snapshot().find({ role: "button", label: "Close" });
+    app.key("escape");
+    app.frames(2);
+    const restoredSearch = app.snapshot().find({ role: "input", label: "Search tracks…" });
+
+    ({ opened, sidebarClosed, sidebarReopened, workspaceClosed, workspaceReopened, widened, maxed, reset, overlayBlocked, overlayKeyBlocked, dialog, dialogAfterTab, firstAfterTab, dialogAfterReverse, firstAfterReverse, lastAfterReverse, firstAfterWrap, restoredSearch })
 "#;
 
 fn number(value: &Value, key: &str) -> f64 {
@@ -186,4 +211,90 @@ fn the_edge_regions_toggle_both_ways_and_the_seam_resizes_the_panel() {
         "the overlay let a press reach the covered sidebar toggle: {:#}",
         out["overlayBlocked"]
     );
+    assert!(
+        number(&out["overlayKeyBlocked"], "sidebar") > 0.0,
+        "the overlay let a shell shortcut mutate the covered sidebar: {:#}",
+        out["overlayKeyBlocked"]
+    );
+    assert_eq!(out["dialog"]["bounds"]["width"], 760.0);
+    assert_eq!(out["dialog"]["bounds"]["height"], 600.0);
+    assert_eq!(
+        out["dialogAfterTab"]["focused"], true,
+        "Tab escaped the modal focus plane: {:#}",
+        out["dialogAfterTab"]
+    );
+    assert_eq!(
+        out["firstAfterTab"]["focused"], true,
+        "Tab did not move from the modal container to its first control: {:#}",
+        out["firstAfterTab"]
+    );
+    assert_eq!(
+        out["dialogAfterReverse"]["focused"], true,
+        "Shift-Tab escaped the modal focus trap: {:#}",
+        out["dialogAfterReverse"]
+    );
+    assert_eq!(
+        out["firstAfterReverse"]["focused"], false,
+        "Shift-Tab did not move from the first control to the last: {:#}",
+        out["firstAfterReverse"]
+    );
+    assert_eq!(
+        out["lastAfterReverse"]["focused"], true,
+        "Shift-Tab did not wrap from the first control to the last row: {:#}",
+        out["lastAfterReverse"]
+    );
+    assert_eq!(
+        out["firstAfterWrap"]["focused"], true,
+        "Tab did not wrap from the last dialog control to the first: {:#}",
+        out["firstAfterWrap"]
+    );
+    assert_eq!(
+        out["restoredSearch"]["focused"], true,
+        "dismissing the dialog did not restore its opener: {:#}",
+        out["restoredSearch"]
+    );
+
+    // The same primitive clamps rather than cropping on a compact window and
+    // reserves the titlebar strip. The three custom traffic lights are still
+    // present with non-empty hit targets above the modal plane.
+    let mut compact = Fixture::new(
+        "shell-panels-compact",
+        TRACK_SECONDS,
+        vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0).lane(0)],
+    )
+    .window(640.0, 480.0)
+    .open(Mode::Headless);
+    let compact_result = compact.exec(
+        &support::script(
+            r#"
+            nav.trackEditor("Test Venue", "Aurora");
+            until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
+            app.action("luma::OpenPatterns");
+            until("the compact dialog", (s) => s.find({ role: "card", label: "Pattern dialog" }) !== undefined);
+            const shot = app.snapshot();
+            ({
+                dialog: shot.find({ role: "card", label: "Pattern dialog" }),
+                close: shot.find({ role: "button", label: "close" }),
+                minimize: shot.find({ role: "button", label: "minimize" }),
+                maximize: shot.find({ role: "button", label: "maximize" }),
+            })
+            "#,
+        ),
+        Duration::from_secs(300),
+    );
+    assert_eq!(
+        compact_result.error, None,
+        "compact script failed:\n{}",
+        compact_result.stdout
+    );
+    let compact: Value = compact_result.result;
+    assert!(number(&compact["dialog"]["bounds"], "width") <= 608.0);
+    assert!(number(&compact["dialog"]["bounds"], "height") <= 426.0);
+    assert!(number(&compact["dialog"]["bounds"], "y") >= 38.0);
+    for control in ["close", "minimize", "maximize"] {
+        assert!(
+            number(&compact[control]["bounds"], "width") > 0.0,
+            "{control} lost its hit target above the compact modal: {compact:#}"
+        );
+    }
 }

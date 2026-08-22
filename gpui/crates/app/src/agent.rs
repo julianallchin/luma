@@ -47,7 +47,7 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
                 score_id: None,
             })
         }
-        Body::Visualizer(_) => None,
+        Body::Visualizer(_) | Body::Universe(_) => None,
     }
 }
 

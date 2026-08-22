@@ -80,6 +80,7 @@ pub struct Tracks {
     /// under rather than re-derived from the screen that opened this one.
     venue_id: String,
     venue_name: String,
+    load_generation: u64,
     rows: Rc<[TrackBrowserRow]>,
     shown: Rc<[usize]>,
     /// Whether the venue's query has come back. Written in the same
@@ -93,6 +94,10 @@ pub struct Tracks {
     /// The signed-in principal, snapshotted when the venue was selected. The
     /// ownership filter reads it.
     user: Option<String>,
+    /// Exact return target for the venue dialog. Pointer activation focuses
+    /// this handle before opening the overlay, so Escape restores the control
+    /// itself rather than the sidebar region generically.
+    venue_focus: FocusHandle,
     search_focus: FocusHandle,
 }
 
@@ -108,11 +113,23 @@ impl Tracks {
         &self.venue_id
     }
 
+    pub(crate) fn load_generation(&self) -> u64 {
+        self.load_generation
+    }
+
     /// The loaded row a click carries. Looked up by id rather than by index
     /// because the click was registered against a *filtered* list, and the
     /// filters can change before it lands.
     pub(crate) fn find(&self, track_id: &str) -> Option<TrackBrowserRow> {
         self.rows.iter().find(|row| row.id == track_id).cloned()
+    }
+
+    /// Adopt a freshly venue-decorated library read after an add-track action.
+    pub(crate) fn replace_rows(&mut self, rows: Vec<TrackBrowserRow>) {
+        self.rows = rows.into();
+        self.loaded = true;
+        self.error = None;
+        self.refilter();
     }
 
     /// The rows the filters admit, in the order the query returned them.
@@ -161,6 +178,13 @@ impl Luma {
     /// own subjects, and closing somebody's open timeline because they glanced
     /// at another room would be the shell throwing work away.
     pub(crate) fn open_venue(&mut self, venue: Venue, cx: &mut Context<Self>) {
+        // A remembered row belongs to the browser that named it. Keeping it
+        // across a venue switch would make the new-tab menu advertise an
+        // editor subject the current browser cannot honestly open.
+        self.selected_track = None;
+        self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
+        let generation = self.venue_selection_generation;
+        let venue_id = venue.id.clone();
         let leaving: Vec<crate::shell::Body> = self
             .workspace
             .close_where(|target| target.venue().is_some_and(|owner| owner != venue.id));
@@ -169,9 +193,13 @@ impl Luma {
         }
         self.overlay = None;
         let pending = self.library.tracks(&venue.id);
+        let remember = self
+            .library
+            .set_session_item(crate::welcome::LAST_VENUE, &venue.id);
         self.sidebar = Some(Tracks {
             venue_id: venue.id,
             venue_name: venue.name,
+            load_generation: generation,
             rows: Rc::from(Vec::new()),
             shown: Rc::from(Vec::new()),
             loaded: false,
@@ -180,13 +208,14 @@ impl Luma {
             in_venue: true,
             query: String::new(),
             user: self.library.user_id().map(str::to_string),
+            venue_focus: cx.focus_handle().tab_stop(true),
             search_focus: cx.focus_handle(),
         });
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                this.with_tracks(cx, |state| {
+                this.with_tracks_for_venue(&venue_id, generation, cx, |state| {
                     state.loaded = true;
                     match result {
                         Ok(rows) => {
@@ -198,6 +227,10 @@ impl Luma {
                 });
             })
             .ok();
+        })
+        .detach();
+        cx.spawn(async move |_, _| {
+            let _ = remember.await;
         })
         .detach();
     }
@@ -238,12 +271,28 @@ impl Luma {
         });
     }
 
-    /// Run `edit` against the sidebar's browser, if a venue is selected. A
-    /// load that lands after the venue changed is a no-op.
+    /// Run a synchronous edit against the selected venue's browser.
     fn with_tracks(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Tracks)) {
         if let Some(state) = &mut self.sidebar {
             edit(state);
             cx.notify();
+        }
+    }
+
+    /// Admit an asynchronous venue read only while that venue still owns the
+    /// sidebar. Both initial loads and post-membership refreshes use this rule.
+    pub(crate) fn with_tracks_for_venue(
+        &mut self,
+        venue_id: &str,
+        generation: u64,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Tracks),
+    ) {
+        if let Some(state) = &mut self.sidebar {
+            if state.venue_id() == venue_id && state.load_generation == generation {
+                edit(state);
+                cx.notify();
+            }
         }
     }
 }
@@ -273,7 +322,7 @@ pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
         // Glass tier: the sidebar sits transparent on the shell's frost —
         // depth comes from the content cards beside it, not from a fill.
         .text_color(luma_ui::glass::ink(0.85))
-        .child(head(state, app))
+        .child(head(state, app, window))
         .child(filters(state, app, window))
         .child(match &state.error {
             Some(message) => luma_ui::plate(
@@ -301,8 +350,9 @@ pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
 ///
 /// Glass language, hand-set: the sidebar is chrome (spec §9), and a ladder
 /// slab up here would be the instrument tier leaking into the frame.
-fn head(state: &Tracks, app: &Entity<Luma>) -> Div {
+fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
     let picker = app.clone();
+    let venue_focus = state.venue_focus.clone();
     div()
         .flex()
         .flex_shrink_0()
@@ -313,6 +363,8 @@ fn head(state: &Tracks, app: &Entity<Luma>) -> Div {
         .child(
             div()
                 .id("venue")
+                .track_focus(&state.venue_focus)
+                .tab_stop(true)
                 .h(px(24.))
                 .px(px(8.))
                 .rounded(px(6.))
@@ -323,16 +375,34 @@ fn head(state: &Tracks, app: &Entity<Luma>) -> Div {
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(luma_ui::glass::ink(0.85))
                 .hover(|button| button.bg(luma_ui::glass::wash(0.06)))
-                .on_click(move |_, _, cx| picker.update(cx, |this, cx| this.show_venues(cx)))
+                .on_click(move |_, window, cx| {
+                    window.focus(&venue_focus, cx);
+                    picker.update(cx, |this, cx| this.show_venues(cx));
+                })
                 .child(state.venue_name.clone())
                 .child(
                     gpui_component::Icon::new(gpui_component::IconName::ChevronDown)
                         .size(px(11.))
                         .text_color(luma_ui::glass::ink(0.45)),
                 )
-                .agent_node(Role::Button, state.venue_name.clone()),
+                .agent_node(Role::Button, state.venue_name.clone())
+                .agent_focused(state.venue_focus.is_focused(window)),
         )
         .child(div().flex_1())
+        .child({
+            let add = app.clone();
+            div()
+                .id("add-track")
+                .size(px(24.0))
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(|button| button.bg(luma_ui::glass::wash(0.06)))
+                .on_click(move |_, _, cx| add.update(cx, |this, cx| this.show_add_tracks(cx)))
+                .child(gpui_component::Icon::new(gpui_component::IconName::Plus).size(px(12.0)))
+                .agent_node(Role::Button, "Add track")
+        })
         // How many rows the filters admit — the web browser's footer, kept in
         // the head because the sidebar has no second bar to spare.
         .child({
@@ -493,6 +563,7 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
         Some(bpm) => format!("{artist} · {bpm:.1}"),
         None => artist,
     };
+    let membership = format!("{name} venue scores: {}", track.venue_score_count);
     div()
         .id(SharedString::from(track.id.clone()))
         .w_full()
@@ -540,7 +611,8 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
                         .truncate()
                         .text_size(px(10.))
                         .text_color(luma_ui::glass::ink(0.45))
-                        .child(sub),
+                        .child(sub)
+                        .agent_node(Role::Text, membership),
                 ),
         )
         .agent_node(Role::Row, name)
