@@ -2,8 +2,8 @@
 //!
 //! Offscreen only: nothing here knows about a window or a swapchain. A frame
 //! goes shadow → depth → scene (MSAA) → haze (accumulated) → composite+AgX →
-//! readback, and comes out as sRGB-encoded 8-bit bytes in the caller's
-//! [`Channels`] order.
+//! editor overlays → readback, and comes out as sRGB-encoded 8-bit bytes in
+//! the caller's [`Channels`] order.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -236,9 +236,9 @@ pub struct Renderer {
     composite_pipelines: [wgpu::RenderPipeline; 2],
     grid_pipeline: wgpu::RenderPipeline,
     overlay_layout: wgpu::BindGroupLayout,
-    /// Indexed by [`overlay_pipeline_index`]: the two topologies crossed with
-    /// the two depth behaviours of [`OverlayDepth`].
-    overlay_pipelines: [wgpu::RenderPipeline; 4],
+    /// Indexed by [`overlay_pipeline_index`]: the two output formats crossed
+    /// with two topologies and two depth behaviours.
+    overlay_pipelines: [wgpu::RenderPipeline; 8],
     shadow_map: wgpu::TextureView,
     shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
     shadow_sampler: wgpu::Sampler,
@@ -891,8 +891,14 @@ impl Renderer {
             }],
         };
         let overlay_pipelines = std::array::from_fn(|i| {
-            let lines = i & 1 == 1;
-            let free = i & 2 == 2;
+            let channels = if i < 4 {
+                Channels::Rgba
+            } else {
+                Channels::Bgra
+            };
+            let variant = i % 4;
+            let lines = variant & 1 == 1;
+            let free = variant & 2 == 2;
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("overlay"),
                 layout: Some(&overlay_pipeline_layout),
@@ -906,7 +912,7 @@ impl Renderer {
                     module: &overlay_module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: SCENE_FORMAT,
+                        format: channels.format(),
                         blend: free.then_some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -931,10 +937,7 @@ impl Renderer {
                 } else {
                     depth_state(true)
                 }),
-                multisample: wgpu::MultisampleState {
-                    count: MSAA_SAMPLES,
-                    ..Default::default()
-                },
+                multisample: wgpu::MultisampleState::default(),
                 multiview: None,
                 cache: None,
             })
@@ -1724,17 +1727,6 @@ impl Renderer {
                     pass.set_pipeline(&self.grid_pipeline);
                     draw_range(&mut pass, opaque..frame.draws.len());
                 }
-
-                // Editor affordances last, in the order `overlay::build`
-                // emitted them — which is three's paint order.
-                if !frame.overlays.is_empty() {
-                    pass.set_bind_group(0, &overlay_bg, &[]);
-                    for (i, overlay) in frame.overlays.iter().enumerate() {
-                        pass.set_pipeline(&self.overlay_pipelines[overlay_pipeline_index(overlay)]);
-                        let (first, last, base) = ranges[overlay.mesh];
-                        pass.draw_indexed(first..last, base, i as u32..i as u32 + 1);
-                    }
-                }
             }
         }
 
@@ -1989,12 +1981,43 @@ impl Renderer {
                 pass.set_bind_group(1, &environment_bg, &[]);
                 pass.draw(0..3, 0..1);
             }
+
+            // Editor affordances are display UI, not scene radiance. Drawing
+            // into the final sRGB target after AgX makes authored colours
+            // independent of stage lighting and exposure. Cages load the
+            // full-resolution reverse-Z prepass depth; free gizmos use Always.
+            if !frame.overlays.is_empty() {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("editor-overlays"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &output_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(depth_attachment_load(&depth_view)),
+                    ..Default::default()
+                });
+                pass.set_bind_group(0, &overlay_bg, &[]);
+                pass.set_vertex_buffer(0, vertex_buf.slice(..));
+                pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                for (i, overlay) in frame.overlays.iter().enumerate() {
+                    pass.set_pipeline(
+                        &self.overlay_pipelines[overlay_pipeline_index(overlay, channels)],
+                    );
+                    let (first, last, base) = ranges[overlay.mesh];
+                    pass.draw_indexed(first..last, base, i as u32..i as u32 + 1);
+                }
+            }
             if let Some((queries, resolve, profile_readback, _)) = &profile {
                 // Metal returns zero for the end timestamp of the final pass
                 // and optimizes a fully empty fence away. A zero-vertex draw
                 // makes this next ordered pass observable without executing a
-                // shader. Its beginning proves composite completed; the fence
-                // body remains outside the measured interval.
+                // shader. Its beginning proves composite and editor overlays
+                // completed; the fence body remains outside the interval.
                 let mut fence = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("luma-profile-fence"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2254,21 +2277,31 @@ const ADD: wgpu::BlendComponent = wgpu::BlendComponent {
 };
 
 /// Slot of the overlay's pipeline in [`Renderer::overlay_pipelines`]: bit 0 is
-/// the line topology, bit 1 is [`OverlayDepth::Free`].
-fn overlay_pipeline_index(overlay: &Overlay) -> usize {
-    usize::from(overlay.lines) | (usize::from(overlay.depth == OverlayDepth::Free) << 1)
+/// line topology, bit 1 is [`OverlayDepth::Free`], bit 2 is BGRA output.
+fn overlay_pipeline_index(overlay: &Overlay, channels: Channels) -> usize {
+    usize::from(overlay.lines)
+        | (usize::from(overlay.depth == OverlayDepth::Free) << 1)
+        | (channels.index() << 2)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use glam::{Mat4, Vec3};
 
-    use crate::frame::{Camera, FixtureCone};
+    use crate::assets::{Material, Vertex};
+    use crate::coords::hex_srgb;
+    use crate::frame::{
+        Camera, DirectionalLight, Draw, FixtureCone, Frame, MaterialTextures, MeshData,
+    };
+    use crate::overlay::{Overlay, OverlayDepth};
+    use crate::scene_desc::DebugView;
 
     use super::{
-        cascade_matrices, downsample, haze_tile_key, haze_tiles, CompositeUniform, Globals,
-        HazeUniform, LightCore, LightRest, TextureEncoding, TileHeader, CAMERA_FAR, CAMERA_NEAR,
-        CASCADE_COUNT, HAZE_TILE_SIZE, SHADOW_SIZE,
+        cascade_matrices, downsample, haze_tile_key, haze_tiles, Channels, CompositeUniform,
+        Globals, HazeUniform, LightCore, LightRest, Renderer, TextureEncoding, TileHeader,
+        CAMERA_FAR, CAMERA_NEAR, CASCADE_COUNT, HAZE_TILE_SIZE, SHADOW_SIZE,
     };
 
     #[test]
@@ -2461,6 +2494,156 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn post_agx_overlay_keeps_authored_srgb_across_scene_lighting_and_output_formats(
+    ) -> anyhow::Result<()> {
+        const AUTHORED: [u8; 3] = [0x33, 0x99, 0xe6];
+        let mut renderer = Renderer::new()?;
+        let dark = overlay_test_frame(true, OverlayDepth::Tested, -1.0, Vec3::ZERO);
+        let lit = overlay_test_frame(true, OverlayDepth::Tested, -1.0, Vec3::splat(40.0));
+
+        let mut rgba_dark = Vec::new();
+        renderer.render_into(&dark, 96, 96, 1, Channels::Rgba, &mut rgba_dark)?;
+        let mut rgba_lit = Vec::new();
+        renderer.render_into(&lit, 96, 96, 1, Channels::Rgba, &mut rgba_lit)?;
+        let mut bgra_lit = Vec::new();
+        renderer.render_into(&lit, 96, 96, 1, Channels::Bgra, &mut bgra_lit)?;
+
+        assert_eq!(center_rgb(&rgba_dark, Channels::Rgba), AUTHORED);
+        assert_eq!(center_rgb(&rgba_lit, Channels::Rgba), AUTHORED);
+        assert_eq!(center_rgb(&bgra_lit, Channels::Bgra), AUTHORED);
+        let bgra_offset = center_offset(96, 96);
+        assert_eq!(
+            &bgra_lit[bgra_offset..bgra_offset + 4],
+            &[AUTHORED[2], AUTHORED[1], AUTHORED[0], 255]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn post_agx_overlays_load_reverse_z_depth_while_free_gizmos_ignore_it() -> anyhow::Result<()> {
+        const AUTHORED: [u8; 3] = [0x33, 0x99, 0xe6];
+        let mut renderer = Renderer::new()?;
+        let occluder_only = overlay_test_frame(true, OverlayDepth::Tested, 1.0, Vec3::ZERO);
+        let mut without_overlay = overlay_test_frame(true, OverlayDepth::Tested, 1.0, Vec3::ZERO);
+        without_overlay.overlays.clear();
+
+        let mut background = Vec::new();
+        renderer.render_into(&without_overlay, 96, 96, 1, Channels::Rgba, &mut background)?;
+        let mut tested_behind = Vec::new();
+        renderer.render_into(
+            &occluder_only,
+            96,
+            96,
+            1,
+            Channels::Rgba,
+            &mut tested_behind,
+        )?;
+        assert_eq!(
+            center_rgb(&tested_behind, Channels::Rgba),
+            center_rgb(&background, Channels::Rgba),
+            "a tested cage behind opaque geometry must remain occluded"
+        );
+
+        let tested_front = overlay_test_frame(true, OverlayDepth::Tested, -1.0, Vec3::ZERO);
+        let mut front = Vec::new();
+        renderer.render_into(&tested_front, 96, 96, 1, Channels::Rgba, &mut front)?;
+        assert_eq!(center_rgb(&front, Channels::Rgba), AUTHORED);
+
+        let free_behind = overlay_test_frame(true, OverlayDepth::Free, 1.0, Vec3::ZERO);
+        let mut free = Vec::new();
+        renderer.render_into(&free_behind, 96, 96, 1, Channels::Rgba, &mut free)?;
+        assert_eq!(
+            center_rgb(&free, Channels::Rgba),
+            AUTHORED,
+            "a free gizmo must use Always and paint over opaque geometry"
+        );
+        Ok(())
+    }
+
+    fn overlay_test_frame(
+        occluder: bool,
+        depth: OverlayDepth,
+        overlay_y: f32,
+        scene_radiance: Vec3,
+    ) -> Frame {
+        let vertex = |position: [f32; 3]| Vertex {
+            position,
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.0; 2],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        };
+        let mesh = MeshData {
+            key: "::post-agx-overlay-test".into(),
+            vertices: vec![
+                vertex([-2.0, 0.0, -2.0]),
+                vertex([2.0, 0.0, -2.0]),
+                vertex([0.0, 0.0, 2.0]),
+            ]
+            .into(),
+            indices: Arc::from([0, 1, 2]),
+        };
+        let draws = occluder
+            .then(|| Draw {
+                mesh: 0,
+                model: Mat4::IDENTITY,
+                material: Material {
+                    base_color: Vec3::splat(0.35),
+                    roughness: 1.0,
+                    ..Material::default()
+                },
+                textures: MaterialTextures::default(),
+            })
+            .into_iter()
+            .collect();
+        Frame {
+            meshes: vec![mesh],
+            images: Vec::new(),
+            draws,
+            grid_draws: 0,
+            overlays: vec![Overlay {
+                mesh: 0,
+                model: Mat4::from_translation(Vec3::Y * overlay_y),
+                lines: false,
+                color: hex_srgb(0x33_99_e6),
+                opacity: 1.0,
+                depth,
+            }],
+            point_lights: Vec::new(),
+            fixture_cones: Vec::new(),
+            clear_color: scene_radiance,
+            ambient: scene_radiance,
+            directional: Some(DirectionalLight {
+                direction: Vec3::new(0.0, -1.0, 1.0).normalize(),
+                radiance: scene_radiance,
+                shadow_eye: Vec3::new(0.0, -4.0, 5.0),
+                shadows: false,
+            }),
+            haze_density: 0.0,
+            haze_steps: 1,
+            haze_resolution: 1.0,
+            time: 0.0,
+            debug_view: DebugView::Pbr,
+            camera: Camera {
+                eye: Vec3::new(0.0, -5.0, 0.0),
+                target: Vec3::ZERO,
+                fov_y_deg: 48.0,
+            },
+        }
+    }
+
+    fn center_offset(width: usize, height: usize) -> usize {
+        ((height / 2) * width + width / 2) * 4
+    }
+
+    fn center_rgb(pixels: &[u8], channels: Channels) -> [u8; 3] {
+        let offset = center_offset(96, 96);
+        match channels {
+            Channels::Rgba => [pixels[offset], pixels[offset + 1], pixels[offset + 2]],
+            Channels::Bgra => [pixels[offset + 2], pixels[offset + 1], pixels[offset]],
         }
     }
 
@@ -2950,6 +3133,18 @@ fn depth_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassDepthStencilAtt
         view,
         depth_ops: Some(wgpu::Operations {
             load: wgpu::LoadOp::Clear(0.0),
+            store: wgpu::StoreOp::Store,
+        }),
+        stencil_ops: None,
+    }
+}
+
+/// Load the full-resolution prepass depth for post-composite editor cages.
+fn depth_attachment_load(view: &wgpu::TextureView) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+    wgpu::RenderPassDepthStencilAttachment {
+        view,
+        depth_ops: Some(wgpu::Operations {
+            load: wgpu::LoadOp::Load,
             store: wgpu::StoreOp::Store,
         }),
         stencil_ops: None,

@@ -2,10 +2,9 @@
 // handles. three's `MeshBasicMaterial` / `LineBasicMaterial` — the colour is
 // the output, with no lighting term and no texture.
 //
-// This runs inside the scene pass, before the display transform, because that
-// is where three's `postprocessing` chain puts it: the AgX pass is a
-// full-screen effect over the whole buffer, so `toneMapped: false` on the
-// material buys nothing and the goldens record tonemapped gizmo colours.
+// This runs after the display transform directly into an sRGB output target.
+// CPU-authored colours are linear values; the attachment's transfer function
+// restores their authored sRGB bytes without lighting or AgX changing them.
 
 // A prefix of the scene pass's `Globals`; only the view-projection is read.
 struct Globals {
