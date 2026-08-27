@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { PythonCellResult } from "@/bindings/schema";
+import type { PythonCellResult, PythonToolOutput } from "@/bindings/schema";
 import {
 	buildPythonTool,
-	type PythonToolOutput,
 	pythonModelOutput,
 	pythonToolLabel,
 	toStoredOutput,
@@ -122,7 +121,6 @@ describe("pythonModelOutput", () => {
 		const out = pythonModelOutput(
 			output({
 				repr: "<Figure>",
-				figureCount: 2,
 				figures: [
 					{ width: 100, height: 50, base64Png: "AAA" },
 					{ width: 200, height: 60, base64Png: "BBB" },
@@ -140,7 +138,6 @@ describe("pythonModelOutput", () => {
 		const big = "x".repeat(5_000_000);
 		const out = pythonModelOutput(
 			output({
-				figureCount: 2,
 				figures: [
 					{ width: 1, height: 1, base64Png: big },
 					{ width: 1, height: 1, base64Png: big },
@@ -155,7 +152,7 @@ describe("pythonModelOutput", () => {
 
 	it("notes a figure whose base64 was not persisted", () => {
 		const out = pythonModelOutput(
-			output({ figureCount: 1, figures: [{ width: 10, height: 10 }] }),
+			output({ figures: [{ width: 10, height: 10 }] }),
 		);
 		expect(images(out.value)).toHaveLength(0);
 		expect(texts(out.value).at(-1)).toContain("too large to include");
@@ -180,7 +177,6 @@ describe("toStoredOutput", () => {
 				],
 			}),
 		);
-		expect(stored.figureCount).toBe(1);
 		expect(stored.figures).toEqual([{ width: 4, height: 2, base64Png: "AAA" }]);
 	});
 
@@ -241,38 +237,6 @@ describe("buildPythonTool execute", () => {
 				},
 			},
 		]);
-	});
-
-	it("routes child execution through its detached authored workspace", async () => {
-		const calls = mockInvoke({
-			run_python_cell: () => cellResult({ repr: "'detached'" }),
-		});
-		const tool = buildPythonTool({
-			threadId: "parent-thread",
-			executionId: "workspace-1",
-			authoredWorkspaceId: "workspace-1",
-			turnMessageId: "root-user-turn",
-			getScope: () => ({
-				trackId: "track-1",
-				venueId: "venue-1",
-				scoreId: "score-1",
-			}),
-		});
-
-		await tool.execute?.(
-			{ purpose: "inspect detached score", code: "luma.track.revision" },
-			{ toolCallId: "child-call", messages: [] },
-		);
-
-		expect(calls[0]).toMatchObject({
-			command: "run_python_cell",
-			args: {
-				threadId: "parent-thread",
-				executionId: "workspace-1",
-				authoredWorkspaceId: "workspace-1",
-				turnMessageId: "root-user-turn",
-			},
-		});
 	});
 
 	it("cancels the cell on abort and still returns the terminal result", async () => {

@@ -46,6 +46,21 @@ pub const CODE_PADDING_Y: f32 = 10.0;
 /// the info string would make a block's height depend on its fence, and would
 /// leave a block that named no language with no way to copy it.
 pub const CODE_HEADER_HEIGHT: f32 = 28.0;
+/// The exact height a fenced block of `code` lays out to.
+///
+/// The block renders per line precisely so its height is a multiplication
+/// rather than a measurement; this is that multiplication, kept beside the
+/// element it mirrors. Callers that have to fold a code block into a height
+/// they declare — the chat's tool card, whose fold is tweened — need the same
+/// number the element will produce, and two spellings of it would drift.
+#[must_use]
+pub fn code_block_height(code: &str) -> f32 {
+    /// The card's own outline, plus the rule under its header.
+    const HAIRLINE: f32 = 1.0;
+    let lines = code.split('\n').count() as f32;
+    3.0 * HAIRLINE + CODE_HEADER_HEIGHT + 2.0 * CODE_PADDING_Y + lines * CODE_LINE_HEIGHT
+}
+
 /// The copy glyph's two squares, and the box they are offset inside.
 const COPY_GLYPH: f32 = 9.0;
 const COPY_GLYPH_BOX: f32 = 12.0;

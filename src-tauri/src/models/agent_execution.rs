@@ -51,6 +51,46 @@ pub struct PythonCellFigure {
     pub base64_png: String,
 }
 
+/// What the transcript keeps for one executed cell — the `python` tool's stored
+/// output, and therefore the shape every reader of a persisted turn decodes:
+/// the chat panel, the detail view, the model-facing projection.
+///
+/// It is [`PythonCellResult`] minus what only the run knew (`artifact_rel`,
+/// oversized figure bytes). Older rows carry fields this shape no longer has;
+/// serde ignores them, and so must every other decoder.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct PythonToolOutput {
+    #[ts(type = r#""ok" | "error" | "interrupted" | "failed""#)]
+    pub status: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub repr: Option<String>,
+    pub traceback: Option<String>,
+    pub notices: Vec<String>,
+    pub figures: Vec<PythonStoredFigure>,
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+}
+
+/// A figure as the transcript keeps it: geometry always, bytes only when the
+/// single-figure persistence cap allowed them. A figure whose bytes were
+/// dropped still occupies its slot, so a card's layout never depends on what
+/// was persisted.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct PythonStoredFigure {
+    pub width: u32,
+    pub height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base64_png: Option<String>,
+}
+
 /// What the agent is looking at, as the frontend can describe it.
 ///
 /// Mirrors `agent_execution::bindings::providers::BindingScope` minus
