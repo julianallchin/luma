@@ -204,15 +204,11 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             runs: parse_inline_container(cur, &InlineStyle::default()),
         }],
         Tag::CodeBlock(kind) => {
+            // One normalizer with the highlighter, so a decorated fence
+            // (```rust,ignore) stores — and its header prints — the same
+            // name the syntax table matches on.
             let language = match kind {
-                CodeBlockKind::Fenced(info) => {
-                    let lang = info.split_whitespace().next().unwrap_or("");
-                    if lang.is_empty() {
-                        None
-                    } else {
-                        Some(lang.to_string())
-                    }
-                }
+                CodeBlockKind::Fenced(info) => crate::syntax::fence_language(&info),
                 CodeBlockKind::Indented => None,
             };
             let mut code = String::new();

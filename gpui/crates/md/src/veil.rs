@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Instant;
 
-use gpui::TextRun;
+use gpui::{SharedString, TextRun};
 
 /// EMA seed for the inter-append gap (mugen `EMA_SEED_MS`).
 pub const VEIL_EMA_SEED_MS: f32 = 160.0;
@@ -171,18 +171,40 @@ impl ElemVeil {
             .collect()
     }
 
-    /// Any chunk still fading (as of the last [`advance`](Self::advance))?
-    pub fn is_fading(&self) -> bool {
-        !self.chunks.is_empty()
+    /// Any chunk still fading *at `now`*.
+    ///
+    /// Answered from the clock rather than from whether [`advance`](Self::advance)
+    /// has run. Chunks are only pruned inside `advance`, and `advance` only runs
+    /// while an element is both live and on screen — so a "are any chunks left"
+    /// answer latches `true` forever the moment either stops being true. That is
+    /// exactly what happens at the end of every turn: the veil is dropped from
+    /// the render options, the last chunks are never pruned, and the host's
+    /// "does anything still need a frame?" question is answered `true` for the
+    /// rest of the session.
+    pub fn is_fading(&self, now: Instant) -> bool {
+        let boost = veil_boost(self.chunks.len());
+        self.chunks.iter().any(|chunk| {
+            now.saturating_duration_since(chunk.started).as_secs_f32() * 1000.0 * boost
+                < chunk.duration_ms
+        })
     }
 }
 
-/// Veil state for one live streaming row, keyed by the render tree's stable
-/// per-element discriminator (top-level block ix / nested ix scheme — stable
-/// across appends because the incremental parser only reparses the tail).
+/// Veil state for one live streaming **turn**.
+///
+/// Keyed by the same pair the render cache is: the caller's row key plus the
+/// render tree's stable per-element discriminator (top-level block ix / nested
+/// ix scheme — stable across appends because the incremental parser only
+/// reparses the tail). The discriminator alone is not a name: it counts from
+/// zero inside each row, and one turn is many rows — an assistant reply is
+/// reasoning, then text, then a tool call, then more text. Two rows sharing a
+/// tracker each see the other's text through it, so every frame keeps only
+/// their common prefix committed and re-veils the rest at opacity zero: a lone
+/// leading character on screen for the whole turn, and the reply appearing all
+/// at once when the veil is dropped at the end.
 #[derive(Debug, Default)]
-pub struct RowVeil {
-    elems: HashMap<usize, ElemVeil>,
+pub struct TurnVeil {
+    elems: HashMap<(SharedString, usize), ElemVeil>,
     /// Attach pass in progress: elements first seen while seeding adopt their
     /// current text as the committed baseline instead of fading it in. Set for
     /// rows that already carried text when the transcript (re)attached to the
@@ -191,7 +213,7 @@ pub struct RowVeil {
     seeding: bool,
 }
 
-impl RowVeil {
+impl TurnVeil {
     /// A veil whose first render pass seeds baselines instead of fading.
     pub fn seeded() -> Self {
         Self {
@@ -206,19 +228,27 @@ impl RowVeil {
         self.seeding = false;
     }
 
-    pub fn advance(&mut self, elem: usize, text: &str, now: Instant) -> Vec<VeilSpan> {
-        if self.seeding && !self.elems.contains_key(&elem) {
+    pub fn advance(
+        &mut self,
+        row: &SharedString,
+        elem: usize,
+        text: &str,
+        now: Instant,
+    ) -> Vec<VeilSpan> {
+        let key = (row.clone(), elem);
+        if self.seeding && !self.elems.contains_key(&key) {
             let mut baseline = ElemVeil::default();
             baseline.seed(text);
-            self.elems.insert(elem, baseline);
+            self.elems.insert(key, baseline);
             return Vec::new();
         }
-        self.elems.entry(elem).or_default().advance(text, now)
+        self.elems.entry(key).or_default().advance(text, now)
     }
 
-    /// Any element still fading? Drives the once-per-frame repaint request.
-    pub fn is_fading(&self) -> bool {
-        self.elems.values().any(ElemVeil::is_fading)
+    /// Any element still fading at `now`? Drives the once-per-frame repaint
+    /// request, so it must go *false* on its own — see [`ElemVeil::is_fading`].
+    pub fn is_fading(&self, now: Instant) -> bool {
+        self.elems.values().any(|elem| elem.is_fading(now))
     }
 }
 
@@ -305,7 +335,7 @@ mod tests {
         assert!(spans[0].1 > 0.0 && spans[0].1 < 1.0);
         // Settled: pruned, never re-animates.
         assert!(v.advance("hello", at(t0, 600)).is_empty());
-        assert!(!v.is_fading());
+        assert!(!v.is_fading(at(t0, 600)));
         assert!(v.advance("hello", at(t0, 700)).is_empty());
     }
 
@@ -355,17 +385,20 @@ mod tests {
         // Switching back to a streaming session: the text already on screen is
         // the attach BASELINE (mugen FadePainter.attach) — no full-reply fade.
         let t0 = Instant::now();
-        let mut row = RowVeil::seeded();
-        assert!(row.advance(0, "already streamed text", t0).is_empty());
-        assert!(row.advance(1, "second block", t0).is_empty());
-        assert!(!row.is_fading());
+        let row: SharedString = "turn:0".into();
+        let mut turn = TurnVeil::seeded();
+        assert!(turn
+            .advance(&row, 0, "already streamed text", t0)
+            .is_empty());
+        assert!(turn.advance(&row, 1, "second block", t0).is_empty());
+        assert!(!turn.is_fading(t0));
         // Appends AFTER the attach fade normally — only the new suffix.
-        let spans = row.advance(0, "already streamed text plus", at(t0, 100));
+        let spans = turn.advance(&row, 0, "already streamed text plus", at(t0, 100));
         assert_eq!(spans, vec![(21..26, 0.0)]);
         // The attach pass ends after the first render: elements first seen
         // later are newly streamed content and fade from empty.
-        row.finish_seeding();
-        let spans = row.advance(2, "new block", at(t0, 200));
+        turn.finish_seeding();
+        let spans = turn.advance(&row, 2, "new block", at(t0, 200));
         assert_eq!(spans, vec![(0..9, 0.0)]);
     }
 
@@ -373,9 +406,47 @@ mod tests {
     fn default_row_veil_fades_first_text() {
         // Mid-stream new rows keep the old behavior: their first chunk fades.
         let t0 = Instant::now();
-        let mut row = RowVeil::default();
-        let spans = row.advance(0, "fresh", t0);
+        let mut turn = TurnVeil::default();
+        let spans = turn.advance(&"turn:0".into(), 0, "fresh", t0);
         assert_eq!(spans, vec![(0..5, 0.0)]);
+    }
+
+    /// Two rows of one turn both start at element 0, and the turn holds one
+    /// veil. Keyed by the element discriminator alone they share a tracker, and
+    /// a shared tracker is not a slow fade — it is a *stuck* one: each frame's
+    /// `advance` sees the other row's text, keeps only the common prefix
+    /// committed and re-veils everything past it from zero. The reply then
+    /// paints its first character and nothing else for the whole turn, and
+    /// arrives all at once when the veil is dropped at the end.
+    #[test]
+    fn two_rows_of_one_turn_do_not_share_an_element_tracker() {
+        let t0 = Instant::now();
+        let reasoning: SharedString = "turn:0".into();
+        let answer: SharedString = "turn:1".into();
+        let mut turn = TurnVeil::default();
+
+        // Both rows stream, interleaved, as they are rendered — one pass per
+        // frame over every visible row.
+        turn.advance(&reasoning, 0, "I should check the grid", t0);
+        turn.advance(&answer, 0, "I ran the cell", t0);
+        for ms in [100, 200, 300, 400, 500, 600] {
+            turn.advance(&reasoning, 0, "I should check the grid", at(t0, ms));
+            turn.advance(&answer, 0, "I ran the cell", at(t0, ms));
+        }
+
+        // Past both fades' durations, with no text having changed since t0,
+        // every character of both rows is committed and nothing is veiled.
+        assert!(
+            turn.advance(&reasoning, 0, "I should check the grid", at(t0, 700))
+                .is_empty(),
+            "the reasoning row is still veiled long after its text settled"
+        );
+        assert!(
+            turn.advance(&answer, 0, "I ran the cell", at(t0, 700))
+                .is_empty(),
+            "the answer row is still veiled long after its text settled"
+        );
+        assert!(!turn.is_fading(at(t0, 700)));
     }
 
     #[test]
@@ -498,13 +569,39 @@ mod tests {
     #[test]
     fn row_veil_tracks_elements_independently() {
         let t0 = Instant::now();
-        let mut row = RowVeil::default();
-        row.advance(0, "para", t0);
-        row.advance(2, "code", t0);
-        assert!(row.is_fading());
-        row.advance(0, "para", at(t0, 600));
-        assert!(row.is_fading(), "elem 2 hasn't been advanced past its fade");
-        row.advance(2, "code", at(t0, 600));
-        assert!(!row.is_fading());
+        let row: SharedString = "turn:0".into();
+        let mut turn = TurnVeil::default();
+        turn.advance(&row, 0, "para", t0);
+        turn.advance(&row, 2, "code", t0);
+        assert!(turn.is_fading(t0));
+        // Each element keeps its own chunks: advancing one does not settle the
+        // other, so a block that is still mid-fade still asks for frames.
+        turn.advance(&row, 0, "para", at(t0, 600));
+        assert!(turn.is_fading(at(t0, 250)), "elem 2 is still mid-fade");
+        turn.advance(&row, 2, "code", at(t0, 600));
+        assert!(!turn.is_fading(at(t0, 600)));
+    }
+
+    /// A fade settles on the clock, not on being looked at.
+    ///
+    /// `advance` is the only thing that prunes chunks, and it only runs while
+    /// an element is live *and* on screen — so an answer derived from "are any
+    /// chunks left" latches true the moment either stops holding, which is what
+    /// happens at the end of every turn. The host drives its repaint request
+    /// from this, so a latched `true` is a panel that never idles again.
+    #[test]
+    fn a_fade_stops_asking_for_frames_even_if_nobody_advances_it() {
+        let t0 = Instant::now();
+        let mut turn = TurnVeil::default();
+        turn.advance(&"turn:0".into(), 0, "streamed", t0);
+        assert!(turn.is_fading(t0), "it starts out fading");
+        // Nothing advances it again — the turn ended, or the block scrolled
+        // out of view. It must still settle.
+        assert!(!turn.is_fading(at(t0, 5_000)));
+
+        let mut elem = ElemVeil::default();
+        elem.advance("streamed", t0);
+        assert!(elem.is_fading(t0));
+        assert!(!elem.is_fading(at(t0, 5_000)));
     }
 }

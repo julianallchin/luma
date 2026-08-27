@@ -195,14 +195,26 @@ const SHELL: Lang = Lang {
     keyed_strings: false,
 };
 
-/// The language a fence's info string names, if the table knows it.
-fn lang_for(name: &str) -> Option<&'static Lang> {
-    // The info string may carry more than a name (`rust,ignore`, `python{1}`).
-    let name = name
+/// The language a fence's info string names, normalized: the first run of
+/// word characters (`+` and `#` kept for c++/c#), lowercased — `rust,ignore`
+/// and `python{1}` both name `rust`/`python`. The **one** normalizer: the
+/// parser stores this (so the header label prints it) and [`lang_for`] matches
+/// on it, so a decorated fence cannot highlight as one language while its
+/// header reads another.
+#[must_use]
+pub fn fence_language(info: &str) -> Option<String> {
+    let name = info
+        .trim_start()
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '+' && c != '#')
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The language a fence's info string names, if the table knows it.
+fn lang_for(name: &str) -> Option<&'static Lang> {
+    let name = fence_language(name)?;
     match name.as_str() {
         "py" | "python" | "python3" => Some(&PYTHON),
         "rs" | "rust" => Some(&RUST),

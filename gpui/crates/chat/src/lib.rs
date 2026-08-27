@@ -48,17 +48,17 @@ pub mod working;
 use std::collections::HashSet;
 
 use gpui::{
-    div, linear_color_stop, linear_gradient, list, prelude::*, px, AnyElement, Context, Entity,
-    FocusHandle, Focusable as _, ListAlignment, ListState, SharedString, Task, Window,
+    div, list, prelude::*, px, AnyElement, Context, Entity, FocusHandle, ListAlignment, ListState,
+    SharedString, Task, Window,
 };
-use gpui_component::input::TextareaState;
 use gpui_component::{Icon, IconName};
 use luma_lib::agent::{AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt};
 use luma_lib::models::agent_threads::AgentThreadDetail;
 use luma_ui::node::{Instrument, Role as NodeRole};
 
+use crate::composer::Composer;
 use crate::theme::Theme;
-use crate::transcript::Row;
+use crate::transcript::{Entry, RowKey};
 
 // -- the loop, on its own reactor --------------------------------------------
 
@@ -99,6 +99,51 @@ impl Agent {
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
+    /// One specific conversation, by id — what the history picker opens.
+    ///
+    /// Not [`Self::resolve_thread`]: that one answers "the newest thread for
+    /// this subject", so routing a picked row through it would open whichever
+    /// conversation about that track is newest rather than the one the reader
+    /// chose. An id is a conversation's only unambiguous name.
+    pub fn open_thread(
+        &self,
+        thread_id: String,
+    ) -> impl std::future::Future<Output = Result<AgentThreadDetail, String>> + use<> {
+        let service = self.service.clone();
+        let task = self.runtime.spawn(async move {
+            service
+                .open_thread(&thread_id)
+                .await
+                .map_err(|e| e.to_string())
+        });
+        async move { task.await.map_err(|error| error.to_string())? }
+    }
+
+    /// A fresh conversation about `scope`, always created — the + button.
+    pub fn new_thread(
+        &self,
+        scope: ThreadScope,
+    ) -> impl std::future::Future<Output = Result<AgentThreadDetail, String>> + use<> {
+        let service = self.service.clone();
+        let task = self
+            .runtime
+            .spawn(async move { service.new_thread(&scope).await.map_err(|e| e.to_string()) });
+        async move { task.await.map_err(|error| error.to_string())? }
+    }
+
+    /// Every conversation about `scope`'s subject, newest first, with its
+    /// transcripts read for the picker's summaries and grep.
+    pub fn history(
+        &self,
+        scope: ThreadScope,
+    ) -> impl std::future::Future<Output = Result<luma_lib::agent::History, String>> + use<> {
+        let service = self.service.clone();
+        let task = self
+            .runtime
+            .spawn(async move { service.history(&scope).await.map_err(|e| e.to_string()) });
+        async move { task.await.map_err(|error| error.to_string())? }
+    }
+
     /// What the next turn's model is called. `None` once the settings read
     /// fails — the composer's chip is a readout, and a panel that refused to
     /// open because it could not name a model would be the wrong trade.
@@ -128,6 +173,18 @@ impl Agent {
         });
         Turn { events: rx, steer }
     }
+}
+
+/// What the panel asks its host for.
+///
+/// One variant, and it exists because the chat cannot open a modal: overlays
+/// are the shell's to mount, and a chat crate that reached for one would invert
+/// the dependency. Starting a *new* conversation is not here — that is entirely
+/// the panel's own business, so it just does it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatEvent {
+    /// The reader pressed rewind: open the history picker over this subject.
+    HistoryRequested,
 }
 
 /// One turn's events, in order. Dropping it cancels the turn.
@@ -181,9 +238,35 @@ pub struct AgentChat {
     /// a conversation in a thread nobody asked for.
     thread: Option<String>,
     transcript: Transcript,
-    rows: Vec<Row>,
+    /// Render state, one per message — parsers, veil, render cache.
+    entries: Vec<Entry>,
+    /// What the list is sized by: one entry per *block*. Derived from
+    /// `transcript` + `turns` on every fold and reconciled by
+    /// [`transcript::diff_rows`], so the list only ever remeasures what moved.
+    rows: Vec<RowKey>,
+    /// The message a running turn is writing into.
+    ///
+    /// Recorded by the event that touches it, never derived from "the last
+    /// message is an assistant one" — between a send and that turn's first
+    /// event the derived answer names the *previous* reply, which would put a
+    /// settled turn back under the veil.
+    live: Option<usize>,
     list: ListState,
-    composer: Entity<TextareaState>,
+    /// The bottom pin. `pinned` is the state, `spring` is the motion; the two
+    /// are separate because a pin can be held while the spring is parked (a
+    /// settled transcript resting at the bottom schedules no frames at all).
+    pinned: bool,
+    spring: transcript::StickSpring,
+    /// Last tick's wall clock, for the elapsed-frames conversion, and last
+    /// tick's distance, which is what makes the re-stick rule direction-aware.
+    spring_tick: Option<std::time::Instant>,
+    spring_settled: Option<std::time::Instant>,
+    distance: f32,
+    /// Reached by `crate::composer` from inside the panel's render, which is
+    /// why it is crate-visible rather than private: the plate's layout state
+    /// belongs to the composer, and passing it back through the entity would
+    /// re-enter a borrow that is already live.
+    pub(crate) composer: Composer,
     /// What the composer's chip names, once settings have been read.
     model: Option<SharedString>,
     turn: TurnState,
@@ -194,6 +277,12 @@ pub struct AgentChat {
     trailer_row: Option<usize>,
     /// What went wrong, in the panel's own words. Cleared by the next send.
     error: Option<String>,
+    /// Whether the reader chose this conversation by hand, in which case the
+    /// panel stops following the screen — see [`Self::open_thread`].
+    ///
+    /// Distinct from the bottom pin above, which is about the *viewport*: this
+    /// one is about which conversation is on screen at all.
+    chosen: bool,
     /// Tool calls the reader has *closed*, by call id.
     ///
     /// The negative set, because a call's detail is open by default: the work
@@ -202,6 +291,10 @@ pub struct AgentChat {
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
     collapsed: HashSet<SharedString>,
+    /// The one fold in flight: which call was clicked, when, and which row it
+    /// is in so the tween can remeasure it. At most one — a fold is started by
+    /// a click, and a click lands on one chip.
+    fold: Option<(SharedString, std::time::Instant, usize)>,
     focus: FocusHandle,
     theme: Theme,
 }
@@ -212,7 +305,7 @@ impl AgentChat {
     pub fn new(
         agent: Agent,
         scope: Option<ThreadScope>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let chat = Self {
@@ -220,17 +313,30 @@ impl AgentChat {
             scope: scope.clone(),
             thread: None,
             transcript: Transcript::default(),
+            entries: Vec::new(),
             rows: Vec::new(),
+            live: None,
             list: ListState::new(0, ListAlignment::Bottom, px(theme::OVERDRAW_PX)),
-            composer: composer::state(window, cx),
+            // A fresh thread opens at the bottom, which is where a conversation
+            // is read from.
+            pinned: true,
+            spring: transcript::StickSpring::default(),
+            spring_tick: None,
+            spring_settled: None,
+            distance: 0.0,
+            composer: Composer::new(cx),
             model: None,
             turn: TurnState::Idle,
             trailer_row: None,
             error: None,
+            chosen: false,
             collapsed: HashSet::new(),
+            fold: None,
             focus: cx.focus_handle(),
             theme: Theme::dark(),
         };
+        let mut chat = chat;
+        chat.watch_scrolling(cx);
         if let Some(scope) = scope {
             chat.load(scope, cx);
         }
@@ -259,43 +365,252 @@ impl AgentChat {
         let pending = self.agent.resolve_thread(scope);
         cx.spawn(async move |this, cx| {
             let resolved = pending.await;
+            this.update(cx, |this, cx| this.receive(resolved, cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Replace the whole transcript — the one path that resets the list.
+    fn seat(&mut self, transcript: Transcript, cx: &mut Context<Self>) {
+        self.entries = transcript
+            .messages
+            .iter()
+            .map(|message| {
+                let mut turn = Entry::restored(&message.id);
+                turn.sync(message, false);
+                turn.finish_restoring();
+                turn
+            })
+            .collect();
+        self.transcript = transcript;
+        self.rows = transcript::rows_for(&self.transcript, &self.entries, None);
+        self.list = ListState::new(
+            self.rows.len(),
+            ListAlignment::Bottom,
+            px(theme::OVERDRAW_PX),
+        );
+        self.trailer_row = None;
+        // A fresh list is a fresh scroll handler: the old one watched a
+        // `ListState` this panel no longer shows.
+        self.watch_scrolling(cx);
+        self.pinned = true;
+        self.spring.reset();
+        self.spring_tick = None;
+        self.distance = 0.0;
+    }
+
+    /// Rebuild the row list and tell the list exactly what moved.
+    ///
+    /// The remeasure-vs-splice choice is the whole reason this is one function
+    /// rather than a `splice` at each call site. `splice` resets its items to
+    /// hint-less `Unmeasured` and, when the viewport's top item falls inside
+    /// the range, re-anchors the scroll to the range start. On an equal-count
+    /// edit — the live→settled flip, where every version moves and every
+    /// identity stays — that is a visible jump at the end of every turn.
+    /// `remeasure_items` keeps the old heights as hints and holds the anchor.
+    fn reconcile_rows(&mut self) {
+        let next = transcript::rows_for(&self.transcript, &self.entries, self.live);
+        let Some((old_range, count)) = transcript::diff_rows(&self.rows, &next) else {
+            return;
+        };
+        self.rows = next;
+        if old_range.len() == count {
+            self.list.remeasure_items(old_range);
+        } else {
+            self.list.splice(old_range, count);
+        }
+    }
+
+    // -- the bottom pin ------------------------------------------------------
+
+    /// How far the view sits above the end, in px.
+    fn distance_from_bottom(&self) -> f32 {
+        let max = f32::from(self.list.max_offset_for_scrollbar().y);
+        let current = f32::from(self.list.scroll_px_offset_for_scrollbar().y);
+        (max + current).max(0.0)
+    }
+
+    /// Watch the reader's own scrolling, and only the reader's.
+    ///
+    /// The list calls this from its wheel and touch path exclusively —
+    /// programmatic scrolls never re-enter it — which is what makes it a safe
+    /// place to decide the pin. Without that guarantee the spring's own
+    /// `scroll_by` would unpin the view on the frame it started chasing.
+    fn watch_scrolling(&mut self, cx: &mut Context<Self>) {
+        let list = self.list.clone();
+        let chat = cx.weak_entity();
+        list.set_scroll_handler(move |_, _, cx| {
+            // The list holds its own `RefCell` borrow while dispatching, so
+            // reading the state back synchronously panics. Defer to after it
+            // has let go.
+            let chat = chat.clone();
+            cx.defer(move |cx| {
+                chat.update(cx, |this, cx| {
+                    let distance = this.distance_from_bottom();
+                    let previous = std::mem::replace(&mut this.distance, distance);
+                    if this.pinned && transcript::should_unpin(distance, previous) {
+                        this.pinned = false;
+                        this.spring.reset();
+                        this.spring_tick = None;
+                    } else if !this.pinned && transcript::should_restick(distance, previous) {
+                        this.pinned = true;
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+        });
+    }
+
+    /// One spring frame: observe the target, step, apply the delta, and park
+    /// once it has landed and stayed landed.
+    ///
+    /// Runs after layout, so the measurements it reads are this frame's rather
+    /// than the previous frame's — a spring fed stale geometry chases a target
+    /// that has already moved and never converges.
+    fn step_spring(&mut self) {
+        if !self.pinned {
+            self.spring_tick = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let frames = match self.spring_tick {
+            Some(last) => (now.duration_since(last).as_secs_f32() * 1000.0
+                / theme::SPRING_FRAME_MS)
+                .min(theme::SPRING_MAX_CATCHUP_FRAMES),
+            None => 1.0,
+        };
+        self.spring_tick = Some(now);
+
+        let target = f32::from(self.list.max_offset_for_scrollbar().y);
+        let mut distance = self.distance_from_bottom();
+        // A long jump — opening a thread mid-history, a huge paste — teleports
+        // most of the way first. Gliding it would be a slow ride through
+        // content nobody asked to see.
+        let viewport = f32::from(self.list.viewport_bounds().size.height);
+        let glide_max = theme::GLIDE_MAX_VIEWPORTS * viewport;
+        if viewport > 0.0 && distance > glide_max {
+            self.list.scroll_by(px(distance - glide_max));
+            distance = glide_max;
+        }
+        let pos = target - distance;
+        let next = self.spring.step(pos, target, frames);
+        if next > pos {
+            self.list.scroll_by(px(next - pos));
+        }
+        self.distance = (target - next).max(0.0);
+
+        if target - next <= 0.5 {
+            let settled = *self.spring_settled.get_or_insert(now);
+            let grace = std::time::Duration::from_millis(theme::SPRING_SETTLE_GRACE_MS);
+            if now.duration_since(settled) >= grace && self.spring.is_idle() {
+                // Park. A transcript resting at the bottom must schedule no
+                // frames at all — this is the difference between an idle panel
+                // costing nothing and pinning a display at its refresh rate.
+                self.spring.reset();
+                self.spring_tick = None;
+            }
+        } else {
+            self.spring_settled = None;
+        }
+    }
+
+    /// Re-engage the pin and ride back down — the jump button, and what a send
+    /// does so the reply lands in view.
+    pub fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.pinned = true;
+        self.spring_tick = None;
+        self.spring_settled = None;
+        cx.notify();
+    }
+
+    /// Bring one turn's parse up to its message, at its current liveness.
+    fn resync(&mut self, ix: usize) {
+        let live = self.live == Some(ix);
+        if let (Some(turn), Some(message)) =
+            (self.entries.get_mut(ix), self.transcript.messages.get(ix))
+        {
+            turn.sync(message, live);
+        }
+    }
+
+    /// Show one specific conversation, by id.
+    ///
+    /// **Only the thread changes.** The screen underneath — which track is
+    /// open, which tab is focused, what the score says — is untouched, because
+    /// reading an old conversation is not the same act as going back to what it
+    /// was about. The agent re-orients itself from the transcript.
+    ///
+    /// [`Self::is_chosen`] is what keeps it open: without it the next scope change
+    /// would re-resolve the screen's subject and silently swap the reader onto
+    /// a different conversation about the same track.
+    pub fn open_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        // Whatever is running belongs to the conversation being left.
+        self.cancel(cx);
+        self.chosen = true;
+        self.thread = None;
+        self.error = None;
+        self.seat(Transcript::default(), cx);
+        let pending = self.agent.open_thread(thread_id.to_string());
+        cx.spawn(async move |this, cx| {
+            let opened = pending.await;
             this.update(cx, |this, cx| {
-                match resolved {
-                    Ok(detail) => match Transcript::from_rows(&detail.messages) {
-                        Ok(transcript) => {
-                            this.thread = Some(detail.thread.id);
-                            this.seat(transcript);
-                        }
-                        Err(error) => this.error = Some(error),
-                    },
-                    Err(error) => this.error = Some(error),
-                }
-                cx.notify();
+                this.receive(opened, cx);
             })
             .ok();
         })
         .detach();
     }
 
-    /// Replace the whole transcript — the one path that resets the list.
-    fn seat(&mut self, transcript: Transcript) {
-        self.rows = transcript
-            .messages
-            .iter()
-            .map(|message| {
-                let mut row = Row::restored(&message.id);
-                row.sync(message);
-                row.finish_restoring();
-                row
+    /// Start a fresh conversation about the screen's own subject.
+    ///
+    /// Always creates: "new chat" is a statement, and resolving would hand back
+    /// the existing conversation whenever there was one — the button appearing
+    /// to do nothing. Unpinned, because a new chat about *this* screen is
+    /// exactly what the screen implies.
+    pub fn new_thread(&mut self, cx: &mut Context<Self>) {
+        let Some(scope) = self.scope.clone() else {
+            return;
+        };
+        self.cancel(cx);
+        self.chosen = false;
+        self.thread = None;
+        self.error = None;
+        self.seat(Transcript::default(), cx);
+        let pending = self.agent.new_thread(scope);
+        cx.spawn(async move |this, cx| {
+            let created = pending.await;
+            this.update(cx, |this, cx| {
+                this.receive(created, cx);
             })
-            .collect();
-        self.list = ListState::new(
-            self.rows.len(),
-            ListAlignment::Bottom,
-            px(theme::OVERDRAW_PX),
-        );
-        self.transcript = transcript;
-        self.trailer_row = None;
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Seat whatever a thread read came back with — the one place a resolve, an
+    /// open and a create all land, so the three cannot drift about what
+    /// "showing a thread" means.
+    fn receive(&mut self, detail: Result<AgentThreadDetail, String>, cx: &mut Context<Self>) {
+        match detail {
+            Ok(detail) => match Transcript::from_rows(&detail.messages) {
+                Ok(transcript) => {
+                    self.thread = Some(detail.thread.id);
+                    self.seat(transcript, cx);
+                }
+                Err(error) => self.error = Some(error),
+            },
+            Err(error) => self.error = Some(error),
+        }
+        cx.notify();
+    }
+
+    /// Whether this panel is showing a conversation the reader chose by hand.
+    ///
+    /// Such a panel does not follow the screen: see [`Self::open_thread`].
+    #[must_use]
+    pub fn is_chosen(&self) -> bool {
+        self.chosen
     }
 
     /// Which conversation this panel is showing, or `None` while it is
@@ -329,15 +644,46 @@ impl AgentChat {
     /// remeasuring the list is the frame budget.
     pub fn toggle_tool(&mut self, call_id: SharedString, row: usize, cx: &mut Context<Self>) {
         if !self.collapsed.remove(&call_id) {
-            self.collapsed.insert(call_id);
+            self.collapsed.insert(call_id.clone());
         }
+        // The fold is timed from the click, and only from a click: a chip that
+        // scrolls back into view has no fold in flight and renders at rest.
+        self.fold = Some((call_id, std::time::Instant::now(), row));
         self.list.remeasure_items(row..row + 1);
         cx.notify();
     }
 
+    /// The fold in flight this frame, and whether it still needs frames.
+    ///
+    /// Advanced here rather than inside the chip because the *row* is what has
+    /// to be remeasured on every step: the card's height is changing, and the
+    /// list caches heights.
+    fn tick_fold(&mut self, reduced_motion: bool) -> Option<(SharedString, f32)> {
+        let (call, at, row) = self.fold.clone()?;
+        if reduced_motion || at.elapsed() >= luma_ui::motion::span(&luma_ui::motion::RESIZE) {
+            self.fold = None;
+            self.list.remeasure_items(row..row + 1);
+            return None;
+        }
+        let progress = luma_ui::motion::exit_progress(&luma_ui::motion::RESIZE, at);
+        self.list.remeasure_items(row..row + 1);
+        Some((call, progress))
+    }
+
     /// Drop the turn, which cancels it.
+    ///
+    /// Also the *end*-of-turn path, not only the stop button: a turn that ran
+    /// to completion and one the reader stopped leave the panel in exactly the
+    /// same state, and a second function for it would be a second place that
+    /// has to remember to settle the live turn's parse.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         self.turn = TurnState::Idle;
+        // The live turn stops fading and switches from the display parse to
+        // the canonical one, which moves every one of its row versions.
+        if let Some(ix) = self.live.take() {
+            self.resync(ix);
+        }
+        self.reconcile_rows();
         self.settle_trailer();
         cx.notify();
     }
@@ -346,10 +692,7 @@ impl AgentChat {
     /// state's prompts do: they *offer* a question, they do not ask it — a
     /// chip that sent on click would spend a turn on a phrasing nobody read.
     pub fn suggest(&mut self, prompt: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.composer
-            .update(cx, |state, cx| state.set_value(prompt, window, cx));
-        let handle = self.composer.read(cx).focus_handle(cx);
-        handle.focus(window, cx);
+        self.composer.suggest(prompt, window, cx);
         cx.notify();
     }
 
@@ -360,15 +703,14 @@ impl AgentChat {
     /// applied at the next assistant-row boundary, which is where the turn
     /// keeps its durability invariant anyway. Queueing here would be a second
     /// place that decides when a prompt takes effect.
-    pub fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let prompt = self.composer.read(cx).value().trim().to_string();
+    pub fn send(&mut self, cx: &mut Context<Self>) {
+        let prompt = self.composer.prompt(cx);
         if prompt.is_empty() {
             return;
         }
         if let TurnState::Streaming { steer, .. } = &self.turn {
             steer.send(prompt);
-            self.composer
-                .update(cx, |state, cx| state.set_value("", window, cx));
+            self.composer.clear(cx);
             cx.notify();
             return;
         }
@@ -377,9 +719,11 @@ impl AgentChat {
             cx.notify();
             return;
         };
-        self.composer
-            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.composer.clear(cx);
         self.error = None;
+        // Your own send always brings you back down: a reply you asked for
+        // arriving off-screen is the one case where following is not a guess.
+        self.jump_to_bottom(cx);
 
         let turn = self.agent.turn(&thread, prompt);
         let steer = turn.steering();
@@ -393,12 +737,7 @@ impl AgentChat {
                     return;
                 }
             }
-            this.update(cx, |this, cx| {
-                this.turn = TurnState::Idle;
-                this.settle_trailer();
-                cx.notify();
-            })
-            .ok();
+            this.update(cx, |this, cx| this.cancel(cx)).ok();
         });
         self.turn = TurnState::Streaming {
             task,
@@ -437,11 +776,11 @@ impl AgentChat {
     ///
     /// Called after anything that can start, end or advance a turn. The
     /// indicator is one line inside a row, so only its *arrival and departure*
-    /// change a height — the word and the timer rewrite within it.
+    /// change a height — the word and the timer rewrite within it. It is also
+    /// the one height a row's content hash cannot see, which is why it gets its
+    /// own remeasure rather than riding [`Self::reconcile_rows`].
     fn settle_trailer(&mut self) {
-        let next = self
-            .trailer()
-            .and(self.transcript.messages.len().checked_sub(1));
+        let next = self.trailer().and(self.rows.len().checked_sub(1));
         if next == self.trailer_row {
             return;
         }
@@ -453,24 +792,15 @@ impl AgentChat {
         self.trailer_row = next;
     }
 
-    /// Fold one event and remeasure exactly the row it changed.
+    /// Fold one event, reparse what it touched, and tell the list what moved.
     fn on_event(&mut self, event: &TurnEvent, cx: &mut Context<Self>) {
         let applied = luma_lib::agent::apply(&mut self.transcript, event);
-        // `apply` is the only thing that appends rows, so growing beside it is
-        // the whole of keeping the two in step.
-        while self.rows.len() < self.transcript.messages.len() {
-            let ix = self.rows.len();
-            self.rows
-                .push(Row::streaming(&self.transcript.messages[ix].id));
-            self.list.splice(ix..ix, 1);
-        }
-        if let Some(ix) = applied.row {
-            if let (Some(row), Some(message)) =
-                (self.rows.get_mut(ix), self.transcript.messages.get(ix))
-            {
-                row.sync(message);
-            }
-            self.list.remeasure_items(ix..ix + 1);
+        // `apply` is the only thing that appends messages, so growing beside it
+        // is the whole of keeping the two in step.
+        while self.entries.len() < self.transcript.messages.len() {
+            let ix = self.entries.len();
+            self.entries
+                .push(Entry::streaming(&self.transcript.messages[ix].id));
         }
         if let TurnEvent::TurnEnded {
             outcome: TurnOutcome::Failed { message },
@@ -478,10 +808,35 @@ impl AgentChat {
         {
             self.error = Some(message.clone());
         }
+        // Liveness is recorded here, from the event that actually writes into
+        // a turn — see `Self::live`.
+        let was_live = self.live;
+        if let Some(ix) = applied.row {
+            if matches!(
+                self.transcript.messages.get(ix).map(|m| m.role),
+                Some(luma_lib::agent::Role::Assistant)
+            ) && self.is_streaming()
+            {
+                self.live = Some(ix);
+            }
+        }
+        // The turn the event landed in, and whichever turn just stopped being
+        // live — a liveness flip rebuilds a display parse even when no text
+        // moved.
+        for ix in applied
+            .row
+            .into_iter()
+            .chain(was_live.filter(|ix| Some(*ix) != self.live))
+        {
+            self.resync(ix);
+        }
+        self.reconcile_rows();
         self.settle_trailer();
         cx.notify();
     }
 }
+
+impl gpui::EventEmitter<ChatEvent> for AgentChat {}
 
 impl Render for AgentChat {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -500,8 +855,9 @@ impl AgentChat {
         // in — a live field over a conversation that cannot exist would be the
         // silent no-op moved one layer in.
         let Some(kind) = self.scope.as_ref().map(|scope| scope.agent_kind) else {
+            let unattached = cx.entity();
             return self
-                .plate(&theme)
+                .plate(&unattached, &theme)
                 .child(
                     div()
                         .flex_1()
@@ -512,46 +868,95 @@ impl AgentChat {
                 .into_any_element();
         };
         let streaming = self.is_streaming();
+        // Read out before the composer takes `&mut self.composer` below —
+        // the plate is painted in one expression, and a live `&self` inside it
+        // would collide with that borrow.
+        let model = self.model.clone();
+        let error = self.error.clone();
         let this = cx.entity();
-        let fading = self.rows.iter().any(Row::is_fading);
+        // Asked with a clock: a fade that finished while its block was off
+        // screen — or while the turn was settling — must stop asking for
+        // frames on its own, or the panel never idles again.
+        let now = std::time::Instant::now();
+        let fading = self.entries.iter().any(|entry| entry.is_fading(now));
         if fading {
             window.request_animation_frame();
         }
+        // The spring ticks *after* layout, so it reads this frame's geometry.
+        // The condition self-terminates: once a settled transcript has landed
+        // the spring parks, `spring_tick` clears, and an idle panel schedules
+        // nothing at all.
+        if self.pinned && (streaming || self.spring_tick.is_some()) {
+            let chat = cx.entity();
+            window.on_next_frame(move |_, cx| {
+                chat.update(cx, |this, cx| {
+                    this.step_spring();
+                    cx.notify();
+                });
+            });
+        }
+        // Far enough up that the way back is worth offering. Read before the
+        // list is built so it reflects the same frame the rows do.
+        let adrift = !self.pinned && self.distance > theme::SCROLL_BUTTON_THRESHOLD_PX;
+        let fold = self.tick_fold(luma_ui::motion::reduced_motion(cx));
+        if fold.is_some() {
+            window.request_animation_frame();
+        }
 
-        let live = transcript::live_row(&self.transcript, streaming);
+        let live = self.live;
         // The indicator trails the *last* row whichever role it has: between
         // the send and the model's first row that is still the user's prompt,
         // and comet's "Sending" bridge is exactly that gap named.
         let trailer = self.trailer();
-        let last = self.transcript.messages.len().checked_sub(1);
-        let opening_trailer = last.is_none().then_some(trailer).flatten();
+        let last_row = self.rows.len().checked_sub(1);
+        let opening_trailer = self.rows.is_empty().then_some(trailer).flatten();
         let view = cx.entity_id();
         let rows = this.clone();
         let transcript_list = list(self.list.clone(), move |ix, window, cx| {
             let held = rows.clone();
             held.update(cx, |state, cx| {
-                match (state.rows.get(ix), state.transcript.messages.get(ix)) {
-                    (Some(row), Some(message)) => transcript::row(
-                        row,
-                        message,
-                        &transcript::RowCtx {
-                            chat: &rows,
-                            ix,
-                            live: live == Some(ix),
-                            trailer: (last == Some(ix)).then_some(trailer).flatten(),
-                            collapsed: &state.collapsed,
-                            theme: &state.theme,
-                        },
-                        window,
-                        cx,
-                    ),
-                    _ => div().into_any_element(),
-                }
+                let Some(key) = state.rows.get(ix).copied() else {
+                    return div().into_any_element();
+                };
+                let (Some(turn), Some(message)) = (
+                    state.entries.get(key.turn),
+                    state.transcript.messages.get(key.turn),
+                ) else {
+                    return div().into_any_element();
+                };
+                // A turn's last row is the one that carries the trailer and the
+                // timestamp lane — read off the row list, which is the only
+                // place that knows where a turn ends.
+                let last_of_turn = state
+                    .rows
+                    .get(ix + 1)
+                    .is_none_or(|next| next.turn != key.turn);
+                transcript::row(
+                    &key,
+                    turn,
+                    message,
+                    &transcript::RowCtx {
+                        chat: &rows,
+                        ix,
+                        live: live == Some(key.turn),
+                        top_gap: transcript::top_gap_for(
+                            ix.checked_sub(1).and_then(|prev| state.rows.get(prev)),
+                            &key,
+                        ),
+                        last_of_turn,
+                        trailer: (last_row == Some(ix)).then_some(trailer).flatten(),
+                        collapsed: &state.collapsed,
+                        fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
+                        theme: &state.theme,
+                    },
+                    window,
+                    cx,
+                )
             })
         })
         .size_full();
 
-        self.plate(&theme)
+        self.plate(&this, &theme)
             .child(
                 div()
                     .relative()
@@ -586,20 +991,21 @@ impl AgentChat {
                     })
                     .when(!self.transcript.messages.is_empty(), |el| {
                         el.child(transcript_list)
-                            .child(fade_band())
+                            .children(fade_bands())
                             .child(self.rail(&theme))
+                            .children(adrift.then(|| jump_to_bottom(&this, &theme)))
                     }),
             )
             .child(composer::composer(
+                &mut self.composer,
                 &this,
-                &self.composer,
                 streaming,
-                self.model.as_deref(),
+                model.as_deref(),
                 &theme,
                 window,
                 cx,
             ))
-            .child(status_strip(streaming, self.error.as_deref(), kind, &theme))
+            .child(status_strip(streaming, error.as_deref(), kind, &theme))
             .into_any_element()
     }
 
@@ -617,15 +1023,18 @@ impl AgentChat {
             .flex_col()
             .justify_center()
             .gap(px(6.));
-        let last_user = self
-            .transcript
-            .messages
+        // One tick per prompt, and the tick scrolls to that prompt's *row* —
+        // the rail indexes the list, not the transcript, and with block rows
+        // the two no longer coincide.
+        let prompts: Vec<usize> = self
+            .rows
             .iter()
-            .rposition(|message| matches!(message.role, luma_lib::agent::Role::User));
-        for (ix, message) in self.transcript.messages.iter().enumerate() {
-            if !matches!(message.role, luma_lib::agent::Role::User) {
-                continue;
-            }
+            .enumerate()
+            .filter(|(_, key)| matches!(key.kind, transcript::RowKind::Prompt))
+            .map(|(row, _)| row)
+            .collect();
+        let last_user = prompts.last().copied();
+        for ix in prompts {
             let list = self.list.clone();
             let active = Some(ix) == last_user;
             ticks = ticks.child(
@@ -639,7 +1048,7 @@ impl AgentChat {
                     .on_click(move |_, _, _| {
                         list.scroll_to_reveal_item(ix);
                     })
-                    .child(div().w(px(14.)).h(px(2.)).rounded(px(1.)).bg(if active {
+                    .child(div().w(px(14.)).h(px(2.)).rounded_full().bg(if active {
                         theme::ink(0.55)
                     } else {
                         theme::ink(0.18)
@@ -652,7 +1061,7 @@ impl AgentChat {
     /// The thread's surface and its header — everything both the attached and
     /// the unattached body sit on, so the two cannot drift apart in the one
     /// place where the chat meets the shell.
-    fn plate(&self, theme: &Theme) -> gpui::Div {
+    fn plate(&self, chat: &Entity<AgentChat>, theme: &Theme) -> gpui::Div {
         div()
             .size_full()
             .flex()
@@ -661,10 +1070,10 @@ impl AgentChat {
             // (`theme::panel`), and a second plane here would stack a second
             // coverage over the blur the card is there to let through.
             .text_color(theme.text)
-            .child(self.header(theme))
+            .child(self.header(chat, theme))
     }
 
-    fn header(&self, theme: &Theme) -> impl IntoElement {
+    fn header(&self, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
         let title: SharedString = match self.scope.as_ref().map(|scope| scope.agent_kind) {
             Some(luma_lib::agent::AgentKind::TrackCopilot) => "Track agent".into(),
             Some(luma_lib::agent::AgentKind::PatternGraph) => "Pattern agent".into(),
@@ -691,40 +1100,141 @@ impl AgentChat {
                     .px(px(theme::SPACE_SM))
                     .flex()
                     .items_center()
-                    .rounded(px(theme::CONTROL_RADIUS))
+                    .rounded(px(luma_ui::radius::CONTROL))
                     .bg(theme::wash(0.06))
                     .text_size(px(10.0))
                     .text_color(theme.text_faint)
                     .child(badge)
             }))
+            .child(div().flex_1())
+            // The two ways out of the conversation you are in: back to an
+            // older one, or on to a new one. Only shown on an attached panel —
+            // an unattached one has no venue to search and no subject to start
+            // a chat about, so both would be buttons that cannot work.
+            .children(self.scope.is_some().then(|| {
+                let rewind = chat.clone();
+                let fresh = chat.clone();
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(theme::SPACE_XS))
+                    .child(header_button(
+                        "chat-history",
+                        IconName::Undo2,
+                        "Chat history",
+                        theme,
+                        move |cx| {
+                            rewind.update(cx, |_, cx| cx.emit(ChatEvent::HistoryRequested));
+                        },
+                    ))
+                    .child(header_button(
+                        "chat-new",
+                        IconName::Plus,
+                        "New chat",
+                        theme,
+                        move |cx| {
+                            fresh.update(cx, |this, cx| this.new_thread(cx));
+                        },
+                    ))
+            }))
     }
 }
 
-/// The last band of the transcript, dissolved into the panel's own ground.
+/// One icon button in the panel's header — the chat's own chrome control.
 ///
-/// A painted overlay rather than gpui's `EdgeFade`, which this pin does not
-/// have: a gradient to the panel's own ground *is* the fade. Without it the
-/// last line of a reply butts against the composer's plate and the two read as
-/// one control.
+/// Square-cornered and unlabelled, sized to the header's own rhythm rather than
+/// to a dialog's: these sit *in* the thread's frame, not on a card floating over
+/// it, so they take the header's recessive tone and gain their fill only on
+/// hover.
+fn header_button(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    theme: &Theme,
+    pressed: impl Fn(&mut gpui::App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .size(px(theme::HEADER_BUTTON))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(luma_ui::radius::CONTROL))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::wash(0.06)))
+        .on_click(move |_, _, cx| pressed(cx))
+        .child(Icon::new(icon).size(px(14.0)).text_color(theme.text_faint))
+        .agent_node(NodeRole::Button, label)
+}
+
+/// The bands at both ends of the transcript, dissolved into the panel's own
+/// ground.
 ///
-/// The stop is [`theme::panel`] — the token the shell paints the thread's card
-/// with — because the band has to arrive at exactly the colour the transcript
-/// is sitting on: one tone off and the fade reads as a seam stripe instead of
-/// a dissolve. Reading the shared token rather than respelling its value is
-/// what keeps that true when the card's coverage moves.
-fn fade_band() -> impl IntoElement {
-    let ground = theme::panel();
+/// Painted overlays rather than gpui's `EdgeFade`, which this pin does not
+/// have: a gradient to the panel's own ground *is* the fade. Without them a
+/// reply butts against the composer's plate below and the header's label above,
+/// and each pair reads as one control.
+///
+/// The stop is [`theme::panel_opaque`] — the ground's colour at **full**
+/// coverage, not [`theme::panel`].
+///
+/// The difference is the whole bug this had: `panel()` carries the coverage the
+/// *plane* spends on the blur behind the window, but a band is painted on top
+/// of that plane, not instead of it. Fading to `panel()` therefore laid a
+/// second half-coverage of the ground's tone over a surface that already had
+/// one — darker than the ground it was meant to disappear into, and still only
+/// half-covering the text it was meant to dissolve. It read as a grey haze with
+/// the prose showing through.
+///
+/// The top band is inset by the header's height so text dissolves *before* it
+/// can reach the header's own label, rather than crossing under it.
+fn fade_bands() -> [gpui::Div; 2] {
+    let ground = theme::panel_opaque();
+    [
+        luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, true).top(px(0.0)),
+        luma_ui::pane::edge_fade(theme::TRANSCRIPT_FADE_BAND, ground, false),
+    ]
+}
+
+/// The way back down, offered only once the bottom is far enough away to be
+/// worth a control.
+///
+/// It re-engages the *pin* rather than jumping the scroll offset: the way back
+/// is the same glide the transcript uses to follow a reply, so there is one
+/// motion toward the bottom and not two that could disagree about where it is.
+fn jump_to_bottom(chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
+    let pressed = chat.clone();
     div()
         .absolute()
-        .bottom_0()
+        .bottom(px(theme::TRANSCRIPT_FADE_BAND + theme::SPACE_SM))
         .left_0()
         .right_0()
-        .h(px(theme::TRANSCRIPT_FADE_BAND))
-        .bg(linear_gradient(
-            0.0,
-            linear_color_stop(ground, 0.0),
-            linear_color_stop(ground.opacity(0.0), 1.0),
-        ))
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .id("chat-jump-to-bottom")
+                .size(px(theme::JUMP_DIAMETER))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(theme::card_bg())
+                .border_1()
+                .border_color(theme.border)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::glass_hover()))
+                .on_click(move |_, _, cx| {
+                    pressed.update(cx, |this, cx| this.jump_to_bottom(cx));
+                })
+                .child(
+                    Icon::new(IconName::ArrowDown)
+                        .size(px(14.0))
+                        .text_color(theme.text_muted),
+                )
+                .agent_node(NodeRole::Button, "Jump to bottom"),
+        )
 }
 
 /// What an agent is for, in the words of the thing it is looking at, and the
@@ -885,7 +1395,7 @@ fn suggestion(
         .flex()
         .items_center()
         .px(px(theme::SPACE_MD))
-        .rounded(px(theme::CONTROL_RADIUS))
+        .rounded(px(luma_ui::radius::CONTROL))
         .bg(theme::card_bg())
         .border_1()
         .border_color(theme.border)
