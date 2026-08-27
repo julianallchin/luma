@@ -24,8 +24,6 @@
 		"shot:compare": "node harness/compare-shots.mjs"
 	},
 	"dependencies": {
-		"@dicebear/collection": "^9.2.4",
-		"@dicebear/core": "^9.2.4",
 		"@earendil-works/pi-agent-core": "0.80.2",
 		"@earendil-works/pi-ai": "0.80.2",
 		"@radix-ui/react-alert-dialog": "^1.1.15",

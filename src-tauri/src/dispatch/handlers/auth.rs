@@ -106,6 +106,7 @@ pub async fn set_session_item(
     let authored = &services.authored;
     let workspaces = &services.workspaces;
     let graph_runs = &services.graph_runs;
+    let subagents = &services.subagents;
     let host_audio = &services.host_audio;
     let render_engine = &services.render_engine;
     let controller = &services.controller;
@@ -164,13 +165,12 @@ pub async fn set_session_item(
                     ),
                 }));
             }
-            if let Err(error) =
-                crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-                    &db.0, authored, workspaces, graph_runs,
-                )
-                .await
+            if let Err(error) = crate::agent_execution::thread_cleanup::recover_threads(
+                &db.0, authored, workspaces, graph_runs, subagents,
+            )
+            .await
             {
-                eprintln!("[agent-threads] identity-activation deletion recovery: {error}");
+                eprintln!("[agent-threads] identity-activation recovery: {error}");
             }
             return Ok(());
         }
@@ -278,15 +278,15 @@ pub async fn set_session_item(
             )
             .await);
         }
-        if let Err(error) = crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-            &db.0, authored, workspaces, graph_runs,
+        if let Err(error) = crate::agent_execution::thread_cleanup::recover_threads(
+            &db.0, authored, workspaces, graph_runs, subagents,
         )
         .await
         {
             // Session installation has already committed. Cleanup remains in
             // its durable terminal state and will retry on refresh/startup;
             // never report the identity switch itself as rolled back.
-            eprintln!("[agent-threads] identity-activation deletion recovery: {error}");
+            eprintln!("[agent-threads] identity-activation recovery: {error}");
         }
         Ok(())
     } else {

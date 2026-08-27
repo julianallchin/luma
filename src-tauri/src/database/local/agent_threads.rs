@@ -19,7 +19,7 @@ use crate::models::agent_threads::{
 use crate::sync::pending;
 
 const THREAD_COLUMNS: &str =
-    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, title, created_at, updated_at";
+    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, created_at, updated_at";
 
 /// The FROM/WHERE every thread *read* shares: active threads, admitted by the
 /// write-admission singleton, owned by the bound principal (one `?`).
@@ -64,6 +64,8 @@ async fn enqueue_thread_snapshot(
              'lifecycle_state', lifecycle_state,
              'forked_from_thread_id', forked_from_thread_id,
              'forked_at_message_id', forked_at_message_id,
+             'parent_thread_id', parent_thread_id,
+             'parent_call_id', parent_call_id,
              'created_at', created_at,
              'updated_at', updated_at
          )
@@ -237,8 +239,8 @@ pub(crate) async fn create_thread_with_id(
         .await
         .map_err(|e| format!("Failed to begin agent thread creation: {e}"))?;
     sqlx::query(
-        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title)
-         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?
+        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id)
+         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?
          FROM auth_write_admission admission
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
@@ -252,6 +254,8 @@ pub(crate) async fn create_thread_with_id(
     .bind(&input.venue_id)
     .bind(&input.score_id)
     .bind(&input.title)
+    .bind(&input.parent_thread_id)
+    .bind(&input.parent_call_id)
     .bind(owner_user_id)
     .execute(&mut *transaction)
     .await
@@ -569,6 +573,44 @@ pub(crate) async fn list_deleting_threads(
     .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to list deleting agent threads: {e}"))
+}
+
+/// Every subagent thread that still owns an active authored workspace, for the
+/// currently admitted principal.
+///
+/// A workspace outlives the turn that opened it — a cancelled delegation or a
+/// process that died mid-run both leave one active — so this is a superset of
+/// what may be retired. Which of these rows is stranded and which is being
+/// written is live state the caller holds, not a fact any row records.
+pub(crate) async fn list_subagent_threads_with_active_workspaces(
+    pool: &SqlitePool,
+    owner_user_id: Option<&str>,
+) -> Result<Vec<AgentThread>, String> {
+    sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
+        "SELECT {} FROM agent_threads thread
+         CROSS JOIN auth_write_admission admission
+         WHERE thread.parent_thread_id IS NOT NULL
+           AND thread.owner_user_id IS ?
+           AND EXISTS (
+               SELECT 1 FROM authored_subagent_workspaces workspace
+               WHERE workspace.owner_thread_id = thread.id
+                 AND workspace.status = 'active'
+           )
+           AND admission.singleton = 1 AND admission.armed = 1
+           AND admission.accepting = 1 AND admission.maintenance = 0
+           AND admission.remote_writes = 0
+           AND thread.owner_user_id IS admission.active_uid
+         ORDER BY thread.updated_at ASC, thread.id ASC",
+        THREAD_COLUMNS
+            .split(", ")
+            .map(|column| format!("thread.{column}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+    .bind(owner_user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list subagent threads with active workspaces: {e}"))
 }
 
 /// Atomically close an active thread to new work. Repeating the transition is
@@ -1497,6 +1539,44 @@ pub async fn rename_thread(
         .await
         .map_err(|e| format!("Failed to commit agent thread rename: {e}"))?;
     Ok(thread)
+}
+
+/// Name the writer this thread's revisions are attributed to.
+///
+/// Restamped rather than set once: the model is chosen per turn, so the turn
+/// that just resolved one is the only place that knows the truth. Local only —
+/// the label that has to survive is the copy every revision keeps, and this
+/// column is just where the next revision reads it from.
+///
+/// # Errors
+///
+/// The thread is missing, belongs to another principal, is not active, or the
+/// principal is not admitted to write.
+pub async fn set_thread_actor(
+    pool: &SqlitePool,
+    thread_id: &str,
+    actor: &str,
+    owner_user_id: Option<&str>,
+) -> Result<(), String> {
+    let result = sqlx::query(
+        "UPDATE agent_threads SET actor = ?
+         WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'active'
+           AND owner_user_id IS (
+               SELECT active_uid FROM auth_write_admission
+               WHERE singleton = 1 AND armed = 1 AND accepting = 1
+                 AND maintenance = 0 AND remote_writes = 0
+           )",
+    )
+    .bind(actor)
+    .bind(thread_id)
+    .bind(owner_user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to set agent thread actor: {e}"))?;
+    if result.rows_affected() == 0 {
+        return Err(thread_not_found(thread_id));
+    }
+    Ok(())
 }
 
 async fn ensure_thread_access(

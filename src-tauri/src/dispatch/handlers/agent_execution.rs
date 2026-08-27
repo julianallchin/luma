@@ -3,23 +3,23 @@
 //!
 //! The cell engine itself lives in `services::agent_execution` — these two
 //! handlers are the injection layer over it, resolving the admitted principal
-//! and the addressed kernel before handing off.
+//! before handing off.
+//!
+//! A command always addresses the thread's own kernel. Child workspaces are a
+//! Rust-loop concept: a subagent's cell is issued by
+//! [`run_python_cell_inner`] from inside the turn, never over IPC, so there is
+//! no execution id or workspace id on the wire for a caller to get wrong.
 
 use crate::database::local::agent_threads as threads_db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
-use crate::services::agent_execution::{
-    cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner,
-};
+use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
 
-/// Run one cell, either in the durable thread's kernel or in a detached child
-/// workspace's. `turn_message_id` is required: a cell with edit authority must
-/// be attributable to a durable user turn.
+/// Run one cell in the durable thread's kernel. `turn_message_id` is required:
+/// a cell with edit authority must be attributable to a durable user turn.
 pub async fn run_python_cell(
     services: &AppServices,
     thread_id: String,
-    execution_id: Option<String>,
-    authored_workspace_id: Option<String>,
     turn_message_id: String,
     code: String,
     scope: PythonScopeInput,
@@ -37,19 +37,17 @@ pub async fn run_python_cell(
         scope,
         Some(turn_message_id),
         current_user_id,
-        execution_id,
-        authored_workspace_id,
+        None,
+        None,
     )
     .await?)
 }
 
-/// Interrupt the addressed kernel's running cell (the model-turn abort path,
+/// Interrupt the thread kernel's running cell (the model-turn abort path,
 /// §16.1). `false` when there was nothing to interrupt.
 pub async fn cancel_python_cell(
     services: &AppServices,
     thread_id: String,
-    execution_id: Option<String>,
-    authored_workspace_id: Option<String>,
 ) -> Result<bool, CommandError> {
     let current_user_id = services.admitted_principal().await?;
     threads_db::get_thread_row(&services.db.0, &thread_id, current_user_id.as_deref())
@@ -59,21 +57,5 @@ pub async fn cancel_python_cell(
                 "agent thread '{thread_id}' is not available: {error}"
             ))
         })?;
-    let execution_id =
-        resolve_execution_id(&thread_id, execution_id, authored_workspace_id.as_deref())?;
-    if let Some(workspace_id) = authored_workspace_id.as_deref() {
-        services
-            .authored
-            .authorize_workspace(
-                &services.db.0,
-                current_user_id.as_deref(),
-                &thread_id,
-                workspace_id,
-            )
-            .await?;
-    }
-    Ok(cancel_python_cell_inner(
-        &services.workspaces,
-        &execution_id,
-    ))
+    Ok(cancel_python_cell_inner(&services.workspaces, &thread_id))
 }

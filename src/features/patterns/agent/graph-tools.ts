@@ -35,9 +35,6 @@ export type GraphAgentBindings = {
 	turnMessageId: string;
 	/** The turn's abort signal; stopping the model interrupts the Python cell. */
 	abortSignal?: AbortSignal;
-	/** Child execution namespace. Root graph turns omit both fields. */
-	executionId?: string;
-	authoredWorkspaceId?: string;
 	getGraph: () => Graph;
 	applyGraph: (graph: Graph) => void | Promise<void>;
 	runGraph: (graph: Graph) => Promise<RunResult>;
@@ -524,8 +521,6 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 		threadId: b.threadId,
 		turnMessageId: b.turnMessageId,
 		abortSignal: b.abortSignal,
-		executionId: b.executionId,
-		authoredWorkspaceId: b.authoredWorkspaceId,
 		getScope: () => ({
 			patternId: b.getPatternId(),
 			implementationId: b.getImplementationId(),

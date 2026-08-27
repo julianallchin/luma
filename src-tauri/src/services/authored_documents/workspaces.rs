@@ -16,15 +16,17 @@ use crate::models::authored_state::{
 use super::operations::{
     insert_committed_operation, operation_outcome_on, OperationOutcomeRow, OperationSpec,
 };
+use super::turns::{active_workspaces_of_thread, turn_head_of_thread};
 use super::{
-    canonicalize_graph, check_track_detached_candidate, check_track_projection_candidate,
-    check_track_workspace_candidate, compile_draft_track_document, compile_import_track_document,
-    file_snapshot_id, graph_files, is_valid_track_draft_id, load_score_dsl_context,
-    operation_request_fingerprint, require_exact_paths, revision_for_clips, revision_metadata,
-    utf8_file, AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError, AuthoredMergeConflict,
-    AuthoredSnapshot, AuthoredTrackWorkspace, DocumentScope, FileMap, ResolvedScope, Result,
-    RevisionId, TrackClip, TrackDocument, TrackEditError, TrackEditPlan, TrackEditResult,
-    TrackProjectionAuthority, TrackProjectionIdentity, GRAPH_PATH, LAYOUT_PATH, SCORE_PATH,
+    agent_threads, canonicalize_graph, check_track_detached_candidate,
+    check_track_projection_candidate, check_track_workspace_candidate,
+    compile_draft_track_document, compile_import_track_document, file_snapshot_id, graph_files,
+    is_valid_track_draft_id, load_score_dsl_context, operation_request_fingerprint,
+    require_exact_paths, revision_for_clips, utf8_file, AuthoredDocument, AuthoredDocuments,
+    AuthoredDocumentsError, AuthoredMergeConflict, AuthoredSnapshot, AuthoredTrackWorkspace,
+    DocumentScope, FileMap, ResolvedScope, Result, RevisionId, TrackClip, TrackDocument,
+    TrackEditError, TrackEditPlan, TrackEditResult, TrackProjectionAuthority,
+    TrackProjectionIdentity, GRAPH_PATH, LAYOUT_PATH, SCORE_PATH,
 };
 
 const MAX_WORKSPACE_FILES: usize = 8;
@@ -663,11 +665,11 @@ impl AuthoredDocuments {
             fingerprint: request_fingerprint,
             result_json: Some(&result_json),
         };
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            &scope,
             "score_edit",
             Some(operation_id),
             "Apply track subagent edit",
-            Some(thread_id),
             None,
             None,
         )?;
@@ -848,11 +850,11 @@ impl AuthoredDocuments {
             .canonicalize_workspace_candidate(pool, &scope, &main, &expected, &raw_files)
             .await?;
 
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            &scope,
             "workspace_commit",
             Some(&input.operation_id),
             subject,
-            Some(&input.thread_id),
             None,
             None,
         )?;
@@ -1074,7 +1076,6 @@ impl AuthoredDocuments {
                 operation,
                 "Merge agent workspace",
                 Some(parents),
-                Some(&input.thread_id),
                 None,
                 None,
             )
@@ -1087,6 +1088,159 @@ impl AuthoredDocuments {
         })
     }
 
+    /// Throw away a subagent's work: retire its workspace and delete the
+    /// directory, leaving the thread and every revision it wrote intact.
+    ///
+    /// The counterpart to [`Self::merge_subagent`], and the only other way a
+    /// child's workspace ends. Idempotent: a child that already published has
+    /// nothing active to retire and is not an error.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthoredDocumentsError::Invalid`] if `child_thread_id` is not a
+    /// subagent thread.
+    pub async fn discard_subagent(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        child_thread_id: &str,
+    ) -> Result<()> {
+        let child = agent_threads::get_thread_row(pool, child_thread_id, principal)
+            .await
+            .map_err(AuthoredDocumentsError::Scope)?;
+        if child.parent_thread_id.is_none() {
+            return Err(AuthoredDocumentsError::Invalid(
+                "only a subagent thread has a workspace to discard".into(),
+            ));
+        }
+        let scope = ResolvedScope::from_thread(&child, principal)?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open subagent discard"))?;
+        let workspaces =
+            active_workspaces_of_thread(&mut connection, &scope, child_thread_id).await?;
+        drop(connection);
+        for workspace_id in workspaces {
+            self.remove_workspace(pool, principal, child_thread_id, &workspace_id)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Merge one recursive child's committed head into its detached parent.
+    /// Only root workspaces use [`Self::merge_workspace`] to publish live state.
+    /// Publish a finished subagent's work into whatever head its parent writes.
+    ///
+    /// One call for both shapes, because no caller has any business knowing
+    /// which it is: a top-level child merges into the live document, a nested
+    /// child into its parent's private workspace, and which of the two applies
+    /// is a fact about the *parent thread* — the same fact `prepare_turn`
+    /// reads to decide where the child's own turns wrote.
+    ///
+    /// The child's workspace is retired either way, conflict included: the
+    /// immutable proposal revision is then the whole handoff (there is nothing
+    /// left in the directory that is not already a revision), and retiring it
+    /// is what makes "a subagent thread is one-shot" true by construction
+    /// rather than by convention.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthoredDocumentsError::Invalid`] if `child_thread_id` is not a
+    /// subagent thread or no longer owns an active workspace.
+    pub async fn merge_subagent(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        child_thread_id: &str,
+        subject: &str,
+        operation_id: &str,
+    ) -> Result<AuthoredWorkspaceMerge> {
+        super::validate_token(operation_id, "subagent merge operation id")?;
+        let child = agent_threads::get_thread_row(pool, child_thread_id, principal)
+            .await
+            .map_err(AuthoredDocumentsError::Scope)?;
+        let parent_thread_id = child.parent_thread_id.clone().ok_or_else(|| {
+            AuthoredDocumentsError::Invalid("only a subagent thread has work to merge".into())
+        })?;
+        let scope = ResolvedScope::from_thread(&child, principal)?;
+        let parent = agent_threads::get_thread_row(pool, &parent_thread_id, principal)
+            .await
+            .map_err(AuthoredDocumentsError::Scope)?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open subagent merge"))?;
+        let source = turn_head_of_thread(&mut connection, &scope, &child).await?;
+        let target = turn_head_of_thread(&mut connection, &scope, &parent).await?;
+        drop(connection);
+        let Some(source_workspace_id) = source.workspace_id().map(str::to_string) else {
+            return Err(AuthoredDocumentsError::Invalid(
+                "subagent thread has no workspace to merge".into(),
+            ));
+        };
+
+        // A child's turns advance its workspace head themselves, so this is
+        // normally a no-op. It is not skipped: the merges below refuse a dirty
+        // directory outright, and "commit what is there" is a better answer to
+        // an unstructured write than a failed handoff.
+        let check = self
+            .check_workspace(pool, principal, child_thread_id, &source_workspace_id)
+            .await?;
+        let head = if check.changed {
+            self.commit_workspace(
+                pool,
+                principal,
+                CommitAuthoredWorkspaceInput {
+                    thread_id: child_thread_id.to_owned(),
+                    workspace_id: source_workspace_id.clone(),
+                    expected_head_revision_id: check.head_revision_id,
+                    expected_snapshot_id: check.snapshot_id,
+                    operation_id: format!("{operation_id}-commit"),
+                    message: subject.to_owned(),
+                },
+            )
+            .await?
+            .revision_id
+        } else {
+            check.head_revision_id
+        };
+
+        let merged = match target.workspace_id() {
+            None => {
+                self.merge_workspace(
+                    pool,
+                    principal,
+                    MergeAuthoredWorkspaceInput {
+                        thread_id: child_thread_id.to_owned(),
+                        workspace_id: source_workspace_id.clone(),
+                        expected_head_revision_id: head,
+                        operation_id: operation_id.to_owned(),
+                    },
+                )
+                .await?
+            }
+            Some(target_workspace_id) => {
+                self.merge_into_workspace(
+                    pool,
+                    principal,
+                    RecursiveMerge {
+                        source_thread_id: child_thread_id,
+                        source_workspace_id: &source_workspace_id,
+                        target_thread_id: &parent_thread_id,
+                        target_workspace_id,
+                        expected_head_revision_id: &head,
+                        operation_id,
+                    },
+                )
+                .await?
+            }
+        };
+        self.remove_workspace(pool, principal, child_thread_id, &source_workspace_id)
+            .await?;
+        Ok(merged)
+    }
+
     /// Merge one recursive child's committed head into its detached parent.
     /// Only root workspaces use [`Self::merge_workspace`] to publish live state.
     pub async fn merge_workspace_into_workspace(
@@ -1095,31 +1249,62 @@ impl AuthoredDocuments {
         principal: Option<&str>,
         input: MergeAuthoredWorkspaceIntoWorkspaceInput,
     ) -> Result<AuthoredWorkspaceMerge> {
-        super::validate_token(&input.operation_id, "workspace merge operation id")?;
-        validate_workspace_id(&input.workspace_id)?;
-        validate_workspace_id(&input.target_workspace_id)?;
-        if input.workspace_id == input.target_workspace_id {
+        self.merge_into_workspace(
+            pool,
+            principal,
+            RecursiveMerge {
+                source_thread_id: &input.thread_id,
+                source_workspace_id: &input.workspace_id,
+                target_thread_id: &input.thread_id,
+                target_workspace_id: &input.target_workspace_id,
+                expected_head_revision_id: &input.expected_head_revision_id,
+                operation_id: &input.operation_id,
+            },
+        )
+        .await
+    }
+
+    async fn merge_into_workspace(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        merge: RecursiveMerge<'_>,
+    ) -> Result<AuthoredWorkspaceMerge> {
+        super::validate_token(merge.operation_id, "workspace merge operation id")?;
+        validate_workspace_id(merge.source_workspace_id)?;
+        validate_workspace_id(merge.target_workspace_id)?;
+        if merge.source_workspace_id == merge.target_workspace_id {
             return Err(AuthoredDocumentsError::Invalid(
                 "a workspace cannot merge into itself".into(),
             ));
         }
-        let expected_theirs = RevisionId::parse(&input.expected_head_revision_id)?;
+        let expected_theirs = RevisionId::parse(merge.expected_head_revision_id)?;
         let fingerprint = operation_request_fingerprint(
             "workspace_merge_into_workspace",
             &[
-                &input.workspace_id,
-                &input.target_workspace_id,
+                merge.source_workspace_id,
+                merge.target_workspace_id,
                 expected_theirs.as_str(),
             ],
         );
         let (_thread, scope, _guard) = self
-            .lock_active_thread(pool, principal, &input.thread_id)
+            .lock_active_thread(pool, principal, merge.source_thread_id)
             .await?;
         let source = self
-            .active_workspace_row(pool, &scope, &input.thread_id, &input.workspace_id)
+            .active_workspace_row(
+                pool,
+                &scope,
+                merge.source_thread_id,
+                merge.source_workspace_id,
+            )
             .await?;
         let target = self
-            .active_workspace_row(pool, &scope, &input.thread_id, &input.target_workspace_id)
+            .active_workspace_row(
+                pool,
+                &scope,
+                merge.target_thread_id,
+                merge.target_workspace_id,
+            )
             .await?;
         if source.head_revision_id != expected_theirs.as_str() {
             return Err(AuthoredDocumentsError::Invalid(format!(
@@ -1129,7 +1314,7 @@ impl AuthoredDocuments {
         }
         let operation = OperationSpec {
             kind: "workspace_merge",
-            id: &input.operation_id,
+            id: merge.operation_id,
             fingerprint: &fingerprint,
             result_json: None,
         };
@@ -1242,16 +1427,16 @@ impl AuthoredDocuments {
                     let current_source = load_workspace_row(
                         connection,
                         &scope,
-                        &input.thread_id,
-                        Some(&input.workspace_id),
+                        merge.source_thread_id,
+                        Some(merge.source_workspace_id),
                         None,
                     )
                     .await?;
                     let current_target = load_workspace_row(
                         connection,
                         &scope,
-                        &input.thread_id,
-                        Some(&input.target_workspace_id),
+                        merge.target_thread_id,
+                        Some(merge.target_workspace_id),
                         None,
                     )
                     .await?;
@@ -1278,11 +1463,11 @@ impl AuthoredDocuments {
             }
         };
 
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            &scope,
             "workspace_merge",
-            Some(&input.operation_id),
+            Some(merge.operation_id),
             "Merge recursive agent workspace",
-            Some(&input.thread_id),
             None,
             None,
         )?;
@@ -1291,16 +1476,16 @@ impl AuthoredDocuments {
         let current_source = load_workspace_row(
             connection,
             &scope,
-            &input.thread_id,
-            Some(&input.workspace_id),
+            merge.source_thread_id,
+            Some(merge.source_workspace_id),
             None,
         )
         .await?;
         let current_target = load_workspace_row(
             connection,
             &scope,
-            &input.thread_id,
-            Some(&input.target_workspace_id),
+            merge.target_thread_id,
+            Some(merge.target_workspace_id),
             None,
         )
         .await?;
@@ -1324,8 +1509,8 @@ impl AuthoredDocuments {
                AND status = 'active' AND head_revision_id = ?",
         )
         .bind(revision.id.as_str())
-        .bind(&input.target_workspace_id)
-        .bind(&input.thread_id)
+        .bind(merge.target_workspace_id)
+        .bind(merge.target_thread_id)
         .bind(scope.document_id.as_str())
         .bind(target_head.as_str())
         .execute(&mut *connection)
@@ -1815,7 +2000,11 @@ impl AuthoredDocuments {
         })
     }
 
-    fn workspace_path(&self, scope: &ResolvedScope, workspace_id: &str) -> Result<PathBuf> {
+    pub(super) fn workspace_path(
+        &self,
+        scope: &ResolvedScope,
+        workspace_id: &str,
+    ) -> Result<PathBuf> {
         validate_workspace_id(workspace_id)?;
         Ok(self
             .storage
@@ -1841,17 +2030,32 @@ fn requested_stable_ids(
 }
 
 #[derive(Clone, Debug, FromRow)]
-struct WorkspaceRow {
-    workspace_id: String,
+pub(super) struct WorkspaceRow {
+    pub(super) workspace_id: String,
     request_fingerprint: String,
     document_id: String,
     owner_thread_id: String,
     base_revision_id: String,
-    head_revision_id: String,
-    status: String,
+    pub(super) head_revision_id: String,
+    pub(super) status: String,
 }
 
-async fn load_workspace_row(
+/// Which workspace a recursive merge moves, and which it moves into.
+///
+/// The two need not share a thread. A subagent's workspace is owned by the
+/// subagent's own thread, so a nested child and its parent own one each — the
+/// shape [`AuthoredDocuments::merge_workspace_into_workspace`]'s single
+/// `thread_id` cannot express.
+struct RecursiveMerge<'a> {
+    source_thread_id: &'a str,
+    source_workspace_id: &'a str,
+    target_thread_id: &'a str,
+    target_workspace_id: &'a str,
+    expected_head_revision_id: &'a str,
+    operation_id: &'a str,
+}
+
+pub(super) async fn load_workspace_row(
     connection: &mut SqliteConnection,
     scope: &ResolvedScope,
     thread_id: &str,
@@ -2100,7 +2304,7 @@ async fn read_workspace_files_or_restore_missing(
     }
 }
 
-async fn replace_workspace_files(path: &Path, files: &FileMap) -> Result<()> {
+pub(super) async fn replace_workspace_files(path: &Path, files: &FileMap) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         AuthoredDocumentsError::Storage("authored workspace has no parent directory".into())
     })?;

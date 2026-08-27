@@ -650,6 +650,11 @@ pub struct RowCtx<'a> {
     /// Tool calls the reader has closed, by call id — see
     /// [`crate::AgentChat::toggle_tool`] for why the set is the negative one.
     pub collapsed: &'a HashSet<SharedString>,
+    /// Python calls, read. Interior-mutable because a row reads its call
+    /// *during* the panel's own render, when the panel entity is already
+    /// borrowed — see [`crate::python_cell`] for why the reading is cached at
+    /// all.
+    pub cells: &'a RefCell<crate::python_cell::Cells>,
     /// The one fold in flight, if any: which call, and how far through its
     /// tween it is. At most one, because a fold is started by a click and a
     /// click lands on one chip.
@@ -701,7 +706,7 @@ pub fn row(
                 .map(|tool| chip::label(tool).to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            (chip::rail(&tools, ctx), plain)
+            (chip::rail(&tools, ctx, window), plain)
         }
         RowKind::Block {
             part,

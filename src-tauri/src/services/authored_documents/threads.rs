@@ -3,6 +3,7 @@ use std::future::Future;
 use sqlx::SqlitePool;
 
 use crate::models::agent_threads::CreateAgentThreadInput;
+use crate::models::authored_state::CreateAuthoredWorkspaceInput;
 
 use super::{
     agent_threads, deterministic_creation_id, ensure_thread_owned, normalized_creation_request_id,
@@ -78,6 +79,13 @@ impl AuthoredDocuments {
         Ok((thread, scope, guard))
     }
 
+    /// Create (or replay the creation of) one durable agent thread.
+    ///
+    /// A thread named a `parent_thread_id` is a subagent: creation also
+    /// allocates its private workspace from the parent's current head, keyed
+    /// by the same request id, so "a subagent thread has a private head to
+    /// write to" holds from the moment the row exists rather than being
+    /// something the spawning turn has to remember to arrange.
     pub async fn create_thread_with_authored_state(
         &self,
         pool: &SqlitePool,
@@ -105,7 +113,9 @@ impl AuthoredDocuments {
                     "agent thread creation was already applied and deletion is terminal".into(),
                 ));
             }
-            return Ok(existing);
+            return self
+                .bind_subagent_workspace(pool, principal, existing, &request_id)
+                .await;
         }
         if agent_threads::find_thread_deletion_receipt(pool, &thread_id, principal)
             .await
@@ -118,34 +128,85 @@ impl AuthoredDocuments {
         }
 
         let provisional = provisional_scope(&input, principal)?;
-        let _guard = self.document_guard(&provisional.document_id).await;
-        // Import a legacy live document before binding the thread. A failed
-        // thread insert may leave legitimate authored history, never a partial
-        // conversation or a second authority.
-        self.load_current_locked(pool, &provisional).await?;
-        match agent_threads::create_thread_with_id(pool, &thread_id, input.clone(), principal).await
-        {
-            Ok(thread) => Ok(thread),
-            Err(error) => {
-                let existing =
-                    agent_threads::find_thread_row_including_deleting(pool, &thread_id, principal)
-                        .await
-                        .map_err(|load| {
-                            AuthoredDocumentsError::Storage(format!(
-                                "create deterministic agent thread: {error}; reload failed: {load}"
-                            ))
-                        })?
-                        .ok_or_else(|| {
-                            AuthoredDocumentsError::Storage(format!(
-                                "create deterministic agent thread: {error}"
-                            ))
-                        })?;
-                verify_agent_thread_creation_scope(&existing, &input, principal)?;
-                Ok(existing)
+        let created = {
+            let _guard = self.document_guard(&provisional.document_id).await;
+            // Import a legacy live document before binding the thread. A failed
+            // thread insert may leave legitimate authored history, never a partial
+            // conversation or a second authority.
+            self.load_current_locked(pool, &provisional).await?;
+            match agent_threads::create_thread_with_id(pool, &thread_id, input.clone(), principal)
+                .await
+            {
+                Ok(thread) => thread,
+                Err(error) => {
+                    let existing = agent_threads::find_thread_row_including_deleting(
+                        pool, &thread_id, principal,
+                    )
+                    .await
+                    .map_err(|load| {
+                        AuthoredDocumentsError::Storage(format!(
+                            "create deterministic agent thread: {error}; reload failed: {load}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        AuthoredDocumentsError::Storage(format!(
+                            "create deterministic agent thread: {error}"
+                        ))
+                    })?;
+                    verify_agent_thread_creation_scope(&existing, &input, principal)?;
+                    existing
+                }
             }
-        }
+        };
+        self.bind_subagent_workspace(pool, principal, created, &request_id)
+            .await
     }
 
+    /// Give a subagent thread the workspace it writes to, or leave an ordinary
+    /// thread alone.
+    ///
+    /// Both allocations are idempotent — the thread id is derived from the
+    /// request id and the workspace is keyed by `(owner_thread_id, request_id)`
+    /// — so a retried create converges on the same pair instead of a second
+    /// workspace.
+    async fn bind_subagent_workspace(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread: AgentThread,
+        request_id: &str,
+    ) -> Result<AgentThread> {
+        let Some(parent_thread_id) = thread.parent_thread_id.as_deref() else {
+            return Ok(thread);
+        };
+        // Reading through the parent is also the liveness check: a parent that
+        // is being deleted cannot be locked, so a child cannot appear under it
+        // after deletion has enumerated its children.
+        let base = self
+            .current_revision(pool, principal, parent_thread_id)
+            .await?;
+        self.create_workspace(
+            pool,
+            principal,
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.id.clone(),
+                request_id: request_id.to_owned(),
+                expected_base_revision_id: base.revision_id,
+            },
+        )
+        .await?;
+        Ok(thread)
+    }
+
+    /// Delete a thread and everything it spawned.
+    ///
+    /// A subagent thread cannot outlive the conversation that spawned it: its
+    /// workspace, its Python namespace and its transcript all exist for one
+    /// turn of the parent. Descendants are deleted deepest-first through this
+    /// same routine, so each leaves the deletion receipt and the retired
+    /// workspaces a top-level deletion leaves — a foreign-key cascade would
+    /// drop the rows and none of that. Authored revisions are never touched;
+    /// history stays restorable.
     pub async fn delete_thread_with_authored_state<Cleanup, CleanupFuture>(
         &self,
         pool: &SqlitePool,
@@ -154,7 +215,56 @@ impl AuthoredDocuments {
         cleanup: Cleanup,
     ) -> Result<Option<AgentThread>>
     where
-        Cleanup: FnOnce(Vec<String>) -> CleanupFuture,
+        Cleanup: Fn(Vec<String>) -> CleanupFuture,
+        CleanupFuture: Future<Output = std::result::Result<(), String>>,
+    {
+        for descendant in self.descendant_threads(pool, principal, thread_id).await? {
+            self.delete_one_thread(pool, principal, &descendant, &cleanup)
+                .await?;
+        }
+        self.delete_one_thread(pool, principal, thread_id, &cleanup)
+            .await
+    }
+
+    /// Every thread spawned under `thread_id`, deepest first, including those
+    /// already marked `deleting` so an interrupted deletion resumes.
+    async fn descendant_threads(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+    ) -> Result<Vec<String>> {
+        sqlx::query_scalar(
+            "WITH RECURSIVE descendant(id, depth) AS (
+                 SELECT id, 1 FROM agent_threads
+                  WHERE parent_thread_id = ? AND owner_user_id IS ?
+                 UNION ALL
+                 SELECT child.id, descendant.depth + 1
+                   FROM agent_threads child
+                   JOIN descendant ON child.parent_thread_id = descendant.id
+                  WHERE child.owner_user_id IS ?
+             )
+             SELECT id FROM descendant ORDER BY depth DESC, id",
+        )
+        .bind(thread_id)
+        .bind(principal)
+        .bind(principal)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| {
+            AuthoredDocumentsError::Storage(format!("list subagent threads to delete: {error}"))
+        })
+    }
+
+    async fn delete_one_thread<Cleanup, CleanupFuture>(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+        cleanup: &Cleanup,
+    ) -> Result<Option<AgentThread>>
+    where
+        Cleanup: Fn(Vec<String>) -> CleanupFuture,
         CleanupFuture: Future<Output = std::result::Result<(), String>>,
     {
         let Some(thread) =
@@ -290,6 +400,8 @@ fn verify_agent_thread_creation_scope(
         || thread.implementation_id != input.implementation_id
         || thread.venue_id != input.venue_id
         || thread.score_id != input.score_id
+        || thread.parent_thread_id != input.parent_thread_id
+        || thread.parent_call_id != input.parent_call_id
     {
         return Err(AuthoredDocumentsError::Invalid(
             "agent thread request id was already used with another authored scope".into(),

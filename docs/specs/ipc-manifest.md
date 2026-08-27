@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**186 commands** across **31 domains** · **18 events** · **0 commands not on the seam**
+**186 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -16,11 +16,11 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | --- | ---: | --- |
 | `agent` | 3 | `src-tauri/src/dispatch/handlers/agent.rs` |
 | `agent_execution` | 2 | `src-tauri/src/dispatch/handlers/agent_execution.rs` |
-| `agent_threads` | 6 | `src-tauri/src/dispatch/handlers/agent_threads.rs` |
+| `agent_threads` | 7 | `src-tauri/src/dispatch/handlers/agent_threads.rs` |
 | `annotation_preview` | 5 | `src-tauri/src/dispatch/handlers/annotation_preview.rs` |
 | `artnet` | 3 | `src-tauri/src/dispatch/handlers/artnet.rs` |
 | `auth` | 4 | `src-tauri/src/dispatch/handlers/auth.rs` |
-| `authored_state` | 14 | `src-tauri/src/dispatch/handlers/authored_state.rs` |
+| `authored_state` | 11 | `src-tauri/src/dispatch/handlers/authored_state.rs` |
 | `categories` | 1 | `src-tauri/src/dispatch/handlers/categories.rs` |
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
 | `compositor` | 2 | `src-tauri/src/dispatch/handlers/compositor.rs` |
@@ -39,6 +39,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `score_dsl` | 3 | `src-tauri/src/dispatch/handlers/score_dsl.rs` |
 | `scores` | 9 | `src-tauri/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
+| `skills` | 2 | `src-tauri/src/dispatch/handlers/skills.rs` |
 | `stage` | 5 | `src-tauri/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `src-tauri/src/dispatch/handlers/telemetry.rs` |
@@ -63,8 +64,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `run_python_cell` | `threadId: String`<br>`executionId: Option<String>`<br>`authoredWorkspaceId: Option<String>`<br>`turnMessageId: String`<br>`code: String`<br>`scope: PythonScopeInput` | `PythonCellResult` |
-| `cancel_python_cell` | `threadId: String`<br>`executionId: Option<String>`<br>`authoredWorkspaceId: Option<String>` | `bool` |
+| `run_python_cell` | `threadId: String`<br>`turnMessageId: String`<br>`code: String`<br>`scope: PythonScopeInput` | `PythonCellResult` |
+| `cancel_python_cell` | `threadId: String` | `bool` |
 
 ### `agent_threads`
 
@@ -75,6 +76,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `agent_thread_create` | `input: CreateAgentThreadInput` | `AgentThread` |
 | `agent_thread_append_messages` | `threadId: String`<br>`input: AppendAgentThreadMessagesInput` | `Vec<AgentThreadMessage>` |
 | `agent_thread_rename` | `threadId: String`<br>`title: Option<String>` | `AgentThread` |
+| `agent_thread_set_actor` | `threadId: String`<br>`actor: String` | `()` |
 | `agent_thread_delete` | `threadId: String` | `()` |
 
 ### `annotation_preview`
@@ -111,16 +113,13 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `authored_state_prepare_turn` | `input: PrepareAuthoredTurnInput` | `PreparedAuthoredTurn` |
 | `authored_state_finalize_turn` | `input: FinalizeAuthoredTurnInput` | `AuthoredTurnCommit` |
 | `authored_state_recover_turns` | `threadId: String` | `Vec<AuthoredTurnCommit>` |
+| `authored_state_set_session_actor` | `actor: String` | `()` |
 | `authored_state_list_history` | `threadId: String`<br>`cursor: Option<String>`<br>`limit: Option<usize>` | `AuthoredHistoryPage` |
 | `authored_state_restore` | `input: RestoreAuthoredStateInput` | `AuthoredRestoreResult` |
-| `authored_state_current_revision` | `threadId: String` | `AuthoredCurrentRevision` |
 | `authored_state_create_workspace` | `input: CreateAuthoredWorkspaceInput` | `AuthoredWorkspaceHandle` |
-| `authored_state_fork_workspace` | `input: ForkAuthoredWorkspaceInput` | `AuthoredWorkspaceHandle` |
 | `authored_state_check_workspace` | `input: AuthoredWorkspaceInput` | `AuthoredWorkspaceCheck` |
-| `authored_state_write_workspace_graph` | `input: WriteAuthoredWorkspaceGraphInput` | `Graph` |
 | `authored_state_commit_workspace` | `input: CommitAuthoredWorkspaceInput` | `AuthoredWorkspaceCommit` |
 | `authored_state_merge_workspace` | `input: MergeAuthoredWorkspaceInput` | `AuthoredWorkspaceMerge` |
-| `authored_state_merge_workspace_into_workspace` | `input: MergeAuthoredWorkspaceIntoWorkspaceInput` | `AuthoredWorkspaceMerge` |
 | `authored_state_remove_workspace` | `input: AuthoredWorkspaceInput` | `()` |
 
 ### `categories`
@@ -330,6 +329,13 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `get_settings` | — | `AppSettings` |
 | `set_setting` | `key: String`<br>`value: String` | `()` |
+
+### `skills`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `skills_listing` | — | `String` |
+| `get_skill` | `name: String` | `String` |
 
 ### `stage`
 

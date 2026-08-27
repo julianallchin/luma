@@ -61,6 +61,8 @@ pub(crate) mod context {
     pub const ADD_TRACKS: &str = "AddTracks";
     /// The chat-history picker.
     pub const CHAT_HISTORY: &str = "ChatHistory";
+    /// The subagents dialog: the delegation list and one child's transcript.
+    pub const SUBAGENTS: &str = "Subagents";
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
     /// because the chat's composer, in another crate, declares the same
@@ -150,24 +152,26 @@ pub(crate) fn init(cx: &mut App) {
     // platform, which is why there is no `cfg` here.
     let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
     let shell = format!(
-        "{} && !{} && !{} && !{} && !{} && !{}",
+        "{} && !{} && !{} && !{} && !{} && !{} && !{}",
         context::ROOT,
         context::VENUES,
         context::PATTERNS,
         context::SETTINGS,
         context::ADD_TRACKS,
-        context::CHAT_HISTORY
+        context::CHAT_HISTORY,
+        context::SUBAGENTS
     );
     // A dialog owns Escape even when its current child is a text field. Route
     // dismissal policy remains in `Luma::dismiss_overlay` (notably, the
     // required first-venue screen refuses to close).
     let dialog = format!(
-        "{} || {} || {} || {} || {}",
+        "{} || {} || {} || {} || {} || {}",
         context::VENUES,
         context::PATTERNS,
         context::SETTINGS,
         context::ADD_TRACKS,
-        context::CHAT_HISTORY
+        context::CHAT_HISTORY,
+        context::SUBAGENTS
     );
     // Every track-editor binding shares one predicate: it means something in
     // that tab and nothing anywhere else, and a field taking typed text
