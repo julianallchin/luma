@@ -49,6 +49,11 @@ pub(crate) struct TabStripFrame {
     pub(crate) gap: f32,
     /// Relative paint offset for the `+` and collapse-control group.
     pub(crate) controls_x_offset: f32,
+    /// Where the control group *is* this frame, in strip space — the anchor
+    /// the `+` menu hangs from. Published rather than re-derived at the call
+    /// site from a first-chip width, which is the same number only while every
+    /// chip is the same width.
+    pub(crate) controls_x: f32,
     pub(crate) animating: bool,
 }
 
@@ -133,9 +138,6 @@ impl ScalarMotion {
 #[derive(Debug)]
 pub(crate) struct TabChrome {
     pub(crate) menu_open: bool,
-    /// Window-space x anchor evaluated from the live strip geometry. The
-    /// popover itself is rendered by the shell above pane clipping.
-    pub(crate) menu_anchor_x: Option<f32>,
     /// Window-space origin of the one live strip owner this frame.
     strip_origin: (f32, f32),
     live: Vec<LiveChip>,
@@ -148,7 +150,6 @@ impl Default for TabChrome {
     fn default() -> Self {
         Self {
             menu_open: false,
-            menu_anchor_x: None,
             strip_origin: (0.0, 0.0),
             live: Vec::new(),
             exits: Vec::new(),
@@ -394,6 +395,7 @@ impl TabChrome {
             live: live_frames,
             gap,
             controls_x_offset: controls_x.value(now) - controls_target,
+            controls_x: controls_x.value(now),
             animating,
         }
     }
@@ -426,16 +428,11 @@ fn chip_width(available_width: f32, controls_width: f32, gap: f32, tabs: usize) 
 }
 
 fn transition_span() -> Duration {
-    TAB_SLIDE.total().mul_f32(motion::speed_scale())
+    motion::span(&TAB_SLIDE)
 }
 
 fn progress(started: Instant, now: Instant) -> f32 {
-    let span = transition_span();
-    if span.is_zero() {
-        return 1.0;
-    }
-    let raw = now.saturating_duration_since(started).as_secs_f32() / span.as_secs_f32();
-    TAB_SLIDE.progress(raw.min(1.0))
+    motion::exit_progress_at(&TAB_SLIDE, started, now)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,19 +440,16 @@ pub(crate) enum NewTabChoice {
     Universe,
     Pattern,
     Track,
-    Visualizer,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 4] =
-        [Self::Universe, Self::Pattern, Self::Track, Self::Visualizer];
+    pub(crate) const ALL: [Self; 3] = [Self::Universe, Self::Pattern, Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Universe => "Universe setup",
             Self::Pattern => "Pattern editor",
             Self::Track => "Track editor",
-            Self::Visualizer => "Visualizer",
         }
     }
 }
@@ -465,6 +459,10 @@ pub(crate) struct NewTabPrerequisites {
     pub(crate) venue: Option<String>,
     pub(crate) track: Option<String>,
     pub(crate) pattern: Option<String>,
+    /// The track a graph tab would be evaluated against, resolved from the
+    /// tab strip (`Luma::graph_track_context`). The graph editor cannot open
+    /// without one — §6/§9 ruling 1 of the graph-editor design doc.
+    pub(crate) graph_track: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -479,14 +477,18 @@ impl ChoiceAvailability {
     }
 }
 
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 4] {
+pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 3] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
-            NewTabChoice::Universe | NewTabChoice::Visualizer if prerequisites.venue.is_none() => {
-                Some("Select a venue first")
-            }
+            NewTabChoice::Universe if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
+            // The track gate outranks the pattern gate: a pattern can be
+            // picked while trackless, but no pick makes the editor openable
+            // without a track to evaluate against.
+            NewTabChoice::Pattern if prerequisites.graph_track.is_none() => {
+                Some(crate::graph::NO_TRACK_REASON)
+            }
             NewTabChoice::Pattern if prerequisites.pattern.is_none() => {
                 Some("Select a pattern first")
             }
@@ -497,6 +499,24 @@ pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvaila
 }
 
 impl Luma {
+    /// What the current shell state lets the `+` menu (and the empty panel's
+    /// copy of it) offer. One constructor, so the two drawings of the choices
+    /// cannot gate on different facts.
+    pub(crate) fn new_tab_prerequisites(&self) -> NewTabPrerequisites {
+        NewTabPrerequisites {
+            venue: self
+                .sidebar
+                .as_ref()
+                .map(|state| state.venue_id().to_string()),
+            track: self.selected_track.clone(),
+            pattern: self
+                .selected_pattern
+                .as_ref()
+                .map(|pattern| pattern.id.clone()),
+            graph_track: self.graph_track_context().map(|context| context.track),
+        }
+    }
+
     /// One close path for the chip, middle click and keyboard. Logical removal
     /// and teardown happen immediately; this module retains only exit paint.
     pub(crate) fn close_tab(
@@ -529,12 +549,17 @@ impl Luma {
         self.finish_close_tab(target, cx);
     }
 
+    /// Logical teardown, shared by every close gesture.
+    ///
+    /// **The panel's width is not part of a close.** Closing the last tab used
+    /// to snap it to zero — a leftover from when emptiness hid the panel — and
+    /// the next frame's `retarget` read that as "open from nothing", so the
+    /// empty state arrived on a full slide-in that nobody had asked for. What
+    /// changed is which tabs are open; the region the user sized stays where
+    /// they put it.
     fn finish_close_tab(&mut self, target: &Target, cx: &mut gpui::Context<Self>) {
         if let Some(body) = self.workspace.close(target) {
             self.teardown(body, cx);
-        }
-        if self.workspace.is_empty() {
-            self.workspace_width.set(0.0);
         }
         cx.notify();
     }
@@ -559,7 +584,6 @@ impl Luma {
                     self.open_track(&track, cx);
                 }
             }
-            NewTabChoice::Visualizer => self.open_visualizer(cx),
         }
         cx.notify();
     }
@@ -726,9 +750,8 @@ mod tests {
     fn menu_reasons_name_each_missing_prerequisite() {
         let none = menu_choices(&NewTabPrerequisites::default());
         assert_eq!(none[0].reason, Some("Select a venue first"));
-        assert_eq!(none[1].reason, Some("Select a pattern first"));
+        assert_eq!(none[1].reason, Some("Open a track to edit patterns"));
         assert_eq!(none[2].reason, Some("Select a venue first"));
-        assert_eq!(none[3].reason, Some("Select a venue first"));
 
         let venue = NewTabPrerequisites {
             venue: Some("v".into()),
@@ -737,12 +760,24 @@ mod tests {
         let venue_only = menu_choices(&venue);
         assert!(venue_only[0].enabled());
         assert_eq!(venue_only[2].reason, Some("Select a track first"));
-        assert!(venue_only[3].enabled());
+
+        // The track gate outranks the pattern gate; with a track editor open
+        // the pattern gate is what remains.
+        let track_open = NewTabPrerequisites {
+            venue: Some("v".into()),
+            graph_track: Some("t".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            menu_choices(&track_open)[1].reason,
+            Some("Select a pattern first")
+        );
 
         let all = menu_choices(&NewTabPrerequisites {
             venue: Some("v".into()),
             track: Some("t".into()),
             pattern: Some("p".into()),
+            graph_track: Some("t".into()),
         });
         assert!(all.into_iter().all(ChoiceAvailability::enabled));
     }

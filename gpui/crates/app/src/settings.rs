@@ -17,6 +17,7 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use luma_ui::arg::select::luma_arg_select;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::Enabled;
@@ -81,10 +82,14 @@ impl Luma {
     /// Open settings over the whole shell. The regions persist beneath the
     /// overlay, so closing it reveals them exactly as they were.
     pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.overlay, Some(crate::shell::Overlay::Settings(_))) {
+        if matches!(
+            self.overlay.as_open(),
+            Some(crate::shell::Overlay::Settings(_))
+        ) {
             return;
         }
-        self.overlay = Some(crate::shell::Overlay::Settings(Settings::new()));
+        self.overlay
+            .open(crate::shell::Overlay::Settings(Settings::new()));
         cx.notify();
         self.reload_settings(cx);
     }
@@ -92,8 +97,11 @@ impl Luma {
     /// Dismiss the overlay. The Back button's handler; Escape lands in
     /// [`Luma::dismiss_overlay`] and does the same thing.
     pub(crate) fn close_settings(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.overlay, Some(crate::shell::Overlay::Settings(_))) {
-            self.overlay = None;
+        if matches!(
+            self.overlay.as_open(),
+            Some(crate::shell::Overlay::Settings(_))
+        ) {
+            self.close_overlay(cx);
             cx.notify();
         }
     }
@@ -155,7 +163,7 @@ impl Luma {
     /// load that lands after it was dismissed is a no-op, not an overlay that
     /// snaps back.
     fn with_settings(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
-        if let Some(crate::shell::Overlay::Settings(state)) = &mut self.overlay {
+        if let Some(crate::shell::Overlay::Settings(state)) = self.overlay.open_mut() {
             edit(state);
             cx.notify();
         }
@@ -297,16 +305,26 @@ fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     vec![
         field(
             Some("Max Brightness"),
-            // Read-only: `luma_slider` paints a value, and dragging one is not
-            // ported (see luma-ui's crate docs). Shown because the number is
-            // worth knowing even where it cannot yet be changed.
-            luma_ui::luma_slider(values.max_dimmer as f32, 0., 100., 240.)
-                .agent_node(
-                    Role::Slider,
-                    format!("Max Brightness {}", values.max_dimmer),
-                )
-                .agent_disabled(true)
-                .into_any_element(),
+            // Whole percent: the setting is stored as a `u8` and read back as
+            // one, so a slider handing over 61.4 would show 61 on the next
+            // reload and disagree with itself in between.
+            luma_ui::luma_slider("max_dimmer", values.max_dimmer as f32, 0., 100., 240., {
+                let app = app.clone();
+                let current = values.max_dimmer;
+                move |value, _, cx| {
+                    let level = value.round().clamp(0., 100.) as u8;
+                    if level != current {
+                        app.update(cx, |this, cx| {
+                            this.write_setting("max_dimmer", level.to_string(), cx);
+                        });
+                    }
+                }
+            })
+            .agent_node(
+                Role::Slider,
+                format!("Max Brightness {}", values.max_dimmer),
+            )
+            .into_any_element(),
             Some("Limits overall brightness of DMX output (100 = no limit)."),
         ),
         field(
@@ -426,10 +444,14 @@ fn checkbox(app: &Entity<Luma>, key: &'static str, label: &str, checked: bool) -
         .into_any_element()
 }
 
-/// A `<Selector>`: the ghost-sized trigger, plus its menu while open.
+/// The app's one select ([`luma_arg_select`]), over this screen's `(id, label)`
+/// options: labels are what the chip and its rows show, ids are what the
+/// setting stores.
 ///
-/// The wrapper is the menu's positioning box, and the menu is `deferred` so it
-/// paints over the fields below it rather than under them.
+/// The pair-to-index translation is all this adds. The trigger, the anchored
+/// card, the rows and their selected state are the widget's — a second copy
+/// of that wiring here is how the screen ended up with a slab trigger under a
+/// glass menu while the strip had a chip.
 fn select(
     state: &Settings,
     app: &Entity<Luma>,
@@ -438,35 +460,25 @@ fn select(
     value: &str,
 ) -> AnyElement {
     let labels: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
-    let current = label_of(options, value);
+    let ids: Vec<String> = options.iter().map(|(id, _)| (*id).to_string()).collect();
     let toggle = app.clone();
-    div()
-        .relative()
-        .child(
-            luma_ui::luma_selector(current, &labels)
-                .id(key)
-                .on_click(move |_, _, cx| toggle.update(cx, |this, cx| this.toggle_menu(key, cx)))
-                .agent_node(Role::Select, current),
-        )
-        .when(state.open_menu == Some(key), |el| {
-            el.child(deferred(options.iter().fold(
-                luma_ui::luma_select_menu().min_w(relative(1.)),
-                |menu, (id, label)| {
-                    let app = app.clone();
-                    let id = id.to_string();
-                    menu.child(
-                        luma_ui::luma_select_item(label, id == value)
-                            .id(SharedString::from(format!("{key}:{id}")))
-                            .on_click(move |_, _, cx| {
-                                let value = id.clone();
-                                app.update(cx, |this, cx| this.write_setting(key, value, cx));
-                            })
-                            .agent_node(Role::Button, *label),
-                    )
-                },
-            )))
-        })
-        .into_any_element()
+    let pick = app.clone();
+    luma_arg_select(
+        key,
+        label_of(options, value),
+        &labels,
+        state.open_menu == Some(key),
+        move |_, cx| toggle.update(cx, |this, cx| this.toggle_menu(key, cx)),
+        move |index, _, cx| {
+            let Some(id) = ids.get(index).cloned() else {
+                return;
+            };
+            // `write_setting` closes the menu itself — it is the one place
+            // that knows the write started.
+            pick.update(cx, |this, cx| this.write_setting(key, id, cx));
+        },
+    )
+    .into_any_element()
 }
 
 /// A value this host can show but not yet edit, drawn in the input's box so

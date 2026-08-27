@@ -23,11 +23,34 @@
 //! first-run picker becomes a trapped window.
 //!
 //! Room for them is reserved by [`band`], not by each surface: **anything that
-//! starts at `y = 0` wears a band**, and the leftmost one leaves
-//! [`LIGHTS_WIDTH`] free. A region does, and so does an overlay plane — one
-//! mechanism rather than an opt-in every future surface has to remember. The
-//! strip itself is inert apart from the three dots, so forgetting is a visible
-//! overlap and never a corner that silently swallows presses.
+//! starts at `y = 0` wears a band**, and a band that reaches the window's
+//! corner leaves that corner free. A region does, and so does an overlay plane
+//! — one mechanism rather than an opt-in every future surface has to remember.
+//! The strip itself is inert apart from the three dots, so forgetting is a
+//! visible overlap and never a corner that silently swallows presses.
+//!
+//! # The panel toggles are anchors, not controls a region carries
+//!
+//! [`sidebar_toggle`] and [`panel_toggle`] are painted in window space beside
+//! the lights, and the window's two corners are the only place they appear.
+//! A toggle rendered *by* a region rides that region's pane, and a pane whose
+//! width is animating clips its own band — which is why the sidebar's toggle
+//! used to vanish part-way through a close and reappear beside back/forward
+//! once the slide had finished. A fixed point cannot live on a moving thing.
+//!
+//! So the rule the whole band reads:
+//!
+//! ```text
+//! [lights][◧] left cluster …………………… right cluster [◨]
+//!  \___ fixed ___/                                  \_ fixed _/
+//! ```
+//!
+//! The toggles hold still and the *clusters* move: [`band_insets`] is the one
+//! statement of the room each edge owes them, read by [`band`] when it pads
+//! itself and by [`band_room`] when it offers a band's flexible child what is
+//! left. A panel opening pushes its neighbour's cluster inward because the
+//! neighbour's band starts where the panel's edge is this frame — the live
+//! width *is* the curve, so nothing here re-states one.
 
 use std::time::Instant;
 
@@ -35,7 +58,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{Icon, IconName};
 use luma_ui::node::{AgentNode, Instrument, Role};
-use luma_ui::{dialog, glass, motion};
+use luma_ui::{float, glass, ladder, motion, radius};
 
 use crate::tab_chrome::{
     menu_choices, NewTabPrerequisites, PointerRegion, TabDescriptor, CHIP_GAP,
@@ -48,8 +71,10 @@ pub const HEIGHT: f32 = 38.;
 /// A tab chip: comet's 24px rounded-6 chip.
 const CHIP_HEIGHT: f32 = 24.;
 const CHIP_RADIUS: f32 = 6.;
-/// One icon-button box in the band.
-const CONTROL: f32 = 24.;
+/// One icon-button box in the band — the gear, a panel toggle, the `+`. The
+/// shell budgets bands against it, so it is stated here once rather than
+/// restated as a second 24 beside the code that reads it.
+pub(crate) const CONTROL: f32 = 24.;
 /// A band's inset from its region's edge, and the gap between its controls.
 const BAND_PAD: f32 = 12.;
 const BAND_GAP: f32 = 10.;
@@ -61,38 +86,67 @@ const LIGHT_GAP: f32 = 8.;
 /// included. Derived rather than measured so the two cannot drift: the shell
 /// pads the leftmost band by exactly what the lights occupy.
 pub(crate) const LIGHTS_WIDTH: f32 = BAND_PAD + 3. * LIGHT + 2. * LIGHT_GAP;
+/// Where the sidebar toggle sits: one [`BAND_GAP`] past the lights, which is
+/// the spacing every other pair of controls in a band keeps. Flush against
+/// [`LIGHTS_WIDTH`] the toggle's hover wash touches the green dot.
+const LEFT_TOGGLE_X: f32 = LIGHTS_WIDTH + BAND_GAP;
+/// Where the window's left anchor block ends — the first pixel a band's own
+/// content may use.
+const LEFT_ANCHOR_END: f32 = LEFT_TOGGLE_X + CONTROL + BAND_GAP;
+/// Where the window's right anchor block begins, measured back from the
+/// trailing edge. The panel toggle itself is inset by [`BAND_PAD`], so this is
+/// one gap further in.
+fn right_anchor_start(viewport: f32) -> f32 {
+    viewport - BAND_PAD - CONTROL - BAND_GAP
+}
 
-/// Width a strip may claim inside a band after its fixed siblings. Keeping
-/// this arithmetic beside the band constants prevents a narrow window from
-/// laying out fixed tab slots past the viewport.
-pub(crate) fn tab_strip_room(
-    panel_width: f32,
-    leftmost: bool,
+/// Where a band sits in window space: what it needs to know to stay clear of
+/// the anchors. The shell already computes both for every region.
+#[derive(Clone, Copy)]
+pub(crate) struct BandSpan {
+    pub x: f32,
+    pub width: f32,
+    pub viewport: f32,
+}
+
+/// What a band owes each of its edges — the single statement of the anchors'
+/// room. [`band`] pads itself with it and [`band_room`] subtracts it, so the
+/// space a child is *offered* can never disagree with the space the band
+/// actually leaves.
+///
+/// Stated against the band's **position**, not against "am I the leftmost
+/// region?". The boolean is the same answer only at the two rest widths: a
+/// sidebar one pixel open stops being leftmost while its neighbour still
+/// starts under the lights, so a band that asked the boolean snapped its
+/// cluster 84px left on the first frame of the slide and then crept back out
+/// from beneath the toggle. Reserving by span makes the cluster hold at the
+/// anchor until the panel's edge passes it and ride the edge after that —
+/// which is the whole behaviour, in one `max`.
+pub(crate) fn band_insets(span: BandSpan) -> (f32, f32) {
+    (
+        (LEFT_ANCHOR_END - span.x).max(BAND_PAD),
+        (span.x + span.width - right_anchor_start(span.viewport)).max(BAND_PAD),
+    )
+}
+
+/// Width a band's flexible child may claim after its fixed siblings and the
+/// gaps between them. Keeping this arithmetic beside the band constants
+/// prevents a narrow window from laying out fixed slots past the viewport.
+pub(crate) fn band_room(
+    span: BandSpan,
     leading_width: f32,
     trailing_width: f32,
     sibling_gaps: usize,
 ) -> f32 {
-    (panel_width
-        - 2.0 * BAND_PAD
-        - if leftmost { LIGHTS_WIDTH } else { 0.0 }
-        - leading_width
-        - trailing_width
-        - sibling_gaps as f32 * BAND_GAP)
+    let (left, right) = band_insets(span);
+    (span.width - left - right - leading_width - trailing_width - sibling_gaps as f32 * BAND_GAP)
         .max(0.0)
 }
 
-/// Window-space origin of a strip after the band's fixed leading children.
-pub(crate) fn tab_strip_origin(
-    panel_x: f32,
-    leftmost: bool,
-    leading_width: f32,
-    leading_children: usize,
-) -> f32 {
-    panel_x
-        + BAND_PAD
-        + if leftmost { LIGHTS_WIDTH } else { 0.0 }
-        + leading_width
-        + leading_children as f32 * BAND_GAP
+/// Window-space origin of the tab strip. It is the panel band's first child
+/// (see [`tab_strip`]), so this is where that band's leading inset ends.
+pub(crate) fn tab_strip_origin(span: BandSpan) -> f32 {
+    span.x + band_insets(span).0
 }
 
 /// Hide the close / minimise / zoom buttons AppKit puts in the content view.
@@ -140,18 +194,19 @@ pub fn hide_native_window_buttons(_window: &Window) {}
 /// One region's head band: the empty drag strip its controls sit in.
 ///
 /// No fill and no border — the band *is* the region's own ground, and a rule
-/// under it would be the one horizontal border this shell does not have. Pass
-/// `leftmost` for the region at `x = 0`, which yields the corner to
-/// [`window_controls`].
-pub(crate) fn band(leftmost: bool) -> Div {
+/// under it would be the one horizontal border this shell does not have. The
+/// span is where the region sits this frame, which is what yields the window's
+/// corners to [`window_controls`] and the two panel toggles.
+pub(crate) fn band(span: BandSpan) -> Div {
+    let (left, right) = band_insets(span);
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(BAND_GAP))
         .h(px(HEIGHT))
-        .px(px(BAND_PAD))
-        .when(leftmost, |band| band.pl(px(LIGHTS_WIDTH)))
+        .pl(px(left))
+        .pr(px(right))
         // The whole band is the drag region; every control stops propagation
         // so a press doesn't also start a move.
         .on_mouse_down(MouseButton::Left, |_, window, _| {
@@ -159,22 +214,94 @@ pub(crate) fn band(leftmost: bool) -> Div {
         })
 }
 
-/// The sidebar's show/hide toggle. Rendered by the leftmost *visible* region,
-/// so hiding the sidebar hands the control to the thread rather than taking
-/// it away with the region it opens.
-pub(crate) fn sidebar_toggle(app: &Entity<Luma>) -> impl IntoElement {
-    icon_button("sidebar-toggle", IconName::PanelLeft)
-        .on_click({
-            let toggled = app.clone();
-            move |_, _, cx| {
-                toggled.update(cx, |this, cx| {
-                    this.sidebar_hidden = !this.sidebar_hidden;
-                    cx.notify();
-                });
-            }
-        })
-        .agent_node(Role::Button, "sidebar-toggle")
+/// The sidebar's show/hide toggle: the window's fixed left anchor, one gap
+/// right of the traffic lights. See the module docs for why it is painted here
+/// and not by whichever region happens to be leftmost.
+pub(crate) fn sidebar_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> impl IntoElement {
+    panel_anchor(
+        anchor(px(LEFT_TOGGLE_X), None),
+        "sidebar-toggle",
+        IconName::PanelLeft,
+        open,
+        enabled,
+        app,
+        |this| this.sidebar_hidden = !this.sidebar_hidden,
+    )
 }
+
+/// The workspace panel's show/hide toggle: the window's fixed right anchor.
+pub(crate) fn panel_toggle(app: &Entity<Luma>, open: bool, enabled: bool) -> impl IntoElement {
+    panel_anchor(
+        anchor(px(0.0), Some(px(BAND_PAD))),
+        "panel-toggle",
+        IconName::PanelRight,
+        open,
+        enabled,
+        app,
+        |this| this.workspace_hidden = !this.workspace_hidden,
+    )
+}
+
+/// One toggle in its fixed slot. Both corners are the same control with a
+/// different icon and a different flag, so they are the same function: an
+/// anchor that behaved differently on one side would be two rules wearing one
+/// name.
+///
+/// `enabled` is false when there is nothing to toggle — no venue on the left,
+/// no tabs on the right. Dimmed and inert then, the way [`history_pair`] is:
+/// the chrome's anatomy holds still, and a control that cannot act says so
+/// rather than vanishing and moving everything beside it.
+fn panel_anchor(
+    slot: Div,
+    id: &'static str,
+    icon: IconName,
+    open: bool,
+    enabled: bool,
+    app: &Entity<Luma>,
+    toggle: fn(&mut Luma),
+) -> impl IntoElement {
+    let button = if enabled {
+        toggle_button(id, icon, open)
+            .on_click({
+                let toggled = app.clone();
+                move |_, _, cx| {
+                    toggled.update(cx, |this, cx| {
+                        toggle(this);
+                        cx.notify();
+                    });
+                }
+            })
+            .into_any_element()
+    } else {
+        dim_icon(icon).into_any_element()
+    };
+    slot.child(
+        div()
+            .child(button)
+            .agent_node(Role::Button, id)
+            .agent_disabled(!enabled),
+    )
+}
+
+/// One window-space slot at the head band's height, pinned to an edge. `right`
+/// wins when given; the toggles are the only callers and each picks one side.
+fn anchor(left: Pixels, right: Option<Pixels>) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .h(px(HEIGHT))
+        .flex()
+        .items_center()
+        .map(|slot| match right {
+            Some(right) => slot.right(right),
+            None => slot.left(left),
+        })
+}
+
+/// What [`history_pair`] occupies in a band, gaps included. The shell budgets
+/// a strip against it and used to restate `2 * 24 + 10` to do so — two places
+/// that had to be edited together, one of which did not know the constants.
+pub(crate) const HISTORY_PAIR_WIDTH: f32 = 2.0 * CONTROL + BAND_GAP;
 
 /// Back/forward: comet's chrome carries them always, dimmed when there is
 /// nowhere to go. This shell has no navigation history — nothing is destroyed,
@@ -185,8 +312,19 @@ pub(crate) fn history_pair() -> Div {
         .flex()
         .items_center()
         .gap(px(BAND_GAP))
-        .child(dim_icon(IconName::ArrowLeft))
-        .child(dim_icon(IconName::ArrowRight))
+        // Published disabled rather than left out of the tree: this pair *is*
+        // the left cluster the fixed toggle pushes, so where it sits is the
+        // observable half of the anchor rule (`chrome_anchors`).
+        .child(
+            dim_icon(IconName::ArrowLeft)
+                .agent_node(Role::Button, "Back")
+                .agent_disabled(true),
+        )
+        .child(
+            dim_icon(IconName::ArrowRight)
+                .agent_node(Role::Button, "Forward")
+                .agent_disabled(true),
+        )
 }
 
 /// The settings gear, rendered at the trailing edge of the rightmost region's
@@ -251,6 +389,17 @@ fn light(id: &'static str, color: Rgba, action: fn(&mut Window)) -> impl IntoEle
 
 /// One glass icon button: quiet ink in a rounded box that washes on hover.
 fn icon_button(id: &'static str, icon: IconName) -> Stateful<Div> {
+    toggle_button(id, icon, false)
+}
+
+/// [`icon_button`] that also reads its own state: a panel toggle wears the
+/// active tab chip's wash while the panel it opens is showing, so "which
+/// panels are up" is legible from the corners without counting regions.
+///
+/// One `hover` call, branching inside — gpui panics on a second one, and a
+/// wrapper that added its own active style on top of `icon_button`'s is
+/// exactly that.
+fn toggle_button(id: &'static str, icon: IconName, active: bool) -> Stateful<Div> {
     div()
         .id(id)
         .size(px(CONTROL))
@@ -258,8 +407,17 @@ fn icon_button(id: &'static str, icon: IconName) -> Stateful<Div> {
         .flex()
         .items_center()
         .justify_center()
-        .text_color(glass::ink(0.55))
-        .hover(|button| button.bg(glass::wash(0.06)).text_color(glass::ink(0.90)))
+        .text_color(glass::ink(if active { 0.92 } else { 0.55 }))
+        .when(active, |button| button.bg(glass::wash(glass::WASH_REST)))
+        .hover(move |button| {
+            button
+                .bg(glass::wash(if active {
+                    glass::WASH_EMPHASIS
+                } else {
+                    glass::WASH_SUBTLE
+                }))
+                .text_color(glass::ink(if active { 0.92 } else { 0.90 }))
+        })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(Icon::new(icon).size(px(14.)))
 }
@@ -276,10 +434,24 @@ fn dim_icon(icon: IconName) -> Div {
         .child(Icon::new(icon).size(px(14.)))
 }
 
-/// The shell tab strip: one rounded chip per open tab, the `+`, and the
-/// collapse chevron. It rides the workspace's own band, which is the width the
-/// strip is *about* — comet right-aligns it into a full-width bar to fake the
-/// same thing.
+/// The shell tab strip: one rounded chip per open tab, and the `+`.
+///
+/// # The strip belongs to the panel
+///
+/// It rides the workspace panel's own band and nowhere else, so it opens and
+/// closes with the thing it is about — comet right-aligns its strip into a
+/// full-width bar to fake the same relationship. The `+` is part of the
+/// **strip** rather than of the band, for the same reason: it extends a row of
+/// tabs, so it is wherever that row is.
+///
+/// A band that could *borrow* the strip when the panel was away is what this
+/// replaced, and it cost two rules the shell no longer has to keep: which band
+/// owns the strip this frame, and where the `+` goes when ownership changes
+/// hands mid-close. Closing the panel now simply puts its tabs away with it,
+/// and ⌘T opens the panel before it offers anything (see `Luma::render`).
+///
+/// With **no** tabs there is no `+`: the panel's own empty state is the offer
+/// then, and two offers for one question is the thing that rule prevents.
 pub(crate) fn tab_strip(
     app: &mut Luma,
     entity: &Entity<Luma>,
@@ -299,14 +471,8 @@ pub(crate) fn tab_strip(
             title: tab.body.title().to_string(),
         })
         .collect::<Vec<_>>();
-    let show_plus = available_width >= CONTROL;
-    let show_collapse = !descriptors.is_empty() && available_width >= 2.0 * CONTROL + CHIP_GAP;
-    let controls_width = if show_plus { CONTROL } else { 0.0 }
-        + if show_collapse {
-            CHIP_GAP + CONTROL
-        } else {
-            0.0
-        };
+    let show_plus = !descriptors.is_empty() && available_width >= CONTROL;
+    let controls_width = if show_plus { CONTROL } else { 0.0 };
     let now = Instant::now();
     let frame = app.tab_chrome.frame(
         &descriptors,
@@ -368,39 +534,32 @@ pub(crate) fn tab_strip(
     if show_plus {
         controls = controls.child(new_tab_control(entity));
     }
-    if show_collapse {
-        controls = controls.child(
-            icon_button("workspace-collapse", IconName::ChevronRight)
-                .on_click({
-                    let collapsed = entity.clone();
-                    move |_, _, cx| {
-                        collapsed.update(cx, |this, cx| {
-                            this.workspace_hidden = !this.workspace_hidden;
-                            cx.notify();
-                        });
-                    }
-                })
-                .agent_node(Role::Button, "workspace-collapse"),
-        );
-    }
     rail = rail.child(controls);
 
-    let strip = strip.child(rail);
-    if menu_open {
-        let width = frame.live.first().map_or(0.0, |chip| chip.width);
-        let plus_x = descriptors.len() as f32 * (width + frame.gap) + frame.controls_x_offset;
-        let viewport = f32::from(window.viewport_size().width);
-        app.tab_chrome.menu_anchor_x =
-            Some((window_x + plus_x).clamp(0.0, (viewport - 240.0).max(0.0)));
-    } else {
-        app.tab_chrome.menu_anchor_x = None;
+    let mut strip = strip.child(rail);
+    // The menu hangs off the strip through the house floating layer:
+    // `deferred(…).priority(1)` lifts it above everything painted in normal
+    // order — the window controls included — and `anchored` owns the
+    // off-screen fitting a hand clamp used to approximate. An overlay up
+    // means the menu yields, as it always has.
+    if menu_open && app.overlay.get().is_none() {
+        let prerequisites = app.new_tab_prerequisites();
+        strip = strip.child(float::anchored_at(
+            "new-tab-menu",
+            point(px(window_x + frame.controls_x), px(HEIGHT - 3.0)),
+            div()
+                .w(px(240.0))
+                .child(new_tab_menu(entity, &prerequisites))
+                .agent_node(Role::Card, "New tab menu")
+                .into_any_element(),
+        ));
     }
     strip.agent_node(Role::Card, "Tab strip")
 }
 
 /// Window-space close transition layer. Exit paint and the stable successor
-/// hotspot live here rather than in either strip rail, so a pane resize or
-/// thread/workspace ownership handoff cannot rebase or clip them.
+/// hotspot live here rather than in the strip's own rail, so the panel sliding
+/// or being dragged under them cannot rebase or clip them.
 pub(crate) fn tab_transition_layer(
     app: &mut Luma,
     entity: &Entity<Luma>,
@@ -437,56 +596,6 @@ pub(crate) fn tab_transition_layer(
     layer.into_any_element()
 }
 
-/// The new-tab popover on the shell's window-space layer. Its anchor is
-/// evaluated by [`tab_strip`] from live pane geometry, but it is deliberately
-/// not a pane child: a menu opened during a panel's entrance must already be
-/// full-sized instead of being cropped to the panel's intermediate width.
-pub(crate) fn tab_menu_layer(app: &Luma, entity: &Entity<Luma>) -> AnyElement {
-    let Some(x) = app
-        .tab_chrome
-        .menu_open
-        .then_some(app.tab_chrome.menu_anchor_x)
-        .flatten()
-    else {
-        return div().into_any_element();
-    };
-    let prerequisites = NewTabPrerequisites {
-        venue: app
-            .sidebar
-            .as_ref()
-            .map(|state| state.venue_id().to_string()),
-        track: app.selected_track.clone(),
-        pattern: app
-            .selected_pattern
-            .as_ref()
-            .map(|pattern| pattern.id.clone()),
-    };
-    div()
-        .absolute()
-        .top(px(HEIGHT - 3.0))
-        .left(px(x))
-        .w(px(240.0))
-        .child(
-            // The menu's glass already carries translucency. Fading that
-            // entire layer over a GPU-heavy timeline makes its first frame
-            // unreadable (and some compositors expose jagged source texture
-            // edges). Keep the authored 2px entrance, but its surface and
-            // text remain fully opaque throughout.
-            div()
-                .w_full()
-                .child(dialog::frosted(
-                    10.0,
-                    28.0,
-                    new_tab_menu(entity, &prerequisites),
-                ))
-                .with_animation("new-tab-menu-in", motion::MENU_IN.animation(), |menu, t| {
-                    menu.relative().top(px(-2.0 * (1.0 - t)))
-                })
-                .agent_node(Role::Card, "New tab menu"),
-        )
-        .into_any_element()
-}
-
 fn new_tab_control(entity: &Entity<Luma>) -> Div {
     let toggled = entity.clone();
     div().size(px(CONTROL)).relative().child(
@@ -501,53 +610,41 @@ fn new_tab_control(entity: &Entity<Luma>) -> Div {
     )
 }
 
+/// The `+` menu's card: the house popover surface with the house rows, not a
+/// third drawing of either. Rows are [`float::menu_row`], so hover fades the
+/// way every other floating row's does; a choice that cannot act dims whole
+/// ([`float::INERT_OPACITY`]) rather than minting its own grey.
 fn new_tab_menu(entity: &Entity<Luma>, prerequisites: &NewTabPrerequisites) -> Div {
-    let mut menu = div()
+    let mut menu = float::popover_card()
         .w_full()
         .flex_none()
-        .p(px(6.0))
-        .rounded(px(10.0))
-        .occlude()
-        .border_1()
-        .border_color(glass::hairline(0.12))
-        .bg(glass::overlay())
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
     for availability in menu_choices(prerequisites) {
         let choice = availability.choice;
         let enabled = availability.enabled();
         let opened = entity.clone();
-        let mut row = div()
-            .id(SharedString::from(format!("new-tab:{}", choice.label())))
-            .w_full()
-            .min_h(px(38.0))
-            .px(px(10.0))
-            .py(px(7.0))
-            .rounded(px(7.0))
-            .flex()
-            .flex_col()
-            .justify_center()
-            .text_size(px(11.5))
-            .text_color(if enabled {
-                glass::ink(0.88)
-            } else {
-                glass::ink(0.30)
-            })
-            .when(enabled, |row| row.hover(|row| row.bg(glass::glass_hover())))
-            .child(choice.label());
+        let key = SharedString::from(format!("new-tab:{}", choice.label()));
+        let mut column = div().flex().flex_col().gap(px(2.0)).child(choice.label());
         if let Some(reason) = availability.reason {
-            row = row.child(
+            column = column.child(
                 div()
-                    .mt(px(2.0))
-                    .text_size(px(9.5))
-                    .text_color(glass::ink(0.32))
+                    .text_size(px(11.0))
+                    .text_color(ladder::foreground_alpha(0.45))
                     .child(reason)
                     .agent_node(Role::Text, reason),
             );
         }
+        let mut row = float::menu_row(float::RowState::Rest, key.clone())
+            .id(key)
+            .w_full()
+            .min_h(px(38.0))
+            .child(column);
         if enabled {
             row = row.on_click(move |_, _, cx| {
                 opened.update(cx, |this, cx| this.activate_new_tab_choice(choice, cx));
             });
+        } else {
+            row = row.cursor_default().opacity(float::INERT_OPACITY);
         }
         menu = menu.child(
             row.agent_node(Role::Button, choice.label())
@@ -566,11 +663,11 @@ fn stable_close_hotspot(entity: &Entity<Luma>, region: PointerRegion) -> impl In
         .top(px(region.y))
         .w(px(region.width))
         .h(px(region.height))
-        .rounded(px(3.0))
+        .rounded(px(radius::CHIP))
         .flex()
         .items_center()
         .justify_center()
-        .hover(|button| button.bg(glass::wash(0.10)))
+        .hover(|button| button.bg(glass::wash(glass::WASH_REST)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| {
             closed.update(cx, |this, cx| {
@@ -648,11 +745,12 @@ fn chip(
         .items_center()
         .gap(px(6.))
         .when(is_active, |chip| {
-            chip.bg(glass::wash(0.10)).text_color(glass::ink(0.92))
+            chip.bg(glass::wash(glass::WASH_REST))
+                .text_color(glass::ink(0.92))
         })
         .when(!is_active, |chip| {
             chip.text_color(glass::ink(0.55))
-                .hover(|chip| chip.bg(glass::wash(0.06)))
+                .hover(|chip| chip.bg(glass::wash(glass::WASH_SUBTLE)))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
@@ -720,7 +818,6 @@ fn kind_icon(target: &Target) -> IconName {
     match target {
         Target::TrackEditor { .. } => IconName::Play,
         Target::Graph { .. } => IconName::Network,
-        Target::Visualizer { .. } => IconName::Frame,
         Target::Universe { .. } => IconName::Cpu,
     }
 }
