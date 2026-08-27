@@ -88,7 +88,7 @@ async fn run() -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        let services = std::sync::Arc::clone(&services);
+        let services = services.clone();
         let stdout = std::sync::Arc::clone(&stdout);
         // A malformed frame must never take the process down — the shim keeps
         // one long-lived child and would lose every in-flight call.

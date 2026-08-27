@@ -44,7 +44,7 @@ impl Tool for EchoTool {
 
 struct Fixture {
     _dir: TempDir,
-    services: Arc<crate::dispatch::AppServices>,
+    services: crate::dispatch::SharedServices,
     thread_id: String,
 }
 
@@ -66,13 +66,14 @@ async fn fixture() -> Fixture {
         storage.agent_workspaces_dir(),
         Arc::new(|| Err("no python worker in tests".to_string())),
     ));
-    let services = Arc::new(crate::dispatch::AppServices::headless(
+    let services = crate::dispatch::AppServices::headless(
         db,
         state_db,
         storage,
         dir.path().join("fixtures"),
         workspaces,
-    ));
+    )
+    .into_shared();
 
     // The thread's authored document is projected from real subject rows.
     sqlx::query(
@@ -86,7 +87,7 @@ async fn fixture() -> Fixture {
     .await
     .expect("subject rows");
 
-    let agent = AgentService::new(Arc::clone(&services));
+    let agent = AgentService::new(services.clone());
     let scope = ThreadScope::track("track-1", "venue-1", "score-1");
     let thread = agent.resolve_thread(&scope).await.expect("thread");
 
@@ -97,8 +98,17 @@ async fn fixture() -> Fixture {
     }
 }
 
+/// The turn registry's back-reference is installed by `into_shared`, which is
+/// the only constructor of `SharedServices` — so the host that forgets it no
+/// longer compiles, and this asserts the wiring the type now guarantees.
+#[tokio::test]
+async fn into_shared_attaches_the_turn_registry() {
+    let fixture = fixture().await;
+    assert!(fixture.services.agent_turns().is_attached());
+}
+
 fn agent(fixture: &Fixture, steps: Vec<Vec<ModelEvent>>) -> AgentService {
-    AgentService::new(Arc::clone(&fixture.services))
+    AgentService::new(fixture.services.clone())
         .with_model(Arc::new(ScriptedModel::new(steps)))
         .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]))
 }
@@ -157,7 +167,7 @@ fn delegating_agent(
     steps: Vec<Vec<ModelEvent>>,
     probes: &Arc<std::sync::Mutex<Vec<Probe>>>,
 ) -> AgentService {
-    AgentService::new(Arc::clone(&fixture.services))
+    AgentService::new(fixture.services.clone())
         .with_model(Arc::new(ScriptedModel::new(steps)))
         .with_tools(ToolRegistry::new(vec![
             Arc::new(ProbeTool(Arc::clone(probes))),
@@ -489,7 +499,7 @@ async fn a_live_subagent_answers_its_parent() {
         .expect("no gateway credential: set LUMA_AI_GATEWAY_API_KEY to smoke-test");
     let fixture = fixture().await;
     let probes = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let service = AgentService::new(Arc::clone(&fixture.services))
+    let service = AgentService::new(fixture.services.clone())
         .with_model(Arc::new(super::model::anthropic::AnthropicClient::gateway(
             key,
         )))
@@ -566,7 +576,7 @@ async fn cancelling_the_parent_turn_cancels_its_child() {
 /// child thread that is left holding an active workspace.
 async fn cancelled_child(fixture: &Fixture) -> String {
     let probes = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let service = AgentService::new(Arc::clone(&fixture.services))
+    let service = AgentService::new(fixture.services.clone())
         .with_model(Arc::new(
             ScriptedModel::new(vec![
                 delegate_step("call_1", "Fitting the ramp", "Take your time."),
@@ -842,7 +852,7 @@ async fn steering_mid_turn_prepares_every_assistant_row() {
 async fn rehydration_replays_the_tool_result_to_the_model() {
     let fixture = fixture().await;
     let scripted = Arc::new(ScriptedModel::new(tool_then_reply()));
-    let service = AgentService::new(Arc::clone(&fixture.services))
+    let service = AgentService::new(fixture.services.clone())
         .with_model(Arc::clone(&scripted) as Arc<dyn super::model::ModelClient>)
         .with_tools(ToolRegistry::new(vec![Arc::new(EchoTool)]));
     let mut stream = service.turn(&fixture.thread_id, "go".to_string().into());
@@ -876,7 +886,7 @@ async fn a_live_turn_runs_a_tool_and_answers_from_its_result() {
     let key = std::env::var(super::model::Provider::VercelAiGateway.key_env_var())
         .expect("no gateway credential: set LUMA_AI_GATEWAY_API_KEY to smoke-test");
     let fixture = fixture().await;
-    let service = AgentService::new(Arc::clone(&fixture.services))
+    let service = AgentService::new(fixture.services.clone())
         .with_model(Arc::new(super::model::anthropic::AnthropicClient::gateway(
             key,
         )))
@@ -958,8 +968,8 @@ async fn dropping_the_stream_stops_the_turn() {
 async fn a_python_call_is_attributed_to_the_durable_user_turn() {
     let fixture = fixture().await;
     // No `with_tools`: the real registry, so the real python tool runs.
-    let service = AgentService::new(Arc::clone(&fixture.services)).with_model(Arc::new(
-        ScriptedModel::new(vec![
+    let service =
+        AgentService::new(fixture.services.clone()).with_model(Arc::new(ScriptedModel::new(vec![
             vec![
                 ModelEvent::ToolCallStarted {
                     id: "call_1".into(),
@@ -984,8 +994,7 @@ async fn a_python_call_is_attributed_to_the_durable_user_turn() {
                     usage: Usage::default(),
                 },
             ],
-        ]),
-    ));
+        ])));
     let mut stream = service.turn(&fixture.thread_id, "analyse it".to_string().into());
     let events = drain(&mut stream).await;
 

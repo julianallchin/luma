@@ -45,7 +45,10 @@ pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
 pub use error::CommandError;
 pub use services::system_track_sources;
-pub use services::{AppServices, EventSink, Events, Host, HostControl, TrackSources};
+pub(crate) use services::WeakServices;
+pub use services::{
+    AppServices, EventSink, Events, Host, HostControl, SharedServices, TrackSources,
+};
 pub(crate) use tauri_host::{tauri_events, tauri_host};
 
 use serde::de::DeserializeOwned;
@@ -77,7 +80,7 @@ macro_rules! commands {
             $(
                 #[tauri::command]
                 pub async fn $name(
-                    services: tauri::State<'_, std::sync::Arc<AppServices>>,
+                    services: tauri::State<'_, SharedServices>,
                     $($arg: $ty,)*
                 ) -> Result<$ret, String> {
                     handlers::$domain::$name(&services, $($arg),*)

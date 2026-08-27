@@ -475,7 +475,7 @@ mod import_tests {
         std::fs::write(path, bytes).unwrap();
     }
 
-    async fn services(directory: &Path, events: Events) -> Arc<AppServices> {
+    async fn services(directory: &Path, events: Events) -> crate::dispatch::SharedServices {
         let db = database::init_app_db_at(directory).await.unwrap();
         let state_db = state::init_state_db_at(directory).await.unwrap();
         auth::bootstrap_host_admission(&db.0, &state_db.0)
@@ -488,10 +488,9 @@ mod import_tests {
                 Arc::new(|| Err("no Python here".to_string())),
             ),
         );
-        Arc::new(
-            AppServices::headless(db, state_db, storage, directory.to_path_buf(), workspaces)
-                .with_events(events),
-        )
+        AppServices::headless(db, state_db, storage, directory.to_path_buf(), workspaces)
+            .with_events(events)
+            .into_shared()
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -509,7 +508,7 @@ mod import_tests {
             }),
         )
         .await;
-        let task_services = Arc::clone(&services);
+        let task_services = services.clone();
         let import = tokio::spawn(async move {
             import_tracks(&task_services, vec![audio.to_string_lossy().into_owned()]).await
         });

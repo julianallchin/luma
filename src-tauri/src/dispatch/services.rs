@@ -275,6 +275,48 @@ pub struct AppServices {
     pub(crate) fixture_principal: Option<String>,
 }
 
+/// An owning handle to services whose [`TurnRegistry`] can reach them again.
+///
+/// [`AppServices::into_shared`] is the only constructor, and it is what
+/// installs that back-reference, so the handle the agent's turn loop needs
+/// cannot be forged with a bare `Arc::new`: a host that skips the wiring fails
+/// to compile instead of failing every `agent_turn_start` at runtime.
+///
+/// Derefs to [`AppServices`], so a `&SharedServices` is a `&AppServices`
+/// everywhere a handler wants one.
+///
+/// [`TurnRegistry`]: crate::agent::host::TurnRegistry
+#[derive(Clone)]
+pub struct SharedServices(Arc<AppServices>);
+
+impl SharedServices {
+    /// A non-owning handle, for the registry the services themselves hold —
+    /// an owning one would be a cycle.
+    pub(crate) fn downgrade(&self) -> WeakServices {
+        WeakServices(Arc::downgrade(&self.0))
+    }
+}
+
+impl std::ops::Deref for SharedServices {
+    type Target = AppServices;
+
+    fn deref(&self) -> &AppServices {
+        &self.0
+    }
+}
+
+/// The back-reference [`SharedServices::downgrade`] hands the turn registry.
+///
+/// Upgrading is the only other way to obtain a [`SharedServices`], and it can
+/// only yield one that was constructed properly in the first place.
+pub(crate) struct WeakServices(std::sync::Weak<AppServices>);
+
+impl WeakServices {
+    pub(crate) fn upgrade(&self) -> Option<SharedServices> {
+        self.0.upgrade().map(SharedServices)
+    }
+}
+
 impl AppServices {
     /// Assemble the service set for a host that is not the Tauri app.
     ///
@@ -348,11 +390,10 @@ impl AppServices {
     ///
     /// The agent's turn loop outlives the command that starts it, so it cannot
     /// borrow a command body's `&AppServices`; a host that wants the
-    /// `agent_turn_*` commands hands ownership over here instead. Every other
-    /// host can ignore this.
+    /// `agent_turn_*` commands hands ownership over here instead.
     #[must_use]
-    pub fn into_shared(self) -> Arc<Self> {
-        let shared = Arc::new(self);
+    pub fn into_shared(self) -> SharedServices {
+        let shared = SharedServices(Arc::new(self));
         shared.agent_turns.attach(&shared);
         shared
     }
