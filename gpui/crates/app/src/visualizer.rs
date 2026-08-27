@@ -47,7 +47,6 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -59,9 +58,8 @@ use gpui::{
     Pixels, Point, RenderImage, ScrollWheelEvent, Window,
 };
 use gpui_component::scroll::ScrollableElement;
-use luma_lib::models::fixtures::FixtureDefinition;
-use luma_lib::models::stage::StagePiece;
 use luma_lib::models::universe::UniverseState;
+use luma_lib::stage_render;
 use luma_render::{
     assets, build_frame_with, coords,
     frame::{EditorObject, MeshData},
@@ -70,9 +68,10 @@ use luma_render::{
 };
 use luma_scene::{
     apply_rotation, apply_translation, bvh::MeshSource, hit_test_gizmo, selection_pivot,
-    snap_angle_15, Camera, ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, GizmoHandle, GizmoMode,
-    Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, ObjectKind, PivotMode, SceneGraph,
-    Selection, SelectionTarget, Transform, TransformTarget, TriMesh,
+    snap_angle_15, Camera, ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Framing, GizmoHandle,
+    GizmoMode, Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, ObjectKind,
+    PivotMode, SceneGraph, Selection, SelectionTarget, Transform, TransformTarget, TriMesh, View,
+    Viewfinder,
 };
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{ladder, Enabled};
@@ -83,8 +82,22 @@ use crate::{Library, LibraryError, Luma};
 
 /// The three.js `<Canvas camera>` the web visualizer mounts with, in three
 /// space: `position [0, 1, 3]`, target at the origin, 50° vertical field.
-const WEB_CAMERA_POSITION: Vec3 = Vec3::new(0.0, 1.0, 3.0);
 const FOV_Y_DEG: f32 = 50.0;
+
+/// Frame shape to fit against before the viewport has been laid out once.
+const DEFAULT_ASPECT: f32 = 16.0 / 9.0;
+
+/// How far the frame-stats overlay sits in from the viewport's top edge. It is
+/// a box in the corner, so it is a layout number and nothing else — see
+/// [`Visualizer::view_finder`] for why it buys no camera distance.
+const STATS_OVERLAY_TOP: Pixels = px(12.);
+/// How far the floating toolbar sits in from the viewport's bottom edge. Read
+/// by the overlay that draws it *and* by the camera fit, so the two cannot
+/// drift: a rig framed to the whole pane is framed partly under this chrome.
+const TOOLBAR_OVERLAY_BOTTOM: Pixels = px(16.);
+/// Height of one control slab plus the hairline trim around it — the vertical
+/// span the toolbar occupies, and so the band the fit keeps clear.
+const OVERLAY_BAND: Pixels = px(30.);
 
 /// `zoomSpeed={0.5}` on the web's `<OrbitControls>`, and three's own
 /// `getZoomScale` base — `0.95 ** (zoomSpeed · distance · 0.01)`.
@@ -360,6 +373,12 @@ pub(crate) struct Visualizer {
     /// The rig's extent, which is what the camera is framed and clamped
     /// against. Set when the rig lands; [`Framing::default`] until then.
     framing: Framing,
+    /// Set when a rig lands, cleared by the first prepaint that knows the
+    /// viewport's shape. The opening pose is fitted to the *frame*, and
+    /// nothing knows the frame's aspect until it has been laid out once — so
+    /// framing is owed rather than done, and a rig that loads before the first
+    /// layout still opens fitted instead of guessed.
+    owes_opening_pose: bool,
     /// The button held, and where the pointer last was — `MouseMoveEvent`
     /// carries no delta.
     drag: Option<(Drag, Point<Pixels>)>,
@@ -826,8 +845,12 @@ impl Visualizer {
             subject,
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
-            camera: Framing::default().opening_camera(),
+            camera: opening_camera(
+                &Framing::default(),
+                &Viewfinder::new(FOV_Y_DEG, DEFAULT_ASPECT),
+            ),
             framing: Framing::default(),
+            owes_opening_pose: false,
             drag: None,
             editor_drag: None,
             selection: Selection::default(),
@@ -881,11 +904,12 @@ impl Visualizer {
         let definitions: BTreeMap<_, _> = rig
             .definitions
             .iter()
-            .map(|(path, def)| (path.clone(), definition(def)))
+            .map(|(path, def)| (path.clone(), stage_render::definition(def)))
             .collect();
         let scene = scene(&rig, &definitions);
-        self.framing = Framing::of(&scene);
-        self.camera = self.framing.opening_camera();
+        self.framing = scene.framing(&definitions);
+        self.camera = opening_camera(&self.framing, &self.view_finder());
+        self.owes_opening_pose = true;
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
         stage.scene = Some(scene);
@@ -917,7 +941,7 @@ impl Visualizer {
             viewport: AsyncViewport::new(),
             work: StageWork::default(),
             submission: Submission::default(),
-            assets: assets::Library::new(meshes_root()),
+            assets: assets::Library::new(stage_render::meshes_root(None)),
             picks: PickTimeline::default(),
             pick_meshes: HashMap::new(),
         });
@@ -941,8 +965,35 @@ impl Visualizer {
         }
     }
 
+    /// The frame every camera in this viewport is fitted to: its shape, and the
+    /// band of it the floating chrome covers.
+    ///
+    /// Only chrome that *spans* an edge earns an inset, because that is what an
+    /// inset claims — this band of the frame is covered. The toolbar's row runs
+    /// the full width and is centred on exactly where a fitted rig's floor
+    /// lands, so it does. The frame-stats readout is a box in the top-left
+    /// corner and does not: reserving the whole top band for it cost 19% of the
+    /// pane's height in the 943×220 viewport the pixel suite opens, which with
+    /// the toolbar's own band left the fit 55% of the frame to work in and drew
+    /// the rig at half size. Chrome that floats in a corner frames as
+    /// background.
+    ///
+    /// Before the first layout there is no shape to read, so a landscape
+    /// default stands in and [`Visualizer::owes_opening_pose`] re-fits once
+    /// there is one.
+    fn view_finder(&self) -> Viewfinder {
+        let (w, h) = (f32::from(self.size.width), f32::from(self.size.height));
+        if w <= 0.0 || h <= 0.0 {
+            return Viewfinder::new(FOV_Y_DEG, DEFAULT_ASPECT);
+        }
+        let toolbar = (f32::from(TOOLBAR_OVERLAY_BOTTOM) + f32::from(OVERLAY_BAND)) / h;
+        Viewfinder::new(FOV_Y_DEG, w / h).inset(Insets::vertical(0.0, toolbar))
+    }
+
     fn dolly(&mut self, factor: f32) {
-        let (near, far) = self.framing.radius_bounds();
+        let (near, far) = self
+            .framing
+            .radius_bounds(opening_camera(&self.framing, &self.view_finder()).radius);
         self.camera.radius = (self.camera.radius * factor).clamp(near, far);
     }
 
@@ -965,8 +1016,7 @@ impl Visualizer {
                 // Three lets phi run the full half-turn, which on a stage means
                 // orbiting under the floor and out the other side. Clamped to
                 // the quadrant that can actually see a rig.
-                self.camera.polar =
-                    (self.camera.polar - turn * dy).clamp(Framing::MIN_POLAR, Framing::MAX_POLAR);
+                self.camera.polar = Framing::clamp_polar(self.camera.polar - turn * dy);
             }
             // three's perspective pan: one screen height of drag moves the
             // target by the full visible extent at the target's depth, so a
@@ -1222,127 +1272,16 @@ fn set_object_pose(
     }
 }
 
+/// The pose a rig opens at: [`View::Front`] of its own framing, fitted to the
+/// frame it will be drawn into.
+fn opening_camera(framing: &Framing, view: &Viewfinder) -> Camera {
+    Camera::for_view(View::Front, framing, None, view)
+}
+
 /// three's `getZoomScale`: exponential in the scroll distance, so ten small
 /// notches and one big flick land in the same place.
 fn zoom_scale(distance: f32) -> f32 {
     ZOOM_BASE.powf(ZOOM_SPEED * distance * 0.05)
-}
-
-/// What the camera has to fit, and what its orbit limits are measured against:
-/// a bounding sphere over the rig **and the floor under it**, in render-world
-/// space.
-///
-/// The floor projection of every fixture is part of the extent because a beam's
-/// pool is as much of the picture as the fixture that casts it — fitting the
-/// hardware alone frames a bank of movers and cuts off everything they light.
-///
-/// The web has no equivalent: its camera sits three metres from the origin
-/// whatever the venue contains, which is inside the beams of any real rig. That
-/// is what [`Visualizer::open`] used to inherit, and it is the whole of the
-/// "orbit walks into a flat red field" failure — a camera immersed in a cone
-/// sees one blown-out slab of colour, with the falloff and the pool off screen.
-#[derive(Clone, Copy)]
-struct Framing {
-    /// Centre of the bounding sphere; the orbit target.
-    target: Vec3,
-    /// Its radius, never zero — a one-fixture rig still needs a scale.
-    radius: f32,
-}
-
-impl Framing {
-    /// Keeps the eye off the +Z pole, where `look_at`'s Z up vector degenerates.
-    const MIN_POLAR: f32 = 0.12;
-    /// Keeps the eye above the target's horizon, and so out of the floor.
-    const MAX_POLAR: f32 = std::f32::consts::FRAC_PI_2 - 0.03;
-    /// Margin between the fitted sphere and the edges of the frame.
-    const FIT_MARGIN: f32 = 1.15;
-    /// How far outside the sphere a dolly may come. Inside it is inside the
-    /// beams.
-    const NEAR_MARGIN: f32 = 1.25;
-    /// Furthest out a dolly may go, as a multiple of the fit distance.
-    const FAR_MULTIPLE: f32 = 6.0;
-
-    fn of(scene: &scene_desc::Scene) -> Self {
-        let fixtures = scene
-            .fixtures
-            .iter()
-            .map(|f| coords::world_from_data(Vec3::from(f.pos)));
-        let points: Vec<Vec3> = fixtures
-            .clone()
-            // Where each fixture's light lands, so the pools are in frame.
-            .map(|p| p.with_z(0.0))
-            .chain(fixtures)
-            .chain(
-                scene
-                    .pieces
-                    .iter()
-                    .map(|p| coords::world_from_data(Vec3::from(p.pos))),
-            )
-            .collect();
-        let Some(&first) = points.first() else {
-            return Self {
-                target: Vec3::ZERO,
-                radius: 1.0,
-            };
-        };
-        // Centre of the AABB rather than the centroid: a rig with twenty
-        // fixtures on one truss and one on the far wall is still one rig, and
-        // the centroid would frame the truss and lose the wall.
-        let (min, max) = points
-            .iter()
-            .fold((first, first), |(lo, hi), &p| (lo.min(p), hi.max(p)));
-        let target = (min + max) * 0.5;
-        let radius = points
-            .iter()
-            .fold(0.0f32, |r, &p| r.max((p - target).length()))
-            .max(1.0);
-        Self { target, radius }
-    }
-
-    /// Orbit distance that puts the whole sphere inside the vertical field.
-    ///
-    /// Vertical because the viewport is a wide centre pane; a pane narrower
-    /// than it is tall would clip the rig horizontally, and zooming out is the
-    /// answer to that rather than a fit that reflows on every resize.
-    fn fit_distance(&self) -> f32 {
-        self.radius * Self::FIT_MARGIN / (FOV_Y_DEG.to_radians() / 2.0).sin()
-    }
-
-    /// The camera pose this rig opens at: the web's viewing direction, at a
-    /// distance that fits.
-    fn opening_camera(&self) -> Camera {
-        let eye = coords::world_from_three(WEB_CAMERA_POSITION);
-        Camera {
-            target: self.target,
-            radius: self.fit_distance(),
-            azimuth: eye.y.atan2(eye.x),
-            polar: (eye.z / eye.length())
-                .acos()
-                .clamp(Self::MIN_POLAR, Self::MAX_POLAR),
-            fov_y_deg: FOV_Y_DEG,
-            znear: 0.1,
-        }
-    }
-
-    /// Radii a dolly may reach: never inside the rig, never so far out that the
-    /// scene is a speck with no way back.
-    fn radius_bounds(&self) -> (f32, f32) {
-        (
-            (self.radius * Self::NEAR_MARGIN).max(0.5),
-            self.fit_distance() * Self::FAR_MULTIPLE,
-        )
-    }
-}
-
-impl Default for Framing {
-    /// The scale to use before a rig has loaded — nothing is drawn at that
-    /// point, so only the units matter.
-    fn default() -> Self {
-        Self {
-            target: Vec3::ZERO,
-            radius: 4.0,
-        }
-    }
 }
 
 // -- the venue, in the renderer's vocabulary ---------------------------------
@@ -1381,105 +1320,8 @@ fn scene(rig: &Rig, definitions: &BTreeMap<String, scene_desc::Definition>) -> s
                 rot: [f.rot_x as f32, f.rot_y as f32, f.rot_z as f32],
             })
             .collect(),
-        pieces: flatten_pieces(&rig.pieces),
+        pieces: stage_render::flatten_pieces(&rig.pieces),
         state: BTreeMap::new(),
-    }
-}
-
-/// Resolve every piece's parent chain into a world pose.
-///
-/// A `StagePiece` with a `parent_piece_id` holds its pose in *parent-local*
-/// space, but [`scene_desc::Piece`] has no parent link — the golden dump
-/// flattens the chain on the TypeScript side (`stage/lib/tree.ts`). Flattening
-/// here rather than teaching the renderer about parents is what keeps its scene
-/// flat, and keeps transform composition in one place instead of two.
-///
-/// A dangling or cyclic parent leaves the piece at its local pose rather than
-/// dropping it: a deck in the wrong place is debuggable, a deck that vanished
-/// is not.
-fn flatten_pieces(pieces: &[StagePiece]) -> Vec<scene_desc::Piece> {
-    let by_id: std::collections::HashMap<&str, &StagePiece> =
-        pieces.iter().map(|p| (p.id.as_str(), p)).collect();
-    pieces
-        .iter()
-        .map(|piece| {
-            let mut model = local_matrix(piece);
-            let mut scale = piece.scale as f32;
-            let mut parent = piece.parent_piece_id.as_deref();
-            // A chain can be no longer than the list; anything more is a cycle.
-            let mut budget = pieces.len();
-            while let Some(id) = parent {
-                let (Some(up), 1..) = (by_id.get(id), budget) else {
-                    break;
-                };
-                budget -= 1;
-                model = local_matrix(up) * model;
-                scale *= up.scale as f32;
-                parent = up.parent_piece_id.as_deref();
-            }
-            let (pos, rot) = coords::data_pose_of(model);
-            scene_desc::Piece {
-                id: piece.id.clone(),
-                mesh_path: piece.mesh_path.clone(),
-                pos,
-                rot,
-                scale,
-            }
-        })
-        .collect()
-}
-
-/// One piece's own transform, in its parent's space — or the world's, with no
-/// parent.
-///
-/// Built in **three space**, because that is the space these poses compose in:
-/// three.js nests each piece's group inside its parent's, and the `(x, z, y)`
-/// swap between the two spaces is a mirror. Composing a chain in data space with
-/// the stored Euler triple applied as-is is not the same transform — it lands
-/// each attached piece reflected across its parent's Y axis.
-fn local_matrix(piece: &StagePiece) -> Mat4 {
-    coords::three_pose_from_data(
-        [piece.pos_x as f32, piece.pos_y as f32, piece.pos_z as f32],
-        [piece.rot_x as f32, piece.rot_y as f32, piece.rot_z as f32],
-    ) * Mat4::from_scale(Vec3::splat(piece.scale as f32))
-}
-
-/// The QLC+ subset the renderer reads, out of the QLC+ model Luma parsed.
-///
-/// `luma_lib::models::fixtures` and [`scene_desc`] are the same concept — a
-/// `.qxf` file — declared twice, and this function is the standing cost of
-/// that. It should collapse to one set of types that the golden JSON also
-/// deserialises into.
-fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
-    scene_desc::Definition {
-        kind: def.type_.clone(),
-        modes: def
-            .modes
-            .iter()
-            .map(|mode| scene_desc::Mode {
-                name: mode.name.clone(),
-                // Only the length is read (`Definition::head_count`); the
-                // renderer's head is deliberately opaque.
-                heads: mode.heads.iter().map(|_| serde_json::Value::Null).collect(),
-            })
-            .collect(),
-        physical: def.physical.as_ref().map(|p| scene_desc::Physical {
-            dimensions: p.dimensions.as_ref().map(|d| scene_desc::Dimensions {
-                width: d.width,
-                height: d.height,
-                depth: d.depth,
-            }),
-            layout: p.layout.as_ref().map(|l| scene_desc::Layout {
-                width: l.width,
-                height: l.height,
-            }),
-            // Zero is the renderer's "unknown", which is what an absent QLC+
-            // attribute means.
-            lens: p.lens.as_ref().map(|l| scene_desc::Lens {
-                degrees_min: l.degrees_min.unwrap_or(0.0),
-                degrees_max: l.degrees_max.unwrap_or(0.0),
-            }),
-        }),
     }
 }
 
@@ -1882,7 +1724,7 @@ impl Gpu {
         let mut frame = build_frame_with(
             scene,
             definitions,
-            &|id, head| lookup(state, id, head),
+            &|id, head| stage_render::primitive_state(state, id, head),
             time,
             &mut self.assets,
         )
@@ -2065,33 +1907,6 @@ fn install_rotation_gizmo(frame: &mut luma_render::Frame, pivot: Option<Vec3>) {
     }
 }
 
-/// One head's state out of an evaluated universe.
-///
-/// The eval engine keys a single-head fixture by its bare id and a multi-head
-/// one by `"<id>:<head>"`; the renderer asks for `(id, head)` and does not know
-/// which it has. Answering both here is what lets it stay ignorant.
-fn lookup(
-    state: Option<&UniverseState>,
-    id: &str,
-    head: usize,
-) -> Option<scene_desc::PrimitiveState> {
-    let state = state?;
-    let p = state
-        .primitives
-        .get(&format!("{id}:{head}"))
-        .or_else(|| state.primitives.get(id))?;
-    Some(scene_desc::PrimitiveState {
-        dimmer: p.dimmer,
-        color: p.color,
-        strobe: p.strobe,
-        position: p.position,
-        // Fixture wheel slots are not in `UniverseState` yet. Open is the
-        // explicit identity until that evaluated-state contract grows them.
-        gobo: 0,
-        gobo_rotation: 0.0,
-    })
-}
-
 /// Whether a stage may build a renderer, from
 /// [`Runtime::stage_gpu`](luma_ui::runtime::Runtime).
 ///
@@ -2111,21 +1926,6 @@ fn lookup(
 /// direction for a switch whose wrong value is invisible in a screenshot.
 fn stage_gpu_enabled() -> bool {
     luma_ui::runtime::Runtime::with(luma_ui::runtime::Runtime::stage_gpu_enabled)
-}
-
-/// Where the stage GLBs live. Mirrors `library`'s fixtures-root resolution: the
-/// repo's own copy in a dev build, overridable for a fixture with its own.
-fn meshes_root() -> PathBuf {
-    if let Some(path) = std::env::var_os("LUMA_MESHES_ROOT") {
-        return PathBuf::from(path);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .map_or_else(
-            || PathBuf::from("resources/meshes"),
-            |repo| repo.join("resources/meshes"),
-        )
 }
 
 // -- the screen --------------------------------------------------------------
@@ -2732,7 +2532,7 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
     };
     div()
         .absolute()
-        .bottom(px(16.))
+        .bottom(TOOLBAR_OVERLAY_BOTTOM)
         .left_0()
         .right_0()
         .flex()
@@ -2893,7 +2693,7 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
     };
     div()
         .absolute()
-        .top(px(12.))
+        .top(STATS_OVERLAY_TOP)
         .left(px(12.))
         .when(live, |el| {
             el.child(
@@ -3187,6 +2987,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                 if let Some(state) = this.visualizer_mut() {
                     state.size = bounds.size;
                     state.viewport_origin = bounds.origin;
+                    if std::mem::take(&mut state.owes_opening_pose) {
+                        state.camera = opening_camera(&state.framing, &state.view_finder());
+                    }
                 }
             });
             // The UI thread's own cadence, taken before anything in this
@@ -3704,142 +3507,6 @@ mod render_lab_tests {
         lab.set(LabValue::HazeResolution, 10.0);
         assert_eq!(lab.haze_steps, 1);
         assert_eq!(lab.haze_resolution, 1.0);
-    }
-}
-
-#[cfg(test)]
-mod stage_piece_tests {
-    use super::*;
-    use std::f32::consts::FRAC_PI_2;
-
-    fn piece(id: &str, pos: [f64; 3], rot: [f64; 3], parent: Option<&str>) -> StagePiece {
-        StagePiece {
-            id: id.into(),
-            uid: None,
-            venue_id: "v".into(),
-            mesh_path: "stage_lab/truss_q30_box.glb".into(),
-            kind: "truss".into(),
-            label: None,
-            pos_x: pos[0],
-            pos_y: pos[1],
-            pos_z: pos[2],
-            rot_x: rot[0],
-            rot_y: rot[1],
-            rot_z: rot[2],
-            scale: 1.0,
-            parent_piece_id: parent.map(Into::into),
-        }
-    }
-
-    fn find<'a>(out: &'a [scene_desc::Piece], id: &str) -> &'a scene_desc::Piece {
-        out.iter()
-            .find(|p| p.id == id)
-            .expect("piece should survive flattening")
-    }
-
-    fn close(got: [f32; 3], want: [f32; 3]) {
-        assert!(
-            Vec3::from(got).abs_diff_eq(Vec3::from(want), 1e-5),
-            "got {got:?}, want {want:?}"
-        );
-    }
-
-    #[test]
-    fn an_unattached_piece_keeps_its_stored_pose() {
-        let out = flatten_pieces(&[piece("deck", [1.0, 2.0, 0.5], [0.0, 0.0, 0.7], None)]);
-        close(find(&out, "deck").pos, [1.0, 2.0, 0.5]);
-        close(find(&out, "deck").rot, [0.0, 0.0, 0.7]);
-    }
-
-    #[test]
-    fn an_attached_piece_lands_where_threejs_nesting_puts_it() {
-        // The regression. Parent yawed a quarter turn about stored Z, child one
-        // metre along the parent's local +X.
-        //
-        // three.js builds the parent group as `rotation.set(rotX, rotZ, rotY)`,
-        // so a stored Z of +90 degrees is `Ry(+90)` in three space, which takes
-        // the child's local +X to three `-Z` — data `-Y`. The child therefore
-        // sits one metre *toward the audience* of the parent, at (1, 1, 0).
-        //
-        // Composing the chain in data space instead (the old bug) applies
-        // `Rz(+90)` and sends the child to (1, 3, 0): mirrored across the
-        // parent's Y axis, two metres out. A truss attached to a rotated deck
-        // was landing there.
-        let out = flatten_pieces(&[
-            piece("deck", [1.0, 2.0, 0.0], [0.0, 0.0, FRAC_PI_2 as f64], None),
-            piece("truss", [1.0, 0.0, 0.0], [0.0; 3], Some("deck")),
-        ]);
-        close(find(&out, "truss").pos, [1.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn a_parents_rotation_carries_into_the_child() {
-        // Position is not the only half that composes: an unrotated child of a
-        // rotated parent must come out carrying the parent's rotation, or the
-        // truss is in the right place pointing the wrong way.
-        //
-        // Asserted as a *pose* rather than as an Euler triple. A stored Z of 90
-        // degrees is `Ry(90)` in three space, which is exactly `euler_xyz_of`'s
-        // gimbal singularity: the triple it recovers there rebuilds the right
-        // matrix but is only good to about four digits, so comparing triples
-        // would be testing the round-trip's precision, not the composition.
-        // The residual here is ~3e-4 rad (0.02 degrees) — invisible on a truss,
-        // but it is why the tolerance is not tighter.
-        let out = flatten_pieces(&[
-            piece("deck", [0.0; 3], [0.0, 0.0, FRAC_PI_2 as f64], None),
-            piece("truss", [0.0; 3], [0.0; 3], Some("deck")),
-        ]);
-        let truss = find(&out, "truss");
-        let got = coords::three_pose_from_data(truss.pos, truss.rot);
-        let want = coords::three_pose_from_data([0.0; 3], [0.0, 0.0, FRAC_PI_2]);
-        let probe = Vec3::new(1.0, 0.0, 0.0);
-        assert!(
-            got.transform_point3(probe)
-                .abs_diff_eq(want.transform_point3(probe), 1e-3),
-            "child pose {:?} does not carry the parent's rotation",
-            got.transform_point3(probe)
-        );
-    }
-
-    #[test]
-    fn a_parents_scale_scales_the_childs_offset_and_its_own_scale() {
-        let mut deck = piece("deck", [0.0; 3], [0.0; 3], None);
-        deck.scale = 2.0;
-        let out = flatten_pieces(&[
-            deck,
-            piece("truss", [1.0, 0.0, 0.0], [0.0; 3], Some("deck")),
-        ]);
-        close(find(&out, "truss").pos, [2.0, 0.0, 0.0]);
-        assert!((find(&out, "truss").scale - 2.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn a_chain_composes_through_every_ancestor() {
-        // Two quarter turns about stored Z compose to a half turn, so the
-        // grandchild's local +X points back along the root's -X.
-        let out = flatten_pieces(&[
-            piece("a", [0.0; 3], [0.0, 0.0, FRAC_PI_2 as f64], None),
-            piece("b", [0.0; 3], [0.0, 0.0, FRAC_PI_2 as f64], Some("a")),
-            piece("c", [1.0, 0.0, 0.0], [0.0; 3], Some("b")),
-        ]);
-        close(find(&out, "c").pos, [-1.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn a_cyclic_parent_leaves_the_piece_visible_at_its_local_pose() {
-        // Documented behaviour: a deck in the wrong place is debuggable, a deck
-        // that vanished is not.
-        let out = flatten_pieces(&[
-            piece("a", [1.0, 0.0, 0.0], [0.0; 3], Some("b")),
-            piece("b", [0.0, 1.0, 0.0], [0.0; 3], Some("a")),
-        ]);
-        assert_eq!(out.len(), 2);
-    }
-
-    #[test]
-    fn a_dangling_parent_leaves_the_piece_at_its_local_pose() {
-        let out = flatten_pieces(&[piece("truss", [1.0, 2.0, 3.0], [0.0; 3], Some("gone"))]);
-        close(find(&out, "truss").pos, [1.0, 2.0, 3.0]);
     }
 }
 

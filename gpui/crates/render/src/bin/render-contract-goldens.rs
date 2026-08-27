@@ -198,6 +198,7 @@ fn material_scenes() -> Vec<Scene> {
             pieces: vec![Piece {
                 id: "lab".into(),
                 mesh_path: format!("../../gpui/crates/render/goldens/{mesh_path}"),
+                kind: "floor".into(),
                 pos: [0.0; 3],
                 rot: [0.0; 3],
                 scale: if mesh_path == "textured-pbr.gltf" {
@@ -262,6 +263,7 @@ fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
             Piece {
                 id: "receiver".into(),
                 mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                kind: "floor".into(),
                 pos: [0.0, 0.0, 0.0],
                 rot: [0.0; 3],
                 scale: 2.4,
@@ -269,6 +271,7 @@ fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
             Piece {
                 id: "caster".into(),
                 mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                kind: "speaker".into(),
                 pos: [0.0, 1.1, 0.0],
                 rot: [0.0, 0.35, 0.0],
                 scale: 1.2,
@@ -291,7 +294,7 @@ fn render_case(
     // GPU completion and readback: it is the capture-ready barrier.
     let pixels = renderer.render(&frame, width, height, DEFAULT_SUBFRAMES)?;
     let image = output.join(scene.frame_name(TIME));
-    write_png(&image, &pixels, width, height)?;
+    luma_render::image_out::write(&image, &pixels, width, height)?;
     let descriptor = catalogue.frame_descriptor(scene, TIME, DEFAULT_SUBFRAMES)?;
     write_json(&output.join(scene.descriptor_name(TIME)), &descriptor)?;
     println!(
@@ -324,15 +327,6 @@ fn copy_definitions(
     Ok(serde_json::from_value(serde_json::to_value(
         &catalogue.definitions,
     )?)?)
-}
-
-fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> anyhow::Result<()> {
-    let file = std::fs::File::create(path)?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(rgba)?;
-    Ok(())
 }
 
 fn write_json(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {

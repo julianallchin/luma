@@ -25,6 +25,7 @@
 pub mod aabb;
 pub mod bvh;
 pub mod camera;
+pub mod framing;
 pub mod gesture;
 pub mod gizmo;
 pub mod graph;
@@ -34,7 +35,8 @@ pub mod sockets;
 
 pub use aabb::Aabb;
 pub use bvh::{MeshBvh, Ray, RayHit, TriMesh};
-pub use camera::Camera;
+pub use camera::{Camera, UnknownView, View, EYE_HEIGHT_M};
+pub use framing::{Beam, Framing, Insets, Viewfinder};
 pub use gesture::{ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Marquee, ScreenRect};
 pub use gizmo::{
     apply_rotation, apply_translation, hit_test_gizmo, selection_pivot, snap_angle_15, Axis,

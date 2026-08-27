@@ -5,6 +5,7 @@ members = [
     "crates/rekordbox",
     "crates/prodjlink",
     "crates/fixture-kinematics",
+    "crates/mcp-stdio",
 ]
 
 [package]
@@ -88,6 +89,18 @@ walkdir = "2.5.0"
 stagelinq = { path = "crates/stagelinq" }
 rekordbox = { path = "crates/rekordbox" }
 prodjlink = { path = "crates/prodjlink" }
+# MCP's stdio JSON-RPC vocabulary, shared with the GPUI harness's server.
+mcp-stdio = { path = "crates/mcp-stdio" }
+# The offscreen renderer, so `luma.venue.render(...)` in an agent's Python
+# workspace produces a PNG of the stage from the same renderer the desktop
+# viewport uses. It reaches across into the `gpui/` workspace; that direction is
+# safe because `luma-render` and `luma-scene` depend on nothing here but
+# `fixture-kinematics`.
+luma-render = { path = "../gpui/crates/render" }
+# The vector type those two speak. Pinned to their version by definition: a
+# second glam here would be a second, incompatible `Vec3`.
+glam = "0.30"
+luma-scene = { path = "../gpui/crates/scene" }
 chrono = "0.4"
 dirs = "5"
 tempfile = "3"

@@ -439,6 +439,22 @@ pub(crate) async fn fetch_scores(
         .map_err(|e| format!("Failed to fetch scores: {}", e))
 }
 
+/// Every persisted score row for a `(venue, track)`, opening the venue itself.
+///
+/// [`fetch_scores`] needs an already-authorized venue; callers outside the
+/// compositing pipeline have only ids, and this is the one place that gap is
+/// bridged rather than each of them re-deriving the access.
+pub(crate) async fn scores_for_track(
+    pool: &sqlx::SqlitePool,
+    venue_id: &str,
+    track_id: &str,
+) -> Result<Vec<TrackScore>, String> {
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id))
+        .await
+        .map_err(|error| format!("the venue is not available: {error}"))?;
+    fetch_scores(&mut access, track_id).await
+}
+
 /// Load beat grid for a track.
 pub(crate) async fn load_beat_grid(
     pool: &sqlx::SqlitePool,

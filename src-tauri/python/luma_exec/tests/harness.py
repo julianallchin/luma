@@ -215,6 +215,18 @@ def write_manifest(workspace: Path, revision: str, title: str) -> str:
                     }
                 }
             },
+            "venue": {
+                "id": "venue-synthetic",
+                "name": "Synthetic Room",
+                "views": [
+                    "front",
+                    "audience",
+                    "overhead",
+                    "quarter_left",
+                    "quarter_right",
+                    "dj",
+                ],
+            },
         },
         "artifacts": {
             "beats": {

@@ -18,6 +18,7 @@ pub mod eval;
 mod ffmpeg_env;
 pub mod fixtures;
 mod genre_worker;
+pub mod headless_host;
 pub mod host_audio;
 mod mert_worker;
 mod mixer_manager;
@@ -33,6 +34,7 @@ mod render_engine;
 mod root_worker;
 pub mod services;
 pub mod settings;
+pub mod stage_render;
 mod stagelinq_manager;
 mod stem_worker;
 pub mod storage;
@@ -320,6 +322,12 @@ pub fn run() {
                 }
             }
 
+            // The one registry: the startup sweep, the sync host and the
+            // command services all read the same leases, so a workspace is
+            // never retired out from under a running child.
+            let subagents: std::sync::Arc<agent::subagent::SubagentRegistry> =
+                std::sync::Arc::default();
+
             // Sync engine — create after both DB pools are available
             let sync_engine = {
                 let db_ref: &database::Db = app.state::<database::Db>().inner();
@@ -348,6 +356,7 @@ pub fn run() {
                 events: dispatch::tauri_events(app_handle),
                         workspaces: workspaces.clone(),
                         graph_runs: graph_runs.clone(),
+                        subagents: subagents.clone(),
                     },
                     shutdown_rx,
                 ));
@@ -409,17 +418,20 @@ pub fn run() {
 
             // A thread deletion is a durable terminal state, not an
             // in-memory UI gesture. Resume any cleanup interrupted by a crash
-            // now that all three owned-resource services are available.
+            // now that all owned-resource services are available. The registry
+            // is still empty here, so every active subagent workspace is
+            // stranded by definition.
             let db = app.state::<database::Db>().inner().clone();
-            if let Err(error) = tauri::async_runtime::block_on(
-                agent_execution::thread_cleanup::recover_deleting_agent_threads(
+            if let Err(error) =
+                tauri::async_runtime::block_on(agent_execution::thread_cleanup::recover_threads(
                     &db.0,
                     &authored,
                     &workspaces,
                     &graph_runs,
-                ),
-            ) {
-                eprintln!("[agent-threads] startup deletion recovery: {error}");
+                    &subagents,
+                ))
+            {
+                eprintln!("[agent-threads] startup recovery: {error}");
             }
 
             let fixtures_root = services::fixtures::resolve_fixtures_root(app_handle)?;
@@ -463,6 +475,7 @@ pub fn run() {
                 fixtures_root: fixtures_root.clone(),
                 fixtures: std::sync::Arc::clone(&fixture_state),
                 agent_turns: std::sync::Arc::default(),
+                subagents,
                 events: dispatch::tauri_events(app_handle),
                 host: dispatch::tauri_host(app_handle),
                 fixture_principal: None,
@@ -710,23 +723,23 @@ pub fn run() {
             dispatch::adapter::agent_thread_append_messages,
             dispatch::adapter::agent_thread_delete,
             dispatch::adapter::agent_thread_rename,
+            dispatch::adapter::agent_thread_set_actor,
             dispatch::adapter::agent_turn_start,
             dispatch::adapter::agent_turn_cancel,
             dispatch::adapter::agent_steer,
+            dispatch::adapter::skills_listing,
+            dispatch::adapter::get_skill,
             // Relational authored document history
             dispatch::adapter::authored_state_prepare_turn,
             dispatch::adapter::authored_state_finalize_turn,
             dispatch::adapter::authored_state_recover_turns,
+            dispatch::adapter::authored_state_set_session_actor,
             dispatch::adapter::authored_state_list_history,
             dispatch::adapter::authored_state_restore,
-            dispatch::adapter::authored_state_current_revision,
             dispatch::adapter::authored_state_create_workspace,
-            dispatch::adapter::authored_state_fork_workspace,
             dispatch::adapter::authored_state_check_workspace,
-            dispatch::adapter::authored_state_write_workspace_graph,
             dispatch::adapter::authored_state_commit_workspace,
             dispatch::adapter::authored_state_merge_workspace,
-            dispatch::adapter::authored_state_merge_workspace_into_workspace,
             dispatch::adapter::authored_state_remove_workspace,
             // Agent code execution
             dispatch::adapter::run_python_cell,

@@ -76,6 +76,7 @@ fn blocker() -> Piece {
     Piece {
         id: "occluder".into(),
         mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        kind: "speaker".into(),
         pos: [0.0, 0.0, 0.8],
         rot: [0.0; 3],
         scale: 4.0,

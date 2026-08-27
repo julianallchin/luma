@@ -35,6 +35,7 @@ mod environment;
 pub mod frame;
 mod gpu;
 mod haze_field;
+pub mod image_out;
 pub mod light_index;
 pub mod luminaire;
 pub mod metrics;

@@ -325,6 +325,30 @@ impl Fixture {
             .await
             .unwrap();
         }
+        // A truss with a light hanging off it — the parent chain is the part
+        // `venue.pieces` has to flatten.
+        sqlx::query(
+            "INSERT INTO stage_pieces
+                (id, venue_id, mesh_path, kind, label, pos_x, pos_y, pos_z,
+                 rot_x, rot_y, rot_z, scale, parent_piece_id)
+             VALUES ('pie-truss', ?, 'stage_lab/truss.glb', 'truss', 'Front truss',
+                     1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, NULL)",
+        )
+        .bind(&self.venue_id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO stage_pieces
+                (id, venue_id, mesh_path, kind, label, pos_x, pos_y, pos_z,
+                 rot_x, rot_y, rot_z, scale, parent_piece_id)
+             VALUES ('pie-cdj', ?, 'stage_lab/cdj.glb', 'cdj', 'Deck',
+                     0.5, 0.0, 0.25, 0.0, 0.0, 0.0, 2.0, 'pie-truss')",
+        )
+        .bind(&self.venue_id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO fixture_groups (id, venue_id, name, axis_lr, display_order)
              VALUES ('grp-1', ?, 'front_wash', -1.0, 0)",
@@ -518,6 +542,18 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(at(&v, "venue.name"), "Basement");
     assert_eq!(at(&v, "venue.fixtures").as_array().unwrap().len(), 2);
     assert_eq!(at(&v, "venue.groups")[0]["name"], "front_wash");
+    let pieces = at(&v, "venue.pieces");
+    assert_eq!(pieces.as_array().unwrap().len(), 2);
+    assert_eq!(pieces[0]["id"], "pie-truss");
+    assert_eq!(pieces[0]["kind"], "truss");
+    assert_eq!(pieces[0]["position"], json!([1.0, 2.0, 3.0]));
+    assert!(pieces[0]["parent_id"].is_null());
+    // The child's stored pose is truss-local; the binding publishes the world
+    // pose the renderer draws, and inherits the parent's scale.
+    assert_eq!(pieces[1]["id"], "pie-cdj");
+    assert_eq!(pieces[1]["parent_id"], "pie-truss");
+    assert_eq!(pieces[1]["position"], json!([1.5, 2.0, 3.25]));
+    assert_eq!(pieces[1]["scale"], 2.0);
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
     // §10.2 authored timeline + patterns. Persistence vocabulary (`score`)
@@ -872,7 +908,7 @@ async fn timeline_visibility_does_not_imply_edit_authorization() {
 }
 
 #[tokio::test]
-async fn a_track_without_a_selected_timeline_is_readable_but_not_editable() {
+async fn a_venue_is_describable_without_a_score() {
     let f = Fixture::new().await;
     let mut scope = f.scope();
     scope.score_id = None;
@@ -882,6 +918,10 @@ async fn a_track_without_a_selected_timeline_is_readable_but_not_editable() {
 
     let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
+
+    // The room is not a property of the timeline: geometry stays bound.
+    assert_eq!(at(&v, "venue.id"), f.venue_id.as_str());
+    assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
     assert_eq!(at(&v, "track.id"), TRACK_ID);
     assert!(reason(&v, "track.revision").contains("no authored lighting timeline"));
@@ -897,7 +937,7 @@ async fn a_scope_with_no_venue_marks_the_venue_branch_unavailable() {
     scope.venue_id = None;
     let (manifest, _store) = f.assemble(&scope).await;
     let v = root(&manifest);
-    for path in ["venue.id", "venue.name", "venue.positions"] {
+    for path in ["venue.id", "venue.name", "venue.pieces", "venue.positions"] {
         assert!(reason(&v, path).contains("no venue"), "{path}");
     }
 }

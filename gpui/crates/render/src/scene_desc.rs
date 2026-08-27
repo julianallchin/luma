@@ -394,12 +394,36 @@ pub struct Piece {
     pub id: String,
     /// Path under `resources/meshes/`.
     pub mesh_path: String,
+    /// The venue's own vocabulary for what this is: `truss`, `stand`, `floor`,
+    /// `guardrail`, `speaker`, `cdj`, `mixer`. Read only by
+    /// [`Piece::is_rig_bearing`]; the renderer draws every piece the same way.
+    /// Absent in the golden catalogue, which predates it.
+    #[serde(default)]
+    pub kind: String,
     /// Position.
     pub pos: [f32; 3],
     /// Euler XYZ rotation.
     pub rot: [f32; 3],
     /// Uniform scale.
     pub scale: f32,
+}
+
+impl Piece {
+    /// Whether this piece is part of the *rig* — something fixtures hang on —
+    /// rather than part of the room around it.
+    ///
+    /// Only rig-bearing pieces are framed (see [`luma_scene::Framing`]). A
+    /// truss is where the lights are; a guardrail at the edge of the room is
+    /// six metres from anything that lights up, and letting it into the extent
+    /// is what drew a real club's rig at 30% of the frame.
+    ///
+    /// An unknown kind — including the empty one the goldens carry — is room.
+    /// The framing is a picture, and the failure mode of guessing wrong in
+    /// this direction is a tighter shot rather than an empty one.
+    #[must_use]
+    pub fn is_rig_bearing(&self) -> bool {
+        matches!(self.kind.as_str(), "truss" | "stand")
+    }
 }
 
 /// One head's evaluated state. Mirrors the eval engine's `PrimitiveState`
@@ -584,6 +608,51 @@ impl Catalogue {
 }
 
 impl Scene {
+    /// What a camera looking at this scene has to fit, in world space.
+    ///
+    /// The rule lives in [`luma_scene::Framing`]; this is the one place the
+    /// scene's data-space geometry is brought into world space for it, so the
+    /// desktop viewport and an offscreen `render(view=…)` frame the same rig
+    /// the same way.
+    ///
+    /// Every fixture contributes a [`luma_scene::Beam`] — the head and where
+    /// its light goes at the state this scene pins. The definitions are what
+    /// says *which way* that is (see [`beam_direction`](crate::luminaire::beam_direction)):
+    /// a pixel bar fires along its own length and a hazer not at all, and a
+    /// framing that assumed every fixture was a mover put a club's extent six
+    /// metres wider than its rig. Only *rig-bearing* pieces contribute a box;
+    /// see [`Piece::is_rig_bearing`].
+    ///
+    /// A piece's real size is in its mesh, which is loaded asynchronously and
+    /// is not part of a scene description — so its uniform `scale` stands in,
+    /// as a box that many metres wide *standing on* its origin. Standing on,
+    /// not centred: a piece's stored position is where it meets the floor, and
+    /// a box centred there would sink the framed floor below the room and pull
+    /// every camera back by the difference. It is the one approximation in
+    /// this function; threading measured mesh bounds through is a change to
+    /// these three lines and nothing else.
+    #[must_use]
+    pub fn framing(&self, definitions: &BTreeMap<String, Definition>) -> luma_scene::Framing {
+        luma_scene::Framing::of(
+            self.fixtures.iter().map(|f| luma_scene::Beam {
+                origin: crate::coords::world_from_data(glam::Vec3::from(f.pos)),
+                direction: crate::luminaire::beam_direction(
+                    definitions.get(&f.fixture_path),
+                    f.rot,
+                    self.primitive(&f.id, 0).map(|s| s.position),
+                ),
+            }),
+            self.pieces.iter().filter(|p| p.is_rig_bearing()).map(|p| {
+                let base = crate::coords::world_from_data(glam::Vec3::from(p.pos));
+                let half = p.scale.abs().max(0.25);
+                luma_scene::Aabb::new(
+                    base - glam::Vec3::new(half, half, 0.0),
+                    base + glam::Vec3::splat(half),
+                )
+            }),
+        )
+    }
+
     /// `<id>-<t>.png`, matching `harness/shot-visualizer.mjs`'s `stamp`.
     #[must_use]
     pub fn frame_name(&self, t: f32) -> String {
@@ -620,5 +689,89 @@ impl Definition {
         let d = self.physical.as_ref().and_then(|p| p.dimensions.as_ref());
         let axis = |v: f32| if v > 0.0 { v / 1000.0 } else { 0.3 };
         d.map_or([0.3; 3], |d| [axis(d.width), axis(d.height), axis(d.depth)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The catalogue the test rig is patched from: one moving head.
+    fn definitions() -> BTreeMap<String, Definition> {
+        BTreeMap::from([(
+            "Luma/Mover.qxf".to_string(),
+            Definition {
+                kind: "Moving Head".into(),
+                modes: Vec::new(),
+                physical: None,
+            },
+        )])
+    }
+
+    /// A rig of four movers over a deck, the shape every visualizer test uses.
+    fn scene() -> Scene {
+        Scene {
+            id: "framing".into(),
+            times: Vec::new(),
+            camera: CameraPose {
+                position: [0.0; 3],
+                target: [0.0; 3],
+            },
+            editing: false,
+            render: RenderSettings::dark_stage(50.0, 1.0),
+            selected_fixture_ids: Vec::new(),
+            fixtures: (0..4)
+                .map(|i| Fixture {
+                    id: format!("fixture-{i}"),
+                    fixture_path: "Luma/Mover.qxf".into(),
+                    mode_name: "Default".into(),
+                    pos: [i as f32 * 0.8 - 1.2, 0.0, 3.0],
+                    rot: [0.0; 3],
+                })
+                .collect(),
+            pieces: vec![
+                Piece {
+                    id: "deck".into(),
+                    mesh_path: "stage_lab/deck.glb".into(),
+                    kind: "floor".into(),
+                    pos: [0.0; 3],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                },
+                // Six metres out and irrelevant to the picture, the shape a
+                // real venue's guardrails and speakers have.
+                Piece {
+                    id: "rail".into(),
+                    mesh_path: "stage_lab/guardrail.glb".into(),
+                    kind: "guardrail".into(),
+                    pos: [6.0, 6.0, 0.0],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                },
+            ],
+            state: BTreeMap::new(),
+        }
+    }
+
+    /// Four movers with no pinned state hang at `z = 3` pointing down, so the
+    /// framed box is the rig *and its pools* — floor to head — without a deck
+    /// having to supply the bottom.
+    #[test]
+    fn beams_carry_the_box_down_to_the_floor() {
+        let framing = scene().framing(&definitions());
+        assert!(framing.floor_z().abs() < 1e-5, "{}", framing.floor_z());
+        assert!((framing.bounds().min.z).abs() < 1e-5);
+        let top = 3.0 + luma_scene::Framing::HEAD_RADIUS;
+        assert!((framing.bounds().max.z - top).abs() < 1e-5, "{framing:?}");
+    }
+
+    /// The room is drawn but not framed: a guardrail six metres out must not
+    /// widen the box, and the deck under the rig must not either.
+    #[test]
+    fn only_rig_bearing_pieces_are_framed() {
+        let extent = scene().framing(&definitions()).bounds();
+        let pad = luma_scene::Framing::HEAD_RADIUS;
+        assert!(extent.max.x < 1.2 + pad + 1e-4, "{extent:?}");
+        assert!(extent.max.y < pad + 1e-4, "{extent:?}");
     }
 }

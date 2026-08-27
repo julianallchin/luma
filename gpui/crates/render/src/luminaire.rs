@@ -10,6 +10,7 @@
 //! the port lands. It lives here for now because nothing else consumes it yet.
 
 use crate::scene_desc::Definition;
+use glam::{Mat3, Vec3};
 
 /// A fixture's optics, reduced to the two numbers the cone model needs.
 #[derive(Debug, Clone, Copy)]
@@ -181,6 +182,43 @@ impl ModelKind {
         };
         origin_offset + 0.3
     }
+}
+
+/// The world-space direction a fixture's beam leaves along, or zero for a
+/// fixture that has no beam.
+///
+/// The one definition of "where is this pointing", shared by the frame builder
+/// that draws the cone and by [`Scene::framing`](crate::scene_desc::Scene::framing)
+/// that frames it — two answers here would be a camera fitted to a beam the
+/// renderer does not draw, which is how a pixel bar aimed along its own length
+/// pulled a club's extent six metres sideways.
+///
+/// `position` is `[pan, tilt]` in degrees, or `None` for a head with no pinned
+/// state — the rest pose the mounting rotation alone describes. Pixel bars
+/// have no pan or tilt: they fire along their mounted `+Z`, and passing one
+/// here is not an error. A definition that is absent from the catalogue, or
+/// one whose type emits haze rather than light, has no direction at all.
+///
+/// Composed in three space, because both the mounting Euler triple and the
+/// pan/tilt gimbal are three-space conventions (`static-fixture.tsx`), then
+/// taken to world space once at the end.
+#[must_use]
+pub fn beam_direction(def: Option<&Definition>, rot: [f32; 3], position: Option<[f32; 2]>) -> Vec3 {
+    let Some(def) = def else {
+        return Vec3::ZERO;
+    };
+    let local = if is_procedural(def) {
+        Vec3::Z
+    } else if model_kind(def).is_some_and(ModelKind::emits_beam) {
+        let [pan, tilt] = position.unwrap_or([0.0, 0.0]);
+        Mat3::from_rotation_y(pan.to_radians())
+            * Mat3::from_rotation_x(-tilt.to_radians())
+            * Vec3::NEG_Y
+    } else {
+        return Vec3::ZERO;
+    };
+    let mount = crate::coords::euler_xyz(rot[0], rot[2], rot[1]);
+    (crate::coords::three_to_world_basis() * (mount * local)).normalize_or_zero()
 }
 
 /// LED bars and matrices are drawn from their layout rather than from a mesh.

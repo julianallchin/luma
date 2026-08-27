@@ -56,7 +56,9 @@
 			"ffmpeg-runtime/*",
 			"python/n2n/**/*",
 			"python/luma_exec/**/*",
-			"../resources/fixtures/**/*"
+			"../resources/fixtures/**/*",
+			"../resources/meshes/**/*",
+			"../resources/skills/**/*"
 		]
 	}
 }

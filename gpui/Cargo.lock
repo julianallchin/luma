@@ -3522,6 +3522,7 @@ dependencies = [
  "luma-app",
  "luma-chat",
  "luma-ui",
+ "mcp-stdio",
  "rquickjs",
  "serde",
  "serde_json",
@@ -5250,9 +5251,13 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "futures-util",
+ "glam",
  "libc",
  "lofty",
  "log",
+ "luma-render",
+ "luma-scene",
+ "mcp-stdio",
  "midir",
  "once_cell",
  "petgraph",
@@ -5316,6 +5321,7 @@ dependencies = [
 name = "luma-chat"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.7",
  "chrono",
  "futures",
  "gpui",
@@ -5543,6 +5549,13 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
  "rayon",
+]
+
+[[package]]
+name = "mcp-stdio"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

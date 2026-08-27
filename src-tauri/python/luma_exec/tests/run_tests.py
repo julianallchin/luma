@@ -192,6 +192,12 @@ def test_figures_are_captured_and_closed():
     assert figure["artifact_rel"].endswith(".png"), figure
     assert (Path(_STATE["workspace"]) / figure["artifact_rel"]).exists()
     assert figure["width"] == 1200 and figure["height"] == 400, figure
+    # Saved on the app's panel grey (--background), not matplotlib's white: a
+    # white rectangle in the dark chat panel is the bug this pins.
+    from PIL import Image  # a matplotlib dependency, so always present here
+
+    with Image.open(Path(_STATE["workspace"]) / figure["artifact_rel"]) as image:
+        assert image.convert("RGB").getpixel((0, 0)) == (39, 39, 39), image
     # A figure last-expression is shown as an image, not as a repr.
     assert result["repr"] is None, result
     # Figures were closed, so the next cell starts clean.
@@ -426,6 +432,47 @@ def test_synchronous_host_call_round_trip():
     )
     assert result["repr"] == "42", result
     assert seen == [("test.increment", {"value": 41})]
+
+
+@test
+def test_venue_render_is_a_host_call_that_becomes_a_cell_figure():
+    """A host-rendered PNG and a matplotlib figure share one figures list."""
+    client = fresh()
+    workspace = Path(_STATE["workspace"])
+
+    def render(method, payload):
+        assert method == "venue.render", method
+        (workspace / "outputs").mkdir(parents=True, exist_ok=True)
+        rel = "outputs/stage-protocol.png"
+        (workspace / rel).write_bytes(b"\x89PNG\r\n\x1a\n")
+        return {
+            "artifactRel": rel,
+            "width": payload["width"],
+            "height": payload["height"],
+            "view": payload["view"],
+            "t": payload["t"],
+        }
+
+    result = ok(
+        client.execute(
+            "shot = luma.venue.render(view='overhead', t=3.0, width=64, height=48)\n"
+            "plt.figure(figsize=(1, 1))\n"
+            "(luma.venue.views[0], shot.view, shot.path.exists(), repr(shot))",
+            REV1,
+            host_handler=render,
+        )
+    )
+    assert result["repr"] == (
+        "('front', 'overhead', True, '<StageImage overhead t=3s 64x48>')"
+    ), result
+    figures = result["figures"]
+    assert len(figures) == 2, figures
+    assert figures[0] == {
+        "artifact_rel": "outputs/stage-protocol.png",
+        "width": 64,
+        "height": 48,
+    }, figures
+    assert figures[1]["artifact_rel"].startswith("outputs/fig-"), figures
 
 
 @test
