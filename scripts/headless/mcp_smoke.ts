@@ -13,18 +13,13 @@
  * one so the managed venv is reused rather than rebuilt.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { createInterface } from "node:readline";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { REAL_CONFIG_DIR as REAL_CONFIG, startMcpServer, textOf } from "./mcp-client";
 import { normalizeScratchLibraryToPrincipal } from "./scratch-library";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const REAL_CONFIG = join(homedir(), "Library/Application Support/com.luma.luma");
-const REAL_CACHE = join(homedir(), "Library/Caches/com.luma.luma");
 const FIXTURE_PRINCIPAL = "headless-mcp-owner";
 /** What this fake client tells `open` is driving it, so the revisions it writes
  * name a model as well as a client. */
@@ -45,85 +40,6 @@ function record(name: string, outcome: Outcome, detail?: string) {
 
 function check(name: string, cond: boolean, detail?: string) {
 	record(name, cond ? "pass" : "fail", cond ? undefined : (detail ?? "assertion failed"));
-}
-
-// -----------------------------------------------------------------------------
-// The client half of MCP stdio
-// -----------------------------------------------------------------------------
-
-type Content = { type: string; text?: string; data?: string; mimeType?: string };
-type ToolResult = { content: Content[]; isError?: boolean };
-
-function startServer(configDir: string) {
-	const binary = process.env.LUMA_MCP_BIN ?? join(REPO_ROOT, "src-tauri/target/debug/luma-mcp");
-	if (!existsSync(binary)) {
-		throw new Error(
-			`luma-mcp not found at ${binary}. Build it first:\n` +
-				"  cargo build --bin luma-mcp --manifest-path src-tauri/Cargo.toml",
-		);
-	}
-	const child: ChildProcess = spawn(
-		binary,
-		[
-			"--config-dir",
-			configDir,
-			"--cache-dir",
-			REAL_CACHE,
-			"--fixture-principal",
-			FIXTURE_PRINCIPAL,
-		],
-		{ stdio: ["pipe", "pipe", "inherit"], cwd: REPO_ROOT },
-	);
-
-	const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
-	let nextId = 1;
-	let exited: Error | null = null;
-	child.on("exit", (code, signal) => {
-		exited = new Error(`luma-mcp exited (code=${code} signal=${signal})`);
-		for (const p of pending.values()) p.reject(exited);
-		pending.clear();
-	});
-
-	createInterface({ input: child.stdout as NodeJS.ReadableStream }).on("line", (line) => {
-		if (!line.trim()) return;
-		const frame = JSON.parse(line);
-		const p = pending.get(frame.id);
-		if (!p) return void process.stderr.write(`[mcp_smoke] unmatched frame: ${line}\n`);
-		pending.delete(frame.id);
-		if (frame.error) p.reject(new Error(JSON.stringify(frame.error)));
-		else p.resolve(frame.result);
-	});
-
-	const request = <T = any>(method: string, params?: unknown): Promise<T> => {
-		if (exited) return Promise.reject(exited);
-		const id = nextId++;
-		return new Promise<T>((res, rej) => {
-			pending.set(id, { resolve: res, reject: rej });
-			child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-		});
-	};
-
-	return {
-		request,
-		notify: (method: string) =>
-			child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`),
-		callTool: (name: string, args: Record<string, unknown> = {}) =>
-			request<ToolResult>("tools/call", { name, arguments: args }),
-		close: () =>
-			new Promise<void>((res) => {
-				if (exited) return res();
-				child.once("exit", () => res());
-				child.stdin?.end();
-				setTimeout(() => child.kill(), 5000).unref?.();
-			}),
-	};
-}
-
-function textOf(result: ToolResult): string {
-	return result.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text ?? "")
-		.join("\n");
 }
 
 // -----------------------------------------------------------------------------
@@ -150,22 +66,25 @@ if (!hasRealDb) console.log("no real luma.db — data-dependent checks will skip
 // The run
 // -----------------------------------------------------------------------------
 
-const server = startServer(scratch);
+const server = startMcpServer({
+	configDir: scratch,
+	fixturePrincipal: FIXTURE_PRINCIPAL,
+	clientInfo: { name: "mcp_smoke", version: "0" },
+});
 try {
 	console.log("\n[handshake]");
-	const initialized = await server.request("initialize", {
-		protocolVersion: "2024-11-05",
-		capabilities: {},
-		clientInfo: { name: "mcp_smoke", version: "0" },
-	});
+	const initialized = await server.handshake();
 	check("initialize names the server", initialized?.serverInfo?.name === "luma");
 	check("initialize declares tools", initialized?.capabilities?.tools !== undefined);
-	server.notify("notifications/initialized");
 	check("ping answers", JSON.stringify(await server.request("ping")) === "{}");
 
 	const listed = await server.request<{ tools: { name: string }[] }>("tools/list");
 	const names = listed.tools.map((t) => t.name).sort();
-	check("tools/list is the contract", JSON.stringify(names) === '["cancel","open","python","reset","skill"]', names.join(","));
+	check(
+		"tools/list is the contract",
+		JSON.stringify(names) === '["cancel","find","open","python","reset","skill"]',
+		names.join(","),
+	);
 
 	// The playbooks are the other half of what makes the in-app copilot good at
 	// this, and they reach an external agent three ways: the `skill` tool's
@@ -224,14 +143,46 @@ try {
 		textOf(nonsense).slice(0, 160),
 	);
 
-	console.log("\n[open]");
-	const listing = await server.callTool("open");
-	check("open with no args lists the library", textOf(listing).includes("venues:"));
+	// A lookup must never author. `find` is the whole reason `open` no longer
+	// has a listing mode: `open` pins a thread and mints a score for a track new
+	// to the room, so resolving an id through it wrote a revision per lookup.
+	console.log("\n[find]");
+	const revisions = () => {
+		if (!hasRealDb) return 0;
+		const library = new Database(join(scratch, "luma.db"), { readonly: true });
+		try {
+			return (
+				library.query<{ n: number }, []>("SELECT count(*) AS n FROM authored_revisions").get()
+					?.n ?? 0
+			);
+		} finally {
+			library.close();
+		}
+	};
+	const before = revisions();
+	const listing = await server.callTool("find");
+	check("find with no args lists the library", textOf(listing).includes("venues:"));
 	const trackId = textOf(listing).match(/^ {2}(\S+) {2}.+$/m)?.[1];
 	const venueIds = (textOf(listing).split(/\n\d+ venues:\n/)[1] ?? "")
 		.split("\n")
 		.map((line) => line.match(/^ {2}(\S+) {2}/)?.[1])
 		.filter((id): id is string => Boolean(id));
+
+	if (!hasRealDb || !trackId) {
+		record("find narrows to one track", "skip", "no track in the scratch library");
+	} else {
+		const byId = await server.callTool("find", { track: trackId });
+		check(
+			"find matches a track by id",
+			textOf(byId).startsWith("1 tracks:") && textOf(byId).includes(trackId),
+			textOf(byId).slice(0, 200),
+		);
+		const nothing = await server.callTool("find", { track: "\u0000no such track" });
+		check("find that matches nothing says so", textOf(nothing).startsWith("0 tracks:"), textOf(nothing).slice(0, 120));
+	}
+	check("find writes nothing", revisions() === before, `${before} -> ${revisions()} revisions`);
+
+	console.log("\n[open]");
 
 	if (!hasRealDb || !trackId) {
 		record("open a track", "skip", "no track in the scratch library");
@@ -372,6 +323,12 @@ try {
 	console.log("\n[errors are results, not transport failures]");
 	const raised = await server.callTool("python", { code: "1 / 0" });
 	check("a traceback is an isError result", raised.isError === true && textOf(raised).includes("ZeroDivisionError"), textOf(raised).slice(0, 200));
+	const nameless = await server.callTool("open");
+	check(
+		"open with no track is an error, not a listing",
+		nameless.isError === true && textOf(nameless).includes("find"),
+		textOf(nameless).slice(0, 200),
+	);
 	const unknown = await server.callTool("nope");
 	check("an unknown tool is an isError result", unknown.isError === true, JSON.stringify(unknown).slice(0, 200));
 } finally {
