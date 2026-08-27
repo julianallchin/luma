@@ -269,7 +269,7 @@ impl MotionSpec {
     /// Wall-clock span honors [`speed_scale`] (measurement knob).
     pub fn animation(&self) -> Animation {
         let spec = *self;
-        Animation::new(spec.total().mul_f32(speed_scale())).with_easing(move |d| spec.progress(d))
+        Animation::new(span(&spec)).with_easing(move |d| spec.progress(d))
     }
 
     /// A repeating gpui [`Animation`] with linear easing over the raw period —
@@ -287,9 +287,21 @@ pub const SNAP: u64 = 100;
 /// Something small appearing where the pointer already is (150ms): menus,
 /// hover washes, a chip sliding one slot over.
 pub const QUICK: u64 = 150;
-/// A region of the window changing size (200ms) — comet's panel duration, and
-/// the rung anything structural takes.
+/// A contained structural change (200ms) — comet's panel duration, and the
+/// rung a dialog entrance or a row collapse takes.
 pub const BASE: u64 = 200;
+/// A large region travelling a long way (270ms): the sidebar and the workspace
+/// panel opening, the dialog card morphing between routes.
+///
+/// A rung of its own rather than [`BASE`] because the eye *tracks* a moving
+/// edge that crosses a third of the window, and at the contained rung it
+/// arrives before the eye has caught up — which reads as a jump rather than as
+/// speed. Contained things keep [`BASE`]: a chevron or a row collapse given
+/// this long reads as hesitation.
+///
+/// 270 continues the ladder's own step (×1.35, the same ratio [`BASE`] takes
+/// over [`QUICK`]) instead of picking a number between the rungs.
+pub const SWEEP: u64 = 270;
 /// A whole surface arriving (500ms): entrances, the splash, a scroll that
 /// crosses the viewport.
 pub const SLOW: u64 = 500;
@@ -308,11 +320,22 @@ pub const MENU_IN: MotionSpec = MotionSpec::new(QUICK, ROOT);
 pub const MENU_OUT: MotionSpec = MotionSpec::new(SNAP, ROOT);
 /// Dialog-in (scale 0.96→1 approximated).
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(BASE, ROOT);
+/// Dialog-out — the same asymmetry [`MENU_OUT`] keeps against [`MENU_IN`]: a
+/// dialog the user has dismissed is already gone as far as they are concerned,
+/// and matching the 200ms entrance on the way out reads as the window lagging
+/// behind the click.
+pub const DIALOG_OUT: MotionSpec = MotionSpec::new(SNAP, ROOT);
 /// Boot splash exit: fade + 6px lift after a hold.
 pub const SPLASH_OUT: MotionSpec = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
 /// Region width/height transitions — the sidebar and the workspace panel
 /// sliding open and shut (see [`crate::pane`]).
-pub const RESIZE: MotionSpec = MotionSpec::new(BASE, ROOT);
+///
+/// Also the dialog card's route morph ([`crate::dialog::morph`]) and the chat
+/// pane's width settle, which read the same spec rather than keeping their own:
+/// a card resizing and a panel sliding are the same gesture at different
+/// scales, and one of them arriving first is the tell that they are two
+/// systems.
+pub const RESIZE: MotionSpec = MotionSpec::new(SWEEP, ROOT);
 /// Tab drag-reorder sliding transforms.
 pub const TAB_SLIDE: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Per-row collapse (height).
@@ -391,6 +414,63 @@ where
     })
 }
 
+/// Dialog exit: the reverse of [`dialog_in`] — fade to 0 while dropping the
+/// 2px the entrance rose. Like [`menu_out`], the eased progress `t` is the
+/// caller's, computed from the closing card's own instant by [`exit_progress`];
+/// the animation wrapper only pumps frames for the exit's span and its own
+/// delta goes unused. See [`menu_out`] for why that indirection is not
+/// optional.
+pub fn dialog_out<E>(id: impl Into<ElementId>, t: f32, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, DIALOG_OUT.animation(), move |el, _| {
+        el.relative().opacity(1.0 - t).top(px(2.0 * t))
+    })
+}
+
+/// The wall-clock span of one run of `spec` — its total stretched by
+/// [`speed_scale`].
+///
+/// The one place the measurement knob is folded into a duration. Every
+/// manually driven tween reads its span from here rather than respelling
+/// `total() × scale`: the respelled copies are how the knob once got *divided*
+/// instead, which made one timeline run 100× fast under the harness while
+/// every other one stretched.
+#[must_use]
+pub fn span(spec: &MotionSpec) -> Duration {
+    spec.total().mul_f32(speed_scale())
+}
+
+/// Eased progress (0..=1) of an exit that began at `since`, read off the wall
+/// clock at render time.
+///
+/// The one correct source for an exit's `t`. A `with_animation` clock is keyed
+/// by element id and replays from 0 whenever the element remounts — mid-exit
+/// that is a full-opacity flash, and a dying card that flashes back is the
+/// single hardest-won lesson in this module. Wall-clock progress is monotonic
+/// by construction and cannot replay.
+///
+/// Honors [`speed_scale`], so a stretched timeline eases over the stretched
+/// span rather than finishing early.
+pub fn exit_progress(spec: &MotionSpec, since: Instant) -> f32 {
+    exit_progress_at(spec, since, Instant::now())
+}
+
+/// [`exit_progress`] against an explicit `now`, for the tweens whose owners
+/// keep windowless tests — same clamp, same easing, same [`speed_scale`] fold,
+/// so a copy with an injected clock never needs to exist.
+#[must_use]
+pub fn exit_progress_at(spec: &MotionSpec, since: Instant, now: Instant) -> f32 {
+    let total = span(spec).as_secs_f32();
+    let raw = if total <= 0.0 {
+        1.0
+    } else {
+        (now.saturating_duration_since(since).as_secs_f32() / total).clamp(0.0, 1.0)
+    };
+    spec.progress(raw)
+}
+
 /// Boot-splash exit: hold 150ms, then fade out + lift 6px over 500ms.
 pub fn splash_out<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
@@ -465,6 +545,31 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
     from + (to - from) * t
 }
 
+/// How far into a region's opening its content has finished arriving.
+///
+/// A sliding region reveals its content by *uncovering* it, which on its own
+/// reads as content sitting still behind a moving window — every row already at
+/// full strength, cut off mid-glyph by the clip. Fading the content in as the
+/// region grows is what makes the two read as one gesture.
+pub const REVEAL_AT: f32 = 0.6;
+
+/// The opacity content wears at `openness` — how much of its resting size the
+/// region showing it currently has, `0.0..=1.0`.
+///
+/// **No curve and no duration of its own, deliberately.** It reads the openness
+/// its caller already has, and that number is a pane's live width over its
+/// target — which is [`RESIZE`]'s tween, on [`ROOT`], for however long `RESIZE`
+/// says. So this cannot drift from the slide it belongs to, and a change to
+/// `RESIZE` moves the fade with it without anything here being touched.
+///
+/// Content reaches full strength at [`REVEAL_AT`] rather than at the very end:
+/// the tail of an ease-out is slow, and content still visibly fading while the
+/// edge has all but stopped reads as the panel waiting for its own contents.
+#[must_use]
+pub fn reveal_opacity(openness: f32) -> f32 {
+    (openness.clamp(0.0, 1.0) / REVEAL_AT).min(1.0)
+}
+
 // ---------------------------------------------------------------------------
 // Hover color fades (CSS `transition-colors` parity)
 // ---------------------------------------------------------------------------
@@ -526,7 +631,7 @@ pub struct HoverFades {
 
 impl HoverFades {
     fn duration() -> Duration {
-        HOVER_FADE.total().mul_f32(speed_scale())
+        span(&HOVER_FADE)
     }
 
     /// Pointer entered (`hovered`) or left the element behind `key`. Reduced
@@ -666,31 +771,26 @@ pub fn hover_blend(key: &str, rest: Hsla, hover: Hsla) -> Hsla {
 // Reduced motion
 // ---------------------------------------------------------------------------
 
-/// Dev/measurement knob (`LUMA_MOTION_SCALE`, default 1): stretches every
-/// catalog timeline by this factor — e.g. `LUMA_MOTION_SCALE=10` slows the
-/// 200ms pane tweens to 2s so screenshot bursts can sample the geometry
-/// per frame. Read once; never set in production.
+/// Dev/measurement knob (default 1): stretches every catalog timeline by this
+/// factor — e.g. `10` slows the 200ms pane tweens to 2s so screenshot bursts
+/// can sample the geometry per frame. Never set in production.
+///
+/// Per-app rather than per-process, so two harnesses in one test binary can
+/// want different timescales. See [`crate::runtime::Runtime`].
 pub fn speed_scale() -> f32 {
-    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *SCALE.get_or_init(|| {
-        std::env::var("LUMA_MOTION_SCALE")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .filter(|s| s.is_finite())
-            .map(|s| s.clamp(0.01, 100.0))
-            .unwrap_or(1.0)
-    })
+    crate::runtime::Runtime::with(|runtime| runtime.motion_scale)
 }
 
-/// Adopt the process's motion policy. Call once, before a window opens.
+/// Adopt this app's motion policy. Call once, before a window opens.
 ///
 /// The OS accessibility setting already reaches gpui; this only adds the
-/// escape hatch `LUMA_MOTION=off`, which the automation harness sets so a test
-/// reads final geometry the frame after it acts instead of racing a slide.
-/// Nothing turns motion back *on* — an override that could contradict the
-/// user's accessibility preference is not an override worth having.
+/// escape hatch [`Runtime::reduced_motion`](crate::runtime::Runtime), which
+/// the automation harness sets so a test reads final geometry the frame after
+/// it acts instead of racing a slide. Nothing turns motion back *on* — an
+/// override that could contradict the user's accessibility preference is not
+/// an override worth having.
 pub fn init(cx: &mut App) {
-    if std::env::var("LUMA_MOTION").as_deref() == Ok("off") {
+    if crate::runtime::Runtime::with(|runtime| runtime.reduced_motion) {
         set_reduced_motion(cx, true);
     }
 }
@@ -833,6 +933,7 @@ mod tests {
             MENU_IN,
             MENU_OUT,
             DIALOG_IN,
+            DIALOG_OUT,
             SPLASH_OUT,
             RESIZE,
             TAB_SLIDE,
@@ -844,17 +945,55 @@ mod tests {
         for spec in transitions {
             assert_eq!(spec.curve, ROOT, "{spec:?} rides a second curve");
             assert!(
-                [SNAP, QUICK, BASE, SLOW].contains(&spec.duration_ms),
+                [SNAP, QUICK, BASE, SWEEP, SLOW].contains(&spec.duration_ms),
                 "{spec:?} invents a duration"
             );
             assert!(
-                spec.delay_ms == 0 || [SNAP, QUICK, BASE, SLOW].contains(&spec.delay_ms),
+                spec.delay_ms == 0 || [SNAP, QUICK, BASE, SWEEP, SLOW].contains(&spec.delay_ms),
                 "{spec:?} invents a delay"
             );
         }
         assert_eq!(ROOT, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
-        // The panel slide keeps comet's 200ms.
-        assert_eq!(RESIZE.duration_ms, 200);
+        // The panel slide is the one place the app deliberately left comet's
+        // 200ms: a travelling edge needs longer than a contained one, and every
+        // surface that slides or morphs reads this spec so they stay one
+        // gesture. Pinned because it is a judgement, not a derivation.
+        assert_eq!(RESIZE.duration_ms, SWEEP);
+        assert_eq!(SWEEP, 270);
+        // Strictly increasing, so "a rung below" is a statement about speed and
+        // no two rungs are the same number wearing two names.
+        let ladder = [SNAP, QUICK, BASE, SWEEP, SLOW];
+        assert!(
+            ladder.windows(2).all(|pair| pair[0] < pair[1]),
+            "the ladder is not strictly increasing: {ladder:?}"
+        );
+    }
+
+    /// Every exit is a rung below its entrance — the asymmetry the ladder
+    /// keeps on purpose (see [`MENU_OUT`]).
+    #[test]
+    fn exits_land_a_rung_below_their_entrances() {
+        assert!(MENU_OUT.duration_ms < MENU_IN.duration_ms);
+        assert!(DIALOG_OUT.duration_ms < DIALOG_IN.duration_ms);
+        assert_eq!(DIALOG_OUT.duration_ms, SNAP);
+    }
+
+    #[test]
+    fn exit_progress_runs_the_curve_over_the_wall_clock() {
+        // At the instant the exit begins it has barely moved (the few
+        // microseconds between stamping and reading are real, so this is a
+        // tolerance rather than an equality)…
+        let now = Instant::now();
+        assert!(exit_progress(&DIALOG_OUT, now) < 0.01);
+        // …and once the span has elapsed it is pinned at the end, not past it.
+        let done = now - DIALOG_OUT.total().mul_f32(speed_scale());
+        assert_eq!(exit_progress(&DIALOG_OUT, done), 1.0);
+        let long_gone = now - Duration::from_secs(30);
+        assert_eq!(exit_progress(&DIALOG_OUT, long_gone), 1.0);
+        // Mid-flight is strictly inside, and monotonic across the span.
+        let half = now - DIALOG_OUT.total().mul_f32(speed_scale()).mul_f32(0.5);
+        let mid = exit_progress(&DIALOG_OUT, half);
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight exit: {mid}");
     }
 
     #[test]
@@ -1027,5 +1166,40 @@ mod tests {
         assert!(mid_fall > 0.1 && mid_fall < 1.0, "eases down");
         let mid_rise = gspin_opacity(0.96, 0.1);
         assert!(mid_rise > 0.1 && mid_rise < 1.0, "eases up");
+    }
+    /// The reveal is monotone, bounded, and *finished before the slide is* —
+    /// the three things a caller reading a live width off a tween is entitled
+    /// to assume, whatever `RESIZE` is retimed to.
+    #[test]
+    fn content_fades_in_with_the_region_and_arrives_before_it_does() {
+        assert_eq!(reveal_opacity(0.0), 0.0, "a closed region shows nothing");
+        assert_eq!(reveal_opacity(1.0), 1.0, "an open one shows everything");
+        assert_eq!(reveal_opacity(REVEAL_AT), 1.0, "full strength at the mark");
+
+        let mut previous = 0.0;
+        for step in 0..=100 {
+            let opacity = reveal_opacity(step as f32 / 100.0);
+            assert!(
+                (0.0..=1.0).contains(&opacity),
+                "opacity escaped the unit interval at {step}: {opacity}"
+            );
+            assert!(opacity >= previous, "the fade went backwards at {step}");
+            previous = opacity;
+        }
+
+        // Out-of-range openness is a usable opacity rather than a panic or a
+        // wash over 1: a live width divided by its target is float arithmetic,
+        // and it lands a hair outside on the frame it settles.
+        assert_eq!(reveal_opacity(1.000_001), 1.0);
+        assert_eq!(reveal_opacity(-0.5), 0.0);
+    }
+
+    /// The fade borrows the slide's clock rather than keeping one: its only
+    /// input is how open the region is, so retiming [`RESIZE`] moves the fade
+    /// with it and cannot desynchronise the two. What is left to pin is the
+    /// other half of that borrow — the curve the openness arrives on.
+    #[test]
+    fn the_reveal_has_no_clock_of_its_own() {
+        assert_eq!(RESIZE.curve, ROOT, "the slide it reads must stay on ROOT");
     }
 }

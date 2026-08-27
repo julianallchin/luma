@@ -6,7 +6,7 @@
 //! hidden copy is measured; only [`MorphDialog::resolve_intrinsic`] commits the
 //! new target.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use std::ops::Deref;
 use std::rc::Rc;
@@ -19,6 +19,7 @@ use gpui::{
 
 use crate::motion::{self, RESIZE};
 use crate::node::{Instrument as _, Role};
+use crate::{glass, radius};
 
 /// Logical dialog content size before the host applies viewport clamps.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -211,6 +212,11 @@ struct AnimatedLayer<K> {
     route: ResolvedRoute<K>,
     from: LayerPose,
     to: LayerPose,
+    /// Whether this is the route the flight is settling on, as opposed to one
+    /// of the copies it is animating away. Decided at [`MorphDialog::begin`],
+    /// where a reversal may reuse a layer already on screen rather than adding
+    /// one.
+    target: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -219,7 +225,6 @@ struct Flight<K> {
     from_size: MorphSize,
     target: ResolvedRoute<K>,
     started: Instant,
-    duration: Duration,
 }
 
 /// An immutable layer sample for the current frame.
@@ -235,6 +240,12 @@ pub struct SampledLayer<K> {
     /// paint-only copy; this prevents focus or pointer admission before the
     /// geometry and target have atomically settled.
     pub interactive: bool,
+    /// Whether this is the route the card is becoming, rather than one it is
+    /// animating away. Distinct from [`Self::interactive`], which turns on only
+    /// once the flight commits: the target is the target from the first frame,
+    /// and it is the reason [`card`] may skip an invisible layer without ever
+    /// skipping this one.
+    pub target: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -243,6 +254,38 @@ pub struct MorphSample<K> {
     pub layers: Vec<SampledLayer<K>>,
     pub progress: f32,
     pub animating: bool,
+}
+
+impl<K: Clone> MorphSample<K> {
+    /// A settled sample holding one route at a fixed size.
+    ///
+    /// The seam that makes [`card`] the only card mechanism: a dialog that
+    /// never morphs does not need a reducer, but it does need the same box, so
+    /// it builds the sample directly instead of growing a second painter.
+    #[must_use]
+    pub fn fixed(key: K, size: MorphSize) -> Self {
+        let route = ResolvedRoute {
+            descriptor: RouteDescriptor {
+                key: key.clone(),
+                size: RouteSize::Exact(size),
+                transition: MorphTransition::CrossFade,
+            },
+            size: size.normalized(),
+        };
+        Self {
+            size: route.size,
+            layers: vec![SampledLayer {
+                key,
+                size: route.size,
+                route,
+                pose: LayerPose::REST,
+                interactive: true,
+                target: true,
+            }],
+            progress: 1.0,
+            animating: false,
+        }
+    }
 }
 
 /// Which version of route content the host asks the child to build.
@@ -257,50 +300,127 @@ pub enum ContentMode {
     Interactive,
 }
 
-/// Paint one sampled container. The child callback owns route content; this
-/// function owns geometry, clipping, layer order, filtered poses and the
-/// target's input plane.
+/// Below this a layer contributes nothing a person can see, and is skipped —
+/// see [`card`]. Not zero: a crossfade spends several frames under 1%.
+const MIN_VISIBLE_OPACITY: f32 = 0.01;
+
+/// **The** dialog card.
+///
+/// Every modal in the app is one of these: a fixed-size dialog is a morph with
+/// a single route ([`MorphSample::fixed`]), and a multi-route dialog is the
+/// same card with more layers in flight. There is no second card mechanism,
+/// which is what makes "what does a dialog card look like" a question with one
+/// answer — the fill, the rim and the radius are written down here and nowhere
+/// else. Routes supply content; they do not describe the box around it.
+///
+/// The child callback owns route content; this function owns the card's
+/// surface, geometry, clipping, layer order, filtered poses and the target's
+/// input plane.
 pub fn card<K>(
     sample: &MorphSample<K>,
     semantic_label: impl Into<SharedString>,
     mut content: impl FnMut(&K, ContentMode) -> AnyElement,
 ) -> AnyElement {
-    let layers = sample.layers.iter().map(|layer| {
-        let key = &layer.key;
-        let mode = if layer.interactive {
-            ContentMode::Interactive
-        } else {
-            ContentMode::PaintOnly
-        };
-        let pose = layer.pose;
-        let left = (sample.size.width - layer.size.width) / 2.0 + pose.x;
-        let top = (sample.size.height - layer.size.height) / 2.0;
-        let shell = gpui::div()
-            .absolute()
-            .top(px(top))
-            .left(px(left))
-            .w(px(layer.size.width))
-            .h(px(layer.size.height))
-            .opacity(pose.opacity);
-        if mode == ContentMode::Interactive {
-            shell.occlude().child(content(key, mode))
-        } else {
-            shell.child(super::filtered(
-                pose.blur,
-                pose.scale,
-                gpui::div().size_full().child(content(key, mode)),
-            ))
-        }
-    });
+    let layers = sample
+        .layers
+        .iter()
+        // A layer the eye cannot see still costs a full content build and, if
+        // it is filtered, an offscreen texture and a gaussian pass — every
+        // frame. The tail of a crossfade is mostly this, and only an *outgoing*
+        // layer has such a tail, which is why the saving is taken there alone.
+        //
+        // Two layers are never skipped, invisible or not. An interactive one
+        // owns the focus and the hitboxes. The target owns the content the card
+        // is becoming, and it enters at opacity zero: skipping it would unmount
+        // the incoming route for the first frames of every flight, so its
+        // children would be built — and their element state seeded — a frame
+        // late, and a replacement would briefly contain nothing arriving at all.
+        .filter(|layer| {
+            layer.interactive || layer.target || layer.pose.opacity > MIN_VISIBLE_OPACITY
+        })
+        .map(|layer| {
+            let key = &layer.key;
+            let mode = if layer.interactive {
+                ContentMode::Interactive
+            } else {
+                ContentMode::PaintOnly
+            };
+            let pose = layer.pose;
+            let left = (sample.size.width - layer.size.width) / 2.0 + pose.x;
+            let top = (sample.size.height - layer.size.height) / 2.0;
+            let shell = gpui::div()
+                .absolute()
+                .top(px(top))
+                .left(px(left))
+                .w(px(layer.size.width))
+                .h(px(layer.size.height))
+                .opacity(pose.opacity);
+            if mode == ContentMode::Interactive {
+                return shell.occlude().child(content(key, mode));
+            }
+            // `filtered` costs an offscreen render target and a blur pass
+            // whatever its arguments say, so a pose that asks for neither must
+            // not pay for both. A transition that only slides and fades — which
+            // is every transition, once its blur has run out — paints straight.
+            let identity = pose.blur <= 0.0 && (pose.scale - 1.0).abs() <= f32::EPSILON;
+            if identity {
+                shell.child(content(key, mode))
+            } else {
+                shell.child(super::filtered(
+                    pose.blur,
+                    pose.scale,
+                    gpui::div().size_full().child(content(key, mode)),
+                ))
+            }
+        });
     gpui::div()
         .relative()
         .flex_none()
         .w(px(sample.size.width))
         .h(px(sample.size.height))
         .overflow_hidden()
+        .rounded(px(radius::MODAL))
+        .bg(glass::dialog())
         .children(layers)
+        .child(rim())
         .agent_node(Role::Card, semantic_label)
         .into_any_element()
+}
+
+/// The card's hairline outline, painted as its **last** child.
+///
+/// Not `border_1()` on the card itself: every content layer above is
+/// absolutely positioned across the card's whole box, and gpui paints a
+/// border before its children — so a real border lands underneath the content
+/// and disappears. Painting the rim after the layers is what puts an edge on a
+/// surface whose interior is a stack of overlapping planes. It occludes
+/// nothing and takes no layout, so the content it outlines still fills the
+/// card edge to edge.
+fn rim() -> gpui::Div {
+    gpui::div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius::MODAL))
+        .border_1()
+        .border_color(glass::hairline(0.10))
+}
+
+/// A dialog that never morphs: one route, one size, built once.
+///
+/// The seam that lets [`card`] be the *only* card mechanism. A fixed-size
+/// dialog still wants the palette's fill, rim and radius, and before this it
+/// got them from a second painter that had to be kept in step by hand. Here it
+/// is simply a morph whose reducer has nothing to do.
+///
+/// `body` is already built, so the route callback hands it over once — a
+/// settled sample has exactly one layer and asks exactly once.
+pub fn fixed_card(label: impl Into<SharedString>, size: MorphSize, body: AnyElement) -> AnyElement {
+    let sample = MorphSample::fixed((), size);
+    let mut body = Some(body);
+    card(&sample, label, move |(), _| {
+        body.take()
+            .unwrap_or_else(|| gpui::div().into_any_element())
+    })
 }
 
 type MeasureCallback = Rc<dyn Fn(gpui::Size<Pixels>, &mut Window, &mut App)>;
@@ -582,6 +702,7 @@ impl<K: Clone + Eq> MorphDialog<K> {
                 } else {
                     transition.pose(LayerRole::Outgoing, 1.0)
                 },
+                target: is_target,
             });
         }
         if !reused_target {
@@ -589,6 +710,7 @@ impl<K: Clone + Eq> MorphDialog<K> {
                 route: target.clone(),
                 from: transition.pose(LayerRole::Incoming, 0.0),
                 to: LayerPose::REST,
+                target: true,
             });
         }
         self.flight = Some(Flight {
@@ -596,7 +718,6 @@ impl<K: Clone + Eq> MorphDialog<K> {
             from_size: current.size,
             target,
             started: now,
-            duration: RESIZE.total().mul_f32(motion::speed_scale()),
         });
         RouteRequest::Transitioning
     }
@@ -612,18 +733,14 @@ impl<K: Clone + Eq> MorphDialog<K> {
                     size: self.settled.size,
                     pose: LayerPose::REST,
                     interactive: true,
+                    target: true,
                 }],
                 progress: 1.0,
                 animating: false,
             };
         };
-        let raw = if flight.duration.is_zero() {
-            1.0
-        } else {
-            now.saturating_duration_since(flight.started).as_secs_f32()
-                / flight.duration.as_secs_f32()
-        };
-        let progress = RESIZE.progress(raw.clamp(0.0, 1.0));
+        let progress = motion::exit_progress_at(&RESIZE, flight.started, now);
+        let animating = now.saturating_duration_since(flight.started) < motion::span(&RESIZE);
         MorphSample {
             size: flight.from_size.interpolate(flight.target.size, progress),
             layers: flight
@@ -635,10 +752,11 @@ impl<K: Clone + Eq> MorphDialog<K> {
                     size: layer.route.size,
                     pose: layer.from.interpolate(layer.to, progress),
                     interactive: false,
+                    target: layer.target,
                 })
                 .collect(),
             progress,
-            animating: raw < 1.0,
+            animating,
         }
     }
 
@@ -670,6 +788,8 @@ impl<K: Clone + Eq> MorphDialog<K> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn route(key: &'static str, width: f32, height: f32) -> RouteDescriptor<&'static str> {
@@ -678,6 +798,49 @@ mod tests {
 
     fn at(start: Instant, milliseconds: u64) -> Instant {
         start + Duration::from_millis(milliseconds)
+    }
+
+    /// How long a flight runs — the same span [`MorphDialog::sample`] reads,
+    /// so these tests cannot drift from the reducer.
+    fn span() -> Duration {
+        motion::span(&RESIZE)
+    }
+
+    /// The instant a flight begun at `start` is `fraction` of the way through.
+    ///
+    /// A fraction rather than a wall-clock literal because the poses pinned
+    /// below are statements about *the curve*, not about a duration: they stay
+    /// true when the ladder rung moves, and a literal would quietly re-point
+    /// them at a different place on the same curve.
+    fn part(start: Instant, fraction: f32) -> Instant {
+        start + span().mul_f32(fraction)
+    }
+
+    /// Past the end of a flight begun at `start`.
+    fn settled(start: Instant) -> Instant {
+        start + span() + Duration::from_millis(1)
+    }
+
+    /// A fixed-size dialog must be indistinguishable from a settled morph, or
+    /// the two would drift into two cards again.
+    #[test]
+    fn a_fixed_sample_is_a_settled_single_route_morph() {
+        let fixed = MorphSample::fixed("venues", MorphSize::new(680.0, 460.0));
+        let settled = MorphDialog::new(route("venues", 680.0, 460.0), MorphSize::new(680.0, 460.0))
+            .sample(Instant::now());
+        assert_eq!(fixed.size, settled.size);
+        assert_eq!(fixed.progress, settled.progress);
+        assert_eq!(fixed.animating, settled.animating);
+        assert_eq!(fixed.layers.len(), settled.layers.len());
+        assert_eq!(fixed.layers[0].key, settled.layers[0].key);
+        assert_eq!(fixed.layers[0].size, settled.layers[0].size);
+        assert_eq!(fixed.layers[0].pose, settled.layers[0].pose);
+        assert!(fixed.layers[0].interactive);
+        // A degenerate request still yields a paintable box.
+        assert_eq!(
+            MorphSample::fixed("x", MorphSize::new(0.0, -4.0)).size,
+            MorphSize::new(1.0, 1.0)
+        );
     }
 
     #[test]
@@ -702,7 +865,7 @@ mod tests {
         assert_eq!(opening.layers[1].pose.opacity, 0.0);
         assert_eq!(opening.layers[1].pose.blur, 16.0);
 
-        let middle = dialog.sample(at(start, 100));
+        let middle = dialog.sample(part(start, 0.5));
         assert!((middle.size.width - 594.356).abs() < 0.01);
         assert!((middle.size.height - 434.356).abs() < 0.01);
         assert!((middle.layers[0].pose.x - 15.548).abs() < 0.01);
@@ -710,8 +873,8 @@ mod tests {
         assert_eq!(middle.layers[0].size, MorphSize::new(400.0, 240.0));
         assert_eq!(middle.layers[1].size, MorphSize::new(600.0, 440.0));
 
-        assert!(!dialog.tick(at(start, 200), false));
-        let end = dialog.sample(at(start, 200));
+        assert!(!dialog.tick(settled(start), false));
+        let end = dialog.sample(settled(start));
         assert_eq!(end.size, MorphSize::new(600.0, 440.0));
         assert_eq!(end.layers.len(), 1);
         assert_eq!(end.layers[0].pose, LayerPose::REST);
@@ -754,13 +917,54 @@ mod tests {
         assert_eq!(replaced.layers.last().unwrap().key, "c");
         assert!(replaced.layers.iter().all(|layer| !layer.interactive));
 
-        assert!(!dialog.tick(at(replace, 200), false));
-        let settled = dialog.sample(at(replace, 200));
+        let done = settled(replace);
+        assert!(!dialog.tick(done, false));
+        let settled = dialog.sample(done);
         assert_eq!(settled.size, MorphSize::new(520.0, 300.0));
         assert_eq!(settled.layers.len(), 1);
         assert_eq!(settled.layers[0].key, "c");
         assert_eq!(settled.layers[0].size, MorphSize::new(520.0, 300.0));
         assert!(settled.layers[0].interactive);
+    }
+
+    /// The incoming route enters at opacity zero, so [`card`]'s "skip what the
+    /// eye cannot see" filter would drop it for the first frames of every
+    /// flight unless it is marked. Exactly one layer carries the mark, whether
+    /// the flight added it or a reversal reused one already on screen.
+    #[test]
+    fn the_route_a_flight_is_settling_on_is_always_marked_exactly_once() {
+        let start = Instant::now();
+        let mut dialog = MorphDialog::new(route("a", 400.0, 240.0), MorphSize::new(400.0, 240.0));
+        fn targets<'k>(sample: &MorphSample<&'k str>) -> Vec<&'k str> {
+            sample
+                .layers
+                .iter()
+                .filter(|layer| layer.target)
+                .map(|layer| layer.key)
+                .collect()
+        }
+        assert_eq!(targets(&dialog.sample(start)), ["a"], "a settled route");
+
+        // Replacement: the incoming layer is brand new and fully transparent.
+        dialog.request(route("b", 600.0, 440.0), start, false);
+        let opening = dialog.sample(start);
+        assert_eq!(targets(&opening), ["b"]);
+        let incoming = opening.layers.iter().find(|l| l.key == "b").unwrap();
+        assert!(
+            incoming.pose.opacity <= MIN_VISIBLE_OPACITY,
+            "the case the mark exists for: {:?}",
+            incoming.pose
+        );
+
+        // Reversal: the target is a layer already on screen, not a new one.
+        let flip = at(start, 70);
+        dialog.request(route("a", 400.0, 240.0), flip, false);
+        assert_eq!(targets(&dialog.sample(flip)), ["a"]);
+
+        // …and a third route replacing an in-flight pair still marks only it.
+        let replace = at(flip, 40);
+        dialog.request(route("c", 520.0, 300.0), replace, false);
+        assert_eq!(targets(&dialog.sample(replace)), ["c"]);
     }
 
     #[test]
@@ -822,8 +1026,10 @@ mod tests {
             dialog.resolve_intrinsic(current, MorphSize::new(560.0, 360.0), at(start, 30), false),
             RouteRequest::Transitioning
         );
-        assert!(!dialog.tick(at(start, 230), false));
-        let settled = dialog.sample(at(start, 230));
+        // The flight begins when the current measurement commits, at +30ms.
+        let done = settled(at(start, 30));
+        assert!(!dialog.tick(done, false));
+        let settled = dialog.sample(done);
         assert_eq!(settled.size, MorphSize::new(560.0, 360.0));
         assert_eq!(settled.layers.len(), 1);
         assert_eq!(settled.layers[0].key, "c");
@@ -891,8 +1097,9 @@ mod tests {
         assert_eq!(opening.layers[2].size, MorphSize::new(520.0, 320.0));
         assert_eq!(opening.layers[2].pose.opacity, 0.0);
 
-        assert!(!dialog.tick(at(reverse, 200), false));
-        let settled = dialog.sample(at(reverse, 200));
+        let done = settled(reverse);
+        assert!(!dialog.tick(done, false));
+        let settled = dialog.sample(done);
         assert_eq!(settled.layers.len(), 1);
         assert_eq!(settled.layers[0].size, MorphSize::new(520.0, 320.0));
         assert_eq!(settled.layers[0].pose, LayerPose::REST);
@@ -951,8 +1158,9 @@ mod tests {
             MorphSize::new(600.0, 400.0)
         );
 
-        assert!(!dialog.tick(at(interrupt, 200), false));
-        let settled = dialog.sample(at(interrupt, 200));
+        let done = settled(interrupt);
+        assert!(!dialog.tick(done, false));
+        let settled = dialog.sample(done);
         assert_eq!(settled.layers.len(), 1);
         assert_eq!(settled.layers[0].key, "a");
         assert_eq!(settled.layers[0].size, MorphSize::new(600.0, 400.0));
@@ -1034,8 +1242,9 @@ mod tests {
                 }
                 MorphTransition::Right => unreachable!(),
             }
-            assert!(!dialog.tick(at(start, 200), false));
-            let settled = dialog.sample(at(start, 200));
+            let done = settled(start);
+            assert!(!dialog.tick(done, false));
+            let settled = dialog.sample(done);
             assert_eq!(settled.layers.len(), 1);
             assert_eq!(settled.layers[0].key, "b");
             assert_eq!(settled.layers[0].pose, LayerPose::REST);

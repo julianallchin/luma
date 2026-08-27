@@ -10,7 +10,8 @@
 use gpui::*;
 use gpui_component::{Icon, IconName};
 
-use crate::ladder;
+use crate::float::RowState;
+use crate::{ladder, CONTROL_HEIGHT};
 
 /// The `size-3` chevron every trigger ends with (`[&_svg]:size-3`). The color
 /// differs by call site — `<Select>` dims it with `opacity-50`, `<Dropdown>`
@@ -21,7 +22,8 @@ pub(crate) fn chevron(color: Hsla) -> Icon {
         .text_color(color)
 }
 
-/// The shared trigger shell: `h-6 border px-2` on control fill, square, no
+/// The shared trigger shell: [`CONTROL_HEIGHT`] (`h-6`) `border px-2` on
+/// control fill, square, no
 /// focus ring. Padding is expressed as a margin on the content instead of
 /// padding on the shell so that absolutely-positioned children (the ghost
 /// stack overlay in `luma_selector`) share one unambiguous box.
@@ -31,7 +33,7 @@ pub(crate) fn trigger_shell() -> Div {
         .flex()
         .items_center()
         .flex_shrink_0()
-        .h(px(24.))
+        .h(px(CONTROL_HEIGHT))
         .border_1()
         .border_color(ladder::control_border())
         .bg(ladder::control())
@@ -55,16 +57,25 @@ pub fn luma_select(value: &str, width: f32) -> Div {
     )
 }
 
-/// The self-sizing geometry both `<Selector>` and `<Dropdown>` are built on:
-/// an invisible column of every row ("text + gap-2 + chevron") is the only
-/// thing in flow, so the trigger is exactly as wide as the widest row, and
-/// the visible row is overlaid on it. Width is therefore invariant across
-/// label changes — that is the whole point of the pattern.
+/// The self-sizing geometry every value trigger in the app is built on: an
+/// invisible column of every row ("text + gap + chevron") is the only thing in
+/// flow, so the trigger is exactly as wide as the widest row, and the visible
+/// row is overlaid on it. Width is therefore invariant across label changes —
+/// that is the whole point of the pattern.
 ///
-/// `rows` are the strings that participate in sizing; `visible` is the one
-/// that's actually drawn. Both are uppercased here, as `BUTTON_CLASS` does.
-pub(crate) fn ghost_trigger(visible: &str, rows: &[&str], chevron_color: Hsla) -> Div {
-    let row = |text: String| {
+/// The tier supplies `shell` (its own box and type) and `pad` (the inset the
+/// rows sit at); this owns only the stacking, so a second tier cannot acquire
+/// a second sizing rule. `rows` are the strings that participate in sizing,
+/// `visible` the one actually drawn, already cased by the caller — casing is
+/// the tier's, and the two tiers disagree about it.
+pub(crate) fn ghost_stack(
+    shell: Div,
+    visible: String,
+    rows: Vec<String>,
+    pad: f32,
+    chevron_color: Hsla,
+) -> Div {
+    let row = move |text: String| {
         div()
             .flex()
             .items_center()
@@ -73,26 +84,38 @@ pub(crate) fn ghost_trigger(visible: &str, rows: &[&str], chevron_color: Hsla) -
             .child(text)
             .child(chevron(chevron_color))
     };
-    trigger_shell()
-        .text_size(px(9.))
-        .font_weight(FontWeight::BOLD)
+    shell
         .child(
             div()
                 .invisible()
-                .mx(px(8.))
+                .mx(px(pad))
                 .flex()
                 .flex_col()
-                .children(rows.iter().map(|r| row(r.to_uppercase()))),
+                .children(rows.into_iter().map(row)),
         )
         .child(
             div()
                 .absolute()
                 .inset_0()
-                .px(px(8.))
+                .px(px(pad))
                 .flex()
                 .items_center()
-                .child(row(visible.to_uppercase()).flex_1()),
+                .child(row(visible).flex_1()),
         )
+}
+
+/// The instrument tier's self-sizing trigger: [`ghost_stack`] in a
+/// [`trigger_shell`], uppercased as `BUTTON_CLASS` does.
+pub(crate) fn ghost_trigger(visible: &str, rows: &[&str], chevron_color: Hsla) -> Div {
+    ghost_stack(
+        trigger_shell()
+            .text_size(px(9.))
+            .font_weight(FontWeight::BOLD),
+        visible.to_uppercase(),
+        rows.iter().map(|r| r.to_uppercase()).collect(),
+        8.,
+        chevron_color,
+    )
 }
 
 /// `<Selector>`: the brutalist control font over the ghost stack, sized to the
@@ -101,46 +124,27 @@ pub fn luma_selector(value: &str, options: &[&str]) -> Div {
     ghost_trigger(value, options, ladder::foreground_alpha(0.45))
 }
 
-/// `<SelectContent>`: the open menu. Control fill on a control border, square,
-/// no shadow and no animation, hung one pixel *under* the trigger's bottom
-/// border so the two boxes share one hairline (the web side's `sideOffset:
-/// -1`).
+/// `<SelectItem>` on the float tier: one row of an open menu — a
+/// [`crate::float::menu_row`] carrying the label, and a check on the chosen
+/// row (a fixed-width hole otherwise, so a label does not shift when the
+/// selection moves to it). Float menu rows are sentence case, and the row owns
+/// its tier's casing the way [`ghost_trigger`] owns the slabs' uppercase: wire
+/// spellings arrive raw ("replace") and are display-cased here, so no caller
+/// keeps a parallel display list. Rows that are *code* (the expression
+/// suggestions) use [`crate::float::menu_row`] directly and stay lowercase.
 ///
-/// Positioned absolutely, so the caller wraps trigger and menu in one
-/// `div().relative()`, and `deferred`s it to paint above later siblings.
-pub fn luma_select_menu() -> Div {
-    div()
-        .absolute()
-        .top(px(23.))
-        .left_0()
-        .flex()
-        .flex_col()
-        .border_1()
-        .border_color(ladder::control_border())
-        .bg(ladder::control())
-}
-
-/// `<SelectItem>`: one row of an open menu — `h-[22px]`, the control font,
-/// `--hover` under the pointer, and a check on the chosen row.
+/// The label doubles as the row's hover fade key, which is unique enough
+/// because the strip and the settings screen open one menu at a time; a
+/// consumer that floats two menus with identical rows at once supplies its
+/// own keys via [`crate::float::menu_row`] directly.
 ///
-/// The web side absolutely-positions that check at `right-2` and reserves room
-/// for it with `pr-8`; here the row is a `justify-between` flex and the check
-/// occupies a real 12px slot, so the padding is `px-2` on both sides. Same ink,
-/// one less way to be wrong about the gap.
-pub fn luma_select_item(label: &str, selected: bool) -> Div {
-    div()
-        .flex()
-        .items_center()
+/// `state` is [`RowState::of`] over the caller's two facts; a menu without
+/// keyboard navigation passes `cursor: false`.
+pub fn luma_select_item(label: &str, state: RowState) -> Div {
+    let selected = state == RowState::Selected;
+    crate::float::menu_row(state, label.to_string())
         .justify_between()
-        .gap(px(8.))
-        .h(px(22.))
-        .pl(px(8.))
-        .pr(px(8.))
-        .text_size(px(9.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(ladder::foreground_90())
-        .hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground()))
-        .child(label.to_uppercase())
+        .child(sentence_case(label))
         .child(if selected {
             Icon::new(IconName::Check).size(px(12.)).into_any_element()
         } else {
@@ -148,4 +152,16 @@ pub fn luma_select_item(label: &str, selected: bool) -> Div {
             // selection moves to it.
             div().size(px(12.)).into_any_element()
         })
+}
+
+/// First letter up, the rest untouched — idempotent on labels that already
+/// arrive cased ("Group Local"). The float tier's casing, shared with the
+/// trigger ([`crate::float::picker_chip`]) so a row and the value it becomes
+/// are spelled the same.
+pub(crate) fn sentence_case(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
