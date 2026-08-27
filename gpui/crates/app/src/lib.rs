@@ -25,13 +25,22 @@
 //! it belongs to (see `settings::open_settings`), so this file stays the list
 //! of what exists. `docs/specs/comet-shell.md` is the contract.
 
+// The hitch report's self-describing schema is one `serde_json::json!`
+// literal, and it grows a line every time the instrument learns to see
+// something new. Each key costs a macro recursion; the default 128 is reached
+// well before the schema stops being worth extending.
+#![recursion_limit = "256"]
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use std::time::Duration;
 
 mod add_tracks;
 mod agent;
+mod chat_history;
 mod chrome;
 mod graph;
+mod history;
 mod keymap;
 mod library;
 mod patterns;
@@ -44,6 +53,7 @@ mod tracks;
 mod universe;
 mod visualizer;
 mod welcome;
+mod workspace;
 
 pub use chrome::hide_native_window_buttons;
 pub use graph::ViewData;
@@ -69,10 +79,15 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     fonts::install(cx);
     keymap::init(cx);
+    // Both halves of the text-field keymap, and they must be bound together:
+    // the app's bindings exclude `TEXT_INPUT`, and the field's own supply the
+    // editing keys that exclusion leaves it. Registering one without the other
+    // gives a field that either eats the app's shortcuts or cannot be typed in.
+    text_input::init(cx);
     motion::init(cx);
 }
 use luma_chat::AgentChat;
-use luma_ui::{fonts, ladder, motion};
+use luma_ui::{fonts, ladder, motion, text_input};
 
 use shell::{Body, FocusSlot, Overlay};
 use tabs::Tabs;
@@ -91,9 +106,13 @@ pub struct Luma {
     /// is true mid-slide: the flag says where the region is going, this says
     /// where it is.
     pub(crate) sidebar_width: luma_ui::pane::PaneWidth,
-    /// The workspace panel's open tabs. What each one shows *is* its identity
-    /// — see [`tabs`].
+    /// The workspace panel's open tabs — **the set on screen**. What each one
+    /// shows *is* its identity, see [`tabs`].
     pub(crate) workspace: Tabs<Body>,
+    /// Every other subject's remembered tabs. The strip belongs to whatever is
+    /// picked in the sidebar, and [`Luma::sync_workspace_scope`] swaps this
+    /// set for that one — see [`workspace`].
+    pub(crate) parked: workspace::ParkedTabs<Body>,
     /// Visual-only state for keyed chip reflow and the floating `+` menu.
     /// Logical tab identity and teardown remain owned by `workspace`.
     pub(crate) tab_chrome: tab_chrome::TabChrome,
@@ -101,20 +120,48 @@ pub struct Luma {
     pub(crate) selected_track: Option<String>,
     pub(crate) selected_pattern: Option<luma_lib::models::patterns::PatternSummary>,
     pub(crate) workspace_hidden: bool,
-    /// The workspace panel's live width, and the width it returns to when it
-    /// opens — the one the seam drags. Session-lived: a width chosen for one
-    /// window is not a preference about every future window.
+    /// The workspace panel's live width — what the open/close toggle tweens.
+    /// Where it rests when open is *derived* from the split below rather than
+    /// stored, so the two can never disagree about how wide "open" is.
     pub(crate) workspace_width: luma_ui::pane::PaneWidth,
-    pub(crate) workspace_open_width: f32,
+    /// How the room left of the panel divides between the thread and the panel.
+    ///
+    /// A proportion, not a width, so the sidebar opening or the window resizing
+    /// takes its space from both in the ratio they were already at.
+    /// Session-lived: a split chosen for one window is not a preference about
+    /// every future window.
+    pub(crate) workspace_split: luma_ui::split::SplitFraction,
     /// Whether an open workspace takes over everything right of the sidebar
     /// (this phase's default) or shares it with the thread column.
     pub(crate) expanded: bool,
+    /// The stage above the editors, when the visible tab is about a room.
+    ///
+    /// Not a tab and not keyed like one: it is a *view of whatever is below
+    /// it*, derived from the workspace every frame by
+    /// [`Luma::sync_visualizer`]. `None` is both "no room to show" and the
+    /// off switch for its redraw loop — see [`visualizer::visualizer`].
+    pub(crate) visualizer: Option<visualizer::Visualizer>,
+    /// Whether the stage pane is suppressed by hand. Kept apart from
+    /// [`visualizer`](Self::visualizer) the way `sidebar_hidden` is from
+    /// `sidebar`: one says what there is to show, the other whether the room
+    /// for it was given away.
+    pub(crate) visualizer_hidden: bool,
+    /// How the workspace column divides between the stage and the editor.
+    /// Session-lived, like `workspace_split`: a split chosen for one window is
+    /// not a preference about every future window.
+    pub(crate) visualizer_split: luma_ui::split::SplitFraction,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
-    pub(crate) overlay: Option<Overlay>,
+    /// The dialog on screen, and — for the frames after it is dismissed —
+    /// the one leaving. See [`luma_ui::dialog::Popup`]: gpui unmounts an
+    /// element the frame its state drops, so an exit animation needs the state
+    /// held alive while it plays.
+    pub(crate) overlay: luma_ui::dialog::Popup<Overlay>,
     /// The agent thread, the shell's centre. Built at first render (its
     /// composer needs a `Window`) and then kept for the app's life — it is a
     /// region, not a panel, and it cannot be closed.
     pub(crate) chat: Option<Entity<AgentChat>>,
+    /// Alive exactly as long as the chat it listens to — see `sync_chat`.
+    pub(crate) chat_subscription: Option<gpui::Subscription>,
     /// The keyboard's home: one handle, tracked at whichever element
     /// [`Luma::focus_slot`] names this frame, so actions always have a
     /// dispatch path and a binding can scope to the region it runs through.
@@ -137,6 +184,9 @@ pub struct Luma {
     /// belongs to the picker instance that requested it, never merely to
     /// whichever venue overlay happens to be visible when it lands.
     pub(crate) venue_picker_generation: u64,
+    /// Correlates a history read with the dialog that asked for it — a slow
+    /// list arriving after the reader reopened the picker is a stale answer.
+    pub(crate) chat_history_generation: u64,
     /// Correlates per-venue track reads. Venue identity is checked as well;
     /// the generation distinguishes reopening the same venue twice.
     pub(crate) venue_selection_generation: u64,
@@ -159,15 +209,21 @@ impl Luma {
             // window that assembles itself.
             sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace: Tabs::default(),
+            parked: workspace::ParkedTabs::default(),
             tab_chrome: tab_chrome::TabChrome::default(),
             selected_track: None,
             selected_pattern: None,
             workspace_hidden: false,
             workspace_width: luma_ui::pane::PaneWidth::new(0.0),
-            workspace_open_width: shell::WORKSPACE_WIDTH,
+            workspace_split: shell::workspace_split(),
             expanded: false,
-            overlay: None,
+            visualizer: None,
+            visualizer_hidden: false,
+            visualizer_split: shell::visualizer_split(),
+            overlay: luma_ui::dialog::Popup::default(),
             chat: None,
+            chat_subscription: None,
+            chat_history_generation: 0,
             focus: cx.focus_handle(),
             dialog_focus: cx.focus_handle(),
             // Explicit tracked handles keep their own tab-stop bit in current
@@ -181,7 +237,87 @@ impl Luma {
             venue_selection_generation: 0,
         };
         app.restore_venue(cx);
+        app.auto_repro(cx);
         app
+    }
+
+    /// Drive the app into one reproduction state at launch.
+    ///
+    /// **A diagnostic instrument, not a feature, and env-gated so it does not
+    /// exist unless asked for.** `main` deliberately takes no flags because
+    /// every screen should be reachable by pressing something — this does not
+    /// change that. It exists because one bug appears only in a real window
+    /// presenting real surfaces to the compositor, which is exactly the
+    /// configuration the offscreen harness cannot produce, and reaching the
+    /// state by hand every time is how a measurement goes unrepeated.
+    ///
+    /// `LUMA_AUTOREPRO` is a substring of the track title to open;
+    /// `LUMA_AUTOREPRO_ZOOM` is how many dolly steps to take once the stage is
+    /// live (default 8, which reaches the near clamp on any rig).
+    ///
+    /// Polls rather than chains callbacks: the venue restore and the track
+    /// open are each several awaited reads, and a poll that gives up after a
+    /// bounded number of tries cannot hang a launch that has nothing to open.
+    fn auto_repro(&mut self, cx: &mut Context<Self>) {
+        let Ok(wanted) = std::env::var("LUMA_AUTOREPRO") else {
+            return;
+        };
+        let steps = std::env::var("LUMA_AUTOREPRO_ZOOM")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(8);
+        let tick = || self.library.transport_after(Duration::from_millis(250));
+        let mut pending = tick();
+        cx.spawn(async move |this, cx| {
+            let mut opened = false;
+            for _ in 0..240 {
+                let _ = pending.await;
+                let outcome = this.update(cx, |this, cx| {
+                    if !opened {
+                        let found = this
+                            .sidebar
+                            .as_ref()
+                            .and_then(|browser| browser.find_titled(&wanted));
+                        if let Some(row) = found {
+                            this.open_track(&row.id, cx);
+                            opened = true;
+                        }
+                        return false;
+                    }
+                    // Only once the stage exists; before that there is no
+                    // camera to move and the gesture would be lost.
+                    match this.visualizer_mut() {
+                        Some(stage) => {
+                            stage.dolly_in(steps);
+                            cx.notify();
+                            // Seek into lit material and start the transport:
+                            // a stage with nothing lit is not the state the
+                            // report is about, and t=0 on this score is dark.
+                            let seek = std::env::var("LUMA_AUTOREPRO_SEEK")
+                                .ok()
+                                .and_then(|value| value.parse().ok())
+                                .unwrap_or(50.0);
+                            drop(this.library.seek(seek));
+                            drop(this.library.play());
+                            true
+                        }
+                        None => false,
+                    }
+                });
+                match outcome {
+                    Ok(true) | Err(_) => return,
+                    Ok(false) => {}
+                }
+                let next = this.read_with(cx, |this, _| {
+                    this.library.transport_after(Duration::from_millis(250))
+                });
+                match next {
+                    Ok(next) => pending = next,
+                    Err(_) => return,
+                }
+            }
+        })
+        .detach();
     }
 
     /// Reveal the `index`th tab in strip order. ⌘1…⌘9; out of range is
@@ -199,14 +335,16 @@ impl Render for Luma {
         // tab is open. A workspace with tabs is a shell with something to
         // show — a pattern's graph needs no venue, and a picker that camped
         // over it would be the welcome screen refusing to leave.
-        if self.sidebar.is_none() && self.overlay.is_none() && self.workspace.is_empty() {
+        if self.sidebar.is_none() && self.overlay.get().is_none() && self.workspace.is_empty() {
             self.show_venues(cx);
         }
+        self.sync_workspace_scope(cx);
         self.sync_chat(window, cx);
+        self.sync_visualizer(cx);
         self.take_focus(window, cx);
 
         let root_holds_focus = matches!(self.focus_slot(), FocusSlot::Shell);
-        div()
+        let root = div()
             .size_full()
             .flex()
             .flex_col()
@@ -229,7 +367,7 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
             .on_action(cx.listener(|this, _: &keymap::OpenPatterns, _, cx| this.show_patterns(cx)))
             .on_action(
-                cx.listener(|this, _: &keymap::OpenVisualizer, _, cx| this.open_visualizer(cx)),
+                cx.listener(|this, _: &keymap::ToggleVisualizer, _, cx| this.toggle_visualizer(cx)),
             )
             .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _, cx| {
                 this.sidebar_hidden = !this.sidebar_hidden;
@@ -245,7 +383,15 @@ impl Render for Luma {
             }))
             .on_action(cx.listener(|this, _: &keymap::CloseTab, _, cx| this.close_active_tab(cx)))
             .on_action(cx.listener(|this, _: &keymap::NewTab, _, cx| {
-                this.tab_chrome.toggle_menu();
+                // ⌘T means "show me the ways to open a tab", and where those
+                // live depends on whether any exist yet: the `+` menu hangs
+                // off the strip, and with no tabs there is no strip to hang
+                // it off — the panel's own empty state is the offer instead.
+                // Either way the panel comes up, because both live inside it.
+                this.workspace_hidden = false;
+                if !this.workspace.is_empty() {
+                    this.tab_chrome.toggle_menu();
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &keymap::SelectTab1, _, cx| this.select_tab(0, cx)))
@@ -263,6 +409,9 @@ impl Render for Luma {
             )
             .on_action(cx.listener(|this, _: &keymap::UndoClips, _, cx| this.undo_clips(cx)))
             .on_action(cx.listener(|this, _: &keymap::RedoClips, _, cx| this.redo_clips(cx)))
+            .on_action(cx.listener(|this, _: &keymap::DeleteNodes, _, cx| this.graph_delete(cx)))
+            .on_action(cx.listener(|this, _: &keymap::UndoGraph, _, cx| this.graph_undo(cx)))
+            .on_action(cx.listener(|this, _: &keymap::RedoGraph, _, cx| this.graph_redo(cx)))
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleLoopRegion, _, cx| {
                     this.toggle_loop_region(cx)
@@ -294,6 +443,19 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::CommitInsertOption, _, cx| {
                 this.commit_insert_menu(cx)
             }))
-            .child(shell::regions(self, window, cx))
+            .child(shell::regions(self, window, cx));
+        // The once-per-frame hover tick, at the tail so it runs after every
+        // row above has read its blend. Without it a hover wash is evaluated
+        // exactly once — on the frame the pointer's own `refresh` produced —
+        // and then freezes part-way until something unrelated invalidates the
+        // window. That is what "hover feels laggy" is, and it is also why a
+        // wash could appear to stop halfway through.
+        //
+        // The tick doubles as the staleness sweep: a row that unmounts mid-
+        // hover never gets its leave event, and this is what drops its entry.
+        if motion::hover_fades_active() {
+            window.request_animation_frame();
+        }
+        root
     }
 }

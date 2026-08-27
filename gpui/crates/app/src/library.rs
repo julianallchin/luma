@@ -72,8 +72,11 @@ use luma_lib::dispatch::{
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
 use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
-use luma_lib::models::node_graph::{BeatGrid, Graph, NodeTypeDef};
-use luma_lib::models::patterns::PatternSummary;
+use luma_lib::models::groups::FixtureGroup;
+use luma_lib::models::node_graph::{
+    BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
+};
+use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
 use luma_lib::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
 };
@@ -84,7 +87,7 @@ use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
-use luma_lib::services::track_edits::TrackEditResult;
+use luma_lib::services::track_edits::{TrackClip, TrackEditResult};
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 
@@ -1201,6 +1204,31 @@ impl Library {
         self.call("list_patterns", json!({}))
     }
 
+    /// One pattern's arg definitions, resolved against a venue — the schema
+    /// the args strip renders from. Venue-resolved on purpose, unlike
+    /// [`Self::pattern_graph`]: a venue can pin a different implementation of
+    /// the same pattern (`pattern-args-venue-divergence` in the IPC manifest),
+    /// and the strip must show the args of the graph that will actually run.
+    pub fn pattern_args(
+        &self,
+        pattern_id: &str,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<PatternArgDef>, LibraryError>> + use<> {
+        self.call(
+            "get_pattern_args",
+            json!({ "id": pattern_id, "venueId": venue_id, "implementationId": null }),
+        )
+    }
+
+    /// A venue's fixture groups — the vocabulary a selection expression is
+    /// written over, which is what seeds the strip's autocomplete.
+    pub fn venue_groups(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<FixtureGroup>, LibraryError>> + use<> {
+        self.call("list_groups", json!({ "venueId": venue_id }))
+    }
+
     /// The node catalogue: what every `typeId` in a graph means. Static for
     /// the life of the process, so a screen reads it once.
     pub fn node_types(
@@ -1249,6 +1277,32 @@ impl Library {
                 "operationId": operation_id,
                 "baseRevision": base_revision,
                 "graph": graph,
+            }),
+        )
+    }
+
+    /// Run a graph against a resolved context and hand back everything the
+    /// run produced — the per-view signals a plot draws, and optionally the
+    /// mel spectrograms (`include_mel_specs`, expensive, wanted only when a
+    /// spectrogram node is actually on screen).
+    ///
+    /// Takes the graph by value, not by id: a live preview runs what the
+    /// editor *holds*, which is routinely ahead of what the seam has saved.
+    pub fn run_graph(
+        &self,
+        graph: &Graph,
+        context: &GraphContext,
+        include_mel_specs: bool,
+    ) -> impl Future<Output = Result<RunResult, LibraryError>> + use<> {
+        self.call(
+            "run_graph",
+            json!({
+                "graph": graph,
+                "context": context,
+                "includeMelSpecs": include_mel_specs,
+                "agentThreadId": null,
+                "agentExecutionId": null,
+                "driveLivePreview": null,
             }),
         )
     }
@@ -1315,6 +1369,52 @@ impl Library {
         score_id: &str,
     ) -> impl Future<Output = Result<Vec<TrackScore>, LibraryError>> + use<> {
         self.call("list_track_scores", json!({ "scoreId": score_id }))
+    }
+
+    /// Every persisted clip's heatmap preview for `(track_id, venue_id)`, in
+    /// z-index order. Slow — the seam evaluates every clip's pattern over its
+    /// span — so a screen asks once per open and patches single clips with
+    /// [`Self::preview_clip`] afterwards.
+    pub fn annotation_previews(
+        &self,
+        track_id: &str,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<Vec<AnnotationPreview>, LibraryError>> + use<> {
+        self.call(
+            "generate_annotation_previews",
+            json!({ "trackId": track_id, "venueId": venue_id }),
+        )
+    }
+
+    /// One clip's heatmap preview, rendered from the state the editor holds
+    /// rather than the persisted row — which is what lets an edited clip's
+    /// thumbnail be redrawn before (or without) the edit being written. The
+    /// clip's id is echoed back as `annotation_id`, so an uncommitted clip is
+    /// previewable too.
+    pub fn preview_clip(
+        &self,
+        track_id: &str,
+        venue_id: &str,
+        clip_id: &str,
+        pattern_id: &str,
+        start: f64,
+        end: f64,
+        args: &serde_json::Value,
+    ) -> impl Future<Output = Result<AnnotationPreview, LibraryError>> + use<> {
+        self.call(
+            "preview_annotation",
+            json!({
+                "trackId": track_id,
+                "venueId": venue_id,
+                "annotation": {
+                    "id": clip_id,
+                    "patternId": pattern_id,
+                    "startTime": start,
+                    "endTime": end,
+                    "args": args,
+                },
+            }),
+        )
     }
 
     /// The rendered envelope of a track, at both resolutions. Large — a full
@@ -1482,6 +1582,20 @@ impl Library {
         self.call_after("host_snapshot", json!({}), after)
     }
 
+    /// A wall-clock delay, on the library's own runtime — what a UI debounce
+    /// awaits. Not `gpui`'s `background_executor().timer`: the automation
+    /// harness's headless dispatcher virtualizes gpui time and never advances
+    /// it, while this runtime keeps real time on both hosts, exactly as the
+    /// transport poll's `after` does.
+    pub fn debounce(&self, wait: Duration) -> impl Future<Output = ()> + use<> {
+        let task = self.runtime.spawn(async move {
+            tokio::time::sleep(wait).await;
+        });
+        async move {
+            task.await.ok();
+        }
+    }
+
     /// Every app setting, typed and defaulted.
     pub fn settings(&self) -> impl Future<Output = Result<AppSettings, LibraryError>> + use<> {
         self.call("get_settings", json!({}))
@@ -1502,7 +1616,7 @@ impl Library {
         key: &str,
         value: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.ordered_session_write("set_session_item", json!({ "key": key, "value": value }))
+        self.ordered_write("set_session_item", json!({ "key": key, "value": value }))
     }
 
     /// Remove one host-session value.
@@ -1510,22 +1624,34 @@ impl Library {
         &self,
         key: &str,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        self.ordered_session_write("remove_session_item", json!({ "key": key }))
+        self.ordered_write("remove_session_item", json!({ "key": key }))
     }
 
     /// Write one setting. The seam owns what a key means and what a write
     /// costs (Art-Net and audio both reload on one), so the caller's only job
     /// afterwards is to read the settings back — which is also the only honest
     /// proof the write landed.
+    ///
+    /// Through the same FIFO the session writes use, and for the same reason
+    /// stated there: a detached call finishes whenever SQLite gets to it, so
+    /// the *last* value a control sent is not necessarily the one left in the
+    /// database. That was a rarity while every settings control was a checkbox
+    /// or a picker; a dragged slider sends a value per pointer move, which
+    /// makes it routine.
     pub fn set_setting(
         &self,
         key: &str,
         value: &str,
-    ) -> impl Future<Output = Result<(), LibraryError>> {
-        self.call("set_setting", json!({ "key": key, "value": value }))
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.ordered_write("set_setting", json!({ "key": key, "value": value }))
     }
 
-    fn ordered_session_write(
+    /// One durable write, queued behind the last one.
+    ///
+    /// Named for the ordering it provides rather than for the session items it
+    /// was first written for — settings share the queue, and a name that said
+    /// "session" would make that read as a mistake.
+    fn ordered_write(
         &self,
         command: &'static str,
         args: Value,
@@ -1594,20 +1720,29 @@ impl Library {
         self.call("agent_thread_delete", json!({ "threadId": thread_id }))
     }
 
-    /// Install `track_id`'s persisted score as the render engine's active
-    /// scene, so [`Self::sample_universe`] has something to sample.
+    /// Install `track_id`'s score as the render engine's active scene, so
+    /// [`Self::sample_universe`] has something to sample.
     ///
-    /// Omitting the annotation list is what says "use the score rows" — an
-    /// empty list would be an authoritative empty document that clears the
-    /// scene instead (see `dispatch::handlers::compositor`).
+    /// `clips` is load-bearing three ways. `None` says "use the persisted score
+    /// rows" — the right answer for a screen that is only *watching* a track,
+    /// which has no working copy to offer. `Some(list)` composites that list
+    /// instead, which is how an editor's live edits reach the rig before the
+    /// trailing write does. An empty `Some` is an authoritative empty document
+    /// and clears the scene; `None` and `Some(vec![])` are therefore *not* the
+    /// same request (see `dispatch::handlers::compositor`).
     pub fn composite_track(
         &self,
         track_id: &str,
         venue_id: &str,
+        clips: Option<Vec<TrackClip>>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
             "composite_track",
-            json!({ "trackId": track_id, "venueId": venue_id }),
+            json!({
+                "trackId": track_id,
+                "venueId": venue_id,
+                "annotations": clips,
+            }),
         )
     }
 
@@ -1663,6 +1798,18 @@ impl Library {
     /// painter — see `eval::scene`.
     pub fn sample_universe(&self, t: f32) -> Option<UniverseState> {
         self.services.render_engine().sample(t)
+    }
+
+    /// Append one entry to the render telemetry log, and forget about it.
+    ///
+    /// Returns nothing, deliberately. This is called from the stage when a
+    /// frame took too long, and a report that made the next frame wait on a
+    /// file write would be reporting on a hitch it had just widened. The
+    /// command is spawned on the Tokio runtime before this returns (see
+    /// [`Self::call_after`]), so dropping the future still runs it — and a
+    /// telemetry write that fails is not a fact any screen should act on.
+    pub fn record_telemetry(&self, entry: Value) {
+        drop(self.call::<()>("append_render_telemetry", json!({ "entry": entry })));
     }
 
     /// Where the transport is, right now, in track seconds. Synchronous for
@@ -1748,10 +1895,10 @@ pub struct Rig {
 }
 
 /// The app config directory: `$APPCONFIG` as the Tauri app resolves it, with
-/// the same `LUMA_CONFIG_DIR` escape hatch the headless harness has.
+/// the same escape hatch the headless harness has.
 fn config_dir() -> Result<StorageRoot, String> {
-    match std::env::var_os("LUMA_CONFIG_DIR") {
-        Some(path) => Ok(StorageRoot::from_path(PathBuf::from(path))),
+    match luma_ui::runtime::Runtime::with(|runtime| runtime.config_dir.clone()) {
+        Some(path) => Ok(StorageRoot::from_path(path)),
         None => StorageRoot::from_env_default(),
     }
 }
@@ -1759,8 +1906,8 @@ fn config_dir() -> Result<StorageRoot, String> {
 /// Root of the bundled fixture definitions. Prefers the repo's newest bundle
 /// so a dev build sees today's fixtures, exactly as the headless harness does.
 fn fixtures_root() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("LUMA_FIXTURES_ROOT") {
-        return Ok(PathBuf::from(path));
+    if let Some(path) = luma_ui::runtime::Runtime::with(|runtime| runtime.fixtures_root.clone()) {
+        return Ok(path);
     }
     if let Some(path) = repo_fixtures_root() {
         return Ok(path);

@@ -8,8 +8,8 @@
 //!
 //! - opening a target that already has a tab *reveals* that tab rather than
 //!   minting a second view of one thing ([`Tabs::open`] is idempotent),
-//! - the visualizer and the universe are singletons per venue for free, since
-//!   there is only one `Visualizer { venue }` value per venue,
+//! - the universe is a singleton per venue for free, since there is only one
+//!   `Universe { venue }` value per venue,
 //! - "the graph agent edited a pattern, surface its tab" is a call with no
 //!   question attached — whether the tab already existed is not the caller's
 //!   problem.
@@ -24,7 +24,7 @@
 //! [`Tabs`] is ordering, selection and healing. It is not a track editor. The
 //! shell instantiates it over the enum of real editor states; the tests here
 //! instantiate it over a `&str`, which is what lets every rule — idempotent
-//! open, dead-tab healing, close-then-heal, reorder — be a plain unit test
+//! open, dead-tab healing, close-then-heal — be a plain unit test
 //! instead of a windowed one.
 //!
 //! # Switching is not closing
@@ -34,12 +34,6 @@
 //! down nothing (playback continues, a loop region stays armed), and closing
 //! runs the state's own close semantics — which the caller can only do if it
 //! is given the state to run them on.
-
-// The model lands before the shell that renders it, so that the shell swap is
-// one commit of wiring over logic that is already proven. Delete this line in
-// the same commit that mounts `Tabs` — after that, an unused method here is a
-// real finding.
-#![allow(dead_code)]
 
 /// What a workspace tab shows.
 ///
@@ -64,8 +58,6 @@ pub(crate) enum Target {
     TrackEditor { track: String, venue: String },
     /// One pattern's node graph.
     Graph { pattern: String },
-    /// One venue's rig in 3D. Singleton per venue.
-    Visualizer { venue: String },
     /// One venue's DMX patch. Singleton per venue.
     Universe { venue: String },
 }
@@ -79,18 +71,7 @@ impl Target {
         match self {
             Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
             Self::Graph { .. } => crate::keymap::context::GRAPH,
-            Self::Visualizer { .. } => crate::keymap::context::VISUALIZER,
             Self::Universe { .. } => crate::keymap::context::UNIVERSE,
-        }
-    }
-
-    /// What the `+` menu and the empty-state picker call this kind of tab.
-    pub(crate) fn kind_label(&self) -> &'static str {
-        match self {
-            Self::TrackEditor { .. } => "Track Editor",
-            Self::Graph { .. } => "Pattern",
-            Self::Visualizer { .. } => "Visualizer",
-            Self::Universe { .. } => "Universe",
         }
     }
 
@@ -103,22 +84,21 @@ impl Target {
         match self {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
             Self::Graph { pattern } => format!("graph:{pattern}"),
-            Self::Visualizer { venue } => format!("visualizer:{venue}"),
             Self::Universe { venue } => format!("universe:{venue}"),
         }
     }
 
-    /// The venue this tab dies with, when it dies with one.
+    /// The venue this tab **dies with**, when it dies with one.
     ///
     /// A track editor does not: its score names a venue, but the tab is about
     /// the track, and closing somebody's open timeline because they glanced at
     /// another room would be the shell throwing work away — which is the thing
-    /// this redesign exists to stop. Only the two rig views are a view *of* a
-    /// venue. This is the spec's open question 2, answered in the type rather
-    /// than at the call site that asks.
+    /// this redesign exists to stop. Only the patch is a view *of* a venue.
+    /// This is the spec's open question 2, answered in the type rather than at
+    /// the call site that asks.
     pub(crate) fn venue(&self) -> Option<&str> {
         match self {
-            Self::Visualizer { venue } | Self::Universe { venue } => Some(venue),
+            Self::Universe { venue } => Some(venue),
             Self::TrackEditor { .. } | Self::Graph { .. } => None,
         }
     }
@@ -194,6 +174,16 @@ impl<B> Tabs<B> {
         Some(tab.body)
     }
 
+    /// Every open tab's state, in strip order, consuming the set.
+    ///
+    /// The whole-set counterpart of [`Self::close`]: a subject that no longer
+    /// exists takes its tabs with it, and each of those states still owes its
+    /// teardown. Consuming rather than draining is what makes "the set is gone"
+    /// unrepresentable afterwards.
+    pub(crate) fn into_bodies(self) -> Vec<B> {
+        self.open.into_iter().map(|tab| tab.body).collect()
+    }
+
     /// Close every tab whose target answers `doomed`, handing back their states
     /// in strip order so the caller tears each one down.
     pub(crate) fn close_where(&mut self, doomed: impl Fn(&Target) -> bool) -> Vec<B> {
@@ -224,20 +214,6 @@ impl<B> Tabs<B> {
         if let Some(tab) = self.open.get(index) {
             self.picked = Some(tab.target.clone());
         }
-    }
-
-    /// Move the tab at `from` so that it sits at `to`, clamped into range.
-    /// Reordering never changes which tab is active, because the selection is a
-    /// target and not a position.
-    pub(crate) fn reorder(&mut self, from: usize, to: usize) {
-        if from >= self.open.len() || from == to {
-            return;
-        }
-        // Clamped against the *pre-removal* length, so a drop past the last
-        // chip means "the end" rather than one short of it.
-        let to = to.min(self.open.len() - 1);
-        let tab = self.open.remove(from);
-        self.open.insert(to, tab);
     }
 
     /// The target that actually renders: the stored pick when it still exists,
@@ -275,10 +251,6 @@ impl<B> Tabs<B> {
     /// Every open tab, in strip order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Tab<B>> {
         self.open.iter()
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Tab<B>> {
-        self.open.iter_mut()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -346,13 +318,13 @@ mod tests {
     }
 
     #[test]
-    fn a_venue_has_exactly_one_visualizer() {
+    fn a_venue_has_exactly_one_universe() {
         let mut tabs: Tabs<&str> = Tabs::default();
-        let target = Target::Visualizer {
+        let target = Target::Universe {
             venue: "aurora".to_string(),
         };
         tabs.open(target.clone(), || "one");
-        tabs.open(target, || panic!("the visualizer is a singleton per venue"));
+        tabs.open(target, || panic!("the patch is a singleton per venue"));
         assert_eq!(tabs.iter().count(), 1);
     }
 
@@ -421,29 +393,6 @@ mod tests {
     }
 
     #[test]
-    fn reorder_moves_the_chip_without_moving_the_selection() {
-        let mut tabs: Tabs<&str> = Tabs::default();
-        tabs.open(track("a"), || "a");
-        tabs.open(track("b"), || "b");
-        tabs.open(track("c"), || "c");
-        tabs.select(&track("a"));
-
-        tabs.reorder(0, 2);
-        assert_eq!(targets(&tabs), vec![track("b"), track("c"), track("a")]);
-        assert_eq!(tabs.active(), Some(&track("a")));
-    }
-
-    #[test]
-    fn reorder_out_of_range_is_a_no_op() {
-        let mut tabs: Tabs<&str> = Tabs::default();
-        tabs.open(track("a"), || "a");
-        tabs.open(track("b"), || "b");
-        tabs.reorder(9, 0);
-        tabs.reorder(0, 9);
-        assert_eq!(targets(&tabs), vec![track("b"), track("a")]);
-    }
-
-    #[test]
     fn select_index_addresses_strip_order_and_ignores_the_rest() {
         let mut tabs: Tabs<&str> = Tabs::default();
         tabs.open(track("a"), || "a");
@@ -468,10 +417,10 @@ mod tests {
         let mut tabs: Tabs<&str> = Tabs::default();
         tabs.open(track("a"), || "editor");
         tabs.open(
-            Target::Visualizer {
+            Target::Universe {
                 venue: "aurora".to_string(),
             },
-            || "aurora rig",
+            || "aurora patch",
         );
         tabs.open(
             Target::Universe {
@@ -481,9 +430,13 @@ mod tests {
         );
 
         let dropped = tabs.close_where(|target| target.venue() == Some("aurora"));
-        assert_eq!(dropped, vec!["aurora rig"]);
+        assert_eq!(dropped, vec!["aurora patch"]);
         assert_eq!(tabs.iter().count(), 2);
     }
+
+    /// The two venue questions must not collapse into one: a track editor is
+    /// *about* a venue (so the stage above it shows that room) and still
+    /// survives leaving it.
 
     #[test]
     fn element_keys_are_unique_per_target() {
@@ -491,10 +444,6 @@ mod tests {
             track("a").element_key(),
             track("b").element_key(),
             graph("p").element_key(),
-            Target::Visualizer {
-                venue: "v".to_string(),
-            }
-            .element_key(),
             Target::Universe {
                 venue: "v".to_string(),
             }
@@ -509,10 +458,6 @@ mod tests {
         let contexts = [
             track("a").key_context(),
             graph("p").key_context(),
-            Target::Visualizer {
-                venue: "v".to_string(),
-            }
-            .key_context(),
             Target::Universe {
                 venue: "v".to_string(),
             }

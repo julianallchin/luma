@@ -41,12 +41,16 @@
 //! frame has a text system in hand — which is `prepaint`, and which is also
 //! the last moment before a mouse event could ask what a card's box is.
 //!
-//! # What v1 is
+//! # What this is so far
 //!
-//! Open, read, look, move. Selection and drag-to-move persist; adding and
-//! deleting nodes and edges, editing arguments, the graph agent and the
-//! preview heatmap do not exist here yet. The seam already carries all of
-//! them — this screen is what is missing, not the commands.
+//! Open, read, look, move, select, delete, undo. The pointer resolves through
+//! [`Scene::hit`] — ports, widget slots, headers, wires — the selection is a
+//! set (shift-click and marquee both feed it), Delete removes it through
+//! [`Edit::RemoveNode`], and every command is a step on a [`History`] of
+//! whole-document snapshots. Wire creation, param editing, the palette and
+//! live preview are the phases still ahead (`docs/design/
+//! graph-editor-interaction.md` §8); the seam already carries all of them —
+//! this screen is what is missing, not the commands.
 //!
 //! A `view_signal` node draws whatever signal the view-data store
 //! ([`ViewData`]) holds for it: the traces, the min/max axis readings and the
@@ -66,26 +70,51 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use luma_ui::node::{agent_paint_node, Instrument, Role};
+use luma_ui::node::{agent_paint_node, agent_paint_node_focused, Instrument, Role};
 use luma_ui::{fonts, ladder, paint};
 
 use luma_lib::dispatch::CommandError;
+use luma_lib::models::node_graph::edit::{apply, pattern_args_def, Edit};
 use luma_lib::models::node_graph::{
-    Graph, NodeTypeDef, ParamDef, ParamOption, ParamType, PatternArgDef, PatternArgType, PortDef,
-    PortType, Signal,
+    Graph, NodeTypeDef, ParamDef, ParamOption, ParamType, PortDef, Signal,
 };
 use luma_lib::models::patterns::PatternSummary;
 
+use crate::history::History;
 use crate::shell::Body as TabBody;
 use crate::tabs::Target;
 use crate::Luma;
 
 // -- state --------------------------------------------------------------------
 
+/// The track a graph is evaluated against.
+///
+/// Resolved from the workspace when the tab opens and re-pointed when the same
+/// pattern is opened from another track — never absent, because the doors that
+/// cannot resolve one are inert (§6/§9 ruling 1 of
+/// `docs/design/graph-editor-interaction.md`). That is what makes every open
+/// graph tab preview-capable by construction: `run_graph` needs a track and a
+/// venue, and an [`Editor`] cannot exist without both.
+#[derive(Clone)]
+pub(crate) struct TrackContext {
+    pub(crate) track: String,
+    /// Unread until the preview runner lands (phase 4b) — carried from day
+    /// one because `run_graph` needs it and an editor that resolved only half
+    /// its context would have to go asking again at run time.
+    #[allow(dead_code)]
+    pub(crate) venue: String,
+    /// For the toolbar readout — ids are for the seam, not the eye.
+    pub(crate) track_name: SharedString,
+}
+
 /// The screen's whole state: the pattern it is editing, the document it read,
 /// the resolved geometry of that document, and where the eye and the hand are.
 pub struct Editor {
     pattern: PatternSummary,
+    /// See [`TrackContext`]. A field rather than part of the tab's identity:
+    /// the tab stays keyed on the pattern alone, so one document never has two
+    /// writers racing through the CAS.
+    context: TrackContext,
     /// The node catalogue, keyed by `typeId`. A graph is only titles and ports
     /// once this is in hand, so the screen draws nothing until it is.
     types: Rc<HashMap<String, NodeTypeDef>>,
@@ -101,7 +130,13 @@ pub struct Editor {
     /// `RefCell` because the measure pass needs a text system and therefore
     /// has to run inside the frame — see the module docs.
     scene: Rc<RefCell<Scene>>,
-    selected: Option<SharedString>,
+    /// The nodes the keyboard verbs act on. A set, not an option: delete,
+    /// undo's snapshot and the marquee all want "these nodes", and widening
+    /// later would have meant widening every reader twice.
+    selected: Vec<SharedString>,
+    /// Where the document has been. Whole-graph snapshots behind an `Rc`, one
+    /// checkpoint per command at the gesture boundary — see [`GraphSnapshot`].
+    history: History<GraphSnapshot>,
     gesture: Option<Gesture>,
     /// Where the eye is. A `Cell` for the same reason [`Self::origin`] is one:
     /// the first framing is a `fitView`, and a fit cannot be computed until
@@ -164,25 +199,56 @@ impl ViewData {
 }
 
 /// The authored document, and the two tokens needed to write it back.
+///
+/// The graph is behind an `Rc` so a history checkpoint is one clone of the
+/// spine: [`Editor::checkpoint`] clones the handle, and the first edit after
+/// it un-shares through [`Rc::make_mut`] — clone-on-write, paid once per
+/// command instead of once per snapshot.
 struct Document {
     implementation_id: String,
     revision: String,
-    graph: Graph,
+    graph: Rc<Graph>,
+}
+
+/// One step of [`Editor::history`]: the whole document, because the document
+/// is already the unit that gets written — a command's inverse is the graph it
+/// replaced, and every [`Edit`] gets undo for free instead of owing one.
+///
+/// The selection rides along for the reason the track editor's does: an undo
+/// that restored a node but left the selection naming something else puts the
+/// next command somewhere the eye is not.
+struct GraphSnapshot {
+    graph: Rc<Graph>,
+    selected: Vec<SharedString>,
 }
 
 /// What the pointer is doing between a press and a release.
+///
+/// A gesture is anchored to the tab it started in: every handler
+/// [`listen`] registers carries that tab's [`Target`] and routes through
+/// [`Luma::edit_graph_tab`], so switching tabs mid-drag cannot strand a
+/// gesture in a tab the handlers can no longer see (§11.5 of the design doc).
 enum Gesture {
     /// Moving the eye. `last` is the previous pointer position, so the pan
     /// follows the pointer exactly regardless of zoom.
     Pan { last: Point<Pixels> },
-    /// Moving a node. `grab` is where inside the card the pointer took hold,
-    /// in graph space, so the card does not jump to centre itself on the
-    /// pointer. `moved` distinguishes a drag from a click that selected.
+    /// Moving the selection. `grab` is where inside the pressed card the
+    /// pointer took hold, in graph space, so the card does not jump to centre
+    /// itself on the pointer. `moved` distinguishes a drag from a click that
+    /// selected. `initial` is where every carried node stood at the press —
+    /// the whole selection moves by one shared delta, as the track editor's
+    /// clips do.
     Move {
         node: SharedString,
         grab: Point<f32>,
         moved: bool,
+        initial: Vec<(SharedString, Point<f32>)>,
     },
+    /// Sweeping a selection rect, both corners in graph space. The selection
+    /// is recomputed live on every drag step — rect-intersect over
+    /// [`Scene::cards`] — and the rect is painted as a 1px
+    /// [`ladder::primary`] outline, nothing filled, nothing animated.
+    Marquee { from: Point<f32>, to: Point<f32> },
 }
 
 /// Where the eye is: a pan in window pixels and a zoom about it.
@@ -283,48 +349,146 @@ impl Editor {
             None => Scene::default(),
         };
         *self.scene.borrow_mut() = scene;
-    }
-
-    /// The card under `at` (graph space), topmost first — cards are painted in
-    /// order, so the last one that contains the point is the one on top.
-    /// Gives back the node's id and where inside the card the point fell,
-    /// rather than a borrow that would outlive the one it was read through.
-    fn card_at(&self, at: Point<f32>) -> Option<(SharedString, Point<f32>)> {
-        let scene = self.scene.borrow();
-        scene.cards.iter().rev().find_map(|card| {
-            let inside = at.x >= card.origin.x
-                && at.x <= card.origin.x + card.width
-                && at.y >= card.origin.y
-                && at.y <= card.origin.y + card.height;
-            inside.then(|| {
-                (
-                    card.node_id.clone(),
-                    point(at.x - card.origin.x, at.y - card.origin.y),
-                )
-            })
-        })
+        // A rebuild is where the document last changed hands (a delete, an
+        // undo, a canonicalized save coming back), so it is also where the
+        // selection sheds ids the document no longer has — a selection naming
+        // a dead node would aim the next delete at nothing.
+        if let Some(document) = &self.document {
+            self.selected
+                .retain(|id| document.graph.nodes.iter().any(|node| node.id == *id));
+        }
     }
 
     /// Move one node to `origin` in graph space, in both the document and the
     /// geometry drawn from it. Wires follow for free: a wire is stored as the
     /// two ports it joins, not as two points.
-    fn move_node(&mut self, node: &str, origin: Point<f32>) {
+    ///
+    /// Routed through [`apply`] like every other mutation — position is the
+    /// one edit cheap enough to run per drag tick, but it is still an edit.
+    fn move_node(&mut self, node: &SharedString, origin: Point<f32>) {
+        let types = Rc::clone(&self.types);
         let Some(document) = &mut self.document else {
             return;
         };
-        let Some(instance) = document.graph.nodes.iter_mut().find(|n| n.id == node) else {
-            return;
+        let edit = Edit::MoveNode {
+            id: node.to_string(),
+            to: (f64::from(origin.x), f64::from(origin.y)),
         };
-        instance.position_x = Some(origin.x as f64);
-        instance.position_y = Some(origin.y as f64);
+        if apply(Rc::make_mut(&mut document.graph), &types, edit).is_err() {
+            return;
+        }
         if let Some(card) = self
             .scene
             .borrow_mut()
             .cards
             .iter_mut()
-            .find(|card| card.node_id == node)
+            .find(|card| &card.node_id == node)
         {
             card.origin = origin;
+        }
+    }
+
+    /// Where the document is now, as something an undo could return to.
+    /// `None` before the document has landed — there is then nothing to step
+    /// back to, and nothing worth recording.
+    fn snapshot(&self) -> Option<GraphSnapshot> {
+        Some(GraphSnapshot {
+            graph: Rc::clone(&self.document.as_ref()?.graph),
+            selected: self.selected.clone(),
+        })
+    }
+
+    /// Mark the point an undo comes back to, before running an edit. One per
+    /// command, at the gesture boundary: a node drag checkpoints at the press
+    /// and its ticks mutate in place, so the whole drag is one step.
+    fn checkpoint(&mut self) {
+        if let Some(now) = self.snapshot() {
+            self.history.record(now);
+        }
+    }
+
+    /// Forget the last checkpoint when the edit it was taken for changed
+    /// nothing. Pointer identity answers "did anything run": every mutation
+    /// goes through [`Rc::make_mut`], and the checkpoint's own clone keeps the
+    /// graph shared, so the first real edit is also a fresh allocation.
+    fn abandon_checkpoint(&mut self) {
+        let Some(document) = &self.document else {
+            return;
+        };
+        let graph = Rc::clone(&document.graph);
+        self.history
+            .abandon_if(|was| Rc::ptr_eq(&was.graph, &graph));
+    }
+
+    /// Remove every selected node from the document — one command, one
+    /// checkpoint, however many nodes. `pattern_args` refuses its removal
+    /// inside [`apply`] and simply stays; `false` when nothing was removed at
+    /// all, which is also no step on the undo stack.
+    fn delete_selected(&mut self) -> bool {
+        let Some(before) = self.snapshot() else {
+            return false;
+        };
+        if self.selected.is_empty() {
+            return false;
+        }
+        let types = Rc::clone(&self.types);
+        let Some(document) = &mut self.document else {
+            return false;
+        };
+        let graph = Rc::make_mut(&mut document.graph);
+        let mut removed = false;
+        for id in self.selected.clone() {
+            removed |= apply(graph, &types, Edit::RemoveNode { id: id.to_string() }).is_ok();
+        }
+        if removed {
+            // Recorded after the fact, from the snapshot taken before it —
+            // which is what lets a command that did nothing leave no step.
+            self.history.record(before);
+            self.rebuild();
+        }
+        removed
+    }
+
+    /// Step back, or forward. `false` when there is nowhere to go. The step
+    /// itself records no checkpoint — it is already moving along the stack.
+    fn undo(&mut self) -> bool {
+        let Some(now) = self.snapshot() else {
+            return false;
+        };
+        let Some(was) = self.history.undo(now) else {
+            return false;
+        };
+        self.restore(was);
+        true
+    }
+
+    fn redo(&mut self) -> bool {
+        let Some(now) = self.snapshot() else {
+            return false;
+        };
+        let Some(next) = self.history.redo(now) else {
+            return false;
+        };
+        self.restore(next);
+        true
+    }
+
+    /// Put the document back to a snapshot — a rewrite of the working copy
+    /// like any other, and it owes a write like any other (the caller saves).
+    fn restore(&mut self, snapshot: GraphSnapshot) {
+        if let Some(document) = &mut self.document {
+            document.graph = snapshot.graph;
+        }
+        self.selected = snapshot.selected;
+        self.rebuild();
+    }
+
+    /// Add `node` to the selection, or take it back out — a shift-click.
+    fn toggle_selected(&mut self, node: SharedString) {
+        if let Some(at) = self.selected.iter().position(|id| id == &node) {
+            self.selected.remove(at);
+        } else {
+            self.selected.push(node);
         }
     }
 }
@@ -339,22 +503,70 @@ impl Editor {
 const SAVE_CONFLICT: &str =
     "another writer saved this pattern first — reloaded, and this change was not kept";
 
+/// Why the graph doors are inert without a track (§6/§9 ruling 1). One
+/// spelling, stated wherever a door is drawn — the pattern rows and the
+/// new-tab Pattern choice — so the two surfaces cannot drift.
+pub(crate) const NO_TRACK_REASON: &str = "Open a track to edit patterns";
+
 impl Luma {
-    /// Open a pattern's graph as a workspace tab. The catalogue and the
-    /// document are read together — a graph without the catalogue is a list
-    /// of opaque type ids, so there is nothing worth drawing until both have
-    /// landed. Reopening a pattern that already has a tab reveals it and
-    /// reloads nothing: the tab's identity is its target.
+    /// The track context the graph doors resolve against: the active tab when
+    /// it is a track editor, else the strip's remaining track-editor tab.
+    /// `None` is what makes the doors inert (§6) — every caller states the
+    /// reason where it draws.
+    ///
+    /// "Most recently active" from the design doc collapses here: the strip
+    /// is scoped per track (see `workspace.rs`), so it holds at most one
+    /// track-editor tab in practice, and the last one in strip order is that
+    /// tab.
+    pub(crate) fn graph_track_context(&self) -> Option<TrackContext> {
+        let active = self.workspace.active().cloned();
+        let mut fallback = None;
+        for tab in self.workspace.iter() {
+            if let (Target::TrackEditor { track, venue }, TabBody::TrackEditor(state)) =
+                (&tab.target, &tab.body)
+            {
+                let context = TrackContext {
+                    track: track.clone(),
+                    venue: venue.clone(),
+                    track_name: state.track_name().to_string().into(),
+                };
+                if Some(&tab.target) == active.as_ref() {
+                    return Some(context);
+                }
+                fallback = Some(context);
+            }
+        }
+        fallback
+    }
+
+    /// Open a pattern's graph as a workspace tab, against the workspace's
+    /// resolved track context. The catalogue and the document are read
+    /// together — a graph without the catalogue is a list of opaque type ids,
+    /// so there is nothing worth drawing until both have landed. Reopening a
+    /// pattern that already has a tab reveals it and **re-points its
+    /// context** — a retarget, not a reload, so one document never has two
+    /// tabs.
     pub(crate) fn open_pattern(&mut self, pattern: PatternSummary, cx: &mut Context<Self>) {
+        // No track, no door: the surfaces that lead here are inert with a
+        // stated reason before this is reachable, so a straggler call (a
+        // stale click racing a tab close) opens nothing rather than opening
+        // an editor that could not preview.
+        let Some(context) = self.graph_track_context() else {
+            return;
+        };
         self.selected_pattern = Some(pattern.clone());
         // The picker's job ends the moment it names a pattern.
-        if matches!(self.overlay, Some(crate::shell::Overlay::Patterns(_))) {
-            self.overlay = None;
+        if matches!(
+            self.overlay.as_open(),
+            Some(crate::shell::Overlay::Patterns(_))
+        ) {
+            self.close_overlay(cx);
         }
         let target = Target::Graph {
             pattern: pattern.id.clone(),
         };
         if self.workspace.body_mut(&target).is_some() {
+            self.edit_graph_tab(&target, cx, |editor| editor.context = context);
             self.workspace.select(&target);
             cx.notify();
             return;
@@ -363,11 +575,13 @@ impl Luma {
         let document = self.library.pattern_graph(&pattern.id);
         let state = Box::new(Editor {
             pattern,
+            context,
             types: Rc::new(HashMap::new()),
             views: ViewData::snapshot(cx),
             document: None,
             scene: Rc::new(RefCell::new(Scene::default())),
-            selected: None,
+            selected: Vec::new(),
+            history: History::default(),
             gesture: None,
             view: Rc::new(Cell::new(Viewport {
                 pan: point(px(0.), px(0.)),
@@ -398,7 +612,7 @@ impl Luma {
                         editor.document = Some(Document {
                             implementation_id: document.implementation_id,
                             revision: document.revision,
-                            graph: document.graph,
+                            graph: Rc::new(document.graph),
                         });
                         editor.rebuild();
                     }
@@ -425,28 +639,80 @@ impl Luma {
         }
     }
 
-    /// A press on the canvas: take hold of a card, or of the background.
-    fn graph_press(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.with_editor(cx, |editor| {
+    /// A press on the canvas: take hold of a port, a card, or the background.
+    ///
+    /// `target` is the tab the canvas belongs to — every gesture handler is
+    /// addressed, not "whatever tab is visible", so a tab switch mid-gesture
+    /// cannot strand a gesture (see [`Gesture`]).
+    fn graph_press(
+        &mut self,
+        target: &Target,
+        at: Point<Pixels>,
+        shift: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_graph_tab(target, cx, |editor| {
             let origin = editor.origin.get();
-            let cursor = editor.view.get().to_graph(origin, at);
-            match editor.card_at(cursor) {
-                Some((node, grab)) => {
-                    editor.selected = Some(node.clone());
+            let view = editor.view.get();
+            let cursor = view.to_graph(origin, at);
+            let scene = Rc::clone(&editor.scene);
+            let scene = scene.borrow();
+            match scene.hit(cursor, view.zoom) {
+                // Phase 1 of the design doc: a port press names its node. The
+                // wire drag starts here in phase 2.
+                Hit::Port { card, .. } => {
+                    editor.selected = vec![scene.cards[card].node_id.clone()];
+                }
+                Hit::Header { card } | Hit::Body { card } | Hit::Widget { card, .. } => {
+                    let node = scene.cards[card].node_id.clone();
+                    if shift {
+                        editor.toggle_selected(node);
+                        return;
+                    }
+                    // A press on an unselected card selects that card alone; a
+                    // press on a selected one carries the whole selection.
+                    if !editor.selected.contains(&node) {
+                        editor.selected = vec![node.clone()];
+                    }
+                    let grab = point(
+                        cursor.x - scene.cards[card].origin.x,
+                        cursor.y - scene.cards[card].origin.y,
+                    );
+                    // `captureBeforeDrag`: the point an undo comes back to is
+                    // where the nodes stood when the pointer took hold.
+                    // Abandoned on release if the gesture turned out to be a
+                    // press.
+                    editor.checkpoint();
+                    let initial = scene
+                        .cards
+                        .iter()
+                        .filter(|card| editor.selected.contains(&card.node_id))
+                        .map(|card| (card.node_id.clone(), card.origin))
+                        .collect();
                     editor.gesture = Some(Gesture::Move {
                         node,
                         grab,
                         moved: false,
+                        initial,
                     });
                 }
-                // A press on the background clears the selection as well as
-                // starting a pan: the web editor does the same, and a
-                // selection that survived a click elsewhere would be a second
-                // way to have one.
-                None => {
-                    editor.selected = None;
-                    editor.fit = false;
-                    editor.gesture = Some(Gesture::Pan { last: at });
+                // A wire is not draggable until phase 2, so a press on one is
+                // a press on the ground under it.
+                Hit::Wire { .. } | Hit::Empty => {
+                    if shift {
+                        editor.gesture = Some(Gesture::Marquee {
+                            from: cursor,
+                            to: cursor,
+                        });
+                    } else {
+                        // A press on the background clears the selection as
+                        // well as starting a pan: the web editor does the
+                        // same, and a selection that survived a click
+                        // elsewhere would be a second way to have one.
+                        editor.selected.clear();
+                        editor.fit = false;
+                        editor.gesture = Some(Gesture::Pan { last: at });
+                    }
                 }
             }
         });
@@ -456,15 +722,16 @@ impl Luma {
     /// it arrives for every move over the app whether or not a gesture is
     /// running — hence the early return, which is what keeps an idle mouse
     /// from notifying (and so redrawing) once per event.
-    fn graph_drag(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        match self.workspace.active_body() {
+    fn graph_drag(&mut self, target: &Target, at: Point<Pixels>, cx: &mut Context<Self>) {
+        match self.workspace.body_mut(target) {
             Some(TabBody::Graph(editor)) if editor.gesture.is_some() => {}
             _ => return,
         }
-        let mut moved = None;
-        self.with_editor(cx, |editor| {
+        let mut moves: Vec<(SharedString, Point<f32>)> = Vec::new();
+        self.edit_graph_tab(target, cx, |editor| {
             let origin = editor.origin.get();
             let mut view = editor.view.get();
+            let mut sweep = None;
             match &mut editor.gesture {
                 Some(Gesture::Pan { last }) => {
                     let delta = point(at.x - last.x, at.y - last.y);
@@ -476,16 +743,46 @@ impl Luma {
                     node,
                     grab,
                     moved: dragged,
+                    initial,
                 }) => {
                     *dragged = true;
                     let cursor = view.to_graph(origin, at);
-                    moved = Some((node.clone(), point(cursor.x - grab.x, cursor.y - grab.y)));
+                    let held = point(cursor.x - grab.x, cursor.y - grab.y);
+                    // One delta for the whole selection, measured against the
+                    // pressed card, so the group cannot shear.
+                    if let Some((_, from)) = initial.iter().find(|(id, _)| id == node) {
+                        let delta = point(held.x - from.x, held.y - from.y);
+                        moves = initial
+                            .iter()
+                            .map(|(id, from)| {
+                                (id.clone(), point(from.x + delta.x, from.y + delta.y))
+                            })
+                            .collect();
+                    }
+                }
+                Some(Gesture::Marquee { from, to }) => {
+                    *to = view.to_graph(origin, at);
+                    sweep = Some((*from, *to));
                 }
                 None => {}
             }
+            if let Some((a, b)) = sweep {
+                let scene = Rc::clone(&editor.scene);
+                let scene = scene.borrow();
+                editor.selected = scene
+                    .cards
+                    .iter()
+                    .filter(|card| card.intersects(a, b))
+                    .map(|card| card.node_id.clone())
+                    .collect();
+            }
         });
-        if let Some((node, origin)) = moved {
-            self.with_editor(cx, |editor| editor.move_node(&node, origin));
+        if !moves.is_empty() {
+            self.edit_graph_tab(target, cx, |editor| {
+                for (node, origin) in &moves {
+                    editor.move_node(node, *origin);
+                }
+            });
         }
     }
 
@@ -494,24 +791,35 @@ impl Luma {
     ///
     /// Registered on the window like [`Self::graph_drag`], and guarded the same
     /// way: a click anywhere else in the app must not redraw this screen.
-    fn graph_release(&mut self, cx: &mut Context<Self>) {
-        match self.workspace.active_body() {
+    fn graph_release(&mut self, target: &Target, cx: &mut Context<Self>) {
+        match self.workspace.body_mut(target) {
             Some(TabBody::Graph(editor)) if editor.gesture.is_some() => {}
             _ => return,
         }
         let mut save = false;
-        self.with_editor(cx, |editor| {
-            if let Some(Gesture::Move { moved: true, .. }) = editor.gesture.take() {
-                save = true;
+        self.edit_graph_tab(target, cx, |editor| match editor.gesture.take() {
+            Some(Gesture::Move { moved, .. }) => {
+                if moved {
+                    save = true;
+                } else {
+                    editor.abandon_checkpoint();
+                }
             }
+            _ => {}
         });
         if save {
-            self.save_graph(cx);
+            self.save_graph(target, cx);
         }
     }
 
-    fn graph_zoom(&mut self, at: Point<Pixels>, wheel: f32, cx: &mut Context<Self>) {
-        self.with_editor(cx, |editor| {
+    fn graph_zoom(
+        &mut self,
+        target: &Target,
+        at: Point<Pixels>,
+        wheel: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_graph_tab(target, cx, |editor| {
             editor.fit = false;
             let origin = editor.origin.get();
             let mut view = editor.view.get();
@@ -522,6 +830,53 @@ impl Luma {
         });
     }
 
+    /// The visible tab, when it is a graph editor — what a keyboard verb acts
+    /// on. The bindings are scoped to the `Graph` key context so this is a
+    /// guard, not a branch.
+    fn active_graph_target(&self) -> Option<Target> {
+        self.workspace
+            .active()
+            .filter(|target| matches!(target, Target::Graph { .. }))
+            .cloned()
+    }
+
+    /// Delete: remove the selection through [`Edit::RemoveNode`], one
+    /// command, one checkpoint, one save.
+    pub(crate) fn graph_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.active_graph_target() else {
+            return;
+        };
+        let mut removed = false;
+        self.edit_graph_tab(&target, cx, |editor| removed = editor.delete_selected());
+        if removed {
+            self.save_graph(&target, cx);
+        }
+    }
+
+    /// `Cmd+Z` / `Cmd+Shift+Z`: step the document back, or forward again.
+    /// An undo is a write like any other — it goes through the same save.
+    pub(crate) fn graph_undo(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.active_graph_target() else {
+            return;
+        };
+        let mut stepped = false;
+        self.edit_graph_tab(&target, cx, |editor| stepped = editor.undo());
+        if stepped {
+            self.save_graph(&target, cx);
+        }
+    }
+
+    pub(crate) fn graph_redo(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.active_graph_target() else {
+            return;
+        };
+        let mut stepped = false;
+        self.edit_graph_tab(&target, cx, |editor| stepped = editor.redo());
+        if stepped {
+            self.save_graph(&target, cx);
+        }
+    }
+
     /// Write the graph back, optimistically.
     ///
     /// One write is in flight at a time. A second edit made while the first is
@@ -529,8 +884,8 @@ impl Luma {
     /// concurrent writes against one `base_revision` would make the later one
     /// a conflict by construction, which is a fight with the seam rather than
     /// a use of it.
-    fn save_graph(&mut self, cx: &mut Context<Self>) {
-        let Some(TabBody::Graph(editor)) = self.workspace.active_body_mut() else {
+    fn save_graph(&mut self, target: &Target, cx: &mut Context<Self>) {
+        let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
             return;
         };
         if editor.saving {
@@ -553,12 +908,13 @@ impl Luma {
             &document.graph,
         );
         cx.notify();
+        let target = target.clone();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut flush = false;
                 let mut reload = false;
-                this.with_editor(cx, |editor| {
+                this.edit_graph_tab(&target, cx, |editor| {
                     editor.saving = false;
                     match result {
                         Ok(saved) => {
@@ -570,7 +926,7 @@ impl Luma {
                                 // it, in which case adopting it would undo a
                                 // move the user has already seen.
                                 if !editor.dirty && editor.gesture.is_none() {
-                                    document.graph = saved.graph;
+                                    document.graph = Rc::new(saved.graph);
                                     editor.rebuild();
                                 }
                             }
@@ -595,9 +951,9 @@ impl Luma {
                     editor.dirty = false;
                 });
                 if reload {
-                    this.reload_graph(cx);
+                    this.reload_graph(&target, cx);
                 } else if flush {
-                    this.save_graph(cx);
+                    this.save_graph(&target, cx);
                 }
             })
             .ok();
@@ -610,20 +966,21 @@ impl Luma {
     /// Unlike [`Self::open_pattern`] this keeps the screen — the catalogue,
     /// the viewport and the message explaining what happened all survive; only
     /// the document is replaced.
-    fn reload_graph(&mut self, cx: &mut Context<Self>) {
-        let Some(TabBody::Graph(editor)) = self.workspace.active_body() else {
+    fn reload_graph(&mut self, target: &Target, cx: &mut Context<Self>) {
+        let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
             return;
         };
         let pending = self.library.pattern_graph(&editor.pattern.id);
+        let target = target.clone();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                this.with_editor(cx, |editor| match result {
+                this.edit_graph_tab(&target, cx, |editor| match result {
                     Ok(document) => {
                         editor.document = Some(Document {
                             implementation_id: document.implementation_id,
                             revision: document.revision,
-                            graph: document.graph,
+                            graph: Rc::new(document.graph),
                         });
                         editor.rebuild();
                     }
@@ -633,17 +990,6 @@ impl Luma {
             .ok();
         })
         .detach();
-    }
-
-    /// Run `edit` against the *visible* graph tab, if there is one. Pointer
-    /// handlers and toolbar buttons come through here — they are gestures at
-    /// what the eye is on; a save or a load that must land in a specific tab
-    /// goes through [`Luma::edit_graph_tab`] instead.
-    fn with_editor(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
-        if let Some(TabBody::Graph(editor)) = self.workspace.active_body_mut() {
-            edit(editor);
-            cx.notify();
-        }
     }
 }
 
@@ -686,6 +1032,14 @@ const COLUMN_GAP: f32 = 8.;
 /// the web — which is what makes a wire land in the dot rather than beside it.
 const PORT_ANCHOR: f32 = 6.;
 const PORT_RING: f32 = 9.;
+/// The square a port answers a press from, centred on its anchor. Much larger
+/// than the painted ring on purpose: a 16px grab box is the difference between
+/// "wiring works" and "wiring is a dexterity test".
+const PORT_GRAB: f32 = 16.;
+/// How far from a wire's centreline a press still takes the wire, in *window*
+/// pixels — a hit is a pointing gesture, so its slack follows the screen, not
+/// the zoom. [`Scene::hit`] divides by the zoom to get graph units.
+const WIRE_GRAB: f32 = 6.;
 const PORT_RING_BORDER: f32 = 1.5;
 const PORT_DOT: f32 = 4.;
 /// The faint lead-in bar from the card edge to the anchor, drawn only on a
@@ -787,6 +1141,183 @@ struct Card {
     inputs: Vec<Port>,
     outputs: Vec<Port>,
     body: Body,
+    /// The card's interactive regions, card-local, in resolution order —
+    /// ports first (their grab boxes out-rank everything they overlap), then
+    /// widget slots, then the header. Resolved by [`Scene::measure`], which is
+    /// the pass that already knows every box; the interaction layer costs
+    /// zero per-frame work. Whatever no region claims is [`Hit::Body`].
+    regions: Vec<Region>,
+}
+
+impl Card {
+    fn contains(&self, at: Point<f32>) -> bool {
+        at.x >= self.origin.x
+            && at.x <= self.origin.x + self.width
+            && at.y >= self.origin.y
+            && at.y <= self.origin.y + self.height
+    }
+
+    /// Does the card's box cross the rect spanned by `a` and `b` (any two
+    /// opposite corners)? The marquee's question, asked in graph space.
+    fn intersects(&self, a: Point<f32>, b: Point<f32>) -> bool {
+        let (left, right) = (a.x.min(b.x), a.x.max(b.x));
+        let (top, bottom) = (a.y.min(b.y), a.y.max(b.y));
+        self.origin.x <= right
+            && self.origin.x + self.width >= left
+            && self.origin.y <= bottom
+            && self.origin.y + self.height >= top
+    }
+
+    /// Rebuild [`Card::regions`] from resolved geometry. Called at the end of
+    /// the measure pass — everything here (port anchors, slot ys, the card's
+    /// final width) exists only once measuring is done.
+    fn resolve_regions(&mut self) {
+        let mut regions = Vec::new();
+        for (ports, output, word) in [
+            (&self.inputs, false, "input"),
+            (&self.outputs, true, "output"),
+        ] {
+            for (index, port) in ports.iter().enumerate() {
+                regions.push(Region {
+                    origin: point(port.at.x - PORT_GRAB / 2., port.at.y - PORT_GRAB / 2.),
+                    size: size(PORT_GRAB, PORT_GRAB),
+                    kind: RegionKind::Port {
+                        port: index,
+                        output,
+                    },
+                    label: format!("{} {word} {}", self.node_id, port.id).into(),
+                });
+            }
+        }
+        // Slabs sit `PAD_H` in from the content box and — bar the
+        // self-sized select trigger — run to its far edge, exactly where
+        // `paint_body` draws them.
+        let slab_left = CARD_BORDER + PAD_H;
+        let slab_width = self.width - (CARD_BORDER + PAD_H) * 2.;
+        let widget = |index: usize,
+                      slot_y: f32,
+                      width: f32,
+                      height: f32,
+                      kind: WidgetKind,
+                      id: &SharedString| Region {
+            origin: point(slab_left, self.body_top + slot_y),
+            size: size(width, height),
+            kind: RegionKind::Widget { param: index, kind },
+            label: format!("{} param {id}", self.node_id).into(),
+        };
+        match &self.body {
+            Body::Params(params) => {
+                for (index, param) in params.iter().enumerate() {
+                    regions.push(match &param.control {
+                        Control::Field(_) => widget(
+                            index,
+                            param.slot_y,
+                            slab_width,
+                            FIELD_HEIGHT,
+                            WidgetKind::Field,
+                            &param.id,
+                        ),
+                        Control::Select { width, .. } => widget(
+                            index,
+                            param.slot_y,
+                            *width,
+                            SELECT_HEIGHT,
+                            WidgetKind::Select,
+                            &param.id,
+                        ),
+                    });
+                }
+            }
+            Body::Falloff { rows, .. } => {
+                for (index, row) in rows.iter().enumerate() {
+                    regions.push(widget(
+                        index,
+                        row.slot_y,
+                        slab_width,
+                        SLIDER_HEIGHT,
+                        WidgetKind::Slider,
+                        &row.id,
+                    ));
+                }
+            }
+            Body::None | Body::Notice { .. } | Body::Plot(_) => {}
+        }
+        regions.push(Region {
+            origin: point(0., 0.),
+            size: size(self.width, CARD_BORDER + HEADER_HEIGHT),
+            kind: RegionKind::Header,
+            label: self.title.clone(),
+        });
+        self.regions = regions;
+    }
+}
+
+/// One interactive region of a card, in card-local graph units.
+///
+/// Carries its harness label so the geometry and the name a script finds it by
+/// are minted in one place ([`Scene::measure`]) from the same port and param
+/// structs the paint reads — the label cannot drift from the thing.
+struct Region {
+    origin: Point<f32>,
+    size: Size<f32>,
+    kind: RegionKind,
+    /// `"{node} input {port}"` / `"{node} output {port}"` /
+    /// `"{node} param {id}"` — how a script says "the phase input of osc_1".
+    label: SharedString,
+}
+
+impl Region {
+    fn contains(&self, at: Point<f32>) -> bool {
+        at.x >= self.origin.x
+            && at.x <= self.origin.x + self.size.width
+            && at.y >= self.origin.y
+            && at.y <= self.origin.y + self.size.height
+    }
+}
+
+enum RegionKind {
+    Port { port: usize, output: bool },
+    Widget { param: usize, kind: WidgetKind },
+    Header,
+}
+
+/// What kind of control a widget slot is a picture of — which decides both
+/// the harness role it registers under and, in phase 3, which tier edits it.
+#[derive(Clone, Copy)]
+enum WidgetKind {
+    Field,
+    Select,
+    Slider,
+}
+
+/// What the pointer is over, resolved by [`Scene::hit`]: the one question
+/// every press, hover and future gesture asks of the canvas.
+enum Hit {
+    Port {
+        card: usize,
+        #[allow(dead_code)] // the wire drag (phase 2) starts from these two
+        port: usize,
+        #[allow(dead_code)]
+        output: bool,
+    },
+    Widget {
+        card: usize,
+        #[allow(dead_code)] // param editing (phase 3) routes on these two
+        param: usize,
+        #[allow(dead_code)]
+        kind: WidgetKind,
+    },
+    Header {
+        card: usize,
+    },
+    Body {
+        card: usize,
+    },
+    Wire {
+        #[allow(dead_code)] // disconnect (phase 2) names the edge with this
+        link: usize,
+    },
+    Empty,
 }
 
 struct Port {
@@ -827,10 +1358,16 @@ enum Body {
 }
 
 struct Param {
+    /// The catalogue param id — what the region and the write path both name
+    /// the param by.
+    id: SharedString,
     /// `None` only for the bodies that lay their own label out (the falloff
     /// sliders); every catalogue param labels its control.
     label: Option<SharedString>,
     control: Control,
+    /// Top of the control's slab, relative to the body's top. Resolved by
+    /// [`Body::measure`], whose walk is the one place that knows it.
+    slot_y: f32,
 }
 
 enum Control {
@@ -848,6 +1385,8 @@ enum Control {
 }
 
 struct SliderRow {
+    /// The catalogue param id, as on [`Param::id`].
+    id: SharedString,
     label: SharedString,
     value: f32,
     min: f32,
@@ -855,6 +1394,9 @@ struct SliderRow {
     help: SharedString,
     /// `help`, broken to the body width. Resolved by [`Scene::measure`].
     help_lines: Vec<SharedString>,
+    /// Top of the slider slab, relative to the body's top — see
+    /// [`Param::slot_y`].
+    slot_y: f32,
 }
 
 /// One view node's plot, resolved from the [`Signal`] the store handed it.
@@ -930,7 +1472,7 @@ impl Scene {
                         .map(|port| Port {
                             id: port.id.clone().into(),
                             label: port.name.clone().into(),
-                            color: ladder::port(port_key(&port.port_type)),
+                            color: ladder::port(port.port_type.key()),
                             at: point(0., 0.),
                             connected: wired.contains(&(
                                 instance.id.as_str(),
@@ -965,6 +1507,7 @@ impl Scene {
                         &instance.params,
                         views.get(&instance.id),
                     ),
+                    regions: Vec::new(),
                 }
             })
             .collect();
@@ -1061,8 +1604,63 @@ impl Scene {
             for (row, port) in card.outputs.iter_mut().enumerate() {
                 port.at = point(card.width - CARD_BORDER - PORT_ANCHOR, row_centre(row));
             }
+            card.resolve_regions();
         }
         self.measured = true;
+    }
+
+    /// What the pointer at `at` (graph space) is over, topmost card first —
+    /// cards are painted in order, so the last one containing the point is on
+    /// top. Within a card the resolution is one linear scan of its regions,
+    /// so the whole test stays O(cards) with a small constant. A wire is only
+    /// consulted when no card claims the point; `zoom` converts its
+    /// screen-space slack ([`WIRE_GRAB`]) into graph units.
+    fn hit(&self, at: Point<f32>, zoom: f32) -> Hit {
+        for (index, card) in self.cards.iter().enumerate().rev() {
+            if !card.contains(at) {
+                continue;
+            }
+            let local = point(at.x - card.origin.x, at.y - card.origin.y);
+            for region in &card.regions {
+                if !region.contains(local) {
+                    continue;
+                }
+                return match region.kind {
+                    RegionKind::Port { port, output } => Hit::Port {
+                        card: index,
+                        port,
+                        output,
+                    },
+                    RegionKind::Widget { param, kind } => Hit::Widget {
+                        card: index,
+                        param,
+                        kind,
+                    },
+                    RegionKind::Header => Hit::Header { card: index },
+                };
+            }
+            return Hit::Body { card: index };
+        }
+        let slack = WIRE_GRAB / zoom;
+        for (index, link) in self.links.iter().enumerate() {
+            let (from, to) = self.ends(link);
+            // The same four corner points `paint_wire` strokes through; the
+            // fillets round the corners by less than the slack, so the
+            // polyline is an honest stand-in for the drawn curve.
+            let corners = [
+                from,
+                point(from.x + WIRE_STUB, from.y),
+                point(to.x - WIRE_STUB, to.y),
+                to,
+            ];
+            if corners
+                .windows(2)
+                .any(|pair| segment_distance(at, pair[0], pair[1]) <= slack)
+            {
+                return Hit::Wire { link: index };
+            }
+        }
+        Hit::Empty
     }
 
     /// The box every card fits inside, in graph space — what a fit frames.
@@ -1103,6 +1701,13 @@ impl Body {
             Body::Params(params) => {
                 let mut width: f32 = 0.;
                 let mut height = PAD * 2.;
+                // A second accumulator rather than `height - PAD`: the height
+                // sum must stay term-for-term what it always was (a card's
+                // pixel height is pinned by fixtures, and float addition is
+                // not associative), while the slot wants the running y the
+                // paint walk will reach — the same sequence `paint_body`
+                // steps through.
+                let mut y = PAD;
                 for param in params.iter_mut() {
                     if let Some(label) = &param.label {
                         width = width.max(
@@ -1110,11 +1715,14 @@ impl Body {
                                 + run_width(label, PARAM_LABEL_SIZE, FontWeight::NORMAL, window),
                         );
                         height += PARAM_LABEL_LINE + PAD;
+                        y += PARAM_LABEL_LINE + PAD;
                     }
+                    param.slot_y = y;
                     match &mut param.control {
                         Control::Field(_) => {
                             width = width.max(PAD_H * 2. + FIELD_WIDTH);
                             height += FIELD_HEIGHT;
+                            y += FIELD_HEIGHT;
                         }
                         Control::Select {
                             options,
@@ -1142,9 +1750,11 @@ impl Body {
                                 + SELECT_CHEVRON;
                             width = width.max(PAD_H * 2. + *trigger);
                             height += SELECT_HEIGHT;
+                            y += SELECT_HEIGHT;
                         }
                     }
                     height += PAD;
+                    y += PAD;
                 }
                 (width, height)
             }
@@ -1179,12 +1789,22 @@ impl Body {
             }
             Body::Falloff { blurb, rows } => {
                 let inner = BODY_MAX_WIDTH - PAD_H * 2.;
-                let mut height = PAD_H * 2.
-                    + wrap(blurb, BODY_TEXT, inner, window).len() as f32 * BODY_TEXT_LINE;
+                let blurb_lines = wrap(blurb, BODY_TEXT, inner, window).len() as f32;
+                let mut height = PAD_H * 2. + blurb_lines * BODY_TEXT_LINE;
+                // The paint walk's y, alongside the height sum — see the
+                // twin comment in the `Params` arm.
+                let mut y = PAD_H + blurb_lines * BODY_TEXT_LINE;
                 for row in rows.iter_mut() {
                     row.help_lines = wrap(&row.help, HELP_TEXT, inner, window);
+                    row.slot_y = y + PAD_H + PARAM_LABEL_LINE + PAD;
                     // `space-y-2` above each group, `space-y-1` within it.
                     height += PAD_H
+                        + PARAM_LABEL_LINE
+                        + PAD
+                        + SLIDER_HEIGHT
+                        + PAD
+                        + row.help_lines.len() as f32 * HELP_TEXT_LINE;
+                    y += PAD_H
                         + PARAM_LABEL_LINE
                         + PAD
                         + SLIDER_HEIGHT
@@ -1381,31 +2001,39 @@ fn body_for(
         },
         "falloff" => Body::Falloff {
             blurb: "Softly tightens a 0..1 signal (or distance) into a pill-shaped falloff.".into(),
-            rows: vec![
-                SliderRow {
-                    label: "Width".into(),
-                    value: number(values, "width", 1.),
-                    min: 0.,
-                    max: 4.,
-                    help: "Higher = tighter pill; lower = wider falloff.".into(),
-                    help_lines: Vec::new(),
-                },
-                SliderRow {
-                    label: "Curve".into(),
-                    value: number(values, "curve", 0.),
-                    min: -1.,
-                    max: 1.,
-                    help: "Negative = softer edges, positive = snappier edges.".into(),
-                    help_lines: Vec::new(),
-                },
-            ],
+            // Bounds and defaults come from the catalogue (`ParamDef::range`);
+            // a number the catalogue gives no bounds draws no slider. Only the
+            // help copy — view prose the catalogue does not carry — stays here.
+            rows: params
+                .iter()
+                .filter_map(|param| {
+                    let (min, max) = param.range?;
+                    Some(SliderRow {
+                        id: param.id.clone().into(),
+                        label: param.name.clone().into(),
+                        value: number(values, &param.id, param.default_number.unwrap_or(0.)),
+                        min,
+                        max,
+                        help: match param.id.as_str() {
+                            "width" => "Higher = tighter pill; lower = wider falloff.",
+                            "curve" => "Negative = softer edges, positive = snappier edges.",
+                            _ => "",
+                        }
+                        .into(),
+                        help_lines: Vec::new(),
+                        slot_y: 0.,
+                    })
+                })
+                .collect(),
         },
         _ if params.is_empty() => Body::None,
         _ => Body::Params(
             params
                 .iter()
                 .map(|param| Param {
+                    id: param.id.clone().into(),
                     label: Some(param.name.clone().into()),
+                    slot_y: 0.,
                     control: match &param.param_type {
                         ParamType::Number => Control::Field(
                             decimal(number(
@@ -1464,36 +2092,6 @@ fn decimal(value: f32) -> String {
     }
 }
 
-/// The synthetic `pattern_args` definition. Mirrors `pattern-args-node-def.ts`
-/// exactly, including the rule that palettes and gradients both surface as
-/// `Stops`. `None` when the pattern has no arguments, which leaves the card on
-/// the "unknown type" path and draws a bare header.
-fn pattern_args_def(args: &[PatternArgDef]) -> Option<NodeTypeDef> {
-    if args.is_empty() {
-        return None;
-    }
-    Some(NodeTypeDef {
-        id: "pattern_args".to_string(),
-        name: "Pattern Args".to_string(),
-        description: None,
-        category: Some("Input".to_string()),
-        inputs: Vec::new(),
-        outputs: args
-            .iter()
-            .map(|arg| PortDef {
-                id: arg.id.clone(),
-                name: arg.name.clone(),
-                port_type: match arg.arg_type {
-                    PatternArgType::Selection => PortType::Selection,
-                    PatternArgType::Palette | PatternArgType::Gradient => PortType::Stops,
-                    PatternArgType::Color | PatternArgType::Scalar => PortType::Signal,
-                },
-            })
-            .collect(),
-        params: Vec::new(),
-    })
-}
-
 /// A node's stored position, or the same fallback grid the web editor lays out
 /// when one is missing: five across, 200 × 150 apart.
 fn placement(x: Option<f64>, y: Option<f64>, index: usize) -> Point<f32> {
@@ -1501,23 +2099,6 @@ fn placement(x: Option<f64>, y: Option<f64>, index: usize) -> Point<f32> {
         x.map(|x| x as f32).unwrap_or((index % 5) as f32 * 200.),
         y.map(|y| y as f32).unwrap_or((index / 5) as f32 * 150.),
     )
-}
-
-/// `PortType`'s wire spelling — the key `ladder::port` is a palette over.
-/// Matched exhaustively so that a new port type is a compile error here rather
-/// than a silently grey wire.
-fn port_key(port_type: &PortType) -> &'static str {
-    match port_type {
-        PortType::Intensity => "Intensity",
-        PortType::Audio => "Audio",
-        PortType::BeatGrid => "BeatGrid",
-        PortType::Series => "Series",
-        PortType::Color => "Color",
-        PortType::Selection => "Selection",
-        PortType::Signal => "Signal",
-        PortType::Events => "Events",
-        PortType::Stops => "Stops",
-    }
 }
 
 // -- rendering ----------------------------------------------------------------
@@ -1567,6 +2148,13 @@ fn toolbar(state: &Editor, _app: &Entity<Luma>) -> Div {
                 .agent_node(Role::Text, state.pattern.name.clone()),
         )
         .child(luma_ui::silkscreen(format!("{nodes} NODES")))
+        // The resolved context, shown: implicit context that silently changes
+        // what the plots mean is obscurity; a context that is never shown is
+        // worse than none (§6).
+        .child(luma_ui::silkscreen(format!(
+            "TRACK {}",
+            state.context.track_name.to_uppercase()
+        )))
         .child(div().flex_1())
         // Named rather than merely drawn: "did the write land" is the question
         // this screen exists to answer, and inferring it from a node's
@@ -1589,10 +2177,20 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let painted = Rc::clone(&state.scene);
     let measured_view = Rc::clone(&state.view);
     let painted_view = Rc::clone(&state.view);
+    let registered_selected = state.selected.clone();
     let selected = state.selected.clone();
+    let marquee = match &state.gesture {
+        Some(Gesture::Marquee { from, to }) => Some((*from, *to)),
+        _ => None,
+    };
     let origin = Rc::clone(&state.origin);
     let fit = state.fit;
     let fitted_size = Rc::clone(&state.fitted_size);
+    // The tab the canvas belongs to: every handler this frame registers is
+    // addressed to it, not to whatever tab is visible when the event lands.
+    let target = Target::Graph {
+        pattern: state.pattern.id.clone(),
+    };
     let app = app.clone();
 
     div().flex_1().overflow_hidden().child(
@@ -1622,12 +2220,50 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                     }
                 }
                 // Registered here, alongside every laid-out control, so the
-                // frame's node ids stay in tree order.
+                // frame's node ids stay in tree order. A selected card reports
+                // `focused` — it is where the keyboard verbs land next.
                 let scene = registered.borrow();
                 let view = measured_view.get();
                 for card in &scene.cards {
                     let box_ = view.card_box(bounds.origin, card);
-                    agent_paint_node(Role::Card, card.title.clone(), box_, window, cx);
+                    agent_paint_node_focused(
+                        Role::Card,
+                        card.title.clone(),
+                        box_,
+                        registered_selected.contains(&card.node_id),
+                        window,
+                        cx,
+                    );
+                    // The hit regions double as the harness's address book:
+                    // one rect, one label, minted together in the measure
+                    // pass, registered together here.
+                    for region in &card.regions {
+                        let role = match region.kind {
+                            RegionKind::Port { .. } => Role::Button,
+                            RegionKind::Widget { kind, .. } => match kind {
+                                WidgetKind::Field => Role::Input,
+                                WidgetKind::Select => Role::Select,
+                                WidgetKind::Slider => Role::Slider,
+                            },
+                            // The card node already names the whole card; a
+                            // header node would be a second spelling of it.
+                            RegionKind::Header => continue,
+                        };
+                        let box_ = Bounds {
+                            origin: view.to_window(
+                                bounds.origin,
+                                point(
+                                    card.origin.x + region.origin.x,
+                                    card.origin.y + region.origin.y,
+                                ),
+                            ),
+                            size: size(
+                                px(region.size.width * view.zoom),
+                                px(region.size.height * view.zoom),
+                            ),
+                        };
+                        agent_paint_node(role, region.label.clone(), box_, window, cx);
+                    }
                 }
                 window.insert_hitbox(bounds, HitboxBehavior::Normal)
             },
@@ -1636,11 +2272,12 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                     bounds,
                     &painted.borrow(),
                     painted_view.get(),
-                    selected.as_ref(),
+                    &selected,
+                    marquee,
                     window,
                     cx,
                 );
-                listen(&app, &hitbox, window);
+                listen(&app, target.clone(), &hitbox, window);
             },
         )
         .size_full(),
@@ -1654,8 +2291,9 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
 /// off the window — must keep tracking, and must end when the button comes up
 /// wherever that happens. A gesture that could only end inside the element it
 /// started in is a gesture that can be left stuck on.
-fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
+fn listen(app: &Entity<Luma>, target: Target, hitbox: &Hitbox, window: &mut Window) {
     let pressed = app.clone();
+    let press_target = target.clone();
     let inside = hitbox.clone();
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble
@@ -1665,21 +2303,26 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
             return;
         }
         let at = event.position;
-        pressed.update(cx, |this, cx| this.graph_press(at, cx));
+        let shift = event.modifiers.shift;
+        pressed.update(cx, |this, cx| {
+            this.graph_press(&press_target, at, shift, cx)
+        });
     });
 
     let dragged = app.clone();
+    let drag_target = target.clone();
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
         if phase == DispatchPhase::Bubble {
             let at = event.position;
-            dragged.update(cx, |this, cx| this.graph_drag(at, cx));
+            dragged.update(cx, |this, cx| this.graph_drag(&drag_target, at, cx));
         }
     });
 
     let released = app.clone();
+    let release_target = target.clone();
     window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
         if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-            released.update(cx, |this, cx| this.graph_release(cx));
+            released.update(cx, |this, cx| this.graph_release(&release_target, cx));
         }
     });
 
@@ -1691,7 +2334,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
         }
         let wheel = f32::from(event.delta.pixel_delta(window.line_height()).y);
         let at = event.position;
-        zoomed.update(cx, |this, cx| this.graph_zoom(at, wheel, cx));
+        zoomed.update(cx, |this, cx| this.graph_zoom(&target, at, wheel, cx));
     });
 }
 
@@ -1706,7 +2349,8 @@ fn paint(
     bounds: Bounds<Pixels>,
     scene: &Scene,
     view: Viewport,
-    selected: Option<&SharedString>,
+    selected: &[SharedString],
+    marquee: Option<(Point<f32>, Point<f32>)>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -1730,10 +2374,31 @@ fn paint(
                 box_,
                 card,
                 view.zoom,
-                selected.is_some_and(|id| id == &card.node_id),
+                selected.iter().any(|id| id == &card.node_id),
                 window,
                 cx,
             );
+        }
+        // The marquee, over everything: a 1px `--primary` outline, nothing
+        // filled, nothing animated. Constant 1px because the rect is a
+        // pointing gesture — window-space chrome, not graph-space content.
+        if let Some((a, b)) = marquee {
+            let min = point(a.x.min(b.x), a.y.min(b.y));
+            let max = point(a.x.max(b.x), a.y.max(b.y));
+            window.paint_quad(quad(
+                Bounds {
+                    origin: view.to_window(bounds.origin, min),
+                    size: size(
+                        px((max.x - min.x) * view.zoom),
+                        px((max.y - min.y) * view.zoom),
+                    ),
+                },
+                Corners::default(),
+                transparent_black(),
+                Edges::all(px(1.)),
+                ladder::primary(),
+                BorderStyle::Solid,
+            ));
         }
     });
 }
@@ -2409,6 +3074,18 @@ fn paint_wire(
 
 fn distance(from: Point<f32>, to: Point<f32>) -> f32 {
     ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt()
+}
+
+/// How far `at` is from the segment `a`–`b`: the distance to the projection of
+/// `at` onto the segment, clamped to its ends.
+fn segment_distance(at: Point<f32>, a: Point<f32>, b: Point<f32>) -> f32 {
+    let length = distance(a, b);
+    if length == 0. {
+        return distance(at, a);
+    }
+    let t = (((at.x - a.x) * (b.x - a.x) + (at.y - a.y) * (b.y - a.y)) / (length * length))
+        .clamp(0., 1.);
+    distance(at, point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
 }
 
 /// Pull a point `by` away from `from`, toward `to`.

@@ -59,6 +59,8 @@ pub(crate) mod context {
     pub const PATTERNS: &str = "Patterns";
     pub const SETTINGS: &str = "Settings";
     pub const ADD_TRACKS: &str = "AddTracks";
+    /// The chat-history picker.
+    pub const CHAT_HISTORY: &str = "ChatHistory";
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
     /// because the chat's composer, in another crate, declares the same
@@ -99,13 +101,21 @@ actions!(
         OpenPatterns,
         /// Open settings over the whole shell.
         OpenSettings,
-        /// Open the 3D stage view as a workspace tab.
-        OpenVisualizer,
+        /// Give the stage pane's room back to the editor under it, or take it
+        /// again. Not an "open": which room the stage shows is implied by the
+        /// visible tab, so this is a preference about screen space and never a
+        /// navigation.
+        ToggleVisualizer,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
         /// Undo / redo the track editor's last edit.
         UndoClips,
         RedoClips,
+        /// Remove the graph editor's selected nodes.
+        DeleteNodes,
+        /// Undo / redo the graph editor's last edit.
+        UndoGraph,
+        RedoGraph,
         /// Loop the track editor's cursor range, or clear the loop it already
         /// describes.
         ToggleLoopRegion,
@@ -140,30 +150,38 @@ pub(crate) fn init(cx: &mut App) {
     // platform, which is why there is no `cfg` here.
     let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
     let shell = format!(
-        "{} && !{} && !{} && !{} && !{}",
+        "{} && !{} && !{} && !{} && !{} && !{}",
         context::ROOT,
         context::VENUES,
         context::PATTERNS,
         context::SETTINGS,
-        context::ADD_TRACKS
+        context::ADD_TRACKS,
+        context::CHAT_HISTORY
     );
     // A dialog owns Escape even when its current child is a text field. Route
     // dismissal policy remains in `Luma::dismiss_overlay` (notably, the
     // required first-venue screen refuses to close).
     let dialog = format!(
-        "{} || {} || {} || {}",
+        "{} || {} || {} || {} || {}",
         context::VENUES,
         context::PATTERNS,
         context::SETTINGS,
-        context::ADD_TRACKS
+        context::ADD_TRACKS,
+        context::CHAT_HISTORY
     );
     // Every track-editor binding shares one predicate: it means something in
     // that tab and nothing anywhere else, and a field taking typed text
     // out-ranks all of it — `f` is a letter, `delete` is a correction, and
     // `secondary-c` is the clipboard the field already owns.
     let editing = format!("{} && !{}", context::TRACK_EDITOR, context::TEXT_INPUT);
+    // The graph editor's bindings carry the same exclusion for the same
+    // reason: a promoted param widget (phase 3) is a text field, and `delete`
+    // is a correction there, not a command.
+    let graphing = format!("{} && !{}", context::GRAPH, context::TEXT_INPUT);
     let mut bindings = vec![
         KeyBinding::new("space", PlayPause, Some(&editing)),
+        KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
+        KeyBinding::new("backspace", DeleteNodes, Some(&graphing)),
         // `f` is a character a person could be typing, so it carries the same
         // text-input exclusion the space bar does.
         KeyBinding::new("f", FollowPlayhead, Some(&editing)),
@@ -190,8 +208,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("secondary-p", OpenPatterns, Some(&shell)),
         KeyBinding::new("secondary-,", OpenSettings, Some(&shell)),
         // Not a bare letter: the track editor's alphabet is already spoken
-        // for, and this opens a tab beside that editor.
-        KeyBinding::new("secondary-shift-v", OpenVisualizer, Some(&shell)),
+        // for, and this reshapes the column that editor sits in.
+        KeyBinding::new("secondary-shift-v", ToggleVisualizer, Some(&shell)),
         KeyBinding::new("secondary-1", SelectTab1, Some(&shell)),
         KeyBinding::new("secondary-2", SelectTab2, Some(&shell)),
         KeyBinding::new("secondary-3", SelectTab3, Some(&shell)),
@@ -204,6 +222,8 @@ pub(crate) fn init(cx: &mut App) {
     ];
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);
+    chord(&mut bindings, "z", UndoGraph, &graphing);
+    chord(&mut bindings, "shift-z", RedoGraph, &graphing);
     chord(&mut bindings, "e", SplitClips, &editing);
     chord(&mut bindings, "c", CopyClips, &editing);
     chord(&mut bindings, "x", CutClips, &editing);

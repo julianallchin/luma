@@ -90,7 +90,11 @@ pub struct Tracks {
     error: Option<String>,
     ownership: Ownership,
     in_venue: bool,
+    /// The typed query, mirrored out of [`Self::search`] on every edit. The
+    /// field is the editor; this is what `refilter` reads.
     query: String,
+    search: Entity<luma_ui::text_input::TextInput>,
+    _search_subscription: Subscription,
     /// The signed-in principal, snapshotted when the venue was selected. The
     /// ownership filter reads it.
     user: Option<String>,
@@ -120,6 +124,20 @@ impl Tracks {
     /// The loaded row a click carries. Looked up by id rather than by index
     /// because the click was registered against a *filtered* list, and the
     /// filters can change before it lands.
+    /// First row whose title contains `needle`, for the launch-time
+    /// reproduction driver. Substring rather than exact because the titles this
+    /// is aimed at are long enough that nobody types them correctly.
+    pub(crate) fn find_titled(&self, needle: &str) -> Option<TrackBrowserRow> {
+        self.rows
+            .iter()
+            .find(|row| {
+                row.title
+                    .as_deref()
+                    .is_some_and(|title| title.to_lowercase().contains(&needle.to_lowercase()))
+            })
+            .cloned()
+    }
+
     pub(crate) fn find(&self, track_id: &str) -> Option<TrackBrowserRow> {
         self.rows.iter().find(|row| row.id == track_id).cloned()
     }
@@ -185,17 +203,33 @@ impl Luma {
         self.venue_selection_generation = self.venue_selection_generation.wrapping_add(1);
         let generation = self.venue_selection_generation;
         let venue_id = venue.id.clone();
-        let leaving: Vec<crate::shell::Body> = self
-            .workspace
-            .close_where(|target| target.venue().is_some_and(|owner| owner != venue.id));
+        // Across every parked set, not just the one on screen: a patch tab for
+        // the room being left is just as stale sitting in another track's
+        // remembered strip as it is in this one. The track and graph tabs in
+        // those sets stay — they are about their own subjects, and the room
+        // they were opened beside is not one of them.
+        let leaving: Vec<crate::shell::Body> =
+            self.parked.close_where(&mut self.workspace, |target| {
+                target.venue().is_some_and(|owner| owner != venue.id)
+            });
         for body in leaving {
             self.teardown(body, cx);
         }
-        self.overlay = None;
+        self.close_overlay(cx);
         let pending = self.library.tracks(&venue.id);
         let remember = self
             .library
             .set_session_item(crate::welcome::LAST_VENUE, &venue.id);
+        let search = cx.new(|cx| luma_ui::text_input::TextInput::search(PLACEHOLDER, cx));
+        let search_focus = search.read(cx).focus_handle(cx);
+        let search_subscription = cx.subscribe(&search, |luma, field, event, cx| {
+            if event == &luma_ui::text_input::Event::Edited {
+                let query = field.read(cx).text().to_string();
+                luma.track_search_changed(query, cx);
+            } else {
+                cx.notify();
+            }
+        });
         self.sidebar = Some(Tracks {
             venue_id: venue.id,
             venue_name: venue.name,
@@ -207,9 +241,11 @@ impl Luma {
             ownership: Ownership::Mine,
             in_venue: true,
             query: String::new(),
+            search,
+            _search_subscription: search_subscription,
             user: self.library.user_id().map(str::to_string),
             venue_focus: cx.focus_handle().tab_stop(true),
-            search_focus: cx.focus_handle(),
+            search_focus,
         });
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -249,26 +285,30 @@ impl Luma {
         });
     }
 
-    /// One keystroke into the search field. Filtering is immediate — the web
+    /// Mirror an edit of the sidebar filter. Filtering is immediate — the web
     /// side debounces because every keystroke there re-renders a React tree
     /// over the same already-loaded rows; here the work is one pass over a
     /// `Vec` and a `uniform_list` that redraws a screenful either way.
-    fn search_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+    fn track_search_changed(&mut self, query: String, cx: &mut Context<Self>) {
         self.with_tracks(cx, |state| {
-            match keystroke.key.as_str() {
-                "backspace" => {
-                    state.query.pop();
-                }
-                "escape" => state.query.clear(),
-                _ => match keystroke.key_char.as_deref() {
-                    // A keystroke with no character is a chord or a navigation
-                    // key: not text, and not this field's business.
-                    Some(text) if !text.contains(['\n', '\t']) => state.query.push_str(text),
-                    _ => return,
-                },
-            }
+            state.query = query;
             state.refilter();
         });
+    }
+
+    /// Escape inside the sidebar filter clears it rather than reaching the
+    /// shell. The field's own keymap leaves escape unbound (it is navigation,
+    /// not text), so it arrives here — and a query is the nearest thing to
+    /// dismiss when one is up.
+    fn track_search_escape(&mut self, cx: &mut Context<Self>) {
+        let field = self
+            .sidebar
+            .as_ref()
+            .filter(|state| !state.query.is_empty())
+            .map(|state| state.search.clone());
+        if let Some(field) = field {
+            field.update(cx, |field, cx| field.set_text("", cx));
+        }
     }
 
     /// Run a synchronous edit against the selected venue's browser.
@@ -288,11 +328,24 @@ impl Luma {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Tracks),
     ) {
-        if let Some(state) = &mut self.sidebar {
-            if state.venue_id() == venue_id && state.load_generation == generation {
-                edit(state);
-                cx.notify();
-            }
+        let Some(state) = &mut self.sidebar else {
+            return;
+        };
+        if state.venue_id() != venue_id || state.load_generation != generation {
+            return;
+        }
+        edit(state);
+        // A loaded catalogue is the only statement this shell ever gets about
+        // which tracks exist: there is no delete gesture, so a track that has
+        // stopped appearing here has gone, and the tabs remembered under it can
+        // never be reached again. Read before `notify` so the strip and the
+        // sidebar agree within one frame.
+        let surviving: Option<Vec<String>> = state
+            .loaded
+            .then(|| state.rows.iter().map(|row| row.id.clone()).collect());
+        cx.notify();
+        if let Some(surviving) = surviving {
+            self.prune_tab_scopes(venue_id, &surviving, cx);
         }
     }
 }
@@ -309,12 +362,13 @@ const DOT: f32 = 6.;
 /// placeholder and a loaded cover occupy the same rect and a row cannot change
 /// shape when its art arrives.
 const ART: f32 = 32.;
-/// The art's corner radius — chrome tier, so comet's small-control radius.
-const ART_RADIUS: f32 = 4.;
 
 /// The sidebar: the venue's name (the way back to the picker), the search,
 /// the filters, and the venue's tracks as a row list.
-pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+/// `selected` is the picked track, which is *not* the same as the open editor
+/// tab: the pick is what the strip and the stage are scoped to, and it survives
+/// closing that track's tabs.
+pub fn sidebar(state: &Tracks, selected: Option<&str>, app: &Entity<Luma>, window: &Window) -> Div {
     div()
         .size_full()
         .flex()
@@ -340,7 +394,7 @@ pub fn sidebar(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 },
                 ladder::muted_foreground(),
             ),
-            None => body(state, app).into_any_element(),
+            None => body(state, selected, app).into_any_element(),
         })
 }
 
@@ -367,7 +421,7 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 .tab_stop(true)
                 .h(px(24.))
                 .px(px(8.))
-                .rounded(px(6.))
+                .rounded(px(luma_ui::radius::CONTROL))
                 .flex()
                 .items_center()
                 .gap(px(6.))
@@ -394,7 +448,7 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
             div()
                 .id("add-track")
                 .size(px(24.0))
-                .rounded(px(6.0))
+                .rounded(px(luma_ui::radius::CONTROL))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -443,7 +497,6 @@ fn filters(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
 /// filter, and every one of those is a control `luma-ui` would have to own for
 /// the whole app rather than one this list invents.
 fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
-    const PLACEHOLDER: &str = "Search tracks…";
     let empty = state.query.is_empty();
     let text = if empty { PLACEHOLDER } else { &state.query };
     let focus = state.search_focus.clone();
@@ -455,32 +508,29 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
         .px(px(8.))
         .flex()
         .items_center()
-        .rounded(px(6.))
+        .rounded(px(luma_ui::radius::CONTROL))
         .bg(luma_ui::glass::wash(0.04))
         .border_1()
         .border_color(luma_ui::glass::hairline(0.08))
         .text_size(px(12.))
-        .text_color(if empty {
-            luma_ui::glass::ink(0.35)
-        } else {
-            luma_ui::glass::ink(0.85)
-        })
-        .child(SharedString::from(text.to_string()))
-        .track_focus(&focus)
-        // While this field has the keyboard, a key a person could be typing
-        // is text and not a shortcut — see `keymap`. Escape is the reason
-        // this is not academic: it clears the query here and dismisses an
-        // overlay everywhere else.
-        .key_context(crate::keymap::context::TEXT_INPUT)
-        // A press focuses it: `track_focus` registers that itself, and it also
-        // stops the shell root underneath from taking the focus back.
+        // Keys the field leaves unbound bubble through here — see
+        // `Luma::track_search_escape`.
         .on_key_down(move |event, _, cx| {
-            let keystroke = event.keystroke.clone();
-            typed.update(cx, |this, cx| this.search_key(&keystroke, cx));
+            if event.keystroke.key == "escape" {
+                typed.update(cx, |this, cx| this.track_search_escape(cx));
+            }
         })
+        .child(state.search.clone())
+        // The semantic label is the field's VALUE once there is one: a driver
+        // asserting on this is asking what it says, not what it would say if
+        // empty.
         .agent_node(Role::Input, text.to_string())
         .agent_focused(focus.is_focused(window))
 }
+
+/// What the sidebar filter says while it is empty. One spelling: the field is
+/// constructed where the venue opens and rendered far below it.
+const PLACEHOLDER: &str = "Search tracks…";
 
 /// One glass filter pill: quiet ink that washes when pressed. The sidebar's
 /// own control, not `luma_toggle` — the ladder's slabs belong inside the
@@ -490,7 +540,7 @@ fn filter_pill(id: &'static str, label: &'static str, on: bool) -> gpui::Statefu
         .id(id)
         .h(px(20.))
         .px(px(8.))
-        .rounded(px(6.))
+        .rounded(px(luma_ui::radius::CONTROL))
         .flex()
         .items_center()
         .text_size(px(11.))
@@ -537,21 +587,26 @@ fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
 /// thousands costs one screenful of elements — the same reason the web side
 /// runs a virtualizer. Everything the closure needs is refcounted, so a redraw
 /// copies two pointers rather than the library.
-fn body(state: &Tracks, app: &Entity<Luma>) -> Div {
+fn body(state: &Tracks, selected: Option<&str>, app: &Entity<Luma>) -> Div {
     let rows = Rc::clone(&state.rows);
     let shown = Rc::clone(&state.shown);
     let app = app.clone();
+    let selected = selected.map(str::to_string);
     div().flex_1().overflow_hidden().child(
         uniform_list("tracks", shown.len(), move |range, _, _| {
             range
-                .map(|index| track_row(index, &rows[shown[index]], &app))
+                .map(|index| {
+                    let row = &rows[shown[index]];
+                    let picked = selected.as_deref() == Some(row.id.as_str());
+                    track_row(row, picked, &app)
+                })
                 .collect()
         })
         .size_full(),
     )
 }
 
-fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyElement {
+fn track_row(track: &TrackBrowserRow, picked: bool, app: &Entity<Luma>) -> AnyElement {
     let name = track_name(track);
     let opened = app.clone();
     let track_id = track.id.clone();
@@ -577,15 +632,26 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
             let track_id = track_id.clone();
             opened.update(cx, |this, cx| this.open_track(&track_id, cx));
         })
-        .rounded(px(6.))
-        .hover(|row| row.bg(luma_ui::glass::wash(0.06)))
+        // Comet's selection recipe, from the one place it is written down:
+        // hover and selection share the *fill*, and only the picked row also
+        // carries the inset ring. Two fills would make a hovered row and the
+        // picked row compete for one reading, and the moment the pointer rests
+        // on the picked row they would have to resolve into one anyway.
+        .rounded(px(luma_ui::radius::ROW))
+        .when(picked, |row| {
+            row.bg(luma_ui::glass::card_selected_bg())
+                .shadow(luma_ui::glass::card_selected_shadows())
+        })
+        .when(!picked, |row| {
+            row.hover(|row| row.bg(luma_ui::glass::glass_hover()))
+        })
         .child(
             div()
                 .flex_shrink_0()
                 .w(px(DOT))
                 .children(coverage_dot(track)),
         )
-        .child(album_art(track))
+        .child(album_art(track.album_art_path.as_deref(), ART))
         .child(
             div()
                 .flex_1()
@@ -603,7 +669,12 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
                     div()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(luma_ui::glass::ink(0.88))
+                        // The picked row is the one the whole workspace is
+                        // scoped to, so it carries full ink; the rest sit back
+                        // as a quiet list. This is the only weight difference —
+                        // the ring above already says which row is picked, and
+                        // a second louder signal would just be shouting.
+                        .text_color(luma_ui::glass::ink(if picked { 0.95 } else { 0.72 }))
                         .child(name.clone()),
                 )
                 .child(
@@ -629,19 +700,18 @@ fn track_row(_index: usize, track: &TrackBrowserRow, app: &Entity<Luma>) -> AnyE
 /// image cache, so a row scrolled back into view costs a cache hit rather than
 /// a decode — the reason the web side has to preload art by hand
 /// (`track-browser.tsx`) and this one does not.
-fn album_art(track: &TrackBrowserRow) -> Div {
+pub(crate) fn album_art(path: Option<&str>, size: f32) -> Div {
     div()
         .flex_shrink_0()
-        .size(px(ART))
-        .rounded(px(ART_RADIUS))
+        .size(px(size))
+        // A hair tighter than the row that holds it — a thumbnail nested in a
+        // rounded row wants the smaller corner, or the two radii fight.
+        .rounded(px(luma_ui::radius::CHIP))
         .overflow_hidden()
         .bg(luma_ui::glass::wash(0.06))
         .children(
-            track
-                .album_art_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-                .map(|path| img(PathBuf::from(path)).size(px(ART))),
+            path.filter(|path| !path.is_empty())
+                .map(|path| img(PathBuf::from(path)).size(px(size))),
         )
 }
 

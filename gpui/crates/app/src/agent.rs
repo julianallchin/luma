@@ -31,24 +31,54 @@ use crate::Luma;
 /// will resolve its own score; until then the row opens the editor, which
 /// amounts to the same conversation.
 pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
-    match app.workspace.active_body()? {
-        Body::TrackEditor(state) => {
-            let (track, venue, score) = state.subject()?;
-            Some(ThreadScope::track(track, venue, score))
-        }
-        Body::Graph(editor) => {
-            let (pattern, implementation) = editor.subject()?;
-            Some(ThreadScope {
-                agent_kind: AgentKind::PatternGraph,
-                subject_kind: SubjectKind::Pattern,
-                subject_id: pattern,
-                implementation_id: Some(implementation),
-                venue_id: None,
-                score_id: None,
-            })
-        }
-        Body::Visualizer(_) | Body::Universe(_) => None,
+    // Each editor gets its companion agent, keyed on the tab in *front*: the
+    // web app pairs the track sidebar with the track agent and the pattern
+    // editor's Agent tab with the graph agent, and front-tab scoping is that
+    // same contract in a single-chat-column shell. An active graph tab is the
+    // pattern-graph conversation; tabs that name no agent of their own (the
+    // patch) fall back to the track being worked on, so glancing at the rig
+    // does not end a track conversation. Deliberately the dumbest switch that
+    // makes both agents reachable: the eventual design injects the open
+    // view's context into the user message instead of deriving agent identity
+    // from a tab, and supersedes this.
+    if let Some(Body::Graph(editor)) = app.workspace.active_body() {
+        let (pattern, implementation) = editor.subject()?;
+        return Some(ThreadScope {
+            agent_kind: AgentKind::PatternGraph,
+            subject_kind: SubjectKind::Pattern,
+            subject_id: pattern,
+            implementation_id: Some(implementation),
+            venue_id: None,
+            score_id: None,
+        });
     }
+    current_track(app)
+}
+
+/// The track the workspace is about: the focused editor if one is focused,
+/// otherwise the last track editor opened.
+///
+/// The fallback is what makes the rule hold while a graph tab is in front —
+/// without it, switching away from a track would read as "no track", and the
+/// thread would drift to whatever the new tab named.
+fn track_scope(body: &Body) -> Option<ThreadScope> {
+    let Body::TrackEditor(state) = body else {
+        return None;
+    };
+    let (track, venue, score) = state.subject()?;
+    Some(ThreadScope::track(track, venue, score))
+}
+
+fn current_track(app: &Luma) -> Option<ThreadScope> {
+    app.workspace
+        .active_body()
+        .and_then(track_scope)
+        .or_else(|| {
+            app.workspace
+                .iter()
+                .filter_map(|tab| track_scope(&tab.body))
+                .last()
+        })
 }
 
 impl Luma {
@@ -79,7 +109,15 @@ impl Luma {
             }
         }
         let agent = self.library.agent();
-        self.chat = Some(cx.new(|cx| AgentChat::new(agent, wanted, window, cx)));
+        let chat = cx.new(|cx| AgentChat::new(agent, wanted, window, cx));
+        // The panel cannot open a modal — overlays are the shell's to mount —
+        // so rewind arrives here as a request. Held with the chat: a re-pointed
+        // centre builds a new entity, and a subscription to the old one would
+        // be a button that stopped working after the first navigation.
+        self.chat_subscription = Some(cx.subscribe(&chat, |this, _, event, cx| match event {
+            luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
+        }));
+        self.chat = Some(chat);
         cx.notify();
     }
 }

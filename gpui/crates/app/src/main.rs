@@ -13,6 +13,11 @@ fn main() {
         std::process::exit(2);
     }
 
+    // Resolve the environment's answer once, on the thread that will own the
+    // app, so nothing downstream re-reads it. The harness installs its own
+    // instead — see `luma_ui::runtime`.
+    luma_ui::runtime::Runtime::default().install();
+
     let library = match Library::open() {
         Ok(library) => library,
         Err(error) => {
@@ -26,6 +31,11 @@ fn main() {
     let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
     app.run(move |cx| {
         luma_app::init(cx);
+        // Before the window exists, because compiling every render pipeline is
+        // the longest thing between launch and a first frame and it does not
+        // need anything the window provides. Returns immediately; the stage
+        // reports the progress (see `visualizer::body`).
+        luma_render::warm();
 
         let options = WindowOptions {
             // No *visible* native chrome: `chrome`'s head bands draw it, the same
@@ -55,9 +65,13 @@ fn main() {
             // the plane, the titlebar and the sidebar are `luma_ui::glass`
             // surfaces and there is nothing behind them but this. Instrument
             // cards paint opaque over it. If this is ever set at runtime, only
-            // `Blurred` keeps the backing `NSVisualEffectView` alive — see
-            // `luma_ui::glass::window_background_appearance`.
-            window_background: luma_chat::theme::window_background_appearance(),
+            // `Blurred` keeps the backing `NSVisualEffectView` alive — see the
+            // function's own docs.
+            //
+            // Straight from `luma_ui`: the chat re-exports this, but reading a
+            // window property through the chat's palette would say the chat
+            // owns it, and it belongs to the tier the whole shell paints in.
+            window_background: luma_ui::glass::window_background_appearance(),
             ..Default::default()
         };
 

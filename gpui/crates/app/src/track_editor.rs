@@ -68,7 +68,20 @@
 //! those and nothing else, and there is no per-command undo to write or to
 //! get wrong.
 //!
-//! What is still missing is the minimap and clip body previews.
+//! What is still missing is the minimap.
+//!
+//! # Clip bodies are heatmap previews
+//!
+//! A clip's body carries its pattern's space-time heatmap — the same picture
+//! the web timeline stretches over `drawAnnotations` — read once per open
+//! through `generate_annotation_previews` and patched one clip at a time
+//! through `preview_annotation` after each committed edit, coalesced per clip
+//! so a burst of writes costs one trailing render. The seam hands back a tiny
+//! RGBA grid (a column per sixteenth-beat, a row per primitive); it is baked
+//! once into a block-per-cell image the GPU stretches over the body at any
+//! zoom — see [`bake`] and [`paint_preview`]. Previews are decoration: a track whose patterns
+//! have no graphs simply keeps the flat translucent fill, and so does any
+//! clip too narrow to read.
 //!
 //! # The vertical bands, which are the whole pointer contract
 //!
@@ -96,29 +109,33 @@
 //! nodes (`"<pattern> start"` / `"<pattern> end"`), which is what a script
 //! drags to resize — the clip's own centre is nowhere near either edge.
 
-use std::cell::Cell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::Enabled;
-use luma_ui::{ladder, paint};
+use luma_ui::{float, ladder, paint};
 
 use luma_lib::dispatch::CommandError;
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, BlendMode};
-use luma_lib::models::patterns::PatternSummary;
+use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
 use luma_lib::models::scores::TrackScore;
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::waveforms::{BandEnvelopes, TrackWaveform};
 use luma_lib::services::track_edits::TrackClip;
 
+use crate::history::History;
 use crate::shell::Body;
 use crate::tabs::Target;
 use crate::{LibraryError, Luma};
+
+mod strip;
 
 // -- state --------------------------------------------------------------------
 
@@ -168,8 +185,19 @@ pub struct Editor {
     /// Every pattern in the library, by id: the clip labels, and what a
     /// right-click offers to insert.
     patterns: Rc<Vec<PatternSummary>>,
+    /// Heatmap previews by clip id, shared with the frame — the resample
+    /// cache inside each entry is written at paint time, which is why the map
+    /// sits behind the same interior-mutability arrangement as
+    /// [`Self::canvas`].
+    previews: Rc<RefCell<HashMap<SharedString, Preview>>>,
+    /// Clips whose single-clip preview render is in flight.
+    preview_inflight: HashSet<SharedString>,
+    /// Clips edited again while their render was in flight. Re-issued when it
+    /// lands — the render reads the clip's current state at issue, so one
+    /// trailing render covers everything a burst of edits did.
+    preview_queued: HashSet<SharedString>,
     /// Where the timeline has been, and where an undo took it back from.
-    history: History,
+    history: History<Snapshot>,
     /// The last cut or copy, in the shape a paste needs. Local to the screen,
     /// as the web store's is.
     clipboard: Option<Clipboard>,
@@ -179,6 +207,10 @@ pub struct Editor {
     loop_region: Option<(f64, f64)>,
     /// The open insertion menu, if a right-click put one up.
     menu: Option<InsertMenu>,
+    /// The menu's list scroll, so the keyboard cursor can pull an off-screen
+    /// pattern into view — a cursor past the clip edge otherwise commits a row
+    /// the user cannot see.
+    menu_scroll: ScrollHandle,
     /// Every selected clip, in the order they were added. A list rather than
     /// one id because the web's shift-click, marquee and group drag all act on
     /// a set, and "one selected clip" is only the common case of that.
@@ -219,6 +251,22 @@ pub struct Editor {
     /// Whether the screen's first load has finished. Written in one assignment
     /// with the data, so "still loading" and "nothing here" cannot be confused.
     loaded: bool,
+    /// The clip list the render engine's installed scene was compiled from.
+    ///
+    /// The rig is lit by a *scene*, and installing one is a command — so an
+    /// edit that never re-composited is an edit the visualizer cannot show,
+    /// however faithfully the timeline draws it. Holding what was sent makes
+    /// "is the rig behind the working copy" a comparison rather than a guess,
+    /// and lets a repaint that changed nothing cost nothing. `None` until the
+    /// first load lands.
+    composited: Option<Rc<[Clip]>>,
+    /// A composite is in flight. One at a time, for the reason every other
+    /// in-flight flag here exists: two installs racing would leave whichever
+    /// landed later lighting the rig, and that is not necessarily the later
+    /// edit. The reconcile re-issues from what it sees when this clears.
+    compositing: bool,
+    /// The args inspector under the timeline — see [`strip`].
+    strip: strip::Strip,
 }
 
 /// The score being edited, and whether this host owns it.
@@ -280,6 +328,60 @@ impl Clip {
             ..self.clone()
         }
     }
+}
+
+/// One clip's heatmap, baked for the GPU — see [`bake`].
+struct Preview {
+    /// Two frames under one identity — frame 0 at [`BODY_ALPHA`], frame 1
+    /// opaque — so selecting a clip picks a frame instead of a second image.
+    /// The identity is the clip's for as long as it has a preview: a
+    /// re-render refreshes one atlas tile instead of abandoning a trail of
+    /// them — `STAGE_IMAGE_ID`'s trick in `visualizer.rs`, one per clip.
+    image: Arc<RenderImage>,
+    /// Whether the atlas has been told about these bytes. False for every
+    /// fresh bake, so the painter refreshes the tile under the kept identity
+    /// before drawing it.
+    published: bool,
+}
+
+impl Preview {
+    /// A seam row baked under `identity` — the retiring preview's, so the
+    /// atlas tile is reused — or a fresh one. `None` for a row that is not
+    /// `width * height` of RGBA: a seam drift this painter cannot draw, and
+    /// skipping it leaves the flat fill, which is already what a missing
+    /// preview means.
+    fn decode(row: AnnotationPreview, identity: Option<ImageId>) -> Option<(SharedString, Self)> {
+        if row.width == 0
+            || row.height == 0
+            || row.pixels.len() != (row.width * row.height * 4) as usize
+        {
+            return None;
+        }
+        let mut image = bake(row.width, row.height, &row.pixels);
+        if let Some(id) = identity {
+            image.id = id;
+        }
+        Some((
+            row.annotation_id.into(),
+            Self {
+                image: Arc::new(image),
+                published: false,
+            },
+        ))
+    }
+}
+
+/// What the range on screen wants of the fine waveform — see
+/// [`Editor::fine_need`].
+enum FineNeed {
+    /// What is held answers the range on screen, a measurement of it is
+    /// already in flight, or this zoom has no use for one.
+    Nothing,
+    /// The view is back under the stored envelope's own resolution: the held
+    /// window should go.
+    Discard,
+    /// Measure this.
+    Measure(Cut),
 }
 
 /// A fine window's identity: the range measured, into how many buckets, for
@@ -357,42 +459,18 @@ struct Clipboard {
 /// The selection and the cursor travel with the clips because they point into
 /// them: an undo that restored a deleted clip but left the selection naming
 /// what was there instead would put the next command somewhere the eye is not.
-#[derive(Clone)]
-struct Snapshot {
-    clips: Rc<[Clip]>,
-    selected: Vec<SharedString>,
-    cursor: Option<Cursor>,
-}
-
-/// Where the timeline has been, and — after an undo — where it was before it
-/// stepped back.
 ///
 /// Whole snapshots rather than a log of inverse edits, because the whole list
 /// is already the unit this screen edits *and* writes. A command is a
 /// replacement, so its inverse is the list it replaced, and every command gets
 /// undo for free instead of owing an inverse of its own. A clip list is a few
 /// hundred small structs behind an `Rc`, so a step costs one clone of the
-/// list's spine.
-#[derive(Default)]
-struct History {
-    past: Vec<Snapshot>,
-    future: Vec<Snapshot>,
-}
-
-impl History {
-    /// How far back an undo reaches. A stack that never forgot would grow for
-    /// as long as the screen is open.
-    const DEPTH: usize = 100;
-
-    /// Mark a point to come back to. A fresh edit is a new branch, so whatever
-    /// a previous undo left ahead of here is gone.
-    fn record(&mut self, now: Snapshot) {
-        self.future.clear();
-        if self.past.len() >= Self::DEPTH {
-            self.past.remove(0);
-        }
-        self.past.push(now);
-    }
+/// list's spine. The stack itself is [`crate::history::History`].
+#[derive(Clone)]
+struct Snapshot {
+    clips: Rc<[Clip]>,
+    selected: Vec<SharedString>,
+    cursor: Option<Cursor>,
 }
 
 /// A right-click's pending insertion: where the clip would go, and the
@@ -732,6 +810,11 @@ impl View {
         f64::from((offset + self.scroll) / self.zoom)
     }
 
+    /// The time range a canvas `width` pixels wide shows.
+    fn visible(&self, width: f32) -> (f64, f64) {
+        (self.time_at(0.), self.time_at(width))
+    }
+
     /// Where a time lands, in pixels from the canvas's left edge. Floored,
     /// because every coordinate in `timeline-drawing.ts` is.
     fn x_of(self, time: f64) -> f32 {
@@ -825,8 +908,7 @@ impl Editor {
 
     /// The range on screen, from the canvas the last frame painted.
     fn visible(&self) -> (f64, f64) {
-        let width = f32::from(self.canvas.get().size.width);
-        (self.view.time_at(0.), self.view.time_at(width))
+        self.view.visible(f32::from(self.canvas.get().size.width))
     }
 
     /// The window worth measuring, or `None` while the stored envelope still
@@ -858,6 +940,30 @@ impl Editor {
             buckets: buckets as usize,
             zoom: self.view.zoom,
         })
+    }
+
+    /// What the range on screen wants of the fine waveform.
+    ///
+    /// The prepaint's gate and the request itself are the same question, so
+    /// they are the same function. Prepaint learns the canvas's width and has
+    /// to ask for a window measured in it, but it learns that width again on
+    /// every frame of a sidebar slide, and a deferred round trip through the
+    /// app per frame to be told the window in hand already covers it is the
+    /// whole cost of asking — [`FINE_MARGIN`] means it usually does.
+    fn fine_need(&self) -> FineNeed {
+        let Some(want) = self.fine_window() else {
+            // Back under the stored envelope's own resolution, where measuring
+            // would only reproduce it.
+            return if self.fine.is_some() {
+                FineNeed::Discard
+            } else {
+                FineNeed::Nothing
+            };
+        };
+        if self.fine_pending.is_some() || self.drawn_buckets().is_some() {
+            return FineNeed::Nothing;
+        }
+        FineNeed::Measure(want)
     }
 
     /// How many measured buckets the canvas is drawing from, or `None` when it
@@ -1056,40 +1162,30 @@ impl Editor {
     }
 
     /// Forget the last checkpoint when the edit it was taken for changed
-    /// nothing — so a press that only selected, or a command with nothing to
-    /// do, does not put a step on the stack that undoes to itself.
+    /// nothing.
     ///
     /// [`Self::replace_clips`] is the only thing that swaps the list and it
     /// always swaps in a fresh allocation, so pointer identity answers exactly
     /// the question "did anything run".
     fn abandon_checkpoint(&mut self) {
-        let untouched = self
-            .history
-            .past
-            .last()
-            .is_some_and(|was| Rc::ptr_eq(&was.clips, &self.clips));
-        if untouched {
-            self.history.past.pop();
-        }
+        let clips = Rc::clone(&self.clips);
+        self.history
+            .abandon_if(|was| Rc::ptr_eq(&was.clips, &clips));
     }
 
     /// Step back, or forward. `false` when there is nowhere to go.
     fn undo(&mut self) -> bool {
-        let Some(was) = self.history.past.pop() else {
+        let Some(was) = self.history.undo(self.snapshot()) else {
             return false;
         };
-        let now = self.snapshot();
-        self.history.future.push(now);
         self.restore(was);
         true
     }
 
     fn redo(&mut self) -> bool {
-        let Some(next) = self.history.future.pop() else {
+        let Some(next) = self.history.redo(self.snapshot()) else {
             return false;
         };
-        let now = self.snapshot();
-        self.history.past.push(now);
         self.restore(next);
         true
     }
@@ -1206,6 +1302,34 @@ impl Editor {
             .collect();
         self.clips = clips.into();
         self.selected = self.selected.iter().map(rename).collect();
+    }
+
+    /// Adopt a whole track's previews, replacing whatever was here — the shape
+    /// `generate_annotation_previews` answers in. A clip the seam did not name
+    /// drops out; a clip it did keeps its atlas identity so the repaint
+    /// refreshes a tile rather than minting one.
+    fn install_previews(&mut self, rows: Vec<AnnotationPreview>) {
+        let mut previews = self.previews.borrow_mut();
+        let mut retired = std::mem::take(&mut *previews);
+        for row in rows {
+            let identity = retired
+                .remove(row.annotation_id.as_str())
+                .map(|previous| previous.image.id);
+            if let Some((id, preview)) = Preview::decode(row, identity) {
+                previews.insert(id, preview);
+            }
+        }
+    }
+
+    /// Adopt one clip's re-rendered preview — `preview_annotation`'s answer.
+    fn install_preview(&mut self, row: AnnotationPreview) {
+        let mut previews = self.previews.borrow_mut();
+        let identity = previews
+            .remove(row.annotation_id.as_str())
+            .map(|previous| previous.image.id);
+        if let Some((id, preview)) = Preview::decode(row, identity) {
+            previews.insert(id, preview);
+        }
     }
 
     /// Clear both the selection and the cursor: what a press on anything that
@@ -1500,6 +1624,7 @@ impl Editor {
         } else {
             menu.active.saturating_sub(1)
         };
+        self.menu_scroll.scroll_to_item(menu.active);
     }
 
     /// The pattern `Enter` would put down, with the insertion it belongs to.
@@ -1725,6 +1850,15 @@ impl Luma {
             return;
         };
         self.selected_track = Some(track.id.clone());
+        // Picking the track *is* changing the strip's subject, and the tab
+        // this gesture is about to open belongs to the arriving set. Syncing
+        // here rather than waiting for the next draw is what keeps it out of
+        // the outgoing track's remembered tabs — the swap is a no-op whenever
+        // the scope has not actually moved, so paying for it here is free.
+        self.sync_workspace_scope(cx);
+        let Some(browser) = &self.sidebar else {
+            return;
+        };
         let venue_id = browser.venue_id().to_string();
         let target = Target::TrackEditor {
             track: track_id.to_string(),
@@ -1754,10 +1888,14 @@ impl Luma {
             clips: Vec::new().into(),
             base: Vec::new().into(),
             patterns: Rc::new(Vec::new()),
+            previews: Rc::new(RefCell::new(HashMap::new())),
+            preview_inflight: HashSet::new(),
+            preview_queued: HashSet::new(),
             history: History::default(),
             clipboard: None,
             loop_region: None,
             menu: None,
+            menu_scroll: ScrollHandle::new(),
             selected: Vec::new(),
             cursor: None,
             follow: false,
@@ -1777,8 +1915,30 @@ impl Luma {
             saving: false,
             error: None,
             loaded: false,
+            composited: None,
+            compositing: false,
+            strip: strip::Strip::default(),
         });
         self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
+
+        // The previews ride their own task because they are the one slow read
+        // — the seam evaluates every clip's pattern over its span — and the
+        // timeline is complete without them. A failure installs nothing and
+        // says nothing: a library whose patterns have no graphs answers this
+        // with an error, and that is a track with flat clip bodies, not a
+        // broken screen.
+        let previews = self.library.annotation_previews(track_id, &venue_id);
+        let preview_target = target.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(rows) = previews.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.edit_track_tab(&preview_target, cx, |editor| editor.install_previews(rows));
+            })
+            .ok();
+        })
+        .detach();
 
         let library = cx.entity();
         cx.spawn(async move |this, cx| {
@@ -1833,6 +1993,10 @@ impl Luma {
                             let clips: Vec<TrackClip> = clips.iter().map(TrackClip::from).collect();
                             editor.clips = resolve(&clips, &editor.patterns);
                             editor.base = clips.into();
+                            // What just loaded *is* what a watcher composites
+                            // from the score rows, so opening the screen owes
+                            // no install of its own — only an edit does.
+                            editor.composited = Some(Rc::clone(&editor.clips));
                         }
                         Some(Err(error)) => editor.error = Some(error.to_string()),
                         None => {}
@@ -2128,6 +2292,7 @@ impl Luma {
                 insert,
                 active: 0,
             });
+            editor.menu_scroll.scroll_to_item(0);
         });
     }
 
@@ -2528,19 +2693,27 @@ impl Luma {
     /// and the prepaint that first tells the canvas how wide it is. The old
     /// measurement is kept until the new one lands, so a scrub or a pan draws
     /// the coarse envelope at worst and never a blank bed.
+    /// Whether [`Self::ensure_fine_waveform`] would do anything, asked without
+    /// a deferred round trip through the app — see [`Editor::fine_need`].
+    fn wants_fine_waveform(&self) -> bool {
+        match self.workspace.active_body() {
+            Some(Body::TrackEditor(state)) => !matches!(state.fine_need(), FineNeed::Nothing),
+            _ => false,
+        }
+    }
+
     fn ensure_fine_waveform(&mut self, cx: &mut Context<Self>) {
         let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
-        let Some(want) = state.fine_window() else {
-            // Back under the stored envelope's own resolution, where measuring
-            // would only reproduce it.
-            state.fine = None;
-            return;
+        let want = match state.fine_need() {
+            FineNeed::Nothing => return,
+            FineNeed::Discard => {
+                state.fine = None;
+                return;
+            }
+            FineNeed::Measure(want) => want,
         };
-        if state.fine_pending.is_some() || state.drawn_buckets().is_some() {
-            return;
-        }
         state.fine_pending = Some(want);
         let duration = state
             .waveform
@@ -2621,6 +2794,35 @@ impl Luma {
         }
         state.saving = true;
         state.error = None;
+        // Which clips this write changes in a way their heatmap can see —
+        // created, or moved/re-argued; a restack or a blend change draws the
+        // same preview. Decided against the base *now*, because by the time
+        // the write lands the base is the candidate; renders are issued only
+        // once the write has, under whatever ids the seam minted.
+        let previous: HashMap<&str, &TrackClip> = state
+            .base
+            .iter()
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect();
+        let stale: Vec<String> = candidate
+            .iter()
+            .filter(|clip| {
+                previous.get(clip.id.as_str()).map_or(true, |base| {
+                    base.pattern_id != clip.pattern_id
+                        || base.start_time != clip.start_time
+                        || base.end_time != clip.end_time
+                        || base.args != clip.args
+                })
+            })
+            .map(|clip| clip.id.clone())
+            .collect();
+        let removed: Vec<String> = state
+            .base
+            .iter()
+            .filter(|clip| !candidate.iter().any(|kept| kept.id == clip.id))
+            .map(|clip| clip.id.clone())
+            .collect();
+        drop(previous);
         // Minted per *write*, not per attempt: this id is what lets the seam
         // replay a durable outcome rather than guess from a later snapshot.
         let operation = uuid::Uuid::new_v4().to_string();
@@ -2637,10 +2839,31 @@ impl Luma {
             this.update(cx, |this, cx| {
                 let mut again = false;
                 let mut reload = false;
+                let mut refresh: Vec<SharedString> = Vec::new();
                 this.with_track_editor(cx, |editor| {
                     editor.saving = false;
                     match result {
                         Ok(saved) => {
+                            // The stored edit is what makes these renders
+                            // worth having: under the seam's ids for the
+                            // creates, and with the deleted clips' pictures
+                            // let go.
+                            refresh = stale
+                                .iter()
+                                .map(|id| {
+                                    saved
+                                        .id_map
+                                        .get(id)
+                                        .cloned()
+                                        .unwrap_or_else(|| id.clone())
+                                        .into()
+                                })
+                                .collect();
+                            let mut previews = editor.previews.borrow_mut();
+                            for id in &removed {
+                                previews.remove(id.as_str());
+                            }
+                            drop(previews);
                             editor.base = saved.clips.clone().into();
                             editor.adopt_ids(&saved.id_map);
                             // The authoritative list is adopted whole only
@@ -2671,6 +2894,9 @@ impl Luma {
                     }
                     again = editor.dirty;
                 });
+                for id in refresh {
+                    this.refresh_clip_preview(id, cx);
+                }
                 if reload {
                     this.reload_clips(cx);
                 } else if again {
@@ -2715,6 +2941,64 @@ impl Luma {
 
     /// Run `edit` against the track editor, if that is still what is showing.
     /// A load or a write that lands after the user navigated away is a no-op.
+    /// Re-render one clip's heatmap from the working copy's row.
+    ///
+    /// Coalesced per clip, the way the web store's `updatePreview` is: an edit
+    /// landing while this clip's render is in flight queues one trailing
+    /// re-issue instead of a backlog, and because the render reads the clip's
+    /// *current* state when it is issued, that one trailing render covers
+    /// everything the burst did.
+    fn refresh_clip_preview(&mut self, id: SharedString, cx: &mut Context<Self>) {
+        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
+            return;
+        };
+        if state.preview_inflight.contains(&id) {
+            state.preview_queued.insert(id);
+            return;
+        }
+        // A clip deleted since the edit that asked has no body to preview.
+        let Some(clip) = state.clips.iter().find(|clip| clip.id == id) else {
+            return;
+        };
+        let (pattern, start, end, args) = (
+            clip.pattern.clone(),
+            clip.start,
+            clip.end,
+            clip.args.clone(),
+        );
+        state.preview_inflight.insert(id.clone());
+        let pending = self.library.preview_clip(
+            &state.track_id,
+            &state.venue_id,
+            &id,
+            &pattern,
+            start,
+            end,
+            &args,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                let mut again = false;
+                this.with_track_editor(cx, |editor| {
+                    editor.preview_inflight.remove(&id);
+                    again = editor.preview_queued.remove(&id);
+                    // A render that failed keeps the previous thumbnail — a
+                    // stale picture over a truthful clip box, exactly what the
+                    // screen shows while a slow render is still on its way.
+                    if let Ok(row) = result {
+                        editor.install_preview(row);
+                    }
+                });
+                if again {
+                    this.refresh_clip_preview(id, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn with_track_editor(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Editor)) {
         if let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() {
             edit(state);
@@ -2870,13 +3154,89 @@ impl Layout {
 
 // -- rendering ----------------------------------------------------------------
 
+/// Keep the render engine's installed scene in step with the working copy.
+///
+/// The visualizer samples an *installed* scene ([`Library::sample_universe`]),
+/// and installing is a command — so without this, every edit the timeline made
+/// was invisible on the rig until the view was re-opened. Reconciled rather
+/// than issued per gesture: the render pass is the one place every path that
+/// can change a clip has already converged, so no edit site has to remember to
+/// invalidate, and a frame's worth of picker motion is one install.
+///
+/// The comparison is the *scene's* inputs, not the list's identity: a write
+/// landing re-resolves the working copy into an equal list, and re-compiling
+/// for that would put one composite behind every save.
+fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
+    if editor.compositing || editor.score.is_none() {
+        return;
+    }
+    let Some(last) = editor.composited.as_ref() else {
+        return;
+    };
+    if same_scene(last, &editor.clips) {
+        return;
+    }
+    let sent = Rc::clone(&editor.clips);
+    let clips: Vec<TrackClip> = sent.iter().map(Clip::to_track_clip).collect();
+    let (track, venue) = (editor.track_id.clone(), editor.venue_id.clone());
+    editor.compositing = true;
+    cx.spawn(async move |this, cx| {
+        let Ok(pending) = this.update(cx, |this, _| {
+            this.library.composite_track(&track, &venue, Some(clips))
+        }) else {
+            return;
+        };
+        pending.await.ok();
+        this.update(cx, |this, cx| {
+            this.with_track_editor(cx, |editor| {
+                editor.compositing = false;
+                // What was sent, not what is current: an edit made while this
+                // was in flight is exactly what the next reconcile must see.
+                editor.composited = Some(sent);
+            });
+        })
+        .ok();
+    })
+    .detach();
+}
+
+/// Do these two lists compile to the same scene?
+///
+/// Every field the compositor reads and no others — a clip's lane, label and
+/// colour are pictures of it, and moving one lights nothing differently.
+fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.id == b.id
+                && a.pattern == b.pattern
+                && a.start == b.start
+                && a.end == b.end
+                && a.z == b.z
+                && a.blend == b.blend
+                && a.args == b.args
+        })
+}
+
 /// Render the screen: a toolbar strip over the canvas.
 ///
 /// The same split as the graph editor, and for the same reason — a panel is a
 /// stack of boxes and gpui lays boxes out well, while a timeline is a
 /// coordinate system nothing gpui lays out could express without a box per
 /// clip per beat.
-pub fn track_editor(state: &Editor, app: &Entity<Luma>) -> Div {
+pub fn track_editor(
+    state: &mut Editor,
+    app: &Entity<Luma>,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> Div {
+    // Reconcile the args strip against the selection before drawing it — the
+    // render pass is where every path that can move the subject converges,
+    // and the one place a `Window` is in hand to build its entities.
+    strip::sync(state, window, cx);
+    // …and the rig against the working copy, for the same reason: an edit is
+    // only real once the scene it changed has been installed.
+    sync_composite(state, cx);
+    let state = &*state;
     div()
         .size_full()
         .flex()
@@ -2906,6 +3266,10 @@ pub fn track_editor(state: &Editor, app: &Entity<Luma>) -> Div {
                 .children(state.menu.map(|target| insert_menu(state, target, app)))
                 .into_any_element(),
         })
+        // The args inspector, under everything and in every state — a
+        // fixed-height plane, so what the selection does can never reflow
+        // the timeline above it.
+        .child(strip::strip(state, app))
 }
 
 /// The patterns a right-click offers, and where its clip would land.
@@ -2916,7 +3280,7 @@ pub fn track_editor(state: &Editor, app: &Entity<Luma>) -> Div {
 /// web anchors the menu itself — that difference is deliberate, and the
 /// insertion it commits is identical.
 fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
-    let mut list = div()
+    div()
         .absolute()
         // Opaque to the pointer: the canvas listens for presses over its whole
         // hitbox and dismisses the menu on any of them, and a *Normal* hitbox
@@ -2933,27 +3297,52 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
         .bg(ladder::control())
         .border_1()
         .border_color(ladder::control_border())
-        .child(luma_ui::silkscreen("INSERT PATTERN".to_string()).into_any_element());
-    for (index, pattern) in state.patterns.iter().enumerate() {
-        let app = app.clone();
-        let chosen = pattern.clone();
-        let name: SharedString = pattern.name.clone().into();
-        list = list.child(
-            // The active row wears the ladder's hover fill, so what `Enter`
-            // would commit is the row a pointer would be over — one
-            // affordance for "this one", whichever moved it there.
-            luma_ui::luma_button(&pattern.name, Enabled::Yes)
-                .when(index == target.active, |el| el.bg(ladder::hover()))
-                .id(SharedString::from(format!("insert-{}", pattern.id)))
-                .w_full()
-                .on_click(move |_, _, cx| {
-                    let chosen = chosen.clone();
-                    app.update(cx, |this, cx| this.insert_pattern(target, chosen, cx));
-                })
-                .agent_node(Role::Row, name),
-        );
-    }
-    list
+        .child(luma_ui::silkscreen("INSERT PATTERN".to_string()).into_any_element())
+        // A real scroller under the drawer's header, gutters outside it
+        // (`float::viewport`'s contract): the library outgrows the canvas, and
+        // `step_menu`'s `scroll_to_item` keeps the row `Enter` would commit on
+        // screen instead of clipped below the drawer's edge.
+        .child(
+            float::viewport()
+                // Content-sized and shrinkable, not `flex_1`: a dialog card
+                // hands the viewport a definite height to fill, while this
+                // drawer's height IS its content — a zero flex basis (or the
+                // list's own `h_full`, a percentage of this auto-height
+                // wrapper) collapses the rows. Past `max_h_full` the shrink
+                // engages and the scroller takes over.
+                .flex_initial()
+                .flex()
+                .flex_col()
+                .child(
+                    float::list()
+                        .id("insert-menu-list")
+                        .h_auto()
+                        .min_h_0()
+                        .flex_initial()
+                        .overflow_y_scroll()
+                        .track_scroll(&state.menu_scroll)
+                        .children(state.patterns.iter().enumerate().map(|(index, pattern)| {
+                            let app = app.clone();
+                            let chosen = pattern.clone();
+                            let name: SharedString = pattern.name.clone().into();
+                            // The active row wears the ladder's hover fill, so
+                            // what `Enter` would commit is the row a pointer
+                            // would be over — one affordance for "this one",
+                            // whichever moved it there.
+                            luma_ui::luma_button(&pattern.name, Enabled::Yes)
+                                .when(index == target.active, |el| el.bg(ladder::hover()))
+                                .id(SharedString::from(format!("insert-{}", pattern.id)))
+                                .w_full()
+                                .on_click(move |_, _, cx| {
+                                    let chosen = chosen.clone();
+                                    app.update(cx, |this, cx| {
+                                        this.insert_pattern(target, chosen, cx);
+                                    });
+                                })
+                                .agent_node(Role::Row, name)
+                        })),
+                ),
+        )
 }
 
 /// The way back, what is open, the transport, and whether a write is in the
@@ -3071,6 +3460,7 @@ pub(crate) fn clock(seconds: f32) -> String {
 fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let scene = Scene {
         clips: Rc::clone(&state.clips),
+        previews: Rc::clone(&state.previews),
         waveform: state.waveform.clone(),
         fine: state.fine.clone(),
         beats: state.beats.clone(),
@@ -3098,8 +3488,11 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                 // How *wide* it is is also what a fine window is measured in,
                 // so a width this canvas has not seen before is the other
                 // moment one has to be asked for. Deferred, because a draw may
-                // not notify.
-                if canvas_bounds.replace(bounds).size.width != bounds.size.width {
+                // not notify — and gated on the window in hand not answering
+                // the new width, because a sidebar slide hands this a new width
+                // every frame and all but a few of them are already covered.
+                let widened = canvas_bounds.replace(bounds).size.width != bounds.size.width;
+                if widened && resized.read(cx).wants_fine_waveform() {
                     let resized = resized.clone();
                     cx.defer(move |cx| {
                         resized.update(cx, |this, cx| this.ensure_fine_waveform(cx));
@@ -3121,6 +3514,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
 #[derive(Clone)]
 struct Scene {
     clips: Rc<[Clip]>,
+    previews: Rc<RefCell<HashMap<SharedString, Preview>>>,
     waveform: Option<Rc<TrackWaveform>>,
     fine: Option<Rc<Fine>>,
     beats: Option<Rc<BeatGrid>>,
@@ -3238,6 +3632,19 @@ fn register(scene: &Scene, canvas: Bounds<Pixels>, window: &mut Window, cx: &mut
                     size: size(box_.size.width, px(CLIP_HEADER)),
                 };
                 agent_paint_node(Role::Card, clip.label.clone(), header, window, cx);
+                // The body stays inert to the pointer; this node is evidence,
+                // not a control. It exists exactly when the clip has a decoded
+                // heatmap, which is the only way a headless probe can tell a
+                // preview surface from the flat fallback fill.
+                if scene.previews.borrow().contains_key(&clip.id) {
+                    agent_paint_node(
+                        Role::Card,
+                        format!("{} preview", clip.label),
+                        clip_body(box_),
+                        window,
+                        cx,
+                    );
+                }
                 for edge in [Edge::Start, Edge::End] {
                     let x = match edge {
                         Edge::Start => box_.origin.x,
@@ -3429,6 +3836,7 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
                     paint_clip(
                         scene.clip_box(bounds, clip),
                         clip,
+                        &scene.previews,
                         scene.selected.contains(&clip.id),
                         window,
                         cx,
@@ -3857,28 +4265,26 @@ fn paint_lanes(canvas: Bounds<Pixels>, layout: Layout, window: &mut Window) {
     }
 }
 
-/// One clip: an opaque header plate over a translucent body, inside a border,
+/// One clip: an opaque header plate over a translucent body — the heatmap
+/// where one has landed, the pattern colour where none has — inside a border,
 /// with grab handles at both ends once it is selected.
 fn paint_clip(
     box_: Bounds<Pixels>,
     clip: &Clip,
+    previews: &RefCell<HashMap<SharedString, Preview>>,
     selected: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let body_alpha = if selected { 1. } else { 0.75 };
+    let body_alpha = if selected { 1. } else { BODY_ALPHA };
     let header = Bounds {
         origin: box_.origin,
         size: size(box_.size.width, px(CLIP_HEADER)),
     };
     window.paint_quad(fill(header, clip.color));
-    window.paint_quad(fill(
-        Bounds {
-            origin: point(box_.origin.x, box_.origin.y + px(CLIP_HEADER)),
-            size: size(box_.size.width, box_.size.height - px(CLIP_HEADER)),
-        },
-        fade(clip.color, body_alpha),
-    ));
+    if !paint_preview(clip_body(box_), clip, previews, selected, window) {
+        window.paint_quad(fill(clip_body(box_), fade(clip.color, body_alpha)));
+    }
     window.paint_quad(quad(
         box_,
         Corners::default(),
@@ -3952,6 +4358,115 @@ fn paint_clip(
             cx,
         );
     });
+}
+
+/// The translucency of an unselected clip's body — the web's `bodyAlpha`.
+/// What lets the beat grid, painted first, read through both the flat fill
+/// and the heatmap; selection goes opaque, on both hosts.
+const BODY_ALPHA: f32 = 0.75;
+
+/// A clip's body: everything under the header plate.
+fn clip_body(box_: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds {
+        origin: point(box_.origin.x, box_.origin.y + px(CLIP_HEADER)),
+        size: size(box_.size.width, box_.size.height - px(CLIP_HEADER)),
+    }
+}
+
+/// Texels per heatmap cell in the uploaded image, each way.
+///
+/// The sprite atlas samples linearly, so a cell drawn wider than its texels
+/// melts into its neighbours over one texel's width. Four texels a side keeps
+/// that seam under a quarter of a cell at any zoom the view allows, for
+/// sixteen times the bytes of the bare grid — a 512-column, 32-row preview
+/// (the seam's ceiling) is 1 MiB a frame, and a track's whole score is
+/// uploaded once and then only drawn.
+const CELL_TEXELS: u32 = 4;
+
+/// Stretch a clip's heatmap over its body.
+///
+/// Answers whether it painted, so the caller can put the flat fill down when
+/// there is nothing to stretch — no decoded preview, or a body too narrow to
+/// read (the web's own floor: under 8px the heatmap is noise).
+///
+/// One `paint_image` of the whole body, whatever the zoom: the picture was
+/// baked at [`CELL_TEXELS`] a cell when it arrived, and the GPU does the
+/// stretching from there. A clip that runs off the canvas is masked by the
+/// lane band around this call, not trimmed here.
+fn paint_preview(
+    body: Bounds<Pixels>,
+    clip: &Clip,
+    previews: &RefCell<HashMap<SharedString, Preview>>,
+    selected: bool,
+    window: &mut Window,
+) -> bool {
+    if f32::from(body.size.width) < 8. || f32::from(body.size.height) <= 0. {
+        return false;
+    }
+    let mut previews = previews.borrow_mut();
+    let Some(preview) = previews.get_mut(&clip.id) else {
+        return false;
+    };
+    if !preview.published {
+        // A re-render lands under the clip's kept atlas identity, and the
+        // atlas answers paints from its cache, so it has to be told: same-size
+        // tiles are refreshed in place, resized ones evicted for the paint
+        // below to re-insert.
+        window.update_image(&preview.image).ok();
+        preview.published = true;
+    }
+    window
+        .paint_image(
+            body,
+            body,
+            Corners::default(),
+            Arc::clone(&preview.image),
+            usize::from(selected),
+            false,
+        )
+        .ok();
+    true
+}
+
+/// A seam heatmap as the two-frame [`RenderImage`] the painter draws: every
+/// cell a [`CELL_TEXELS`]-square block, frame 0 at [`BODY_ALPHA`], frame 1
+/// opaque, RGBA swapped to the BGRA the sprite atlas stores.
+fn bake(width: u32, height: u32, pixels: &[u8]) -> RenderImage {
+    let (texels_x, texels_y) = (width * CELL_TEXELS, height * CELL_TEXELS);
+    let row_bytes = (texels_x * 4) as usize;
+    let mut body = vec![0u8; row_bytes * texels_y as usize];
+    let mut opaque = vec![0u8; row_bytes * texels_y as usize];
+    for row in 0..height as usize {
+        // Build the block's first row, then copy it down the rest.
+        let target = row * CELL_TEXELS as usize * row_bytes;
+        for column in 0..width as usize {
+            let source = (row * width as usize + column) * 4;
+            let [r, g, b, a] = [
+                pixels[source],
+                pixels[source + 1],
+                pixels[source + 2],
+                pixels[source + 3],
+            ];
+            let faded = (f32::from(a) * BODY_ALPHA) as u8;
+            for texel in 0..CELL_TEXELS as usize {
+                let at = target + (column * CELL_TEXELS as usize + texel) * 4;
+                opaque[at..at + 4].copy_from_slice(&[b, g, r, a]);
+                body[at..at + 4].copy_from_slice(&[b, g, r, faded]);
+            }
+        }
+        for repeat in 1..CELL_TEXELS as usize {
+            let to = target + repeat * row_bytes;
+            body.copy_within(target..target + row_bytes, to);
+            opaque.copy_within(target..target + row_bytes, to);
+        }
+    }
+    let frame = |bytes: Vec<u8>| {
+        image::Frame::new(
+            image::RgbaImage::from_raw(texels_x, texels_y, bytes)
+                .expect("sized as texels_x * texels_y * 4 above"),
+        )
+    };
+    RenderImage::new(vec![frame(body), frame(opaque)])
 }
 
 /// The drawn width of a selected clip's grab mark. Narrower than [`HANDLE`],
