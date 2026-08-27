@@ -71,6 +71,19 @@ fn vs_depth(
     return globals.light_view_proj[0] * instances[instance].model * vec4<f32>(position, 1.0);
 }
 
+/// Depth-only entry for the fixture shadow maps. Instances arrive bucketed
+/// by mesh: `instance_index` walks a slice of `caster_instances`, whose
+/// entries are the frame's draw indices — one instanced draw per distinct
+/// mesh per map instead of one draw per caster.
+@vertex
+fn vs_fixture_shadow(
+    @location(0) position: vec3<f32>,
+    @builtin(instance_index) slot: u32,
+) -> @builtin(position) vec4<f32> {
+    let instance = caster_instances[slot];
+    return globals.light_view_proj[0] * instances[instance].model * vec4<f32>(position, 1.0);
+}
+
 fn f_schlick(f0: vec3<f32>, f90: f32, dot_vh: f32) -> vec3<f32> {
     let fresnel = exp2((-5.55473 * dot_vh - 6.98316) * dot_vh);
     return f0 * (1.0 - fresnel) + vec3<f32>(f90) * fresnel;
@@ -110,24 +123,6 @@ fn distance_attenuation(d: f32, cutoff: f32) -> f32 {
     return falloff;
 }
 
-fn surface_cluster_index(frag: vec4<f32>, world: vec3<f32>) -> u32 {
-    let columns = max(surface_clusters.grid.x, 1u);
-    let rows = max(surface_clusters.grid.y, 1u);
-    let tile_size = max(surface_clusters.grid.z, 1u);
-    let x = min(u32(max(frag.x, 0.0)) / tile_size, columns - 1u);
-    let y = min(u32(max(frag.y, 0.0)) / tile_size, rows - 1u);
-    let near = surface_clusters.depth_and_flags.x;
-    let far = surface_clusters.depth_and_flags.y;
-    let depth = clamp(
-        dot(world - globals.camera_pos.xyz, globals.camera_forward.xyz),
-        near,
-        far,
-    );
-    let scale = f32(surface_clusters.grid.w) / log(far / near);
-    let slice = min(u32(max(log(depth / near) * scale, 0.0)), surface_clusters.grid.w - 1u);
-    return (slice * rows + y) * columns + x;
-}
-
 fn occupancy_color(count: u32) -> vec3<f32> {
     if count == 0u { return vec3<f32>(0.015, 0.02, 0.03); }
     let t = saturate(log2(f32(count) + 1.0) / 6.0);
@@ -135,10 +130,13 @@ fn occupancy_color(count: u32) -> vec3<f32> {
 }
 
 fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u32) -> f32 {
-    if f32(light_index) >= surface_clusters.shadow.x {
+    // A cone without a slot casts no shadow rather than borrowing another's.
+    let slot = fixture_rests[light_index].shadow_slot;
+    if slot < 0.0 {
         return 1.0;
     }
-    let clip = fixture_shadow_matrices[light_index].view_proj
+    let layer = i32(slot);
+    let clip = fixture_shadow_matrices[layer].view_proj
         * vec4<f32>(world + normal * 0.006, 1.0);
     let ndc = clip.xyz / clip.w;
     if ndc.z < 0.0 || ndc.z > 1.0 {
@@ -148,6 +146,10 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return 1.0;
     }
+    // Metric slack (see `shadow_compare_reference`); the world-space normal
+    // offset above carries the acne margin, this only guards depth precision.
+    let planes = fixture_shadow_matrices[layer].params;
+    let reference = shadow_compare_reference(ndc.z, planes.x, planes.y, 0.02);
     var visible = 0.0;
     for (var y = -1; y <= 1; y = y + 1) {
         for (var x = -1; x <= 1; x = x + 1) {
@@ -155,8 +157,8 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
                 fixture_shadow_map,
                 fixture_shadow_sampler,
                 uv + vec2<f32>(f32(x), f32(y)) * surface_clusters.shadow.y,
-                i32(light_index),
-                ndc.z + 0.0015,
+                layer,
+                reference,
             );
         }
     }
@@ -277,10 +279,18 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let diffuse_color = base_color * (1.0 - metallic);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     let shadow = shadow_factor(in.world, n);
-    let cluster = surface_cluster_headers[surface_cluster_index(in.clip, in.world)];
+    // View depth for the light index's Z-bin lookup — the same forward-axis
+    // distance the index binned the lights with.
+    let view_depth = dot(in.world - globals.camera_pos.xyz, globals.camera_forward.xyz);
 
-    if surface_clusters.depth_and_flags.w > 0.5 {
-        return vec4<f32>(occupancy_color(cluster.count), 1.0);
+    if surface_clusters.flags.y > 0.5 {
+        var probe = lights_at(in.clip.xy, view_depth);
+        var probe_id = 0u;
+        var count = 0u;
+        while light_index_next(&probe, &probe_id) {
+            count += 1u;
+        }
+        return vec4<f32>(occupancy_color(count), 1.0);
     }
 
     let debug = u32(globals.params.w + 0.5);
@@ -357,10 +367,10 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         out += irradiance * brdf_ggx(n, v, l, f0, roughness);
     }
 
-    if surface_clusters.depth_and_flags.z > 0.5 {
-        let cluster_end = cluster.offset + cluster.count;
-        for (var entry = cluster.offset; entry < cluster_end; entry = entry + 1u) {
-            let light_index = surface_cluster_indices[entry];
+    if surface_clusters.flags.x > 0.5 {
+        var cursor = lights_at(in.clip.xy, view_depth);
+        var light_index = 0u;
+        while light_index_next(&cursor, &light_index) {
             let core = fixture_cores[light_index];
             let rest = fixture_rests[light_index];
             let q = in.world - core.position;
@@ -388,7 +398,12 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
             }
             let profile = angular * aperture * distance_attenuation(distance, core.range);
             let visibility = fixture_shadow_visibility(in.world, n, light_index);
-            let irradiance = dot_nl * rest.color * rest.intensity * profile * visibility;
+            // `rest.intensity` is a 0..1 dimmer times the optic's gain, not
+            // radiance; the beam gain is the absolute scale, and it is the
+            // same one the haze march applies to the same cone.
+            let beam_gain = surface_clusters.shadow.z;
+            let irradiance =
+                dot_nl * rest.color * rest.intensity * beam_gain * profile * visibility;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness);
         }

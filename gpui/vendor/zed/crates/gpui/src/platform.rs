@@ -1356,6 +1356,29 @@ pub trait PlatformAtlas {
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
 
+    /// Replace the pixels of an already-resident tile, in place.
+    ///
+    /// Returns whether `key` was resident. Callers must treat `false` as "the
+    /// tile is gone, insert it again" — which is exactly what the next
+    /// [`Self::get_or_insert_with`] does, so the observable result is the same
+    /// either way and only the cost differs.
+    ///
+    /// The default drops the tile and rebuilds it, which is correct for every
+    /// backend. A backend that can overwrite an existing allocation should do
+    /// so instead: a live viewport hands the atlas a new frame of the same size
+    /// many times a second, and freeing and reallocating a full-screen texture
+    /// at that rate fragments the allocator and leaves the driver a destroy
+    /// backlog that grows for as long as the view is open.
+    ///
+    /// `bytes` must match the resident tile's size and format; a backend that
+    /// cannot verify this may assume it.
+    // LUMA LOCAL EDIT: this method is not upstream. The default drops the
+    // tile so unpatched backends stay correct.
+    fn update(&self, key: &AtlasKey, _bytes: &[u8]) -> bool {
+        self.remove(key);
+        false
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     fn contains(&self, _key: &AtlasKey) -> bool {
         false

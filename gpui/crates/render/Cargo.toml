@@ -9,8 +9,13 @@ publish = false
 # comes back as bytes. `luma-viewport` will own presentation.
 [dependencies]
 luma-scene = { path = "../scene" }
+# Reaches across into the src-tauri workspace, the same direction `luma-app`
+# already goes. It is glam-only by policy precisely so that crossing is cheap:
+# beam origins have to be one implementation or they drift, and the app cannot
+# depend on anything in `gpui/`.
+fixture-kinematics = { path = "../../../src-tauri/crates/fixture-kinematics" }
 glam = "0.30"
-wgpu = "26"
+wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }
@@ -20,3 +25,23 @@ png = "0.17"
 anyhow = "1"
 image = { version = "0.25", default-features = false, features = ["hdr"] }
 half = { version = "2", features = ["bytemuck"] }
+
+# Zero-copy presentation (see `share`). The `objc2-*` crates are pinned to the
+# majors `wgpu-hal` resolves, because the texture handed to
+# `hal::metal::Device::texture_from_raw` must be *that* crate's
+# `ProtocolObject<dyn MTLTexture>` and not a structurally identical one from
+# another major version.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-video = "0.5.2"
+io-surface = "0.16"
+objc2 = "0.6"
+objc2-metal = { version = "0.3", features = [
+    "MTLAllocation",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLTexture",
+    "objc2-io-surface",
+] }
+objc2-io-surface = { version = "0.3", features = ["objc2"] }

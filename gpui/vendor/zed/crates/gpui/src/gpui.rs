@@ -97,6 +97,16 @@ pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
 pub use color::*;
+/// The `CVPixelBuffer` vocabulary [`Window::paint_surface`] and [`PaintSurface`]
+/// speak.
+///
+/// Exported because those two already name the type in their public signatures.
+/// Without this a caller has to depend on `core-video` itself and match this
+/// crate's version exactly, or it hands over a structurally identical type the
+/// compiler rejects — the version being an implementation detail is precisely
+/// what makes it the wrong thing to make callers guess.
+#[cfg(target_os = "macos")]
+pub use core_video;
 pub use ctor::ctor;
 #[cfg(feature = "profiler")]
 pub use debug_overlay::*;

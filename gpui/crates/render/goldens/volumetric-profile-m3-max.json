@@ -16,175 +16,590 @@
     "profile": "release",
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "target": "aarch64-apple-darwin",
-    "wgpu_lock": "26.0.1"
+    "wgpu_lock": "30.0.1"
   },
-  "captured_at_utc": "2026-08-22T17:25:32Z",
+  "captured_at_utc": "2026-08-25T22:07:12Z",
   "cases": [
     {
       "budgets_ms": {
-        "cpu_encode_submit_p95": 1.5,
-        "gpu_total_p95": 8.0,
-        "gpu_volumetric_p95": null
+        "cpu_encode_submit_p95": 2.0,
+        "gpu_total_max": 18.0,
+        "gpu_total_p95": 17.0,
+        "gpu_volumetric_p95": null,
+        "mean_lights_per_tile": 30.0
       },
+      "camera_radius": 7.400000095367432,
       "case_id": "transport-32",
-      "cluster_stats": {
-        "light_references": 435642,
-        "max_lights_per_cluster": 32,
-        "occupied_clusters": 16320,
-        "rebuilds": 1
-      },
-      "cold_cluster_build_ms": 1.023875,
+      "cold_cluster_build_ms": 0.051417,
       "cones": 32,
       "cpu_cluster": {
-        "max_ms": 0.0,
-        "p50_ms": 0.0,
-        "p95_ms": 0.0
+        "max_ms": 0.805708,
+        "p50_ms": 0.243167,
+        "p95_ms": 0.33575
       },
       "cpu_encode_submit": {
-        "max_ms": 1.488208,
-        "p50_ms": 0.21087499999999998,
-        "p95_ms": 0.407792
+        "max_ms": 4.176292,
+        "p50_ms": 1.2715420000000002,
+        "p95_ms": 1.6828329999999998
       },
       "fixture_shadows": false,
       "gpu_total": {
-        "max_ms": 10.652916999999999,
-        "p50_ms": 0.277459,
-        "p95_ms": 0.38641699999999995
+        "max_ms": 13.076625,
+        "p50_ms": 10.209083,
+        "p95_ms": 12.042791999999999
       },
       "gpu_volumetric": {
-        "max_ms": 5.381125,
-        "p50_ms": 0.220292,
-        "p95_ms": 0.286958
+        "max_ms": 12.000625,
+        "p50_ms": 9.441334,
+        "p95_ms": 11.236666999999999
       },
+      "light_index_stats": {
+        "lights_on_screen": 32,
+        "lights_total": 32,
+        "mean_lights_per_tile": 25.977376543209875,
+        "tile_references": 841667,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 11.870897682143866,
       "opaque_draws": 1,
       "samples": 600,
-      "samples_fnv64": "0x35f1c34608eed2d3",
+      "samples_fnv64": "0x2fc482159e4b85fd",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
       "shadowed_fixtures": 0,
       "within_budget": true
     },
     {
       "budgets_ms": {
-        "cpu_encode_submit_p95": 1.5,
-        "gpu_total_p95": 6.5,
-        "gpu_volumetric_p95": 3.0
+        "cpu_encode_submit_p95": 2.5,
+        "gpu_total_max": 89.0,
+        "gpu_total_p95": 75.0,
+        "gpu_volumetric_p95": 71.0,
+        "mean_lights_per_tile": 100.0
       },
+      "camera_radius": 7.400000095367432,
       "case_id": "transport-128",
-      "cluster_stats": {
-        "light_references": 1697114,
-        "max_lights_per_cluster": 128,
-        "occupied_clusters": 16320,
-        "rebuilds": 2
-      },
-      "cold_cluster_build_ms": 6.813292000000001,
+      "cold_cluster_build_ms": 0.36141599999999996,
       "cones": 128,
       "cpu_cluster": {
-        "max_ms": 0.0,
-        "p50_ms": 0.0,
-        "p95_ms": 0.0
+        "max_ms": 0.360792,
+        "p50_ms": 0.059875,
+        "p95_ms": 0.246333
       },
       "cpu_encode_submit": {
-        "max_ms": 1.1225829999999999,
-        "p50_ms": 0.239333,
-        "p95_ms": 0.378334
+        "max_ms": 2.51575,
+        "p50_ms": 0.223333,
+        "p95_ms": 0.9472499999999999
       },
       "fixture_shadows": false,
       "gpu_total": {
-        "max_ms": 14.164124999999999,
-        "p50_ms": 0.939958,
-        "p95_ms": 1.161834
+        "max_ms": 61.428749999999994,
+        "p50_ms": 41.702833,
+        "p95_ms": 53.621334
       },
       "gpu_volumetric": {
-        "max_ms": 14.14475,
-        "p50_ms": 0.780833,
-        "p95_ms": 1.0607499999999999
+        "max_ms": 57.670457999999996,
+        "p50_ms": 38.298708999999995,
+        "p95_ms": 50.577292
       },
+      "light_index_stats": {
+        "lights_on_screen": 128,
+        "lights_total": 128,
+        "mean_lights_per_tile": 95.41268518518518,
+        "tile_references": 3091371,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 48.741985188187215,
       "opaque_draws": 1,
       "samples": 600,
-      "samples_fnv64": "0x9cc122892519bc80",
+      "samples_fnv64": "0x7f7b609ea20e8dd8",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
       "shadowed_fixtures": 0,
       "within_budget": true
     },
     {
       "budgets_ms": {
         "cpu_encode_submit_p95": 2.0,
-        "gpu_total_p95": 8.0,
-        "gpu_volumetric_p95": 6.0
+        "gpu_total_max": 398.0,
+        "gpu_total_p95": 324.0,
+        "gpu_volumetric_p95": 305.0,
+        "mean_lights_per_tile": 360.0
       },
+      "camera_radius": 7.400000095367432,
       "case_id": "transport-512",
-      "cluster_stats": {
-        "light_references": 5793674,
-        "max_lights_per_cluster": 512,
-        "occupied_clusters": 17495,
-        "rebuilds": 3
-      },
-      "cold_cluster_build_ms": 13.824541,
+      "cold_cluster_build_ms": 0.14283300000000002,
       "cones": 512,
       "cpu_cluster": {
-        "max_ms": 0.0,
-        "p50_ms": 0.0,
-        "p95_ms": 0.0
+        "max_ms": 0.222083,
+        "p50_ms": 0.127458,
+        "p95_ms": 0.167208
       },
       "cpu_encode_submit": {
-        "max_ms": 0.935542,
-        "p50_ms": 0.34975,
-        "p95_ms": 0.555292
+        "max_ms": 0.61575,
+        "p50_ms": 0.339833,
+        "p95_ms": 0.480333
       },
       "fixture_shadows": false,
       "gpu_total": {
-        "max_ms": 140.48975,
-        "p50_ms": 3.887542,
-        "p95_ms": 6.358667
+        "max_ms": 300.338125,
+        "p50_ms": 192.58458299999998,
+        "p95_ms": 231.798916
       },
       "gpu_volumetric": {
-        "max_ms": 139.952459,
-        "p50_ms": 3.053625,
-        "p95_ms": 5.074208
+        "max_ms": 255.466209,
+        "p50_ms": 177.218584,
+        "p95_ms": 217.96558399999998
       },
+      "light_index_stats": {
+        "lights_on_screen": 512,
+        "lights_total": 512,
+        "mean_lights_per_tile": 346.3850308641975,
+        "tile_references": 11222875,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 209.4017321266454,
       "opaque_draws": 1,
       "samples": 600,
-      "samples_fnv64": "0xd51d15841ef10fbb",
+      "samples_fnv64": "0xb6b0825494cd2cc1",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
       "shadowed_fixtures": 0,
       "within_budget": true
     },
     {
       "budgets_ms": {
         "cpu_encode_submit_p95": 1.5,
-        "gpu_total_p95": 8.0,
-        "gpu_volumetric_p95": 3.0
+        "gpu_total_max": 192.0,
+        "gpu_total_p95": 175.0,
+        "gpu_volumetric_p95": 173.0,
+        "mean_lights_per_tile": 130.0
       },
-      "case_id": "fixture-shadows-120",
-      "cluster_stats": {
-        "light_references": 1566554,
-        "max_lights_per_cluster": 120,
-        "occupied_clusters": 16320,
-        "rebuilds": 4
-      },
-      "cold_cluster_build_ms": 3.101,
-      "cones": 120,
+      "camera_radius": 2.200000047683716,
+      "case_id": "zoom-near-128",
+      "cold_cluster_build_ms": 0.095791,
+      "cones": 128,
       "cpu_cluster": {
-        "max_ms": 0.0,
-        "p50_ms": 0.0,
-        "p95_ms": 0.0
+        "max_ms": 0.152084,
+        "p50_ms": 0.0735,
+        "p95_ms": 0.111583
       },
       "cpu_encode_submit": {
-        "max_ms": 1.7733340000000002,
-        "p50_ms": 0.947708,
-        "p95_ms": 1.164334
+        "max_ms": 0.5852919999999999,
+        "p50_ms": 0.286292,
+        "p95_ms": 0.428083
+      },
+      "fixture_shadows": false,
+      "gpu_total": {
+        "max_ms": 165.95149999999998,
+        "p50_ms": 125.648917,
+        "p95_ms": 141.30795899999998
+      },
+      "gpu_volumetric": {
+        "max_ms": 164.05320799999998,
+        "p50_ms": 124.245583,
+        "p95_ms": 139.88049999999998
+      },
+      "light_index_stats": {
+        "lights_on_screen": 128,
+        "lights_total": 128,
+        "mean_lights_per_tile": 117.35,
+        "tile_references": 3802140,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 0.0,
+      "opaque_draws": 1,
+      "samples": 600,
+      "samples_fnv64": "0x43b7a9cd6c7eb5be",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
+      "shadowed_fixtures": 0,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 7.0,
+        "gpu_total_max": 442.0,
+        "gpu_total_p95": 348.0,
+        "gpu_volumetric_p95": 339.0,
+        "mean_lights_per_tile": 130.0
+      },
+      "camera_radius": 7.400000095367432,
+      "case_id": "beams-at-camera-128",
+      "cold_cluster_build_ms": 0.06875,
+      "cones": 128,
+      "cpu_cluster": {
+        "max_ms": 0.198583,
+        "p50_ms": 0.080292,
+        "p95_ms": 0.119708
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.7254590000000001,
+        "p50_ms": 0.323833,
+        "p95_ms": 0.465958
+      },
+      "fixture_shadows": false,
+      "gpu_total": {
+        "max_ms": 265.544541,
+        "p50_ms": 227.191209,
+        "p95_ms": 249.29037499999998
+      },
+      "gpu_volumetric": {
+        "max_ms": 259.552709,
+        "p50_ms": 220.438708,
+        "p95_ms": 241.747709
+      },
+      "light_index_stats": {
+        "lights_on_screen": 128,
+        "lights_total": 128,
+        "mean_lights_per_tile": 128.0,
+        "tile_references": 4147200,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 77.06703466556131,
+      "opaque_draws": 1,
+      "samples": 600,
+      "samples_fnv64": "0x80cd7a7b49c322e1",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
+      "shadowed_fixtures": 0,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 1.5,
+        "gpu_total_max": 196.0,
+        "gpu_total_p95": 161.0,
+        "gpu_volumetric_p95": 159.0,
+        "mean_lights_per_tile": 130.0
+      },
+      "camera_radius": 0.8999999761581421,
+      "case_id": "zoom-inside-128",
+      "cold_cluster_build_ms": 0.05775,
+      "cones": 128,
+      "cpu_cluster": {
+        "max_ms": 0.15412499999999998,
+        "p50_ms": 0.062833,
+        "p95_ms": 0.096458
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.591417,
+        "p50_ms": 0.24416599999999997,
+        "p95_ms": 0.35612499999999997
+      },
+      "fixture_shadows": false,
+      "gpu_total": {
+        "max_ms": 111.82104199999999,
+        "p50_ms": 89.029,
+        "p95_ms": 99.14524999999999
+      },
+      "gpu_volumetric": {
+        "max_ms": 110.581959,
+        "p50_ms": 87.90174999999999,
+        "p95_ms": 98.10458399999999
+      },
+      "light_index_stats": {
+        "lights_on_screen": 128,
+        "lights_total": 128,
+        "mean_lights_per_tile": 120.50416666666666,
+        "tile_references": 3904335,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 0.0,
+      "opaque_draws": 1,
+      "samples": 600,
+      "samples_fnv64": "0xf80a6c7f43afd546",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
+      "shadowed_fixtures": 0,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 3.0,
+        "gpu_total_max": 81.0,
+        "gpu_total_p95": 73.0,
+        "gpu_volumetric_p95": 68.0,
+        "mean_lights_per_tile": 100.0
+      },
+      "camera_radius": 7.400000095367432,
+      "case_id": "fixture-shadows-120",
+      "cold_cluster_build_ms": 0.06425,
+      "cones": 120,
+      "cpu_cluster": {
+        "max_ms": 0.109458,
+        "p50_ms": 0.056041,
+        "p95_ms": 0.08224999999999999
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.761,
+        "p50_ms": 0.431791,
+        "p95_ms": 0.593459
       },
       "fixture_shadows": true,
       "gpu_total": {
-        "max_ms": 14.917584,
-        "p50_ms": 0.24345899999999998,
-        "p95_ms": 1.317375
+        "max_ms": 57.212959,
+        "p50_ms": 38.13775,
+        "p95_ms": 45.911209
       },
       "gpu_volumetric": {
-        "max_ms": 14.767417,
-        "p50_ms": 0.143792,
-        "p95_ms": 1.216125
+        "max_ms": 54.124916999999996,
+        "p50_ms": 34.851791999999996,
+        "p95_ms": 42.728792
       },
+      "light_index_stats": {
+        "lights_on_screen": 120,
+        "lights_total": 120,
+        "mean_lights_per_tile": 91.548487654321,
+        "tile_references": 2966171,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 46.78753551520647,
       "opaque_draws": 17,
       "samples": 600,
-      "samples_fnv64": "0x27b899c53182db71",
+      "samples_fnv64": "0xf393ad0431e88d9e",
+      "shadow_stats": {
+        "caster_draws": 16,
+        "mesh_draws": 16,
+        "redrawn_maps": 16,
+        "unculled_draws": 272
+      },
+      "shadowed_fixtures": 120,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 12.0,
+        "gpu_total_max": 120.0,
+        "gpu_total_p95": 103.0,
+        "gpu_volumetric_p95": 95.0,
+        "mean_lights_per_tile": 100.0
+      },
+      "camera_radius": 7.400000095367432,
+      "case_id": "dense-geometry-noshadow-120",
+      "cold_cluster_build_ms": 0.082,
+      "cones": 120,
+      "cpu_cluster": {
+        "max_ms": 0.15475,
+        "p50_ms": 0.057791999999999996,
+        "p95_ms": 0.087708
+      },
+      "cpu_encode_submit": {
+        "max_ms": 3.8890830000000003,
+        "p50_ms": 2.57675,
+        "p95_ms": 2.7015
+      },
+      "fixture_shadows": false,
+      "gpu_total": {
+        "max_ms": 64.022375,
+        "p50_ms": 43.084584,
+        "p95_ms": 55.293625
+      },
+      "gpu_volumetric": {
+        "max_ms": 60.076707999999996,
+        "p50_ms": 38.513999999999996,
+        "p95_ms": 50.941334
+      },
+      "light_index_stats": {
+        "lights_on_screen": 120,
+        "lights_total": 120,
+        "mean_lights_per_tile": 91.548487654321,
+        "tile_references": 2966171,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 57.874397514052674,
+      "opaque_draws": 2057,
+      "samples": 600,
+      "samples_fnv64": "0xeb42f6f551a612ab",
+      "shadow_stats": {
+        "caster_draws": 0,
+        "mesh_draws": 0,
+        "redrawn_maps": 0,
+        "unculled_draws": 0
+      },
+      "shadowed_fixtures": 0,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 14.0,
+        "gpu_total_max": 141.0,
+        "gpu_total_p95": 121.0,
+        "gpu_volumetric_p95": 108.0,
+        "mean_lights_per_tile": 100.0
+      },
+      "camera_radius": 7.400000095367432,
+      "case_id": "dense-geometry-120",
+      "cold_cluster_build_ms": 0.0515,
+      "cones": 120,
+      "cpu_cluster": {
+        "max_ms": 0.12825,
+        "p50_ms": 0.060458000000000005,
+        "p95_ms": 0.092167
+      },
+      "cpu_encode_submit": {
+        "max_ms": 3.764417,
+        "p50_ms": 3.1822920000000003,
+        "p95_ms": 3.384209
+      },
+      "fixture_shadows": true,
+      "gpu_total": {
+        "max_ms": 64.839833,
+        "p50_ms": 38.550042,
+        "p95_ms": 48.641833
+      },
+      "gpu_volumetric": {
+        "max_ms": 59.548083,
+        "p50_ms": 33.788166,
+        "p95_ms": 43.119417
+      },
+      "light_index_stats": {
+        "lights_on_screen": 120,
+        "lights_total": 120,
+        "mean_lights_per_tile": 91.548487654321,
+        "tile_references": 2966171,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 57.874397514052674,
+      "opaque_draws": 2057,
+      "samples": 600,
+      "samples_fnv64": "0xb609c6e417f7a13e",
+      "shadow_stats": {
+        "caster_draws": 3460,
+        "mesh_draws": 106,
+        "redrawn_maps": 16,
+        "unculled_draws": 32912
+      },
+      "shadowed_fixtures": 120,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 17.0,
+        "gpu_total_max": 92.0,
+        "gpu_total_p95": 78.0,
+        "gpu_volumetric_p95": 57.0,
+        "mean_lights_per_tile": 130.0
+      },
+      "camera_radius": 2.200000047683716,
+      "case_id": "zoom-dense-geometry-120",
+      "cold_cluster_build_ms": 0.059417,
+      "cones": 120,
+      "cpu_cluster": {
+        "max_ms": 0.1155,
+        "p50_ms": 0.061542,
+        "p95_ms": 0.077542
+      },
+      "cpu_encode_submit": {
+        "max_ms": 4.555,
+        "p50_ms": 3.4671659999999997,
+        "p95_ms": 4.071959
+      },
+      "fixture_shadows": true,
+      "gpu_total": {
+        "max_ms": 31.832292,
+        "p50_ms": 13.165999999999999,
+        "p95_ms": 25.834584
+      },
+      "gpu_volumetric": {
+        "max_ms": 24.143583,
+        "p50_ms": 7.081582999999999,
+        "p95_ms": 17.783165999999998
+      },
+      "light_index_stats": {
+        "lights_on_screen": 120,
+        "lights_total": 120,
+        "mean_lights_per_tile": 109.44583333333334,
+        "tile_references": 3546045,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 80.07002003251992,
+      "opaque_draws": 2057,
+      "samples": 600,
+      "samples_fnv64": "0x95330eef6827b824",
+      "shadow_stats": {
+        "caster_draws": 3836,
+        "mesh_draws": 176,
+        "redrawn_maps": 16,
+        "unculled_draws": 32912
+      },
+      "shadowed_fixtures": 120,
+      "within_budget": true
+    },
+    {
+      "budgets_ms": {
+        "cpu_encode_submit_p95": 3.0,
+        "gpu_total_max": 197.0,
+        "gpu_total_p95": 163.0,
+        "gpu_volumetric_p95": 160.0,
+        "mean_lights_per_tile": 130.0
+      },
+      "camera_radius": 0.8999999761581421,
+      "case_id": "zoom-inside-shadows-120",
+      "cold_cluster_build_ms": 0.048583,
+      "cones": 120,
+      "cpu_cluster": {
+        "max_ms": 0.418625,
+        "p50_ms": 0.064458,
+        "p95_ms": 0.254542
+      },
+      "cpu_encode_submit": {
+        "max_ms": 3.717334,
+        "p50_ms": 0.514709,
+        "p95_ms": 2.597708
+      },
+      "fixture_shadows": true,
+      "gpu_total": {
+        "max_ms": 112.742875,
+        "p50_ms": 70.114958,
+        "p95_ms": 89.29508299999999
+      },
+      "gpu_volumetric": {
+        "max_ms": 109.907541,
+        "p50_ms": 67.07475,
+        "p95_ms": 87.435833
+      },
+      "light_index_stats": {
+        "lights_on_screen": 120,
+        "lights_total": 120,
+        "mean_lights_per_tile": 114.625,
+        "tile_references": 3713850,
+        "total_tiles": 32400
+      },
+      "mean_lights_per_fragment": 102.10844237257938,
+      "opaque_draws": 17,
+      "samples": 600,
+      "samples_fnv64": "0x2d81cbe10b2a7e07",
+      "shadow_stats": {
+        "caster_draws": 16,
+        "mesh_draws": 16,
+        "redrawn_maps": 16,
+        "unculled_draws": 272
+      },
       "shadowed_fixtures": 120,
       "within_budget": true
     }
@@ -206,6 +621,7 @@
     "haze_steps": 8,
     "height": 1080,
     "measured_frames": 600,
+    "motion": "show (camera + heads)",
     "percentile": "nearest-rank ceil(q*n)-1",
     "subframes": 2,
     "temporal": true,
@@ -215,202 +631,382 @@
   },
   "schema": "luma.renderer-profile/2",
   "source": {
-    "branch": "codex/renderer-dialog-gauntlet",
-    "commit": "139eef990c15f23ba4076744c9fb7fc324f8ce86",
+    "branch": "agent-code-execution",
+    "commit": "f86782f283c8462714828061eb7983c1a057f791",
     "dirty": true,
     "provenance": {
       "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
       "entries": [
         {
-          "bytes": 50167,
-          "content_fnv64": "0x28181405505b86d7",
+          "bytes": 66583,
+          "content_fnv64": "0xfbedb8f51214cd40",
           "path": "gpui/crates/app/src/add_tracks.rs",
           "state": "tracked"
         },
         {
-          "bytes": 29007,
-          "content_fnv64": "0xe34c401437a2afd0",
+          "bytes": 5785,
+          "content_fnv64": "0x3b6c64c49a119926",
+          "path": "gpui/crates/app/src/agent.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 18361,
+          "content_fnv64": "0xf9d89ec41bcb8efe",
+          "path": "gpui/crates/app/src/chat_history.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 32826,
+          "content_fnv64": "0xc9c8f158c223c4ab",
+          "path": "gpui/crates/app/src/chrome.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 95578,
+          "content_fnv64": "0x79cfaa039a206df3",
+          "path": "gpui/crates/app/src/graph.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 11047,
+          "content_fnv64": "0x092d4eac1f8a9742",
+          "path": "gpui/crates/app/src/keymap.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 22883,
+          "content_fnv64": "0x0cb87c0e498eb345",
+          "path": "gpui/crates/app/src/lib.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 71759,
+          "content_fnv64": "0xed5eb3d4a01a2166",
+          "path": "gpui/crates/app/src/library.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 4113,
+          "content_fnv64": "0x697d8d574cf73a23",
+          "path": "gpui/crates/app/src/main.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 7642,
+          "content_fnv64": "0x97af342e382a9f21",
+          "path": "gpui/crates/app/src/patterns.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 17410,
+          "content_fnv64": "0xb9936102f98370f3",
+          "path": "gpui/crates/app/src/settings.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 49554,
+          "content_fnv64": "0x860543b126eadc94",
           "path": "gpui/crates/app/src/shell.rs",
           "state": "tracked"
         },
         {
-          "bytes": 88445,
-          "content_fnv64": "0x93cebccccb809b42",
+          "bytes": 24892,
+          "content_fnv64": "0x914c378abb0fd931",
+          "path": "gpui/crates/app/src/tab_chrome.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 18432,
+          "content_fnv64": "0x1ffc36b1aa9f27c7",
+          "path": "gpui/crates/app/src/tabs.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 183017,
+          "content_fnv64": "0x1f5fa3a2e4cb9511",
+          "path": "gpui/crates/app/src/track_editor.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 30175,
+          "content_fnv64": "0x967a3c7ba63804b2",
+          "path": "gpui/crates/app/src/tracks.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 164213,
+          "content_fnv64": "0x797da6959e723fd7",
           "path": "gpui/crates/app/src/visualizer.rs",
           "state": "tracked"
         },
         {
-          "bytes": 26911,
-          "content_fnv64": "0xf4089fb1927b4ef8",
+          "bytes": 34794,
+          "content_fnv64": "0x64da3f412365b936",
           "path": "gpui/crates/app/src/welcome.rs",
           "state": "tracked"
         },
         {
-          "bytes": 3297,
-          "content_fnv64": "0xa614a982035f6576",
-          "path": "gpui/crates/render/goldens/contracts/fixture-shadow-open-1.370.json",
+          "bytes": 15211,
+          "content_fnv64": "0x88e9a7cde4062eb8",
+          "path": "gpui/crates/app/src/workspace.rs",
           "state": "untracked"
         },
         {
-          "bytes": 364253,
-          "content_fnv64": "0x441cb38ce5ea98de",
+          "bytes": 352843,
+          "content_fnv64": "0xbdcd4ac3692505de",
           "path": "gpui/crates/render/goldens/contracts/fixture-shadow-open-1.370.png",
-          "state": "untracked"
+          "state": "tracked"
         },
         {
-          "bytes": 3300,
-          "content_fnv64": "0x4e562af0ae028de5",
-          "path": "gpui/crates/render/goldens/contracts/fixture-shadowed-beam-1.370.json",
-          "state": "untracked"
-        },
-        {
-          "bytes": 366614,
-          "content_fnv64": "0x458f933f3ec1338d",
+          "bytes": 355715,
+          "content_fnv64": "0x97227d031560dc6c",
           "path": "gpui/crates/render/goldens/contracts/fixture-shadowed-beam-1.370.png",
-          "state": "untracked"
-        },
-        {
-          "bytes": 3046,
-          "content_fnv64": "0x70fa2df1a2e8e627",
-          "path": "gpui/crates/render/goldens/contracts/gobo-seam-negative-1.370.json",
           "state": "tracked"
         },
         {
-          "bytes": 3049,
-          "content_fnv64": "0xbd8e3c014430232d",
-          "path": "gpui/crates/render/goldens/contracts/gobo-seam-positive-1.370.json",
+          "bytes": 463707,
+          "content_fnv64": "0x1ad4e4c751600e2d",
+          "path": "gpui/crates/render/goldens/contracts/gobo-seam-negative-1.370.png",
           "state": "tracked"
         },
         {
-          "bytes": 1703,
-          "content_fnv64": "0xf3a652e5e1dd77a6",
-          "path": "gpui/crates/render/goldens/contracts/metal-roughness-sweep-1.370.json",
+          "bytes": 463707,
+          "content_fnv64": "0x1ad4e4c751600e2d",
+          "path": "gpui/crates/render/goldens/contracts/gobo-seam-positive-1.370.png",
           "state": "tracked"
         },
         {
-          "bytes": 3285,
-          "content_fnv64": "0xcd3547685df13090",
-          "path": "gpui/crates/render/goldens/contracts/occluded-beam-1.370.json",
+          "bytes": 353530,
+          "content_fnv64": "0x5fb89e01e3e9febe",
+          "path": "gpui/crates/render/goldens/contracts/occluded-beam-1.370.png",
           "state": "tracked"
         },
         {
-          "bytes": 3023,
-          "content_fnv64": "0x01eb28179c7cc1b6",
-          "path": "gpui/crates/render/goldens/contracts/one-beam-1.370.json",
+          "bytes": 417187,
+          "content_fnv64": "0x966dc8d0cc185b7b",
+          "path": "gpui/crates/render/goldens/contracts/one-beam-1.370.png",
           "state": "tracked"
         },
         {
-          "bytes": 6750,
-          "content_fnv64": "0x0f36bc626280cff8",
-          "path": "gpui/crates/render/goldens/contracts/overlapping-beams-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 460226,
-          "content_fnv64": "0x9f617b56f284c3e0",
+          "bytes": 450297,
+          "content_fnv64": "0x922311842889351c",
           "path": "gpui/crates/render/goldens/contracts/overlapping-beams-1.370.png",
           "state": "tracked"
         },
         {
-          "bytes": 1698,
-          "content_fnv64": "0x8051c292512045b5",
-          "path": "gpui/crates/render/goldens/contracts/sun-direction-left-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 1699,
-          "content_fnv64": "0x552d90b347c64826",
-          "path": "gpui/crates/render/goldens/contracts/sun-direction-right-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 1433,
-          "content_fnv64": "0x8c9ad0f77cd38f9b",
-          "path": "gpui/crates/render/goldens/contracts/sun-off-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 1940,
-          "content_fnv64": "0xb176839914906f3b",
-          "path": "gpui/crates/render/goldens/contracts/sun-shadow-hard-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 1940,
-          "content_fnv64": "0x7726e4f71eec78a4",
-          "path": "gpui/crates/render/goldens/contracts/sun-shadow-soft-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 1687,
-          "content_fnv64": "0x0006c2065dc328a2",
-          "path": "gpui/crates/render/goldens/contracts/textured-pbr-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 65684,
-          "content_fnv64": "0x169247cb2891090c",
-          "path": "gpui/crates/render/goldens/contracts/volumetric-performance-smooth-1.370.json",
-          "state": "tracked"
-        },
-        {
-          "bytes": 1733157,
-          "content_fnv64": "0xd02c28e574245342",
+          "bytes": 1677967,
+          "content_fnv64": "0xaeb41169e175e616",
           "path": "gpui/crates/render/goldens/contracts/volumetric-performance-smooth-1.370.png",
           "state": "tracked"
         },
         {
-          "bytes": 23570,
-          "content_fnv64": "0x6602fad5828fd5e4",
+          "bytes": 3769,
+          "content_fnv64": "0xbd0d50f646b4236a",
+          "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+          "state": "tracked"
+        },
+        {
+          "bytes": 2907,
+          "content_fnv64": "0x36103cbaefe09f72",
+          "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+          "state": "tracked"
+        },
+        {
+          "bytes": 4594,
+          "content_fnv64": "0x3f095f9b68587977",
+          "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+          "state": "tracked"
+        },
+        {
+          "bytes": 1085,
+          "content_fnv64": "0x2f965fa5e03f804e",
+          "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+          "state": "tracked"
+        },
+        {
+          "bytes": 43803,
+          "content_fnv64": "0x412dfb12fee4a480",
           "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
           "state": "tracked"
         },
         {
-          "bytes": 10985,
-          "content_fnv64": "0x4137df9c5149836f",
-          "path": "gpui/crates/render/src/bin/render-contract-goldens.rs",
+          "bytes": null,
+          "content_fnv64": null,
+          "path": "gpui/crates/render/src/clusters.rs",
+          "state": "deleted"
+        },
+        {
+          "bytes": 9060,
+          "content_fnv64": "0xd47495d76a9b41e8",
+          "path": "gpui/crates/render/src/coords.rs",
           "state": "tracked"
         },
         {
-          "bytes": 30613,
-          "content_fnv64": "0xcc2650f36428c583",
+          "bytes": 22647,
+          "content_fnv64": "0xb74dd3cf975d7e51",
+          "path": "gpui/crates/render/src/environment.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 30884,
+          "content_fnv64": "0xf8cdbf4a11a47558",
           "path": "gpui/crates/render/src/frame.rs",
           "state": "tracked"
         },
         {
-          "bytes": 155105,
-          "content_fnv64": "0x4705c335a72eb81c",
+          "bytes": 196553,
+          "content_fnv64": "0x0b44c3ce4a395b81",
           "path": "gpui/crates/render/src/gpu.rs",
           "state": "tracked"
         },
         {
-          "bytes": 21938,
-          "content_fnv64": "0x1c1f030124777b45",
+          "bytes": 2863,
+          "content_fnv64": "0x9ac1a1246eca0d12",
+          "path": "gpui/crates/render/src/lib.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 57104,
+          "content_fnv64": "0x6dfbba6c393664ec",
+          "path": "gpui/crates/render/src/light_index.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 2794,
+          "content_fnv64": "0xbf997d310f78e8b3",
+          "path": "gpui/crates/render/src/metrics.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 17018,
+          "content_fnv64": "0x0e9a44b28d0d62f4",
+          "path": "gpui/crates/render/src/overlay.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 22132,
+          "content_fnv64": "0x4424fd6dc575c2f9",
           "path": "gpui/crates/render/src/scene_desc.rs",
           "state": "tracked"
         },
         {
-          "bytes": 17969,
-          "content_fnv64": "0x60d96a7fbcf695b3",
+          "bytes": 18256,
+          "content_fnv64": "0xf5fcb77fd922128f",
+          "path": "gpui/crates/render/src/shaders/beam_transport.wgsl",
+          "state": "untracked"
+        },
+        {
+          "bytes": 8246,
+          "content_fnv64": "0xcfd20a469bbbf925",
+          "path": "gpui/crates/render/src/shaders/composite.wgsl",
+          "state": "tracked"
+        },
+        {
+          "bytes": 3037,
+          "content_fnv64": "0x19cf12d26079288f",
+          "path": "gpui/crates/render/src/shaders/fixture_light.wgsl",
+          "state": "tracked"
+        },
+        {
+          "bytes": 3517,
+          "content_fnv64": "0x3b84d3268dec0170",
           "path": "gpui/crates/render/src/shaders/haze.wgsl",
           "state": "tracked"
         },
         {
-          "bytes": 14965,
-          "content_fnv64": "0xd5af003486a9277c",
+          "bytes": 4106,
+          "content_fnv64": "0x9851b3c0a8d7449a",
+          "path": "gpui/crates/render/src/shaders/light_index.wgsl",
+          "state": "untracked"
+        },
+        {
+          "bytes": 6944,
+          "content_fnv64": "0x62f03a704c3c496a",
+          "path": "gpui/crates/render/src/shaders/light_index_build.wgsl",
+          "state": "untracked"
+        },
+        {
+          "bytes": 1728,
+          "content_fnv64": "0x99cdf1c870ab3308",
+          "path": "gpui/crates/render/src/shaders/light_index_count.wgsl",
+          "state": "untracked"
+        },
+        {
+          "bytes": 15666,
+          "content_fnv64": "0x188051518b297149",
           "path": "gpui/crates/render/src/shaders/scene.wgsl",
           "state": "tracked"
         },
         {
-          "bytes": 3542,
-          "content_fnv64": "0x7ef223b64103b022",
+          "bytes": 4634,
+          "content_fnv64": "0x0ab5604e06ea94de",
           "path": "gpui/crates/render/src/shaders/scene_bindings.wgsl",
           "state": "tracked"
         },
         {
-          "bytes": 4893,
-          "content_fnv64": "0xa94a30cb4d1bcf33",
-          "path": "gpui/crates/render/tests/renderer_contract_goldens.rs",
+          "bytes": 13528,
+          "content_fnv64": "0x4097bd726e1a96ac",
+          "path": "gpui/crates/render/src/shadow.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 14083,
+          "content_fnv64": "0xd0d818d8588af63b",
+          "path": "gpui/crates/render/src/share.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 101301,
+          "content_fnv64": "0x99e90375dd58a0e3",
+          "path": "gpui/crates/render/src/viewport.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 4421,
+          "content_fnv64": "0xc2fe71fa9ad3a13f",
+          "path": "gpui/crates/render/src/warmup.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 27969,
+          "content_fnv64": "0xc2604cbd9ccd3dc4",
+          "path": "gpui/crates/render/tests/environment_controls.rs",
+          "state": "tracked"
+        },
+        {
+          "bytes": 7729,
+          "content_fnv64": "0xf1bdf37a309c5a19",
+          "path": "gpui/crates/render/tests/fixture_kinematics_contract.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 4816,
+          "content_fnv64": "0x12d2ff53b9824439",
+          "path": "gpui/crates/render/tests/shared_presentation.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 6822,
+          "content_fnv64": "0x0e3230869e9cfa3e",
+          "path": "gpui/crates/render/tests/stall_probe.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 15880,
+          "content_fnv64": "0xc09157bcad3c7c16",
+          "path": "gpui/crates/render/tests/timestamp_lie.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 8320,
+          "content_fnv64": "0xe1d6be428b23e098",
+          "path": "gpui/crates/render/tests/timestamp_query_contract.rs",
+          "state": "untracked"
+        },
+        {
+          "bytes": 20510,
+          "content_fnv64": "0xd64555141fc04e6b",
+          "path": "gpui/crates/render/tests/volumetric_transport.rs",
           "state": "tracked"
         }
       ],
@@ -424,7 +1020,7 @@
         "json",
         "png"
       ],
-      "manifest_fnv64": "0xfb71a0ed93e48b85",
+      "manifest_fnv64": "0xa237a2e4dcab79a2",
       "scopes": [
         "gpui/crates/render",
         "gpui/crates/app"

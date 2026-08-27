@@ -59,6 +59,25 @@ impl PlatformAtlas for MetalAtlas {
         }
     }
 
+    // LUMA LOCAL EDIT: refresh a resident tile in place (see the trait's
+    // default for why). Not upstream.
+    fn update(&self, key: &AtlasKey, bytes: &[u8]) -> bool {
+        let lock = self.0.lock();
+        let Some(tile) = lock.tiles_by_key.get(key).copied() else {
+            return false;
+        };
+        let texture = lock.texture(tile.texture_id);
+        // A resized viewport is a different tile, not a refill of this one.
+        let stride = tile.bounds.size.width.to_bytes(texture.bytes_per_pixel()) as usize;
+        if bytes.len() != stride * tile.bounds.size.height.0 as usize {
+            drop(lock);
+            self.remove(key);
+            return false;
+        }
+        texture.upload(tile.bounds, bytes);
+        true
+    }
+
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
         let Some(tile) = lock.tiles_by_key.remove(key) else {

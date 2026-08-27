@@ -14,7 +14,7 @@
 
 use glam::{Mat4, Vec3};
 
-use crate::coords::{euler_xyz, hex_srgb};
+use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_pose_from_data};
 use crate::frame::{Camera, Definitions, MeshData};
 use crate::scene_desc::Scene;
 
@@ -169,7 +169,7 @@ pub(crate) fn build(
         });
         out.push(Overlay {
             mesh,
-            model: to_world * fixture_transform(fixture),
+            model: to_world * three_pose_from_data(fixture.pos, fixture.rot),
             lines: true,
             color: hex_srgb(if i == 0 { 0xff_ff_00 } else { 0xb8_b8_46 }),
             opacity: 1.0,
@@ -187,7 +187,7 @@ pub(crate) fn build(
     else {
         return out;
     };
-    let pivot_three = Vec3::new(primary.pos[0], primary.pos[2], primary.pos[1]);
+    let pivot_three = three_from_data(Vec3::from(primary.pos));
     let pivot_world = to_world.transform_point3(pivot_three);
 
     // Constant screen size: `factor * size / 7` where `factor` is the distance
@@ -245,13 +245,6 @@ pub(crate) fn build(
     }
 
     out
-}
-
-/// Position and Euler rotation of a fixture, in three space — the same
-/// composition `frame::build` uses for the fixture body.
-fn fixture_transform(fixture: &crate::scene_desc::Fixture) -> Mat4 {
-    Mat4::from_translation(Vec3::new(fixture.pos[0], fixture.pos[2], fixture.pos[1]))
-        * Mat4::from_mat3(euler_xyz(fixture.rot[0], fixture.rot[2], fixture.rot[1]))
 }
 
 /// `three-stdlib`'s `gizmoTranslate`, flattened into the child order

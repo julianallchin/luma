@@ -11,7 +11,9 @@ use std::sync::Arc;
 use glam::{Mat3, Mat4, Vec3};
 
 use crate::assets::{HdrImage, Image, Library, Material, Vertex};
-use crate::coords::{euler_xyz, hex_srgb, three_to_world_basis, world_from_three};
+use crate::coords::{
+    euler_xyz, hex_srgb, three_pose_from_data, three_to_world_basis, world_from_three,
+};
 use crate::luminaire::{cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL};
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, PrimitiveState, Scene};
@@ -180,6 +182,10 @@ pub struct Frame {
     pub fixture_cones: Vec<FixtureCone>,
     /// Whether fixture cones illuminate opaque surfaces as well as haze.
     pub fixture_surface_lighting: bool,
+    /// Whether beams draw through per-cone proxy geometry instead of the
+    /// full-screen tiled march. Same integrand either way — see
+    /// `shaders/beam_transport.wgsl`; this only changes which pixels run it.
+    pub beam_proxy: bool,
     /// Whether opaque venue geometry casts into fixture cones and haze.
     pub fixture_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
@@ -513,9 +519,8 @@ pub fn build_with(
         let Some(def) = definitions.get(&fixture.fixture_path) else {
             continue;
         };
-        let pos_three = Vec3::new(fixture.pos[0], fixture.pos[2], fixture.pos[1]);
         let rot_three = euler_xyz(fixture.rot[0], fixture.rot[2], fixture.rot[1]);
-        let base = to_world * Mat4::from_translation(pos_three) * Mat4::from_mat3(rot_three);
+        let base = to_world * three_pose_from_data(fixture.pos, fixture.rot);
 
         if is_procedural(def) {
             let head_count = def.head_count(&fixture.mode_name).max(1);
@@ -681,9 +686,11 @@ pub fn build_with(
     // --- stage pieces ------------------------------------------------------
     for piece in &scene.pieces {
         let glb = lib.get(&piece.mesh_path)?;
+        // Attached pieces arrive already flattened into world poses (see
+        // `flatten_pieces` app-side), so a piece's pose here is never relative
+        // to another piece's.
         let root = to_world
-            * Mat4::from_translation(Vec3::new(piece.pos[0], piece.pos[2], piece.pos[1]))
-            * Mat4::from_mat3(euler_xyz(piece.rot[0], piece.rot[2], piece.rot[1]))
+            * three_pose_from_data(piece.pos, piece.rot)
             * Mat4::from_scale(Vec3::splat(piece.scale));
         let worlds = glb.world_matrices(root, &HashMap::new());
         for (node, world) in glb.nodes.iter().zip(&worlds) {
@@ -748,6 +755,7 @@ pub fn build_with(
         point_lights,
         fixture_cones,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
+        beam_proxy: false,
         fixture_shadows: scene.render.fixture_shadows,
         cluster_debug: scene.render.cluster_debug,
         clear_color: Vec3::from(scene.render.environment.background),

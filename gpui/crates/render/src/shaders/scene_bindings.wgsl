@@ -46,6 +46,10 @@ struct PointLightData {
 @group(0) @binding(2) var<storage, read> point_lights: array<PointLightData>;
 @group(0) @binding(3) var shadow_map: texture_depth_2d_array;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
+// Fixture-shadow pass only: draw indices bucketed by mesh, so one instanced
+// draw covers every caster sharing a mesh. Other pipelines never reference
+// it, so their layouts carry no entry for it.
+@group(0) @binding(5) var<storage, read> caster_instances: array<u32>;
 
 struct EnvironmentParams {
     intensity: f32,
@@ -73,28 +77,40 @@ struct FixtureLightRest {
     wash: f32,
     gobo: f32,
     gobo_rotation: f32,
-};
-
-struct SurfaceClusterHeader {
-    offset: u32,
-    count: u32,
+    // Shadow-map layer for this cone, or negative when it has none: maps are
+    // capped, so a cone's layer is not its index.
+    shadow_slot: f32,
+    // Three scalars, not a `vec3`: a `vec3` member would take its own 16-byte
+    // alignment and push the struct to 80 bytes, disagreeing with the Rust
+    // stride. Scalars keep it at 64.
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 struct SurfaceClusterParams {
-    grid: vec4<u32>,
-    depth_and_flags: vec4<f32>,
-    // x: shadowed fixture count, y: shadow texel size.
+    // x: fixture surface lighting enabled, y: cluster-occupancy debug view.
+    // The culling structure itself is the shared light index (group 3,
+    // bindings 8–10); only the pass flags remain here.
+    flags: vec4<f32>,
+    // x: shadowed fixture count, y: shadow texel size, z: beam gain — the
+    // dimmer-to-radiance scale shared with the haze march.
     shadow: vec4<f32>,
 };
 
 struct FixtureShadowMatrix {
     view_proj: mat4x4<f32>,
+    // xy: shadow projection near/far planes in metres.
+    params: vec4<f32>,
 };
 
+// Binding 3 held a CSR cluster list before the unified light index
+// (bindings 8–10, declared in `light_index.wgsl`) replaced it; the number
+// stays reserved so the surviving slots keep their ids. The light SoA below
+// is uploaded by the index in its own sorted order — ids from the index walk
+// are direct offsets into it.
 @group(3) @binding(0) var<storage, read> fixture_cores: array<FixtureLightCore>;
 @group(3) @binding(1) var<storage, read> fixture_rests: array<FixtureLightRest>;
-@group(3) @binding(2) var<storage, read> surface_cluster_headers: array<SurfaceClusterHeader>;
-@group(3) @binding(3) var<storage, read> surface_cluster_indices: array<u32>;
 @group(3) @binding(4) var<uniform> surface_clusters: SurfaceClusterParams;
 @group(3) @binding(5) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
 @group(3) @binding(6) var fixture_shadow_map: texture_depth_2d_array;

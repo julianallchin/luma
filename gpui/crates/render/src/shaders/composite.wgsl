@@ -7,7 +7,7 @@ struct Composite {
     inv_view_proj: mat4x4<f32>,
     // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
-    // xy: camera near/far planes.
+    // xy: camera near/far planes, z: mean extinction sigma in 1/metres.
     depth: vec4<f32>,
 };
 
@@ -63,8 +63,20 @@ fn upsample_haze(uv: vec2<f32>, full_depth: f32) -> vec3<f32> {
     let w01 = (1.0 - f.x) * f.y * exp(-abs(s01.a - full_depth) * k);
     let w11 = f.x * f.y * exp(-abs(s11.a - full_depth) * k);
 
+    let total = w00 + w10 + w01 + w11;
+    if total < 1e-4 {
+        // Every tap disagrees with this pixel's depth. Renormalising four
+        // wrong-side answers paints the far side's haze onto a near surface;
+        // the least-wrong single tap is the one whose depth is closest.
+        var best = s00;
+        var best_err = abs(s00.a - full_depth);
+        if abs(s10.a - full_depth) < best_err { best = s10; best_err = abs(s10.a - full_depth); }
+        if abs(s01.a - full_depth) < best_err { best = s01; best_err = abs(s01.a - full_depth); }
+        if abs(s11.a - full_depth) < best_err { best = s11; }
+        return best.rgb;
+    }
     let haze = w00 * s00.rgb + w10 * s10.rgb + w01 * s01.rgb + w11 * s11.rgb;
-    return haze / max(w00 + w10 + w01 + w11, 1e-4);
+    return haze / total;
 }
 
 const LINEAR_SRGB_TO_LINEAR_REC2020 = mat3x3<f32>(
@@ -160,5 +172,9 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     if debug == 7u {
         return vec4<f32>(agx(haze), 1.0);
     }
-    return vec4<f32>(agx(scene + haze), 1.0);
+    // Beer-Lambert over the camera path, with the same sigma the haze pass
+    // integrates in-scatter against. Surface radiance decays exactly as the
+    // medium's own glow builds, so everything converges to one fog colour with
+    // distance — geometry never silhouettes against the sky through the haze.
+    return vec4<f32>(agx(scene * exp(-cfg.depth.z * depth) + haze), 1.0);
 }

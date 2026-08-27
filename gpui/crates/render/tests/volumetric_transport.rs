@@ -232,8 +232,26 @@ fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) {
         .unwrap();
 }
 
+/// How long [`wait_for_serial`] waits before calling the renderer worker stuck.
+///
+/// **A liveness guard, not a frame budget.** A viewport's *first* frame pays
+/// for device creation and shader compilation — measured at ~24.5s on an idle
+/// M3 Max — while every frame after it lands in 3-13ms. Any bound tight enough
+/// to say something interesting about the second frame therefore fails the
+/// first one the moment the machine is busy, which is exactly how this flaked
+/// at 30s: a correct result went red because the box was loaded, and the
+/// margin was 0-14% even when it was not.
+///
+/// So this is deliberately several times the measured warmup. It exists only
+/// so a genuinely wedged worker fails the run instead of hanging it. What a
+/// frame *costs* is asserted where it can be measured meaningfully — the
+/// budget tests and `profile-volumetrics` — and deliberately not here, where
+/// the number would be dominated by shader compilation.
+const WORKER_LIVENESS_TIMEOUT: Duration = Duration::from_secs(180);
+
 fn wait_for_serial(viewport: &AsyncViewport, serial: u64) -> AsyncPresentation {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let started = Instant::now();
+    let deadline = started + WORKER_LIVENESS_TIMEOUT;
     loop {
         if let Some(result) = viewport.take_latest() {
             let presentation = result.unwrap();
@@ -247,7 +265,11 @@ fn wait_for_serial(viewport: &AsyncViewport, serial: u64) -> AsyncPresentation {
         }
         assert!(
             Instant::now() < deadline,
-            "renderer worker did not complete serial {serial}"
+            "renderer worker did not complete serial {serial} within {:?} \
+             (waited {:?}) — the worker is wedged, not merely slow: this bound \
+             is several times the first-frame shader-compilation cost",
+            WORKER_LIVENESS_TIMEOUT,
+            started.elapsed()
         );
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -281,12 +303,19 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
     let gobo = renderer
         .render(&frame(Vec::new(), vec![light(1)]), WIDTH, HEIGHT, 4)
         .unwrap();
+    // Provisional 2026-08-25: re-baselined for the baked haze density field
+    // (`haze_field.rs`), which is a different realization of the same noise
+    // process, not a different picture. Accepted from stills; the temporal
+    // delta distribution was measured to match the previous field to within
+    // 8% and stay flat across texel boundaries. If the look is later rejected,
+    // these three and the two below are the revert candidates — the invariants
+    // asserted after this point never moved.
     assert_eq!(
         (hash(&one), hash(&overlap), hash(&gobo)),
         (
-            0x1eee_2591_7e01_e511,
-            0x0d99_caff_28ca_c25a,
-            0x8171_47f1_b1ef_0857,
+            0x2f6f_fe9f_972f_c988,
+            0x6f91_c14f_777d_8cca,
+            0xb064_ab17_5c43_29ac,
         ),
         "one/overlap/gobo transport golden drifted"
     );
@@ -312,9 +341,10 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
     let blocked = renderer
         .render(&frame(vec![blocker()], vec![light(0)]), WIDTH, HEIGHT, 2)
         .unwrap();
+    // Provisional 2026-08-25, same re-baseline as above.
     assert_eq!(
         (hash(&open), hash(&blocked)),
-        (0x7f4e_c6ae_9fdf_b901, 0xaa17_6206_f7b4_cf3a),
+        (0xec44_6591_4338_0f1e, 0xbb65_661d_35cd_8d5e),
         "depth-occlusion transport golden drifted"
     );
     assert!(mean_rgb(&blocked) < mean_rgb(&open));
@@ -499,6 +529,24 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
         assert!(timings.cpu_encode_submit_ms >= 0.0);
         assert!(timings.gpu_total_ms >= timings.gpu_volumetric_ms);
     }
+    // The submit-span phases are only worth having if a long total is
+    // *attributable*, and that requires them to account for the whole span
+    // rather than sample points inside it. Pinned here because the failure is
+    // silent: a phase added to the encode path and not to `CpuSpans` would
+    // still produce plausible-looking numbers that quietly lose time.
+    let cpu = first.cpu;
+    let phases = cpu.prepare + cpu.clusters + cpu.upload + cpu.targets + cpu.encode;
+    let drift = phases.abs_diff(cpu.total);
+    assert!(
+        drift < std::time::Duration::from_micros(50),
+        "submit phases must exhaust the submit span: \
+         phases={phases:?} total={:?} drift={drift:?}",
+        cpu.total
+    );
+    assert!(
+        cpu.total > std::time::Duration::ZERO,
+        "the submit span is a wall bracket and is never absent"
+    );
     let stabilized = draw_async(
         &mut live,
         frame(Vec::new(), vec![light(0)]),
@@ -507,7 +555,8 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
         2,
     );
     assert_ne!(
-        first.pixels, stabilized.pixels,
+        first.image.to_bytes(),
+        stabilized.image.to_bytes(),
         "async history must advance"
     );
 
@@ -520,7 +569,8 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
     fresh_moved.camera.eye.x += 0.25;
     let expected_camera = draw_async(&mut fresh, fresh_moved, WIDTH, HEIGHT, 1);
     assert_eq!(
-        camera_reset.pixels, expected_camera.pixels,
+        camera_reset.image.to_bytes(),
+        expected_camera.image.to_bytes(),
         "the renderer-thread path must reject history on camera motion"
     );
 
@@ -549,7 +599,8 @@ fn async_viewport_advances_and_resets_production_temporal_history() {
         1,
     );
     assert_eq!(
-        resized.pixels, expected_resize.pixels,
+        resized.image.to_bytes(),
+        expected_resize.image.to_bytes(),
         "resize must discard history and rebuild renderer-thread targets"
     );
 }
@@ -579,7 +630,8 @@ fn async_viewport_coalesces_in_flight_work_and_presents_the_newest_descriptor() 
     newest_input.camera.eye.x += 16.0 * 0.02;
     let expected = draw_async(&mut fresh, newest_input, WIDTH, HEIGHT, 1);
     assert_eq!(
-        newest.pixels, expected.pixels,
+        newest.image.to_bytes(),
+        expected.image.to_bytes(),
         "newest-wins coalescing must render the last submitted descriptor"
     );
 }

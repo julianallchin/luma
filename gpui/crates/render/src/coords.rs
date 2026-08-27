@@ -17,12 +17,53 @@
 //! across every call site; when the app-side swap is deleted, this becomes the
 //! identity and the goldens are re-captured.
 
-use glam::{Mat3, Vec3};
+use glam::{Mat3, Mat4, Vec3};
 
 /// three.js `Object3D.position.set(posX, posZ, posY)`.
+///
+/// Transposing two axes is its own inverse, so this maps three space back to
+/// data space just as well. [`data_pose_of`] relies on that.
 #[must_use]
 pub fn three_from_data(p: Vec3) -> Vec3 {
     Vec3::new(p.x, p.z, p.y)
+}
+
+/// The three-space pose a stored `(position, euler)` pair denotes.
+///
+/// Every stored transform in a venue — fixture or stage piece, root or attached
+/// — means this and nothing else, so it is spelled once. The `(x, z, y)` swap
+/// applies to *both* halves: three.js builds these as
+/// `position.set(posX, posZ, posY)` / `rotation.set(rotX, rotZ, rotY)`, and a
+/// pose whose translation is swapped but whose Euler triple is not is a pose in
+/// no space at all. That mistake is only visible once transforms compose, which
+/// is why it survived in the stage-piece parent chain for as long as it did.
+///
+/// Scale is not included: it is uniform, commutes with the rotation, and the
+/// callers that have one apply it themselves.
+#[must_use]
+pub fn three_pose_from_data(pos: [f32; 3], rot: [f32; 3]) -> Mat4 {
+    Mat4::from_translation(three_from_data(Vec3::from(pos)))
+        * Mat4::from_mat3(euler_xyz(rot[0], rot[2], rot[1]))
+}
+
+/// Recover the stored `(position, euler)` pair from a three-space pose — the
+/// inverse of [`three_pose_from_data`].
+///
+/// This is what flattening a parent chain needs: compose in three space, then
+/// come back out to the stored convention once, at the end. Any uniform scale in
+/// `m` is dropped, matching what [`three_pose_from_data`] does not take.
+///
+/// Round-trips to the same *pose*, not necessarily the same triple — see
+/// [`euler_xyz_of`] on the gimbal clamp.
+#[must_use]
+pub fn data_pose_of(m: Mat4) -> ([f32; 3], [f32; 3]) {
+    let (_, rotation, translation) = m.to_scale_rotation_translation();
+    let e = euler_xyz_of(Mat3::from_quat(rotation));
+    (
+        // The swap is an involution, so this is three -> data.
+        three_from_data(translation).to_array(),
+        [e.x, e.z, e.y],
+    )
 }
 
 /// three space (Y-up) into world space (Z-up). A rotation, so it changes no
@@ -159,6 +200,36 @@ mod tests {
         assert_eq!(
             world_from_data(Vec3::new(1.0, 2.0, 3.0)),
             Vec3::new(1.0, -2.0, 3.0)
+        );
+    }
+
+    #[test]
+    fn a_stored_pose_round_trips_through_three_space() {
+        let pos = [1.5, -2.25, 4.0];
+        let rot = [0.3, -1.1, 0.75];
+        let (back_pos, back_rot) = data_pose_of(three_pose_from_data(pos, rot));
+        assert!(Vec3::from(back_pos).abs_diff_eq(Vec3::from(pos), 1e-5));
+        assert!(Vec3::from(back_rot).abs_diff_eq(Vec3::from(rot), 1e-5));
+    }
+
+    #[test]
+    fn composing_stored_poses_matches_nesting_them() {
+        // The property the stage-piece parent chain depends on: flattening
+        // parent-then-child must land where three.js's nested groups land.
+        // Composing in three space and converting once is the only order that
+        // holds, because the swap is a mirror and does not distribute over a
+        // product of poses built in the wrong space.
+        let parent = ([1.0, 2.0, 0.0], [0.0, 0.0, std::f32::consts::FRAC_PI_2]);
+        let child = ([1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        let flattened =
+            three_pose_from_data(parent.0, parent.1) * three_pose_from_data(child.0, child.1);
+        let (pos, _) = data_pose_of(flattened);
+
+        // A quarter turn about stored Z takes the child's +X offset to -Y in
+        // data space, so the child sits at (1, 1, 0), not (1, 3, 0).
+        assert!(
+            Vec3::from(pos).abs_diff_eq(Vec3::new(1.0, 1.0, 0.0), 1e-5),
+            "flattened child landed at {pos:?}"
         );
     }
 }
