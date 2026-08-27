@@ -1,0 +1,230 @@
+{
+  "schema": "luma.renderer-frame/1",
+  "image": "stage-builder-4.200.png",
+  "viewport": {
+    "width": 800,
+    "height": 500
+  },
+  "deviceScaleFactor": 2.0,
+  "outputSize": [
+    1600,
+    1000
+  ],
+  "subframes": 16,
+  "timeSeconds": 4.2,
+  "scene": {
+    "id": "stage-builder",
+    "times": [
+      0.0,
+      1.37,
+      4.2
+    ],
+    "camera": {
+      "position": [
+        5.0,
+        3.5,
+        6.0
+      ],
+      "target": [
+        0.0,
+        0.8,
+        0.0
+      ]
+    },
+    "editing": true,
+    "render": {
+      "environment": {
+        "background": [
+          0.009721217,
+          0.009721217,
+          0.009721217
+        ],
+        "ambientColor": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "ambientIntensity": 0.2
+      },
+      "haze": {
+        "enabled": false,
+        "steps": 8,
+        "resolution": 1.0,
+        "density": 0.8
+      },
+      "sun": {
+        "direction": [
+          8.0,
+          -6.0,
+          12.0
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "intensity": 1.4,
+        "shadows": true,
+        "shadowSoftness": 1.0
+      },
+      "showGrid": true,
+      "debugView": "pbr",
+      "fixtureSurfaceLighting": false,
+      "fixtureShadows": false,
+      "clusterDebug": false,
+      "fov": 50.0
+    },
+    "selectedFixtureIds": [
+      "sb-mover-l"
+    ],
+    "fixtures": [
+      {
+        "id": "sb-mover-l",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          -1.5,
+          0.0,
+          3.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "sb-mover-r",
+        "fixturePath": "golden/moving-head.qxf",
+        "modeName": "Default",
+        "pos": [
+          1.5,
+          0.0,
+          3.2
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "pieces": [
+      {
+        "id": "deck-l",
+        "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "pos": [
+          -1.0,
+          0.0,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "deck-r",
+        "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "pos": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "truss-a",
+        "meshPath": "stage_lab/truss_q40_1.83m.glb",
+        "pos": [
+          0.0,
+          -1.6,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "speaker",
+        "meshPath": "stage_lab/speaker_dbr15.glb",
+        "pos": [
+          2.2,
+          0.0,
+          0.0
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 1.0
+      }
+    ],
+    "state": {
+      "sb-mover-l:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          -20.0,
+          35.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "sb-mover-r:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          20.0,
+          35.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      }
+    }
+  },
+  "definitions": {
+    "golden/moving-head.qxf": {
+      "Type": "Moving Head",
+      "Mode": [
+        {
+          "@Name": "Default",
+          "Head": []
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Width": 302.0,
+          "@Height": 302.0,
+          "@Depth": 361.0
+        },
+        "Layout": null,
+        "Lens": {
+          "@DegreesMin": 11.0,
+          "@DegreesMax": 58.0
+        }
+      }
+    }
+  }
+}

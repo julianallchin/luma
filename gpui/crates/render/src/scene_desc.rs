@@ -336,7 +336,10 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 sun: wire.sun,
                 show_grid: wire.show_grid.unwrap_or(false),
                 debug_view: wire.debug_view,
-                fixture_surface_lighting: wire.fixture_surface_lighting.unwrap_or(false),
+                // Absent means the constructors' default, which is on — only
+                // the legacy branch below pins it off, and that pin has its
+                // own justification.
+                fixture_surface_lighting: wire.fixture_surface_lighting.unwrap_or(true),
                 fixture_shadows: wire.fixture_shadows.unwrap_or(true),
                 cluster_debug: wire.cluster_debug,
                 fov: wire.fov,

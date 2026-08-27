@@ -29,7 +29,7 @@ struct SizeParams {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
 struct SceneParams {
     intensity: f32,
     rotation: f32,
@@ -43,8 +43,13 @@ struct ResidentEnvironment {
     specular: wgpu::TextureView,
 }
 
-/// Owns immutable preprocessing pipelines and the currently resident probe.
-pub(crate) struct EnvironmentSystem {
+/// Environment preprocessing that depends on no scene: the compute pipelines,
+/// the samplers, the neutral fallback probe and the split-sum BRDF LUT.
+///
+/// Separate from [`EnvironmentCache`] because these belong to the device and
+/// that belongs to a renderer. One process compiles these once; each renderer
+/// keeps its own view of which probe is resident.
+pub(crate) struct EnvironmentPipelines {
     scene_layout: wgpu::BindGroupLayout,
     equirect_layout: wgpu::BindGroupLayout,
     filter_layout: wgpu::BindGroupLayout,
@@ -52,12 +57,27 @@ pub(crate) struct EnvironmentSystem {
     filter_pipeline: wgpu::ComputePipeline,
     sampler: wgpu::Sampler,
     fallback_cube: wgpu::TextureView,
-    fallback_lut: wgpu::TextureView,
-    brdf: Option<wgpu::TextureView>,
-    resident: Option<ResidentEnvironment>,
+    /// The split-sum lookup table. It is a function of the BRDF and nothing
+    /// else, so it is built once here rather than lazily on the first frame
+    /// that has an environment — which used to put a compute dispatch and a
+    /// texture allocation inside a live frame.
+    brdf: wgpu::TextureView,
 }
 
-impl EnvironmentSystem {
+/// Which probe a renderer currently has resident, and the bindings for it.
+#[derive(Default)]
+pub(crate) struct EnvironmentCache {
+    resident: Option<ResidentEnvironment>,
+    /// Last frame's bind group and the parameters it was built from.
+    ///
+    /// The probe is normally unchanged frame to frame — it changes when the
+    /// authored environment does, not when the transport moves — so rebuilding
+    /// a uniform buffer and a five-entry bind group every frame was per-frame
+    /// garbage for a value that had not moved.
+    cached: Option<(SceneParams, wgpu::Buffer, wgpu::BindGroup)>,
+}
+
+impl EnvironmentPipelines {
     pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("environment-scene"),
@@ -106,11 +126,11 @@ impl EnvironmentSystem {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         let fallback_cube = black_cube(device, queue);
-        let fallback_lut = black_2d(device, queue);
+        let brdf = brdf_lut(device, queue);
         Self {
             scene_layout,
             equirect_layout,
@@ -119,19 +139,20 @@ impl EnvironmentSystem {
             filter_pipeline,
             sampler,
             fallback_cube,
-            fallback_lut,
-            brdf: None,
-            resident: None,
+            brdf,
         }
     }
 
     pub(crate) fn scene_layout(&self) -> &wgpu::BindGroupLayout {
         &self.scene_layout
     }
+}
 
+impl EnvironmentCache {
     /// Ensure the frame's immutable probe is resident. Returns true on upload.
     pub(crate) fn prepare(
         &mut self,
+        pipelines: &EnvironmentPipelines,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         environment: Option<&EnvironmentImage>,
@@ -146,10 +167,6 @@ impl EnvironmentSystem {
         {
             return false;
         }
-        if self.brdf.is_none() {
-            self.brdf = Some(brdf_lut(device, queue));
-        }
-
         let source = upload_hdr(device, queue, environment);
         let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
         let raw_cube = cube_texture(device, CUBE_SIZE, 1, "environment-raw-cube");
@@ -181,18 +198,18 @@ impl EnvironmentSystem {
         dispatch_equirect(
             device,
             &mut encoder,
-            (&self.equirect_layout, &self.equirect_pipeline),
+            (&pipelines.equirect_layout, &pipelines.equirect_pipeline),
             &source_view,
-            &self.sampler,
+            &pipelines.sampler,
             &raw_target,
             CUBE_SIZE,
         );
         dispatch_filter(
             device,
             &mut encoder,
-            (&self.filter_layout, &self.filter_pipeline),
+            (&pipelines.filter_layout, &pipelines.filter_pipeline),
             &raw_sample,
-            &self.sampler,
+            &pipelines.sampler,
             &irradiance_target,
             FilterParams {
                 size: IRRADIANCE_SIZE,
@@ -207,9 +224,9 @@ impl EnvironmentSystem {
             dispatch_filter(
                 device,
                 &mut encoder,
-                (&self.filter_layout, &self.filter_pipeline),
+                (&pipelines.filter_layout, &pipelines.filter_pipeline),
                 &raw_sample,
-                &self.sampler,
+                &pipelines.sampler,
                 &target,
                 FilterParams {
                     size,
@@ -225,11 +242,14 @@ impl EnvironmentSystem {
             irradiance,
             specular,
         });
+        // The cached bind group names the old cube views.
+        self.cached = None;
         true
     }
 
     pub(crate) fn bind_group(
-        &self,
+        &mut self,
+        pipelines: &EnvironmentPipelines,
         device: &wgpu::Device,
         environment: Option<&EnvironmentImage>,
     ) -> (wgpu::Buffer, wgpu::BindGroup) {
@@ -248,34 +268,35 @@ impl EnvironmentSystem {
                 visible: f32::from(u8::from(enabled && environment.visible)),
             },
         );
+        // The resident probe is part of the identity: a reprojected cube map
+        // with identical parameters still needs a new bind group.
+        if let Some((cached, uniform, bind_group)) = &self.cached {
+            if *cached == params {
+                return (uniform.clone(), bind_group.clone());
+            }
+        }
         let uniform = buffer(
             device,
             &[params],
             wgpu::BufferUsages::UNIFORM,
             "environment-scene",
         );
-        let (irradiance, specular) = self
-            .resident
-            .as_ref()
-            .map_or((&self.fallback_cube, &self.fallback_cube), |resident| {
-                (&resident.irradiance, &resident.specular)
-            });
+        let (irradiance, specular) = self.resident.as_ref().map_or(
+            (&pipelines.fallback_cube, &pipelines.fallback_cube),
+            |resident| (&resident.irradiance, &resident.specular),
+        );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("environment-scene"),
-            layout: &self.scene_layout,
+            layout: &pipelines.scene_layout,
             entries: &[
                 binding(0, wgpu::BindingResource::TextureView(irradiance)),
                 binding(1, wgpu::BindingResource::TextureView(specular)),
-                binding(
-                    2,
-                    wgpu::BindingResource::TextureView(
-                        self.brdf.as_ref().unwrap_or(&self.fallback_lut),
-                    ),
-                ),
-                binding(3, wgpu::BindingResource::Sampler(&self.sampler)),
+                binding(2, wgpu::BindingResource::TextureView(&pipelines.brdf)),
+                binding(3, wgpu::BindingResource::Sampler(&pipelines.sampler)),
                 binding(4, uniform.as_entire_binding()),
             ],
         });
+        self.cached = Some((params, uniform.clone(), bind_group.clone()));
         (uniform, bind_group)
     }
 }
@@ -540,43 +561,6 @@ fn black_cube(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
     })
 }
 
-fn black_2d(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("environment-lut-fallback"),
-        size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &[0; 8],
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(8),
-            rows_per_image: Some(1),
-        },
-        wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-    );
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
-}
-
 fn compute_pipeline(
     device: &wgpu::Device,
     label: &str,
@@ -589,8 +573,8 @@ fn compute_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
-        bind_group_layouts: &[layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some(label),

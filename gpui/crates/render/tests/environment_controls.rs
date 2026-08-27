@@ -804,7 +804,7 @@ fn live_async_presentation_matches_deterministic_capture_without_ui_polling() {
         assert!(Instant::now() < deadline, "async GPU frame did not retire");
         std::thread::sleep(Duration::from_millis(2));
     };
-    let mut rgba = presented.pixels.to_vec();
+    let mut rgba = presented.image.to_bytes();
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }

@@ -1,77 +1,18 @@
 // Volumetric haze — transliteration of `effects/volumetric-haze-pass.ts`.
 //
-// There is no global march. A conservative 16x16 screen-tile list restricts
-// each pixel to cones whose finite volumes can reach it. Each candidate's
-// contribution is the 1D integral of single-scatter along the exact span of
-// the ray inside that light's
+// There is no global march. The unified light index (`light_index.wgsl`)
+// restricts each pixel to cones whose finite volumes can reach it. Each
+// candidate's contribution is the 1D integral of single-scatter along the
+// exact span of the ray inside that light's
 // cone∩range volume (analytic ray/convex-solid intersection), estimated with
 // equiangular + uniform MIS sampling. Empty pixels cost a handful of
 // intersection tests and zero march steps.
 //
-// Two mechanical departures from the GLSL, both spec §3.1:
-//   * the light array is two SoA storage buffers, not a packed `DataTexture`.
-//     `LightCore` alone drives the sphere reject, so a pixel a light does not
-//     reach costs one 16-byte read rather than four. That property is what
-//     keeps the exact intersection cheap after tiling and it survives the port.
-//   * with storage buffers there is no sampling inside data-dependent control
-//     flow, so WGSL's uniformity rule never comes up. The one depth read stays
-//     at the top of `main`.
-
-const MAX_SAMPLES: i32 = 32;
-
-struct LightCore {
-    position: vec3<f32>,
-    range: f32,
-};
-
-struct LightRest {
-    direction: vec3<f32>,
-    cos_beam: f32,
-    color: vec3<f32>,
-    intensity: f32,
-    cos_field: f32,
-    wash: f32,
-    gobo: f32,
-    gobo_rotation: f32,
-};
-
-struct TileHeader {
-    offset: u32,
-    count: u32,
-    _pad: vec2<u32>,
-};
-
-struct Haze {
-    inv_view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    // x: light count, y: density, z: ray steps, w: elapsed seconds.
-    params: vec4<f32>,
-    // x: frame index (jitter walk), y: accumulation weight (1/subframes),
-    // z: near clamp, w: beam gain.
-    tuning: vec4<f32>,
-    // x: white leak, y: phase g, zw: this target's height and width in px.
-    transport: vec4<f32>,
-    // xy: tile grid, z: tile edge in pixels, w: fixed capture seed.
-    tiles: vec4<f32>,
-    // xy: camera near/far planes.
-    depth: vec4<f32>,
-    // x: shadowed fixture count, y: shadow texel size.
-    shadow: vec4<f32>,
-};
-
-struct FixtureShadowMatrix {
-    view_proj: mat4x4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> haze: Haze;
-@group(0) @binding(1) var<storage, read> light_core: array<LightCore>;
-@group(0) @binding(2) var<storage, read> light_rest: array<LightRest>;
-@group(0) @binding(3) var depth_texture: texture_depth_2d;
-@group(0) @binding(4) var<storage, read> tile_headers: array<TileHeader>;
-@group(0) @binding(5) var<storage, read> tile_light_indices: array<u32>;
-@group(0) @binding(6) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
-@group(0) @binding(7) var fixture_shadow_map: texture_depth_2d_array;
-@group(0) @binding(8) var fixture_shadow_sampler: sampler_comparison;
+// The ray reconstruction and the per-light integral live in
+// `beam_transport.wgsl`, which this file prepends — the same functions serve
+// the per-beam proxy pass, so the two passes cannot draw two different beams.
+// What remains here is the pass shape: one oversized triangle, the ambient
+// medium bed, and the tile-list loop.
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -80,353 +21,54 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(xy, 0.0, 1.0);
 }
 
-fn hash3(p_in: vec3<f32>) -> vec3<f32> {
-    let p = vec3<f32>(
-        dot(p_in, vec3<f32>(127.1, 311.7, 74.7)),
-        dot(p_in, vec3<f32>(269.5, 183.3, 246.1)),
-        dot(p_in, vec3<f32>(113.5, 271.9, 124.6)),
-    );
-    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
-}
-
-fn noise3d(p: vec3<f32>) -> f32 {
-    let i = floor(p);
-    let f = p - i;
-    let u = f * f * (3.0 - 2.0 * f);
-    let g000 = dot(hash3(i + vec3<f32>(0.0, 0.0, 0.0)), f - vec3<f32>(0.0, 0.0, 0.0));
-    let g100 = dot(hash3(i + vec3<f32>(1.0, 0.0, 0.0)), f - vec3<f32>(1.0, 0.0, 0.0));
-    let g010 = dot(hash3(i + vec3<f32>(0.0, 1.0, 0.0)), f - vec3<f32>(0.0, 1.0, 0.0));
-    let g110 = dot(hash3(i + vec3<f32>(1.0, 1.0, 0.0)), f - vec3<f32>(1.0, 1.0, 0.0));
-    let g001 = dot(hash3(i + vec3<f32>(0.0, 0.0, 1.0)), f - vec3<f32>(0.0, 0.0, 1.0));
-    let g101 = dot(hash3(i + vec3<f32>(1.0, 0.0, 1.0)), f - vec3<f32>(1.0, 0.0, 1.0));
-    let g011 = dot(hash3(i + vec3<f32>(0.0, 1.0, 1.0)), f - vec3<f32>(0.0, 1.0, 1.0));
-    let g111 = dot(hash3(i + vec3<f32>(1.0, 1.0, 1.0)), f - vec3<f32>(1.0, 1.0, 1.0));
-    let x00 = mix(g000, g100, u.x);
-    let x10 = mix(g010, g110, u.x);
-    let x01 = mix(g001, g101, u.x);
-    let x11 = mix(g011, g111, u.x);
-    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
-}
-
-/// Multiplicative density field, centred on 1. The same turbulence exists
-/// everywhere including the near field; it reads clean at the source only
-/// because the core is overexposed. No spatial gate anywhere.
-fn haze_noise(p_world: vec3<f32>, elapsed: f32) -> f32 {
-    // The turbulence is anisotropic — hash3 mixes each axis with different
-    // constants and the drift is per-axis — so the field is only the same
-    // field if it is sampled in the basis it was authored in. Everything else
-    // here is Z-up world space; the noise alone is evaluated in three's Y-up
-    // basis (`coords::world_from_three` inverted).
-    let p = vec3<f32>(p_world.x, p_world.z, -p_world.y);
-    let drift = vec3<f32>(elapsed * 0.4, elapsed * 0.25, elapsed * 0.15);
-    let q = p * 2.0 + drift;
-    let n = noise3d(q) * 0.6 + noise3d(q * 3.0 + drift + 3.7) * 0.4;
-    return max(1.0 + 1.1 * n, 0.05);
-}
-
-fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
-    let p = haze.inv_view_proj * vec4<f32>(ndc, 1.0);
-    return p.xyz / p.w;
-}
-
-fn fixture_shadow_visibility(world: vec3<f32>, light_index: u32) -> f32 {
-    if f32(light_index) >= haze.shadow.x {
-        return 1.0;
-    }
-    let clip = fixture_shadow_matrices[light_index].view_proj * vec4<f32>(world, 1.0);
-    let ndc = clip.xyz / clip.w;
-    if ndc.z < 0.0 || ndc.z > 1.0 {
-        return 1.0;
-    }
-    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
-        return 1.0;
-    }
-    // One nearest depth lookup per integration sample keeps shadow cost
-    // proportional to actual in-volume work. Reverse-Z stores the closest
-    // caster as the greatest depth; a farther volume sample is therefore
-    // shadowed when its reference falls below that stored value. Temporal
-    // accumulation supplies the soft edge without multiplying atlas reads.
-    let dimensions = vec2<i32>(textureDimensions(fixture_shadow_map));
-    let coord = clamp(vec2<i32>(uv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - 1);
-    let stored = textureLoad(fixture_shadow_map, coord, i32(light_index), 0);
-    return select(0.0, 1.0, ndc.z + 0.001 >= stored);
-}
-
-fn linear_view_depth(raw_depth: f32) -> f32 {
-    let near = haze.depth.x;
-    let far = haze.depth.y;
-    // The scene attachment is reverse-Z: near is one, infinity approaches zero.
-    return near * far / max(near + raw_depth * (far - near), 1e-5);
-}
-
-/// Henyey-Greenstein, normalised so isotropic (g=0) == 1 rather than 1/4pi:
-/// the "intensity" here is a 0..1 dimmer, not radiance in watts, so the
-/// absolute scale lives in the beam gain and only the angular shape matters.
-fn henyey_greenstein(cos_t: f32, g: f32) -> f32 {
-    let g2 = g * g;
-    let denom = 1.0 + g2 - 2.0 * g * cos_t;
-    return (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
-}
-
-// Progressive best-candidate rank tile. Ranks are visited in a toroidal
-// farthest-point order, giving every prefix blue-noise spacing. A per-tile
-// Cranley rotation breaks the visible 8x8 repeat without changing that local
-// spectrum; capture mode fixes `frame`, so this is byte deterministic.
-const BLUE_NOISE_RANK = array<u32, 64>(
-    20u, 52u, 25u, 33u, 31u, 32u, 28u, 34u,
-    39u, 11u, 62u, 4u, 35u, 9u, 44u, 6u,
-    17u, 36u, 26u, 55u, 19u, 51u, 30u, 57u,
-    38u, 2u, 63u, 15u, 59u, 0u, 43u, 13u,
-    21u, 50u, 29u, 53u, 23u, 40u, 22u, 56u,
-    45u, 8u, 54u, 7u, 49u, 14u, 42u, 5u,
-    27u, 48u, 18u, 37u, 24u, 41u, 16u, 46u,
-    58u, 1u, 60u, 10u, 61u, 3u, 47u, 12u,
-);
-
-fn blue_noise(frag: vec2<f32>, frame: u32) -> f32 {
-    let pixel = vec2<u32>(frag) + vec2<u32>(frame * 3u, frame * 5u);
-    let index = (pixel.y & 7u) * 8u + (pixel.x & 7u);
-    let tile = floor(frag / 8.0);
-    let rotation = fract(sin(dot(tile, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    return fract((f32(BLUE_NOISE_RANK[index]) + 0.5) / 64.0 + rotation);
-}
-
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-    // This target may be smaller than the depth buffer (`haze_resolution`), so
-    // the ray is built from *this* pass's uv and the depth is point-sampled at
-    // the full-res texel that uv lands in — the nearest depth, not a blend of
-    // four, because a blended depth across a silhouette is a surface that is
-    // not there. The composite's bilateral upsample is what puts the result
-    // back at full resolution.
-    let size = vec2<f32>(haze.transport.w, haze.transport.z);
-    let uv = frag.xy / size;
-    let coord = vec2<i32>(uv * vec2<f32>(textureDimensions(depth_texture)));
-    let raw_depth = textureLoad(depth_texture, coord, 0);
-    let view_depth = linear_view_depth(raw_depth);
+    let ray = scene_ray(frag.xy);
     let weight = haze.tuning.y;
     let density = haze.params.y;
 
-    let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-
     if density < 0.001 {
-        return vec4<f32>(0.0, 0.0, 0.0, view_depth * weight);
+        return vec4<f32>(0.0, 0.0, 0.0, ray.view_depth * weight);
     }
 
-    let far_world = world_from_ndc(vec3<f32>(ndc_xy, 0.5));
-    let ray_dir = normalize(far_world - haze.camera_pos.xyz);
-    let world_hit = world_from_ndc(vec3<f32>(ndc_xy, raw_depth));
-    let hit_dist = length(world_hit - haze.camera_pos.xyz);
-
-    // Mean extinction. The noise modulates in-scatter only; transmittance uses
-    // the mean so it stays an analytic exp(-sigma*t) with no flicker.
-    let sigma = density * 0.06;
-    let near_clamp = haze.tuning.z;
-    let beam_gain = haze.tuning.w;
-
-    // Golden-ratio temporal walk on the per-pixel stratum jitter.
-    // `gl_FragCoord` counts rows from the bottom and `@builtin(position)` from
-    // the top, so the jitter pattern only lands on the same pixels as the
-    // goldens' if the row index is flipped back.
-    let j = blue_noise(
-        vec2<f32>(frag.x, haze.transport.z - frag.y),
-        u32(haze.tuning.x + haze.tiles.w),
-    );
+    // Mean extinction, derived CPU-side from density (Transport::EXTINCTION —
+    // the composite attenuates the scene with the same value). The noise
+    // modulates in-scatter only; transmittance uses the mean so it stays an
+    // analytic exp(-sigma*t) with no flicker.
+    let sigma = haze.depth.z;
 
     var scattered = vec3<f32>(0.0);
 
     // Ambient medium fill — diffuse haze the beams cut through. Closed-form
     // transmittance; eight stratified noise taps keep the drifting smoke
-    // structure visible instead of averaging it flat.
+    // structure visible instead of averaging it flat. The taps only resolve the
+    // near field; beyond it the noise (centred on 1) integrates as its mean, so
+    // in-scatter saturates toward the medium's asymptotic colour along the whole
+    // camera ray. Paired with the composite's matching extinction, a far surface
+    // and the sky converge to the same fog instead of meeting at a silhouette.
     {
-        let amb_end = min(hit_dist, 24.0);
+        let amb_end = min(ray.hit_dist, 24.0);
         let amb_step = amb_end / 8.0;
         var amb = 0.0;
         for (var i = 0; i < 8; i = i + 1) {
-            let t = (f32(i) + j) * amb_step;
-            amb += haze_noise(haze.camera_pos.xyz + ray_dir * t, haze.params.w) * exp(-sigma * t);
+            let t = (f32(i) + ray.jitter) * amb_step;
+            amb += haze_noise(haze.camera_pos.xyz + ray.dir * t, haze.params.w) * exp(-sigma * t);
         }
-        scattered += vec3<f32>(0.014, 0.011, 0.009) * density * amb * sigma * amb_step;
+        let tail = exp(-sigma * amb_end) - exp(-sigma * ray.hit_dist);
+        scattered += vec3<f32>(0.014, 0.011, 0.009) * density * (amb * sigma * amb_step + tail);
     }
 
-    let sample_count = i32(clamp(haze.params.z, 1.0, f32(MAX_SAMPLES)));
-    // MIS split: equiangular samples own the hot near field (their density
-    // cancels 1/d² exactly), uniform samples own the dim far tail where the
-    // turbulence lives. Balance-heuristic weights combine them.
-    let n_eq = (sample_count + 1) / 2;
-    let n_un = sample_count - n_eq;
-    let tile_xy = min(
-        vec2<u32>(frag.xy) / u32(haze.tiles.z),
-        vec2<u32>(haze.tiles.xy) - vec2<u32>(1u),
-    );
-    let tile = tile_headers[tile_xy.y * u32(haze.tiles.x) + tile_xy.x];
-
-    for (var candidate = 0u; candidate < tile.count; candidate = candidate + 1u) {
-        let li = tile_light_indices[tile.offset + candidate];
-        if li >= u32(haze.params.x) {
-            continue;
-        }
-        let core = light_core[li];
-        let oc = haze.camera_pos.xyz - core.position;
-        let b = dot(oc, ray_dir);
-        let oo = dot(oc, oc);
-        let disc = b * b - (oo - core.range * core.range);
-        if disc <= 0.0 {
-            continue;
-        }
-        let sq = sqrt(disc);
-        let s0 = max(-b - sq, 0.0);
-        let s1 = min(-b + sq, hit_dist);   // geometry occludes the beam
-        if s1 <= s0 {
-            continue;
-        }
-
-        let rest = light_rest[li];
-        let cf2 = rest.cos_field * rest.cos_field;
-        let dv = dot(ray_dir, rest.direction);
-        let ov = dot(oc, rest.direction);
-        let qa = dv * dv - cf2;
-        let qb = dv * ov - cf2 * b;
-        let qc = ov * ov - cf2 * oo;
-
-        var r0 = s0;
-        var r1 = s0;
-        if abs(qa) > 1e-6 {
-            let qd = qb * qb - qa * qc;
-            if qd > 0.0 {
-                let qs = sqrt(qd);
-                var a0 = (-qb - qs) / qa;
-                var a1 = (-qb + qs) / qa;
-                if a0 > a1 {
-                    let tmp = a0;
-                    a0 = a1;
-                    a1 = tmp;
-                }
-                r0 = clamp(a0, s0, s1);
-                r1 = clamp(a1, s0, s1);
-            }
-        } else if abs(qb) > 1e-6 {
-            // Ray grazing along the cone surface: the quadratic degenerates.
-            r0 = clamp(-qc / (2.0 * qb), s0, s1);
-            r1 = r0;
-        }
-
-        // Solid forward cone and range ball are both convex, so the ray is
-        // inside their intersection along one contiguous span. Partition
-        // [s0,s1] at the cone roots and keep sub-intervals whose midpoints are
-        // inside the forward cone.
-        var t_a = 1e9;
-        var t_b = -1e9;
-        for (var k = 0; k < 3; k = k + 1) {
-            var ea = s0;
-            var eb = r0;
-            if k == 1 {
-                ea = r0;
-                eb = r1;
-            } else if k == 2 {
-                ea = r1;
-                eb = s1;
-            }
-            if eb - ea < 1e-5 {
-                continue;
-            }
-            let mp = oc + ray_dir * ((ea + eb) * 0.5);
-            let mm = dot(mp, rest.direction);
-            if mm > 0.0 && mm * mm >= cf2 * dot(mp, mp) {
-                t_a = min(t_a, ea);
-                t_b = max(t_b, eb);
-            }
-        }
-        if t_b <= t_a {
-            continue;
-        }
-        let seg_len = t_b - t_a;
-
-        // Equiangular substitution t = delta + h·tan(theta): sample density
-        // proportional to 1/d² around the source.
-        let delta = -b;
-        let h = sqrt(max(oo - b * b, near_clamp));
-        let th_a = atan((t_a - delta) / h);
-        let th_b = atan((t_b - delta) / h);
-        let d_th = th_b - th_a;
-
-        let g = mix(haze.transport.y, haze.transport.y * 0.3, rest.wash);
-        var acc = vec3<f32>(0.0);
-
-        // Emitted spectrum: the saturated colour plus a small broadband leak —
-        // a real fixture is a white source behind an imperfect filter, plus
-        // lens glare. White-hot is EMERGENT from this: near the source the
-        // leak's absolute radiance is enormous, all channels blow out, and AgX
-        // rolls the core to white; mid-beam the leak is invisible and the true
-        // colour shows. No radiance gate, no white mix.
-        let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
-
-        // Decorrelate jitter across lights so overlapping cones dither
-        // independently — correlated jitter turns overlaps into stripes.
-        let jl = fract(j + f32(li) * 0.7548777);
-
-        for (var i = 0; i < MAX_SAMPLES; i = i + 1) {
-            if i >= sample_count {
-                break;
-            }
-            var t: f32;
-            if i < n_eq {
-                let u = (f32(i) + jl) / f32(n_eq);
-                t = delta + h * tan(th_a + u * d_th);
-            } else {
-                let u = (f32(i - n_eq) + jl) / f32(n_un);
-                t = t_a + u * seg_len;
-            }
-            // Balance heuristic over the two strategies; the equiangular pdf
-            // uses the same clamped-h geometry the tan mapping sampled with.
-            let dt2 = (t - delta) * (t - delta) + h * h;
-            let mis_w = 1.0 / (f32(n_eq) * h / (d_th * dt2) + f32(n_un) / seg_len);
-
-            let q = oc + ray_dir * t;
-            let d2 = dot(q, q);
-            let dist = sqrt(d2);
-            let cos_angle = dot(q, rest.direction) / max(dist, 1e-4);
-
-            let angular = angular_profile(cos_angle, rest.cos_beam, rest.cos_field);
-            if angular <= 0.0 {
-                continue;
-            }
-
-            // Soft range taper — the beam dissolves into the dark instead of
-            // popping at the hard cull sphere.
-            let taper = 1.0 - smoothstep(core.range * 0.7, core.range, dist);
-            let gobo = gobo_transmission(
-                q,
-                rest.direction,
-                rest.cos_field,
-                rest.gobo,
-                rest.gobo_rotation,
-            );
-
-            // True HDR radiance, no clamp to display range. The tonemapper is
-            // the camera; blinding values are its problem and the white-hot
-            // core is its correct answer.
-            let sample_world = haze.camera_pos.xyz + ray_dir * t;
-            var radiance = rest.intensity * angular * taper * gobo * beam_gain
-                / max(d2, near_clamp);
-            // Preserve the established shadow-off arithmetic exactly: even a
-            // multiply by 1 can change half-float rounding and invalidate a
-            // capture without changing the authored image.
-            if haze.shadow.x > 0.0 {
-                radiance *= fixture_shadow_visibility(sample_world, li);
-            }
-            let nz = haze_noise(sample_world, haze.params.w);
-            // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
-            let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
-            acc += tint * (radiance * phase * nz * exp(-sigma * t) * mis_w);
-        }
-
-        scattered += acc * sigma;
+    // This pass renders at a fraction of output resolution; the light index
+    // is defined in full-resolution pixels, so scale the fragment coordinate
+    // rather than rebuilding the index per consumer resolution.
+    var cursor = lights_along(frag.xy * haze.tiles.xy);
+    var li = 0u;
+    while light_index_next(&cursor, &li) {
+        scattered += beam_scatter(li, ray, sigma);
     }
 
     // Alpha carries linear view depth in metres so temporal rejection and the
     // composite's bilateral upsample have a distance-independent threshold.
     // Both channels are pre-weighted for subframe accumulation (spec §6).
-    return vec4<f32>(scattered * weight, view_depth * weight);
+    return vec4<f32>(scattered * weight, ray.view_depth * weight);
 }

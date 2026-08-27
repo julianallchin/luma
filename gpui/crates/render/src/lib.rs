@@ -30,23 +30,34 @@
 #![allow(clippy::too_many_lines)]
 
 pub mod assets;
-pub mod clusters;
 pub mod coords;
 mod environment;
 pub mod frame;
 mod gpu;
+mod haze_field;
+pub mod light_index;
 pub mod luminaire;
+pub mod metrics;
 pub mod overlay;
 pub mod scene_desc;
+#[cfg(target_os = "macos")]
+mod shadow;
+mod share;
 pub mod viewport;
+pub mod warmup;
 
 pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
-pub use gpu::{ClusterStats, FrameTimings, Renderer, RendererProfile, UploadStats};
+pub use gpu::{CpuSpans, FrameTimings, Gpu, Renderer, RendererProfile, ShadowStats, UploadStats};
+pub use light_index::LightIndexStats;
+pub use metrics::MetricSummary;
 pub use scene_desc::Catalogue;
+#[cfg(target_os = "macos")]
+pub use viewport::Surface;
 pub use viewport::{
-    AsyncPresentation, AsyncViewport, Presentation, SubmitOutcome, Viewport, LIVE_HAZE_RESOLUTION,
-    LIVE_SUBFRAMES,
+    AsyncPresentation, AsyncViewport, Occupancy, Pacing, Presentation, Presented, SubmitOutcome,
+    Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES,
 };
+pub use warmup::{warm, warming, Warming};
 
 /// Jitter subframes accumulated per **exported** output frame.
 ///

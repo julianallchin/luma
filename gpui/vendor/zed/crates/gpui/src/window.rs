@@ -4690,6 +4690,35 @@ impl Window {
         });
     }
 
+    /// Replace the pixels of an image already in the sprite atlas, keeping its
+    /// identity and its allocation.
+    ///
+    /// This is the path for a surface whose *contents* change every frame while
+    /// its size does not — a live viewport, a video frame. Minting a fresh
+    /// [`RenderImage`] each time instead gives the atlas a new key each time,
+    /// and a key it has never seen means a new allocation and, once the old one
+    /// is dropped, a freed texture: at frame rate that is a full-screen texture
+    /// created and destroyed continuously.
+    ///
+    /// Reusing an image's id without calling this would paint the *old* pixels,
+    /// because the atlas answers from its cache. Call it before painting.
+    ///
+    /// A frame whose tile is absent or has changed size is left for
+    /// [`Self::paint_image`] to insert, so a resize needs no special case.
+    pub fn update_image(&mut self, data: &RenderImage) -> Result<()> {
+        for frame_index in 0..data.frame_count() {
+            let Some(bytes) = data.as_bytes(frame_index) else {
+                continue;
+            };
+            let params = RenderImageParams {
+                image_id: data.id,
+                frame_index,
+            };
+            self.sprite_atlas.update(&params.into(), bytes);
+        }
+        Ok(())
+    }
+
     /// Removes an image from the sprite atlas.
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         for frame_index in 0..data.frame_count() {

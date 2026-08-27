@@ -16,7 +16,7 @@ use image::RgbaImage;
 use core_foundation::base::TCFType;
 use core_video::{
     metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
-    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{
@@ -26,6 +26,77 @@ use objc::{self, class, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
 use std::{cell::Cell, ffi::c_void, mem, mem::MaybeUninit, ops::Range, ptr, slice, sync::Arc};
+
+
+/// Env-gated GPU timing for content-filter passes (`LUMA_FILTER_PROFILE=1`).
+///
+/// **An instrument, not a feature.** The automation harness reports `drawMs`,
+/// which is the scene build and stops at the renderer's door — so what a
+/// filtered layer costs (an offscreen render of the whole subtree, then a
+/// gaussian, per filter per frame) is invisible from outside. Metal already
+/// carries per-command-buffer GPU timestamps and the headless path already
+/// waits for completion, so reading them changes no timing.
+///
+/// Thread-local rather than a renderer field so the instrument's whole
+/// footprint is one module plus two call sites, removable in one edit.
+mod filter_profile {
+    use std::cell::RefCell;
+    use std::sync::OnceLock;
+
+    use foreign_types::ForeignTypeRef as _;
+    use objc::{msg_send, sel, sel_impl};
+
+    pub fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("LUMA_FILTER_PROFILE").is_some())
+    }
+
+    /// One filtered layer's offscreen pass, kept until the frame is complete.
+    pub struct Pass {
+        pub buffer: metal::CommandBuffer,
+        pub width: u64,
+        pub height: u64,
+        pub sigma: f32,
+    }
+
+    thread_local! {
+        static PASSES: RefCell<Vec<Pass>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub fn record(pass: Pass) {
+        PASSES.with(|passes| passes.borrow_mut().push(pass));
+    }
+
+    /// GPU milliseconds for a *completed* command buffer. Reading these before
+    /// completion yields zeros, which is why this is only called after the
+    /// frame has been waited on.
+    fn gpu_ms(buffer: &metal::CommandBufferRef) -> f64 {
+        unsafe {
+            let object = buffer.as_ptr() as *mut objc::runtime::Object;
+            let start: f64 = msg_send![object, GPUStartTime];
+            let end: f64 = msg_send![object, GPUEndTime];
+            (end - start) * 1000.0
+        }
+    }
+
+    /// Print what this frame's filters cost, and clear the accumulator.
+    pub fn report(frame: &metal::CommandBufferRef) {
+        let passes: Vec<Pass> = PASSES.with(|passes| passes.borrow_mut().drain(..).collect());
+        let subtree: f64 = passes.iter().map(|pass| gpu_ms(&pass.buffer)).sum();
+        let geometry = passes
+            .iter()
+            .map(|pass| format!("{}x{}@sigma{:.0}", pass.width, pass.height, pass.sigma))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "FILTER_PROFILE filters={} frameGpuMs={:.3} subtreeGpuMs={:.3} {}",
+            passes.len(),
+            gpu_ms(frame),
+            subtree,
+            geometry
+        );
+    }
+}
 
 #[link(name = "MetalPerformanceShaders", kind = "framework")]
 unsafe extern "C" {}
@@ -250,6 +321,11 @@ pub struct MetalRenderer {
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
+    /// Surfaces whose pixels are already RGB. `surfaces_pipeline_state` exists
+    /// for camera and video frames, which arrive as planar YCbCr; a surface
+    /// produced by another renderer on this machine arrives as BGRA and wants
+    /// no colour conversion at all.
+    bgra_surfaces_pipeline_state: metal::RenderPipelineState,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -283,7 +359,23 @@ impl MetalRenderer {
         // Support direct-to-display rendering if the window is not transparent
         // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
         layer.set_opaque(!transparent);
-        layer.set_maximum_drawable_count(3);
+        // LUMA LOCAL EDIT (upstream sets 3). This bounds how many window command
+        // buffers can be executing at once, and each of them samples the
+        // `IOSurface` that was current when it was encoded. Luma's renderer
+        // draws into its own pool of those surfaces on a *different* Metal
+        // queue, and withholds the most recent `luma_render::viewport::RESERVED`
+        // of them from reuse — nothing else fences the two queues.
+        //
+        // The requirement is `RESERVED >= this + 1`, not equality: `next_drawable`
+        // blocks in paint while the surface release happens in the next frame's
+        // prepaint, so the guarantee in force at release time is the *previous*
+        // frame's acquire. See the `RESERVED` doc comment, which works it out.
+        //
+        // Lowering this to 2 is worth doing on its own — it shrinks the set of
+        // possibly-executing command buffers ahead of a released surface — but
+        // it does not by itself close the race, and the matching `RESERVED = 3`
+        // is what does. Raising this again without raising RESERVED reopens it.
+        layer.set_maximum_drawable_count(2);
         // Allow texture reading for visual tests (captures screenshots without ScreenCaptureKit)
         #[cfg(any(test, feature = "test-support"))]
         layer.set_framebuffer_only(false);
@@ -463,6 +555,14 @@ impl MetalRenderer {
             "surface_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
+        let bgra_surfaces_pipeline_state = build_pipeline_state(
+            &device,
+            &library,
+            "bgra_surfaces",
+            "surface_vertex",
+            "bgra_surface_fragment",
+            MTLPixelFormat::BGRA8Unorm,
+        );
 
         let command_queue = device.new_command_queue();
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
@@ -502,6 +602,7 @@ impl MetalRenderer {
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
+            bgra_surfaces_pipeline_state,
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
@@ -736,6 +837,9 @@ impl MetalRenderer {
         // Commit and wait for completion without presenting
         command_buffer.commit();
         command_buffer.wait_until_completed();
+        if filter_profile::enabled() {
+            filter_profile::report(&command_buffer);
+        }
 
         read_texture_to_image(drawable.texture())
     }
@@ -781,6 +885,9 @@ impl MetalRenderer {
         // Commit and wait for completion
         command_buffer.commit();
         command_buffer.wait_until_completed();
+        if filter_profile::enabled() {
+            filter_profile::report(&command_buffer);
+        }
 
         read_texture_to_image(&target_texture)
     }
@@ -1066,6 +1173,14 @@ impl MetalRenderer {
             point(DevicePixels(copy_x as i32), DevicePixels(copy_y as i32)),
         )?;
         child_command.commit();
+        if filter_profile::enabled() {
+            filter_profile::record(filter_profile::Pass {
+                buffer: child_command.to_owned(),
+                width: scratch.width(),
+                height: scratch.height(),
+                sigma,
+            });
+        }
 
         let source = if filter.blur_radius.0 <= 0.01 {
             scratch
@@ -1777,7 +1892,6 @@ impl MetalRenderer {
             return;
         }
 
-        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
         command_encoder.set_vertex_buffer(
             SurfaceInputIndex::Vertices as u64,
             Some(&self.unit_vertices),
@@ -1800,48 +1914,53 @@ impl MetalRenderer {
                 DevicePixels::from(surface.image_buffer.get_height() as i32),
             );
 
-            assert_eq!(
-                surface.image_buffer.get_pixel_format(),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            );
-
-            let y_texture = self
-                .core_video_texture_cache
-                .create_texture_from_image(
-                    surface.image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::R8Unorm,
-                    surface.image_buffer.get_width_of_plane(0),
-                    surface.image_buffer.get_height_of_plane(0),
-                    0,
-                )
-                .unwrap();
-            let cb_cr_texture = self
-                .core_video_texture_cache
-                .create_texture_from_image(
-                    surface.image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::RG8Unorm,
-                    surface.image_buffer.get_width_of_plane(1),
-                    surface.image_buffer.get_height_of_plane(1),
-                    1,
-                )
-                .unwrap();
-
             command_encoder.set_vertex_bytes(
                 SurfaceInputIndex::TextureSize as u64,
                 mem::size_of_val(&texture_size) as u64,
                 &texture_size as *const Size<DevicePixels> as *const _,
             );
-            // let y_texture = y_texture.get_texture().unwrap().
-            command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
-                Some(metal::TextureRef::from_ptr(texture as *mut _))
-            });
-            command_encoder.set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
-                Some(metal::TextureRef::from_ptr(texture as *mut _))
-            });
+
+            // One plane per binding, and the plane layout is what picks the
+            // pipeline: a video frame is two planes of luma and chroma, a frame
+            // another renderer produced is one plane already in this target's
+            // own format.
+            let plane = |index: usize, format: MTLPixelFormat, binding: SurfaceInputIndex| {
+                let plane_texture = self
+                    .core_video_texture_cache
+                    .create_texture_from_image(
+                        surface.image_buffer.as_concrete_TypeRef(),
+                        None,
+                        format,
+                        surface.image_buffer.get_width_of_plane(index),
+                        surface.image_buffer.get_height_of_plane(index),
+                        index,
+                    )
+                    .unwrap();
+                command_encoder.set_fragment_texture(binding as u64, unsafe {
+                    let texture = CVMetalTextureGetTexture(plane_texture.as_concrete_TypeRef());
+                    Some(metal::TextureRef::from_ptr(texture as *mut _))
+                });
+                plane_texture
+            };
+
+            // Held only for its lifetime: the `CVMetalTexture` wrappers must
+            // outlive the draw that binds them.
+            let format = surface.image_buffer.get_pixel_format();
+            let _planes = if format == kCVPixelFormatType_32BGRA {
+                command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
+                vec![plane(
+                    0,
+                    MTLPixelFormat::BGRA8Unorm,
+                    SurfaceInputIndex::BgraTexture,
+                )]
+            } else {
+                assert_eq!(format, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+                command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
+                vec![
+                    plane(0, MTLPixelFormat::R8Unorm, SurfaceInputIndex::YTexture),
+                    plane(1, MTLPixelFormat::RG8Unorm, SurfaceInputIndex::CbCrTexture),
+                ]
+            };
 
             command_encoder.draw_primitives_instanced_base_instance(
                 metal::MTLPrimitiveType::Triangle,
@@ -2334,6 +2453,7 @@ enum SurfaceInputIndex {
     TextureSize = 3,
     YTexture = 4,
     CbCrTexture = 5,
+    BgraTexture = 6,
 }
 
 #[repr(C)]

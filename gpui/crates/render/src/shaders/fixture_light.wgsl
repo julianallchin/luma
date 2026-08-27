@@ -2,6 +2,24 @@
 // transport. This source deliberately declares no resources or bind groups so
 // either pass can prepend it without coupling their GPU layouts.
 
+/// Compare reference for a fixture-shadow lookup with *metric* slack: the
+/// sample only reads as occluded when the stored caster is more than `slack`
+/// metres in front of it. Reverse-Z projective depth is metrically non-uniform
+/// — a constant raw bias is centimetres near the light and metres at range,
+/// which reads as the beam spilling straight through occluders (fog samples a
+/// metre behind a tabletop still passed). Linearise the sample depth with the
+/// projection's own planes, subtract the slack, and re-project; the raw
+/// comparison against the map (hardware or manual) is unchanged.
+fn shadow_compare_reference(raw_z: f32, near: f32, far: f32, slack: f32) -> f32 {
+    let sample_depth = near * far / max(near + raw_z * (far - near), 1e-5);
+    let reference_depth = max(sample_depth - slack, near);
+    return clamp(
+        near * (far - reference_depth) / max(reference_depth * (far - near), 1e-5),
+        0.0,
+        1.0,
+    );
+}
+
 /// Peaked photometric profile with GDTF beam/field semantics: 100% on the
 /// axis, 50% at the beam angle, smoothly cut to zero approaching the field
 /// angle.
