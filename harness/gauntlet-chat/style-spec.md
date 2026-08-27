@@ -138,31 +138,140 @@ but `Blurred` (`appearance.rs:186-235`, `lib.rs:248`).
 | `STATUS_STRIP_HEIGHT` | 24 (reserved, so the composer never shifts) |
 | `TRANSCRIPT_FADE_BAND` | 24 |
 
-### 2.4 Transcript (`transcript.rs:56-131`)
+### 2.4 Transcript
+
+Mirrored by `gpui/crates/chat/src/theme.rs`. **These two must not drift** — the
+constants there are the shipped values and this table is what they were
+transcribed from.
 
 | Name | px | Note |
 | --- | --- | --- |
 | `MAX_CONTENT_WIDTH` | 736 | the 46rem reading column |
-| `GAP_TURN` | 14 | between turns |
-| `GAP_BLOCK` | 8 | within a turn |
+| `CONTENT_GUTTER` | 48 | either side; the turn rail lives in the left one |
+| `BUBBLE_WIDTH_SHARE` | 0.8 | a user bubble's share of the column |
+| `GAP_TURN` | 16 | a new turn begins |
+| `GAP_TOOL` | 12 | either side of a tool group; `== MD_BLOCK_GAP` |
+| `GAP_BLOCK` | 8 | everything else within a turn |
+| `TIMESTAMP_LANE` | 32 | reserved under a settled turn, stamp shown on hover |
+| `HEADER_HEIGHT` / `HEADER_BUTTON` | 44 / 24 | the panel's header, and the rewind / new-chat icon buttons in it |
+| `TRANSCRIPT_FADE_BAND` | 24 | dissolve band at **both** ends |
 | `OVERDRAW_PX` | 320 | `ListState` overdraw |
-| `STICK_THRESHOLD_PX` | 70 | re-engage bottom pin |
-| `SCROLL_BUTTON_THRESHOLD_PX` | 320 | show jump-to-bottom |
-| `CHIP_HEIGHT` / `CHIP_CARD_HEIGHT` / `CHIP_GAP` | 38 / 30 / 0 | tool chip on a continuous rail |
-| `ATT_THUMB_W` × `ATT_THUMB_H` | 112 × 80 | attachment thumbs, fixed strip height |
+| `CHIP_HEIGHT` | 38 | one tool chip |
+| `RAIL_INSET` / `RAIL_WIDTH` / `RAIL_GUTTER` | 12 / 1 / 11 | the guide down a tool group |
+| `ATT_THUMB_W` × `ATT_THUMB_H` | 112 × 80 | attachments — **not ported**, no consumer |
 
-### 2.5 Composer (`composer.rs:46-84`)
+The spacing rhythm is three gaps in priority order and nothing else: turn start
+→ `GAP_TURN`; two blocks of the same text part, or either side of a tool group
+→ `GAP_TOOL`; otherwise `GAP_BLOCK`. `GAP_TOOL` is defined *as* the markdown
+renderer's `MD_BLOCK_GAP`, so a block split out of a text part cannot shift by a
+pixel when it splits.
+
+### 2.4a Row granularity
+
+**One row per block, not per message.** A user turn is one bubble row; an
+assistant text part becomes one row per top-level markdown block; consecutive
+tool calls fold into one group row. A row's identity is `(turn, kind)` and its
+content is a `version` — FNV-1a over the block's source bytes, shifted up one
+with the low bit carrying "its turn is still streaming".
+
+This is what makes streaming flat-cost: only the tail rows' versions move per
+commit, so the reconcile touches O(changed rows) and every settled row keeps its
+measured height and its render cache.
+
+**The rule that is easy to get wrong:** when the diff reports the same row
+*count*, remeasure — do not splice. `splice` resets items to hint-less
+`Unmeasured` and re-anchors the scroll when the viewport's top item is inside
+the range. The live→settled flip is exactly an equal-count edit (every version
+moves via the streaming bit, every identity stays), so splicing there is the
+end-of-turn jump.
+
+### 2.4b The bottom pin
+
+| Name | value | Note |
+| --- | --- | --- |
+| `SPRING_DAMPING` / `STIFFNESS` / `MASS` | 0.7 / 0.05 / 1.25 | |
+| `SPRING_FRAME_MS` | 1000/60 | the fixed timestep the integration is defined at |
+| `SPRING_MAX_CATCHUP_FRAMES` | 8 | a hitch catches up, never teleports |
+| `SPRING_GROWTH_EMA` | 0.12 | feed-forward target-growth estimate |
+| `SPRING_CHASE_MAX_LEAD` | 32 | chase this far above a *growing* bottom |
+| `AT_BOTTOM_PX` | 2 | counts as exactly pinned |
+| `STICK_THRESHOLD_PX` | 70 | band inside which a downward scroll re-sticks |
+| `GLIDE_MAX_VIEWPORTS` | 2.5 | farther than this, teleport then glide |
+| `SPRING_SETTLE_GRACE_MS` | 500 | keep the loop warm after landing |
+| `SCROLL_BUTTON_THRESHOLD_PX` | 320 | offer jump-to-bottom |
+| `JUMP_DIAMETER` | 30 | the jump pill |
+
+A velocity spring, not a snap, because the bottom edge *moves* while a reply
+streams. The feed-forward term is the half that cannot be faked: without it the
+chase is permanently behind a growing target and the text visibly lags.
+
+Re-sticking needs the band **and** the direction — inside the band alone makes
+the pin unbreakable, because a small wheel-up notch near the bottom stays inside
+it and would snap the view straight back.
+
+Note gpui's `ListState` has a built-in `FollowMode::Tail`. It is deliberately
+**not** used: it hard-snaps each layout and re-engages only within 1px, so it is
+a simpler alternative to this spring rather than a component of it. Running both
+would be two mechanisms owning one scroll position.
+
+Role is carried by **alignment and the presence of a plate**, nothing else: the
+user's turn is a right-aligned `BUBBLE_RADIUS` bubble over `wash(0.08)` at
+`px 16 / py 10`, capped at `BUBBLE_WIDTH_SHARE` of the column and `min_w_0` (or
+gpui's unwrapped min-content width runs a long prompt off the left edge); the
+assistant's turn has **no container at all**. There are no avatars and no role
+labels.
+
+### 2.5 Composer
 
 | Name | px | Note |
 | --- | --- | --- |
-| `TEXTAREA_PAD_V` | 20 | |
-| `TEXTAREA_MIN` / `TEXTAREA_MAX` | 76 / 260 | grow range |
+| `TEXTAREA_PAD_V` | 20 | `pt-4 pb-1` |
+| `TEXTAREA_MIN` / `TEXTAREA_MAX` | 76 / 260 | grow range, border-box |
+| `INPUT_LINE_HEIGHT` | 22.75 | 14 × 1.625; re-exported from `luma_ui::text_input` |
 | `ACTIONS_ROW_HEIGHT` | 46 | |
 | `PILL_BORDER_V` | 2 | |
 | `COMPOSER_MIN/MAX_HEIGHT` | 124 / 308 | derived sums |
-| `COMPACT_TOTAL_HEIGHT` | 49 | |
+| `COMPACT_TOTAL_HEIGHT` | 49 | one-line pill |
+| `MIN_COMPACT_INPUT_WIDTH` | 200 | below this it always expands |
 | `COLLAPSE_HYSTERESIS` | 32 | prevents flapping |
-| `STRIP_THUMB` / `STRIP_GAP` / `STRIP_PAD_TOP` / `STRIP_PAD_X` | 56 / 8 / 12 / 16 | |
+| `RESIZE_SETTLE_MS` | 150 | collapse waits for a resize to settle |
+| `PILL_RADIUS` / `PILL_BLUR` | 26 / 16 | a *pill*, not a card; lighter blur than menus (44) |
+| `SEND_DIAMETER` | 28 | `rounded_full`, 14px arrow / 11px `rounded(3)` square |
+| `CARET_BLINK_MS` | 500 | half-period, anchored to the last edit |
+| `STRIP_THUMB` / `STRIP_GAP` / `STRIP_PAD_TOP` / `STRIP_PAD_X` | 56 / 8 / 12 / 16 | attachments — **not ported**, no consumer |
+
+`composer_total_height(h) = (h + 20).clamp(76, 260) + 46 + 2`.
+
+The pill is frosted at its own radius (a blur mask that disagreed with the
+`rounded()` would square off at the corners) and carries **no shadow** wherever
+the backdrop actually blurs — behind a translucent fill a drop shadow shows
+through as an inner glow. **There is no focus styling at all**: focus changes
+only whether the caret paints.
+
+### 2.5a Tool-chip folds
+
+A chip's detail card has a **declared** height (`card_height`), counted from its
+own clipped line budget, never measured — which is what lets the fold be tweened
+at all: a tween has to know where it is going before it starts.
+
+The fold is driven by hand over `RESIZE` (200ms), *not* through a gpui
+animation. gpui keys an animation by element id and replays it on remount, and
+in a virtualized list every scroll-back-into-view is a remount — so an animated
+fold flashes open every time it scrolls past. Comet works around that with a
+400ms arming window; not creating the replay at all is cheaper and cannot drift.
+A chip with no fold in flight renders at 0 or 1, never a fraction.
+
+A fully-open card renders at its natural height rather than the computed one, so
+any drift between `card_height` and the element is invisible while moving and
+can never become a permanent clip.
+
+### 2.5b The composer flip
+
+Compact ↔ expanded flips on a hysteretic rule — a newline or a capacity under
+`MIN_COMPACT_INPUT_WIDTH` always expands, and an expanded pill collapses only
+once the text is `COLLAPSE_HYSTERESIS` clear of capacity, so the two boundaries
+never touch. The height is tweened by hand over `COLLAPSE`, never through
+`with_animation`, whose element-id keying replays a tween on remount.
 
 ---
 

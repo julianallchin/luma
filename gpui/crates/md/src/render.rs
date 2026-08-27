@@ -22,11 +22,13 @@ use gpui::{
     UnderlineStyle, Window,
 };
 
+use luma_ui::radius;
+
 use crate::theme::Theme;
 use crate::{HighlightSpan, HighlightedCode, Highlighter};
 
 use super::parser::{Block, BlockTree, InlineRun, TableAlign};
-use super::veil::{apply_veil, slice_spans, RowVeil};
+use super::veil::{apply_veil, slice_spans, TurnVeil};
 
 /// Gap between markdown blocks inside one message (zeron mdBlockGap).
 pub const MD_BLOCK_GAP: f32 = 12.0;
@@ -78,10 +80,12 @@ pub fn table_hairline() -> Hsla {
 pub struct RenderOptions {
     /// Stable row key — prefixes element ids (scroll state, animations).
     pub row_key: SharedString,
-    /// Streaming veil state for a live row: newly appended text fades in via
-    /// paint-only run opacity, keyed per (element, chunk offset) so each chunk
-    /// fades exactly once. `None` renders without fades (completed rows).
-    pub veil: Option<Rc<RefCell<RowVeil>>>,
+    /// Streaming veil state for the live *turn* this row belongs to: newly
+    /// appended text fades in via paint-only run opacity, keyed per (row key,
+    /// element, chunk offset) so each chunk fades exactly once. One turn's rows
+    /// share one veil, which is why [`Self::row_key`] is half of that key.
+    /// `None` renders without fades (completed rows).
+    pub veil: Option<Rc<RefCell<TurnVeil>>>,
     /// Flatten/shape input cache (see [`RenderCache`]): settled blocks reuse
     /// their flat text + runs across frames instead of rebuilding them — the
     /// per-frame cost of a fading live row stays O(tail block), flat in the
@@ -245,8 +249,8 @@ pub fn render_block(
             .border_l_2()
             .border_color(theme.accent.opacity(0.6))
             .bg(theme.accent.opacity(0.05))
-            .rounded_tr(px(6.0))
-            .rounded_br(px(6.0))
+            .rounded_tr(px(radius::CONTROL))
+            .rounded_br(px(radius::CONTROL))
             .pl(px(12.0))
             .pr(px(10.0))
             .py(px(6.0))
@@ -524,9 +528,8 @@ pub fn inline_code_text(theme: &Theme) -> Hsla {
 pub fn inline_code_wash(theme: &Theme) -> Hsla {
     theme.code_wash // violet-400/12
 }
-/// Rounded-wash geometry: small radius on a slightly inset box (paint-only —
-/// x extends 2px past the glyphs, y insets 2px from the 22px line box).
-pub const INLINE_CODE_RADIUS: f32 = 4.5;
+/// Rounded-wash geometry: [`radius::CHIP`] on a slightly inset box (paint-only
+/// — x extends 2px past the glyphs, y insets 2px from the 22px line box).
 pub const INLINE_CODE_PAD_X: f32 = 2.0;
 pub const INLINE_CODE_INSET_Y: f32 = 2.0;
 
@@ -667,7 +670,9 @@ fn flat_text_element(
     // Settled elements return no spans and reuse the cached runs unsplit.
     let text_runs = match &opts.veil {
         Some(veil) => {
-            let spans = veil.borrow_mut().advance(ix, &flat.text, opts.now);
+            let spans = veil
+                .borrow_mut()
+                .advance(&opts.row_key, ix, &flat.text, opts.now);
             apply_veil(flat.runs.clone(), &spans)
         }
         None => flat.runs.clone(),
@@ -690,13 +695,13 @@ fn flat_text_element(
     // Underlay canvas: inline-code washes + the selection wash, painted
     // BEFORE the text (earlier sibling ⇒ underneath), reading glyph geometry
     // from the text's own layout handle. Pure paint — never in layout. The
-    // same paint pass re-registers the frame-scoped window mouse listeners
-    // that drive text selection (round 18; see markdown/selection.rs).
+    // selection half — wash, registry, listener re-registration — is
+    // [`paint_text_selection`], the same path a plain text element takes.
     let sel_key: std::sync::Arc<str> = format!("{}:{ix}", opts.row_key).into();
     let code_ranges = flat.code_ranges.clone();
     let flat_text = flat.text.clone();
     let wash = inline_code_wash(theme);
-    let sel_wash = selection_wash(theme);
+    let paint_theme = theme.clone();
     let underlay = canvas(
         |_, _, _| (),
         move |_, _, window, _| {
@@ -704,7 +709,7 @@ fn flat_text_element(
                 for rect in range_rects(&layout, range, INLINE_CODE_PAD_X, INLINE_CODE_INSET_Y) {
                     window.paint_quad(quad(
                         rect,
-                        px(INLINE_CODE_RADIUS),
+                        px(radius::CHIP),
                         wash,
                         px(0.0),
                         gpui::transparent_black(),
@@ -712,29 +717,7 @@ fn flat_text_element(
                     ));
                 }
             }
-            if let Some(range) = super::selection::wash_range(&sel_key) {
-                for rect in range_rects(&layout, &range, 0.0, 0.0) {
-                    window.paint_quad(quad(
-                        rect,
-                        px(0.0),
-                        sel_wash,
-                        px(0.0),
-                        gpui::transparent_black(),
-                        BorderStyle::default(),
-                    ));
-                }
-            }
-            // Register this element into the frame's document-ordered
-            // registry (paint order IS document order), then the frame's
-            // mouse listeners.
-            REGISTRY.with(|r| {
-                r.borrow_mut().push(RegEntry {
-                    key: sel_key.clone(),
-                    text: flat_text.clone(),
-                    layout: layout.clone(),
-                })
-            });
-            register_selection_listeners(window, &sel_key, &flat_text, &layout);
+            paint_text_selection(window, &sel_key, &flat_text, &layout, &paint_theme);
         },
     )
     .absolute()
@@ -1064,12 +1047,12 @@ fn render_code_block(
     // Streaming veil over appended code, tracked on the whole code text and
     // sliced per line below (paint-only run recolor — heights stay exact).
     let veil_spans = match &opts.veil {
-        Some(veil) => veil.borrow_mut().advance(ix, code, opts.now),
+        Some(veil) => veil.borrow_mut().advance(&opts.row_key, ix, code, opts.now),
         None => Vec::new(),
     };
     let scroll_id: SharedString = format!("{}-code{ix}", opts.row_key).into();
     div()
-        .rounded(px(10.0))
+        .rounded(px(radius::PANEL))
         // The one raised-plate fill, with the hairline border.
         .bg(crate::theme::card_bg())
         .border_1()
@@ -1150,7 +1133,7 @@ fn copy_button(code: &str, ix: usize, opts: &RenderOptions, theme: &Theme) -> im
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.0))
+        .rounded(px(radius::CHIP))
         .cursor_pointer()
         .hover(|style| style.bg(crate::theme::ink(0.08)))
         .on_click(move |_, _, cx| {
@@ -1176,7 +1159,7 @@ fn copy_button(code: &str, ix: usize, opts: &RenderOptions, theme: &Theme) -> im
                         .right_0()
                         .bottom_0()
                         .size(px(COPY_GLYPH))
-                        .rounded(px(2.0))
+                        .rounded(px(radius::CHIP))
                         .border_1()
                         .border_color(theme.text_muted),
                 ),

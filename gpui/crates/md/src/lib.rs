@@ -48,7 +48,7 @@ pub use parser::{parse_full, Block, BlockTree, IncrementalParser, InlineRun, Inl
 pub use render::{render_tree, RenderCache, RenderOptions};
 pub use syntax::{Syntax, TokenKind};
 pub use theme::Theme;
-pub use veil::RowVeil;
+pub use veil::TurnVeil;
 
 /// One painted token: a byte range within its line, and the color to paint it.
 ///

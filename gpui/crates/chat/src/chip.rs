@@ -84,21 +84,68 @@ pub fn label(tool: &ToolPart) -> SharedString {
     }
 }
 
-/// One clipped line of the call's arguments, when they say something a person
-/// would want. Deliberately shallow: this is the chip's *narration*, and the
-/// whole argument object is one chevron away in [`detail_card`].
+/// One clipped line of narration after the verb.
+///
+/// Routed by tool, exactly as the TypeScript original routes `formatLabel`:
+/// each tool owns what its own call is *about*, and this is the shared layer
+/// that bounds the result. The whole argument object is one chevron away in
+/// the detail card, so this is a title, not a summary of the arguments.
 fn detail(tool: &ToolPart) -> Option<String> {
-    let input = tool.input.as_ref()?;
-    let value = input
-        .get("code")
-        .or_else(|| input.get("name"))
-        .or_else(|| input.get("path"))?
-        .as_str()?;
-    let line: String = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.is_empty() {
+    let line = match tool.tool_name() {
+        "python" => python_detail(tool),
+        "skill" => string_arg(tool, "name"),
+        // An unknown tool narrates by its verb alone. Guessing at a field name
+        // would put whichever argument happened to match into the title.
+        _ => None,
+    }?;
+    Some(clip(&one_line(&line), DETAIL_MAX))
+}
+
+/// A python cell's title: **the model-authored purpose, never the code.**
+///
+/// The purpose is the whole reason the tool asks for one — it is a four-word
+/// noun phrase written to complete "Running …", and it says what the cell is
+/// *for*. Code says what it does, which the reader can already see by opening
+/// the chip, and a clipped first line of source is the least useful 48
+/// characters available. The TypeScript side has an explicit test that this
+/// does not fall back to code; so does this one.
+fn python_detail(tool: &ToolPart) -> Option<String> {
+    let purpose = string_arg(tool, "purpose");
+    match (purpose, failure_marker(tool)) {
+        (None, None) => None,
+        (Some(purpose), None) => Some(purpose),
+        (None, Some(marker)) => Some(marker),
+        (Some(purpose), Some(marker)) => Some(format!("{purpose} · {marker}")),
+    }
+}
+
+/// `error 1.5s` — appended only when the cell did not simply succeed, so an
+/// ordinary run is titled by its purpose alone.
+fn failure_marker(tool: &ToolPart) -> Option<String> {
+    let output = tool.output.as_ref()?;
+    let status = output.get("status")?.as_str()?;
+    if status == "ok" {
         return None;
     }
-    Some(clip(&line, DETAIL_MAX))
+    let seconds = output
+        .get("durationMs")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|ms| *ms > 0)
+        .map(|ms| format!(" {:.1}s", ms as f64 / 1000.0))
+        .unwrap_or_default();
+    Some(format!("{status}{seconds}"))
+}
+
+/// One non-empty string argument, trimmed.
+fn string_arg(tool: &ToolPart, key: &str) -> Option<String> {
+    let value = tool.input.as_ref()?.get(key)?.as_str()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// Collapse to one line: a title that wrapped would break the chip's declared
+/// height, and a newline in a noun phrase is never meaningful.
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn clip(line: &str, max: usize) -> String {
@@ -114,7 +161,7 @@ fn clip(line: &str, max: usize) -> String {
 /// the rows; a lone call is its own row and needs no introduction.
 pub fn rail(tools: &[&ToolPart], ctx: &RowCtx) -> AnyElement {
     let theme = ctx.theme;
-    let mut rail = div().flex().flex_none().flex_col();
+    let mut rows = div().flex().flex_none().flex_col().min_w_0().flex_1();
     if tools.len() > 1 {
         let running = tools.iter().any(|tool| {
             matches!(
@@ -127,7 +174,7 @@ pub fn rail(tools: &[&ToolPart], ctx: &RowCtx) -> AnyElement {
         } else {
             format!("Ran {} tools", tools.len())
         };
-        rail = rail.child(
+        rows = rows.child(
             div()
                 .h(px(theme::CHIP_HEIGHT))
                 .flex()
@@ -145,9 +192,27 @@ pub fn rail(tools: &[&ToolPart], ctx: &RowCtx) -> AnyElement {
         );
     }
     for tool in tools {
-        rail = rail.child(row(tool, ctx));
+        rows = rows.child(row(tool, ctx));
     }
-    rail.into_any_element()
+    // The guide: one hairline running the group's whole height, with the rows
+    // inset past it. It is what makes a run of calls read as *one step* rather
+    // than as a stack of unrelated chips — and it is a rail, not a border, so a
+    // group of one still gets it and the grammar never changes with the count.
+    div()
+        .flex()
+        .flex_row()
+        .flex_none()
+        .min_w_0()
+        .child(
+            div()
+                .flex_none()
+                .ml(px(theme::RAIL_INSET))
+                .mr(px(theme::RAIL_GUTTER))
+                .w(px(theme::RAIL_WIDTH))
+                .bg(theme::ink(0.08)),
+        )
+        .child(rows)
+        .into_any_element()
 }
 
 /// The 24px icon tile at a row's leading edge — a rounded wash square holding
@@ -163,7 +228,7 @@ fn tinted_tile(icon: IconName, tint: Hsla, _theme: &Theme) -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(theme::CONTROL_RADIUS))
+        .rounded(px(luma_ui::radius::CONTROL))
         .bg(theme::wash(0.06))
         .child(Icon::new(icon).size(px(13.0)).text_color(tint))
 }
@@ -177,12 +242,65 @@ fn tool_icon(tool: &str) -> IconName {
     }
 }
 
+/// The open card's exact height.
+///
+/// Declared, never measured — the same rule the module docs state for the chip
+/// itself, and the reason a fold can be *animated* at all: a tween needs to
+/// know where it is going before it starts, and a measured card only knows
+/// after it has been laid out at full size.
+///
+/// Mirrors the card element below term for term. The two are a pair, and the
+/// tests at the bottom of this file are what hold them together.
+#[must_use]
+pub fn card_height(tool: &ToolPart) -> f32 {
+    let mut sections = 0.0;
+    let mut lines = 0.0;
+    if let Some(input) = tool.input.as_ref() {
+        sections += 1.0;
+        lines += lines_of_json(input).len() as f32;
+    }
+    let answer = match (&tool.error_text, &tool.output) {
+        (Some(error), _) => Some(lines_of_text(error).len() as f32),
+        (None, Some(output)) => Some(lines_of_json(output).len() as f32),
+        (None, None) => None,
+    };
+    if let Some(count) = answer {
+        sections += 1.0;
+        lines += count;
+    }
+    if sections == 0.0 {
+        return 0.0;
+    }
+    // Per section: one heading line plus its content lines. Per card: the top
+    // rule and its padding, the bottom padding, and one gap between sections.
+    let content = (sections + lines) * theme::CHIP_DETAIL_LINE;
+    let chrome = 1.0 + theme::SPACE_SM + theme::SPACE_MD;
+    content + chrome + (sections - 1.0) * theme::SPACE_SM
+}
+
+/// How open a chip's detail is right now, 0..1.
+///
+/// A tween the panel drives by hand rather than a gpui animation: gpui keys an
+/// animation by element id and replays it on remount, and in a virtualized list
+/// every scroll back into view *is* a remount — so an animated fold flashes
+/// open every time it scrolls past. Comet works around that with an arming
+/// window; not creating the replay in the first place is cheaper and cannot
+/// drift.
+fn openness(open: bool, fold: Option<f32>) -> f32 {
+    match fold {
+        Some(progress) if open => progress,
+        Some(progress) => 1.0 - progress,
+        None => f32::from(u8::from(open)),
+    }
+}
+
 /// One tool call: an unboxed 38px row — tile, narration, trailing chevron —
 /// and its detail card when the chevron has been answered.
 fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
     let theme = ctx.theme;
     let text = label(tool);
     let open = ctx.is_expanded(&tool.call_id);
+    let openness = openness(open, ctx.fold_progress(&tool.call_id));
     let chat = ctx.chat.clone();
     let call_id = SharedString::from(tool.call_id.clone());
     let id = SharedString::from(format!("chat-chip-{call_id}"));
@@ -207,7 +325,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
                 .flex_row()
                 .items_center()
                 .gap(px(theme::SPACE_SM))
-                .rounded(px(theme::CONTROL_RADIUS))
+                .rounded(px(luma_ui::radius::CONTROL))
                 .cursor_pointer()
                 .hover(|style| style.bg(theme::wash(0.04)))
                 .on_click(move |_, _, cx| {
@@ -242,12 +360,23 @@ fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
                 )
                 .agent_node(NodeRole::Chip, text),
         )
-        .when(open, |el| {
-            el.child(
-                // Indented under the narration, past the tile, so the detail
-                // reads as the row's own and not as a new block.
-                div().pl(px(32.0)).child(detail_card(tool, theme)),
-            )
+        .when(openness > 0.0, |el| {
+            // Indented under the narration, past the tile, so the detail reads
+            // as the row's own and not as a new block.
+            let card = div().pl(px(32.0)).child(detail_card(tool, theme));
+            el.child(if openness >= 1.0 {
+                // Fully open renders at its natural height. Clamping a settled
+                // card to a computed number would turn any drift between
+                // `card_height` and the element into a permanent clip; while
+                // it is moving, a pixel of drift is a pixel nobody can see.
+                card.into_any_element()
+            } else {
+                div()
+                    .h(px(card_height(tool) * openness))
+                    .overflow_hidden()
+                    .child(card)
+                    .into_any_element()
+            })
         })
         .into_any_element()
 }
@@ -447,16 +576,139 @@ mod tests {
         assert_eq!(lines.last().unwrap().as_ref(), "…");
     }
 
+    /// A chip with nothing to show has no card, so a fold on it animates
+    /// nothing rather than opening an empty box.
     #[test]
-    fn detail_is_one_clipped_line() {
-        let long = "x".repeat(200);
+    fn a_chip_with_no_detail_has_no_card() {
+        let bare = part("python", ToolState::OutputAvailable, None);
+        assert_eq!(card_height(&bare), 0.0);
+    }
+
+    /// The card's height is a count, and it stays bounded however much the
+    /// tool printed — the property that lets a fold be tweened at all.
+    #[test]
+    fn the_card_height_is_counted_and_bounded() {
+        let one = part(
+            "python",
+            ToolState::OutputAvailable,
+            Some(json!({ "code": "a" })),
+        );
+        let single = card_height(&one);
+        assert!(single > 0.0);
+
+        let mut many = one.clone();
+        many.output = Some(json!("x\n".repeat(500)));
+        let both = card_height(&many);
+        assert!(both > single, "a second section must add height");
+
+        // Both sections at their clipped maximum: the ceiling a card can reach.
+        let max_lines = (theme::CHIP_DETAIL_MAX_LINES + 1) as f32;
+        let ceiling = (2.0 + 2.0 * max_lines) * theme::CHIP_DETAIL_LINE
+            + 1.0
+            + theme::SPACE_SM
+            + theme::SPACE_MD
+            + theme::SPACE_SM;
+        assert!(both <= ceiling, "{both} exceeded the declared ceiling");
+    }
+
+    /// The three fold states, and the one that matters: a chip nobody clicked
+    /// is at rest, whichever way it is set. That is what stops a virtualized
+    /// list from replaying a fold every time a row scrolls back into view.
+    #[test]
+    fn a_chip_nobody_clicked_is_at_rest() {
+        // No fold in flight: fully open or fully shut, never a fraction. This
+        // is the case a virtualized list hits on every scroll-back-into-view.
+        assert_eq!(openness(true, None), 1.0);
+        assert_eq!(openness(false, None), 0.0);
+        // Mid-fold: opening walks up, closing walks down.
+        assert_eq!(openness(true, Some(0.25)), 0.25);
+        assert_eq!(openness(false, Some(0.25)), 0.75);
+        // Both directions still land exactly on their endpoints.
+        assert_eq!(openness(true, Some(1.0)), 1.0);
+        assert_eq!(openness(false, Some(1.0)), 0.0);
+    }
+
+    /// The chip is titled by the model-authored purpose. This is the whole
+    /// point of the tool asking for one.
+    #[test]
+    fn a_python_chip_is_titled_by_its_purpose() {
         let tool = part(
             "python",
             ToolState::OutputAvailable,
-            Some(json!({ "code": format!("print(\n  {long}\n)") })),
+            Some(json!({
+                "purpose": "an onset analysis",
+                "code": "kicks = luma.features.drum_onsets",
+            })),
+        );
+        assert_eq!(label(&tool), "Ran python cell · an onset analysis");
+    }
+
+    /// …and **never** falls back to the code. A call with no purpose is titled
+    /// by its verb alone rather than by a clipped line of source — the same
+    /// assertion the TypeScript side makes.
+    #[test]
+    fn a_python_chip_never_falls_back_to_showing_code() {
+        let tool = part(
+            "python",
+            ToolState::OutputAvailable,
+            Some(json!({ "code": "print(luma.catalog())" })),
+        );
+        assert_eq!(label(&tool), "Ran python cell");
+        assert!(!label(&tool).contains("print"));
+    }
+
+    /// A cell that did not simply succeed says so, with how long it took.
+    #[test]
+    fn a_failed_cell_appends_its_status_and_duration() {
+        let mut tool = part(
+            "python",
+            ToolState::OutputError,
+            Some(json!({ "purpose": "a validation pass", "code": "boom()" })),
+        );
+        tool.output = Some(json!({ "status": "error", "durationMs": 1500 }));
+        assert_eq!(
+            label(&tool),
+            "Ran python cell · a validation pass · error 1.5s"
+        );
+        // A cell that succeeded carries no marker at all.
+        tool.output = Some(json!({ "status": "ok", "durationMs": 1500 }));
+        assert_eq!(label(&tool), "Ran python cell · a validation pass");
+    }
+
+    /// A skill is titled by the skill it read — its own argument, not python's.
+    #[test]
+    fn a_skill_chip_is_titled_by_its_name() {
+        let tool = part(
+            "skill",
+            ToolState::OutputAvailable,
+            Some(json!({ "name": "beatgrid", "code": "ignored" })),
+        );
+        assert_eq!(label(&tool), "Read skill · beatgrid");
+    }
+
+    /// A tool the vocabulary does not know narrates by its verb alone rather
+    /// than promoting whichever argument happens to match a guessed key.
+    #[test]
+    fn an_unknown_tool_gets_no_detail_from_its_arguments() {
+        let tool = part(
+            "wobble",
+            ToolState::OutputAvailable,
+            Some(json!({ "purpose": "nope", "name": "nope", "code": "nope" })),
+        );
+        assert_eq!(label(&tool), "Ran tool");
+    }
+
+    /// However long the purpose, the title stays one clipped line — the chip's
+    /// height is declared, so a wrapping title would overflow it.
+    #[test]
+    fn detail_is_one_clipped_line() {
+        let tool = part(
+            "python",
+            ToolState::OutputAvailable,
+            Some(json!({ "purpose": format!("a\n  {}", "x".repeat(200)) })),
         );
         let label = label(&tool);
-        assert!(label.starts_with("Ran python cell · print( "), "{label}");
+        assert!(label.starts_with("Ran python cell · a x"), "{label}");
         assert!(label.ends_with('…'));
         assert!(!label.contains('\n'));
     }

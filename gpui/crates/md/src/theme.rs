@@ -15,7 +15,8 @@ use luma_ui::ladder;
 
 pub use luma_ui::glass::{
     card_bg, generation as glass_generation, glass, glass_hover, hairline, ink, neutral, oklch,
-    overlay, panel, scrim, wash, window_background_appearance, GLASS_ALPHA, SCRIM_ALPHA,
+    overlay, panel, panel_opaque, scrim, wash, window_background_appearance, GLASS_ALPHA,
+    SCRIM_ALPHA,
 };
 
 use crate::syntax::TokenKind;
