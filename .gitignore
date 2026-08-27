@@ -89,3 +89,5 @@ gpui/target/
 # running the pixel command from a subdirectory once left 6.8 GB at
 # crates/agent/tests/target-pixel/.
 target-pixel/
+# …and the agent friction log
+!/docs/AGENT_FRICTION.md

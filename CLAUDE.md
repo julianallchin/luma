@@ -125,3 +125,12 @@ The window is `decorations: false` on all platforms; native traffic lights are g
 ## Album art / large media
 
 Album art is *not* base64-inlined in list responses (see `list_tracks_enriched` in `src-tauri/src/services/tracks.rs`). The backend returns the file path on disk; the frontend loads it via `convertFileSrc(track.albumArtPath)` so the browser can lazy-decode and cache it. The Tauri asset protocol is scoped to `$APPCONFIG/tracks/art/**` in `tauri.conf.json`. Don't reintroduce base64 inlining for bulk endpoints — it makes first paint slow and causes blank rows during virtualized scroll.
+
+# Agent friction log
+
+`docs/AGENT_FRICTION.md` is where tooling complaints go — a command that lies, a
+convention that reads backwards, a trap that ate twenty minutes. When you hit one,
+append an entry before you finish the task: `- [YYYY-MM-DD] <complaint>. <what it
+cost>. <fix, if obvious>.`, newest at top, three lines max. Subagents included — a
+subagent that hit friction reports it, and the lead writes it down. Product bugs are
+not friction; those go in the task report.
