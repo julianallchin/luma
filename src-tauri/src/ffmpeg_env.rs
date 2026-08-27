@@ -1,3 +1,12 @@
+//! Where the bundled ffmpeg binary is.
+//!
+//! Resolution is a one-shot search over a list of directories, latched in a
+//! `OnceLock`. Who supplies that list differs — the desktop app knows its Tauri
+//! resource dir, a headless binary only knows where its own executable is — so
+//! the *search* lives in [`init_from`] and each host supplies its own dirs.
+//! Before that split a headless binary silently fell through to system `PATH`
+//! and failed at spawn time with no diagnosis.
+
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -8,34 +17,32 @@ static FFMPEG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 pub fn init(app: &tauri::AppHandle) {
     use tauri::Manager;
 
+    let mut dirs = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        dirs.push(resource_dir.join("ffmpeg-runtime"));
+    }
+    dirs.extend(dev_runtime_dir());
+    init_from(&dirs);
+}
+
+/// Initialize from the executable's own location — the answer for any host with
+/// no `AppHandle`. Call once during headless boot.
+pub fn init_headless() {
+    init_from(&dev_runtime_dir().into_iter().collect::<Vec<_>>());
+}
+
+/// Latch the first directory in `dirs` that holds an ffmpeg binary.
+///
+/// Idempotent: the first call wins, later ones are no-ops, so a host that boots
+/// twice in one process does not thrash the path.
+pub fn init_from(dirs: &[PathBuf]) {
     FFMPEG_PATH.get_or_init(|| {
-        let mut search_dirs = Vec::new();
-
-        // Production: Tauri resource directory
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            search_dirs.push(resource_dir.join("ffmpeg-runtime"));
-        }
-
-        // Development: relative to the source directory (src-tauri/ffmpeg-runtime)
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
-                    if let Some(target) = exe_dir.parent() {
-                        if let Some(src_tauri) = target.parent() {
-                            search_dirs.push(src_tauri.join("ffmpeg-runtime"));
-                        }
-                    }
-                }
-            }
-        }
-
         let binary_name = if cfg!(windows) {
             "ffmpeg.exe"
         } else {
             "ffmpeg"
         };
-
-        for dir in &search_dirs {
+        for dir in dirs {
             let candidate = dir.join(binary_name);
             if candidate.exists() {
                 eprintln!(
@@ -45,10 +52,23 @@ pub fn init(app: &tauri::AppHandle) {
                 return Some(candidate);
             }
         }
-
         eprintln!("[ffmpeg-env] Bundled ffmpeg not found, will fall back to system PATH");
         None
     });
+}
+
+/// `src-tauri/ffmpeg-runtime`, found by walking up from the executable. This is
+/// where `build.rs` downloads it, so it is the answer in a dev tree for the app
+/// and for every headless binary alike.
+///
+/// Searched by *presence* rather than by counting `target/<profile>/` levels:
+/// the profile directory is named by whichever profile was built (`debug`,
+/// `release`, `perf`, …) and a hardcoded pair of names silently misses the rest.
+fn dev_runtime_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors()
+        .map(|dir| dir.join("ffmpeg-runtime"))
+        .find(|candidate| candidate.is_dir())
 }
 
 /// Get the path to the ffmpeg binary.

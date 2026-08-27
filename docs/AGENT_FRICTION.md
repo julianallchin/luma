@@ -3,6 +3,12 @@
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
 
+- [2026-08-27] ffmpeg's `-shortest` quietly drops ~7 s of audio off every recording when the video arrives down a slow pipe — the file muxes, plays, and reports two stream durations that differ, and nothing anywhere warns you
+- [2026-08-27] `ffmpeg_env`'s dev search hardcoded `target/debug` and `target/release`, so anything built with the repo's own `perf` profile fell through to system PATH and rendered fine with the *wrong* ffmpeg
+- [2026-08-27] `headless_host::boot` runs migrations against whatever `--config-dir` it is given, so "read the real library read-only" actually means copying `luma.db`, `-wal`, `-shm` *and* `state.db` first — and nothing lists that set
+- [2026-08-27] `HostConfig::parse_args` hard-errors on an unknown flag, so any new bin with flags of its own has to pre-split argv into "mine" and "shared" before it can call the shared parser
+- [2026-08-27] `ffmpeg_env::init` takes a `&tauri::AppHandle`, so every headless bin silently falls back to system-PATH ffmpeg — the bundled binary is right there in `src-tauri/ffmpeg-runtime/` and nothing says you didn't get it until a spawn fails
+- [2026-08-27] video export exists on the unmerged `feat/video-export` branch and nothing in the tree mentions it, so `git log --diff-filter=D` for the "deleted" `commands/export.rs` returns nothing and you conclude it never existed
 - [2026-08-27] the model-facing traceback in a headless transcript is truncated mid-frame, so the one line that names the failing host call is exactly the line you never get — reproducing the cell in a Rust test was faster than reading the log
 - [2026-08-27] `luma.track` is reinstalled between cells but not by `apply()`, so a cell that applied and then rendered was told "track changed while this edit was open" by its own commit (fixed — apply advances the binding)
 - [2026-08-27] the Python package has three test entry points (`test_track.py`, `test_venue.py`, `run_tests.py`) and no runner that knows about all three; nothing in AGENTS.md mentions the app venv at `~/Library/Caches/com.luma.luma/python-env/bin/python3` that they need

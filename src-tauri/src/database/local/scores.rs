@@ -22,6 +22,29 @@ pub async fn get_scores_for_track(
     .map_err(|e| format!("Failed to list track_scores: {}", e))
 }
 
+/// One score's own clips, in timeline order.
+///
+/// [`get_scores_for_track`] deliberately spans every score on a
+/// `(track, venue)` — that is what the live compositor blends. This is the
+/// other question: what does *this score* contain.
+pub async fn get_clips_of_score(
+    access: &mut impl AuthorizedVenue,
+    score_id: &str,
+) -> Result<Vec<TrackScore>, String> {
+    sqlx::query_as::<_, TrackScore>(
+        "SELECT track_scores.id, track_scores.uid, track_scores.score_id, track_scores.pattern_id, track_scores.start_time, track_scores.end_time, track_scores.z_index, track_scores.blend_mode, track_scores.args_json, track_scores.created_at, track_scores.updated_at
+         FROM track_scores
+         JOIN scores ON track_scores.score_id = scores.id
+         WHERE track_scores.score_id = ? AND scores.venue_id = ?
+         ORDER BY track_scores.start_time ASC, track_scores.z_index ASC",
+    )
+    .bind(score_id)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to list this score's clips: {}", e))
+}
+
 /// Return the venue_id of the most-recently-updated score for a track that has
 /// at least one annotation, if any. Used by previews that only receive a track_id.
 pub async fn get_accessible_venue_for_track(

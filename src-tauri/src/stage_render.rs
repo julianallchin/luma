@@ -21,6 +21,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 use glam::{Mat4, Vec3};
@@ -345,32 +346,116 @@ pub fn render_rgba(
     shot: Shot,
     meshes_root: PathBuf,
 ) -> Result<(Vec<u8>, u32, u32), String> {
-    let (width, height) = (
-        shot.size.0.clamp(1, MAX_DIMENSION),
-        shot.size.1.clamp(1, MAX_DIMENSION),
-    );
-    let framing = scene.framing(&definitions);
-    // No chrome over a headless frame, so the fit gets the whole of it.
-    let view = Viewfinder::new(FOV_Y_DEG, width as f32 / height as f32);
-    let camera = Camera::for_view(shot.view, &framing, shot.booth, &view);
-
-    let (reply, answer) = mpsc::sync_channel(1);
-    jobs()
-        .send(Job {
-            scene,
-            camera,
-            definitions,
-            state: shot.state,
-            time: shot.time,
-            size: (width, height),
-            meshes_root,
-            reply,
-        })
-        .map_err(|_| "the offscreen renderer stopped".to_string())?;
-    let rgba = answer
-        .recv()
-        .map_err(|_| "the offscreen renderer stopped mid-frame".to_string())??;
+    let sequence = Sequence::install(
+        scene,
+        definitions,
+        meshes_root,
+        shot.view,
+        shot.booth,
+        shot.size,
+    )?;
+    let (width, height) = sequence.size();
+    let rgba = sequence.frame(shot.state.as_ref(), shot.time, DEFAULT_SUBFRAMES)?;
     Ok((rgba, width, height))
+}
+
+/// A venue installed on the render thread, ready to be lit repeatedly.
+///
+/// One still is one install and one [`frame`](Self::frame); a recording is one
+/// install and nine thousand. The distinction matters because the scene
+/// description and the definition table are the large half of a frame request
+/// and neither depends on `t` — sending them per frame would clone the whole
+/// room nine thousand times.
+///
+/// The camera is fitted at install: framing is a function of the geometry and
+/// the aspect ratio, not of the clock.
+///
+/// Dropping uninstalls. Several sequences may be installed at once, so an
+/// agent's still does not evict a recording in progress — though it does wait
+/// its turn, one frame deep.
+pub struct Sequence {
+    id: u64,
+    size: (u32, u32),
+}
+
+impl Sequence {
+    /// Install `scene` at a fixed size and view.
+    ///
+    /// Both sides of `size` are clamped to [`MAX_DIMENSION`]; the size actually
+    /// installed is [`Sequence::size`].
+    ///
+    /// # Errors
+    /// Fails if the render thread has stopped.
+    pub fn install(
+        scene: scene_desc::Scene,
+        definitions: BTreeMap<String, scene_desc::Definition>,
+        meshes_root: PathBuf,
+        view: View,
+        booth: Option<Vec3>,
+        size: (u32, u32),
+    ) -> Result<Self, String> {
+        let size = (
+            size.0.clamp(1, MAX_DIMENSION),
+            size.1.clamp(1, MAX_DIMENSION),
+        );
+        let framing = scene.framing(&definitions);
+        // No chrome over a headless frame, so the fit gets the whole of it.
+        let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1 as f32);
+        let camera = Camera::for_view(view, &framing, booth, &viewfinder);
+
+        let id = NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        jobs()
+            .send(Job::Install(Box::new(Installed {
+                id,
+                scene,
+                definitions,
+                camera,
+                size,
+                meshes_root,
+            })))
+            .map_err(|_| "the offscreen renderer stopped".to_string())?;
+        Ok(Self { id, size })
+    }
+
+    /// The size frames come back at, after clamping.
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// One frame, tightly packed sRGB RGBA8. Blocks until it is back.
+    ///
+    /// # Errors
+    /// Fails if the GPU device cannot be created, if a referenced mesh is
+    /// missing, or if the frame cannot be read back.
+    pub fn frame(
+        &self,
+        state: Option<&UniverseState>,
+        time: f32,
+        subframes: u32,
+    ) -> Result<Vec<u8>, String> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        jobs()
+            .send(Job::Frame {
+                id: self.id,
+                // Cloned rather than borrowed: the frame is built on the
+                // renderer's own thread, which outlives this call's stack.
+                state: state.cloned(),
+                time,
+                subframes,
+                reply,
+            })
+            .map_err(|_| "the offscreen renderer stopped".to_string())?;
+        answer
+            .recv()
+            .map_err(|_| "the offscreen renderer stopped mid-frame".to_string())?
+    }
+}
+
+impl Drop for Sequence {
+    fn drop(&mut self) {
+        let _ = jobs().send(Job::Uninstall(self.id));
+    }
 }
 
 /// [`render_rgba`], encoded as a PNG.
@@ -395,15 +480,10 @@ pub fn render_png(
 // the render thread
 // ---------------------------------------------------------------------------
 
-/// One frame's worth of work, owned outright.
-///
-/// wgpu's Metal surface types are neither `Send` nor `Sync`, so a [`Renderer`]
-/// cannot be shared, moved between threads, or parked in a `static`. It is
-/// therefore pinned to one thread that owns it for the life of the process, and
-/// this is the message that thread takes. Creating a device and compiling the
-/// pipelines is the entire cold cost of a render, so an agent asking for six
-/// views in a row pays it once.
-struct Job {
+/// A venue parked on the render thread, and everything about a frame of it
+/// that does not depend on the clock.
+struct Installed {
+    id: u64,
     scene: scene_desc::Scene,
     /// Where the frame is seen from, in render-world space.
     ///
@@ -413,12 +493,33 @@ struct Job {
     /// making a round trip through a mirror space to say where it is.
     camera: Camera,
     definitions: BTreeMap<String, scene_desc::Definition>,
-    state: Option<UniverseState>,
-    time: f32,
     size: (u32, u32),
     meshes_root: PathBuf,
-    reply: mpsc::SyncSender<Result<Vec<u8>, String>>,
 }
+
+/// What the render thread takes.
+///
+/// wgpu's Metal surface types are neither `Send` nor `Sync`, so a [`Renderer`]
+/// cannot be shared, moved between threads, or parked in a `static`. It is
+/// therefore pinned to one thread that owns it for the life of the process, and
+/// this is the message that thread takes. Creating a device and compiling the
+/// pipelines is the entire cold cost of a render, so an agent asking for six
+/// views in a row pays it once.
+enum Job {
+    /// Boxed because a `Frame` is a handful of words next to a whole venue, and
+    /// the channel's element size is the larger of the two.
+    Install(Box<Installed>),
+    Frame {
+        id: u64,
+        state: Option<UniverseState>,
+        time: f32,
+        subframes: u32,
+        reply: mpsc::SyncSender<Result<Vec<u8>, String>>,
+    },
+    Uninstall(u64),
+}
+
+static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 static JOBS: OnceLock<mpsc::SyncSender<Job>> = OnceLock::new();
 
@@ -444,21 +545,45 @@ fn jobs() -> &'static mpsc::SyncSender<Job> {
 /// picture, and can be retried.
 fn render_loop(rx: &mpsc::Receiver<Job>) {
     let mut stage: Option<(Renderer, assets::Library, PathBuf)> = None;
+    let mut installed: HashMap<u64, Installed> = HashMap::new();
     while let Ok(job) = rx.recv() {
+        let (id, state, time, subframes, reply) = match job {
+            Job::Install(scene) => {
+                installed.insert(scene.id, *scene);
+                continue;
+            }
+            Job::Uninstall(id) => {
+                installed.remove(&id);
+                continue;
+            }
+            Job::Frame {
+                id,
+                state,
+                time,
+                subframes,
+                reply,
+            } => (id, state, time, subframes, reply),
+        };
+        let Some(scene) = installed.get(&id) else {
+            // Only reachable if the handle outlived its own `Drop`, which it
+            // cannot; answering rather than hanging the caller regardless.
+            let _ = reply.send(Err("that sequence is no longer installed".into()));
+            continue;
+        };
         if stage
             .as_ref()
-            .is_none_or(|(_, _, root)| *root != job.meshes_root)
+            .is_none_or(|(_, _, root)| *root != scene.meshes_root)
         {
             match Renderer::new() {
                 Ok(renderer) => {
                     stage = Some((
                         renderer,
-                        assets::Library::new(&job.meshes_root),
-                        job.meshes_root.clone(),
+                        assets::Library::new(&scene.meshes_root),
+                        scene.meshes_root.clone(),
                     ));
                 }
                 Err(error) => {
-                    let _ = job.reply.send(Err(format!(
+                    let _ = reply.send(Err(format!(
                         "no GPU device for offscreen rendering: {error}"
                     )));
                     continue;
@@ -466,31 +591,41 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
             }
         }
         let (renderer, library, _) = stage.as_mut().expect("the stage was just installed");
-        let _ = job.reply.send(one_frame(renderer, library, &job));
+        let _ = reply.send(one_frame(
+            renderer,
+            library,
+            scene,
+            state.as_ref(),
+            time,
+            subframes,
+        ));
     }
 }
 
 fn one_frame(
     renderer: &mut Renderer,
     library: &mut assets::Library,
-    job: &Job,
+    scene: &Installed,
+    state: Option<&UniverseState>,
+    time: f32,
+    subframes: u32,
 ) -> Result<Vec<u8>, String> {
-    let (width, height) = job.size;
+    let (width, height) = scene.size;
     let mut frame = build_frame_with(
-        &job.scene,
-        &job.definitions,
-        &|id, head| primitive_state(job.state.as_ref(), id, head),
-        job.time,
+        &scene.scene,
+        &scene.definitions,
+        &|id, head| primitive_state(state, id, head),
+        time,
         library,
     )
     .map_err(|error| format!("could not assemble the frame: {error}"))?;
     frame.camera = luma_render::frame::Camera {
-        eye: job.camera.position(),
-        target: job.camera.target,
-        fov_y_deg: job.camera.fov_y_deg,
+        eye: scene.camera.position(),
+        target: scene.camera.target,
+        fov_y_deg: scene.camera.fov_y_deg,
     };
     renderer
-        .render(&frame, width, height, DEFAULT_SUBFRAMES)
+        .render(&frame, width, height, subframes)
         .map_err(|error| format!("could not render the frame: {error}"))
 }
 

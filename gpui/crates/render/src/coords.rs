@@ -148,6 +148,19 @@ pub fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
+/// The inverse of [`srgb_to_linear`]. Anything that averages, blends or
+/// resamples a readback frame has to come back through here: the renderer hands
+/// out sRGB-encoded bytes, and arithmetic on those is arithmetic on a gamma
+/// curve.
+#[must_use]
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c < 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 /// `#rrggbb` in sRGB to a linear working-space colour.
 #[must_use]
 pub fn hex_srgb(hex: u32) -> Vec3 {
