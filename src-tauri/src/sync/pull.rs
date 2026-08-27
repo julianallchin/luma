@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
+use crate::agent::subagent::SubagentRegistry;
 use crate::agent_execution::{GraphRunStore, PythonWorkspaceService};
 use crate::services::authored_documents::AuthoredDocuments;
 
@@ -222,6 +223,7 @@ pub async fn pull_all(
     authored: &AuthoredDocuments,
     workspaces: &PythonWorkspaceService,
     graph_runs: &GraphRunStore,
+    subagents: &SubagentRegistry,
     remote: &dyn RemoteClient,
     token: &str,
     current_uid: Option<&str>,
@@ -292,14 +294,12 @@ pub async fn pull_all(
     // startup, and identity-activation deletion before this pull returns.
     // Failures remain durable and retry on every later pull, even when there
     // are no new remote rows.
-    if let Err(error) = crate::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-        pool, authored, workspaces, graph_runs,
+    if let Err(error) = crate::agent_execution::thread_cleanup::recover_threads(
+        pool, authored, workspaces, graph_runs, subagents,
     )
     .await
     {
-        stats
-            .errors
-            .push(format!("agent thread deletion recovery: {error}"));
+        stats.errors.push(format!("agent thread recovery: {error}"));
     }
 
     Ok(stats)
@@ -1444,7 +1444,7 @@ mod remote_deletion_tests {
     use crate::eval::{Plan, ResidentContext};
     use crate::models::agent_threads::CreateAgentThreadInput;
     use crate::services::authored_state::{
-        AuthoredRevisionStore, NewAuthoredDocument, RevisionMetadata,
+        Actor, AuthoredRevisionStore, NewAuthoredDocument, RevisionMetadata,
     };
     use crate::storage::StorageRoot;
     use crate::sync::authored_remote::{
@@ -1569,13 +1569,16 @@ mod remote_deletion_tests {
         (directory, pool, authored)
     }
 
-    fn thread_resources(directory: &tempfile::TempDir) -> (PythonWorkspaceService, GraphRunStore) {
+    fn thread_resources(
+        directory: &tempfile::TempDir,
+    ) -> (PythonWorkspaceService, GraphRunStore, SubagentRegistry) {
         (
             PythonWorkspaceService::new(
                 directory.path().join("python-workspaces"),
                 Arc::new(|| Err("python is not used by sync pull tests".into())),
             ),
             GraphRunStore::new(),
+            SubagentRegistry::default(),
         )
     }
 
@@ -1671,12 +1674,13 @@ mod remote_deletion_tests {
                 })],
             )]),
         };
-        let (workspaces, graph_runs) = thread_resources(&directory);
+        let (workspaces, graph_runs, subagents) = thread_resources(&directory);
         let first = pull_all(
             &pool,
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &projection_only,
             "token",
             Some("alice"),
@@ -1713,6 +1717,7 @@ mod remote_deletion_tests {
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &canonical_receipt,
             "token",
             Some("alice"),
@@ -1753,7 +1758,7 @@ mod remote_deletion_tests {
         .await
         .unwrap();
 
-        let (workspaces, graph_runs) = thread_resources(&directory);
+        let (workspaces, graph_runs, subagents) = thread_resources(&directory);
         let python_workspace = workspaces.workspace_for_test(&thread.id).unwrap();
         let python_workspace_path = python_workspace.dir().to_owned();
         drop(python_workspace);
@@ -1824,6 +1829,7 @@ mod remote_deletion_tests {
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &remote,
             "token",
             Some("alice"),
@@ -1884,6 +1890,7 @@ mod remote_deletion_tests {
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &remote,
             "token",
             Some("alice"),
@@ -1986,6 +1993,7 @@ mod remote_deletion_tests {
                     operation_kind: "initial_import".into(),
                     operation_id: None,
                     message: "Import".into(),
+                    actor: Actor::user(),
                     author_name: "Luma".into(),
                     author_email: "test@luma.local".into(),
                     authored_at: "2026-08-02T00:00:00Z".into(),
@@ -2092,7 +2100,7 @@ mod remote_deletion_tests {
     #[tokio::test]
     async fn archived_proposal_trace_cannot_block_a_later_live_document_proposal() {
         let (directory, pool, authored) = test_pool().await;
-        let (workspaces, graph_runs) = thread_resources(&directory);
+        let (workspaces, graph_runs, subagents) = thread_resources(&directory);
         insert_score_fixture(&pool).await;
         let store = AuthoredRevisionStore;
         let archived_document =
@@ -2104,6 +2112,7 @@ mod remote_deletion_tests {
             operation_kind: "score_edit".into(),
             operation_id: Some(operation_id.into()),
             message: operation_id.into(),
+            actor: Actor::user(),
             author_name: "Luma".into(),
             author_email: "test@luma.local".into(),
             authored_at: authored_at.into(),
@@ -2247,6 +2256,7 @@ mod remote_deletion_tests {
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &remote,
             "token",
             Some("alice"),
@@ -2304,6 +2314,7 @@ mod remote_deletion_tests {
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &remote,
             "token",
             Some("alice"),

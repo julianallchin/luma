@@ -264,6 +264,9 @@ pub struct AppServices {
     /// Turns started through the seam by a host that cannot hold a
     /// `TurnStream`. Empty and idle on every other host.
     pub(crate) agent_turns: Arc<crate::agent::host::TurnRegistry>,
+    /// Delegated turns in flight, per parent thread. Empty on a host that
+    /// never runs a `subagent` call; it is only the concurrency cap's counter.
+    pub(crate) subagents: Arc<crate::agent::subagent::SubagentRegistry>,
     pub(crate) events: Events,
     pub(crate) host: HostControl,
     /// Explicit trusted principal for a disposable headless fixture. Unset on
@@ -334,6 +337,7 @@ impl AppServices {
             fixtures_root,
             fixtures: Arc::new(FixtureState::empty()),
             agent_turns: Arc::default(),
+            subagents: Arc::default(),
             events: Events::discard(),
             host: HostControl::process_exit(),
             fixture_principal: None,
@@ -427,6 +431,7 @@ impl AppServices {
             events: self.events.clone(),
             workspaces: Arc::clone(&self.workspaces),
             graph_runs: Arc::clone(&self.graph_runs),
+            subagents: Arc::clone(&self.subagents),
         }
     }
 

@@ -88,27 +88,43 @@ fn once_err(error: ModelError) -> BoxStream<'static, Result<ModelEvent, ModelErr
 }
 
 fn body(wire_id: &str, request: &ModelRequest) -> Value {
+    // Recomputed from scratch every request, never rotated: three markers on a
+    // ceiling of four. Render order is tools → system → messages, so the system
+    // marker covers the tool definitions too and the message marker advances
+    // with the conversation. The fourth breakpoint stays unspent — the argument
+    // for a second, trailing message anchor is a miss rate we have not measured
+    // yet (`Transcript::missed_cache_tokens` is the instrument).
+    let control = request.cache_retention.control(request.model);
     let mut body = json!({
         "model": wire_id,
         "max_tokens": request.max_tokens,
         "stream": true,
-        "system": request.system,
-        "messages": request.messages.iter().map(message).collect::<Vec<_>>(),
+        "system": request
+            .system
+            .iter()
+            .map(|text| stamp(json!({ "type": "text", "text": text }), control.as_ref()))
+            .collect::<Vec<_>>(),
+        "messages": messages(request, control.as_ref()),
     });
     let object = body.as_object_mut().expect("object literal");
     if !request.tools.is_empty() {
+        let last = request.tools.len() - 1;
         object.insert(
             "tools".into(),
             Value::Array(
                 request
                     .tools
                     .iter()
-                    .map(|tool| {
-                        json!({
+                    .enumerate()
+                    .map(|(index, tool)| {
+                        let tool = json!({
                             "name": tool.name,
                             "description": tool.description,
                             "input_schema": tool.schema,
-                        })
+                        });
+                        // Only the last: a marker there caches every definition
+                        // before it, and stays put when the list grows.
+                        stamp(tool, control.as_ref().filter(|_| index == last))
                     })
                     .collect(),
             ),
@@ -129,6 +145,53 @@ fn body(wire_id: &str, request: &ModelRequest) -> Value {
         );
     }
     body
+}
+
+/// Add `cache_control` to an already-lowered block, when there is one to add.
+fn stamp(mut block: Value, control: Option<&Value>) -> Value {
+    if let Some(control) = control {
+        block
+            .as_object_mut()
+            .expect("a lowered block is an object")
+            .insert("cache_control".into(), control.clone());
+    }
+    block
+}
+
+/// The conversation, with the tail marker on the last content block of the last
+/// message — and only when that message is a user turn.
+///
+/// An assistant turn gets nothing: the provider collapses tool results into a
+/// synthetic user message, so during a tool loop the tail *is* the newest
+/// `tool_result`, and a trailing assistant row means the step reads only as far
+/// as system+tools. That uncovered case is measured rather than anchored.
+fn messages(request: &ModelRequest, control: Option<&Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = request.messages.iter().map(message).collect();
+    let Some(control) = control else { return out };
+    let Some(last) = request.messages.last() else {
+        return out;
+    };
+    if last.role != ModelRole::User || !cacheable_tail(last) {
+        return out;
+    }
+    if let Some(tail) = out
+        .last_mut()
+        .and_then(|message| message.get_mut("content"))
+        .and_then(Value::as_array_mut)
+        .and_then(|content| content.last_mut())
+    {
+        *tail = stamp(tail.take(), Some(control));
+    }
+    out
+}
+
+/// Whether a message ends in a block a breakpoint may attach to. A `tool_use`
+/// cannot carry one, and a message with no content has no block at all.
+fn cacheable_tail(message: &ModelMessage) -> bool {
+    matches!(
+        message.content.last(),
+        Some(ContentBlock::Text(_) | ContentBlock::ToolResult { .. } | ContentBlock::Image { .. })
+    )
 }
 
 fn message(message: &ModelMessage) -> Value {
@@ -175,6 +238,7 @@ struct MessagesParser {
     /// Names the service in any error — a gateway fault must not be reported
     /// as an Anthropic one.
     provider: &'static str,
+    ended: bool,
 }
 
 impl MessagesParser {
@@ -184,6 +248,7 @@ impl MessagesParser {
             usage: Usage::default(),
             stop_reason: StopReason::default(),
             provider: provider.as_str(),
+            ended: false,
         }
     }
 
@@ -273,10 +338,13 @@ impl SseParser for MessagesParser {
                 }
                 Vec::new()
             }
-            "message_stop" => vec![ModelEvent::StepEnded {
-                stop_reason: self.stop_reason,
-                usage: self.usage,
-            }],
+            "message_stop" => {
+                self.ended = true;
+                vec![ModelEvent::StepEnded {
+                    stop_reason: self.stop_reason,
+                    usage: self.usage,
+                }]
+            }
             "error" => {
                 return Err(ModelError::Status {
                     provider: self.provider,
@@ -286,6 +354,20 @@ impl SseParser for MessagesParser {
             }
             _ => Vec::new(),
         })
+    }
+
+    /// A body that ends without `message_stop` still spent tokens: the counts
+    /// from the frames that did arrive close the step, rather than the caller
+    /// inventing a zeroed one.
+    fn finish(&mut self) -> Vec<ModelEvent> {
+        if self.ended {
+            return Vec::new();
+        }
+        self.ended = true;
+        vec![ModelEvent::StepEnded {
+            stop_reason: self.stop_reason,
+            usage: self.usage,
+        }]
     }
 }
 
@@ -317,10 +399,43 @@ fn merge_usage(usage: &mut Usage, frame: &Map<String, Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::model::{ModelId, ToolSpec};
+    use crate::agent::model::{CacheRetention, ModelId, ToolSpec};
 
     fn parse(parser: &mut MessagesParser, data: &str) -> Vec<ModelEvent> {
         parser.event(data).expect("frame")
+    }
+
+    /// Anthropic splits one prompt across three fields and reports each in a
+    /// different frame — `input_tokens` and the cache pair at `message_start`,
+    /// `output_tokens` only at `message_delta`. They must accumulate onto one
+    /// [`Usage`] rather than the later frame clearing the earlier one.
+    #[test]
+    fn a_cached_usage_accumulates_across_the_frames_that_carry_it() {
+        let mut parser = MessagesParser::new(Provider::Anthropic);
+        assert!(parse(
+            &mut parser,
+            r#"{"type":"message_start","message":{"usage":{
+                "input_tokens":4000,"cache_read_input_tokens":176000,
+                "cache_creation_input_tokens":2048}}}"#
+        )
+        .is_empty());
+        assert!(parse(
+            &mut parser,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":64}}"#
+        )
+        .is_empty());
+        assert_eq!(
+            parse(&mut parser, r#"{"type":"message_stop"}"#),
+            vec![ModelEvent::StepEnded {
+                stop_reason: StopReason::EndTurn,
+                usage: Usage {
+                    input_tokens: 4_000,
+                    output_tokens: 64,
+                    cache_read_input_tokens: 176_000,
+                    cache_creation_input_tokens: 2_048,
+                },
+            }]
+        );
     }
 
     #[test]
@@ -376,7 +491,7 @@ mod tests {
     fn the_request_body_carries_tools_and_an_effort_level() {
         let request = ModelRequest {
             model: ModelId::parse("claude-opus-5").expect("known model"),
-            system: "sys".into(),
+            system: vec!["sys".into()],
             messages: vec![ModelMessage {
                 role: ModelRole::User,
                 content: vec![ContentBlock::Text("hi".into())],
@@ -388,11 +503,141 @@ mod tests {
             }],
             reasoning: ReasoningLevel::High,
             max_tokens: 1024,
+            cache_retention: CacheRetention::Short,
         };
         let body = body("claude-opus-5", &request);
         assert_eq!(body["tools"][0]["name"], "python");
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["output_config"]["effort"], "high");
         assert_eq!(body["messages"][0]["content"][0]["text"], "hi");
+    }
+
+    /// Count every `cache_control` anywhere in a body — the ceiling is per
+    /// *request*, so a test that counted only the sites it expected would miss
+    /// a fourth someone added elsewhere.
+    fn markers(body: &Value) -> usize {
+        match body {
+            Value::Object(fields) => fields
+                .iter()
+                .map(|(key, value)| usize::from(key == "cache_control") + markers(value))
+                .sum(),
+            Value::Array(items) => items.iter().map(markers).sum(),
+            _ => 0,
+        }
+    }
+
+    fn request(messages: Vec<ModelMessage>, retention: CacheRetention) -> ModelRequest {
+        ModelRequest {
+            model: ModelId::parse("claude-opus-5").expect("known model"),
+            system: vec!["sys".into()],
+            messages,
+            tools: vec![
+                ToolSpec {
+                    name: "first".into(),
+                    description: "a".into(),
+                    schema: json!({ "type": "object" }),
+                },
+                ToolSpec {
+                    name: "python".into(),
+                    description: "run".into(),
+                    schema: json!({ "type": "object" }),
+                },
+            ],
+            reasoning: ReasoningLevel::High,
+            max_tokens: 1024,
+            cache_retention: retention,
+        }
+    }
+
+    fn user(block: ContentBlock) -> ModelMessage {
+        ModelMessage {
+            role: ModelRole::User,
+            content: vec![ContentBlock::Text("earlier".into()), block],
+        }
+    }
+
+    /// The three sites, and the fourth breakpoint left unspent.
+    #[test]
+    fn three_markers_land_on_the_system_the_last_tool_and_the_conversation_tail() {
+        let body = body(
+            "claude-opus-5",
+            &request(
+                vec![user(ContentBlock::Text("hi".into()))],
+                CacheRetention::Short,
+            ),
+        );
+        assert_eq!(markers(&body), 3, "{body:#}");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert!(body["tools"][0]["cache_control"].is_null());
+        assert_eq!(body["tools"][1]["cache_control"]["type"], "ephemeral");
+        assert!(body["messages"][0]["content"][0]["cache_control"].is_null());
+        assert_eq!(
+            body["messages"][0]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+    }
+
+    /// A tool loop's tail: the newest `tool_result`, inside the synthetic user
+    /// message the transcript already collapses results into.
+    #[test]
+    fn the_tail_marker_follows_a_tool_result() {
+        let body = body(
+            "claude-opus-5",
+            &request(
+                vec![user(ContentBlock::ToolResult {
+                    id: "c1".into(),
+                    content: vec![ContentBlock::Text("42".into())],
+                    is_error: false,
+                })],
+                CacheRetention::Short,
+            ),
+        );
+        assert_eq!(markers(&body), 3, "{body:#}");
+        assert_eq!(body["messages"][0]["content"][1]["type"], "tool_result");
+        assert_eq!(
+            body["messages"][0]["content"][1]["cache_control"]["type"],
+            "ephemeral"
+        );
+    }
+
+    /// Pi's accepted trade-off, ported: a step that resumes after an assistant
+    /// turn places no message marker at all rather than anchoring one somewhere
+    /// the next step would have to move it from.
+    #[test]
+    fn an_assistant_tail_gets_no_message_marker() {
+        let body = body(
+            "claude-opus-5",
+            &request(
+                vec![ModelMessage {
+                    role: ModelRole::Assistant,
+                    content: vec![ContentBlock::Text("thinking".into())],
+                }],
+                CacheRetention::Short,
+            ),
+        );
+        assert_eq!(markers(&body), 2, "{body:#}");
+        assert!(body["messages"][0]["content"][0]["cache_control"].is_null());
+    }
+
+    #[test]
+    fn retention_none_writes_no_markers_and_long_carries_a_ttl() {
+        let none = body(
+            "claude-opus-5",
+            &request(
+                vec![user(ContentBlock::Text("hi".into()))],
+                CacheRetention::None,
+            ),
+        );
+        assert_eq!(markers(&none), 0, "{none:#}");
+
+        let long = body(
+            "claude-opus-5",
+            &request(
+                vec![user(ContentBlock::Text("hi".into()))],
+                CacheRetention::Long,
+            ),
+        );
+        assert_eq!(markers(&long), 3);
+        assert_eq!(long["system"][0]["cache_control"]["ttl"], "1h");
     }
 }

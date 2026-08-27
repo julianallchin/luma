@@ -25,10 +25,10 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::model::{
-    self, ModelClient, ModelEvent, ModelId, ModelMessage, ModelRequest, ReasoningLevel, StopReason,
-    Usage,
+    self, CacheRetention, ModelClient, ModelEvent, ModelId, ModelMessage, ModelRequest,
+    ReasoningLevel, StopReason, Usage,
 };
-use super::tools::{self, ToolContext, ToolRegistry};
+use super::tools::{self, ToolContext, ToolProgress, ToolRegistry};
 use super::transcript::{self, Transcript};
 use super::{
     AgentChatMessage, AgentError, AgentKind, AgentService, Role, ToolResult, TurnEvent,
@@ -45,7 +45,7 @@ use crate::models::authored_state::{
 
 /// Output ceiling for one model step. Generous: the ceiling exists to bound a
 /// runaway, not to shape a response.
-const MAX_TOKENS: u32 = 32_000;
+pub(super) const MAX_TOKENS: u32 = 32_000;
 
 pub(super) async fn run(
     service: AgentService,
@@ -94,6 +94,16 @@ struct TurnSetup<'a> {
     kind: AgentKind,
     registry: &'a ToolRegistry,
     scope: &'a PythonScopeInput,
+    /// The private authored head this thread writes to, for a subagent
+    /// thread. Resolved once, from the thread, and handed to every tool call:
+    /// a child's Python namespace and its authored writes then address the
+    /// same detached state `prepare_turn` will finalize, and no tool is in a
+    /// position to disagree about which.
+    workspace_id: Option<&'a str>,
+    /// Resolved once per turn rather than once per step: every step of a turn
+    /// writes into the same prefix, and re-reading the environment mid-turn
+    /// could change the TTL under a cache that is already warm.
+    cache_retention: CacheRetention,
 }
 
 impl Turn {
@@ -121,6 +131,13 @@ impl Turn {
             .clone()
             .unwrap_or_else(|| tools::registry(kind));
         let scope = python_scope(&detail.thread);
+        let workspace_id = self
+            .service
+            .services()
+            .authored()
+            .thread_workspace(&pool, self.principal.as_deref(), &self.thread_id)
+            .await
+            .map_err(|error| AgentError::Storage(error.to_string()))?;
         let (client, model, reasoning) = self.resolve_model().await?;
         let setup = TurnSetup {
             client: &*client,
@@ -129,9 +146,24 @@ impl Turn {
             kind,
             registry: &registry,
             scope: &scope,
+            workspace_id: workspace_id.as_deref(),
+            cache_retention: CacheRetention::from_env(),
         };
 
         let mut turn_message_id = self.append_user(&prompt.text).await?;
+        // The thread's actor is restamped per turn, not per thread: the model
+        // is chosen per turn, and this is the only point that knows which one
+        // is about to answer. Every revision the turn writes reads it back off
+        // the thread and keeps its own copy. After the first durable append, so
+        // that a thread the caller may not write to fails as it always did.
+        db::set_thread_actor(
+            &pool,
+            &self.thread_id,
+            setup.model.key(),
+            self.principal.as_deref(),
+        )
+        .await
+        .map_err(AgentError::Storage)?;
 
         loop {
             let (stop_reason, usage, assistant_id) =
@@ -164,22 +196,27 @@ impl Turn {
             self.emit(TurnEvent::StepStarted);
             let request = ModelRequest {
                 model: setup.model,
-                system: setup.kind.system_prompt().to_string(),
+                system: vec![setup.kind.system_prompt().to_string()],
                 messages: self.model_messages(setup.registry),
                 tools: setup.registry.specs(),
                 reasoning: setup.reasoning,
                 max_tokens: MAX_TOKENS,
+                cache_retention: setup.cache_retention,
             };
+            let started = std::time::Instant::now();
             let (stop_reason, usage, calls) = self.stream_step(setup.client, request).await?;
-            self.emit(TurnEvent::StepEnded { stop_reason, usage });
+            self.emit(TurnEvent::StepEnded {
+                stop_reason,
+                usage,
+                model: setup.model.key().to_string(),
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            });
 
             if calls.is_empty() {
                 return Ok((stop_reason, usage, assistant_id));
             }
             for call in calls {
-                let output = self
-                    .run_tool(setup.registry, setup.scope, turn_message_id, &call)
-                    .await;
+                let output = self.run_tool(setup, turn_message_id, &call).await;
                 self.emit(TurnEvent::ToolCallEnded {
                     call_id: call.id,
                     output,
@@ -243,23 +280,28 @@ impl Turn {
 
     async fn run_tool(
         &self,
-        registry: &ToolRegistry,
-        scope: &PythonScopeInput,
+        setup: &TurnSetup<'_>,
         turn_message_id: &str,
         call: &PendingCall,
     ) -> ToolResult {
-        let Some(tool) = registry.get(&call.name) else {
+        let Some(tool) = setup.registry.get(&call.name) else {
             return ToolResult::Failed {
                 message: format!("no tool named '{}'", call.name),
             };
         };
+        let progress = ToolProgress::new(self.events.clone());
         let context = ToolContext {
-            services: self.service.services(),
+            agent: &self.service,
             thread_id: &self.thread_id,
+            call_id: &call.id,
             turn_message_id,
-            execution_id: None,
-            authored_workspace_id: None,
-            scope,
+            // A subagent thread's Python namespace *is* its workspace: the
+            // execution service checks the two are the same string and
+            // authorizes both against this thread.
+            execution_id: setup.workspace_id,
+            authored_workspace_id: setup.workspace_id,
+            scope: setup.scope,
+            progress: &progress,
         };
         match tool.call(&context, call.input()).await {
             Ok(value) => ToolResult::Output { value },

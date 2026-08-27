@@ -361,6 +361,132 @@ impl Transcript {
     pub fn head_message_id(&self) -> Option<String> {
         self.messages.last().map(|message| message.id.clone())
     }
+
+    /// What the most recent model request cost, or [`None`] in a conversation
+    /// that has not made one.
+    ///
+    /// Read back out of the transcript rather than remembered beside it, which
+    /// is what makes a reloaded thread and a live one answer identically: a
+    /// panel that cached the last [`TurnEvent::StepEnded`] would go blank on
+    /// reopen and disagree with the row sitting on screen.
+    #[must_use]
+    pub fn last_request(&self) -> Option<RequestUsage> {
+        self.requests().next_back()
+    }
+
+    /// Every model step this thread has made, oldest first.
+    pub fn requests(&self) -> impl DoubleEndedIterator<Item = RequestUsage> + '_ {
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .filter_map(|part| match part {
+                AgentChatPart::ProviderMessage { data } => RequestUsage::from_value(data),
+                _ => None,
+            })
+    }
+
+    /// Prompt tokens this thread re-read at full price that a warm cache should
+    /// have covered.
+    ///
+    /// The answer to "is caching still working" that survives the one-time
+    /// acceptance check: it is derived from usage readback alone, so it notices
+    /// a prefix someone destabilised without anyone having to re-run a live
+    /// test. Zero is the healthy reading. A thread against a provider that never
+    /// reports caching at all reads like a total miss, which is the honest
+    /// answer — those tokens really were paid for twice.
+    #[must_use]
+    pub fn missed_cache_tokens(&self) -> u64 {
+        let mut previous: Option<RequestUsage> = None;
+        let mut missed = 0;
+        for request in self.requests() {
+            if let Some(previous) = &previous {
+                missed += request.missed_tokens(previous);
+            }
+            previous = Some(request);
+        }
+        missed
+    }
+}
+
+/// Per-step misses at or below this are breakpoint granularity, not a broken
+/// prefix: the tail marker sits on the *previous* step's last block, so the
+/// blocks written after it are legitimately fresh.
+const CACHE_MISS_NOISE_FLOOR: u64 = 1024;
+
+/// One model request's accounting, as the durable `data-pi-message` part
+/// records it.
+///
+/// A *step*, not a turn: the last step is the one whose prompt was the whole
+/// conversation so far, so it — and not a sum over the turn — is what says how
+/// close the thread is to its window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestUsage {
+    pub usage: super::model::Usage,
+    /// The model that served it, when the row names one this build still
+    /// carries. Rows written before the field existed, and rows naming a
+    /// retired model, leave it [`None`] — which is also the one case with no
+    /// window to measure against.
+    pub model: Option<super::model::ModelId>,
+    pub duration: Option<std::time::Duration>,
+}
+
+impl RequestUsage {
+    fn from_value(data: &Value) -> Option<Self> {
+        let object = data.as_object()?;
+        let usage = serde_json::from_value(object.get("usage")?.clone()).ok()?;
+        Some(Self {
+            usage,
+            model: object
+                .get("model")
+                .and_then(Value::as_str)
+                .and_then(super::model::ModelId::parse),
+            duration: object
+                .get("durationMs")
+                .and_then(Value::as_u64)
+                .map(std::time::Duration::from_millis),
+        })
+    }
+
+    /// Everything the provider read to answer: fresh tokens plus whatever came
+    /// out of, or went into, the prompt cache.
+    ///
+    /// **Not `input_tokens` alone.** Anthropic reports cached prefix tokens in
+    /// their own fields and excludes them from `input_tokens`, so on a warm
+    /// thread — which is every thread past its first turn — `input_tokens` is
+    /// the last few hundred characters the person typed. A gauge fed from it
+    /// would read near-empty right up to the context limit.
+    #[must_use]
+    pub fn prompt_tokens(&self) -> u64 {
+        self.usage.input_tokens
+            + self.usage.cache_read_input_tokens
+            + self.usage.cache_creation_input_tokens
+    }
+
+    /// How much of the prefix `previous` established this step paid for again.
+    ///
+    /// `min` of the two prompts, because only the overlap *could* have been
+    /// cached — a step whose prompt shrank (a rewind, a compaction) is not owed
+    /// coverage it never sent. Below a 1024-token noise floor the answer is
+    /// zero rather than a small number, so the reading stays a signal.
+    #[must_use]
+    pub fn missed_tokens(&self, previous: &Self) -> u64 {
+        let cacheable = previous.prompt_tokens().min(self.prompt_tokens());
+        let missed = cacheable.saturating_sub(self.usage.cache_read_input_tokens);
+        if missed > CACHE_MISS_NOISE_FLOOR {
+            missed
+        } else {
+            0
+        }
+    }
+
+    /// How full the window is, 0..1, or [`None`] when the row names no model
+    /// this build knows and there is therefore no window.
+    #[must_use]
+    pub fn fraction(&self) -> Option<f32> {
+        let window = f64::from(self.model?.context_window());
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        Some(((self.prompt_tokens() as f64 / window) as f32).clamp(0.0, 1.0))
+    }
 }
 
 /// What one [`apply`] changed, so a host can remeasure exactly that row and
@@ -447,12 +573,19 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
                 appended: None,
             }
         }
-        TurnEvent::StepEnded { stop_reason, usage } => push_part(
+        TurnEvent::StepEnded {
+            stop_reason,
+            usage,
+            model,
+            duration_ms,
+        } => push_part(
             transcript,
             AgentChatPart::ProviderMessage {
                 data: serde_json::json!({
                     "stopReason": stop_reason.as_str(),
                     "usage": usage,
+                    "model": model,
+                    "durationMs": duration_ms,
                 }),
             },
         ),
@@ -776,11 +909,153 @@ mod tests {
             &TurnEvent::StepEnded {
                 stop_reason: StopReason::EndTurn,
                 usage: Usage::default(),
+                model: "claude-opus-5".into(),
+                duration_ms: 1_234,
             },
         );
         assert!(matches!(
             transcript.messages[0].parts[0],
             AgentChatPart::ProviderMessage { .. }
         ));
+    }
+
+    /// The whole point of writing the step's metadata into the durable part:
+    /// a reloaded thread answers "how full is the window" from the same bytes
+    /// the live panel read, with no state kept beside the transcript.
+    #[test]
+    fn the_last_request_survives_a_round_trip_through_the_parts_column() {
+        let mut transcript = Transcript::default();
+        apply(
+            &mut transcript,
+            &TurnEvent::MessageStarted {
+                id: "a1".into(),
+                role: Role::Assistant,
+            },
+        );
+        // Two steps: the reader must answer with the *last*, not the first.
+        for (input, duration) in [(10_u64, 100_u64), (240_000, 7_500)] {
+            apply(
+                &mut transcript,
+                &TurnEvent::StepEnded {
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage {
+                        input_tokens: input,
+                        output_tokens: 42,
+                        cache_read_input_tokens: 500_000,
+                        cache_creation_input_tokens: 10_000,
+                    },
+                    model: "claude-opus-5".into(),
+                    duration_ms: duration,
+                },
+            );
+        }
+        // Through the column and back, exactly as a reopened thread reads it.
+        let column = serde_json::json!([{
+            "id": "a1",
+            "role": "assistant",
+            "parts": transcript.messages[0].parts_json(),
+        }]);
+        let parts = AgentChatMessage::parse_parts(&column[0]["parts"]).expect("round trip");
+        let reloaded = Transcript {
+            messages: vec![AgentChatMessage {
+                id: "a1".into(),
+                role: Role::Assistant,
+                parts,
+            }],
+        };
+
+        let last = reloaded.last_request().expect("a step was recorded");
+        assert_eq!(last.usage.input_tokens, 240_000);
+        assert_eq!(last.duration, Some(std::time::Duration::from_millis(7_500)));
+        assert_eq!(
+            last.model.map(super::super::model::ModelId::key),
+            Some("claude-opus-5")
+        );
+        // Cached tokens are context too — the reason this is not `input_tokens`.
+        assert_eq!(last.prompt_tokens(), 240_000 + 500_000 + 10_000);
+        assert_eq!(last.fraction(), Some(0.75));
+        assert_eq!(last, transcript.last_request().expect("live"));
+    }
+
+    /// A row written before the field existed, or naming a model this build
+    /// dropped, still reports its tokens — it just has no window to measure
+    /// them against. The gauge asks for a fraction and gets an honest `None`
+    /// rather than a made-up denominator.
+    #[test]
+    fn a_step_with_no_known_model_has_tokens_but_no_fraction() {
+        let mut transcript = Transcript::default();
+        transcript.messages.push(AgentChatMessage {
+            id: "a1".into(),
+            role: Role::Assistant,
+            parts: vec![AgentChatPart::ProviderMessage {
+                data: serde_json::json!({
+                    "stopReason": "end_turn",
+                    "usage": { "inputTokens": 7, "outputTokens": 3,
+                               "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0 },
+                }),
+            }],
+        });
+        let last = transcript.last_request().expect("a step was recorded");
+        assert_eq!(last.prompt_tokens(), 7);
+        assert_eq!(last.model, None);
+        assert_eq!(last.fraction(), None);
+        assert_eq!(last.duration, None);
+    }
+
+    /// A thread of steps, as the miss detector reads it back.
+    fn stepped(steps: &[(u64, u64)]) -> Transcript {
+        Transcript {
+            messages: steps
+                .iter()
+                .enumerate()
+                .map(|(index, (fresh, cache_read))| AgentChatMessage {
+                    id: format!("a{index}"),
+                    role: Role::Assistant,
+                    parts: vec![AgentChatPart::ProviderMessage {
+                        data: serde_json::json!({
+                            "usage": { "inputTokens": fresh, "outputTokens": 1,
+                                       "cacheReadInputTokens": cache_read,
+                                       "cacheCreationInputTokens": 0 },
+                        }),
+                    }],
+                })
+                .collect(),
+        }
+    }
+
+    /// A healthy thread reads zero: each step's cache read covers the prefix
+    /// the step before it established, and the handful of tokens the person
+    /// typed since are under the noise floor.
+    #[test]
+    fn a_warm_thread_misses_nothing() {
+        assert_eq!(
+            stepped(&[(20_000, 0), (60, 20_000), (40, 20_060)]).missed_cache_tokens(),
+            0
+        );
+    }
+
+    /// A provider that reports no cache read at all — a destabilised prefix, or
+    /// a marker nobody placed. Every step past the first pays for the whole
+    /// overlap again, and the number says so.
+    #[test]
+    fn an_uncached_thread_reports_the_prefix_it_paid_for_twice() {
+        assert_eq!(
+            stepped(&[(20_000, 0), (20_060, 0), (20_100, 0)]).missed_cache_tokens(),
+            20_000 + 20_060
+        );
+    }
+
+    /// Below the floor is granularity, not breakage: the tail marker sits on
+    /// the previous step's last block, so the blocks after it are legitimately
+    /// fresh and must not accumulate into a scary total.
+    #[test]
+    fn a_sub_floor_miss_is_noise_not_a_miss() {
+        let step = stepped(&[(2_000, 0), (500, 1_500)]);
+        let requests: Vec<_> = step.requests().collect();
+        assert_eq!(requests[1].missed_tokens(&requests[0]), 0);
+        assert_eq!(step.missed_cache_tokens(), 0);
+        // One token over, and it counts.
+        let over = stepped(&[(2_000, 0), (1_050, 975)]);
+        assert_eq!(over.missed_cache_tokens(), 1_025);
     }
 }

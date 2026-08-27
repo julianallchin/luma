@@ -29,13 +29,15 @@
 
 pub mod host;
 pub mod model;
+pub mod skills;
+pub mod subagent;
 pub mod tools;
 pub mod transcript;
 mod turn;
 
 pub use transcript::{
-    apply, to_model_messages, AgentChatMessage, AgentChatPart, Applied, Role, ToolPart, ToolState,
-    Transcript,
+    apply, to_model_messages, AgentChatMessage, AgentChatPart, Applied, RequestUsage, Role,
+    ToolPart, ToolState, Transcript,
 };
 
 use std::pin::Pin;
@@ -85,13 +87,24 @@ impl AgentKind {
         }
     }
 
-    /// The system prompt, byte-stable so it stays a cacheable prefix.
+    /// The system prompt: the kind's prose plus the `<available_skills>` block
+    /// the `skill` tool loads from.
+    ///
+    /// Byte-stable so it stays a cacheable prefix — the listing is name-sorted
+    /// and the whole string is composed once per process, so a prefix cannot
+    /// move under a running thread.
     #[must_use]
     pub fn system_prompt(self) -> &'static str {
-        match self {
-            AgentKind::TrackCopilot => include_str!("prompts/track.md"),
-            AgentKind::PatternGraph => include_str!("prompts/graph.md"),
-        }
+        static TRACK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        static GRAPH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let (cell, prose) = match self {
+            AgentKind::TrackCopilot => (&TRACK, include_str!("prompts/track.md")),
+            AgentKind::PatternGraph => (&GRAPH, include_str!("prompts/graph.md")),
+        };
+        cell.get_or_init(|| match skills::bundled().listing() {
+            "" => prose.to_string(),
+            listing => format!("{prose}\n\n{listing}"),
+        })
     }
 }
 
@@ -392,6 +405,8 @@ impl ThreadScope {
             venue_id: self.venue_id.clone(),
             score_id: self.score_id.clone(),
             title: None,
+            parent_thread_id: None,
+            parent_call_id: None,
         }
     }
 }
@@ -464,12 +479,24 @@ pub enum TurnEvent {
         output: ToolResult,
     },
     /// One model step within the open assistant row finished.
+    ///
+    /// The three facts a context-usage readout needs about the request that
+    /// just returned, carried together because they are only true together: a
+    /// token count means nothing without the window it was spent against, and
+    /// the window comes from the model this particular step used.
     StepEnded {
         stop_reason: StopReason,
         usage: Usage,
+        /// The [`model::ModelId`] key this step ran on. A `String` because
+        /// [`TurnEvent`] crosses the JSON seam to the webview.
+        model: String,
+        /// Wall time from request to last frame. The provider does not report
+        /// it; the loop measures it.
+        duration_ms: u64,
     },
-    /// Live subagent state. Never persisted: a milestone is UI state, not
-    /// transcript (§2.5).
+    /// Live subagent state — one [`subagent::SubagentSnapshot`], as JSON
+    /// because this event crosses the seam to the webview. Never persisted: a
+    /// milestone is UI state, not transcript (§2.5).
     Subagent {
         snapshot: Value,
     },

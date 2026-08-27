@@ -1,13 +1,6 @@
 import type { ToolLabel, ToolView } from "@/shared/components/agent-chat/parts";
 
-export { BUNDLED_SKILL_SOURCES } from "./bundled-skills";
-export {
-	buildSkillTool,
-	type Skill,
-	type SkillDefinition,
-	SkillLoader,
-	skillToolDescription,
-} from "./skill-loader";
+export { buildSkillTool, skillsListing } from "./skill-loader";
 
 /** Chat-row label for a skill load: the requested skill name. */
 export function skillToolLabel(tool: ToolView): ToolLabel {

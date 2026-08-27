@@ -6,10 +6,10 @@ use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use super::operations::local_row_payload;
 use super::{
     apply_graph_edit_in_transaction, apply_track_projection_in_transaction, canonicalize_graph,
-    exact_graph_json, graph_files, operation_request_fingerprint, principal_key, AuthoredDocument,
-    AuthoredDocuments, AuthoredDocumentsError, AuthoredSnapshot, DocumentScope, GraphDocument,
-    GraphEditPlan, ResolvedScope, Result, RevisionId, RevisionMetadata, TrackEditPlan,
-    TrackProjectionAuthority,
+    exact_graph_json, graph_files, operation_request_fingerprint, principal_key, Actor,
+    AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError, AuthoredSnapshot, DocumentScope,
+    GraphDocument, GraphEditPlan, ResolvedScope, Result, RevisionId, RevisionMetadata,
+    TrackEditPlan, TrackProjectionAuthority,
 };
 use crate::database::local::write_admission;
 use crate::services::authored_state::{AuthoredDocumentId, AuthoredStateError};
@@ -969,6 +969,9 @@ fn sync_revision_metadata(
         &[proposal_id, expected_server_head.as_str()],
     );
     Some(RevisionMetadata {
+        // No human and no model authored this: the sync layer minted it to
+        // converge two devices on the server's ordering.
+        actor: Actor::sync(),
         operation_kind: "sync_integration".into(),
         operation_id: Some(operation_id),
         message: message.into(),

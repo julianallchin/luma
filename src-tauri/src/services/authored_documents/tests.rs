@@ -23,6 +23,28 @@ use crate::sync::authored_remote::{
 use crate::sync::error::SyncError;
 use crate::sync::traits::RemoteClient;
 
+/// A revision authored directly against the store, with no scope to read a
+/// writer from. Tests that seed history do not exercise attribution — the
+/// tests that do assert it name the actor explicitly.
+fn revision_metadata(
+    operation_kind: &str,
+    operation_id: Option<&str>,
+    subject: &str,
+) -> Result<RevisionMetadata> {
+    Ok(RevisionMetadata {
+        operation_kind: operation_kind.to_owned(),
+        operation_id: operation_id.map(str::to_owned),
+        message: subject.to_owned(),
+        actor: Actor::user(),
+        author_name: "Luma".into(),
+        author_email: "authored-state@luma.local".into(),
+        authored_at: Utc::now().to_rfc3339(),
+        thread_id: None,
+        assistant_message_id: None,
+        restored_revision_id: None,
+    })
+}
+
 /// A migrated app database with write admission armed, plus the authored
 /// authority over it. `pub(crate)` so the service-layer tests above the
 /// authority — `score_mutations` — seed a score the same way rather than
@@ -173,6 +195,41 @@ impl Fixture {
             .await
             .unwrap();
         (thread, scope)
+    }
+
+    /// A subagent thread under `parent`: same authored route, its own private
+    /// workspace allocated by creation.
+    async fn subagent_thread(&self, parent: &AgentThread) -> AgentThread {
+        self.authored
+            .create_thread_with_authored_state(
+                &self.pool,
+                CreateAgentThreadInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    agent_kind: parent.agent_kind.clone(),
+                    subject_kind: parent.subject_kind.clone(),
+                    subject_id: parent.subject_id.clone(),
+                    implementation_id: parent.implementation_id.clone(),
+                    venue_id: parent.venue_id.clone(),
+                    score_id: parent.score_id.clone(),
+                    parent_thread_id: Some(parent.id.clone()),
+                    parent_call_id: Some("call-1".into()),
+                    ..Default::default()
+                },
+                self.owner.as_deref(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn active_workspace(&self, thread_id: &str) -> (String, String) {
+        sqlx::query_as(
+            "SELECT workspace_id, head_revision_id FROM authored_subagent_workspaces
+             WHERE owner_thread_id = ? AND status = 'active'",
+        )
+        .bind(thread_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
     }
 
     async fn append_assistant(&self, thread_id: &str, message_id: &str) {
@@ -1730,9 +1787,6 @@ async fn structural_score_merge_preserves_current_trivia_and_proposal_semantics(
                 "edit",
                 Some("current-comment-only"),
                 "Current comment-only edit",
-                None,
-                None,
-                None,
             )
             .unwrap(),
         )
@@ -1845,9 +1899,6 @@ async fn malformed_legacy_proposal_metadata_terminally_falls_back() {
                 "sync_integration",
                 Some("metadata-server-head"),
                 "Server head",
-                None,
-                None,
-                None,
             )
             .unwrap(),
         )
@@ -1962,9 +2013,6 @@ async fn not_earliest_retry_persists_a_new_head_specific_merge_candidate() {
                 "edit",
                 Some("earlier-server-one"),
                 "Earlier server proposal",
-                None,
-                None,
-                None,
             )
             .unwrap(),
         )
@@ -1983,9 +2031,6 @@ async fn not_earliest_retry_persists_a_new_head_specific_merge_candidate() {
                 "edit",
                 Some("earlier-server-two"),
                 "Earlier server proposal advanced",
-                None,
-                None,
-                None,
             )
             .unwrap(),
         )
@@ -2422,15 +2467,8 @@ async fn superseded_proposal_tip_is_visible_and_restorable_as_a_forward_revision
     let initial_id = RevisionId::parse(initial).unwrap();
     let server_graph = graph_with_node("server-winner", 2.0);
     let server_files = graph_files(&server_graph).unwrap();
-    let server_metadata = revision_metadata(
-        "sync_integration",
-        Some("server-winner"),
-        "Server winner",
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    let server_metadata =
+        revision_metadata("sync_integration", Some("server-winner"), "Server winner").unwrap();
     let mut transaction = fixture.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
     let server_revision = fixture
         .authored
@@ -2559,6 +2597,7 @@ async fn unknown_future_operation_superseded_tip_remains_listable_and_restorable
                 operation_kind: "future_spatial_transform".into(),
                 operation_id: Some("future-operation".into()),
                 message: "A revision from a newer producer".into(),
+                actor: Actor::user(),
                 author_name: "Future Luma".into(),
                 author_email: "future@luma.local".into(),
                 authored_at: "2026-08-02T00:00:01Z".into(),
@@ -2638,6 +2677,166 @@ async fn unknown_future_operation_superseded_tip_remains_listable_and_restorable
     assert_eq!(graph.nodes[0].id, "future-operation");
 }
 
+/// Every revision names its writer, and the three writers Luma has are told
+/// apart: the operator in the editor, the model serving an agent turn, and an
+/// out-of-process MCP client. The thread's own label wins over the host's, and
+/// a model id spelled the way the TypeScript loop spells it lands on the same
+/// actor as the Rust loop's key.
+#[tokio::test]
+async fn each_writer_names_itself_on_its_revisions() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+
+    let user_edit = fixture
+        .authored
+        .apply_graph_for_scope(
+            &fixture.pool,
+            None,
+            "pattern",
+            "implementation",
+            "user-edit",
+            graph_with_node("from-the-editor", 4.0),
+            &crate::services::graph_documents::graph_revision(&empty_graph()).unwrap(),
+            "Edit from the editor",
+        )
+        .await
+        .unwrap();
+    assert_eq!(actor_of(&fixture, &user_edit.revision_id).await, "user");
+
+    agent_threads::set_thread_actor(&fixture.pool, &thread.id, "anthropic/claude-opus-5", None)
+        .await
+        .unwrap();
+    let prepared = fixture
+        .authored
+        .prepare_turn(
+            &fixture.pool,
+            None,
+            PrepareAuthoredTurnInput {
+                thread_id: thread.id.clone(),
+                assistant_message_id: "assistant-1".into(),
+                graph: Some(graph_with_node("from-the-agent", 2.0)),
+            },
+        )
+        .await
+        .unwrap();
+    fixture.append_assistant(&thread.id, "assistant-1").await;
+    let AuthoredTurnCommit::Committed {
+        revision_id: turn_revision,
+        ..
+    } = fixture
+        .authored
+        .finalize_turn(
+            &fixture.pool,
+            None,
+            FinalizeAuthoredTurnInput {
+                thread_id: thread.id.clone(),
+                assistant_message_id: "assistant-1".into(),
+                prepared_revision_id: prepared.prepared_revision_id,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the turn should commit")
+    };
+    assert_eq!(
+        actor_of(&fixture, &turn_revision).await,
+        "claude-opus-5",
+        "a provider-qualified model id is stored under its canonical key"
+    );
+
+    // An out-of-process client names itself once, for the whole connection.
+    fixture
+        .authored
+        .set_session_actor(Actor::parse("client:claude-code/2.1:claude-opus-5").unwrap());
+    let client_edit = fixture
+        .authored
+        .apply_graph_for_scope(
+            &fixture.pool,
+            None,
+            "pattern",
+            "implementation",
+            "client-edit",
+            graph_with_node("from-the-client", 6.0),
+            &crate::services::graph_documents::graph_revision(&graph_with_node(
+                "from-the-agent",
+                2.0,
+            ))
+            .unwrap(),
+            "Edit from an MCP client",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        actor_of(&fixture, &client_edit.revision_id).await,
+        "client:claude-code/2.1:claude-opus-5"
+    );
+
+    // The thread still answers for its own writes: the host's session actor is
+    // only the fallback for an operation with no conversation behind it.
+    let history = fixture
+        .authored
+        .list_history(&fixture.pool, None, &thread.id, None, Some(20))
+        .await
+        .unwrap();
+    let turn = history
+        .entries
+        .iter()
+        .find(|entry| entry.revision_id == turn_revision)
+        .expect("the turn is in history");
+    assert_eq!(turn.actor, "claude-opus-5");
+}
+
+/// A restore is authored by whoever restored, not by whoever wrote the state
+/// being restored.
+#[tokio::test]
+async fn a_restore_is_authored_by_the_writer_who_restored_it() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.pattern_thread().await;
+    let first = fixture
+        .authored
+        .apply_graph_for_scope(
+            &fixture.pool,
+            None,
+            "pattern",
+            "implementation",
+            "before-restore",
+            graph_with_node("before", 4.0),
+            &crate::services::graph_documents::graph_revision(&empty_graph()).unwrap(),
+            "Edit before the restore",
+        )
+        .await
+        .unwrap();
+
+    agent_threads::set_thread_actor(&fixture.pool, &thread.id, "kimi-k3-fast", None)
+        .await
+        .unwrap();
+    let restored = fixture
+        .authored
+        .restore(
+            &fixture.pool,
+            None,
+            &thread.id,
+            &first.revision_id,
+            "restore-1",
+            AuthoredRestoreMode::StateOnly,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        actor_of(&fixture, &restored.revision_id).await,
+        "kimi-k3-fast"
+    );
+}
+
+async fn actor_of(fixture: &Fixture, revision_id: &str) -> String {
+    sqlx::query_scalar("SELECT actor FROM authored_revisions WHERE revision_id = ?")
+        .bind(revision_id)
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn turn_checkpoint_is_immutable_and_finalization_advances_once() {
     let fixture = Fixture::new().await;
@@ -2693,4 +2892,166 @@ async fn turn_checkpoint_is_immutable_and_finalization_advances_once() {
     .await
     .unwrap();
     assert_eq!(outcomes, 1);
+}
+
+#[tokio::test]
+async fn subagent_turn_advances_only_its_workspace_head() {
+    let fixture = Fixture::signed_in("owner").await;
+    let parent = fixture.pattern_thread().await;
+    let child = fixture.subagent_thread(&parent).await;
+    let before = fixture
+        .authored
+        .current_revision(&fixture.pool, Some("owner"), &parent.id)
+        .await
+        .unwrap();
+    let (workspace_id, workspace_base) = fixture.active_workspace(&child.id).await;
+    assert_eq!(workspace_base, before.revision_id);
+
+    let prepared = fixture
+        .authored
+        .prepare_turn(
+            &fixture.pool,
+            Some("owner"),
+            PrepareAuthoredTurnInput {
+                thread_id: child.id.clone(),
+                assistant_message_id: "child-1".into(),
+                graph: Some(graph_with_node("child", 3.0)),
+            },
+        )
+        .await
+        .unwrap();
+    // The assistant row is insertable only because the turn above prepared
+    // one: this is the 1811 trigger, satisfied by a child thread with no
+    // milestone row anywhere.
+    fixture.append_assistant(&child.id, "child-1").await;
+    let committed = fixture
+        .authored
+        .finalize_turn(
+            &fixture.pool,
+            Some("owner"),
+            FinalizeAuthoredTurnInput {
+                thread_id: child.id.clone(),
+                assistant_message_id: "child-1".into(),
+                prepared_revision_id: prepared.prepared_revision_id,
+            },
+        )
+        .await
+        .unwrap();
+    let AuthoredTurnCommit::Committed {
+        revision_id,
+        applied_to_current_projection,
+        ..
+    } = committed
+    else {
+        panic!("a subagent turn should commit to its workspace")
+    };
+    assert!(!applied_to_current_projection);
+
+    let after = fixture
+        .authored
+        .current_revision(&fixture.pool, Some("owner"), &parent.id)
+        .await
+        .unwrap();
+    assert_eq!(after.revision_id, before.revision_id);
+    let AuthoredProjectedDocument::PatternGraph { graph, .. } = after.document else {
+        panic!("pattern document")
+    };
+    assert!(graph.nodes.is_empty());
+
+    let (_, workspace_head) = fixture.active_workspace(&child.id).await;
+    assert_eq!(workspace_head, revision_id);
+    let recorded: Option<String> = sqlx::query_scalar(
+        "SELECT workspace_id FROM authored_turn_preparations
+         WHERE assistant_message_id = 'child-1'",
+    )
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded.as_deref(), Some(workspace_id.as_str()));
+    // A private head is never proposed: the live head did not move.
+    let proposals: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM authored_head_proposals WHERE proposed_revision_id = ?",
+    )
+    .bind(&revision_id)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(proposals, 0);
+    // The workspace directory was brought up to the head the turn wrote.
+    let check = fixture
+        .authored
+        .check_workspace(&fixture.pool, Some("owner"), &child.id, &workspace_id)
+        .await
+        .unwrap();
+    assert!(!check.changed);
+    assert_eq!(check.head_revision_id, revision_id);
+}
+
+#[tokio::test]
+async fn recovery_finalizes_a_live_workspace_turn_and_skips_a_discarded_one() {
+    let fixture = Fixture::signed_in("owner").await;
+    let parent = fixture.pattern_thread().await;
+    let child = fixture.subagent_thread(&parent).await;
+    let before = fixture
+        .authored
+        .current_revision(&fixture.pool, Some("owner"), &parent.id)
+        .await
+        .unwrap();
+
+    fixture
+        .authored
+        .prepare_turn(
+            &fixture.pool,
+            Some("owner"),
+            PrepareAuthoredTurnInput {
+                thread_id: child.id.clone(),
+                assistant_message_id: "child-1".into(),
+                graph: Some(graph_with_node("first", 1.0)),
+            },
+        )
+        .await
+        .unwrap();
+    fixture.append_assistant(&child.id, "child-1").await;
+    let recovered = fixture
+        .authored
+        .recover_turns(&fixture.pool, Some("owner"), &child.id)
+        .await
+        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    let (workspace_id, workspace_head) = fixture.active_workspace(&child.id).await;
+    assert_ne!(workspace_head, before.revision_id);
+
+    fixture
+        .authored
+        .prepare_turn(
+            &fixture.pool,
+            Some("owner"),
+            PrepareAuthoredTurnInput {
+                thread_id: child.id.clone(),
+                assistant_message_id: "child-2".into(),
+                graph: Some(graph_with_node("second", 2.0)),
+            },
+        )
+        .await
+        .unwrap();
+    fixture.append_assistant(&child.id, "child-2").await;
+    fixture
+        .authored
+        .remove_workspace(&fixture.pool, Some("owner"), &child.id, &workspace_id)
+        .await
+        .unwrap();
+    // A discarded workspace has no head left to finalize into. The turn is
+    // skipped, not redirected onto the live document.
+    let recovered = fixture
+        .authored
+        .recover_turns(&fixture.pool, Some("owner"), &child.id)
+        .await
+        .unwrap();
+    assert!(recovered.is_empty());
+    let after = fixture
+        .authored
+        .current_revision(&fixture.pool, Some("owner"), &parent.id)
+        .await
+        .unwrap();
+    assert_eq!(after.revision_id, before.revision_id);
 }

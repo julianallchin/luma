@@ -1,9 +1,8 @@
 //! What sync needs from its host, named once.
 //!
-//! Sync used to take an `AppHandle` and reach through it for four things: the
-//! storage root, the event bus, and the two in-memory stores a pull has to
-//! invalidate. Naming those four is what lets a non-Tauri host run a sync at
-//! all — and it keeps `AppHandle`, which can supply anything, from being an
+//! Sync used to take an `AppHandle` and reach through it for the storage root,
+//! the event bus, and the in-memory stores a pull has to invalidate. Naming
+//! them is what lets a non-Tauri host run a sync at all — and it keeps `AppHandle`, which can supply anything, from being an
 //! open channel into the sync module.
 //!
 //! Every field is a shared handle, so a clone is another view of the same host,
@@ -11,6 +10,7 @@
 
 use std::sync::Arc;
 
+use crate::agent::subagent::SubagentRegistry;
 use crate::agent_execution::{GraphRunStore, PythonWorkspaceService};
 use crate::dispatch::Events;
 use crate::storage::StorageRoot;
@@ -26,4 +26,7 @@ pub struct SyncHost {
     pub workspaces: Arc<PythonWorkspaceService>,
     /// Published graph evaluations a pull can invalidate.
     pub graph_runs: Arc<GraphRunStore>,
+    /// Live subagent leases, which tell a stranded authored workspace from one
+    /// a running child is still writing.
+    pub subagents: Arc<SubagentRegistry>,
 }

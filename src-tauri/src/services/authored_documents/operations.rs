@@ -1,13 +1,13 @@
 use super::{
     agent_threads, apply_graph_edit_in_transaction, apply_track_projection_in_transaction,
-    revision_metadata, AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError,
-    AuthoredProjectedDocument, DocumentScope, FileMap, GraphDocumentError, GraphEditPlan,
-    MainState, ResolvedScope, Result, RevisionId, RevisionInfo, RevisionMetadata, TrackEditError,
-    TrackEditPlan, TrackEditResult, TrackProjectionAuthority, VenueAccess, VenueResource, Write,
+    AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError, AuthoredProjectedDocument,
+    DocumentScope, FileMap, GraphDocumentError, GraphEditPlan, MainState, ResolvedScope, Result,
+    RevisionId, RevisionInfo, RevisionMetadata, TrackEditError, TrackEditPlan, TrackEditResult,
+    TrackProjectionAuthority, VenueAccess, VenueResource, Write,
 };
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::authored_state::AppliedAuthoredState;
-use crate::services::authored_state::AuthoredStateError;
+use crate::services::authored_state::{Actor, AuthoredStateError};
 use crate::sync::authored_remote::SubmitHeadProposalInput;
 use crate::sync::{pending, registry};
 use serde_json::Value;
@@ -215,6 +215,12 @@ impl AuthoredDocuments {
             operation_kind: "initial_import".into(),
             operation_id: None,
             message: "Import existing authored state".into(),
+            // Constant like the timestamp beside it, and for the same reason:
+            // every device importing the same legacy projection must derive
+            // one root. Who first authored the imported state is not recorded
+            // anywhere, and the human whose library it is is the closest true
+            // answer — the same one the migration's backfill gives.
+            actor: Actor::user(),
             author_name: "Luma".into(),
             author_email: "authored-state@luma.local".into(),
             authored_at: "1970-01-01T00:00:00Z".into(),
@@ -265,7 +271,6 @@ impl AuthoredDocuments {
         operation: OperationSpec<'_>,
         subject: &str,
         parents: Option<Vec<RevisionId>>,
-        thread_id: Option<&str>,
         assistant_message_id: Option<&str>,
         restored_revision_id: Option<RevisionId>,
     ) -> Result<CandidateApplication> {
@@ -307,11 +312,11 @@ impl AuthoredDocuments {
                 "the first parent of a live revision must be the current head".into(),
             ));
         }
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            scope,
             operation.kind,
             Some(operation.id),
             subject,
-            thread_id,
             assistant_message_id,
             restored_revision_id,
         )?;

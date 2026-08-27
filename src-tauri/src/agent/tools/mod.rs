@@ -7,14 +7,19 @@
 //! workspace). There is no second builder that could drift.
 
 pub mod python;
+pub mod skill;
+pub mod subagent;
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use super::model::{ContentBlock, ToolSpec};
+use super::subagent::SubagentSnapshot;
+use super::{AgentService, TurnEvent};
 use crate::dispatch::AppServices;
 use crate::models::agent_execution::PythonScopeInput;
 
@@ -32,13 +37,21 @@ pub enum ToolOutcome {
 
 /// Everything a tool call knows about where it is running.
 ///
-/// Deliberately not a host handle: a tool reaches services, the durable thread,
-/// and the scope the *thread* declares — never a window, a canvas, or an
-/// editor. The two host-flavoured tools in the TypeScript stack are handled by
-/// turn events instead (§1).
+/// Deliberately not a host handle: a tool reaches services, the durable
+/// thread, and the scope the *thread* declares — never a window, a canvas, or
+/// an editor. The two host-flavoured tools in the TypeScript stack are handled
+/// by turn events instead (§1).
+///
+/// It does carry the loop itself, because one tool — `subagent` — delegates by
+/// running another turn. That is the same [`AgentService`] the parent turn is
+/// running on, so a child's model and tool surface are the parent's by
+/// construction rather than by a second resolution.
 pub struct ToolContext<'a> {
-    pub services: &'a AppServices,
+    pub agent: &'a AgentService,
     pub thread_id: &'a str,
+    /// The id the model gave this call, and the id of the transcript's tool
+    /// part. Anything a tool creates can name the chip it belongs to.
+    pub call_id: &'a str,
     /// The durable *user* row that began this turn — never the assistant row
     /// being written, which is not persisted until the turn closes. A cell with
     /// edit authority must be traceable to a prompt a person actually sent, so
@@ -53,6 +66,39 @@ pub struct ToolContext<'a> {
     /// What the agent is looking at, resolved from the thread — never asserted
     /// by the model.
     pub scope: &'a PythonScopeInput,
+    /// Live state for the host, for a call whose work outlasts a chip.
+    pub progress: &'a ToolProgress,
+}
+
+impl ToolContext<'_> {
+    /// Every service a tool may reach.
+    #[must_use]
+    pub fn services(&self) -> &AppServices {
+        self.agent.services()
+    }
+}
+
+/// Live progress from a call whose work outlasts a chip.
+///
+/// One method, deliberately. The turn folds every event it emits into the
+/// transcript before handing it to the host; the only event a tool may bypass
+/// that fold with is the one the reducer drops on sight, because it is not
+/// transcript at all.
+#[derive(Clone)]
+pub struct ToolProgress(mpsc::UnboundedSender<TurnEvent>);
+
+impl ToolProgress {
+    pub(super) fn new(events: mpsc::UnboundedSender<TurnEvent>) -> Self {
+        Self(events)
+    }
+
+    /// Say what a delegated turn is doing right now. Dropped by the reducer,
+    /// so it never reaches a transcript row.
+    pub fn subagent(&self, snapshot: &SubagentSnapshot) {
+        if let Ok(snapshot) = serde_json::to_value(snapshot) {
+            let _ = self.0.send(TurnEvent::Subagent { snapshot });
+        }
+    }
 }
 
 /// One capability the model can invoke.
@@ -130,9 +176,11 @@ pub fn registry(kind: super::AgentKind) -> ToolRegistry {
     match kind {
         // The graph agent's own tools (graph edits, `ask_venue`, `preview`)
         // are not ported yet; it shares the notebook until they are.
-        super::AgentKind::TrackCopilot | super::AgentKind::PatternGraph => {
-            ToolRegistry::new(vec![Arc::new(python::PythonTool)])
-        }
+        super::AgentKind::TrackCopilot | super::AgentKind::PatternGraph => ToolRegistry::new(vec![
+            Arc::new(python::PythonTool),
+            Arc::new(skill::SkillTool),
+            Arc::new(subagent::SubagentTool),
+        ]),
     }
 }
 

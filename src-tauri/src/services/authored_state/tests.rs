@@ -108,6 +108,7 @@ fn metadata(operation_kind: &str, operation_id: &str) -> RevisionMetadata {
         operation_kind: operation_kind.into(),
         operation_id: Some(operation_id.into()),
         message: format!("{operation_kind} {operation_id}"),
+        actor: Actor::user(),
         author_name: "Luma test".into(),
         author_email: "test@luma.local".into(),
         authored_at: "2026-08-02T12:00:00Z".into(),

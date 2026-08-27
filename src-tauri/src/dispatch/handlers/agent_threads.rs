@@ -4,6 +4,7 @@ use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage,
     AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
+use crate::services::authored_state::Actor;
 
 pub async fn agent_thread_create(
     services: &AppServices,
@@ -98,6 +99,22 @@ pub async fn agent_thread_delete(
             },
         )
         .await?;
+    Ok(())
+}
+
+/// Restamp who this thread's writes are attributed to.
+///
+/// Called by the loop that just resolved a model for the turn about to run —
+/// the only place that knows which model is really answering — and once by an
+/// external MCP client naming itself.
+pub async fn agent_thread_set_actor(
+    services: &AppServices,
+    thread_id: String,
+    actor: String,
+) -> Result<(), CommandError> {
+    let owner_user_id = services.admitted_principal().await?;
+    Actor::parse(&actor).map_err(|error| CommandError::Invalid(error.to_string()))?;
+    db::set_thread_actor(&services.db.0, &thread_id, &actor, owner_user_id.as_deref()).await?;
     Ok(())
 }
 

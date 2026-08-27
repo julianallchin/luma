@@ -1,112 +1,34 @@
 import { z } from "zod";
 import { tool } from "@/shared/lib/agent/agent-tool";
-import { parseFrontmatter } from "@/shared/lib/agent/frontmatter";
-import { BUNDLED_SKILL_SOURCES } from "./bundled-skills";
+import { invoke } from "@/shared/lib/tauri";
+// The one copy of the tool description, shared with the Rust agent loop, which
+// reads the same file through `include_str!`.
+import DESCRIPTION from "../../../../../src-tauri/src/agent/prompts/skill-tool.md?raw";
 
-/** A genre/technique playbook the agent can pull into context on demand. */
-export type Skill = {
-	/** Stable identifier the model passes to the `skill` tool. */
-	name: string;
-	/** One line in the tool description; it is the only thing the model sees
-	 * before choosing to load the skill, so it must say when to reach for it. */
-	description: string;
-	/** Full markdown instructions, returned verbatim as the tool result. */
-	body: string;
-};
-
-export type SkillDefinition = string | Skill;
-
-function fromRaw(content: string): Skill {
-	const { data, body } = parseFrontmatter(content);
-	const name = data.name?.trim();
-	if (!name) throw new Error("Skill definition is missing a name.");
-	if (!body.trim()) throw new Error(`Skill "${name}" has an empty body.`);
-	return { name, description: data.description?.trim() ?? "", body };
+/** The `<available_skills>` block to append to a system prompt.
+ *
+ * The webview has no filesystem, so the registry is Rust's — this is the same
+ * listing the Rust loop puts in its own prompt, fetched rather than rebuilt.
+ * Empty when the bundle carries no readable skill. */
+export function skillsListing(): Promise<string> {
+	return invoke<string>("skills_listing");
 }
 
-function normalize(definition: SkillDefinition): Skill {
-	const skill =
-		typeof definition === "string" ? fromRaw(definition) : definition;
-	const name = skill.name.trim();
-	if (!name) throw new Error("Skill definition is missing a name.");
-	return {
-		name,
-		description: skill.description.trim(),
-		body: skill.body.trim(),
-	};
-}
-
-/** Registry of bundled (and, in tests, injected) skills. */
-export class SkillLoader {
-	private readonly skills = new Map<string, Skill>();
-
-	constructor(
-		options: {
-			definitions?: SkillDefinition[];
-			includeBundled?: boolean;
-		} = {},
-	) {
-		if (options.includeBundled !== false) {
-			for (const source of BUNDLED_SKILL_SOURCES) this.load(source);
-		}
-		for (const definition of options.definitions ?? []) this.load(definition);
-	}
-
-	/** Add or replace a definition. Later definitions win by name. */
-	load(definition: SkillDefinition): Skill {
-		const skill = normalize(definition);
-		this.skills.set(skill.name, skill);
-		return skill;
-	}
-
-	get(name: string): Skill | undefined {
-		return this.skills.get(name.trim());
-	}
-
-	list(): Skill[] {
-		return [...this.skills.values()];
-	}
-
-	names(): string[] {
-		return [...this.skills.keys()];
-	}
-}
-
-export function skillToolDescription(loader: SkillLoader): string {
-	const skills = loader
-		.list()
-		.map((skill) => `- ${skill.name}: ${skill.description}`)
-		.join("\n");
-	return `Load a scoring playbook — genre-specific technique written by lighting designers who score this music by hand. Returns the full instructions as the tool result.
-
-Available skills:
-${skills || "- none"}
-
-Before planning a show, read the genre skill that matches the track (\`features.genres.track_top\` plus your own ears decide which), and pull craft skills as the work calls for them. A track that changes style mid-way gets a second genre skill at that boundary. Read each skill once per thread and keep working from it.`;
-}
-
-/** The `skill` tool. Its description enumerates the bundled skills; invoking it
- * with a name returns that skill's markdown body verbatim. */
-export function buildSkillTool(loader: SkillLoader = new SkillLoader()) {
+/** The `skill` tool: load one playbook by the name the listing gave.
+ *
+ * The listing lives in the system prompt, not here, so this description is
+ * short and static — a tool description that enumerated the skills would move
+ * every time a playbook was edited, and it is part of the cached prefix. */
+export function buildSkillTool() {
 	return tool({
-		get description() {
-			return skillToolDescription(loader);
-		},
+		description: DESCRIPTION.trimEnd(),
 		inputSchema: z.object({
-			name: z
-				.string()
-				.min(1)
-				.describe("Skill name from the available skills above."),
+			name: z.string().min(1).describe("Skill name from <available_skills>."),
 		}),
-		execute: ({ name }): { name: string; body: string } => {
-			const skill = loader.get(name);
-			if (!skill) {
-				throw new Error(
-					`Unknown skill "${name}". Available skills: ${loader.names().join(", ") || "none"}.`,
-				);
-			}
-			return { name: skill.name, body: skill.body };
-		},
+		execute: async ({ name }): Promise<{ name: string; body: string }> => ({
+			name,
+			body: await invoke<string>("get_skill", { name }),
+		}),
 		toModelOutput: ({ output }) => ({
 			type: "text" as const,
 			value: output.body,

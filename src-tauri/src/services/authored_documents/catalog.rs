@@ -5,11 +5,11 @@ use super::edits::PatternForkSource;
 use super::operations::enqueue_local_row;
 use super::{
     deterministic_creation_id, exact_graph_json, graph_files, normalized_creation_request_id,
-    operation_request_fingerprint, principal_key, revision_for_clips, revision_metadata,
-    serialize_track, write_admission, AuthoredDocuments, AuthoredDocumentsError,
-    AuthoredIdentitySwitch, FileMap, ForkPatternInput, ForkPatternResult, Graph,
-    NewAuthoredDocument, PatternNames, PatternSummary, ResolvedScope, Result, Score, TrackDocument,
-    TrackScope, VenueAccess, VenueResource, Write, PATTERN_SUMMARY_COLUMNS, SCORE_PATH,
+    operation_request_fingerprint, principal_key, revision_for_clips, serialize_track,
+    write_admission, AuthoredDocuments, AuthoredDocumentsError, AuthoredIdentitySwitch, FileMap,
+    ForkPatternInput, ForkPatternResult, Graph, NewAuthoredDocument, PatternNames, PatternSummary,
+    ResolvedScope, Result, Score, TrackDocument, TrackScope, VenueAccess, VenueResource, Write,
+    PATTERN_SUMMARY_COLUMNS, SCORE_PATH,
 };
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::services::authored_state::AuthoredDocumentKind;
@@ -863,11 +863,11 @@ impl AuthoredDocuments {
         self.store
             .insert_document(connection, &scope.specification()?)
             .await?;
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            scope,
             operation_kind,
             Some(operation_id),
             subject,
-            None,
             None,
             None,
         )?;
