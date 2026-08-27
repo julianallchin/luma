@@ -687,6 +687,7 @@ async fn run_pull_cycle(
         authored,
         &host.workspaces,
         &host.graph_runs,
+        &host.subagents,
         remote,
         &token,
         Some(&uid),

@@ -25,13 +25,15 @@ use crate::agent_execution::bindings::providers::{
 };
 use crate::agent_execution::graph_runs::GraphRunStore;
 use crate::agent_execution::track_host::TrackHost;
+use crate::agent_execution::venue_host::VenueHost;
 use crate::agent_execution::worker_process::{ExecStatus, HostOperationScope};
 use crate::agent_execution::workspace::{
     CellOutcome, PythonWorkspaceService, Workspace, DEFAULT_CELL_TIMEOUT,
 };
+use crate::agent_execution::CellHost;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
-use crate::models::agent_threads::AgentThread;
+use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute};
 use crate::models::authored_state::AuthoredProjectedDocument;
 use crate::services::authored_documents::AuthoredDocuments;
 use crate::services::track_edits::{TrackEditScope, TrackScope};
@@ -103,8 +105,9 @@ pub fn resolve_execution_id(
 
 struct ResolvedScope {
     bindings: BindingScope,
-    /// Present whenever a durable track thread has a coherent score and venue.
-    /// It permits high-fidelity read-only candidate rendering, never mutation.
+    /// Present for every durable track thread — the route guarantees track,
+    /// venue and score together. It permits high-fidelity read-only candidate
+    /// rendering, never mutation.
     track: Option<TrackScope>,
     /// Present only when the durable thread scope and authenticated owner both
     /// authorize mutation. Python never supplies any field of this capability.
@@ -117,119 +120,79 @@ async fn resolve_scope(
     requested: PythonScopeInput,
     current_user_id: Option<&str>,
 ) -> Result<ResolvedScope, String> {
-    match thread.agent_kind.as_str() {
-        "track_copilot" => {
-            if thread.subject_kind.as_deref() != Some("track") {
-                return Err("track agent thread is not pinned to a track subject".into());
-            }
-            let track_id = thread
-                .subject_id
-                .clone()
-                .ok_or_else(|| "track agent thread has no pinned track id".to_string())?;
-            if crate::database::local::tracks::get_track_by_id(pool, &track_id)
+    match thread.authored_route()? {
+        AuthoredThreadRoute::Track {
+            track_id,
+            venue_id,
+            score_id,
+        } => {
+            if crate::database::local::tracks::get_track_by_id(pool, track_id)
                 .await?
                 .is_none()
             {
                 return Err("pinned track is not available".into());
             }
-            assert_pinned("track", requested.track_id.as_deref(), Some(&track_id))?;
-            assert_pinned(
-                "venue",
-                requested.venue_id.as_deref(),
-                thread.venue_id.as_deref(),
-            )?;
-            assert_pinned(
-                "score",
-                requested.score_id.as_deref(),
-                thread.score_id.as_deref(),
-            )?;
+            assert_pinned("track", requested.track_id.as_deref(), Some(track_id))?;
+            assert_pinned("venue", requested.venue_id.as_deref(), Some(venue_id))?;
+            assert_pinned("score", requested.score_id.as_deref(), Some(score_id))?;
 
-            let mut editable = false;
-            let mut track_scope = None;
-            let mut track_edit = None;
-            if let (Some(venue_id), Some(score_id)) =
-                (thread.venue_id.as_deref(), thread.score_id.as_deref())
-            {
-                let mut access = VenueAccess::<Read>::read(pool, VenueResource::Score(score_id))
-                    .await
-                    .map_err(|error| {
-                        format!("pinned score '{score_id}' is not available: {error}")
-                    })?;
-                access.require_venue(venue_id)?;
-                let score = crate::database::local::scores::get_score(&mut access, score_id)
-                    .await
-                    .map_err(|error| {
-                        format!("pinned score '{score_id}' is not available: {error}")
-                    })?;
-                if score.track_id != track_id || score.venue_id != venue_id {
-                    return Err(format!(
-                        "pinned score '{score_id}' does not belong to track '{track_id}' and venue '{venue_id}'"
-                    ));
-                }
-                track_scope = Some(TrackScope {
-                    score_id: score_id.to_string(),
-                    track_id: track_id.clone(),
-                    venue_id: venue_id.to_string(),
-                });
-                if let Some(user_id) = current_user_id
-                    .filter(|user_id| score.uid.as_deref().is_some_and(|owner| owner == *user_id))
-                {
-                    editable = true;
-                    track_edit = Some(TrackEditScope {
-                        score_id: score_id.to_string(),
-                        track_id: track_id.clone(),
-                        venue_id: venue_id.to_string(),
-                        user_id: user_id.to_string(),
-                    });
-                }
-            } else if thread.venue_id.is_some() || thread.score_id.is_some() {
-                return Err("track agent thread has an incomplete venue/score scope".into());
+            let mut access = VenueAccess::<Read>::read(pool, VenueResource::Score(score_id))
+                .await
+                .map_err(|error| format!("pinned score '{score_id}' is not available: {error}"))?;
+            access.require_venue(venue_id)?;
+            let score = crate::database::local::scores::get_score(&mut access, score_id)
+                .await
+                .map_err(|error| format!("pinned score '{score_id}' is not available: {error}"))?;
+            if score.track_id != track_id || score.venue_id != venue_id {
+                return Err(format!(
+                    "pinned score '{score_id}' does not belong to track '{track_id}' and venue '{venue_id}'"
+                ));
             }
+            let track_edit = current_user_id
+                .filter(|user_id| score.uid.as_deref().is_some_and(|owner| owner == *user_id))
+                .map(|user_id| TrackEditScope {
+                    score_id: score_id.to_string(),
+                    track_id: track_id.to_string(),
+                    venue_id: venue_id.to_string(),
+                    user_id: user_id.to_string(),
+                });
 
             Ok(ResolvedScope {
                 bindings: BindingScope {
                     agent_kind: thread.agent_kind.clone(),
-                    track_id: Some(track_id),
-                    venue_id: thread.venue_id.clone(),
-                    score_id: thread.score_id.clone(),
-                    track_editable: editable,
+                    track_id: Some(track_id.to_string()),
+                    venue_id: Some(venue_id.to_string()),
+                    score_id: Some(score_id.to_string()),
+                    track_editable: track_edit.is_some(),
                     track_document: None,
                     pattern_id: None,
                     implementation_id: None,
                     window: requested.window,
                     graph_definition: None,
                 },
-                track: track_scope,
+                track: Some(TrackScope {
+                    score_id: score_id.to_string(),
+                    track_id: track_id.to_string(),
+                    venue_id: venue_id.to_string(),
+                }),
                 track_edit,
             })
         }
-        "pattern_graph" => {
-            if thread.subject_kind.as_deref() != Some("pattern") {
-                return Err("graph agent thread is not pinned to a pattern subject".into());
-            }
-            let pattern_id = thread
-                .subject_id
-                .clone()
-                .ok_or_else(|| "graph agent thread has no pinned pattern id".to_string())?;
-            let implementation_id = thread
-                .implementation_id
-                .clone()
-                .ok_or_else(|| "graph agent thread has no pinned implementation id".to_string())?;
-            assert_pinned(
-                "pattern",
-                requested.pattern_id.as_deref(),
-                Some(&pattern_id),
-            )?;
+        AuthoredThreadRoute::Pattern {
+            pattern_id,
+            implementation_id,
+        } => {
+            assert_pinned("pattern", requested.pattern_id.as_deref(), Some(pattern_id))?;
             assert_pinned(
                 "implementation",
                 requested.implementation_id.as_deref(),
-                Some(&implementation_id),
+                Some(implementation_id),
             )?;
             crate::services::graph_documents::load_visible_graph_document(
                 pool,
-                &pattern_id,
+                pattern_id,
                 requested.venue_id.as_deref(),
-                Some(&implementation_id),
+                Some(implementation_id),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -249,8 +212,8 @@ async fn resolve_scope(
                     score_id: requested.score_id,
                     track_editable: false,
                     track_document: None,
-                    pattern_id: Some(pattern_id),
-                    implementation_id: Some(implementation_id),
+                    pattern_id: Some(pattern_id.to_string()),
+                    implementation_id: Some(implementation_id.to_string()),
                     window: requested.window,
                     graph_definition: requested.graph_definition,
                 },
@@ -258,7 +221,6 @@ async fn resolve_scope(
                 track_edit: None,
             })
         }
-        other => Err(format!("unknown agent kind '{other}'")),
     }
 }
 
@@ -392,7 +354,21 @@ pub async fn run_python_cell_inner(
 
     let workspace_for_cell = Arc::clone(&workspace);
     let edit_scope = resolved.track_edit;
-    let host = resolved.track.map(|track_scope| {
+    // A room is renderable whenever one is in scope, whether or not this thread
+    // may edit a track in it — a graph agent working against a venue still gets
+    // to look at it. When a score *is* pinned, that score is what lights it.
+    let venue = scope.venue_id.clone().map(|venue_id| {
+        VenueHost::new(
+            tokio::runtime::Handle::current(),
+            pool.clone(),
+            storage.clone(),
+            resource_root.to_path_buf(),
+            Arc::clone(&workspace),
+            venue_id,
+            resolved.track.clone(),
+        )
+    });
+    let track = resolved.track.map(|track_scope| {
         TrackHost::new(
             tokio::runtime::Handle::current(),
             pool.clone(),
@@ -406,6 +382,7 @@ pub async fn run_python_cell_inner(
             authored_workspace_id.clone(),
         )
     });
+    let host = CellHost::new(track, venue);
     let executed = tokio::task::spawn_blocking(move || {
         // Once blocking execution begins, the task itself owns admission. If
         // the async command future is dropped, deletion still cannot overtake
@@ -526,7 +503,10 @@ mod tests {
             score_id: Some("score".into()),
             forked_from_thread_id: None,
             forked_at_message_id: None,
+            parent_thread_id: None,
+            parent_call_id: None,
             title: None,
+            actor: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

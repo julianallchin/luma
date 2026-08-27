@@ -577,6 +577,7 @@ pub static TABLES: &[TableMeta] = &[
             "operation_kind",
             "operation_id",
             "message",
+            "actor",
             "author_name",
             "author_email",
             "authored_at",
@@ -718,6 +719,9 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &[],
     },
+    // `actor` is deliberately absent: the thread's session label is this
+    // host's, restamped every turn, and what has to survive is the copy each
+    // revision keeps. A column sync does not name is left alone on upsert.
     TableMeta {
         name: "agent_threads",
         conflict_key: "id",
@@ -735,6 +739,8 @@ pub static TABLES: &[TableMeta] = &[
             "lifecycle_state",
             "forked_from_thread_id",
             "forked_at_message_id",
+            "parent_thread_id",
+            "parent_call_id",
             "created_at",
             "updated_at",
         ],
@@ -804,6 +810,7 @@ pub static TABLES: &[TableMeta] = &[
             "principal_key",
             "document_id",
             "prepared_revision_id",
+            "workspace_id",
             "created_at",
         ],
         local_only: &[],

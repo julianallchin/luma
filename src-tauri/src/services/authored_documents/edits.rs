@@ -65,7 +65,6 @@ impl AuthoredDocuments {
                 None,
                 None,
                 None,
-                None,
             )
             .await?
             .state)
@@ -125,7 +124,6 @@ impl AuthoredDocuments {
                     result_json: Some(&result_json),
                 },
                 subject,
-                None,
                 None,
                 None,
                 None,
@@ -543,7 +541,6 @@ impl AuthoredDocuments {
                 },
                 subject,
                 None,
-                scope.thread_id.as_deref(),
                 None,
                 None,
             )

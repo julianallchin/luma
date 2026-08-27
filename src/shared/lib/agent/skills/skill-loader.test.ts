@@ -1,24 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { BUNDLED_SKILL_SOURCES } from "./bundled-skills";
-import {
-	buildSkillTool,
-	SkillLoader,
-	skillToolDescription,
-} from "./skill-loader";
-
-const RAW = `---
-name: test-genre
-description: A test genre playbook.
----
-# Test genre
-
-Do the thing.`;
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetInvoke, setInvoke } from "@/shared/lib/tauri";
+import { skillToolLabel } from "./index";
+import { buildSkillTool, skillsListing } from "./skill-loader";
 
 const execution = { toolCallId: "call-1" };
+const ENVELOPE =
+	'<skill name="color" location="/skills/color/SKILL.md">\nBody.\n</skill>';
 
-function loaderWith(...sources: string[]): SkillLoader {
-	return new SkillLoader({ includeBundled: false, definitions: sources });
-}
+afterEach(resetInvoke);
 
 /** `execute` is typed to allow a streaming result; the skill tool never streams. */
 async function invokeSkill(
@@ -31,98 +20,52 @@ async function invokeSkill(
 	};
 }
 
-describe("SkillLoader frontmatter", () => {
-	it("parses name, description and body", () => {
-		const skill = loaderWith(RAW).get("test-genre");
-		expect(skill).toEqual({
-			name: "test-genre",
-			description: "A test genre playbook.",
-			body: "# Test genre\n\nDo the thing.",
-		});
+describe("the skill tool", () => {
+	it("is a fetch, not a menu — the listing lives in the system prompt", () => {
+		const tool = buildSkillTool();
+		expect(tool.description).toContain("<available_skills>");
+		expect(tool.description).not.toContain("- color:");
 	});
 
-	it("strips quotes and tolerates CRLF", () => {
-		const skill = loaderWith(
-			"---\r\nname: \"quoted\"\r\ndescription: 'q'\r\n---\r\nBody.",
-		).get("quoted");
-		expect(skill?.description).toBe("q");
-		expect(skill?.body).toBe("Body.");
-	});
-
-	it("rejects a definition with no name", () => {
-		expect(() => loaderWith("---\ndescription: x\n---\nBody.")).toThrow(
-			/missing a name/,
-		);
-	});
-
-	it("rejects a definition with an empty body", () => {
-		expect(() => loaderWith("---\nname: hollow\n---\n\n")).toThrow(
-			/empty body/,
-		);
-	});
-
-	it("lets a later definition win by name", () => {
-		const loader = loaderWith(RAW);
-		loader.load({ name: "test-genre", description: "d2", body: "Second." });
-		expect(loader.list()).toHaveLength(1);
-		expect(loader.get("test-genre")?.body).toBe("Second.");
-	});
-});
-
-describe("bundled skills", () => {
-	it("discovers the bundled SKILL.md files", () => {
-		const names = new SkillLoader().names();
-		expect(names).toContain("heavy-bass");
-		expect(names).toContain("four-on-the-floor");
-		expect(names).toContain("finding-things-in-audio");
-		expect(names).toHaveLength(BUNDLED_SKILL_SOURCES.length);
-	});
-
-	it("gives every bundled skill a description", () => {
-		for (const skill of new SkillLoader().list()) {
-			expect(skill.description.length).toBeGreaterThan(0);
-			expect(skill.body.length).toBeGreaterThan(0);
-		}
-	});
-});
-
-describe("skill tool", () => {
-	it("enumerates every skill as `name: description` in its description", () => {
-		const description = skillToolDescription(
-			loaderWith(RAW, "---\nname: other\ndescription: Another.\n---\nBody."),
-		);
-		expect(description).toContain("- test-genre: A test genre playbook.");
-		expect(description).toContain("- other: Another.");
-	});
-
-	it("says so when there are no skills", () => {
-		expect(skillToolDescription(loaderWith())).toContain("- none");
-	});
-
-	it("returns the skill body when invoked", async () => {
-		const tool = buildSkillTool(loaderWith(RAW));
-		const output = await invokeSkill(tool, "test-genre");
-		expect(output.body).toBe("# Test genre\n\nDo the thing.");
+	it("returns one skill's envelope from the Rust registry", async () => {
+		const dispatch = vi.fn().mockResolvedValue(ENVELOPE);
+		setInvoke(dispatch);
+		const tool = buildSkillTool();
+		const output = await invokeSkill(tool, "color");
+		expect(dispatch).toHaveBeenCalledWith("get_skill", { name: "color" });
+		expect(output).toEqual({ name: "color", body: ENVELOPE });
 		expect(
 			await tool.toModelOutput?.({
 				toolCallId: "call-1",
-				input: { name: "test-genre" },
+				input: { name: "color" },
 				output,
 			}),
-		).toEqual({ type: "text", value: "# Test genre\n\nDo the thing." });
+		).toEqual({ type: "text", value: ENVELOPE });
 	});
 
-	it("errors on an unknown name and lists the valid ones", () => {
-		const tool = buildSkillTool(loaderWith(RAW));
-		expect(() => tool.execute({ name: "garage" }, execution)).toThrow(
-			'Unknown skill "garage". Available skills: test-genre.',
+	it("surfaces an unknown name as the registry's own error", async () => {
+		setInvoke(() =>
+			Promise.reject(new Error("unknown skill 'garage'. Available: color")),
+		);
+		await expect(invokeSkill(buildSkillTool(), "garage")).rejects.toThrow(
+			/unknown skill 'garage'/,
 		);
 	});
 
-	it("resolves the real bundled skills", async () => {
-		const tool = buildSkillTool();
-		const output = await invokeSkill(tool, "heavy-bass");
-		expect(output.body).toContain("bass");
-		expect(tool.description).toContain("- heavy-bass:");
+	it("labels the chat row with the requested skill", () => {
+		expect(
+			skillToolLabel({ name: "skill", input: { name: "heavy-bass" } } as never),
+		).toEqual({ verb: "skill", detail: "heavy-bass" });
+	});
+});
+
+describe("the listing", () => {
+	it("is fetched, never rebuilt in the webview", async () => {
+		const dispatch = vi
+			.fn()
+			.mockResolvedValue("<available_skills>\n</available_skills>");
+		setInvoke(dispatch);
+		expect(await skillsListing()).toContain("<available_skills>");
+		expect(dispatch).toHaveBeenCalledWith("skills_listing", undefined);
 	});
 });

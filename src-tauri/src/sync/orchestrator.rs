@@ -108,6 +108,7 @@ impl SyncEngine {
             &self.authored,
             &host.workspaces,
             &host.graph_runs,
+            &host.subagents,
             self.remote.as_ref(),
             &token,
             Some(&uid),

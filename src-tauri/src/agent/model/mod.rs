@@ -78,6 +78,14 @@ impl StopReason {
 }
 
 /// Token accounting for one step. Fields the provider omits stay zero.
+///
+/// **The fields do not overlap**, in Anthropic's sense: `input_tokens` is what
+/// the provider read *fresh*, and the two cache counts are the prefix it did
+/// not. Their sum is the whole prompt. OpenAI-shaped providers report the
+/// opposite convention — a `prompt_tokens` that already counts both the prefix
+/// the step read *and* the prefix it wrote — so their transport subtracts on
+/// the way in ([`openrouter`]) rather than leaving every reader to ask which
+/// provider it is looking at.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
@@ -91,11 +99,77 @@ pub struct Usage {
 #[derive(Clone, Debug)]
 pub struct ModelRequest {
     pub model: ModelId,
-    pub system: String,
+    /// The system prompt as an ordered list of text blocks, because a
+    /// breakpoint attaches to a *block* and a bare string has none. Text only:
+    /// no provider accepts an image or a tool result up here, so the list
+    /// cannot express one.
+    pub system: Vec<String>,
     pub messages: Vec<ModelMessage>,
     pub tools: Vec<ToolSpec>,
     pub reasoning: ReasoningLevel,
     pub max_tokens: u32,
+    /// How long the provider should keep the prefix this step writes. The knob
+    /// crosses the seam; *where* the markers land does not — each transport
+    /// places them for its own wire shape.
+    pub cache_retention: CacheRetention,
+}
+
+/// How long a written prompt-cache prefix should live.
+///
+/// One knob, resolved from scratch on every request. There is deliberately no
+/// breakpoint state machine behind it: a provider caches the longest matching
+/// prefix whether or not the previous request's marker is still there, so the
+/// conversation-tail marker advances by itself while the system and tool
+/// markers stay pinned. The 4-breakpoint ceiling then holds by construction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CacheRetention {
+    /// No markers at all — what a one-off fork (compaction, summarization)
+    /// wants, so it does not pay a cache write nobody will read.
+    None,
+    /// The 5-minute default: written at 1.25x input, read at 0.1x, so it pays
+    /// for itself on the second request.
+    #[default]
+    Short,
+    /// One hour, at 2x write. Vetoed to [`CacheRetention::Short`] on a model
+    /// whose spec does not carry it.
+    Long,
+}
+
+/// The environment override, named for the knob rather than for a provider —
+/// the same variable governs every transport.
+const CACHE_RETENTION_ENV: &str = "LUMA_CACHE_RETENTION";
+
+impl CacheRetention {
+    /// The retention a turn asks for: the environment when it names one this
+    /// build knows, and [`CacheRetention::Short`] otherwise.
+    ///
+    /// An unrecognised value is the default rather than an error — a typo in a
+    /// shell profile must not stop the agent from answering.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var(CACHE_RETENTION_ENV).as_deref().map(str::trim) {
+            Ok("none") => CacheRetention::None,
+            Ok("long") => CacheRetention::Long,
+            _ => CacheRetention::Short,
+        }
+    }
+
+    /// The `cache_control` object to stamp on a block, or [`None`] when this
+    /// request writes no markers at all.
+    ///
+    /// The per-model veto lives here so no transport can forget it: asking for
+    /// an hour on a model that does not serve one would be billed at the 2x
+    /// write rate and read back as a miss.
+    #[must_use]
+    pub fn control(self, model: ModelId) -> Option<Value> {
+        match self {
+            CacheRetention::None => None,
+            CacheRetention::Long if model.spec().long_cache_retention => {
+                Some(serde_json::json!({ "type": "ephemeral", "ttl": "1h" }))
+            }
+            _ => Some(serde_json::json!({ "type": "ephemeral" })),
+        }
+    }
 }
 
 /// One tool as the provider sees it.
@@ -250,6 +324,15 @@ pub struct ModelSpec {
     pub openrouter: Option<&'static str>,
     pub gateway: Option<&'static str>,
     pub default_reasoning: ReasoningLevel,
+    /// Total prompt tokens the model will accept. The denominator of every
+    /// "how full is this conversation" readout, and the reason that question
+    /// has one answer: a second table of window sizes beside this one is how
+    /// the TypeScript stack ended up with four drifting model-id lists.
+    pub context_window: u32,
+    /// Whether this model honours `ttl: "1h"` on a cache breakpoint. False for
+    /// every model that caches *implicitly* — it is not a capability they lack
+    /// so much as a field they are never sent.
+    pub long_cache_retention: bool,
 }
 
 /// The one model table.
@@ -265,6 +348,8 @@ pub static MODELS: &[ModelSpec] = &[
         openrouter: Some("anthropic/claude-opus-5"),
         gateway: Some("anthropic/claude-opus-5"),
         default_reasoning: ReasoningLevel::High,
+        context_window: 1_000_000,
+        long_cache_retention: true,
     },
     ModelSpec {
         key: "kimi-k3-fast",
@@ -273,6 +358,8 @@ pub static MODELS: &[ModelSpec] = &[
         openrouter: Some("moonshotai/kimi-k3-fast"),
         gateway: Some("moonshotai/kimi-k3-fast"),
         default_reasoning: ReasoningLevel::Medium,
+        context_window: 256_000,
+        long_cache_retention: false,
     },
     ModelSpec {
         key: "grok-4.5",
@@ -281,6 +368,8 @@ pub static MODELS: &[ModelSpec] = &[
         openrouter: Some("x-ai/grok-4.5"),
         gateway: Some("xai/grok-4.5"),
         default_reasoning: ReasoningLevel::Medium,
+        context_window: 256_000,
+        long_cache_retention: false,
     },
 ];
 
@@ -345,6 +434,18 @@ pub async fn configured_client(
 #[derive(Clone, Copy, Debug)]
 pub struct ModelId(&'static ModelSpec);
 
+/// Two ids are the same model when they name the same [`MODELS`] entry, which
+/// its key is the identity of. Not derived: that would ask [`ModelSpec`] for an
+/// equality over every column, so adding a column would quietly change what
+/// "the same model" means.
+impl PartialEq for ModelId {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.key == other.0.key
+    }
+}
+
+impl Eq for ModelId {}
+
 impl ModelId {
     /// Look a model up by its stable Luma key, or by any provider wire id it
     /// carries — settings written by the TypeScript stack stored wire ids.
@@ -369,6 +470,18 @@ impl ModelId {
     #[must_use]
     pub fn key(self) -> &'static str {
         self.0.key
+    }
+
+    #[must_use]
+    pub fn display(self) -> &'static str {
+        self.0.display
+    }
+
+    /// How many prompt tokens this model accepts — see
+    /// [`ModelSpec::context_window`].
+    #[must_use]
+    pub fn context_window(self) -> u32 {
+        self.0.context_window
     }
 
     /// The id `provider` knows this model by.
@@ -513,6 +626,20 @@ mod tests {
         }
     }
 
+    /// A window of zero would divide a usage readout by nothing; a window
+    /// smaller than one step's output ceiling is a typo, not a model.
+    #[test]
+    fn every_model_declares_a_usable_context_window() {
+        for spec in MODELS {
+            assert!(
+                spec.context_window > crate::agent::turn::MAX_TOKENS,
+                "'{}' declares a {}-token window",
+                spec.key,
+                spec.context_window
+            );
+        }
+    }
+
     #[test]
     fn a_provider_round_trips_through_its_stored_spelling() {
         for provider in PROVIDER_PREFERENCE {
@@ -563,7 +690,7 @@ mod tests {
 
         let mut stream = client.stream(ModelRequest {
             model: id,
-            system: "Answer in one word.".into(),
+            system: vec!["Answer in one word.".into()],
             messages: vec![ModelMessage {
                 role: ModelRole::User,
                 content: vec![ContentBlock::Text("Say pong.".into())],
@@ -571,6 +698,7 @@ mod tests {
             tools: Vec::new(),
             reasoning,
             max_tokens: 1024,
+            cache_retention: CacheRetention::Short,
         });
 
         let mut text = String::new();
@@ -586,6 +714,53 @@ mod tests {
         println!("gateway said {text:?} ({usage:?})");
         assert!(!text.trim().is_empty(), "the gateway streamed no text");
         assert!(usage.output_tokens > 0, "the gateway reported no usage");
+    }
+
+    /// The provider the settings table actually names on this machine, and the
+    /// one whose usage frame arrives *after* its finish reason. Asserts the
+    /// prompt count too: an output-only assertion passes on a step whose input
+    /// never landed, which is exactly the shape the usage panel showed.
+    ///
+    /// Ignored by default — it costs tokens and needs a network. Run with
+    /// `cargo test --lib a_live_openrouter -- --ignored --nocapture`, with
+    /// `LUMA_OPENROUTER_API_KEY` set.
+    #[tokio::test]
+    #[ignore = "live: needs LUMA_OPENROUTER_API_KEY and a network"]
+    async fn a_live_openrouter_turn_reports_both_halves_of_its_usage() {
+        use futures_util::StreamExt;
+
+        let key = std::env::var(Provider::OpenRouter.key_env_var())
+            .expect("no OpenRouter credential: set LUMA_OPENROUTER_API_KEY to smoke-test");
+        let client = openrouter::OpenRouterClient::new(key);
+        let id = ModelId::parse(DEFAULT_MODEL).expect("known model");
+
+        let mut stream = client.stream(ModelRequest {
+            model: id,
+            system: vec!["Answer in one word.".into()],
+            messages: vec![ModelMessage {
+                role: ModelRole::User,
+                content: vec![ContentBlock::Text("Say pong.".into())],
+            }],
+            tools: Vec::new(),
+            reasoning: ReasoningLevel::Off,
+            max_tokens: 1024,
+            cache_retention: CacheRetention::Short,
+        });
+
+        let mut text = String::new();
+        let mut ended = None;
+        while let Some(event) = stream.next().await {
+            match event.expect("the openrouter stream carried an error") {
+                ModelEvent::TextDelta(delta) => text.push_str(&delta),
+                ModelEvent::StepEnded { usage, .. } => ended = Some(usage),
+                _ => {}
+            }
+        }
+        let usage = ended.expect("the stream ended without a StepEnded");
+        println!("openrouter said {text:?} ({usage:?})");
+        assert!(!text.trim().is_empty(), "openrouter streamed no text");
+        assert!(usage.output_tokens > 0, "no output tokens reported");
+        assert!(usage.input_tokens > 0, "no prompt tokens reported");
     }
 
     /// The tool round trip over the live wire, with the *real* tool spec — the
@@ -621,11 +796,12 @@ mod tests {
 
         let step = |messages: Vec<ModelMessage>| ModelRequest {
             model: id,
-            system: "Use the python tool to answer. Do not answer from memory.".into(),
+            system: vec!["Use the python tool to answer. Do not answer from memory.".into()],
             messages,
             tools: specs.clone(),
             reasoning: id.spec().default_reasoning,
             max_tokens: 4096,
+            cache_retention: CacheRetention::Short,
         };
 
         let mut stream = client.stream(step(vec![ModelMessage {
@@ -688,5 +864,115 @@ mod tests {
         }
         println!("answered {text:?}");
         assert!(text.contains("42"), "the model did not read the result");
+    }
+
+    /// Two steps in one thread against the *shipped* prefix: the real
+    /// `TrackCopilot` system prompt and the real registry specs, because the
+    /// prefix a real turn sends is the thing under test — a hand-written
+    /// stand-in would still pass after someone inlined a catalog into the tool
+    /// description.
+    ///
+    /// Step two appends one user block and must read back nearly all of step
+    /// one's prompt. The 0.8 floor, rather than equality: the provider counts
+    /// the blocks written *after* the tail marker as fresh, and a live service
+    /// rounds.
+    async fn two_steps_share_a_prefix(client: &dyn ModelClient, id: ModelId) {
+        use crate::agent::{tools, AgentKind};
+        use futures_util::StreamExt;
+
+        let specs = tools::registry(AgentKind::TrackCopilot).specs();
+        let system = vec![AgentKind::TrackCopilot.system_prompt().to_string()];
+        let first = ModelMessage {
+            role: ModelRole::User,
+            content: vec![ContentBlock::Text("Say only: one.".into())],
+        };
+        let step = |messages: Vec<ModelMessage>| ModelRequest {
+            model: id,
+            system: system.clone(),
+            messages,
+            tools: specs.clone(),
+            reasoning: ReasoningLevel::Off,
+            max_tokens: 256,
+            cache_retention: CacheRetention::Short,
+        };
+        let drain = |mut stream: BoxStream<'static, Result<ModelEvent, ModelError>>| async move {
+            let mut usage = None;
+            while let Some(event) = stream.next().await {
+                if let ModelEvent::StepEnded { usage: seen, .. } =
+                    event.expect("the stream carried an error")
+                {
+                    usage = Some(seen);
+                }
+            }
+            usage.expect("the stream ended without a StepEnded")
+        };
+
+        let one = drain(client.stream(step(vec![first.clone()]))).await;
+        let prompt =
+            one.input_tokens + one.cache_read_input_tokens + one.cache_creation_input_tokens;
+        println!("step one: {one:?} (prompt {prompt})");
+        assert!(prompt > 0, "step one reported no prompt tokens");
+
+        let two = drain(client.stream(step(vec![
+            first,
+            ModelMessage {
+                role: ModelRole::Assistant,
+                content: vec![ContentBlock::Text("one".into())],
+            },
+            ModelMessage {
+                role: ModelRole::User,
+                content: vec![ContentBlock::Text("Say only: two.".into())],
+            },
+        ])))
+        .await;
+        println!("step two: {two:?}");
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let floor = (prompt as f64 * 0.8) as u64;
+        assert!(
+            two.cache_read_input_tokens >= floor,
+            "step two read {} cached tokens, under the {floor} floor for a {prompt}-token prefix",
+            two.cache_read_input_tokens
+        );
+    }
+
+    /// The default path: Anthropic models over the Vercel gateway.
+    ///
+    /// Ignored by default — it costs tokens and needs a network. Run with
+    /// `cargo test --lib a_second_gateway_step -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "live: needs LUMA_AI_GATEWAY_API_KEY and a network"]
+    async fn a_second_gateway_step_reads_the_prefix_its_first_step_wrote() {
+        let key = std::env::var(Provider::VercelAiGateway.key_env_var())
+            .expect("no gateway credential: set LUMA_AI_GATEWAY_API_KEY to smoke-test");
+        let client = anthropic::AnthropicClient::gateway(key);
+        two_steps_share_a_prefix(&client, ModelId::parse(DEFAULT_MODEL).expect("known model"))
+            .await;
+    }
+
+    /// The first-party API, where the markers are native.
+    #[tokio::test]
+    #[ignore = "live: needs LUMA_ANTHROPIC_API_KEY and a network"]
+    async fn a_second_anthropic_step_reads_the_prefix_its_first_step_wrote() {
+        let key = std::env::var(Provider::Anthropic.key_env_var())
+            .expect("no Anthropic credential: set LUMA_ANTHROPIC_API_KEY to smoke-test");
+        let client = anthropic::AnthropicClient::new(key);
+        two_steps_share_a_prefix(&client, ModelId::parse(DEFAULT_MODEL).expect("known model"))
+            .await;
+    }
+
+    /// The OpenAI-shaped wire, where the markers ride content parts and the
+    /// `anthropic/` prefix is what turns them on.
+    #[tokio::test]
+    #[ignore = "live: needs LUMA_OPENROUTER_API_KEY and a network"]
+    async fn a_second_openrouter_step_reads_the_prefix_its_first_step_wrote() {
+        let key = std::env::var(Provider::OpenRouter.key_env_var())
+            .expect("no OpenRouter credential: set LUMA_OPENROUTER_API_KEY to smoke-test");
+        let client = openrouter::OpenRouterClient::new(key);
+        two_steps_share_a_prefix(&client, ModelId::parse(DEFAULT_MODEL).expect("known model"))
+            .await;
     }
 }

@@ -12,7 +12,7 @@ mod tests {
         AppendAgentThreadMessagesInput, CreateAgentThreadInput, NewAgentThreadMessage,
     };
     use crate::services::authored_state::{
-        AuthoredRevisionStore, NewAuthoredDocument, RevisionMetadata,
+        Actor, AuthoredRevisionStore, NewAuthoredDocument, RevisionMetadata,
     };
     use crate::sync::authored_remote::{
         ArchiveAuthoredDocumentInput, ArchiveAuthoredDocumentReceipt,
@@ -323,6 +323,7 @@ mod tests {
                     operation_kind: "initial_import".into(),
                     operation_id: None,
                     message: "Import".into(),
+                    actor: Actor::user(),
                     author_name: "Luma".into(),
                     author_email: "test@luma.local".into(),
                     authored_at: "2026-08-02T00:00:00Z".into(),
@@ -714,6 +715,7 @@ mod tests {
             std::sync::Arc::new(|| Err("python is not used by this sync test".into())),
         );
         let graph_runs = crate::agent_execution::GraphRunStore::new();
+        let subagents = crate::agent::subagent::SubagentRegistry::default();
         let remote = MockRemoteClient::new();
         remote.on_select(
             "implementations",
@@ -743,6 +745,7 @@ mod tests {
             &authored,
             &workspaces,
             &graph_runs,
+            &subagents,
             &remote,
             "token",
             Some("u-1"),

@@ -7,15 +7,29 @@
 
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::authored_state::{
-    AuthoredCurrentRevision, AuthoredHistoryPage, AuthoredRestoreResult, AuthoredTurnCommit,
-    AuthoredWorkspace, AuthoredWorkspaceCheck, AuthoredWorkspaceCommit, AuthoredWorkspaceHandle,
+    AuthoredHistoryPage, AuthoredRestoreResult, AuthoredTurnCommit, AuthoredWorkspace,
+    AuthoredWorkspaceCheck, AuthoredWorkspaceCommit, AuthoredWorkspaceHandle,
     AuthoredWorkspaceInput, AuthoredWorkspaceMerge, CommitAuthoredWorkspaceInput,
-    CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput, ForkAuthoredWorkspaceInput,
-    MergeAuthoredWorkspaceInput, MergeAuthoredWorkspaceIntoWorkspaceInput,
+    CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput,
     PrepareAuthoredTurnInput, PreparedAuthoredTurn, RestoreAuthoredStateInput,
-    WriteAuthoredWorkspaceGraphInput,
 };
-use crate::models::node_graph::Graph;
+use crate::services::authored_state::Actor;
+
+/// Name the writer behind every revision this host produces from now on.
+///
+/// A host with no agent of its own — the app — leaves this alone and writes as
+/// `user`. `luma-mcp` calls it once, with the `clientInfo` of the client that
+/// connected, so an external client's writes are labelled as that client's
+/// rather than as the operator's. A thread that names its own actor still wins
+/// over this for the revisions it produces.
+pub async fn authored_state_set_session_actor(
+    services: &AppServices,
+    actor: String,
+) -> Result<(), CommandError> {
+    let actor = Actor::parse(&actor).map_err(|error| CommandError::Invalid(error.to_string()))?;
+    services.authored.set_session_actor(actor);
+    Ok(())
+}
 
 pub async fn authored_state_prepare_turn(
     services: &AppServices,
@@ -88,17 +102,6 @@ pub async fn authored_state_restore(
         .await?)
 }
 
-pub async fn authored_state_current_revision(
-    services: &AppServices,
-    thread_id: String,
-) -> Result<AuthoredCurrentRevision, CommandError> {
-    let principal = services.admitted_principal().await?;
-    Ok(services
-        .authored
-        .current_revision(&services.db.0, principal.as_deref(), &thread_id)
-        .await?)
-}
-
 pub async fn authored_state_create_workspace(
     services: &AppServices,
     input: CreateAuthoredWorkspaceInput,
@@ -108,19 +111,6 @@ pub async fn authored_state_create_workspace(
         services
             .authored
             .create_workspace(&services.db.0, principal.as_deref(), input)
-            .await?,
-    ))
-}
-
-pub async fn authored_state_fork_workspace(
-    services: &AppServices,
-    input: ForkAuthoredWorkspaceInput,
-) -> Result<AuthoredWorkspaceHandle, CommandError> {
-    let principal = services.admitted_principal().await?;
-    Ok(workspace_handle(
-        services
-            .authored
-            .fork_workspace(&services.db.0, principal.as_deref(), input)
             .await?,
     ))
 }
@@ -137,23 +127,6 @@ pub async fn authored_state_check_workspace(
             principal.as_deref(),
             &input.thread_id,
             &input.workspace_id,
-        )
-        .await?)
-}
-
-pub async fn authored_state_write_workspace_graph(
-    services: &AppServices,
-    input: WriteAuthoredWorkspaceGraphInput,
-) -> Result<Graph, CommandError> {
-    let principal = services.admitted_principal().await?;
-    Ok(services
-        .authored
-        .write_workspace_graph(
-            &services.db.0,
-            principal.as_deref(),
-            &input.thread_id,
-            &input.workspace_id,
-            &input.graph,
         )
         .await?)
 }
@@ -177,17 +150,6 @@ pub async fn authored_state_merge_workspace(
     Ok(services
         .authored
         .merge_workspace(&services.db.0, principal.as_deref(), input)
-        .await?)
-}
-
-pub async fn authored_state_merge_workspace_into_workspace(
-    services: &AppServices,
-    input: MergeAuthoredWorkspaceIntoWorkspaceInput,
-) -> Result<AuthoredWorkspaceMerge, CommandError> {
-    let principal = services.admitted_principal().await?;
-    Ok(services
-        .authored
-        .merge_workspace_into_workspace(&services.db.0, principal.as_deref(), input)
         .await?)
 }
 

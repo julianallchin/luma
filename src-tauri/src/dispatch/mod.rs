@@ -155,13 +155,11 @@ use crate::models::agent_threads::{
     CreateAgentThreadInput,
 };
 use crate::models::authored_state::{
-    AuthoredCurrentRevision, AuthoredHistoryPage, AuthoredRestoreResult, AuthoredTurnCommit,
-    AuthoredWorkspaceCheck, AuthoredWorkspaceCommit, AuthoredWorkspaceHandle,
-    AuthoredWorkspaceInput, AuthoredWorkspaceMerge, CommitAuthoredWorkspaceInput,
-    CreateAuthoredWorkspaceInput, FinalizeAuthoredTurnInput, ForkAuthoredWorkspaceInput,
-    MergeAuthoredWorkspaceInput, MergeAuthoredWorkspaceIntoWorkspaceInput,
-    PrepareAuthoredTurnInput, PreparedAuthoredTurn, RestoreAuthoredStateInput,
-    WriteAuthoredWorkspaceGraphInput,
+    AuthoredHistoryPage, AuthoredRestoreResult, AuthoredTurnCommit, AuthoredWorkspaceCheck,
+    AuthoredWorkspaceCommit, AuthoredWorkspaceHandle, AuthoredWorkspaceInput,
+    AuthoredWorkspaceMerge, CommitAuthoredWorkspaceInput, CreateAuthoredWorkspaceInput,
+    FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput, PrepareAuthoredTurnInput,
+    PreparedAuthoredTurn, RestoreAuthoredStateInput,
 };
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use crate::models::groups::{FixtureGroup, FixtureGroupNode, MovementConfig};
@@ -264,6 +262,7 @@ commands! {
         input: AppendAgentThreadMessagesInput,
     ) -> Vec<AgentThreadMessage>;
     agent_threads::agent_thread_rename(thread_id: String, title: Option<String>) -> AgentThread;
+    agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
 
     // Only what a webview needs and a typed caller does not: it cannot hold a
@@ -273,6 +272,12 @@ commands! {
     agent::agent_turn_cancel(thread_id: String) -> bool;
     agent::agent_steer(thread_id: String, message: String) -> ();
 
+    // The bundled lighting-craft playbooks, read from `resources/skills` by the
+    // one registry in `agent::skills`. A webview has no filesystem to discover
+    // them itself.
+    skills::skills_listing() -> String;
+    skills::get_skill(name: String) -> String;
+
     authored_state::authored_state_prepare_turn(
         input: PrepareAuthoredTurnInput,
     ) -> PreparedAuthoredTurn;
@@ -280,6 +285,7 @@ commands! {
         input: FinalizeAuthoredTurnInput,
     ) -> AuthoredTurnCommit;
     authored_state::authored_state_recover_turns(thread_id: String) -> Vec<AuthoredTurnCommit>;
+    authored_state::authored_state_set_session_actor(actor: String) -> ();
     authored_state::authored_state_list_history(
         thread_id: String,
         cursor: Option<String>,
@@ -288,45 +294,27 @@ commands! {
     authored_state::authored_state_restore(
         input: RestoreAuthoredStateInput,
     ) -> AuthoredRestoreResult;
-    authored_state::authored_state_current_revision(
-        thread_id: String,
-    ) -> AuthoredCurrentRevision;
     authored_state::authored_state_create_workspace(
         input: CreateAuthoredWorkspaceInput,
-    ) -> AuthoredWorkspaceHandle;
-    authored_state::authored_state_fork_workspace(
-        input: ForkAuthoredWorkspaceInput,
     ) -> AuthoredWorkspaceHandle;
     authored_state::authored_state_check_workspace(
         input: AuthoredWorkspaceInput,
     ) -> AuthoredWorkspaceCheck;
-    authored_state::authored_state_write_workspace_graph(
-        input: WriteAuthoredWorkspaceGraphInput,
-    ) -> Graph;
     authored_state::authored_state_commit_workspace(
         input: CommitAuthoredWorkspaceInput,
     ) -> AuthoredWorkspaceCommit;
     authored_state::authored_state_merge_workspace(
         input: MergeAuthoredWorkspaceInput,
     ) -> AuthoredWorkspaceMerge;
-    authored_state::authored_state_merge_workspace_into_workspace(
-        input: MergeAuthoredWorkspaceIntoWorkspaceInput,
-    ) -> AuthoredWorkspaceMerge;
     authored_state::authored_state_remove_workspace(input: AuthoredWorkspaceInput) -> ();
 
     agent_execution::run_python_cell(
         thread_id: String,
-        execution_id: Option<String>,
-        authored_workspace_id: Option<String>,
         turn_message_id: String,
         code: String,
         scope: PythonScopeInput,
     ) -> PythonCellResult;
-    agent_execution::cancel_python_cell(
-        thread_id: String,
-        execution_id: Option<String>,
-        authored_workspace_id: Option<String>,
-    ) -> bool;
+    agent_execution::cancel_python_cell(thread_id: String) -> bool;
 
     fixtures::get_patched_fixtures(venue_id: String) -> Vec<PatchedFixture>;
     fixtures::initialize_fixtures() -> usize;

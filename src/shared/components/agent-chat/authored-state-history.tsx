@@ -34,6 +34,17 @@ function formatRevisionTime(value: string): string {
 	return Number.isNaN(date.getTime()) ? value : REVISION_TIME.format(date);
 }
 
+/** The revision's writer, as a silkscreen label. `user` is the operator, a
+ * bare key is the model that served the turn, and `client:<name>/<version>` is
+ * an out-of-process MCP client — shown as the client's name so a long version
+ * string does not crowd the row. The vocabulary is open: anything unrecognized
+ * is shown verbatim rather than swallowed. */
+function actorLabel(actor: string): string {
+	if (actor === "user") return "You";
+	const client = actor.match(/^client:([^/]+)\//);
+	return client ? client[1] : actor;
+}
+
 function kindLabel(kind: AuthoredHistoryKind): string {
 	switch (kind) {
 		case "initial_import":
@@ -215,6 +226,13 @@ export function AuthoredStateHistory({
 											</div>
 											<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/70">
 												<span>{kindLabel(entry.kind)}</span>
+												<span aria-hidden="true">·</span>
+												<span
+													className="truncate uppercase tracking-wider"
+													title={entry.actor}
+												>
+													{actorLabel(entry.actor)}
+												</span>
 												<span aria-hidden="true">·</span>
 												<span>{formatRevisionTime(entry.authoredAt)}</span>
 												{current && (

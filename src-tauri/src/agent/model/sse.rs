@@ -19,6 +19,18 @@ pub(super) trait SseParser: Send + 'static {
     ///
     /// If the payload is not the shape this provider promised.
     fn event(&mut self, data: &str) -> Result<Vec<ModelEvent>, ModelError>;
+
+    /// The body ended cleanly. Last chance to emit — a transport whose step
+    /// boundary is the end of the stream rather than a frame closes it here.
+    ///
+    /// Anything a parser is still accumulating when the *last* frame arrives
+    /// (a trailing usage-only chunk is one) can only be known to be final
+    /// once there is nothing after it, so a parser that guesses a frame early
+    /// reports whatever it had then. This is the seam that makes the guess
+    /// unnecessary.
+    fn finish(&mut self) -> Vec<ModelEvent> {
+        Vec::new()
+    }
 }
 
 /// `RequestBuilder` dwarfs the streaming state, so the connect phase is boxed:
@@ -72,7 +84,8 @@ pub(super) fn stream_sse<P: SseParser>(
                         // A clean end of body with a partial frame left over is the
                         // provider hanging up mid-message; the frame is discarded
                         // rather than guessed at.
-                        return Some((Vec::new(), Phase::Done));
+                        let tail = parser.finish().into_iter().map(Ok).collect();
+                        return Some((tail, Phase::Done));
                     };
                     let chunk = match chunk {
                         Ok(bytes) => bytes,

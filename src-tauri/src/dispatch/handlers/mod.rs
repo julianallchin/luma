@@ -36,6 +36,7 @@ pub mod render_engine;
 pub mod score_dsl;
 pub mod scores;
 pub mod settings;
+pub mod skills;
 pub mod stage;
 pub mod sync;
 pub mod telemetry;

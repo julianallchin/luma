@@ -282,9 +282,74 @@ pub(crate) struct AuthoredDocumentRecord {
     pub created_at: String,
 }
 
+/// Who produced a revision: a stable label, kept on the row forever because a
+/// thread can be deleted and a model key can retire.
+///
+/// An open vocabulary on purpose — `user`, a model key from
+/// [`crate::agent::model::MODELS`], or `client:<name>/<version>[:<model>]` for
+/// an out-of-process MCP client — so a new writer needs no schema change and no
+/// second enum to drift from this one. Deliberately *not* part of
+/// [`derive_revision_id`]: the id is a content-and-operation hash that the
+/// server re-derives (`private.expected_revision_id`), and hashing provenance
+/// would invalidate every revision that already exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Actor(String);
+
+impl Actor {
+    /// A human editing in the app. Also what a revision with no writing
+    /// session of its own falls back to.
+    pub(crate) const USER: &'static str = "user";
+    /// A revision minted by the sync layer itself while integrating a
+    /// server-ordered proposal — no human and no model authored it.
+    pub(crate) const SYNC: &'static str = "sync";
+
+    /// The label for the human in the editor.
+    pub(crate) fn user() -> Self {
+        Self(Self::USER.to_owned())
+    }
+
+    /// The label for a device-convergence revision the sync layer minted.
+    pub(crate) fn sync() -> Self {
+        Self(Self::SYNC.to_owned())
+    }
+
+    /// Read a stored or caller-supplied label.
+    ///
+    /// A label naming a model this build knows is canonicalized to that
+    /// model's key, so the several spellings the two agent loops accept
+    /// (`claude-opus-5`, `anthropic/claude-opus-5`) land on one actor. Anything
+    /// else — `user`, a client label, a retired model — is kept verbatim: an
+    /// unrecognized writer is still an honest one.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthoredStateError::InvalidInput`] if the label is empty, over 256
+    /// bytes, or carries anything but `[A-Za-z0-9-_.:/]`.
+    pub(crate) fn parse(label: &str) -> Result<Self> {
+        validate_actor(label)?;
+        let label = crate::agent::model::ModelId::parse(label).map_or(label, |id| id.key());
+        Ok(Self(label.to_owned()))
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Actor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RevisionMetadata {
     pub operation_kind: String,
+    /// Who produced this revision. Unlike `author_name`/`author_email` — two
+    /// constants the deterministic id happens to hash — this is the real
+    /// answer, and it is not hashed.
+    pub actor: Actor,
     pub operation_id: Option<String>,
     pub message: String,
     pub author_name: String,
@@ -313,6 +378,7 @@ impl RevisionMetadata {
             validate_token(operation_id, "revision operation id")?;
         }
         validate_optional_text(&self.message, "revision message", 8_192)?;
+        validate_actor(self.actor.as_str())?;
         validate_optional_text(&self.author_name, "revision author name", 1_024)?;
         validate_optional_text(&self.author_email, "revision author email", 1_024)?;
         validate_rfc3339(&self.authored_at, "revision authored_at")?;
@@ -602,9 +668,9 @@ impl AuthoredRevisionStore {
             "INSERT INTO authored_revisions
              (revision_id, document_id, principal_key, parent_count, content_hash,
               operation_kind, operation_id,
-              message, author_name, author_email, authored_at, thread_id,
+              message, actor, author_name, author_email, authored_at, thread_id,
               assistant_message_id, restored_revision_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(revision_id.as_str())
         .bind(document_id.as_str())
@@ -614,6 +680,7 @@ impl AuthoredRevisionStore {
         .bind(&metadata.operation_kind)
         .bind(&metadata.operation_id)
         .bind(&metadata.message)
+        .bind(metadata.actor.as_str())
         .bind(&metadata.author_name)
         .bind(&metadata.author_email)
         .bind(&metadata.authored_at)
@@ -1201,7 +1268,8 @@ impl AuthoredRevisionStore {
                     document.principal_key AS document_principal_key,
                     revision.parent_count,
                     revision.content_hash, revision.operation_kind,
-                    revision.operation_id, revision.message, revision.author_name,
+                    revision.operation_id, revision.message, revision.actor,
+                    revision.author_name,
                     revision.author_email, revision.authored_at, revision.thread_id,
                     revision.assistant_message_id, revision.restored_revision_id,
                     revision.created_at
@@ -1543,6 +1611,22 @@ fn validate_optional_text(value: &str, name: &str, max_bytes: usize) -> Result<(
     Ok(())
 }
 
+/// A revision actor label. Wider than [`validate_token`] by `/`, which
+/// separates an MCP client's name from its version.
+fn validate_actor(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        })
+    {
+        return Err(AuthoredStateError::InvalidInput(format!(
+            "invalid revision actor {value:?}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_token(value: &str, name: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 256
@@ -1818,6 +1902,7 @@ struct RevisionRow {
     operation_kind: String,
     operation_id: Option<String>,
     message: String,
+    actor: String,
     author_name: String,
     author_email: String,
     authored_at: String,
@@ -1848,6 +1933,7 @@ impl RevisionRow {
             operation_kind: self.operation_kind,
             operation_id: self.operation_id,
             message: self.message,
+            actor: Actor::parse(&self.actor)?,
             author_name: self.author_name,
             author_email: self.author_email,
             authored_at: self.authored_at,

@@ -1,0 +1,1 @@
+Load one of the skills listed in <available_skills>. Returns the playbook's full instructions. Read the genre skill that matches the track before planning a show, and pull craft skills as the work calls for them; read each one once per thread and keep working from it.

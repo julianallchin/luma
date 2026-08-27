@@ -130,6 +130,10 @@ pub struct AuthoredHistoryEntry {
     pub revision_id: String,
     pub parent_ids: Vec<String>,
     pub message: String,
+    /// Who produced this revision: `user`, a model key, or
+    /// `client:<name>/<version>[:<model>]` for an out-of-process MCP client.
+    /// An open vocabulary — the surface shows it, it does not switch on it.
+    pub actor: String,
     /// RFC 3339 / ISO-8601.
     pub authored_at: String,
     pub thread_id: Option<String>,

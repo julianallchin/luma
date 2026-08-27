@@ -44,8 +44,8 @@ use crate::models::scores::{
 };
 use crate::services::authored_merge::{merge_graphs, merge_track_documents};
 use crate::services::authored_state::{
-    AuthoredDocumentId, AuthoredRevisionStore, AuthoredStateError, FileMap, NewAuthoredDocument,
-    RevisionId, RevisionInfo, RevisionMetadata,
+    Actor, AuthoredDocumentId, AuthoredRevisionStore, AuthoredStateError, FileMap,
+    NewAuthoredDocument, RevisionId, RevisionInfo, RevisionMetadata,
 };
 use crate::services::graph_documents::{
     apply_graph_edit_in_transaction, canonicalize_graph, exact_graph_json, graph_from_files,
@@ -142,6 +142,9 @@ pub struct AuthoredDocuments {
     storage: StorageRoot,
     document_locks: Arc<Mutex<HashMap<AuthoredDocumentId, Arc<Mutex<()>>>>>,
     lifecycle_lock: Arc<RwLock<()>>,
+    /// Who this process writes as when no thread says otherwise. See
+    /// [`AuthoredDocuments::session_actor`].
+    session_actor: Arc<std::sync::RwLock<Actor>>,
 }
 
 struct AuthoredDocumentGuard {
@@ -164,6 +167,7 @@ impl AuthoredDocuments {
             storage,
             document_locks: Arc::new(Mutex::new(HashMap::new())),
             lifecycle_lock: Arc::new(RwLock::new(())),
+            session_actor: Arc::new(std::sync::RwLock::new(Actor::user())),
         }
     }
 
@@ -222,6 +226,10 @@ struct ResolvedScope {
     principal_key: String,
     owner_user_id: Option<String>,
     thread_id: Option<String>,
+    /// The writing thread's own actor label, when it has one. `None` leaves
+    /// the host's session actor to answer — see
+    /// [`AuthoredDocuments::session_actor`].
+    thread_actor: Option<Actor>,
     document: DocumentScope,
 }
 
@@ -250,6 +258,7 @@ impl ResolvedScope {
             } => Self::pattern(principal, pattern_id, implementation_id)?,
         };
         scope.thread_id = Some(thread.id.clone());
+        scope.thread_actor = thread.actor.as_deref().map(Actor::parse).transpose()?;
         Ok(scope)
     }
 
@@ -266,6 +275,7 @@ impl ResolvedScope {
             principal_key,
             owner_user_id: principal.map(str::to_owned),
             thread_id: None,
+            thread_actor: None,
             document: DocumentScope::Track(track_scope),
         })
     }
@@ -279,6 +289,7 @@ impl ResolvedScope {
             principal_key,
             owner_user_id: principal.map(str::to_owned),
             thread_id: None,
+            thread_actor: None,
             document: DocumentScope::Pattern(GraphScope {
                 pattern_id: pattern_id.to_owned(),
                 implementation_id: implementation_id.to_owned(),
@@ -413,25 +424,59 @@ fn normalized_subject(subject: &str) -> Result<&str> {
     Ok(subject)
 }
 
-fn revision_metadata(
-    operation_kind: &str,
-    operation_id: Option<&str>,
-    subject: &str,
-    thread_id: Option<&str>,
-    assistant_message_id: Option<&str>,
-    restored_revision_id: Option<RevisionId>,
-) -> Result<RevisionMetadata> {
-    Ok(RevisionMetadata {
-        operation_kind: operation_kind.to_owned(),
-        operation_id: operation_id.map(str::to_owned),
-        message: normalized_subject(subject)?.to_owned(),
-        author_name: "Luma".into(),
-        author_email: "authored-state@luma.local".into(),
-        authored_at: Utc::now().to_rfc3339(),
-        thread_id: thread_id.map(str::to_owned),
-        assistant_message_id: assistant_message_id.map(str::to_owned),
-        restored_revision_id,
-    })
+impl AuthoredDocuments {
+    /// Who this host writes as when the operation has no thread of its own.
+    ///
+    /// The app answers `user` — a write with no agent behind it came from the
+    /// editor. `luma-mcp` replaces it with the connected client once
+    /// `initialize` names one, so even the scaffolding writes an external
+    /// client makes (minting a score for a track that has none) are labelled
+    /// honestly rather than blamed on the operator.
+    pub(crate) fn session_actor(&self) -> Actor {
+        self.session_actor
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Name the writer behind every subsequent revision this host produces.
+    pub(crate) fn set_session_actor(&self, actor: Actor) {
+        *self
+            .session_actor
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = actor;
+    }
+
+    /// The typed metadata for one locally-authored revision.
+    ///
+    /// `scope` is the single source of both "which conversation" and "who is
+    /// writing": a thread-scoped operation is attributed to the thread's own
+    /// actor, everything else to this host's session actor.
+    fn revision_metadata(
+        &self,
+        scope: &ResolvedScope,
+        operation_kind: &str,
+        operation_id: Option<&str>,
+        subject: &str,
+        assistant_message_id: Option<&str>,
+        restored_revision_id: Option<RevisionId>,
+    ) -> Result<RevisionMetadata> {
+        Ok(RevisionMetadata {
+            operation_kind: operation_kind.to_owned(),
+            operation_id: operation_id.map(str::to_owned),
+            message: normalized_subject(subject)?.to_owned(),
+            actor: scope
+                .thread_actor
+                .clone()
+                .unwrap_or_else(|| self.session_actor()),
+            author_name: "Luma".into(),
+            author_email: "authored-state@luma.local".into(),
+            authored_at: Utc::now().to_rfc3339(),
+            thread_id: scope.thread_id.clone(),
+            assistant_message_id: assistant_message_id.map(str::to_owned),
+            restored_revision_id,
+        })
+    }
 }
 
 fn operation_request_fingerprint(kind: &str, fields: &[&str]) -> String {
