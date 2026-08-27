@@ -148,6 +148,11 @@ pub async fn boot(config: &HostConfig) -> Result<AppServices, String> {
     let fixtures_root = config.fixtures_root()?;
     let cache_dir = config.cache_dir()?;
 
+    // No `AppHandle` here, so the bundled binary is found from the executable's
+    // own location instead of a Tauri resource dir. Without this a headless
+    // host falls through to system PATH and fails at spawn time.
+    crate::ffmpeg_env::init_headless();
+
     let db = init_app_db_at(storage.path()).await?;
     let state_db = init_state_db_at(storage.path()).await?;
     if let Some(principal) = config.fixture_principal.as_deref() {

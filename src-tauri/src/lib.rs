@@ -29,6 +29,7 @@ mod preprocessing;
 pub use preprocessing::AnalysisTaskGroup;
 mod prodjlink_manager;
 pub mod python_env;
+pub mod recording;
 mod rekordbox;
 mod render_engine;
 mod root_worker;
