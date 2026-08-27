@@ -180,14 +180,20 @@ pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
 /// painted it opaque, the coverage costs nothing at all.
 pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 
-/// Coverage of a floating chrome surface — menu, popover, picker. Near-opaque,
+/// Coverage of a floating chrome surface — menu, popover, picker. **Opaque**,
 /// because these are the surfaces whose whole job is carrying *text*, and text
-/// may not ghost under text: at any real translucency a menu row over a label
-/// ("subtract" over a strip's "REPLACE") reads as two broken strings, not as
-/// depth. The last few percent keep the surface in the glass family without
-/// letting anything legible through; decorative glass ([`PANEL_ALPHA`],
+/// may not ghost under text: a menu row over a label ("subtract" over a
+/// strip's "REPLACE") reads as two broken strings, not as depth.
+///
+/// The four percent this used to keep — meant as a token membership in the
+/// glass family — was enough to do exactly that: measured over the timeline,
+/// a clip's own label and its lit blocks both read through the usage card.
+/// Four percent of a bright element on a near-black plane is not a texture,
+/// it is a second image. A surface that hangs over *content* rather than over
+/// the window's edge has no desktop behind it to be glass about, so there is
+/// nothing for the coverage to buy. Decorative glass ([`PANEL_ALPHA`],
 /// [`DIALOG_ALPHA`] — whose card sits on its own scrim) keeps its coverage.
-pub const OVERLAY_ALPHA: f32 = if cfg!(target_os = "macos") { 0.96 } else { 1.0 };
+pub const OVERLAY_ALPHA: f32 = 1.0;
 
 /// Coverage of a large frosted picker.
 ///

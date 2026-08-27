@@ -614,24 +614,63 @@ pub fn anchored_below(
     trigger: f32,
     content: AnyElement,
 ) -> AnyElement {
+    hang(id, Side::Below, trigger, content)
+}
+
+/// Hang `content` off the *top* of the trigger it is a child of — the mirror
+/// of [`anchored_below`], for a control that has nothing under it.
+///
+/// The whole rationale of [`anchored_below`] applies, reflected: the wrapper
+/// pins the origin to the trigger's top edge, the anchor corner is the card's
+/// bottom one, and the trigger's height is reserved as padding **above** the
+/// card so that the downward flip near the window's *top* edge clears the
+/// control instead of painting over it.
+///
+/// It also mirrors horizontally, hanging from the trigger's top-**right** and
+/// growing left. That is not a second knob wearing a default: a control with
+/// no room below it is one docked to the bottom of the window, those strips
+/// run to the window's right edge, and a left-aligned card there overflows —
+/// at which point gpui snaps it back inside and the card is no longer pinned
+/// to anything. Aligning to the right edge is what keeps the pin.
+pub fn anchored_above(
+    id: impl Into<SharedString>,
+    trigger: f32,
+    content: AnyElement,
+) -> AnyElement {
+    hang(id, Side::Above, trigger, content)
+}
+
+/// Which edge of the trigger a menu hangs from. The only thing that differs
+/// between [`anchored_below`] and [`anchored_above`] — everything else about
+/// hanging a menu (the floating layer, the reserved air, the occlusion) is one
+/// implementation below.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Below,
+    Above,
+}
+
+fn hang(id: impl Into<SharedString>, side: Side, trigger: f32, content: AnyElement) -> AnyElement {
     let id = id.into();
-    div()
-        .absolute()
-        .bottom_0()
-        .left_0()
-        .size_0()
+    let reserved = px(trigger + MENU_GAP);
+    let gap = px(MENU_GAP);
+    let mut origin = div().absolute().size_0();
+    let (anchor, card) = match side {
+        Side::Below => {
+            origin = origin.bottom_0().left_0();
+            (gpui::Anchor::TopLeft, div().pt(gap).pb(reserved))
+        }
+        Side::Above => {
+            origin = origin.top_0().right_0();
+            (gpui::Anchor::BottomRight, div().pb(gap).pt(reserved))
+        }
+    };
+    origin
         .child(
-            gpui::deferred(
-                gpui::anchored()
-                    .anchor(gpui::Anchor::TopLeft)
-                    .child(motion::menu_in(
-                        id,
-                        div()
-                            .pt(px(MENU_GAP))
-                            .pb(px(trigger + MENU_GAP))
-                            .child(div().occlude().child(content)),
-                    )),
-            )
+            gpui::deferred(gpui::anchored().anchor(anchor).child(motion::menu_in(
+                id,
+                card.child(div().occlude().child(content)),
+            )))
             .priority(1),
         )
         .into_any_element()

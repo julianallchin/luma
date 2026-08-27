@@ -1,6 +1,6 @@
 import { code as codePlugin } from "@streamdown/code";
 import { Streamdown } from "streamdown";
-import type { PythonToolOutput } from "@/shared/lib/agent/python-tool";
+import type { PythonToolOutput } from "@/bindings/schema";
 import type { ToolView } from "./parts";
 
 const CODE_CLASSNAME =

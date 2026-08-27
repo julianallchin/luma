@@ -15,7 +15,8 @@ Startup:
     2. fd 1 and fd 2 are `dup2`'d onto capture pipes, so *native* writes are
        caught too (design §14.5); reader threads drain them forever into 32 KiB
        bounded buffers so a chatty C extension can never block on a full pipe.
-    3. matplotlib is forced to Agg before pyplot is imported (§14.7).
+    3. matplotlib is forced to Agg before pyplot is imported (§14.7), and given
+       the chat panel's dark defaults (`MATPLOTLIB_DARK_RC`).
     4. numpy / scipy / scipy.signal / librosa / matplotlib.pyplot are preloaded
        into the user namespace (§7.2); librosa's lazy submodules are touched so
        the cost lands at startup, not in the agent's first cell. A missing
@@ -79,6 +80,33 @@ from pathlib import Path
 from typing import Any
 
 MAX_HOST_CALL_BYTES = 8 * 1024 * 1024
+
+#: Matplotlib defaults for a figure that will be shown inside Luma's chat panel.
+#: The values are the app's own grey ladder (src/App.css): --background for the
+#: surface, --foreground for ink, --muted-foreground for spines and tick marks,
+#: --hover for the grid. Applied once at kernel start, so a cell that sets its
+#: own rcParams or passes facecolor= still wins.
+#: No colormap or cycle is chosen here — what a plot means is the agent's call.
+MATPLOTLIB_DARK_RC = {
+    "figure.facecolor": "#272727",
+    "figure.edgecolor": "#272727",
+    "axes.facecolor": "#272727",
+    "axes.edgecolor": "#777777",
+    "axes.labelcolor": "#e4e4e4",
+    "text.color": "#e4e4e4",
+    "xtick.color": "#777777",
+    "ytick.color": "#777777",
+    "xtick.labelcolor": "#e4e4e4",
+    "ytick.labelcolor": "#e4e4e4",
+    "grid.color": "#3b3b3b",
+    "legend.facecolor": "#272727",
+    "legend.edgecolor": "#777777",
+    "savefig.facecolor": "#272727",
+    "savefig.edgecolor": "#272727",
+    # The saved pixel count must equal the figure's own, because that is what
+    # `figures._save` reports as width/height; it passes the dpi explicitly.
+    "savefig.dpi": "figure",
+}
 
 # Clamp RLIMIT_NOFILE before any heavy import. Some hosts hand children an
 # absurd soft limit (Bun sets it to i64::MAX); joblib/loky's fork path closes
@@ -217,6 +245,9 @@ class Worker:
         self._host_call_counter = 0
         self._host_call_pending = False
         self._plt: Any = None
+        # Figures are produced by two things — matplotlib and the host's own
+        # renderer — and reported as one list. The sink is the seam.
+        self._figures = figures.FigureSink()
         self._proto_lock = threading.Lock()
 
         # --- fd isolation (design §14.5) --------------------------------
@@ -254,6 +285,7 @@ class Worker:
             import matplotlib
 
             matplotlib.use("Agg")
+            matplotlib.rcParams.update(MATPLOTLIB_DARK_RC)
             import matplotlib.pyplot as plt
 
             self._plt = plt
@@ -310,6 +342,7 @@ class Worker:
                     self.workspace,
                     manifest_rel,
                     host_call=self.host_call,
+                    figures=self._figures,
                 )
                 revision = namespace.revision or manifest_rel
                 self._manifests[revision] = namespace
@@ -480,7 +513,7 @@ class Worker:
         # Figures first: rendering can print, and the agent should see that.
         figure_list: list[dict[str, Any]] = []
         try:
-            figure_list, figure_warnings = figures.collect(self.workspace, self._plt)
+            figure_list, figure_warnings = self._figures.collect(self.workspace, self._plt)
             warnings.extend(figure_warnings)
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"figure capture failed: {exc}")

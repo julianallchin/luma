@@ -327,7 +327,6 @@ try {
 		repr: string | null;
 		traceback: string | null;
 		notices: string[];
-		figureCount: number;
 		figures: { width: number; height: number; base64Png?: string }[];
 		durationMs: number;
 	};
@@ -561,11 +560,11 @@ try {
 		check(
 			"a matplotlib figure comes back as a real PNG",
 			fig.status === "ok" &&
-				fig.figureCount === 1 &&
+				fig.figures.length === 1 &&
 				(fig.figures[0]?.base64Png?.length ?? 0) > 1000 &&
 				fig.figures[0].width > 0,
 			{
-				detail: fig.traceback ?? `figureCount=${fig.figureCount}`,
+				detail: fig.traceback ?? `figures=${fig.figures.length}`,
 				criteria: [11],
 				evidence: `one figure captured: ${fig.figures[0]?.width}×${fig.figures[0]?.height} PNG, ${fig.figures[0]?.base64Png?.length ?? 0} base64 chars`,
 			},
@@ -750,9 +749,9 @@ try {
 		);
 		check(
 			"candidate window yields authored timeline and composited heatmap",
-			hasStage("half_open") && staged.figureCount === 2,
+			hasStage("half_open") && staged.figures.length === 2,
 			{
-				detail: staged.traceback ?? `figures=${staged.figureCount}`,
+				detail: staged.traceback ?? `figures=${staged.figures.length}`,
 				criteria: [18],
 				evidence:
 					"an explicit immutable seconds=[start,end) draft window produced both the time×z timeline and production-compositor time×light heatmap",
@@ -1286,7 +1285,6 @@ try {
 							repr: "'…'",
 							traceback: null,
 							notices: [],
-							figureCount: 1,
 							figures: [{ width: 800, height: 300, base64Png: "iVBORw0KGgo=" }],
 							durationMs: 42,
 						},

@@ -98,5 +98,5 @@ pub use dropdown::luma_dropdown;
 pub use input::luma_input;
 pub use select::{luma_select, luma_select_item, luma_selector};
 pub use slider::luma_slider;
-pub use text::{plate, silkscreen};
+pub use text::{plate, silkscreen, silkscreen_in};
 pub use toggle::{luma_toggle, luma_toggle_group, luma_toggle_segment};

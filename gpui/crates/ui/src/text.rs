@@ -17,11 +17,19 @@ use crate::node::{Instrument, Role};
 /// node's label — a silkscreen is read, never pressed, so the words on it are
 /// the whole of its identity.
 pub fn silkscreen(label: impl Into<String>) -> impl IntoElement {
+    silkscreen_in(label, ladder::muted_foreground())
+}
+
+/// [`silkscreen`] at another tone — what a *floating* surface needs, where the
+/// instrument tier's muted grey is a foreign tint against glass. The shape (9px,
+/// bold, uppercase, read-never-pressed) is the part that must not fork, so only
+/// the colour is a parameter.
+pub fn silkscreen_in(label: impl Into<String>, color: impl Into<Hsla>) -> impl IntoElement {
     let label = label.into();
     div()
         .text_size(px(9.))
         .font_weight(FontWeight::BOLD)
-        .text_color(ladder::muted_foreground())
+        .text_color(color.into())
         .child(label.clone())
         .agent_node(Role::Text, label)
 }

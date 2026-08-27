@@ -637,27 +637,22 @@ pub fn composer(
         )
     };
 
-    // The plate sits on the same reading column as the transcript above it —
-    // a full-bleed composer under a centered column is two column rules on
-    // one pane. Frosted so the transcript blurs under it instead of stopping
-    // at a seam; the radius matches the pill's, or the blur would square off
-    // at its corners.
+    // The plate fills the reading column — it does not state one. The column
+    // is the footer's, drawn once around composer and strip together so that
+    // what hangs off the pair lands on the same rule they do; a plate that
+    // measured its own gutters would be a second column rule on one pane.
+    // Frosted so the transcript blurs under it instead of stopping at a seam;
+    // the radius matches the pill's, or the blur would square off at its
+    // corners.
     div()
         .flex()
         .flex_col()
-        .items_center()
-        .px(px(theme::CONTENT_GUTTER))
         .py(px(theme::SPACE_MD))
-        .child(
-            div()
-                .w_full()
-                .max_w(px(theme::MAX_CONTENT_WIDTH))
-                .child(dialog::frosted(
-                    luma_ui::radius::PILL,
-                    theme::PILL_BLUR,
-                    motion::fade_quick("composer-pill", body),
-                )),
-        )
+        .child(dialog::frosted(
+            luma_ui::radius::PILL,
+            theme::PILL_BLUR,
+            motion::fade_quick("composer-pill", body),
+        ))
 }
 
 /// Which model answers. A readout, not a control — the model is chosen in

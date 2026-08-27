@@ -41,10 +41,14 @@
 
 pub mod chip;
 pub mod composer;
+pub mod python_cell;
+pub mod subagents;
 pub mod theme;
 pub mod transcript;
+pub mod usage;
 pub mod working;
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 use gpui::{
@@ -181,10 +185,17 @@ impl Agent {
 /// are the shell's to mount, and a chat crate that reached for one would invert
 /// the dependency. Starting a *new* conversation is not here — that is entirely
 /// the panel's own business, so it just does it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatEvent {
     /// The reader pressed rewind: open the history picker over this subject.
     HistoryRequested,
+    /// Show this thread's subagents. `Some` names the child to open straight
+    /// into — a transcript chip knows which delegation was clicked, the
+    /// floating pill only knows that some are running.
+    ///
+    /// A request rather than an action for the same reason rewind is: the
+    /// panel is a region and cannot mount an overlay.
+    SubagentsRequested(Option<SharedString>),
 }
 
 /// One turn's events, in order. Dropping it cancels the turn.
@@ -269,6 +280,22 @@ pub struct AgentChat {
     pub(crate) composer: Composer,
     /// What the composer's chip names, once settings have been read.
     model: Option<SharedString>,
+    /// Whether the context gauge's card is showing. Held here rather than
+    /// derived from a hover fade — see [`usage::gauge`].
+    usage_open: bool,
+    /// Live delegation state, newest child last, one entry per subagent this
+    /// panel has seen a snapshot for.
+    ///
+    /// **Not durable, and deliberately not derived from the transcript.** What
+    /// is durable about a child is the child's own thread; this is the answer
+    /// to "what is running right now", which no row can be. Kept beside the
+    /// transcript rather than inside it because [`luma_lib::agent::apply`]
+    /// drops the event that carries it — see [`TurnEvent::Subagent`].
+    subagents: Vec<luma_lib::agent::subagent::SubagentSnapshot>,
+    /// A panel that shows a conversation and cannot join it: no header, no
+    /// composer, no status strip. What the subagents dialog mounts over a
+    /// child thread, so inspecting one costs no second transcript renderer.
+    read_only: bool,
     turn: TurnState,
     /// Which row currently carries the working indicator, so the one row whose
     /// height it changes can be remeasured when it moves. Derived state, kept
@@ -291,6 +318,10 @@ pub struct AgentChat {
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
     collapsed: HashSet<SharedString>,
+    /// Python calls, read once each — see [`python_cell`]. Lives on the panel
+    /// rather than on a turn because a call is named by its id, and a `RefCell`
+    /// because a row reads its call while the panel is mid-render.
+    cells: RefCell<python_cell::Cells>,
     /// The one fold in flight: which call was clicked, when, and which row it
     /// is in so the tween can remeasure it. At most one — a fold is started by
     /// a click, and a click lands on one chip.
@@ -326,11 +357,15 @@ impl AgentChat {
             distance: 0.0,
             composer: Composer::new(cx),
             model: None,
+            usage_open: false,
+            subagents: Vec::new(),
+            read_only: false,
             turn: TurnState::Idle,
             trailer_row: None,
             error: None,
             chosen: false,
             collapsed: HashSet::new(),
+            cells: RefCell::default(),
             fold: None,
             focus: cx.focus_handle(),
             theme: Theme::dark(),
@@ -342,6 +377,52 @@ impl AgentChat {
         }
         chat.name_model(cx);
         chat
+    }
+
+    /// A panel that only *reads* one conversation, by id.
+    ///
+    /// The same entity the shell's centre is, with the two surfaces that make
+    /// a conversation joinable — the header and the footer — left unbuilt. It
+    /// is not a second renderer and must never become one: the whole reason a
+    /// subagent's thread is a real `agent_threads` row is that reading it
+    /// needs no code of its own.
+    pub fn reader(
+        agent: Agent,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut chat = Self::new(agent, None, window, cx);
+        chat.read_only = true;
+        chat.open_thread(thread_id, cx);
+        chat
+    }
+
+    /// Every subagent this panel has heard from this session, running and
+    /// finished. The dialog lists them; the pill counts the unfinished ones.
+    #[must_use]
+    pub fn subagents(&self) -> &[luma_lib::agent::subagent::SubagentSnapshot] {
+        &self.subagents
+    }
+
+    /// Ask the host to show this thread's subagents, optionally opening
+    /// straight into one child's transcript.
+    pub(crate) fn request_subagents(
+        &mut self,
+        child: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(ChatEvent::SubagentsRequested(child));
+    }
+
+    /// Open or close the context gauge's card. Crate-visible because the
+    /// gauge is painted from a free function in [`usage`], which has no
+    /// `&mut self` to reach.
+    pub(crate) fn set_usage_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.usage_open != open {
+            self.usage_open = open;
+            cx.notify();
+        }
     }
 
     /// Read the model's name for the composer's chip.
@@ -383,6 +464,10 @@ impl AgentChat {
             })
             .collect();
         self.transcript = transcript;
+        // Live state belongs to the conversation being left: a snapshot names a
+        // child of *this* thread, and carrying one across would put another
+        // conversation's delegation on the pill.
+        self.subagents.clear();
         self.rows = transcript::rows_for(&self.transcript, &self.entries, None);
         self.list = ListState::new(
             self.rows.len(),
@@ -792,6 +877,32 @@ impl AgentChat {
         self.trailer_row = next;
     }
 
+    /// Take one live subagent snapshot, replacing the child's previous one.
+    ///
+    /// Keyed by the *call* rather than by the child thread, because the call
+    /// exists from the delegation's first frame and the thread does not — a
+    /// child keyed by thread id would appear as a second row the moment it was
+    /// created. Order is first-seen, which is the order the transcript's chips
+    /// are in.
+    ///
+    /// A snapshot this build cannot read is dropped rather than shown as a
+    /// blank row: it is live state, so the next one is milliseconds away.
+    fn fold_subagent(&mut self, snapshot: &serde_json::Value) {
+        let Ok(snapshot) =
+            serde_json::from_value::<luma_lib::agent::subagent::SubagentSnapshot>(snapshot.clone())
+        else {
+            return;
+        };
+        match self
+            .subagents
+            .iter_mut()
+            .find(|held| held.call_id == snapshot.call_id)
+        {
+            Some(held) => *held = snapshot,
+            None => self.subagents.push(snapshot),
+        }
+    }
+
     /// Fold one event, reparse what it touched, and tell the list what moved.
     fn on_event(&mut self, event: &TurnEvent, cx: &mut Context<Self>) {
         let applied = luma_lib::agent::apply(&mut self.transcript, event);
@@ -807,6 +918,9 @@ impl AgentChat {
         } = event
         {
             self.error = Some(message.clone());
+        }
+        if let TurnEvent::Subagent { snapshot } = event {
+            self.fold_subagent(snapshot);
         }
         // Liveness is recorded here, from the event that actually writes into
         // a turn — see `Self::live`.
@@ -854,7 +968,12 @@ impl AgentChat {
         // strip and no composer, because there is no thread for a send to land
         // in — a live field over a conversation that cannot exist would be the
         // silent no-op moved one layer in.
-        let Some(kind) = self.scope.as_ref().map(|scope| scope.agent_kind) else {
+        //
+        // A reader is the other scope-less panel and is not that: it names no
+        // subject *because* it was handed a thread outright, so it shows the
+        // conversation rather than an opening.
+        let kind = self.scope.as_ref().map(|scope| scope.agent_kind);
+        if kind.is_none() && !self.read_only {
             let unattached = cx.entity();
             return self
                 .plate(&unattached, &theme)
@@ -866,7 +985,7 @@ impl AgentChat {
                         .child(opening(&Opening::UNATTACHED, None, &theme)),
                 )
                 .into_any_element();
-        };
+        }
         let streaming = self.is_streaming();
         // Read out before the composer takes `&mut self.composer` below —
         // the plate is painted in one expression, and a live `&self` inside it
@@ -946,6 +1065,7 @@ impl AgentChat {
                         last_of_turn,
                         trailer: (last_row == Some(ix)).then_some(trailer).flatten(),
                         collapsed: &state.collapsed,
+                        cells: &state.cells,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         theme: &state.theme,
                     },
@@ -973,22 +1093,26 @@ impl AgentChat {
                     // painted text element pushes into, and nothing else
                     // empties it.
                     .child(luma_md::render::selection_frame_reset())
-                    .when(self.transcript.messages.is_empty(), |el| {
-                        // A turn sent from the empty state has no row to trail
-                        // yet — the user's own row arrives with the turn's
-                        // first event, one hop later. Without this the panel
-                        // would go silent for that hop, which is exactly the
-                        // moment a person is looking for a sign it heard them.
-                        let opening_trailer = opening_trailer.map(|state| {
-                            div()
-                                .absolute()
-                                .bottom(px(theme::SPACE_LG))
-                                .left_0()
-                                .child(working::trailer(&state, &theme, view, cx))
-                        });
-                        el.child(opening(&Opening::of(kind), Some(&this), &theme))
-                            .children(opening_trailer)
-                    })
+                    .when_some(
+                        kind.filter(|_| self.transcript.messages.is_empty()),
+                        |el, kind| {
+                            // A turn sent from the empty state has no row to
+                            // trail yet — the user's own row arrives with the
+                            // turn's first event, one hop later. Without this
+                            // the panel would go silent for that hop, which is
+                            // exactly the moment a person is looking for a sign
+                            // it heard them.
+                            let opening_trailer = opening_trailer.map(|state| {
+                                div()
+                                    .absolute()
+                                    .bottom(px(theme::SPACE_LG))
+                                    .left_0()
+                                    .child(working::trailer(&state, &theme, view, cx))
+                            });
+                            el.child(opening(&Opening::of(kind), Some(&this), &theme))
+                                .children(opening_trailer)
+                        },
+                    )
                     .when(!self.transcript.messages.is_empty(), |el| {
                         el.child(transcript_list)
                             .children(fade_bands())
@@ -996,16 +1120,59 @@ impl AgentChat {
                             .children(adrift.then(|| jump_to_bottom(&this, &theme)))
                     }),
             )
-            .child(composer::composer(
-                &mut self.composer,
-                &this,
-                streaming,
-                model.as_deref(),
-                &theme,
-                window,
-                cx,
-            ))
-            .child(status_strip(streaming, error.as_deref(), kind, &theme))
+            // The footer: composer and strip as one block, on the reading
+            // column the transcript above them keeps. The column is stated
+            // here and nowhere below, because one thing hangs off the *pair* —
+            // the context card measures itself against this rect, so opening
+            // it lifts it clear of the field instead of over it, and lands it
+            // on the column's edge rather than the pane's
+            // (see [`usage::open_card`]).
+            .when_some(kind.filter(|_| !self.read_only), |el, kind| {
+                el.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .flex_none()
+                        .px(px(theme::CONTENT_GUTTER))
+                        .child(
+                            div()
+                                .relative()
+                                .flex()
+                                .flex_col()
+                                .w_full()
+                                .max_w(px(theme::MAX_CONTENT_WIDTH))
+                                .child(composer::composer(
+                                    &mut self.composer,
+                                    &this,
+                                    streaming,
+                                    model.as_deref(),
+                                    &theme,
+                                    window,
+                                    cx,
+                                ))
+                                .child(status_strip(
+                                    streaming,
+                                    error.as_deref(),
+                                    kind,
+                                    self.transcript.last_request().as_ref(),
+                                    &this,
+                                    &theme,
+                                ))
+                                .children(
+                                    self.usage_open
+                                        .then(|| self.transcript.last_request())
+                                        .flatten()
+                                        .map(|request| usage::open_card(&request, &theme)),
+                                )
+                                // Hung off the footer for the reason the context
+                                // card is: composer and strip are one block, and a
+                                // pill measured against the strip alone would sit
+                                // over the field.
+                                .children(subagents::pill(&self.subagents, &this, &theme)),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
@@ -1062,15 +1229,20 @@ impl AgentChat {
     /// the unattached body sit on, so the two cannot drift apart in the one
     /// place where the chat meets the shell.
     fn plate(&self, chat: &Entity<AgentChat>, theme: &Theme) -> gpui::Div {
-        div()
+        let plate = div()
             .size_full()
             .flex()
             .flex_col()
             // No fill of its own: the shell's content card paints the ground
             // (`theme::panel`), and a second plane here would stack a second
             // coverage over the blur the card is there to let through.
-            .text_color(theme.text)
-            .child(self.header(chat, theme))
+            .text_color(theme.text);
+        // A reader is mounted inside a dialog that already carries a header
+        // band; a second one would be two titles over one conversation.
+        if self.read_only {
+            return plate;
+        }
+        plate.child(self.header(chat, theme))
     }
 
     fn header(&self, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
@@ -1416,6 +1588,8 @@ fn status_strip(
     streaming: bool,
     error: Option<&str>,
     kind: luma_lib::agent::AgentKind,
+    request: Option<&luma_lib::agent::RequestUsage>,
+    chat: &Entity<AgentChat>,
     theme: &Theme,
 ) -> AnyElement {
     let strip = div()
@@ -1426,12 +1600,11 @@ fn status_strip(
         .items_center()
         .gap(px(theme::SPACE_SM))
         // Under the composer, as comet keeps it: the strip is the thread's
-        // context line, not the transcript's tail. Centered on the same
-        // reading column as the plate above it.
-        .mx_auto()
+        // context line, not the transcript's tail. The column is the footer's;
+        // the inset here is the strip's own, holding its text off the plate's
+        // edge above it.
         .w_full()
-        .max_w(px(theme::MAX_CONTENT_WIDTH + 2.0 * theme::CONTENT_GUTTER))
-        .px(px(theme::CONTENT_GUTTER + theme::SPACE_LG))
+        .px(px(theme::SPACE_LG))
         .mb(px(theme::SPACE_XS))
         .text_size(px(11.0));
     if let Some(error) = error {
@@ -1456,5 +1629,8 @@ fn status_strip(
         .child(SharedString::from(subject))
         .child(div().flex_1())
         .when(!streaming, |el| el.child(SharedString::from("⏎ to send")))
+        // Trailing, past the send hint: the gauge answers a question nobody is
+        // asking yet, so it takes the far edge and the hint keeps its place.
+        .children(request.map(|request| usage::gauge(request, chat, theme)))
         .into_any_element()
 }
