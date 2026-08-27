@@ -52,6 +52,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(6.0),
                 default_text: None,
+                range: None,
             },
             ParamDef {
                 id: "wander_speed".into(),
@@ -59,6 +60,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(0.3),
                 default_text: None,
+                range: None,
             },
             ParamDef {
                 id: "softness".into(),
@@ -66,6 +68,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(0.3),
                 default_text: None,
+                range: None,
             },
             ParamDef {
                 id: "vibrance".into(),
@@ -73,6 +76,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(0.6),
                 default_text: None,
+                range: None,
             },
             ParamDef {
                 id: "seed_offset".into(),
@@ -80,6 +84,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(0.0),
                 default_text: None,
+                range: None,
             },
         ],
     }]

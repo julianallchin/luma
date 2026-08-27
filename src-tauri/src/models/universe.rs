@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export, export_to = "../../src/bindings/universe.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PrimitiveState {
@@ -13,7 +13,7 @@ pub struct PrimitiveState {
     pub speed: f32,         // 0.0 (frozen) or 1.0 (fast) - binary
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
 #[ts(export, export_to = "../../src/bindings/universe.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct UniverseState {

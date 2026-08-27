@@ -1,3 +1,5 @@
+pub mod edit;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -15,6 +17,27 @@ pub enum PortType {
     Signal,
     Events,
     Stops,
+}
+
+impl PortType {
+    /// The type's wire spelling — the string key UI palettes color ports by
+    /// (`luma_ui` keeps string keys so it does not depend on this crate).
+    /// Matched exhaustively so a new port type is a compile error here rather
+    /// than a silently grey wire.
+    #[must_use]
+    pub fn key(&self) -> &'static str {
+        match self {
+            PortType::Intensity => "Intensity",
+            PortType::Audio => "Audio",
+            PortType::BeatGrid => "BeatGrid",
+            PortType::Series => "Series",
+            PortType::Color => "Color",
+            PortType::Selection => "Selection",
+            PortType::Signal => "Signal",
+            PortType::Events => "Events",
+            PortType::Stops => "Stops",
+        }
+    }
 }
 
 /// One choice in a [`ParamType::Enum`]: the string stored in the graph, and the
@@ -102,6 +125,12 @@ pub struct ParamDef {
     pub param_type: ParamType,
     pub default_number: Option<f32>,
     pub default_text: Option<String>,
+    /// `(min, max)` for a number a slider can carry. Catalogue knowledge, not
+    /// view knowledge: both editors used to hardcode these per node type, and
+    /// the copies drifted. `None` means the param has no natural bounds and
+    /// renders as a bare field.
+    #[serde(default)]
+    pub range: Option<(f32, f32)>,
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
@@ -341,6 +370,48 @@ pub enum BlendMode {
     Lighten,
     Value, // New "Value" blend mode
     Subtract,
+}
+
+impl BlendMode {
+    /// Every mode, in the order every picker lists them. The one canonical
+    /// list — the score DSL, the track-edit hasher, and both hosts' blend
+    /// selects all read it from here rather than keeping a spelling of their
+    /// own.
+    pub const ALL: [Self; 9] = [
+        Self::Replace,
+        Self::Add,
+        Self::Multiply,
+        Self::Screen,
+        Self::Max,
+        Self::Min,
+        Self::Lighten,
+        Self::Value,
+        Self::Subtract,
+    ];
+
+    /// The mode's wire spelling. Identical to the serde `camelCase` rename on
+    /// the enum — the DSL and the JSON schema deliberately agree — so a new
+    /// variant added to one is a compile error here rather than a drift.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Add => "add",
+            Self::Multiply => "multiply",
+            Self::Screen => "screen",
+            Self::Max => "max",
+            Self::Min => "min",
+            Self::Lighten => "lighten",
+            Self::Value => "value",
+            Self::Subtract => "subtract",
+        }
+    }
+
+    /// [`Self::name`]'s inverse; `None` for a word that names no mode.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
+    }
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]

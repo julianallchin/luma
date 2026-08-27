@@ -1,5 +1,11 @@
 [workspace]
-members = [".", "crates/stagelinq", "crates/rekordbox", "crates/prodjlink"]
+members = [
+    ".",
+    "crates/stagelinq",
+    "crates/rekordbox",
+    "crates/prodjlink",
+    "crates/fixture-kinematics",
+]
 
 [package]
 name = "luma"
@@ -96,6 +102,17 @@ sentry = { version = "0.34", default-features = false, features = ["backtrace", 
 # Fast compile, no optimizations (use `cargo run --profile perf` for optimized builds)
 [profile.dev]
 opt-level = 0
+
+# Dependencies carry no debuginfo. `"*"` never matches workspace members, so
+# everything under `src/` keeps full DWARF and stays steppable in a debugger —
+# this only gives up line numbers inside third-party frames, which is the half
+# of the tree nobody sets a breakpoint in and most of the bytes on disk.
+#
+# The gpui workspace goes further and drops its own crates to line tables too;
+# it is a test harness, where a backtrace is the whole debugging story. This is
+# the app someone actually steps through, so it keeps them.
+[profile.dev.package."*"]
+debug = false
 
 # Optimized dev builds for real-time audio/DSP testing
 [profile.perf]

@@ -84,6 +84,18 @@ struct Turn {
     principal: Option<String>,
 }
 
+/// What a turn resolves once and every assistant row in it then reuses. Only
+/// the turn message varies across rows, and it varies per prompt, so it stays
+/// an argument rather than joining this.
+struct TurnSetup<'a> {
+    client: &'a dyn ModelClient,
+    model: ModelId,
+    reasoning: ReasoningLevel,
+    kind: AgentKind,
+    registry: &'a ToolRegistry,
+    scope: &'a PythonScopeInput,
+}
+
 impl Turn {
     /// Fold the event into the transcript, then hand it to the host. The two
     /// stay in lockstep because rehydration reads the same transcript.
@@ -110,19 +122,26 @@ impl Turn {
             .unwrap_or_else(|| tools::registry(kind));
         let scope = python_scope(&detail.thread);
         let (client, model, reasoning) = self.resolve_model().await?;
+        let setup = TurnSetup {
+            client: &*client,
+            model,
+            reasoning,
+            kind,
+            registry: &registry,
+            scope: &scope,
+        };
 
-        self.append_user(&prompt.text).await?;
+        let mut turn_message_id = self.append_user(&prompt.text).await?;
 
         loop {
-            let (stop_reason, usage, assistant_id) = self
-                .assistant_row(&*client, model, reasoning, kind, &registry, &scope)
-                .await?;
+            let (stop_reason, usage, assistant_id) =
+                self.assistant_row(&setup, &turn_message_id).await?;
             self.close_row(&assistant_id, stop_reason, usage).await?;
 
             // Steering is applied here and nowhere else: between one durable
             // assistant row and the next, so each row keeps its own preparation.
             match self.steer.try_recv() {
-                Ok(text) => self.append_user(&text).await?,
+                Ok(text) => turn_message_id = self.append_user(&text).await?,
                 Err(_) => return Ok(()),
             }
         }
@@ -132,12 +151,8 @@ impl Turn {
     /// calls run between them. Returns the last step's stop reason and usage.
     async fn assistant_row(
         &mut self,
-        client: &dyn ModelClient,
-        model: ModelId,
-        reasoning: ReasoningLevel,
-        kind: AgentKind,
-        registry: &ToolRegistry,
-        scope: &PythonScopeInput,
+        setup: &TurnSetup<'_>,
+        turn_message_id: &str,
     ) -> Result<(StopReason, Usage, String), AgentError> {
         let assistant_id = uuid::Uuid::new_v4().to_string();
         self.emit(TurnEvent::MessageStarted {
@@ -148,21 +163,23 @@ impl Turn {
         loop {
             self.emit(TurnEvent::StepStarted);
             let request = ModelRequest {
-                model,
-                system: kind.system_prompt().to_string(),
-                messages: self.model_messages(registry),
-                tools: registry.specs(),
-                reasoning,
+                model: setup.model,
+                system: setup.kind.system_prompt().to_string(),
+                messages: self.model_messages(setup.registry),
+                tools: setup.registry.specs(),
+                reasoning: setup.reasoning,
                 max_tokens: MAX_TOKENS,
             };
-            let (stop_reason, usage, calls) = self.stream_step(client, request).await?;
+            let (stop_reason, usage, calls) = self.stream_step(setup.client, request).await?;
             self.emit(TurnEvent::StepEnded { stop_reason, usage });
 
             if calls.is_empty() {
                 return Ok((stop_reason, usage, assistant_id));
             }
             for call in calls {
-                let output = self.run_tool(registry, scope, &assistant_id, &call).await;
+                let output = self
+                    .run_tool(setup.registry, setup.scope, turn_message_id, &call)
+                    .await;
                 self.emit(TurnEvent::ToolCallEnded {
                     call_id: call.id,
                     output,
@@ -228,7 +245,7 @@ impl Turn {
         &self,
         registry: &ToolRegistry,
         scope: &PythonScopeInput,
-        assistant_id: &str,
+        turn_message_id: &str,
         call: &PendingCall,
     ) -> ToolResult {
         let Some(tool) = registry.get(&call.name) else {
@@ -239,7 +256,7 @@ impl Turn {
         let context = ToolContext {
             services: self.service.services(),
             thread_id: &self.thread_id,
-            turn_message_id: assistant_id,
+            turn_message_id,
             execution_id: None,
             authored_workspace_id: None,
             scope,
@@ -251,8 +268,9 @@ impl Turn {
     }
 
     /// Persist the user's message before any remote call is made: the prompt is
-    /// durable before it can produce a response.
-    async fn append_user(&mut self, text: &str) -> Result<(), AgentError> {
+    /// durable before it can produce a response. Returns its id, which is the
+    /// turn message every tool call in the rows that follow is attributed to.
+    async fn append_user(&mut self, text: &str) -> Result<String, AgentError> {
         let id = uuid::Uuid::new_v4().to_string();
         self.emit(TurnEvent::MessageStarted {
             id: id.clone(),
@@ -261,8 +279,9 @@ impl Turn {
         self.emit(TurnEvent::TextDelta {
             text: text.to_string(),
         });
-        let message = AgentChatMessage::user(id, text);
-        self.append(&message).await
+        let message = AgentChatMessage::user(id.clone(), text);
+        self.append(&message).await?;
+        Ok(id)
     }
 
     /// Close one assistant row: reserve its authored state, insert it, then

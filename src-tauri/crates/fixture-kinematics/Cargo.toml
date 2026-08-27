@@ -1,0 +1,12 @@
+[package]
+name = "fixture-kinematics"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Where a fixture's light comes from and where it points, in one place"
+
+# glam only, and deliberately so: this crate is depended on from *both* cargo
+# workspaces (src-tauri and gpui/). Every dependency added here is a dependency
+# added to the desktop app and to the renderer at once.
+[dependencies]
+glam = "0.30"

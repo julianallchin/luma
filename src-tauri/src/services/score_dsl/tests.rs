@@ -619,10 +619,8 @@ fn group_expression_roundtrip_preserves_precedence() {
 
 #[test]
 fn every_blend_mode_roundtrips() {
-    for name in [
-        "replace", "add", "multiply", "screen", "max", "min", "lighten", "value", "subtract",
-    ] {
-        let mode = super::parser::blend_mode_from_name(name).unwrap();
+    for mode in BlendMode::ALL {
+        let name = mode.name();
         let canonical = track_document_to_canonical_dsl(
             &TrackDocument {
                 revision: String::new(),

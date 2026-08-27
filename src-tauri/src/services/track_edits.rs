@@ -687,7 +687,7 @@ async fn apply_track_candidate_in_transaction(
         .bind(clip.start_time)
         .bind(clip.end_time)
         .bind(clip.z_index)
-        .bind(blend_mode_name(clip.blend_mode))
+        .bind(clip.blend_mode.name())
         .bind(clip.args.to_string())
         .execute(&mut *connection)
         .await
@@ -705,7 +705,7 @@ async fn apply_track_candidate_in_transaction(
         .bind(clip.start_time)
         .bind(clip.end_time)
         .bind(clip.z_index)
-        .bind(blend_mode_name(clip.blend_mode))
+        .bind(clip.blend_mode.name())
         .bind(clip.args.to_string())
         .bind(&clip.id)
         .bind(&scope.score_id)
@@ -1241,7 +1241,7 @@ pub(crate) fn revision_for_clips(clips: &[TrackClip]) -> String {
         hasher.update(clip.start_time.to_bits().to_le_bytes());
         hasher.update(clip.end_time.to_bits().to_le_bytes());
         hasher.update(clip.z_index.to_le_bytes());
-        hash_string(&mut hasher, blend_mode_name(clip.blend_mode));
+        hash_string(&mut hasher, clip.blend_mode.name());
         hash_string(&mut hasher, &crate::canonical_json::to_string(&clip.args));
     }
     format!("sha256:{:x}", hasher.finalize())
@@ -1250,20 +1250,6 @@ pub(crate) fn revision_for_clips(clips: &[TrackClip]) -> String {
 fn hash_string(hasher: &mut Sha256, value: &str) {
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
-}
-
-fn blend_mode_name(mode: BlendMode) -> &'static str {
-    match mode {
-        BlendMode::Replace => "replace",
-        BlendMode::Add => "add",
-        BlendMode::Multiply => "multiply",
-        BlendMode::Screen => "screen",
-        BlendMode::Max => "max",
-        BlendMode::Min => "min",
-        BlendMode::Lighten => "lighten",
-        BlendMode::Value => "value",
-        BlendMode::Subtract => "subtract",
-    }
 }
 
 #[cfg(test)]

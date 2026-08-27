@@ -39,7 +39,7 @@ static AUDIO_CACHE: Lazy<Mutex<HashMap<String, ResidentAudio>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 const AUDIO_CACHE_MAX: usize = 8;
 
-/// Process-wide cache of per-head GDTF offsets, keyed by `"{fixture_path}|{mode}"`,
+/// Process-wide cache of per-head layout offsets, keyed by `"{fixture_path}|{mode}"`,
 /// so fixture definitions are parsed from disk once per venue rather than once per
 /// (fixture × annotation).
 static OFFSETS_CACHE: Lazy<Mutex<HashMap<String, Vec<HeadLayout>>>> =
@@ -144,8 +144,12 @@ fn seed_for(node_id: &str) -> u64 {
     h.finish()
 }
 
-/// Per-head GDTF offsets for a fixture definition (single head at origin if the
+/// Per-head offsets for a fixture definition (single head at origin if the
 /// definition is missing/unparsable).
+///
+/// Derived from the QLC+ `Physical` block — a housing size and a pixel grid.
+/// QLC+ carries no pivot or aperture geometry, so these are positions on the
+/// housing face and nothing more.
 fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> Vec<HeadLayout> {
     let key = format!("{fixture_path}|{mode_name}");
     if let Ok(cache) = OFFSETS_CACHE.lock() {

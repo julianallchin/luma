@@ -19,6 +19,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "startTime".into(),
@@ -26,6 +27,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "endTime".into(),
@@ -33,6 +35,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "beatGrid".into(),
@@ -40,6 +43,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Text,
                     default_number: None,
                     default_text: None,
+                    range: None,
                 },
             ],
         },
@@ -101,6 +105,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some("[]".into()),
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -124,6 +129,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(200.0),
                 default_text: None,
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -147,6 +153,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(200.0),
                 default_text: None,
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -178,6 +185,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(1.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "only_downbeats".into(),
@@ -185,6 +193,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "offset".into(),
@@ -192,6 +201,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "anticipate".into(),
@@ -199,6 +209,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "attack".into(),
@@ -206,6 +217,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.3),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "decay".into(),
@@ -213,6 +225,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.2),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "sustain".into(),
@@ -220,6 +233,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.3),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "release".into(),
@@ -227,6 +241,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.2),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "sustain_level".into(),
@@ -234,6 +249,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.7),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "attack_curve".into(),
@@ -241,6 +257,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "decay_curve".into(),
@@ -248,6 +265,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "amplitude".into(),
@@ -255,6 +273,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(1.0),
                     default_text: None,
+                    range: None,
                 },
             ],
         },
@@ -290,6 +309,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(1.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "only_downbeats".into(),
@@ -297,6 +317,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "offset".into(),
@@ -304,6 +325,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
             ],
         },
@@ -364,6 +386,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.1),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "decay".into(),
@@ -371,6 +394,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.4),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "sustain".into(),
@@ -378,6 +402,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "release".into(),
@@ -385,6 +410,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.5),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "sustain_level".into(),
@@ -392,6 +418,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.5),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "attack_curve".into(),
@@ -399,6 +426,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "decay_curve".into(),
@@ -406,6 +434,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "amplitude".into(),
@@ -413,6 +442,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(1.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "length_beats".into(),
@@ -420,6 +450,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.5),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "fit_to_gap".into(),
@@ -427,6 +458,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "anticipate".into(),
@@ -434,6 +466,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
             ],
         },

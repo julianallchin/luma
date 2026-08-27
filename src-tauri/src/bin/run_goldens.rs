@@ -193,7 +193,7 @@ fn fixtures_root() -> Option<PathBuf> {
 }
 
 /// Map primitive id (`fixture-uuid:head`) -> world position, reproducing the
-/// legacy mapping exactly: per-head GDTF offset rotated by the fixture
+/// legacy mapping exactly: per-head layout offset rotated by the fixture
 /// orientation and added to the base position (shared `head_world_position`).
 /// This replaces the old base-position shortcut so spatial patterns (chases,
 /// gradients) see the same per-head geometry the legacy engine did.

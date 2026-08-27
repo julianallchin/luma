@@ -49,7 +49,9 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::dispatch::AppServices;
-use crate::models::agent_threads::{AgentThread, AgentThreadDetail, CreateAgentThreadInput};
+use crate::models::agent_threads::{
+    AgentThread, AgentThreadDetail, AgentThreadMessage, CreateAgentThreadInput,
+};
 use model::{ModelClient, ModelError, StopReason, Usage};
 
 /// Which agent a thread belongs to. The durable column stores the snake-case
@@ -116,6 +118,226 @@ impl SubjectKind {
 /// The rule that `pattern_graph` requires an implementation and `track_copilot`
 /// forbids one is stated once, in the durable model's `authored_route`; this
 /// type carries the fields and lets that check own the invariant.
+/// One row of the history picker: a conversation, read by its own words.
+///
+/// Threads are almost never titled, so a row is named by what was said in it —
+/// the first thing the reader asked and the last thing the agent answered,
+/// each flattened to one line. Both come from the same read that fills the
+/// list; a picker that pulled transcripts per row to name them would be N+1
+/// against a list that exists to be typed at.
+#[derive(Clone, Debug)]
+pub struct ThreadEntry {
+    pub thread: AgentThread,
+    /// The reader's first message, as one line. `None` for a conversation
+    /// nobody has spoken in yet.
+    pub opening: Option<String>,
+    /// The agent's most recent message, as one line.
+    pub latest: Option<String>,
+}
+
+impl ThreadEntry {
+    /// The row's first line: what was asked, else what the thread was named,
+    /// else a stable placeholder so an empty conversation still has a name.
+    #[must_use]
+    pub fn headline(&self) -> String {
+        self.opening
+            .clone()
+            .or_else(|| {
+                self.thread
+                    .title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_else(|| "New chat".to_string())
+    }
+}
+
+/// One grep hit: a line of one conversation, and where in it the query fell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryHit {
+    /// Index into [`History::entries`].
+    pub entry: usize,
+    /// The matched line, windowed around the match when it is long.
+    pub excerpt: String,
+    /// Byte range of the match within `excerpt`.
+    pub span: std::ops::Range<usize>,
+}
+
+/// Everything the history picker shows about one subject: its conversations,
+/// newest first, and every line said in them.
+///
+/// The transcripts are held here rather than handed to the picker because the
+/// picker needs two views of them — a one-line summary per row, and a grep —
+/// and neither wants the parts JSON. One read fills both; the search is a pure
+/// function over what was read, so typing never waits on the database.
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    entries: Vec<ThreadEntry>,
+    /// Every spoken line of every entry, in `(entry, seq)` order.
+    lines: Vec<(usize, String)>,
+}
+
+impl History {
+    /// How many hits one conversation may contribute to a search. A thread
+    /// that says the word on every turn would otherwise crowd every other
+    /// thread off the list; six is enough to show it is *that* thread.
+    pub const HITS_PER_ENTRY: usize = 6;
+
+    /// The longest a summary or excerpt gets, in characters. Past this the row
+    /// is truncated visually anyway, and a picker should not carry essays.
+    const LINE_CHARS: usize = 200;
+
+    fn build(threads: Vec<AgentThread>, messages: Vec<AgentThreadMessage>) -> Self {
+        let mut entries: Vec<ThreadEntry> = threads
+            .into_iter()
+            .map(|thread| ThreadEntry {
+                thread,
+                opening: None,
+                latest: None,
+            })
+            .collect();
+        let index: std::collections::HashMap<String, usize> = entries
+            .iter()
+            .enumerate()
+            .map(|(at, entry)| (entry.thread.id.clone(), at))
+            .collect();
+        let mut lines = Vec::new();
+        for message in &messages {
+            let Some(&at) = index.get(&message.thread_id) else {
+                continue;
+            };
+            let role = match message.role.as_str() {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                _ => continue,
+            };
+            let Ok(parts) = AgentChatMessage::parse_parts(&message.parts) else {
+                continue;
+            };
+            let text = AgentChatMessage {
+                id: message.id.clone(),
+                role,
+                parts,
+            }
+            .text();
+            let entry = &mut entries[at];
+            match role {
+                Role::User if entry.opening.is_none() => entry.opening = one_line(&text),
+                Role::Assistant => {
+                    if let Some(latest) = one_line(&text) {
+                        entry.latest = Some(latest);
+                    }
+                }
+                Role::User => {}
+            }
+            lines.extend(
+                text.lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(|line| (at, line.to_string())),
+            );
+        }
+        Self { entries, lines }
+    }
+
+    /// The conversations, newest first.
+    #[must_use]
+    pub fn entries(&self) -> &[ThreadEntry] {
+        &self.entries
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Case-insensitive grep over every spoken line, grouped by conversation
+    /// in the order of [`Self::entries`], at most [`Self::HITS_PER_ENTRY`]
+    /// hits each. One hit per line: its first occurrence.
+    ///
+    /// Matching is per character, each folded to its first lowercase form, so
+    /// the span lands on the original text rather than on a lowercased copy
+    /// whose byte offsets need not line up.
+    #[must_use]
+    pub fn search(&self, query: &str) -> Vec<HistoryHit> {
+        let needle: Vec<char> = query.trim().chars().map(fold).collect();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut hits = Vec::new();
+        let mut counts = vec![0usize; self.entries.len()];
+        for (entry, line) in &self.lines {
+            if counts[*entry] >= Self::HITS_PER_ENTRY {
+                continue;
+            }
+            let chars: Vec<char> = line.chars().collect();
+            let Some(start) = chars
+                .windows(needle.len())
+                .position(|window| window.iter().map(|&c| fold(c)).eq(needle.iter().copied()))
+            else {
+                continue;
+            };
+            counts[*entry] += 1;
+            hits.push(excerpt(*entry, &chars, start..start + needle.len()));
+        }
+        hits.sort_by_key(|hit| hit.entry);
+        hits
+    }
+}
+
+fn fold(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// Collapse a message to one trimmed line of at most [`History::LINE_CHARS`].
+fn one_line(text: &str) -> Option<String> {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.is_empty() {
+        return None;
+    }
+    let mut out: String = joined.chars().take(History::LINE_CHARS).collect();
+    if out.chars().count() < joined.chars().count() {
+        out.push('…');
+    }
+    Some(out)
+}
+
+/// Window `line` around `matched` (char indices) so a hit on a long line still
+/// shows its match, and translate the span to byte offsets in the window.
+fn excerpt(entry: usize, line: &[char], matched: std::ops::Range<usize>) -> HistoryHit {
+    const LEAD: usize = 40;
+    let from = if line.len() <= History::LINE_CHARS {
+        0
+    } else {
+        matched.start.saturating_sub(LEAD)
+    };
+    let to = line.len().min(from + History::LINE_CHARS);
+    let mut text = String::new();
+    if from > 0 {
+        text.push('…');
+    }
+    let byte_at = |index: usize| -> usize {
+        text.len()
+            + line[from..index]
+                .iter()
+                .map(|c| c.len_utf8())
+                .sum::<usize>()
+    };
+    let start = byte_at(matched.start);
+    let end = byte_at(matched.end.min(to));
+    text.extend(&line[from..to]);
+    if to < line.len() {
+        text.push('…');
+    }
+    HistoryHit {
+        entry,
+        excerpt: text,
+        span: start..end,
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadScope {
@@ -354,6 +576,92 @@ impl AgentService {
             .await
             .map_err(AgentError::Storage)?;
         Ok(model::configured(&settings)?.spec().display)
+    }
+
+    /// Everything the history picker shows about `scope`'s subject: its
+    /// conversations, newest first, each named by its own words, and a grep.
+    ///
+    /// Scoped to the *subject* — agent, subject kind, subject id — and not to
+    /// the whole [`ThreadScope`]: "what have I said about this track" does not
+    /// change with the score it was hung on, and a listing that hid last
+    /// week's conversation because it was had over another score would look
+    /// like it lost it.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::Storage`] if the threads or their messages cannot be read.
+    pub async fn history(&self, scope: &ThreadScope) -> Result<History, AgentError> {
+        let pool = &self.services.db().0;
+        let principal = self.principal().await?;
+        let threads = crate::database::local::agent_threads::list_threads(
+            pool,
+            Some(scope.agent_kind.as_str()),
+            Some(scope.subject_kind.as_str()),
+            Some(&scope.subject_id),
+            principal.as_deref(),
+        )
+        .await
+        .map_err(AgentError::Storage)?;
+        let messages = crate::database::local::agent_threads::list_subject_messages(
+            pool,
+            scope.agent_kind.as_str(),
+            scope.subject_kind.as_str(),
+            &scope.subject_id,
+            principal.as_deref(),
+        )
+        .await
+        .map_err(AgentError::Storage)?;
+        Ok(History::build(threads, messages))
+    }
+
+    /// One specific conversation, by id.
+    ///
+    /// The history picker's open path, and the reason it exists: [`Self::resolve_thread`]
+    /// answers "the newest thread for this subject", so routing a picked row
+    /// through it would land the reader in whichever conversation about that
+    /// track happens to be newest — not the one they clicked. An id is the only
+    /// unambiguous name a conversation has.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::Storage`] if the thread does not exist or cannot be read.
+    pub async fn open_thread(&self, thread_id: &str) -> Result<AgentThreadDetail, AgentError> {
+        let principal = self.principal().await?;
+        crate::database::local::agent_threads::get_thread(
+            &self.services.db().0,
+            thread_id,
+            principal.as_deref(),
+        )
+        .await
+        .map_err(AgentError::Storage)
+    }
+
+    /// A brand new conversation about `scope`, always created.
+    ///
+    /// Distinct from [`Self::resolve_thread`] for the same reason [`Self::open_thread`]
+    /// is: "start a new chat" is a statement, not a lookup, and a resolve would
+    /// hand back the existing one whenever there was one — which is precisely
+    /// the button not working.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::Storage`] if the thread cannot be created.
+    pub async fn new_thread(&self, scope: &ThreadScope) -> Result<AgentThreadDetail, AgentError> {
+        let principal = self.principal().await?;
+        let created = self
+            .services
+            .authored()
+            .create_thread_with_authored_state(
+                &self.services.db().0,
+                scope.create_input(uuid::Uuid::new_v4().to_string()),
+                principal.as_deref(),
+            )
+            .await
+            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        Ok(AgentThreadDetail {
+            thread: created,
+            messages: Vec::new(),
+        })
     }
 
     /// The newest thread matching `scope`, creating one if none exists.

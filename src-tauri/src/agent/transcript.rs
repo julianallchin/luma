@@ -293,6 +293,20 @@ impl AgentChatMessage {
         Value::Array(self.parts.iter().map(AgentChatPart::to_value).collect())
     }
 
+    /// What this row *says*: its text parts, in order, joined by newlines.
+    /// Reasoning, tool calls and provider metadata are not speech.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.parts
+            .iter()
+            .filter_map(|part| match part {
+                AgentChatPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Read a row's `parts` column.
     ///
     /// # Errors
@@ -523,15 +537,7 @@ pub fn to_model_messages(transcript: &Transcript, registry: &ToolRegistry) -> Ve
     for message in &transcript.messages {
         match message.role {
             Role::User => {
-                let text = message
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        AgentChatPart::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let text = message.text();
                 if !text.is_empty() {
                     out.push(ModelMessage {
                         role: ModelRole::User,

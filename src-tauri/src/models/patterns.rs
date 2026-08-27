@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
