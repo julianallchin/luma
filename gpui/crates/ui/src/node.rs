@@ -187,8 +187,25 @@ pub fn agent_paint_node(
     window: &gpui::Window,
     cx: &mut gpui::App,
 ) {
+    agent_paint_node_focused(role, label, bounds, false, window, cx);
+}
+
+/// [`agent_paint_node`], carrying the painted twin of
+/// [`AgentNode::agent_focused`]: a painted control the screen's keyboard verbs
+/// will act on next — a selected card on the graph canvas — reports
+/// `focused: true`, which is how a script asserts a selection the paint only
+/// shows as a border.
+#[cfg(feature = "agent")]
+pub fn agent_paint_node_focused(
+    role: Role,
+    label: impl Into<SharedString>,
+    bounds: Bounds<Pixels>,
+    focused: bool,
+    window: &gpui::Window,
+    cx: &mut gpui::App,
+) {
     let bounds = bounds.intersect(&window.content_mask().bounds);
-    imp::push_painted(cx, role, label.into(), bounds);
+    imp::push_painted(cx, role, label.into(), bounds, focused);
 }
 
 /// See the `agent`-enabled twin. Without the feature there is no registry, so
@@ -199,6 +216,19 @@ pub fn agent_paint_node(
     _role: Role,
     _label: impl Into<SharedString>,
     _bounds: Bounds<Pixels>,
+    _window: &gpui::Window,
+    _cx: &mut gpui::App,
+) {
+}
+
+/// See the `agent`-enabled twin.
+#[cfg(not(feature = "agent"))]
+#[inline(always)]
+pub fn agent_paint_node_focused(
+    _role: Role,
+    _label: impl Into<SharedString>,
+    _bounds: Bounds<Pixels>,
+    _focused: bool,
     _window: &gpui::Window,
     _cx: &mut gpui::App,
 ) {
@@ -439,6 +469,7 @@ mod imp {
         role: Role,
         label: SharedString,
         bounds: Bounds<Pixels>,
+        focused: bool,
     ) {
         NodeRegistry::push(cx, |id| Node {
             id,
@@ -446,7 +477,7 @@ mod imp {
             label,
             bounds,
             enabled: true,
-            focused: false,
+            focused,
         });
     }
 

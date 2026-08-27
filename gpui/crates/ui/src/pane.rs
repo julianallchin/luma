@@ -27,6 +27,7 @@ use std::time::Instant;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
+use crate::drag::DragGhost;
 use crate::motion::{self, RESIZE};
 
 /// A width that is on its way from one value to another.
@@ -95,6 +96,21 @@ impl PaneWidth {
         self.moving = None;
     }
 
+    /// Whether the region is at rest rather than part-way through a slide.
+    ///
+    /// What it is for: a width that is *derived* from something else already
+    /// moving (a panel sized against the sliding sidebar) must be [`set`], not
+    /// [`retarget`]ed — a tween whose destination changes every frame restarts
+    /// every frame, so it trails its own source and lands in a lurch. A caller
+    /// with such a width asks this, and only animates the toggle.
+    ///
+    /// [`set`]: Self::set
+    /// [`retarget`]: Self::retarget
+    #[must_use]
+    pub fn settled(&self) -> bool {
+        self.moving.is_none()
+    }
+
     /// This frame's width, without asking for another frame. Callers that are
     /// rendering want [`Self::eval`]; this is for arithmetic (a takeover panel
     /// sized against the sidebar's live width).
@@ -103,12 +119,7 @@ impl PaneWidth {
         let Some(Tween { from, started }) = self.moving else {
             return self.target;
         };
-        let span = RESIZE.total().mul_f32(motion::speed_scale());
-        let raw = started.elapsed().as_secs_f32() / span.as_secs_f32();
-        if raw >= 1.0 {
-            return self.target;
-        }
-        motion::lerp(from, self.target, RESIZE.progress(raw))
+        motion::lerp(from, self.target, motion::exit_progress(&RESIZE, started))
     }
 
     /// This frame's width, asking for the next frame while still moving.
@@ -129,27 +140,57 @@ impl PaneWidth {
 
 /// A region at `width`, clipping `inner` laid out at `content` — see the
 /// module docs for why the two differ during a slide.
+///
+/// The content also fades with the slide ([`motion::reveal_opacity`]), and the
+/// openness it fades on is exactly `width / content` — the tween this function
+/// is already holding both ends of. That is why the fade lives here and not at
+/// the call sites: a caller would have to be handed the same two numbers to
+/// recompute the same ratio, and a caller that forgot would be the one region
+/// whose content pops.
 pub fn pane(width: Pixels, content: Pixels, inner: AnyElement) -> Div {
-    div()
-        .h_full()
-        .flex_none()
-        .overflow_hidden()
-        .w(width)
-        .child(div().h_full().w(content).flex().flex_col().child(inner))
+    let target = f32::from(content);
+    let openness = if target > 0.0 {
+        f32::from(width) / target
+    } else {
+        1.0
+    };
+    div().h_full().flex_none().overflow_hidden().w(width).child(
+        div()
+            .h_full()
+            .w(content)
+            .flex()
+            .flex_col()
+            // Only while it is actually arriving: a resting region should
+            // carry no opacity at all rather than a redundant ×1.
+            .when(openness < 1.0, |content| {
+                content.opacity(motion::reveal_opacity(openness))
+            })
+            .child(inner),
+    )
 }
 
-/// A seam the mouse can pull, floating over the boundary at zero layout width.
+/// Which boundary a seam is: the axis it *moves along*, not the one it spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seam {
+    /// A vertical rule between two side-by-side regions, dragged left/right.
+    Vertical,
+    /// A horizontal rule between two stacked regions, dragged up/down.
+    Horizontal,
+}
+
+/// A seam the mouse can pull, floating over the boundary at zero layout size.
 ///
 /// gpui's drag-and-drop rather than a mouse-move listener: the drag survives
 /// the pointer leaving the 5px strip, which a hover-scoped listener would not.
 /// The marker type `M` is what tells the root's `on_drag_move` *which* seam is
-/// moving, so the two seams share this one implementation.
+/// moving, so every seam shares this one implementation.
 ///
 /// Double-click resets — `reset` is a plain fn pointer because there is exactly
 /// one behaviour per seam and a closure would only be a place to capture state
 /// this element must not hold.
 pub fn resize_handle<M: 'static, V: Render>(
     id: &'static str,
+    seam: Seam,
     marker: fn() -> M,
     reset: fn(&mut V, &mut Context<V>),
     hover: Hsla,
@@ -157,10 +198,11 @@ pub fn resize_handle<M: 'static, V: Render>(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .w(px(HANDLE_WIDTH))
-        .h_full()
         .flex_none()
-        .cursor_col_resize()
+        .map(|handle| match seam {
+            Seam::Vertical => handle.w(px(HANDLE_WIDTH)).h_full().cursor_col_resize(),
+            Seam::Horizontal => handle.h(px(HANDLE_WIDTH)).w_full().cursor_row_resize(),
+        })
         .hover(move |s| s.bg(hover))
         .on_drag(marker(), |_, _: Point<Pixels>, _, cx| {
             cx.stop_propagation();
@@ -177,19 +219,9 @@ pub fn resize_handle<M: 'static, V: Render>(
         )
 }
 
-/// How wide the grab strip is. Narrow enough to read as a seam, wide enough to
-/// hit without aiming.
+/// How thick the grab strip is, across whichever axis it spans. Narrow enough
+/// to read as a seam, wide enough to hit without aiming.
 pub const HANDLE_WIDTH: f32 = 5.0;
-
-/// The thing gpui drags. Empty on purpose: the seam is not a card being
-/// carried anywhere, and a visible ghost would be a second cursor.
-struct DragGhost;
-
-impl Render for DragGhost {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
-}
 
 /// A fade band at one edge of a scrolling region, so content dissolves under
 /// the chrome above or below it rather than being cut off by it.

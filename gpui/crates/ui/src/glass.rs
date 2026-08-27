@@ -26,14 +26,36 @@
 //! place a grey is written down. The tier decides *how much desktop shows
 //! through*, never *what colour a surface is*.
 //!
-//! # Coverage cannot place a plane
+//! # What a plane may spend on the blur
 //!
-//! A translucent surface's brightness is set by whatever is behind the window,
-//! so a plane painted at a coverage has no rung — it has a wallpaper. The
-//! shell's three structural planes (sidebar, thread column, workspace) are
-//! therefore painted straight from [`crate::ladder`], opaque, and this tier
-//! covers what genuinely *floats* over them plus the washes and inks a
-//! translucent surface's own states have to be.
+//! A translucent surface's brightness is set partly by whatever is behind the
+//! window, so a coverage costs a plane some of its rung. Whether that is worth
+//! paying is decided by **what the plane carries**, not by where it sits:
+//!
+//! - the window's one root fill is [`glass`], and the sidebar lifts off it with
+//!   a [`tone_column`] wash rather than a plane of its own — chrome, so the
+//!   blur is the point;
+//! - the workspace panel is [`crate::ladder::background`], **opaque** — it
+//!   carries instrument surfaces, and a waveform read through a blurred
+//!   desktop is a waveform you cannot read;
+//! - the thread column is [`panel_opaque`], the same ground at full coverage —
+//!   it scrolls, and a transcript that scrolls needs its ends dissolved.
+//!
+//! So the rule is: **a structural plane is opaque** — because it carries an
+//! instrument, or because it carries scrolling content whose edges have to be
+//! faded. Only what genuinely *floats* takes a coverage.
+//!
+//! The second half of that is the less obvious one. A fade band is an overlay
+//! painted **on** its plane, so it can only disappear into a colour it can
+//! name; a translucent plane's on-screen tone is its rung composited over
+//! whatever is behind the *window*, which no band can match at any tint. The
+//! thread column read as a dark strip under its own header for exactly that
+//! reason, at every tint tried. Opaque, the band and the plane are one token,
+//! and
+//! they agree by construction rather than by calibration.
+//!
+//! This tier therefore covers those grounds, what floats over them, and the
+//! washes and inks a translucent surface's own states have to be.
 //!
 //! [`ink`], [`wash`] and [`hairline`] are the exception, and deliberately so:
 //! they are alpha over neutral white, which is what a translucent surface's
@@ -76,6 +98,23 @@ pub fn invalidate() {
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
+// ---------------------------------------------------------------------------
+// The alpha families
+// ---------------------------------------------------------------------------
+//
+// Four families, and every translucent value on this tier belongs to exactly
+// one of them. They exist as separate functions rather than one `alpha(a)`
+// because they do not move together when the field behind them changes: on a
+// bright backdrop an edge needs *more* ink and a plate needs *less*, and a
+// scrim must stay black while a fill flips to soft-black. That divergence is
+// precisely what a light mode would have to express, so the families are the
+// seam a second appearance is added at — one `match` per family, no call site
+// touched. Luma is dark-only today (see "One appearance" above), so each is
+// currently a single arm.
+//
+// Alphas are quoted at every call site in dark-mode terms; a family, not a
+// call site, is where a second appearance would derive its own value.
+
 /// Translucent **fill** ink for interactive states and chip plates.
 ///
 /// Fills rest on transparent *white* at zero alpha, never on transparent
@@ -100,12 +139,32 @@ pub fn wash(alpha: f32) -> Hsla {
     hsla(0.0, 0.0, 0.92, alpha)
 }
 
+/// Recessed **shade**: always black, at every appearance. The family that
+/// *subtracts* light — a modal backdrop ([`scrim`]) and the recessed strip a
+/// palette's header and footer sit on ([`band`]) are the same gesture at two
+/// strengths, and neither has a tone to flip. A "light scrim" of white would
+/// wash a modal out instead of seating it.
+///
+/// This is the one family with no ladder rung behind it, and deliberately so:
+/// the ladder climbs from its ground and has nothing below the floor, so
+/// *recessed* cannot be a rung. It has to be paint that removes light.
+#[must_use]
+pub fn scrim(alpha: f32) -> Hsla {
+    hsla(0.0, 0.0, 0.0, alpha)
+}
+
 /// Alpha of the standard modal backdrop.
 pub const SCRIM_ALPHA: f32 = 0.60;
 
-/// Dialogs use the lighter Comet palette treatment: enough dimming to detach
-/// the overlay without erasing the colour the frosted card is meant to carry.
-pub const DIALOG_SCRIM_ALPHA: f32 = 0.35;
+/// Alpha of the modal backdrop behind a dialog.
+///
+/// Heavier than the 0.35 this was when the plane was *also* blurred: dimming is
+/// now the only thing separating the dialog from the shell, so it has to do
+/// that work alone. Lighter than [`SCRIM_ALPHA`], because the shell underneath
+/// is meant to stay legible — a lighting desk's stage should still read as a
+/// stage while you pick a track to put on it, and a blackout would say the
+/// dialog had replaced the app rather than risen above it.
+pub const DIALOG_SCRIM_ALPHA: f32 = 0.45;
 
 /// Coverage of a chrome surface over whatever is behind the window.
 ///
@@ -121,15 +180,25 @@ pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
 /// painted it opaque, the coverage costs nothing at all.
 pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 
-/// Coverage of a floating chrome surface — menu, popover, picker. Heavier than
-/// [`PANEL_ALPHA`] because a menu's rows have to sit on a *known* background:
-/// text ghosting over whatever the popover happens to cover is worse than a
-/// thinner blur.
-pub const OVERLAY_ALPHA: f32 = if cfg!(target_os = "macos") { 0.85 } else { 1.0 };
+/// Coverage of a floating chrome surface — menu, popover, picker. Near-opaque,
+/// because these are the surfaces whose whole job is carrying *text*, and text
+/// may not ghost under text: at any real translucency a menu row over a label
+/// ("subtract" over a strip's "REPLACE") reads as two broken strings, not as
+/// depth. The last few percent keep the surface in the glass family without
+/// letting anything legible through; decorative glass ([`PANEL_ALPHA`],
+/// [`DIALOG_ALPHA`] — whose card sits on its own scrim) keeps its coverage.
+pub const OVERLAY_ALPHA: f32 = if cfg!(target_os = "macos") { 0.96 } else { 1.0 };
 
-/// Coverage of a large frosted picker. Menus need the heavier overlay tint;
-/// a dialog has enough area for blur and backdrop colour to become its body.
-pub const DIALOG_ALPHA: f32 = if cfg!(target_os = "macos") { 0.34 } else { 1.0 };
+/// Coverage of a large frosted picker.
+///
+/// Raised from the 0.34 this was when the modal plane behind it was ALSO
+/// blurred. With the plane reduced to a plain tint the card became the only
+/// thing separating a dialog from the shell, and at a third coverage it read
+/// as see-through rather than as glass — the content behind it stayed legible
+/// enough to compete with the content on it. Still well short of [`OVERLAY_ALPHA`]:
+/// a menu has to put rows on a *known* background, while a dialog is big
+/// enough that some of the blurred backdrop showing through is the point.
+pub const DIALOG_ALPHA: f32 = if cfg!(target_os = "macos") { 0.62 } else { 1.0 };
 
 /// The chrome plane: what a surface takes to read as *frame* rather than
 /// content. [`ladder::chrome_plane`] at [`GLASS_ALPHA`] — the sidebar's own
@@ -142,17 +211,37 @@ pub fn glass() -> Hsla {
     tinted(ladder::chrome_plane(), GLASS_ALPHA)
 }
 
-/// The content ground under a chrome surface — the thread column's own floor.
-/// [`ladder::background`] at [`PANEL_ALPHA`].
+/// The content ground with the desktop showing through it: [`ladder::background`]
+/// at [`PANEL_ALPHA`].
 ///
-/// The coverage is a no-op wherever the shell has already painted the ground
-/// opaque underneath, which is everywhere it matters: a tone at any alpha over
-/// *itself* resolves to itself. That is what lets the transcript's fade band
-/// arrive at exactly the colour it is sitting on without knowing which of the
-/// two painted it.
+/// No plane in the shell takes this — every structural plane is opaque (see the
+/// module docs), so this is the coverage a *floating* surface reaches for when
+/// it wants the ground's rung rather than the apex. Anything painted **on** a
+/// ground wants [`panel_opaque`] instead.
 #[must_use]
 pub fn panel() -> Hsla {
     tinted(ladder::background(), PANEL_ALPHA)
+}
+
+/// The content ground's **colour**, at full coverage.
+///
+/// [`panel`] is that colour at [`PANEL_ALPHA`], and the coverage is the part
+/// that does not travel: it is what the plane spends on the blur *behind the
+/// window*. Anything painted **on** the ground — a fade band, a dissolve, a
+/// mask — has the ground behind it rather than the desktop, so reusing
+/// [`panel`] there paints a second half-coverage of the same tone over a
+/// surface that already has it: too dark to match the ground, and too
+/// transparent to hide what it is covering.
+///
+/// So this is what a structural plane and everything painted on it both ask
+/// for — the thread column and the fade bands at its ends are the same token,
+/// which is what makes them match. [`panel`] is the same colour spending part
+/// of itself on the blur, for a surface that floats. Same colour, one
+/// definition, two coverages — two functions rather than an alpha argument
+/// nobody would know how to pick.
+#[must_use]
+pub fn panel_opaque() -> Hsla {
+    tinted(ladder::background(), 1.0)
 }
 
 /// A floating chrome surface: menu, popover, the plane an overlay screen sits
@@ -163,16 +252,27 @@ pub fn overlay() -> Hsla {
     tinted(ladder::apex(), OVERLAY_ALPHA)
 }
 
-/// Translucent material for large modal cards.
+/// Translucent material for large modal cards. [`ladder::apex`] at
+/// [`DIALOG_ALPHA`] — the same rung [`overlay`] takes, because a dialog floats
+/// for the same reason a menu does; only the coverage differs.
 #[must_use]
 pub fn dialog() -> Hsla {
-    neutral(0.33).opacity(DIALOG_ALPHA)
+    tinted(ladder::apex(), DIALOG_ALPHA)
 }
 
-/// Recessed translucent header/footer band used by palette-shaped dialogs.
+/// Alpha of the recessed strip a palette's header and footer sit on.
+///
+/// Measured subtler values vanish against the dim scrim: the band has to read
+/// as recessed through both the backdrop blur and the card tint above it.
+pub const BAND_ALPHA: f32 = 0.16;
+
+/// Recessed translucent header/footer band used by palette-shaped dialogs —
+/// the [`scrim`] family at [`BAND_ALPHA`]. A strip that is *below* the card's
+/// own surface cannot be a rung (see [`scrim`]); it is the card's material
+/// with light taken back out of it.
 #[must_use]
 pub fn band() -> Hsla {
-    hsla(0.0, 0.0, 0.0, 0.16)
+    scrim(BAND_ALPHA)
 }
 
 /// A ladder tone taken to the glass tier at `alpha`. The single conversion
@@ -182,12 +282,77 @@ fn tinted(tone: gpui::Rgba, alpha: f32) -> Hsla {
     Hsla::from(tone).opacity(alpha)
 }
 
+/// The chrome band's three wash strengths, named so the tab chips, the corner
+/// toggles and the close hotspot cannot drift apart one literal at a time.
+/// Hover on a control at rest — the quietest lift there is.
+pub const WASH_SUBTLE: f32 = 0.06;
+/// What an *active* chrome control rests at: the selected tab chip, a toggle
+/// whose panel is up, the armed close hotspot.
+pub const WASH_REST: f32 = 0.10;
+/// Hover over an already-active control — one step above its rest, so the
+/// pointer still reads on the brightest chip in the band.
+pub const WASH_EMPHASIS: f32 = 0.14;
+
+/// Alpha of the one wash that marks a row as *lifted* — hovered or selected.
+///
+/// Hover and selection share this fill on purpose. Two different fills make a
+/// hovered row and a selected row compete for the same reading, and the moment
+/// the pointer rests on the selected row they have to resolve into one anyway.
+/// What distinguishes selection is the ring ([`card_selected_shadows`]), which
+/// is an *edge* — a different channel, so the two compose instead of fighting.
+pub const SELECTION_ALPHA: f32 = 0.11;
+
 /// Hover wash for a row sitting directly on [`glass`]. Softer than an opaque
 /// element hover: over a translucent ground a full-strength wash paints out the
 /// tint that is the point of the tier.
+///
+/// Identical to [`card_selected_bg`] by construction — see [`SELECTION_ALPHA`].
 #[must_use]
 pub fn glass_hover() -> Hsla {
-    wash(0.11)
+    wash(SELECTION_ALPHA)
+}
+
+/// Selected fill for a row or chip inside a floating card — menu rows, the
+/// picker rail, segmented chips. The same wash a hover takes
+/// ([`SELECTION_ALPHA`]); the ring is what says "selected".
+#[must_use]
+pub fn card_selected_bg() -> Hsla {
+    wash(SELECTION_ALPHA)
+}
+
+/// The selected chip's outline, as an **inset** shadow.
+///
+/// gpui paints inset shadows on top of the background and only at the edges —
+/// a border with no layout cost, so selection never reflows a row. A *drop*
+/// shadow is a filled rect painted BEHIND the element, and behind a
+/// translucent fill it shows straight through as an opaque plate with a greyed
+/// rim. Nothing may paint behind a glass chip: the card already carries
+/// whatever elevation the stack needs, and selection inside it only owes the
+/// edge.
+///
+/// One layer, zero blur, one pixel of spread. A blurred ring on a near-black
+/// field reads as smudge rather than outline at this size.
+#[must_use]
+pub fn card_selected_shadows() -> Vec<gpui::BoxShadow> {
+    vec![gpui::BoxShadow {
+        color: hairline(0.09),
+        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+        blur_radius: gpui::px(0.0),
+        spread_radius: gpui::px(1.0),
+        inset: true,
+    }]
+}
+
+/// The keyboard cursor's plate — the row the arrow keys are on, which is *not*
+/// the same thing as the row that is selected.
+///
+/// A step below [`card_selected_bg`] and from the [`ink`] family rather than
+/// the wash: the cursor is a position, not a state, so it reads as a lighter
+/// plate with no ring. Two rows looking selected at once is the bug this
+/// distinction exists to prevent.
+#[must_use]
+pub fn card_cursor_bg() -> Hsla {
+    ink(0.05)
 }
 
 /// A card raised off the glass — code block, tool chip, header strip.
@@ -203,6 +368,40 @@ pub fn glass_hover() -> Hsla {
 #[must_use]
 pub fn card_bg() -> Hsla {
     ink(0.05)
+}
+
+/// Coverage of the sidebar's tone column over the shell root.
+///
+/// Barely there on purpose: the sidebar is *not* a plane of its own on a
+/// blurred window — see [`tone_column`].
+pub const TONE_COLUMN_ALPHA: f32 = 0.05;
+
+/// The sidebar's tone: a wash over the shell root, not a fill of its own.
+///
+/// # The blur is a window property, not an element's
+///
+/// A blurred sidebar is three things together, and painting any of them alone
+/// gets nothing:
+///
+/// 1. the window composites blurred ([`window_background_appearance`]),
+/// 2. the shell **root** paints [`glass`] — one translucent fill across the
+///    whole window, which is the only surface the desktop shows through,
+/// 3. the sidebar paints *this* over that root, plus a `border_r` of
+///    [`hairline`], and **no background of its own**.
+///
+/// Step 3 is the counter-intuitive one. An opaque sidebar rung would be a
+/// slab sitting on the blur rather than a region of it; a *translucent* rung
+/// would land on the root's own tone and vanish. Only a wash lifts what is
+/// already behind it, which is what "one blurred pane, subtly divided" has to
+/// mean. The column is a tone, and the border is the division.
+///
+/// The gotcha in step 1: gpui's macOS backend tears the `NSVisualEffectView`
+/// out of the hierarchy whenever the appearance is set to anything but
+/// `Blurred`, so a theme swap must **re-push** it — see
+/// [`window_background_appearance`].
+#[must_use]
+pub fn tone_column() -> Hsla {
+    wash(TONE_COLUMN_ALPHA)
 }
 
 /// How the window must be composited for [`glass`] to mean anything.
@@ -222,12 +421,6 @@ pub fn window_background_appearance() -> WindowBackgroundAppearance {
     } else {
         WindowBackgroundAppearance::Opaque
     }
-}
-
-/// Modal backdrop. Black: a scrim's job is to darken what is behind it.
-#[must_use]
-pub fn scrim(alpha: f32) -> Hsla {
-    hsla(0.0, 0.0, 0.0, alpha)
 }
 
 /// A neutral (chroma 0) oklch tone. Chroma 0 means `r == g == b` exactly, so
@@ -308,15 +501,71 @@ mod tests {
     /// The tier borrows the ladder's *value* and changes only its coverage —
     /// a glass surface that had drifted to a tone of its own is the bug this
     /// asserts against.
+    ///
+    /// Every surface function on this tier is listed. A new one that is not
+    /// here has escaped the contract, so the count is asserted too.
     #[test]
     fn glass_surfaces_are_ladder_rungs_at_a_coverage() {
-        for (surface, rung, alpha) in [
-            (glass(), ladder::chrome_plane(), GLASS_ALPHA),
-            (panel(), ladder::background(), PANEL_ALPHA),
-            (overlay(), ladder::apex(), OVERLAY_ALPHA),
-        ] {
-            assert_eq!(surface.l, Hsla::from(rung).l);
-            assert_eq!(surface.a, alpha);
+        let surfaces = [
+            ("glass", glass(), ladder::chrome_plane(), GLASS_ALPHA),
+            ("panel", panel(), ladder::background(), PANEL_ALPHA),
+            ("overlay", overlay(), ladder::apex(), OVERLAY_ALPHA),
+            ("dialog", dialog(), ladder::apex(), DIALOG_ALPHA),
+        ];
+        for (name, surface, rung, alpha) in surfaces {
+            assert_eq!(surface.l, Hsla::from(rung).l, "{name} minted its own tone");
+            assert_eq!(surface.s, 0.0, "{name} picked up a tint");
+            assert_eq!(surface.a, alpha, "{name} is not at its declared coverage");
+        }
+        assert_eq!(surfaces.len(), 4, "a new surface must join the guard");
+    }
+
+    /// A dialog floats for the same reason a menu does, so it lands on the
+    /// same rung; only how much desktop it lets through differs.
+    #[test]
+    fn the_two_floating_surfaces_share_a_rung() {
+        assert_eq!(dialog().l, overlay().l);
+        assert_ne!(dialog().a, overlay().a);
+    }
+
+    /// Recessed paint has no rung to borrow (there is nothing below the
+    /// ground), so it must come from the one family that subtracts light.
+    #[test]
+    fn recessed_paint_is_the_scrim_family() {
+        assert_eq!(band(), scrim(BAND_ALPHA));
+        for shade in [band(), scrim(SCRIM_ALPHA), scrim(DIALOG_SCRIM_ALPHA)] {
+            assert_eq!(shade.l, 0.0, "a shade that is not black is not recessed");
+            assert_eq!(shade.s, 0.0);
+        }
+    }
+
+    /// Hover and selection are the same lift; only the ring separates them.
+    /// A second fill here is the bug — see [`SELECTION_ALPHA`].
+    #[test]
+    fn hover_and_selection_share_one_fill_and_differ_only_by_the_ring() {
+        assert_eq!(glass_hover(), card_selected_bg());
+        assert_ne!(card_cursor_bg(), card_selected_bg());
+
+        let ring = card_selected_shadows();
+        assert_eq!(ring.len(), 1, "selection is one edge, not a stack");
+        assert!(ring[0].inset, "a drop shadow paints behind a glass chip");
+        assert_eq!(ring[0].blur_radius, gpui::px(0.0));
+        assert_eq!(ring[0].spread_radius, gpui::px(1.0));
+        assert_eq!(ring[0].color, hairline(0.09));
+    }
+
+    /// The four families are the seam a light mode is added at, so each has to
+    /// stay recognisably itself: fills and edges lift, washes stop short of
+    /// white, shades are black.
+    #[test]
+    fn the_alpha_families_stay_distinct() {
+        assert_eq!(ink(0.5).l, 1.0);
+        assert_eq!(hairline(0.5).l, 1.0);
+        assert!(wash(0.5).l < 1.0, "a wash that reached white is an ink");
+        assert_eq!(scrim(0.5).l, 0.0);
+        for family in [ink(0.42), hairline(0.42), wash(0.42), scrim(0.42)] {
+            assert_eq!(family.a, 0.42, "a family must not rescale its alpha");
+            assert_eq!(family.s, 0.0);
         }
     }
 
