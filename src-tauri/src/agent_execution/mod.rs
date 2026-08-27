@@ -17,6 +17,7 @@
 
 pub mod artifacts;
 pub mod bindings;
+pub mod cell_host;
 pub mod error;
 pub mod graph_runs;
 pub mod headless_env;
@@ -28,6 +29,7 @@ mod sandbox_tests;
 pub mod tauri_env;
 pub mod thread_cleanup;
 pub mod track_host;
+pub mod venue_host;
 pub mod worker_launcher;
 pub mod worker_process;
 pub mod workspace;
@@ -39,6 +41,7 @@ pub use bindings::{
     AgentKind, AnalysisScope, AnalysisWindow, ArtifactId, AxisSpec, BindingBuilder,
     BindingManifest, BindingRevision, BindingValue, DType, Provenance, TensorRef,
 };
+pub use cell_host::CellHost;
 pub use error::{DataPlaneError, Result};
 pub use graph_runs::GraphRunStore;
 pub use worker_launcher::{SandboxPolicy, WorkerLauncher};

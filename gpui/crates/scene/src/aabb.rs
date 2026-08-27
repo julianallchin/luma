@@ -56,6 +56,19 @@ impl Aabb {
         (self.max - self.min).max(Vec3::ZERO)
     }
 
+    /// The eight corners, indexed by the bits of `i`: bit 0 picks `max.x` over
+    /// `min.x`, bit 1 `max.y`, bit 2 `max.z`.
+    pub fn corners(&self) -> [Vec3; 8] {
+        let (lo, hi) = (self.min, self.max);
+        std::array::from_fn(|i| {
+            Vec3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            )
+        })
+    }
+
     /// Surface area, the SAH cost term. Zero for an empty box.
     pub fn surface_area(&self) -> f32 {
         if self.is_empty() {

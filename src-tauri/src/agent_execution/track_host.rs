@@ -6,10 +6,8 @@
 //! use the production compositor. The worker protocol remains domain-free.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -18,6 +16,7 @@ use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
 use crate::agent_execution::bindings::manifest::{AxisSpec, DType, Provenance, TensorRef};
+use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
 use crate::compositor::build_scene_strict;
@@ -36,8 +35,6 @@ const SAMPLES_PER_BEAT: f64 = 16.0;
 const FALLBACK_SAMPLES_PER_SECOND: f64 = 32.0;
 const MIN_SAMPLES: usize = 2;
 const MAX_SAMPLES: usize = 2048;
-const MAX_HOST_CALL_DURATION: Duration = Duration::from_secs(30);
-const HOST_CANCEL_POLL: Duration = Duration::from_millis(25);
 
 /// One cell's track capability table. Construct only from host-resolved scope.
 pub struct TrackHost {
@@ -334,10 +331,7 @@ impl HostCallHandler for TrackHost {
         // Keeping the protocol synchronous makes Python methods ordinary while
         // Tokio still owns every database/compositor operation.
         context.check()?;
-        let limit = context
-            .remaining()
-            .ok_or_else(|| HostCallError::new("timeout", "the cell deadline has expired"))?
-            .min(MAX_HOST_CALL_DURATION);
+        let limit = call_limit(context)?;
         self.runtime.block_on(async {
             if method == "track.apply" {
                 let plan: TrackEditPlan = decode(payload)?;
@@ -444,37 +438,6 @@ fn scoped_apply_digest(domain: &[u8], values: &[&str]) -> impl std::fmt::LowerHe
     hash.finalize()
 }
 
-async fn supervise<T>(
-    operation: impl Future<Output = Result<T, HostCallError>>,
-    context: &HostCallContext,
-    limit: Duration,
-) -> Result<T, HostCallError> {
-    tokio::pin!(operation);
-    let timeout = tokio::time::sleep(limit);
-    tokio::pin!(timeout);
-
-    loop {
-        tokio::select! {
-            biased;
-            result = &mut operation => break result,
-            _ = &mut timeout => {
-                break Err(HostCallError::new(
-                    "timeout",
-                    format!("track host call exceeded {:.0}s", limit.as_secs_f64()),
-                ));
-            }
-            _ = tokio::time::sleep(HOST_CANCEL_POLL) => {
-                if context.is_cancelled() {
-                    break Err(HostCallError::new(
-                        "cancelled",
-                        "the track host call was cancelled",
-                    ));
-                }
-            }
-        }
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TrackRenderRequest {
@@ -482,11 +445,6 @@ struct TrackRenderRequest {
     candidate: Vec<TrackClip>,
     start_time: f64,
     end_time: f64,
-}
-
-fn decode<T: for<'de> Deserialize<'de>>(payload: Value) -> Result<T, HostCallError> {
-    serde_json::from_value(payload)
-        .map_err(|error| HostCallError::new("invalid_request", error.to_string()))
 }
 
 fn edit_error(error: TrackEditError) -> HostCallError {

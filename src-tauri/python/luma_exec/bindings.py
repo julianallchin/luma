@@ -765,6 +765,7 @@ def build_namespace(
     workspace: Path,
     *,
     host_call: Any = None,
+    figures: Any = None,
 ) -> LumaNamespace:
     """Turn a parsed manifest into the `luma` root object."""
     version = int(manifest.get("schema_version", 0))
@@ -809,6 +810,20 @@ def build_namespace(
                 artifact_store=store,
             )
 
+    # The room is a binding record plus one capability: a camera over it. Every
+    # thread with a venue in scope gets it, track and graph alike — looking at a
+    # room is not an authored-track privilege.
+    venue_values = items.get("venue")
+    if isinstance(venue_values, LumaRecord):
+        from .venue import Venue
+
+        items["venue"] = Venue(
+            venue_values,
+            host_call=host_call,
+            figures=figures,
+            workspace=workspace,
+        )
+
     # The manifest envelope is authoritative for meta/window: `revision`,
     # `schema_version` and `agent_kind` always come from the top level, and the
     # window always mirrors scope.window. Anything else the provider put under
@@ -850,6 +865,7 @@ def load_manifest(
     manifest_rel: str,
     *,
     host_call: Any = None,
+    figures: Any = None,
 ) -> LumaNamespace:
     """Read `<workspace>/<manifest_rel>` and build the `luma` namespace."""
     workspace = Path(workspace)
@@ -860,4 +876,4 @@ def load_manifest(
         raise LumaBindingError("manifest_rel escapes the workspace")
     with open(path, "r", encoding="utf-8") as fh:
         manifest = json.load(fh)
-    return build_namespace(manifest, workspace, host_call=host_call)
+    return build_namespace(manifest, workspace, host_call=host_call, figures=figures)

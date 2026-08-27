@@ -8,13 +8,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat4, Vec3};
 
 use crate::assets::{HdrImage, Image, Library, Material, Vertex};
-use crate::coords::{
-    euler_xyz, hex_srgb, three_pose_from_data, three_to_world_basis, world_from_three,
+use crate::coords::{hex_srgb, three_pose_from_data, three_to_world_basis, world_from_three};
+use crate::luminaire::{
+    beam_direction, cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL,
 };
-use crate::luminaire::{cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL};
 use crate::overlay::Overlay;
 use crate::scene_desc::{Definition, PrimitiveState, Scene};
 
@@ -519,7 +519,6 @@ pub fn build_with(
         let Some(def) = definitions.get(&fixture.fixture_path) else {
             continue;
         };
-        let rot_three = euler_xyz(fixture.rot[0], fixture.rot[2], fixture.rot[1]);
         let base = to_world * three_pose_from_data(fixture.pos, fixture.rot);
 
         if is_procedural(def) {
@@ -573,7 +572,7 @@ pub fn build_with(
             // One haze cone per *head* (not per pixel), fired from the middle
             // pixel of that head's run.
             let cone = cone_from_opening(PIXEL);
-            let dir = (r * (rot_three * Vec3::Z)).normalize();
+            let dir = beam_direction(Some(def), fixture.rot, None);
             for head in 0..head_count {
                 if fixture_cones.len() >= MAX_FIXTURE_CONES {
                     break;
@@ -665,14 +664,10 @@ pub fn build_with(
             continue;
         }
         let cone = cone_from_opening(luminaire_for(def, Some(kind)));
-        let dir_three = rot_three
-            * Mat3::from_rotation_y(head_state.position[0].to_radians())
-            * Mat3::from_rotation_x(-head_state.position[1].to_radians())
-            * Vec3::NEG_Y;
         fixture_cones.push(FixtureCone {
             position: base.transform_point3(Vec3::ZERO),
             range: cone.range,
-            direction: (r * dir_three).normalize(),
+            direction: beam_direction(Some(def), fixture.rot, Some(head_state.position)),
             cos_beam: cone.cos_beam,
             color: Vec3::from(head_state.color),
             intensity: intensity * cone.gain,

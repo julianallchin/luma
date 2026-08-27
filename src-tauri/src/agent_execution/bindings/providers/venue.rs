@@ -1,5 +1,5 @@
-//! `luma.venue` — the room: fixtures, groups, and the position of every
-//! primitive.
+//! `luma.venue` — the room: fixtures, stage pieces, groups, and the position of
+//! every primitive.
 //!
 //! The positions tensor is the load-bearing part. Its `primitive` axis is
 //! labeled with the **exact** ordered ids the evaluator produces
@@ -23,6 +23,8 @@ use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
 use crate::eval::ops::spatial::rig_uv;
+use crate::stage_render::flatten_pieces;
+use luma_scene::View;
 
 #[derive(Serialize)]
 struct FixtureBinding {
@@ -35,6 +37,24 @@ struct FixtureBinding {
     address: i64,
     num_channels: i64,
     position: [f64; 3],
+}
+
+/// One stage piece in the same world frame as [`FixtureBinding::position`].
+///
+/// `position`/`rotation` are the *flattened* pose — a piece parented to a truss
+/// stores its pose in the truss's local space, and an agent asked to find the
+/// booth cannot be expected to walk that chain. `parent_id` is kept so the
+/// attachment is still legible.
+#[derive(Serialize)]
+struct PieceBinding {
+    id: String,
+    /// Snap/palette taxonomy: `floor`, `truss`, `speaker`, `cdj`, `mixer`, ...
+    kind: String,
+    mesh_path: String,
+    position: [f32; 3],
+    rotation: [f32; 3],
+    scale: f32,
+    parent_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -67,12 +87,14 @@ pub async fn provide(
             "venue.id",
             "venue.name",
             "venue.fixtures",
+            "venue.pieces",
             "venue.groups",
             "venue.positions",
             "venue.uv",
         ] {
             unavailable(b, path, NO_VENUE)?;
         }
+        views(b)?;
         return Ok(());
     };
 
@@ -84,12 +106,14 @@ pub async fn provide(
                 "venue.id",
                 "venue.name",
                 "venue.fixtures",
+                "venue.pieces",
                 "venue.groups",
                 "venue.positions",
                 "venue.uv",
             ] {
                 unavailable(b, path, format!("the venue is not available: {error}"))?;
             }
+            views(b)?;
             return Ok(());
         }
     };
@@ -134,8 +158,53 @@ pub async fn provide(
         )?,
     }
 
+    pieces(b, &mut access).await?;
+    views(b)?;
     groups(b, ctx, &mut access).await?;
     positions(b, ctx, store, &mut access).await
+}
+
+/// The set design: everything in the room that is not a light.
+///
+/// The world pose comes from [`flatten_pieces`], the same parent-chain
+/// flattening the renderer draws with, so `render(view="dj")` and this record
+/// agree about where the booth is. The taxonomy and the attachment are read off
+/// the rows, which `flatten_pieces` returns one-for-one and in order.
+async fn pieces(b: &mut BindingBuilder, access: &mut VenueAccess<'_, Read>) -> Result<(), String> {
+    let rows = match local::stage::get_stage_pieces(access).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            return unavailable(
+                b,
+                "venue.pieces",
+                format!("the venue's stage pieces could not be loaded: {e}"),
+            )
+        }
+    };
+    let bindings: Vec<PieceBinding> = flatten_pieces(&rows)
+        .into_iter()
+        .zip(&rows)
+        .map(|(flat, row)| PieceBinding {
+            id: flat.id,
+            kind: row.kind.clone(),
+            mesh_path: flat.mesh_path,
+            position: flat.pos,
+            rotation: flat.rot,
+            scale: flat.scale,
+            parent_id: row.parent_piece_id.clone(),
+        })
+        .collect();
+    inline(b, "venue.pieces", &bindings)
+}
+
+/// The camera names `luma.venue.render(view=...)` accepts.
+///
+/// Sourced from [`View::ALL`] so the vocabulary is declared once, in the crate
+/// that implements it. A hand-written list in Python would be a second source
+/// of truth that drifts the first time a view is added.
+fn views(b: &mut BindingBuilder) -> Result<(), String> {
+    let names: Vec<&str> = View::ALL.iter().map(|view| view.name()).collect();
+    inline(b, "venue.views", &names)
 }
 
 async fn groups(
