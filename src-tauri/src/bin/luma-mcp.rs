@@ -674,7 +674,9 @@ async fn main() {
 
 async fn run() -> Result<(), String> {
     let config = HostConfig::parse_args(std::env::args().skip(1))?;
-    let services = Arc::new(boot(&config).await?);
+    // `into_shared`, not a bare `Arc::new`: the turn loop outlives the command
+    // that starts it, so it needs the back-reference `into_shared` attaches.
+    let services = boot(&config).await?.into_shared();
     eprintln!(
         "[luma-mcp] ready: config={} fixtures={}",
         services.storage().path().display(),
@@ -730,7 +732,7 @@ async fn run() -> Result<(), String> {
                 arguments,
             } => (id, name, arguments),
         };
-        let services = Arc::clone(&services);
+        let services = services.clone();
         let session = Arc::clone(&session);
         let client_cell = Arc::clone(&client_cell);
         let stdout = Arc::clone(&stdout);

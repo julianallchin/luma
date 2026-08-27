@@ -11,13 +11,13 @@
 //! loop nor the typed path knows this file exists.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Mutex, OnceLock};
 
 use futures_util::StreamExt;
 use serde_json::json;
 
 use super::{AgentError, AgentService, TurnSteer, UserPrompt};
-use crate::dispatch::AppServices;
+use crate::dispatch::{SharedServices, WeakServices};
 
 /// The event name every turn delta is broadcast under, for the one host that
 /// needs a broadcast.
@@ -34,25 +34,31 @@ struct Running {
 /// Held by [`AppServices`]; a host that never calls
 /// [`AppServices::into_shared`] has no shared handle to spawn against and the
 /// seam commands say so rather than silently doing nothing.
+///
+/// [`AppServices`]: crate::dispatch::AppServices
+/// [`AppServices::into_shared`]: crate::dispatch::AppServices::into_shared
 #[derive(Default)]
 pub struct TurnRegistry {
-    services: OnceLock<Weak<AppServices>>,
+    services: OnceLock<WeakServices>,
     running: Mutex<HashMap<String, Running>>,
 }
 
 impl TurnRegistry {
     /// Record the shared services handle a spawned turn will run against.
-    pub(crate) fn attach(&self, services: &Arc<AppServices>) {
-        let _ = self.services.set(Arc::downgrade(services));
+    pub(crate) fn attach(&self, services: &SharedServices) {
+        let _ = self.services.set(services.downgrade());
     }
 
-    fn shared(&self) -> Result<Arc<AppServices>, AgentError> {
-        self.services.get().and_then(Weak::upgrade).ok_or_else(|| {
-            AgentError::Invalid(
+    fn shared(&self) -> Result<SharedServices, AgentError> {
+        self.services
+            .get()
+            .and_then(WeakServices::upgrade)
+            .ok_or_else(|| {
+                AgentError::Invalid(
                 "this host has no shared services handle; build it with AppServices::into_shared"
                     .into(),
             )
-        })
+            })
     }
 
     /// Start a turn and stream it onto the event bus. Returns the turn id the
@@ -74,7 +80,7 @@ impl TurnRegistry {
         }
 
         let turn_id = uuid::Uuid::new_v4().to_string();
-        let mut stream = AgentService::new(Arc::clone(&services)).turn(thread_id, prompt);
+        let mut stream = AgentService::new(services.clone()).turn(thread_id, prompt);
         let steer = stream.steering();
         let events = services.events().clone();
         let thread = thread_id.to_string();
@@ -124,6 +130,13 @@ impl TurnRegistry {
         };
         running.steer.send(message);
         Ok(())
+    }
+
+    /// Whether a host installed the shared handle — the registry's entire
+    /// precondition, for a test that asserts a host wired itself.
+    #[cfg(test)]
+    pub(crate) fn is_attached(&self) -> bool {
+        self.shared().is_ok()
     }
 
     /// The turn id currently attached to a thread, if any.

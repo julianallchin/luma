@@ -50,7 +50,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::dispatch::AppServices;
+use crate::dispatch::{AppServices, SharedServices};
 use crate::models::agent_threads::{
     AgentThread, AgentThreadDetail, AgentThreadMessage, CreateAgentThreadInput,
 };
@@ -550,7 +550,7 @@ impl From<AgentError> for crate::dispatch::CommandError {
 /// it cannot borrow the caller's `&AppServices`.
 #[derive(Clone)]
 pub struct AgentService {
-    services: Arc<AppServices>,
+    services: SharedServices,
     /// Overrides provider selection. Set by tests and by a host that wants a
     /// scripted model; `None` resolves the model from settings and the key from
     /// the environment or the settings table.
@@ -562,7 +562,7 @@ pub struct AgentService {
 
 impl AgentService {
     #[must_use]
-    pub fn new(services: Arc<AppServices>) -> Self {
+    pub fn new(services: SharedServices) -> Self {
         Self {
             services,
             client: None,

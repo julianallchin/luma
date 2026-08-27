@@ -49,6 +49,13 @@ Bindings are auto-generated from Rust structs in `src-tauri/src/models/` using `
 - Regeneration: happens automatically on `cargo test`.
 - If you change exported Rust models, run `cargo test --manifest-path src-tauri/Cargo.toml` to refresh bindings.
 - Do **not** commit generated `src/bindings/schema.ts`.
+- A **filtered** run (`cargo test --lib <filter>`) rewrites `schema.ts` with only the types the filtered tests touched, so `bun run build` then fails on missing types. Run the full suite before building the frontend.
+
+## Migrations
+
+- Migrations are **append-only** once run on any machine: sqlx checksums each version (SHA-384), so editing an applied file breaks every launch with a checksum mismatch.
+- To amend a migration, add a new timestamped file — never edit or renumber an existing one.
+- Keep `src-tauri/migrations` (local SQLite) and `supabase/migrations` (remote Postgres) symmetric: a schema change that syncs needs a file in both.
 
 ## Testing Guidelines
 

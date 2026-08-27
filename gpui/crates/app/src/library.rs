@@ -64,7 +64,7 @@ use luma_lib::agent_execution::headless_env;
 use luma_lib::database::local::auth::bootstrap_host_admission;
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
-use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events};
+use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events, SharedServices};
 #[cfg(feature = "agent")]
 use luma_lib::dispatch::{
     system_track_sources, ImportedEngineDjTrack, ImportedRekordboxTrack, TrackSources,
@@ -497,7 +497,7 @@ impl std::error::Error for LibraryError {}
 
 /// A connection to the real Luma library.
 pub struct Library {
-    services: Arc<AppServices>,
+    services: SharedServices,
     /// Who the app database admitted at startup. `None` is the guest
     /// namespace, which is also what an un-signed-in host gets.
     user_id: Option<String>,
@@ -601,10 +601,10 @@ impl Library {
             Ok::<_, String>((services, user_id))
         })?;
 
-        let services = Arc::new(services);
+        let services = services.into_shared();
         let (session_writes, mut session_write_rx) =
             tokio::sync::mpsc::unbounded_channel::<SessionWrite>();
-        let session_services = Arc::clone(&services);
+        let session_services = services.clone();
         #[cfg(feature = "agent")]
         let session_navigation_fixture = Arc::clone(&navigation_fixture);
         runtime.spawn(async move {
@@ -656,7 +656,7 @@ impl Library {
     /// every dispatched command runs on, which is what keeps the agent's
     /// writes and the app's reads inside one transaction boundary.
     pub fn agent(&self) -> luma_chat::Agent {
-        let mut service = AgentService::new(Arc::clone(&self.services));
+        let mut service = AgentService::new(self.services.clone());
         if let Some(model) = &self.model {
             service = service.with_model(Arc::clone(model));
         }
@@ -1755,7 +1755,7 @@ impl Library {
     /// for until the fixture list has landed. A screen that orchestrated that
     /// would be a screen that knew the second call depends on the first.
     pub fn venue_rig(&self, venue_id: &str) -> impl Future<Output = Result<Rig, LibraryError>> {
-        let services = Arc::clone(&self.services);
+        let services = self.services.clone();
         let venue = json!({ "venueId": venue_id });
         let task = self.runtime.spawn(async move {
             let fixtures: Vec<PatchedFixture> =
@@ -1851,7 +1851,7 @@ impl Library {
         args: Value,
         after: Duration,
     ) -> impl Future<Output = Result<T, LibraryError>> + use<T> {
-        let services = Arc::clone(&self.services);
+        let services = self.services.clone();
         let task = self.runtime.spawn(async move {
             if !after.is_zero() {
                 tokio::time::sleep(after).await;
