@@ -128,9 +128,7 @@ Album art is *not* base64-inlined in list responses (see `list_tracks_enriched` 
 
 # Agent friction log
 
-`docs/AGENT_FRICTION.md` is where tooling complaints go — a command that lies, a
-convention that reads backwards, a trap that ate twenty minutes. When you hit one,
-append an entry before you finish the task: `- [YYYY-MM-DD] <complaint>. <what it
-cost>. <fix, if obvious>.`, newest at top, three lines max. Subagents included — a
-subagent that hit friction reports it, and the lead writes it down. Product bugs are
-not friction; those go in the task report.
+Hit friction — a command that lies, a convention that reads backwards, a trap that ate
+twenty minutes — and append one gripe line to `docs/AGENT_FRICTION.md` before you finish:
+newest first, `- [YYYY-MM-DD] <gripe>`. Subagents grumble, the lead writes it down. Product
+bugs aren't friction; those go in the task report.
