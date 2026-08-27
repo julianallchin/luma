@@ -684,6 +684,26 @@ async fn python_track_edit_applies_through_the_real_worker_and_transaction() {
     expect_ok(&out, "refresh committed track binding");
     assert_eq!(out.repr.as_deref(), Some("(2, 1)"));
 
+    // An apply advances `luma.track` inside its own cell. The host reinstalls
+    // the binding only between cells, so without that the rest of the cell
+    // would render and edit against a revision the host has already superseded.
+    let same_cell = f
+        .run_as_owner(
+            &thread,
+            turn_message_id,
+            "edit3 = luma.track.edit()\n\
+             edit3.add_clip('Blank canvas', seconds=(5.0, 6.0), z=0)\n\
+             applied3 = edit3.apply()\n\
+             after = luma.track.edit().window(seconds=(5.0, 6.0)).output.tensor\n\
+             (applied3.revision == luma.track.revision, len(luma.track.clips), after.shape)",
+        )
+        .await;
+    expect_ok(
+        &same_cell,
+        "render against the revision the same cell applied",
+    );
+    assert_eq!(same_cell.repr.as_deref(), Some("(True, 3, (2, 32, 3))"));
+
     f.service.shutdown_all();
 }
 

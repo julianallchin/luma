@@ -9,7 +9,7 @@ authoritative work (compilation, compositing, validation, and atomic apply).
 The public shape is intentionally small::
 
     edit = luma.track.edit()
-    edit.add_clip("Blue wash", bars=(17, 25), z=0,
+    edit.add_clip("Blue wash", bars=(17, 25), z=0,   # id or unique name
                   selection="front_wash")
     edit.update_clip("clip-id", args={"Intensity": .7})
     edit.remove_clip("another-id")
@@ -24,8 +24,13 @@ The public shape is intentionally small::
 
 An ``Edit`` always contains the *whole* candidate track.  A window therefore
 includes unchanged clips which intersect it, not only clips touched by the
-edit.  ``Track`` and ``Clip`` are immutable snapshots; mutation is confined to
-the explicit ``Edit`` object.
+edit.  ``Clip`` is an immutable value and ``Track`` changes only when an
+``Edit`` is applied, which advances it to the revision it committed; authoring
+is otherwise confined to the explicit ``Edit`` object.
+
+``pattern_id`` accepts a pattern id or an unambiguous pattern name, and is the
+same identity a clip carries as ``Clip.pattern_id``; ``clip_id`` likewise
+accepts a ``Clip``.
 
 Host calls
 ----------
@@ -67,6 +72,10 @@ from typing import Any
 
 
 HostCall = Callable[[str, Any], Any]
+
+#: Clips staged by an edit carry a provisional id until `apply` mints the real
+#: one. The prefix is what makes a staged id recognisable in a diff or error.
+TEMP_ID_PREFIX = "new:"
 
 BLEND_MODES = frozenset(
     {
@@ -356,7 +365,13 @@ class _PatternCatalog:
 
 
 class Track(_ImmutableSnapshot):
-    """An immutable binding snapshot of the current authored lighting track."""
+    """The current authored lighting track.
+
+    Immutable except through `Edit.apply`, which advances it to the revision
+    it just committed: `luma.track` always names the live score, whether the
+    host installed it at the start of the cell or an apply moved it forward
+    mid-cell.
+    """
 
     __slots__ = (
         "_values",
@@ -407,6 +422,21 @@ class Track(_ImmutableSnapshot):
         if not self.editable:
             raise TrackReadOnlyError("this track is read-only")
         return Edit(self)
+
+    def _advance(self, revision: str, clips: tuple[Clip, ...]) -> None:
+        """Adopt the authoritative document a successful apply just produced.
+
+        `luma.track` names the *current* authored score, not a photograph of it
+        taken when the cell began. The host reinstalls it between cells, so
+        without this an apply would leave the rest of its own cell holding a
+        superseded revision: every later `edit()`, `window()` or `heatmap()`
+        would be built on it and rejected by the host as a conflict.
+
+        Everything else in the snapshot — title, duration, patterns, features —
+        is unchanged by an apply, so only identity moves forward.
+        """
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "clips", clips)
 
     def window(
         self,
@@ -538,7 +568,7 @@ class Edit:
 
     def add_clip(
         self,
-        pattern: str,
+        pattern_id: str,
         *,
         bars: tuple[float, float] | None = None,
         seconds: tuple[float, float] | None = None,
@@ -548,7 +578,7 @@ class Edit:
         selection: str | None = None,
     ) -> Clip:
         self._ensure_open()
-        pattern_id, pattern_name = self._track._pattern(pattern)
+        pattern_id, pattern_name = self._track._pattern(pattern_id)
         start_s, end_s = self._track._resolve_range(bars=bars, seconds=seconds)
         blend = _blend(blend)
         z = _z(z)
@@ -569,9 +599,9 @@ class Edit:
 
     def update_clip(
         self,
-        clip_id: str,
+        clip_id: str | Clip,
         *,
-        pattern: str | None = None,
+        pattern_id: str | None = None,
         bars: tuple[float, float] | None = None,
         seconds: tuple[float, float] | None = None,
         z: int | None = None,
@@ -587,11 +617,11 @@ class Edit:
         else:
             start_s, end_s = before.start_s, before.end_s
 
-        if pattern is None:
+        if pattern_id is None:
             pattern_id, pattern_name = before.pattern_id, before.pattern_name
             prior_args = _thaw(before.args)
         else:
-            pattern_id, pattern_name = self._track._pattern(pattern)
+            pattern_id, pattern_name = self._track._pattern(pattern_id)
             # Argument ids belong to a pattern. Carrying them across a pattern
             # replacement is almost always an accidental, invalid mutation.
             prior_args = {} if pattern_id != before.pattern_id else _thaw(before.args)
@@ -625,13 +655,13 @@ class Edit:
             blend=before.blend if blend is None else _blend(blend),
             args=_freeze(next_args),
         )
-        self._clips[clip_id] = after
+        self._clips[before.id] = after
         return after
 
-    def remove_clip(self, clip_id: str) -> Clip:
+    def remove_clip(self, clip_id: str | Clip) -> Clip:
         self._ensure_open()
         clip = self._find(clip_id)
-        del self._clips[clip_id]
+        del self._clips[clip.id]
         return clip
 
     def window(
@@ -710,6 +740,7 @@ class Edit:
         updated = int(_field(response, "updated", default=len(difference.updated)))
         removed = int(_field(response, "removed", default=len(difference.removed)))
         self._closed = True
+        self._track._advance(revision, clips)
         return ApplyResult(
             revision=revision,
             clips=clips,
@@ -769,15 +800,30 @@ class Edit:
             errors.append(f"clips {left!r} and {right!r} overlap on z={z}")
         return CheckResult(ok=not errors, errors=tuple(errors))
 
-    def _find(self, clip_id: str) -> Clip:
+    def _find(self, clip_id: str | Clip) -> Clip:
+        """Resolve a clip reference against the candidate.
+
+        Accepts the `Clip` itself as well as its id: a clip taken from
+        `edit.clips` or returned by `add_clip` is always a usable reference,
+        so the common way of naming a staged clip cannot be mistyped.
+        """
+        if isinstance(clip_id, Clip):
+            clip_id = clip_id.id
+        key = str(clip_id)
         try:
-            return self._clips[str(clip_id)]
+            return self._clips[key]
         except KeyError:
-            raise TrackError(f"unknown clip id {clip_id!r}") from None
+            staged = f"{TEMP_ID_PREFIX}{key}"
+            if staged in self._clips:
+                raise TrackError(
+                    f"unknown clip id {key!r}; the staged clip is {staged!r} "
+                    "— pass clip.id or the Clip itself"
+                ) from None
+            raise TrackError(f"unknown clip id {key!r}") from None
 
     def _temp_id(self) -> str:
         while True:
-            candidate = f"new:{self._next_temp}"
+            candidate = f"{TEMP_ID_PREFIX}{self._next_temp}"
             self._next_temp += 1
             if candidate not in self._clips:
                 return candidate

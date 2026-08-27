@@ -321,6 +321,34 @@ class TrackEditingTests(unittest.TestCase):
         with self.assertRaisesRegex(TrackError, "unknown argument"):
             edit.update_clip("a", unset_args=("legacy-extra",))
 
+    def test_a_clip_is_its_own_reference_and_a_staged_id_is_named(self) -> None:
+        edit = make_track().edit()
+        staged = edit.add_clip("Hit", seconds=(18.0, 19.0), z=4)
+
+        # The Clip itself, its id, and a Clip re-read from the candidate are
+        # one reference; a staged clip is no less removable than a stored one.
+        edit.update_clip(staged, z=5)
+        self.assertEqual(edit.remove_clip(staged).id, staged.id)
+        again = edit.add_clip("Hit", seconds=(18.0, 19.0), z=4)
+        self.assertEqual(edit.remove_clip(again.id).id, again.id)
+
+        third = edit.add_clip("Hit", seconds=(18.0, 19.0), z=4)
+        with self.assertRaisesRegex(TrackError, f"staged clip is '{third.id}'"):
+            edit.remove_clip(int(third.id.removeprefix("new:")))
+        with self.assertRaisesRegex(TrackError, "unknown clip id 'nope'"):
+            edit.remove_clip("nope")
+
+    def test_a_pattern_reference_round_trips_through_a_clip(self) -> None:
+        edit = make_track().edit()
+        source = edit.clips[0]
+        copied = edit.add_clip(pattern_id=source.pattern_id, seconds=(18.0, 19.0), z=4)
+        self.assertEqual(copied.pattern_id, source.pattern_id)
+
+        # A display name is accepted in the same slot and resolves to the id.
+        renamed = edit.update_clip(copied, pattern_id="Hit")
+        self.assertEqual(renamed.pattern_id, "hit")
+        self.assertEqual(renamed.pattern_name, "Hit")
+
     def test_diff_is_semantic_and_compact(self) -> None:
         edit = make_track().edit()
         edit.update_clip("inside", blend="add")
@@ -460,6 +488,44 @@ class TrackEditingTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "conflict")
         # A failed authoritative apply never pretends the local draft closed.
         self.assertIn("open", repr(edit))
+
+    def test_apply_advances_the_live_track_to_the_revision_it_committed(self) -> None:
+        class RevisionHost(Host):
+            """A host that enforces optimistic concurrency, as the real one does."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.revision = "sha256:base"
+
+            def __call__(self, method: str, payload: Any) -> Any:
+                if payload["baseRevision"] != self.revision:
+                    from luma_exec.host_errors import LumaHostCallError
+
+                    raise LumaHostCallError("conflict", "the live track changed")
+                response = super().__call__(method, payload)
+                if method == "track.apply":
+                    self.revision = response["revision"]
+                return response
+
+        host = RevisionHost()
+        track = make_track(host)
+        edit = track.edit()
+        added = edit.add_clip("Hit", seconds=(18.0, 19.0), z=4)
+        result = edit.apply()
+
+        self.assertEqual(track.revision, result.revision)
+        self.assertEqual(len(track.clips), 5)
+        self.assertNotIn(added.id, [item.id for item in track.clips])
+        # The rest of the cell keeps working: everything downstream of the
+        # applied revision would otherwise be rejected as a conflict.
+        track.window(seconds=(0.0, 10.0)).output.heatmap()
+        track.edit().apply()
+
+    def test_the_live_track_stays_immutable_to_its_holder(self) -> None:
+        track = make_track(Host())
+        track.edit().apply()
+        with self.assertRaisesRegex(AttributeError, "immutable"):
+            track.revision = "sha256:forged"
 
 
 class TrackWindowTests(unittest.TestCase):
