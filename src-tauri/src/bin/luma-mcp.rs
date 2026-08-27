@@ -9,6 +9,7 @@
 //! a description of one.
 //!
 //! ```text
+//! find   {track?, venue?}                   -> matching tracks and venues
 //! open   {track_query|track_id, venue_id?}  -> the bound namespace's catalog
 //! python {code}                             -> stdout/repr/traceback + figures
 //! reset  {}                                 -> a fresh workspace and kernel
@@ -98,13 +99,32 @@ type ClientCell = Arc<tokio::sync::RwLock<Option<ClientInfo>>>;
 fn tools() -> Value {
     json!([
         tool(
+            "find",
+            "Search the library without touching it. `track` matches a track's id, artist or \
+             title; `venue` matches a venue's id or name; either may be omitted to list that \
+             half whole. Reads only — use it to get the ids `open` wants.",
+            &json!({
+                "type": "object",
+                "properties": {
+                    "track": {
+                        "type": "string",
+                        "description": "Track id, or a substring of the artist or title.",
+                    },
+                    "venue": {
+                        "type": "string",
+                        "description": "Venue id, or a substring of the name.",
+                    },
+                },
+            }),
+        ),
+        tool(
             "open",
             "Bind a track's Luma workspace to this session, and return the catalog of \
-             everything `luma` then exposes. Call with no arguments to list the tracks and \
-             venues available. `track_query` matches artist and title. `venue_id` picks the \
+             everything `luma` then exposes. Name the track with `track_id` or `track_query` \
+             (which matches artist and title); `find` searches for both. `venue_id` picks the \
              room; without it the track's own venue is used, or the library's if there is \
-             only one. Opening a venue the track is not in yet adds it. Opening again \
-             replaces the session.",
+             only one. Opening a venue the track is not in yet adds it, which writes. Opening \
+             again replaces the session.",
             &json!({
                 "type": "object",
                 "properties": {
@@ -167,6 +187,7 @@ async fn call(
     client: &ClientCell,
 ) -> Value {
     let outcome = match name {
+        "find" => find(services, arguments).await,
         "open" => open(services, arguments, session, client).await,
         "python" => {
             let Some(code) = arguments.get("code").and_then(Value::as_str) else {
@@ -198,19 +219,8 @@ async fn open(
     let venue_id = arguments.get("venue_id").and_then(Value::as_str);
     let model = arguments.get("model").and_then(Value::as_str);
 
-    let tracks = invoke(
-        services,
-        "list_tracks_enriched",
-        json!({ "venueId": venue_id }),
-    )
-    .await?;
-    let tracks = tracks.as_array().cloned().unwrap_or_default();
-    let venues = invoke(services, "list_venues", json!({})).await?;
-    let venues = venues.as_array().cloned().unwrap_or_default();
-
-    let Some(track) = pick_track(&tracks, track_id, track_query)? else {
-        return Ok(listing(&tracks, &venues));
-    };
+    let (tracks, venues) = library(services, venue_id).await?;
+    let track = pick_track(&tracks, track_id, track_query)?;
     let track_id = string(&track, "id");
     let label = track_label(&track);
 
@@ -569,23 +579,64 @@ fn prompts(registry: &SkillRegistry) -> Value {
 // Library lookup
 // -----------------------------------------------------------------------------
 
-/// `Ok(None)` when the caller named no track — that is a request for the
-/// listing, not a failure.
+/// Every track and venue one lookup sees. `venue_id` scopes the enriched track
+/// rows the way the app's own library view does; `None` is every track.
+async fn library(
+    services: &AppServices,
+    venue_id: Option<&str>,
+) -> Result<(Vec<Value>, Vec<Value>), String> {
+    let tracks = invoke(
+        services,
+        "list_tracks_enriched",
+        json!({ "venueId": venue_id }),
+    )
+    .await?;
+    let venues = invoke(services, "list_venues", json!({})).await?;
+    Ok((
+        tracks.as_array().cloned().unwrap_or_default(),
+        venues.as_array().cloned().unwrap_or_default(),
+    ))
+}
+
+/// Search, and nothing else.
+///
+/// `open` binds a session — it pins a thread and, for a track new to the room,
+/// mints the score, so it authors. A caller that only wants an id must have a
+/// surface that cannot write, or every lookup leaves a revision behind.
+async fn find(services: &AppServices, arguments: &Value) -> Result<String, String> {
+    let track = arguments.get("track").and_then(Value::as_str);
+    let venue = arguments.get("venue").and_then(Value::as_str);
+    let (tracks, venues) = library(services, None).await?;
+    Ok(listing(
+        &retain(tracks, track, track_label),
+        &retain(venues, venue, |venue| string(venue, "name")),
+    ))
+}
+
+/// Rows whose id is exactly the query, or whose label contains it, case-blind.
+/// No query keeps everything: an omitted half of `find` lists that half whole.
+fn retain(rows: Vec<Value>, query: Option<&str>, label: fn(&Value) -> String) -> Vec<Value> {
+    let Some(query) = query else { return rows };
+    let needle = query.to_lowercase();
+    rows.into_iter()
+        .filter(|row| string(row, "id") == query || label(row).to_lowercase().contains(&needle))
+        .collect()
+}
+
 fn pick_track(
     tracks: &[Value],
     track_id: Option<&str>,
     track_query: Option<&str>,
-) -> Result<Option<Value>, String> {
+) -> Result<Value, String> {
     if let Some(track_id) = track_id {
         return tracks
             .iter()
             .find(|track| string(track, "id") == track_id)
             .cloned()
-            .map(Some)
             .ok_or_else(|| format!("no track with id '{track_id}'"));
     }
     let Some(query) = track_query else {
-        return Ok(None);
+        return Err("name a track: `track_id` or `track_query` — `find` searches for both".into());
     };
     let needle = query.to_lowercase();
     let matches: Vec<&Value> = tracks
@@ -594,38 +645,33 @@ fn pick_track(
         .collect();
     match matches.as_slice() {
         [] => Err(format!("no track matches '{query}'")),
-        [only] => Ok(Some((*only).clone())),
-        many => {
-            let names: Vec<String> = many
-                .iter()
-                .take(LISTING_LIMIT)
-                .map(|track| format!("  {}  {}", string(track, "id"), track_label(track)))
-                .collect();
-            Err(format!(
-                "'{query}' matches {} tracks; pass track_id:\n{}",
-                many.len(),
-                names.join("\n")
-            ))
-        }
+        [only] => Ok((*only).clone()),
+        many => Err(format!(
+            "'{query}' matches {} tracks; pass track_id:\n{}",
+            many.len(),
+            track_list(many.iter().copied())
+        )),
     }
+}
+
+/// `  <id>  <label>` per row, capped. Ids first so a caller — human or script —
+/// reads the same shape everywhere a list of tracks appears.
+fn track_list<'a>(tracks: impl Iterator<Item = &'a Value>) -> String {
+    tracks
+        .take(LISTING_LIMIT)
+        .map(|track| format!("  {}  {}", string(track, "id"), track_label(track)))
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 fn listing(tracks: &[Value], venues: &[Value]) -> String {
     let mut out = format!("{} tracks", tracks.len());
     if tracks.len() > LISTING_LIMIT {
-        out.push_str(&format!(
-            " (first {LISTING_LIMIT}; use track_query to narrow)"
-        ));
+        out.push_str(&format!(" (first {LISTING_LIMIT}; narrow with `track`)"));
     }
     out.push_str(":\n");
-    for track in tracks.iter().take(LISTING_LIMIT) {
-        out.push_str(&format!(
-            "  {}  {}\n",
-            string(track, "id"),
-            track_label(track)
-        ));
-    }
-    out.push_str(&format!("\n{} venues:\n", venues.len()));
+    out.push_str(&track_list(tracks.iter()));
+    out.push_str(&format!("\n\n{} venues:\n", venues.len()));
     out.push_str(&venue_list(venues));
     out.push('\n');
     out
