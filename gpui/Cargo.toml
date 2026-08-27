@@ -34,6 +34,39 @@ gpui = { path = "vendor/zed/crates/gpui", version = "=0.2.2" }
 gpui_macros = { path = "vendor/zed/crates/gpui_macros", version = "=0.1.0" }
 gpui_platform = { path = "vendor/zed/crates/gpui_platform", version = "=0.1.0" }
 
+# Line tables, not full DWARF. Backtraces through Luma's own crates keep
+# `file:line`, which is all a test failure needs; what goes is the type and
+# variable detail a stepping debugger would use. Measured at 60% off `deps/`
+# with `opt-level` held constant — see docs/build-overhaul.md.
+[profile.dev]
+debug = "line-tables-only"
+
 # gpui is unusably slow at opt-level 0 (comet and gpui-component both do this).
+#
+# `"*"` is dependencies only, never workspace members, so dropping their
+# debuginfo entirely costs nothing a Luma backtrace shows: symbol names live in
+# the symbol table, not in DWARF, so a frame inside gpui still names itself. It
+# just cannot tell you which line of gpui it was.
 [profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+# The per-frame CPU path, which `"*"` above cannot reach because these are
+# workspace members. Frame assembly walks every fixture, cluster binning walks
+# every cone, and the pick snapshot rebuilds a BVH — all of it float math in
+# tight loops, which is the one shape `opt-level = 0` costs an order of
+# magnitude on. Measured on the 480-fixture stage with a track playing: 19.1 ms
+# of UI-thread frame assembly at 0, 1.0 ms at 2 — the whole UI half of the frame
+# goes 21.6 ms to 3.1 ms. A dev build is what anybody actually running the app
+# has, so leaving these at 0 means the renderer everyone sees is not the
+# renderer `profile-volumetrics --release` measures, which is why that profiler
+# kept reporting budgets the app could not hold.
+#
+# Deliberately not `luma-app`: it is the crate under active edit, its own
+# per-frame work is thin, and it is the one where a stepping debugger earns its
+# keep.
+[profile.dev.package.luma-render]
+opt-level = 2
+
+[profile.dev.package.luma-scene]
 opt-level = 2

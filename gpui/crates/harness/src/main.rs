@@ -25,8 +25,15 @@ fn repo_root() -> std::path::PathBuf {
 //   cargo run -- --fixture button [--out harness/shots/gpui/button.png]
 //   cargo run -- --list
 
+/// A static fixture's content is rebuilt every frame; an entity fixture was
+/// built once at window open and renders itself.
+enum Content {
+    Static(fn() -> AnyElement),
+    View(AnyView),
+}
+
 struct FixtureView {
-    build: fn() -> AnyElement,
+    content: Content,
 }
 
 impl Render for FixtureView {
@@ -39,7 +46,16 @@ impl Render for FixtureView {
             .justify_center()
             .bg(ladder::background())
             .font_family(fonts::FAMILY)
-            .child((self.build)())
+            // The app root establishes the resting ink (`app/src/lib.rs`), and
+            // kit pieces that inherit rather than set text color — float menu
+            // rows deliberately do — count on it. Without it here they fall
+            // back to gpui's near-black default and every fixture of an
+            // inheriting widget measures wrong.
+            .text_color(ladder::foreground())
+            .child(match &self.content {
+                Content::Static(build) => build(),
+                Content::View(view) => view.clone().into_any_element(),
+            })
     }
 }
 
@@ -85,6 +101,9 @@ fn main() {
     let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
     app.run(move |cx| {
         gpui_component::init(cx);
+        // The entity fixtures hold real text fields; without the keymap their
+        // resting frame is identical, but a --hold session couldn't type.
+        luma_ui::text_input::init(cx);
 
         // Without Inter the gpui side silently falls back to a different face
         // and every typography comparison is meaningless. The web harness
@@ -96,6 +115,15 @@ fn main() {
         // inset by MARGIN: macOS rounds borderless-window corners, and the
         // inset keeps the desktop bleed out of the shot.
         const MARGIN: f32 = 24.;
+        // How far inside the window the capture crops. MARGIN keeps macOS's
+        // rounded borderless corners out of an ordinary shot — but a fixture
+        // that pins the popup float's window snap (`float::anchored_below`) needs the band the popup
+        // bottoms out in (the snap margin is 8, inside MARGIN), so it crops
+        // tighter and accepts a sliver of corner rounding.
+        let inset: f32 = match fixture.id {
+            "arg-select-open-up" => 6.,
+            _ => MARGIN,
+        };
         let bounds = Bounds {
             origin: point(px(200.), px(200.)),
             size: size(
@@ -114,7 +142,11 @@ fn main() {
         cx.spawn(async move |cx| {
             let handle = cx
                 .open_window(options, |window, cx| {
-                    let view = cx.new(|_| FixtureView { build });
+                    let content = match build {
+                        fixtures::Build::Static(build) => Content::Static(build),
+                        fixtures::Build::View(build) => Content::View(build(window, cx)),
+                    };
+                    let view = cx.new(|_| FixtureView { content });
                     cx.new(|cx| Root::new(view, window, cx).bordered(false))
                 })
                 .expect("failed to open window");
@@ -135,10 +167,10 @@ fn main() {
                 .expect("failed to read window bounds");
             let region = format!(
                 "-R{},{},{},{}",
-                f32::from(bounds.origin.x) + MARGIN,
-                f32::from(bounds.origin.y) + MARGIN,
-                f32::from(bounds.size.width) - 2. * MARGIN,
-                f32::from(bounds.size.height) - 2. * MARGIN,
+                f32::from(bounds.origin.x) + inset,
+                f32::from(bounds.origin.y) + inset,
+                f32::from(bounds.size.width) - 2. * inset,
+                f32::from(bounds.size.height) - 2. * inset,
             );
             let status = Command::new("screencapture")
                 .args(["-x", &region, &out])

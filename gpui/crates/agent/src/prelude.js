@@ -50,6 +50,15 @@
     return { node: node(value, "to") };
   };
 
+  // A gesture origin is a node, or a bare {x, y} point in the window — a
+  // canvas has positions where no control is (an empty spot to pan from, or
+  // to sweep a marquee from), and the wire carries whichever was given.
+  const pointer = (value, which) =>
+    value !== null && typeof value === "object" &&
+    typeof value.x === "number" && typeof value.y === "number"
+      ? { at: { x: value.x, y: value.y } }
+      : { node: node(value, which) };
+
   const snapshot = () => {
     const shot = call("snapshot");
     shot.find = (query) => shot.nodes.find(predicate(query));
@@ -88,7 +97,7 @@
       }),
     drag: (from, to, opts) =>
       call("drag", {
-        from: node(from, "from"),
+        from: pointer(from, "from"),
         to: target(to),
         ...options(opts, {
           restale: "restale",
@@ -109,10 +118,7 @@
       call("frames", { n: n ?? 1, ...options(opts, { waitMs: "wait_ms" }) }),
     scroll: (where_, opts) =>
       call("scroll", {
-        at: where_ !== null && typeof where_ === "object" &&
-            typeof where_.x === "number" && typeof where_.y === "number"
-          ? { at: { x: where_.x, y: where_.y } }
-          : { node: node(where_, "where") },
+        at: pointer(where_, "where"),
         ...options(opts, {
           dx: "dx",
           dy: "dy",

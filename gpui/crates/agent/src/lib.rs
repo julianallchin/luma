@@ -61,11 +61,88 @@ mod pixel;
 pub mod protocol;
 pub mod pump;
 
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 pub use error::HarnessError;
 pub use interp::{ExecResult, Interpreter, API_DTS};
-pub use pump::{Config, Mode, PumpClient, RootFactory};
+pub use pump::{Config, Mode, PumpClient, RootFactory, GPU_LIVENESS_TIMEOUT};
+
+/// How many threads may be driving an app at once in one process.
+///
+/// This is a *deadline* limit, not a CPU limit. These tests are wall-clock
+/// bound: a script polls for a rendered frame with a timeout, and fixtures
+/// hold responses for a fixed number of milliseconds. A harness that only gets
+/// a sliver of a core misses those deadlines and fails an assertion that has
+/// nothing to do with what it was testing.
+///
+/// With one binary per test file, cargo supplied this cap for free — it runs
+/// test binaries one at a time, so only that file's handful of tests ever
+/// overlapped. A consolidated suite has to say it out loud.
+///
+/// # It is insurance, not a fix
+///
+/// Be honest about what this bought. It was introduced when the machine was
+/// pathological — thirteen agents on one target directory and a 96%-full disk
+/// — and there the uncapped suite failed a different test on every run while
+/// six passed. On a quiet machine with a healthy disk the whole suite runs in
+/// ~28 s and passes either way; capped and uncapped are within noise of each
+/// other, because at that speed nothing is close to its deadline.
+///
+/// It stays because a loaded machine is the normal condition for this repo,
+/// and it costs nothing measurable when the machine is not loaded. If you find
+/// yourself raising it to make something faster, the cap is not your problem.
+const HARNESS_CONCURRENCY: usize = 6;
+
+/// Permits, and somewhere to wait for one.
+static DRIVING_THREADS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+
+std::thread_local! {
+    /// How many harnesses this thread is holding.
+    ///
+    /// The permit is per *thread*, not per harness, because a test may keep
+    /// two apps open at once — `add_tracks_pixels` shoots an empty library and
+    /// a populated one in one test. Counting harnesses would let a full house
+    /// of tests each block waiting for a permit none of them can release,
+    /// since each is already holding one. Counting threads cannot deadlock: a
+    /// thread that is already driving never queues again.
+    static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// This thread's turn at driving an app, given back when its last harness
+/// drops.
+struct Slot;
+
+impl Slot {
+    fn acquire() -> Self {
+        if DEPTH.with(|depth| depth.replace(depth.get() + 1)) == 0 {
+            let (count, free) = &DRIVING_THREADS;
+            let mut driving = count
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while *driving >= HARNESS_CONCURRENCY {
+                driving = free
+                    .wait(driving)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            *driving += 1;
+        }
+        Self
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if DEPTH.with(|depth| depth.replace(depth.get() - 1)) == 1 {
+            let (count, free) = &DRIVING_THREADS;
+            let mut driving = count
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *driving -= 1;
+            free.notify_one();
+        }
+    }
+}
 
 /// The two tools, over one interpreter and one app.
 ///
@@ -73,20 +150,45 @@ pub use pump::{Config, Mode, PumpClient, RootFactory};
 /// somewhere else by the time you have a [`PumpClient`].
 pub struct Harness {
     interpreter: Interpreter,
+    /// Held for the harness's life by [`Harness::headless`]. `None` when the
+    /// pump runs on the caller's thread (the MCP binary), which is one app in
+    /// a process that exists to hold it and has nothing to contend with.
+    _slot: Option<Slot>,
 }
 
 impl Harness {
     pub fn new(client: PumpClient) -> Result<Self, HarnessError> {
         Ok(Self {
             interpreter: Interpreter::new(client)?,
+            _slot: None,
         })
     }
 
     /// Spin up a headless pump on its own thread and attach a harness to it.
     /// This is the shape a test wants: it already owns a thread, and headless
     /// mode does not care which one gpui runs on.
-    pub fn headless(config: Config, root: RootFactory) -> Result<Self, HarnessError> {
-        Self::new(pump::spawn(config, root))
+    pub fn headless(mut config: Config, root: RootFactory) -> Result<Self, HarnessError> {
+        // The mode already says whether this run may touch a GPU, so it is the
+        // one place that can answer for every test at once — including the
+        // fixtures that build their own root and would otherwise each have to
+        // remember. A headless `cargo test` must not create a device, and the
+        // shell's stage pane acquires one wherever it mounts.
+        //
+        // A caller that set `stage_gpu` itself is left alone, so a suite can be
+        // measured or debugged either way without editing fixtures.
+        config.runtime.stage_gpu.get_or_insert(match config.mode {
+            #[cfg(feature = "pixel")]
+            Mode::Pixel => true,
+            Mode::Headless => false,
+        });
+        // Taken before the app opens and held until this harness drops, so a
+        // suite cannot start more windows than it can feed. See
+        // [`HARNESS_CONCURRENCY`].
+        let slot = Slot::acquire();
+        Ok(Self {
+            interpreter: Interpreter::new(pump::spawn(config, root))?,
+            _slot: Some(slot),
+        })
     }
 
     pub fn exec(&mut self, code: &str, timeout: Duration) -> ExecResult {

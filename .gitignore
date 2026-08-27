@@ -64,6 +64,8 @@ scripts/*
 /docs/*
 # …except migration specs — the contract ports are verified against
 !/docs/specs/
+# …and design docs — architecture decisions implementation is steered by
+!/docs/design/
 
 # SQLite databases
 *.sqlite
@@ -85,3 +87,9 @@ experiments/cs525-data/eval/plots/*
 # Component screenshot harness output + gpui workspace build artifacts
 harness/shots/
 gpui/target/
+# Pixel-feature builds get their own tree so feature flips never evict the
+# headless one — see gpui/BUILD.md. Unanchored so it also catches a stray tree
+# from a *relative* CARGO_TARGET_DIR, which cargo resolves against the cwd:
+# running the pixel command from a subdirectory once left 6.8 GB at
+# crates/agent/tests/target-pixel/.
+target-pixel/
