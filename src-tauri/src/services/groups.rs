@@ -51,10 +51,10 @@ pub fn invalidate_venue_fixture_cache() {
 
 /// This cache's identity for one venue: the library it lives in, and its id.
 ///
-/// A venue id is unique *within* a library, not across them — a `.luma` project
-/// and the app database can both hold `venue-main`, and so can two of them. On
-/// the id alone those are one entry, and whichever venue loads first serves its
-/// rig to every other venue that shares the id.
+/// A venue id is unique *within* a library, not across them — the app database
+/// and a scratch copy of it can both hold `venue-main`. On the id alone those
+/// are one entry, and whichever venue loads first serves its rig to every other
+/// venue that shares the id.
 ///
 /// NUL separates the two halves because it is the one byte a path cannot
 /// contain, so no path can spell a key that belongs to another venue.

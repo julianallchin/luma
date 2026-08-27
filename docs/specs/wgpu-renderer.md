@@ -147,7 +147,7 @@ expect goldens on silhouette edges to differ slightly and accept it.
 Rotation storage stays Euler XYZ radians in the DB. `luma-scene` must contain an
 exact port of three.js `Euler.setFromQuaternion(q, "XYZ")`, including its clamping at
 gimbal lock, with a round-trip test over every existing `stage_pieces` and
-`patched_fixtures` row in `projects/*.luma`. A silent mismatch here corrupts saved
+`patched_fixtures` row in `luma.db`. A silent mismatch here corrupts saved
 venues, and it will not look like a rendering bug when it happens.
 
 ### 2.2 Scene representation
@@ -847,7 +847,7 @@ proves the one thing nothing else can be built on top of.
 
 | Phase | Deliverable | Validated by |
 |---|---|---|
-| **0** | Goldens captured from three.js. `luma-assets` + `luma-scene`: glTF load, AABB, transforms, Euler XYZ three-compat, sockets, snap solver. **No GPU.** | The 20 ported `snap.test.ts` cases; an Euler round-trip test over every row in `projects/*.luma` |
+| **0** | Goldens captured from three.js. `luma-assets` + `luma-scene`: glTF load, AABB, transforms, Euler XYZ three-compat, sockets, snap solver. **No GPU.** | The 20 ported `snap.test.ts` cases; an Euler round-trip test over every row in `luma.db` |
 | **1** | `luma-viewport` skeleton: gpui element, own wgpu device, clear colour, readback→`RenderImage`→`img()`, `request_animation_frame`, resize, `gpui-fps` HUD | It runs at vsync and survives a panel drag; readback cost measured against the §7.4 budget |
 | **2** | Geometry: glTF meshes on GPU, `Pbr` + `Unlit` + `Grid`, directional light + shadow map, orbit camera, reverse-Z | **Golden scene 7 passes** (haze off — pure geometry/material/tonemap) |
 | **3** | Haze: emitter fill, spotlight array, analytic haze pass, temporal, composite+AgX | **Golden scenes 1–4, 6, 8 pass.** Cutover point: three.js can be deleted after this |

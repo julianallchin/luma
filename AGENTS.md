@@ -9,9 +9,8 @@ Luma is a Tauri desktop app: a React/TypeScript frontend in `src/` backed by a R
   - Shared UI/components in `src/shared/`.
 - `src-tauri/`: Rust backend (entry `src-tauri/src/main.rs`, app setup in `src-tauri/src/lib.rs`).
   - Models in `src-tauri/src/models/`.
-  - SQLite + migrations in `src-tauri/migrations/{app,project}`.
+  - SQLite migrations in `src-tauri/migrations/` (one flat, timestamp-ordered directory).
   - Python workers in `src-tauri/python/` for beats/roots/stems analysis.
-- `projects/`: example venue projects (`*.luma`).
 - `resources/fixtures/`: fixture definitions bundled into the app.
 - `experiments/`: research notebooks and test data.
 
@@ -63,7 +62,7 @@ The global library database `luma.db` is stored in the Tauri app config director
 - Windows: `%APPDATA%\\com.luma.luma\\luma.db`
 - Linux: `~/.config/com.luma.luma/luma.db`
 
-Venue projects are SQLite `.luma` files, created/opened via the UI and stored wherever the user chooses (samples in `projects/`).
+Venues, scores, patterns and authored history all live in that one database — there is no per-venue project file.
 
 ## UI Conventions
 
