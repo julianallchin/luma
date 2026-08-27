@@ -30,6 +30,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some(DEFAULT_PALETTE_JSON.into()),
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -52,6 +53,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some(DEFAULT_GRADIENT_JSON.into()),
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -112,6 +114,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some(DEFAULT_CHROMA_PALETTE_JSON.into()),
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -142,6 +145,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number,
                 default_number: Some(1.0),
                 default_text: None,
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -168,6 +172,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(0.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "spread".into(),
@@ -175,6 +180,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(1.0),
                     default_text: None,
+                    range: None,
                 },
                 ParamDef {
                     id: "saturation".into(),
@@ -182,6 +188,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                     param_type: ParamType::Number,
                     default_number: Some(1.0),
                     default_text: None,
+                    range: None,
                 },
             ],
         },
@@ -202,6 +209,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some(r#"{"r":255,"g":0,"b":0,"a":1}"#.into()),
+                range: None,
             }],
         },
     ]

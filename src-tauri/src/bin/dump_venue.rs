@@ -4,7 +4,7 @@
 //! and every fixture group + its member fixture IDs.
 //!
 //! Drives the 2D box-projection in the trace-viewer canvas. luma-lighting-
-//! model only needs positions + grouping, not the full GDTF channel layout.
+//! model only needs positions + grouping, not the full QLC+ channel layout.
 //!
 //! Standalone — does NOT depend on `luma_lib::database` (private) or any
 //! Tauri state. Just opens the SQLite read-only and runs three queries.

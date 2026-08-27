@@ -49,15 +49,28 @@ pub fn invalidate_venue_fixture_cache() {
     }
 }
 
+/// This cache's identity for one venue: the library it lives in, and its id.
+///
+/// A venue id is unique *within* a library, not across them — a `.luma` project
+/// and the app database can both hold `venue-main`, and so can two of them. On
+/// the id alone those are one entry, and whichever venue loads first serves its
+/// rig to every other venue that shares the id.
+///
+/// NUL separates the two halves because it is the one byte a path cannot
+/// contain, so no path can spell a key that belongs to another venue.
+fn venue_cache_key(resource_path: &Path, venue_id: &str) -> String {
+    format!("{}\u{0}{venue_id}", resource_path.display())
+}
+
 async fn get_cached_venue_fixtures(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
 ) -> Result<Arc<CachedVenueFixtures>, String> {
-    let venue_id = access.venue_id().to_owned();
+    let key = venue_cache_key(resource_path, access.venue_id());
     // Fast path: check data cache (sync mutex, instant)
     {
         let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        if let Some(cached) = inner.data.get(&venue_id) {
+        if let Some(cached) = inner.data.get(&key) {
             return Ok(cached.clone());
         }
     }
@@ -67,7 +80,7 @@ async fn get_cached_venue_fixtures(
         let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
         inner
             .loading
-            .entry(venue_id.clone())
+            .entry(key.clone())
             .or_insert_with(|| Arc::new(TokioMutex::new(())))
             .clone()
     };
@@ -78,7 +91,7 @@ async fn get_cached_venue_fixtures(
     // Check again — another task may have loaded while we waited
     {
         let inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        if let Some(cached) = inner.data.get(&venue_id) {
+        if let Some(cached) = inner.data.get(&key) {
             return Ok(cached.clone());
         }
     }
@@ -128,9 +141,9 @@ async fn get_cached_venue_fixtures(
     // Clean up loading lock regardless of success/failure
     {
         let mut inner = VENUE_FIXTURE_CACHE.lock().unwrap();
-        inner.loading.remove(&venue_id);
+        inner.loading.remove(&key);
         if let Ok(ref cached) = result {
-            inner.data.insert(venue_id, cached.clone());
+            inner.data.insert(key, cached.clone());
         }
     }
 
@@ -696,4 +709,43 @@ pub async fn remove_head_from_group(
         return Ok(());
     }
     groups_db::remove_member_from_group(access, fixture_id, group_id, Some(head_index)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::venue_cache_key;
+    use std::path::Path;
+
+    /// The bug this key exists to prevent: two libraries holding a venue of the
+    /// same id are two venues, and a cache that cannot tell them apart serves
+    /// the first one's rig to the second.
+    #[test]
+    fn one_venue_id_in_two_libraries_is_two_keys() {
+        let venue = "venue-main";
+        assert_ne!(
+            venue_cache_key(Path::new("/tmp/luma-a"), venue),
+            venue_cache_key(Path::new("/tmp/luma-b"), venue),
+        );
+    }
+
+    /// And the other half: the same venue in the same library must stay one
+    /// entry, or the cache stops being a cache.
+    #[test]
+    fn the_same_venue_in_the_same_library_is_one_key() {
+        assert_eq!(
+            venue_cache_key(Path::new("/tmp/luma-a"), "venue-main"),
+            venue_cache_key(Path::new("/tmp/luma-a"), "venue-main"),
+        );
+    }
+
+    /// The separator is NUL because a path cannot contain one. Without that,
+    /// a library directory named to look like `library + separator + venue`
+    /// could collide with a different library's venue.
+    #[test]
+    fn a_path_cannot_spell_another_venues_key() {
+        assert_ne!(
+            venue_cache_key(Path::new("/tmp/luma"), "a/venue-main"),
+            venue_cache_key(Path::new("/tmp/luma/a"), "venue-main"),
+        );
+    }
 }

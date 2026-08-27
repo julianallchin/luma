@@ -21,6 +21,23 @@ use crate::sync::pending;
 const THREAD_COLUMNS: &str =
     "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, title, created_at, updated_at";
 
+/// The FROM/WHERE every thread *read* shares: active threads, admitted by the
+/// write-admission singleton, owned by the bound principal (one `?`).
+///
+/// Spelled once because it is the access-control predicate. A second listing
+/// that reconstructed it by hand would be one clause away from serving another
+/// account's conversations, and that is not a difference a reviewer would spot
+/// in a wall of SQL. Anything appending filters to this binds the principal
+/// first and its own values after.
+const LIVE_THREADS_FOR_PRINCIPAL: &str = "FROM agent_threads thread
+         CROSS JOIN auth_write_admission admission
+         WHERE thread.lifecycle_state = 'active'
+           AND admission.singleton = 1 AND admission.armed = 1
+           AND admission.accepting = 1 AND admission.maintenance = 0
+           AND admission.remote_writes = 0
+           AND thread.owner_user_id IS admission.active_uid
+           AND admission.active_uid IS ?";
+
 fn thread_not_found(thread_id: &str) -> String {
     format!("Agent thread not found: {thread_id}")
 }
@@ -785,16 +802,7 @@ pub async fn list_threads(
         .map(|column| format!("thread.{column}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut sql = format!(
-        "SELECT {columns} FROM agent_threads thread
-         CROSS JOIN auth_write_admission admission
-         WHERE thread.lifecycle_state = 'active'
-           AND admission.singleton = 1 AND admission.armed = 1
-           AND admission.accepting = 1 AND admission.maintenance = 0
-           AND admission.remote_writes = 0
-           AND thread.owner_user_id IS admission.active_uid
-           AND admission.active_uid IS ?"
-    );
+    let mut sql = format!("SELECT {columns} {LIVE_THREADS_FOR_PRINCIPAL}");
     if agent_kind.is_some() {
         sql.push_str(" AND agent_kind = ?");
     }
@@ -816,6 +824,59 @@ pub async fn list_threads(
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to list agent threads: {}", e))
+}
+
+/// Every message of every live conversation about one subject, in
+/// `(thread, seq)` order — the history picker's excerpts and its grep, read in
+/// one statement.
+///
+/// One recursive walk over all of the subject's transcript heads at once,
+/// rather than [`list_messages`] per thread: the picker exists to be typed at,
+/// and a query per row is the classic N+1 for a list that has to answer a
+/// keystroke. Rows come back as [`AgentThreadMessage`]s with `thread_id` set,
+/// so the caller regroups them without a second shape.
+pub async fn list_subject_messages(
+    pool: &SqlitePool,
+    agent_kind: &str,
+    subject_kind: &str,
+    subject_id: &str,
+    owner_user_id: Option<&str>,
+) -> Result<Vec<AgentThreadMessage>, String> {
+    let sql = format!(
+        "WITH RECURSIVE lineage(
+             thread_id, id, parent_message_id, depth, role, parts_json, created_at
+         ) AS (
+             SELECT head.thread_id, message.id, message.parent_message_id,
+                    message.depth, message.role, message.parts_json, message.created_at
+             FROM agent_thread_transcript_heads AS head
+             JOIN agent_thread_messages AS message
+               ON message.id = head.head_message_id
+             WHERE head.owner_user_id IS ?
+               AND head.thread_id IN (
+                   SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL}
+                      AND thread.agent_kind = ?
+                      AND thread.subject_kind = ?
+                      AND thread.subject_id = ?
+               )
+             UNION ALL
+             SELECT child.thread_id, parent.id, parent.parent_message_id,
+                    parent.depth, parent.role, parent.parts_json, parent.created_at
+             FROM agent_thread_messages AS parent
+             JOIN lineage AS child ON child.parent_message_id = parent.id
+         )
+         SELECT id, thread_id, parent_message_id, depth AS seq,
+                role, parts_json, created_at
+         FROM lineage ORDER BY thread_id ASC, depth ASC"
+    );
+    sqlx::query_as::<_, AgentThreadMessage>(sqlx::AssertSqlSafe(sql))
+        .bind(owner_user_id)
+        .bind(owner_user_id)
+        .bind(agent_kind)
+        .bind(subject_kind)
+        .bind(subject_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list a subject's agent messages: {e}"))
 }
 
 /// Atomically append one message batch at the caller's observed head. The
@@ -2016,6 +2077,95 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(graph.subject_kind.as_deref(), Some("pattern"));
+    }
+
+    /// The history picker's read: every message of every conversation about
+    /// one subject, in one statement, and nothing about any other subject.
+    #[tokio::test]
+    async fn a_subject_listing_walks_every_transcript_and_stops_at_the_subject() {
+        let (_dir, pool) = test_pool().await;
+        let first = create_thread(&pool, track_thread("track-a"), None)
+            .await
+            .unwrap();
+        // A second conversation about the SAME track is its own transcript.
+        let second = create_thread(&pool, track_thread("track-a"), None)
+            .await
+            .unwrap();
+        // …an empty one contributes no rows and breaks nothing.
+        create_thread(&pool, track_thread("track-a"), None)
+            .await
+            .unwrap();
+        // …and one about another track is not this listing's business.
+        let other = create_thread(&pool, track_thread("track-b"), None)
+            .await
+            .unwrap();
+        // Only one of the same-scope threads gets an assistant turn: a
+        // reserved turn claims the scope's authored document, and there is
+        // one of those per (track, venue, score).
+        for (thread, roles) in [
+            (&first, &["user", "assistant"][..]),
+            (&second, &["user"][..]),
+            (&other, &["user", "assistant"][..]),
+        ] {
+            let messages = roles
+                .iter()
+                .map(|role| msg(role, json!([{"type": "text", "text": "said"}])))
+                .collect();
+            append_test_messages(&pool, &thread.id, messages, None)
+                .await
+                .unwrap();
+        }
+
+        let rows = list_subject_messages(&pool, "track_copilot", "track", "track-a", None)
+            .await
+            .unwrap();
+        let mut by_thread: Vec<(&str, i64, &str)> = rows
+            .iter()
+            .map(|row| (row.thread_id.as_str(), row.seq, row.role.as_str()))
+            .collect();
+        by_thread.sort();
+        let mut expected = vec![
+            (first.id.as_str(), 0, "user"),
+            (first.id.as_str(), 1, "assistant"),
+            (second.id.as_str(), 0, "user"),
+        ];
+        expected.sort();
+        assert_eq!(by_thread, expected);
+    }
+
+    /// A subject listing is admission-controlled exactly like every other
+    /// thread read. This is the assertion that would fail if the shared
+    /// predicate were ever reconstructed by hand for this query.
+    #[tokio::test]
+    async fn a_subject_listing_only_serves_its_own_principal() {
+        let (_dir, pool) = test_pool().await;
+        admit(&pool, Some("alice")).await;
+        let thread = create_thread(&pool, track_thread("track-a"), Some("alice"))
+            .await
+            .unwrap();
+        append_test_messages(
+            &pool,
+            &thread.id,
+            vec![msg("user", json!([{"type": "text", "text": "mine"}]))],
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            list_subject_messages(&pool, "track_copilot", "track", "track-a", Some("alice"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            list_subject_messages(&pool, "track_copilot", "track", "track-a", Some("bob"))
+                .await
+                .unwrap()
+                .is_empty(),
+            "another account's conversations must not be listed"
+        );
     }
 
     #[tokio::test]

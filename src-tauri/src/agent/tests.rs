@@ -359,3 +359,173 @@ async fn dropping_the_stream_stops_the_turn() {
         "a cancelled turn must not persist an assistant row"
     );
 }
+
+/// The `python` tool is attributed to the durable *user* row, never to the
+/// assistant row being written — that one is not inserted until the turn
+/// closes, so attributing to it made every cell fail the host's durability
+/// check before it could reach a kernel. The stub worker is the proof: the call
+/// must get far enough to ask for one.
+#[tokio::test]
+async fn a_python_call_is_attributed_to_the_durable_user_turn() {
+    let fixture = fixture().await;
+    // No `with_tools`: the real registry, so the real python tool runs.
+    let service = AgentService::new(Arc::clone(&fixture.services)).with_model(Arc::new(
+        ScriptedModel::new(vec![
+            vec![
+                ModelEvent::ToolCallStarted {
+                    id: "call_1".into(),
+                    name: "python".into(),
+                },
+                ModelEvent::ToolCallArgsDelta {
+                    id: "call_1".into(),
+                    json: r#"{"purpose":"section energy","code":"1 + 1"}"#.into(),
+                },
+                ModelEvent::ToolCallEnded {
+                    id: "call_1".into(),
+                },
+                ModelEvent::StepEnded {
+                    stop_reason: StopReason::ToolUse,
+                    usage: Usage::default(),
+                },
+            ],
+            vec![
+                ModelEvent::TextDelta("no kernel".into()),
+                ModelEvent::StepEnded {
+                    stop_reason: StopReason::EndTurn,
+                    usage: Usage::default(),
+                },
+            ],
+        ]),
+    ));
+    let mut stream = service.turn(&fixture.thread_id, "analyse it".to_string().into());
+    let events = drain(&mut stream).await;
+
+    // A rejected turn message fails the *call* (`ToolResult::Failed`); a cell
+    // that was admitted and then found no kernel comes back as a normal result
+    // whose status is `failed`. Which of the two arrives is the whole point.
+    let outcome = events
+        .iter()
+        .find_map(|event| match event {
+            TurnEvent::ToolCallEnded { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the python call never ended: {events:#?}"));
+    let value = match outcome {
+        ToolResult::Output { value } => value,
+        ToolResult::Failed { message } => {
+            panic!("the python call was rejected before it reached a kernel: {message}")
+        }
+    };
+    assert_eq!(value["status"], json!("failed"));
+    assert!(
+        value["notices"]
+            .as_array()
+            .is_some_and(|notices| notices.iter().any(|notice| notice
+                .as_str()
+                .is_some_and(|notice| notice.contains("no python worker in tests")))),
+        "the cell stopped somewhere other than the worker: {value:#?}"
+    );
+}
+
+fn history_thread(id: &str, title: Option<&str>) -> crate::models::agent_threads::AgentThread {
+    crate::models::agent_threads::AgentThread {
+        id: id.into(),
+        owner_user_id: None,
+        agent_kind: "track_copilot".into(),
+        subject_kind: Some("track".into()),
+        subject_id: Some("track-1".into()),
+        implementation_id: None,
+        venue_id: Some("venue-1".into()),
+        score_id: None,
+        forked_from_thread_id: None,
+        forked_at_message_id: None,
+        title: title.map(ToString::to_string),
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+fn history_message(thread: &str, seq: i64, role: &str, text: &str) -> AgentThreadMessage {
+    AgentThreadMessage {
+        id: format!("{thread}-{seq}"),
+        thread_id: thread.into(),
+        parent_message_id: None,
+        seq,
+        role: role.into(),
+        parts: serde_json::json!([{"type": "text", "text": text}]),
+        created_at: String::new(),
+    }
+}
+
+/// A history row is named by its own words: the first thing asked, then the
+/// last thing answered, each flattened to one line.
+#[test]
+fn a_history_row_reads_its_opening_and_its_latest_reply() {
+    use super::History;
+
+    let history = History::build(
+        vec![
+            history_thread("a", None),
+            history_thread("b", Some("Named")),
+            history_thread("c", None),
+        ],
+        vec![
+            history_message("a", 0, "user", "  where does\nthe ramp peak?  "),
+            history_message("a", 1, "assistant", "Bar 3."),
+            history_message("a", 2, "user", "and the release?"),
+            history_message("a", 3, "assistant", "Two bars\nafter."),
+            // A titled thread nobody spoke in is named by its title.
+            // An untitled, unspoken one gets the placeholder.
+        ],
+    );
+    let [a, b, c] = history.entries() else {
+        panic!("three rows: {:?}", history.entries());
+    };
+    assert_eq!(a.headline(), "where does the ramp peak?");
+    assert_eq!(a.latest.as_deref(), Some("Two bars after."));
+    assert_eq!(b.headline(), "Named");
+    assert_eq!(b.latest, None);
+    assert_eq!(c.headline(), "New chat");
+}
+
+/// The grep: case-insensitive, one hit per line, capped per conversation, and
+/// the span lands on the original text.
+#[test]
+fn a_history_search_finds_lines_and_windows_long_ones() {
+    use super::History;
+
+    let long = format!("{}Ramp here{}", "x".repeat(150), "y".repeat(200));
+    let mut messages = vec![
+        history_message(
+            "a",
+            0,
+            "user",
+            "Where does the RAMP peak?\nno ramp on this line either",
+        ),
+        history_message("a", 1, "assistant", &long),
+        history_message("b", 0, "user", "nothing relevant"),
+    ];
+    for seq in 0..10 {
+        messages.push(history_message("b", seq + 1, "assistant", "ramp ramp ramp"));
+    }
+    let history = History::build(
+        vec![history_thread("a", None), history_thread("b", None)],
+        messages,
+    );
+
+    let hits = history.search("  ramp ");
+    let a_hits: Vec<_> = hits.iter().filter(|hit| hit.entry == 0).collect();
+    assert_eq!(a_hits.len(), 3, "{hits:?}");
+    assert_eq!(&a_hits[0].excerpt[a_hits[0].span.clone()], "RAMP");
+    assert_eq!(a_hits[0].excerpt, "Where does the RAMP peak?");
+    // The long line is windowed around its match, marked on both cut sides.
+    let windowed = &a_hits[2];
+    assert!(windowed.excerpt.starts_with('…') && windowed.excerpt.ends_with('…'));
+    assert_eq!(&windowed.excerpt[windowed.span.clone()], "Ramp");
+    // One hit per line, and no more than the cap per conversation.
+    assert_eq!(
+        hits.iter().filter(|hit| hit.entry == 1).count(),
+        History::HITS_PER_ENTRY
+    );
+    assert!(history.search("   ").is_empty());
+}

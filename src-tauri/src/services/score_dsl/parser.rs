@@ -312,14 +312,14 @@ impl<'a> Parser<'a> {
                     );
                 } else {
                     self.advance();
-                    if let Some(mode) = blend_mode_from_name(&value.value) {
+                    if let Some(mode) = BlendMode::from_name(&value.value) {
                         blend = mode;
                     } else {
                         self.error(
                             DslErrorCode::InvalidBlendMode,
                             format!("invalid blend mode {:?}", value.value),
                             value.span,
-                            Some(format!("Valid modes: {}", BLEND_MODE_NAMES.join(", "))),
+                            Some(format!("Valid modes: {}", blend_mode_list())),
                         );
                     }
                 }
@@ -1087,37 +1087,8 @@ struct ParsedBarPosition {
     span: Span,
 }
 
-const BLEND_MODE_NAMES: [&str; 9] = [
-    "replace", "add", "multiply", "screen", "max", "min", "lighten", "value", "subtract",
-];
-
-pub(crate) fn blend_mode_from_name(name: &str) -> Option<BlendMode> {
-    match name {
-        "replace" => Some(BlendMode::Replace),
-        "add" => Some(BlendMode::Add),
-        "multiply" => Some(BlendMode::Multiply),
-        "screen" => Some(BlendMode::Screen),
-        "max" => Some(BlendMode::Max),
-        "min" => Some(BlendMode::Min),
-        "lighten" => Some(BlendMode::Lighten),
-        "value" => Some(BlendMode::Value),
-        "subtract" => Some(BlendMode::Subtract),
-        _ => None,
-    }
-}
-
-pub(crate) fn blend_mode_name(mode: BlendMode) -> &'static str {
-    match mode {
-        BlendMode::Replace => "replace",
-        BlendMode::Add => "add",
-        BlendMode::Multiply => "multiply",
-        BlendMode::Screen => "screen",
-        BlendMode::Max => "max",
-        BlendMode::Min => "min",
-        BlendMode::Lighten => "lighten",
-        BlendMode::Value => "value",
-        BlendMode::Subtract => "subtract",
-    }
+fn blend_mode_list() -> String {
+    BlendMode::ALL.map(BlendMode::name).join(", ")
 }
 
 fn arg_value_name(value: &ArgValue) -> &'static str {

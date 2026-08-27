@@ -39,8 +39,10 @@ pub enum ToolOutcome {
 pub struct ToolContext<'a> {
     pub services: &'a AppServices,
     pub thread_id: &'a str,
-    /// The durable assistant row this call is attributed to. A cell with edit
-    /// authority must be traceable to a persisted turn, so this is not optional.
+    /// The durable *user* row that began this turn — never the assistant row
+    /// being written, which is not persisted until the turn closes. A cell with
+    /// edit authority must be traceable to a prompt a person actually sent, so
+    /// this is not optional and the host rejects any other role.
     pub turn_message_id: &'a str,
     /// A child execution namespace, for a subagent. `None` runs in the
     /// thread's own kernel.

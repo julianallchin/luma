@@ -4,7 +4,6 @@ use std::fmt;
 
 use crate::models::node_graph::BlendMode;
 
-use super::parser::blend_mode_name;
 use super::types::{
     Annotation, Arg, ArgValue, BarRange, Comment, Document, GroupExpr, Layer, PatternArgument,
     PatternDefinition, PatternRegistry, TimeUnit,
@@ -393,7 +392,7 @@ fn serialize_annotation(
         ));
     }
     if annotation.blend != BlendMode::Replace {
-        parts.push(format!("blend={}", blend_mode_name(annotation.blend)));
+        parts.push(format!("blend={}", annotation.blend.name()));
     }
     Ok(parts.join(" "))
 }

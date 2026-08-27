@@ -22,6 +22,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::enum_of(crate::eval::ops::spatial::ATTRIBUTES),
                 default_number: None,
                 default_text: Some("index".into()),
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -59,6 +60,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Number, // 0 or 1
                 default_number: Some(1.0),
                 default_text: None,
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -84,6 +86,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::Text,
                 default_number: None,
                 default_text: Some("movement".into()), // movement, color, strobe
+                range: None,
             }],
         },
         NodeTypeDef {
@@ -117,6 +120,7 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
                 param_type: ParamType::enum_of(crate::eval::ops::spatial::AXES),
                 default_number: None,
                 default_text: Some("x".into()),
+                range: None,
             }],
         },
     ]
