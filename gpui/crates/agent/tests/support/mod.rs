@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use gpui::{AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode};
+use luma_ui::runtime::Runtime;
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
@@ -60,6 +61,22 @@ pub const NAV: &str = concat!(include_str!("until.js"), include_str!("nav.js"));
 #[must_use]
 pub fn script(body: &str) -> String {
     format!("{NAV}\n{body}")
+}
+
+/// A runtime pointed at `config_dir` with motion snapped — what every harness
+/// in this suite wants that does not go through [`Fixture::open`].
+///
+/// Carried in [`Config`] rather than set in the environment, so that two of
+/// these may be live at once in one test binary. Everything else still falls
+/// back to the environment, which keeps the escape hatches working for a human
+/// running a single test by hand.
+#[must_use]
+pub fn runtime(config_dir: impl Into<PathBuf>) -> Runtime {
+    Runtime {
+        config_dir: Some(config_dir.into()),
+        reduced_motion: true,
+        ..Runtime::default()
+    }
 }
 
 pub const VENUE: &str = "venue-main";
@@ -115,9 +132,10 @@ impl Clip {
 
 /// A library with one venue, one track, one score, and clips on it.
 pub struct Fixture {
-    /// Distinguishes one test binary's config directory from another's, which
-    /// matters because `LUMA_CONFIG_DIR` is process-global: two tests seeding
-    /// the same directory would be one library with both their contents.
+    /// Distinguishes one test's config directory from another's: two tests
+    /// seeding the same directory would be one library with both their
+    /// contents. Keep it unique per test, not per file — a merged suite runs
+    /// many of these side by side in one process.
     name: &'static str,
     seconds: u32,
     clips: Vec<Clip>,
@@ -125,7 +143,7 @@ pub struct Fixture {
     /// fixture bundle for them to resolve against. Off by default: every other
     /// fixture in this file is testing rows and geometry, and a rig would only
     /// be a slower seed.
-    rig: bool,
+    rig: usize,
     seed_track: bool,
     track_created_at: Option<String>,
     window: Option<gpui::Size<gpui::Pixels>>,
@@ -135,6 +153,9 @@ pub struct Fixture {
     source_import_fixture_delay: Option<Duration>,
     equal_timestamp_track: bool,
     force_motion: bool,
+    motion_scale: Option<f32>,
+    extra_tracks: usize,
+    album_art: Option<usize>,
 }
 
 impl Fixture {
@@ -143,7 +164,7 @@ impl Fixture {
             name,
             seconds,
             clips,
-            rig: false,
+            rig: 0,
             seed_track: true,
             track_created_at: None,
             window: None,
@@ -153,6 +174,9 @@ impl Fixture {
             source_import_fixture_delay: None,
             equal_timestamp_track: false,
             force_motion: false,
+            motion_scale: None,
+            extra_tracks: 0,
+            album_art: None,
         }
     }
 
@@ -170,11 +194,20 @@ impl Fixture {
 
     /// Patch a small rig into the venue and bundle the definition it needs.
     ///
-    /// Also sets `LUMA_FIXTURES_ROOT`, so the bundled definition is the one the
-    /// app resolves rather than the developer's — the same escape hatch
-    /// `LUMA_CONFIG_DIR` is, and process-global for the same reason.
-    pub fn with_rig(mut self) -> Self {
-        self.rig = true;
+    /// Also points the harness's fixtures root at that bundle, so the app
+    /// resolves the definition this fixture wrote rather than the developer's.
+    pub fn with_rig(self) -> Self {
+        self.with_rig_of(4)
+    }
+
+    /// Patch `count` movers instead of the default four.
+    ///
+    /// Rig size is the axis most renderer costs scale on — cluster occupancy,
+    /// shadow passes, draw count — so a test about frame cost has to be able to
+    /// ask for a venue-sized one. The geometry is the same line of movers,
+    /// spread to keep the whole rig in frame.
+    pub fn with_rig_of(mut self, count: usize) -> Self {
+        self.rig = count;
         self
     }
 
@@ -219,11 +252,46 @@ impl Fixture {
         self
     }
 
+    /// Stretch every timeline by `scale`, so a screenshot burst can sample a
+    /// 200ms tween per frame. Only meaningful alongside [`Self::with_motion`].
+    ///
+    /// Per-fixture rather than per-process, which is what lets one suite hold
+    /// a test that wants 10x next to one that wants 3x.
+    #[allow(dead_code)]
+    pub fn with_motion_scale(mut self, scale: f32) -> Self {
+        self.motion_scale = Some(scale);
+        self
+    }
+
     /// Keep the venue but omit the library track and its score. Used by
     /// outside-in empty-library flows whose only entry point is the sidebar
     /// head rather than an existing track row.
     pub fn without_track(mut self) -> Self {
         self.seed_track = false;
+        self
+    }
+
+    /// Pad the library with `count` extra rows, so a list is a *library*
+    /// rather than a line.
+    ///
+    /// The seeded track alone is the right fixture for behaviour and the wrong
+    /// one for cost: anything that walks the library per frame is invisible at
+    /// one row. These carry no audio and no beats — they exist to be listed.
+    pub fn with_extra_tracks(mut self, count: usize) -> Self {
+        self.extra_tracks = count;
+        self
+    }
+
+    /// Give the padding rows album art: a real PNG on disk for most of them,
+    /// and a path that resolves to nothing for every `broken_every`-th row.
+    ///
+    /// Both halves matter. Art is what a real library has and the cost
+    /// fixtures otherwise lack, and a *missing* file is the case worth pinning:
+    /// if a failed decode is not cached, every frame re-reads a path that will
+    /// never resolve, which is a per-frame cost that no amount of list
+    /// virtualization removes. `0` disables the broken rows.
+    pub fn with_album_art(mut self, broken_every: usize) -> Self {
+        self.album_art = Some(broken_every);
         self
     }
 
@@ -236,29 +304,22 @@ impl Fixture {
 
     /// Seed the library and open the app on it.
     ///
-    /// Sets `LUMA_CONFIG_DIR`, so exactly one fixture may be open per process.
+    /// Every knob this needs travels in the harness's [`Runtime`], so any
+    /// number of fixtures may be open at once in one process — which is what
+    /// lets a whole suite share a test binary.
     pub fn open(self, mode: Mode) -> Harness {
-        std::env::set_var("LUMA_CONFIG_DIR", self.seed());
-        // A walk acts and then looks. With the panel slides running, "looks"
-        // would land mid-transition and every geometry assertion would be a
-        // race against a 200ms tween; snapped, the frame after an action is
-        // the finished one. Process-global for the same reason the config
-        // directory is — and left alone when the run already asked for motion
-        // (`shell_motion` shoots the slides themselves).
-        if std::env::var_os("LUMA_MOTION").is_none() {
-            std::env::set_var("LUMA_MOTION", "off");
-        }
+        let config_dir = self.seed();
+        // The rig's bundle is written under the config directory by
+        // `seed_rig`, so the app resolves the definition this fixture just
+        // wrote rather than the developer's.
+        let fixtures_root = (self.rig > 0).then(|| config_dir.join("fixtures"));
         let source_fixture = self.source_fixture.clone();
         let source_fixture_delay = self.source_fixture_delay;
         let source_search_responses = self.source_search_responses.clone();
         let source_import_fixture_delay = self.source_import_fixture_delay;
-        let force_motion = self.force_motion;
         let root: gpui_agent::RootFactory =
             Arc::new(move |window: &mut Window, cx: &mut App| -> AnyView {
                 luma_app::init(cx);
-                if force_motion {
-                    luma_ui::motion::set_reduced_motion(cx, false);
-                }
                 let mut library =
                     luma_app::Library::open().expect("failed to open the fixture library");
                 if let Some(fixture) = source_fixture.clone() {
@@ -280,12 +341,43 @@ impl Fixture {
         let mut config = Config {
             mode,
             call_timeout: Duration::from_secs(120),
+            runtime: Runtime {
+                config_dir: Some(config_dir),
+                fixtures_root,
+                // A walk acts and then looks. With the panel slides running,
+                // "looks" would land mid-transition and every geometry
+                // assertion would be a race against a 200ms tween; snapped,
+                // the frame after an action is the finished one. Tests that
+                // shoot the slides themselves opt out with `with_motion`.
+                reduced_motion: !self.force_motion,
+                motion_scale: self.motion_scale.unwrap_or(1.0),
+                // Left unset so `Harness::headless` answers from the mode.
+                stage_gpu: None,
+            },
             ..Config::default()
         };
         if let Some(window) = self.window {
             config.window_size = window;
         }
         Harness::headless(config, root).expect("failed to start the harness")
+    }
+
+    /// A seeded track's content hash — and it has to vary with the content.
+    ///
+    /// A track hash names the bytes, and both `luma::audio::cache` and
+    /// `luma::eval::context` keep process-global decode caches keyed on it. So
+    /// a fixed literal here is not a harmless stand-in: two fixtures of
+    /// different lengths claiming one hash means whichever test decodes first
+    /// serves its audio to every later test in the process, which surfaces as
+    /// that test's own track being the wrong duration. [`wav`] is a pure
+    /// function of `seconds`, so `seconds` is what distinguishes the bytes.
+    ///
+    /// `stem` keeps the two seeded tracks apart. They share one audio file, so
+    /// a strict content hash would be equal for both — but the import matcher
+    /// treats an equal hash as the same track, and these are seeded precisely
+    /// to be two. Distinct stems cost one redundant decode and buy that.
+    fn track_hash(&self, stem: &str) -> String {
+        format!("{stem}-{}s", self.seconds)
     }
 
     /// A library of its own, so the run cannot see — or corrupt — the
@@ -334,10 +426,11 @@ impl Fixture {
             sqlx::query(
                 "INSERT INTO tracks
                     (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-                 VALUES (?, NULL, 'aurora-hash', ?, 'Nightliner', ?, ?,
+                 VALUES (?, NULL, ?, ?, 'Nightliner', ?, ?,
                          COALESCE(?, CURRENT_TIMESTAMP))",
             )
             .bind(TRACK)
+            .bind(self.track_hash("aurora"))
             .bind(TRACK_NAME)
             .bind(f64::from(self.seconds))
             .bind(audio.to_string_lossy().to_string())
@@ -350,9 +443,10 @@ impl Fixture {
                 sqlx::query(
                     "INSERT INTO tracks
                         (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-                     VALUES ('track-zulu', NULL, 'zulu-hash', 'Zulu', 'Nightliner', ?, ?,
+                     VALUES ('track-zulu', NULL, ?, 'Zulu', 'Nightliner', ?, ?,
                              COALESCE(?, CURRENT_TIMESTAMP))",
                 )
+                .bind(self.track_hash("zulu"))
                 .bind(f64::from(self.seconds))
                 .bind(audio.to_string_lossy().to_string())
                 .bind(self.track_created_at.as_deref())
@@ -361,7 +455,43 @@ impl Fixture {
                 .expect("failed to seed the equal-timestamp track");
             }
         }
-        if self.rig {
+        // One PNG on disk, shared by every row that has art. Distinct files
+        // would measure the decoder; one file measures the cache, which is the
+        // question — a real library's covers are already decoded once each.
+        let art_path = self.album_art.map(|_| {
+            let path = config_dir.join("padding-art.png");
+            std::fs::write(&path, padding_art()).expect("failed to write padding art");
+            path.to_string_lossy().into_owned()
+        });
+        for index in 0..self.extra_tracks {
+            let art = art_path.as_ref().map(|path| {
+                let broken_every = self.album_art.unwrap_or(0);
+                if broken_every > 0 && index % broken_every == 0 {
+                    // Points nowhere on purpose. See `with_album_art`.
+                    format!("{path}.missing-{index:05}")
+                } else {
+                    path.clone()
+                }
+            });
+            sqlx::query(
+                "INSERT INTO tracks
+                    (id, uid, track_hash, title, artist, album, duration_seconds, file_path,
+                     album_art_path, album_art_mime)
+                 VALUES (?, NULL, ?, ?, ?, 'Padding', ?, ?, ?, ?)",
+            )
+            .bind(format!("track-pad-{index:05}"))
+            .bind(self.track_hash(&format!("pad-{index}")))
+            .bind(format!("Padding Track {index:05}"))
+            .bind(format!("Padding Artist {:03}", index % 97))
+            .bind(f64::from(self.seconds))
+            .bind(audio.to_string_lossy().to_string())
+            .bind(art.clone())
+            .bind(art.map(|_| "image/png".to_string()))
+            .execute(pool)
+            .await
+            .expect("failed to seed a padding track");
+        }
+        if self.rig > 0 {
             self.seed_rig(pool, config_dir).await;
         }
 
@@ -416,24 +546,35 @@ impl Fixture {
             None
         };
 
+        // Lit patterns are minted once per `clip.pattern` key, so two clips
+        // that name the same key share one pattern — which is what a test
+        // about same-pattern multi-selection needs to exist at all.
+        let mut lit_patterns: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for (index, clip) in self.clips.iter().enumerate().filter(|_| self.seed_track) {
             // `create_pattern` mints its own id, so a lit clip's score row
             // names that one rather than `clip.pattern` — which for a lit clip
             // is only the request key that keeps re-seeding idempotent.
             let pattern = if clip.lit {
-                let created = call(
-                    &services,
-                    "create_pattern",
-                    json!({ "requestId": request_id(800 + index),
-                            "name": clip.name, "description": null }),
-                )
-                .await;
-                let id = created["id"]
-                    .as_str()
-                    .expect("a created pattern has an id")
-                    .to_string();
-                self.light(&services, &id, index).await;
-                id
+                match lit_patterns.get(&clip.pattern) {
+                    Some(id) => id.clone(),
+                    None => {
+                        let created = call(
+                            &services,
+                            "create_pattern",
+                            json!({ "requestId": request_id(800 + index),
+                                    "name": clip.name, "description": null }),
+                        )
+                        .await;
+                        let id = created["id"]
+                            .as_str()
+                            .expect("a created pattern has an id")
+                            .to_string();
+                        self.light(&services, &id, index).await;
+                        lit_patterns.insert(clip.pattern.clone(), id.clone());
+                        id
+                    }
+                }
             } else {
                 clip.pattern.clone()
             };
@@ -509,11 +650,24 @@ impl Fixture {
                         edge("mix", "out", "apply", "signal"),
                         edge("pattern_args", "selection", "apply", "selection"),
                     ],
+                    // One arg of each editable family the args strip must
+                    // host. Only `selection` is wired into the graph; the
+                    // rest are schema for the strip to render and write.
                     "args": [{
                         "id": "selection",
                         "name": "selection",
                         "argType": "Selection",
                         "defaultValue": { "expression": "all", "spatialReference": "global" },
+                    }, {
+                        "id": "intensity",
+                        "name": "intensity",
+                        "argType": "Scalar",
+                        "defaultValue": 1.0,
+                    }, {
+                        "id": "tint",
+                        "name": "tint",
+                        "argType": "Color",
+                        "defaultValue": { "r": 255.0, "g": 0.0, "b": 0.0, "a": 1.0 },
                     }],
                 },
             }),
@@ -532,9 +686,10 @@ impl Fixture {
         std::fs::create_dir_all(bundle.join("Luma")).expect("failed to create the fixture bundle");
         std::fs::write(bundle.join("Luma/Mover.qxf"), MOVER_QXF)
             .expect("failed to write the fixture definition");
-        std::env::set_var("LUMA_FIXTURES_ROOT", &bundle);
 
-        for i in 0..4 {
+        let count = self.rig;
+        let span = (count as f64).max(1.0) * 0.6;
+        for i in 0..count {
             sqlx::query(
                 "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
                                        manufacturer, model, mode_name, fixture_path, label,
@@ -543,10 +698,10 @@ impl Fixture {
             )
             .bind(format!("fixture-{i}"))
             .bind(VENUE)
-            .bind(i * 8 + 1)
+            .bind(i as i64 * 8 + 1)
             .bind(MOVER_PATH)
             .bind(format!("Mover {i}"))
-            .bind(f64::from(i) * 1.5 - 2.25)
+            .bind((i as f64 / (count.max(2) - 1) as f64 - 0.5) * span)
             .execute(pool)
             .await
             .expect("failed to patch a fixture");
@@ -625,7 +780,7 @@ async fn call(services: &luma_lib::dispatch::AppServices, name: &str, args: Valu
 /// A slow amplitude sweep over a 220 Hz tone rather than silence: the waveform
 /// renderer's band envelopes are the point of loading it, and a flat signal
 /// would give three bands of zero and nothing to look at — or to draw slowly.
-fn wav(seconds: u32) -> Vec<u8> {
+pub fn wav(seconds: u32) -> Vec<u8> {
     const RATE: u32 = 44_100;
     let frames = RATE * seconds;
     let mut samples = Vec::with_capacity(frames as usize * 4);
@@ -652,4 +807,113 @@ fn wav(seconds: u32) -> Vec<u8> {
     file.extend_from_slice(&(samples.len() as u32).to_le_bytes());
     file.extend_from_slice(&samples);
     file
+}
+
+#[cfg(feature = "pixel")]
+pub mod image;
+
+/// Reading `app.timings()` — shared so two suites cannot disagree about what a
+/// percentile means.
+///
+/// These are the CPU half of a frame (scene build), never the GPU: see
+/// `app.timings()` in `api.d.ts`.
+pub mod cost {
+    use serde_json::Value;
+
+    /// Nearest-rank percentile. Sorts in place.
+    pub fn percentile(sample: &mut Vec<f64>, fraction: f64) -> f64 {
+        sample.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if sample.is_empty() {
+            return f64::NAN;
+        }
+        sample[(((sample.len() - 1) as f64) * fraction).round() as usize]
+    }
+
+    /// Print what the frames in `(from, to]` cost, and hand back the median.
+    ///
+    /// Half-open on purpose: callers mark a stretch with the frame number a
+    /// command returned, and that frame belongs to the stretch before it.
+    pub fn summarize(frames: &[Value], from: u64, to: u64, label: &str) -> f64 {
+        let mut draw: Vec<f64> = Vec::new();
+        let mut parked: Vec<f64> = Vec::new();
+        for frame in frames {
+            let number = frame["frame"].as_u64().unwrap();
+            if number > from && number <= to {
+                draw.push(frame["drawMs"].as_f64().unwrap());
+                parked.push(frame["parkedMs"].as_f64().unwrap());
+            }
+        }
+        let count = draw.len();
+        let mean = draw.iter().sum::<f64>() / count.max(1) as f64;
+        let p50 = percentile(&mut draw.clone(), 0.50);
+        let p95 = percentile(&mut draw, 0.95);
+        println!(
+            "{label:<26} n={count:<4} drawMs mean={mean:6.2} p50={p50:6.2} p95={p95:6.2}  \
+             parkedMs p50={:5.2}",
+            percentile(&mut parked, 0.50)
+        );
+        p50
+    }
+}
+
+/// A 64×64 PNG, built rather than embedded.
+///
+/// Fixtures that need album art need *valid* art — a file that fails to decode
+/// would put every row on the failure path and quietly measure the wrong thing.
+/// Hand-written bytes with a wrong CRC do exactly that, so the encoder is here:
+/// stored-mode deflate needs no compressor, and the two checksums are short.
+fn padding_art() -> Vec<u8> {
+    const SIDE: u32 = 64;
+    let mut raw = Vec::with_capacity((SIDE * (1 + SIDE * 3)) as usize);
+    for y in 0..SIDE {
+        raw.push(0); // filter: none
+        for x in 0..SIDE {
+            raw.extend_from_slice(&[(x * 4) as u8, (y * 4) as u8, 0x80]);
+        }
+    }
+
+    let mut zlib = vec![0x78, 0x01];
+    for (index, block) in raw.chunks(65_535).enumerate() {
+        let last = (index + 1) * 65_535 >= raw.len();
+        zlib.push(u8::from(last));
+        zlib.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &raw {
+        a = (a + u32::from(*byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+
+    let mut header = Vec::new();
+    header.extend_from_slice(&SIDE.to_be_bytes());
+    header.extend_from_slice(&SIDE.to_be_bytes());
+    header.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit RGB, no interlace
+
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    for (kind, body) in [(b"IHDR", header), (b"IDAT", zlib), (b"IEND", Vec::new())] {
+        png.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let mut chunk = kind.to_vec();
+        chunk.extend_from_slice(&body);
+        png.extend_from_slice(&chunk);
+        png.extend_from_slice(&crc32(&chunk).to_be_bytes());
+    }
+    png
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
 }

@@ -33,11 +33,13 @@ use serde_json::{json, Value};
 /// pattern — so two tests sharing a pattern would share a thread, and the
 /// second would open onto the first's transcript. One pattern each is what
 /// makes each test's panel empty when it opens.
-pub const PATTERNS: [&str; 5] = [
+pub const PATTERNS: [&str; 7] = [
     "chat-turn",
     "chat-growth",
     "chat-typing",
     "chat-repoint",
+    "chat-new",
+    "chat-history",
     CAPTURED,
 ];
 
@@ -55,6 +57,15 @@ pub const CAPTURED: &str = "gauntlet-chat";
 /// [`UNTIL`] polls inside it rather than sleeping through it, so the suite
 /// pays the latency only when a state never arrives.
 const TOOL_LATENCY: Duration = Duration::from_millis(1_200);
+
+/// The gap between scripted events, so a turn is observably *mid-text*.
+///
+/// Without a cadence the whole script is ready in one poll: the transcript goes
+/// from empty to complete inside a single frame, and every assertion about
+/// "streaming" is really an assertion about the final paint. That made a whole
+/// class of streaming bug invisible to this suite. Small enough that a turn
+/// still finishes in about a second.
+const TEXT_CADENCE: Duration = Duration::from_millis(25);
 
 /// What the model "says" in its first step, before it calls the tool.
 pub const OPENING: &str =
@@ -86,8 +97,19 @@ impl Tool for ScriptedTool {
         Cow::Borrowed("Run a Python cell against the pattern.")
     }
 
+    /// Mirrors the real tool's contract, `purpose` included: the model must
+    /// say what a cell is *for* before its source, and the chip is titled by
+    /// that. A stand-in that accepted code alone would let the panel be tested
+    /// against a call the real tool cannot make.
     fn schema(&self) -> Value {
-        json!({ "type": "object", "properties": { "code": { "type": "string" } } })
+        json!({
+            "type": "object",
+            "required": ["purpose", "code"],
+            "properties": {
+                "purpose": { "type": "string" },
+                "code": { "type": "string" },
+            },
+        })
     }
 
     async fn call(&self, _ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
@@ -123,7 +145,7 @@ fn script() -> Vec<Vec<ModelEvent>> {
         },
         ModelEvent::ToolCallArgsDelta {
             id: "call-1".into(),
-            json: r#"{"code":"ramp.peak()"}"#.into(),
+            json: r#"{"purpose":"ramp peak check","code":"ramp.peak()"}"#.into(),
         },
         ModelEvent::ToolCallEnded {
             id: "call-1".into(),
@@ -199,13 +221,28 @@ async fn seed(config_dir: &Path) {
     // A venue, so the shell has a sidebar to show: the captures are judged as
     // "the app as a user with a venue sees it", and a venue-less fixture was
     // exactly how round one shipped three sidebar-less plates.
-    luma_lib::dispatch::dispatch(
+    let venue = luma_lib::dispatch::dispatch(
         &services,
         "create_venue",
         &json!({ "name": "Studio A", "description": null }),
     )
     .await
     .expect("failed to seed the venue");
+    // A score puts the first track *in* the venue — the sidebar lists
+    // membership, and the graph doors need a track editor open (§6 of the
+    // graph-editor design doc), so `open_chat`'s walk goes through it.
+    luma_lib::dispatch::dispatch(
+        &services,
+        "create_score",
+        &json!({
+            "requestId": "7f1c2c60-0000-4000-8000-00000000c500",
+            "trackId": "chat-track-0",
+            "venueId": venue["id"],
+            "name": "Chat Fixture Score",
+        }),
+    )
+    .await
+    .expect("failed to seed the score");
     for (index, name) in PATTERNS.iter().enumerate() {
         let created = luma_lib::dispatch::dispatch(
             &services,
@@ -260,9 +297,9 @@ async fn seed_graph(services: &luma_lib::dispatch::AppServices, pattern: &str) {
 
 /// The seeded library, made once per process.
 ///
-/// `LUMA_CONFIG_DIR` is process-global, so there is exactly one fixture
-/// library per test binary — and building it twice is what produced a locked
-/// database when two tests raced into the migrations.
+/// These tests deliberately share one library, so it is seeded once — building
+/// it twice is what produced a locked database when two tests raced into the
+/// migrations. [`session`] serializes the turns that use it.
 fn fixture() -> &'static PathBuf {
     static FIXTURE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     FIXTURE.get_or_init(config_dir)
@@ -284,13 +321,12 @@ pub fn session(mode: Mode, window: (f32, f32)) -> Session {
     let gate = GATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    std::env::set_var("LUMA_CONFIG_DIR", fixture());
-    // Snap the panel slides: see the note in `support::mod`'s `open`.
-    std::env::set_var("LUMA_MOTION", "off");
     let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
         luma_app::init(cx);
         let mut library = luma_app::Library::open().expect("failed to open the fixture library");
-        library.set_agent_model(Arc::new(ScriptedModel::new(script())));
+        library.set_agent_model(Arc::new(
+            ScriptedModel::new(script()).with_cadence(TEXT_CADENCE),
+        ));
         library.set_agent_tools(ToolRegistry::new(vec![Arc::new(ScriptedTool)]));
         cx.new(|cx| luma_app::Luma::new(library, cx)).into()
     });
@@ -299,6 +335,14 @@ pub fn session(mode: Mode, window: (f32, f32)) -> Session {
             mode,
             window_size: size(px(window.0), px(window.1)),
             call_timeout: Duration::from_secs(120),
+            // Snapped, for the reason in `support::mod`'s `open`. Built here
+            // rather than borrowed from `support` because this file is
+            // included at the crate root via `#[path]`, not as `support::chat`.
+            runtime: luma_ui::runtime::Runtime {
+                config_dir: Some(fixture().clone()),
+                reduced_motion: true,
+                ..luma_ui::runtime::Runtime::default()
+            },
             ..Config::default()
         },
         root,
@@ -349,6 +393,10 @@ pub fn open_chat(pattern: &str) -> String {
     format!(
         r#"
         {until}
+        {venue}
+        // The graph editor is not openable without a track context (§6 of the
+        // graph-editor design doc), so the walk goes venue → track → pattern.
+        nav.track("Aurora");
         nav.pattern({pattern:?});
         until("the chat centre", (s) => {{
             // Not merely present: a control inside a clipped region exists
@@ -360,16 +408,57 @@ pub fn open_chat(pattern: &str) -> String {
         app.frames(8, {{ waitMs: 40 }});
     "#,
         until = UNTIL,
+        venue = PICK_VENUE,
     )
 }
 
-/// Type the prompt and press Send.
+/// Land in Studio A, whichever way this session opens: the shared library
+/// remembers the picked venue, so only the process's first session sees the
+/// venue picker — every later one opens straight onto the shell. Waiting for
+/// *either* is what makes the walk order-independent across the suite.
+/// Block-scoped, because a session keeps one interpreter context and two
+/// pastes of a top-level `const` are a redeclaration.
+pub const PICK_VENUE: &str = r#"
+        {
+            const arrival = until("the venue picker or the shell", (s) =>
+                (s.find({ role: "card", label: "Studio A" })
+                    || s.find({ role: "input", label: "Search tracks…" })) ? s : undefined);
+            if (arrival.find({ role: "card", label: "Studio A" })) {
+                nav.venue("Studio A");
+            }
+        }
+"#;
+
+/// Type the prompt, press Send, and wait for the turn to actually begin.
+///
+/// # Why the wait is here and not at the call sites
+///
+/// Pressing Send only *starts* a turn: the stream is opened on a runtime gpui
+/// cannot see, so the frame after the click is still the idle one. Every caller
+/// then writes some form of "wait until the turn ended", and that predicate —
+/// no `Working` trailer — is **equally true before the turn starts**. A script
+/// that asked it immediately could be answered by the pre-turn frame, pass, and
+/// have observed nothing at all.
+///
+/// Waiting for the working trailer to appear is what makes the absence that
+/// follows mean something. It belongs to `send` rather than to each caller
+/// because it is a property of the gesture, not of what any one test does next
+/// — a new caller that forgot it would get the same silent false pass.
+///
+/// **Both** of the trailer's labels count. It reads `Sending` until the
+/// assistant row exists and `Working` after, and a turn has begun at the first
+/// of those, not the second: keying on `Working` alone would wait through a
+/// state that already answers the question, and hang on any turn that finishes
+/// before it gets there.
 pub fn send() -> String {
     format!(
         r#"
         app.type({composer}, "where does the ramp peak?");
         app.frames(2);
         app.click(app.snapshot().find({{ role: "button", label: "Send" }}));
+        until("the turn to begin", (s) =>
+            s.findAll({{ role: "text" }})
+                .some((n) => n.label === "Sending" || n.label === "Working"));
     "#,
         composer = composer()
     )

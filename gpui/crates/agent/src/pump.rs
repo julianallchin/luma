@@ -39,6 +39,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use luma_ui::runtime::Runtime;
+
 use gpui::{
     px, size, AnyView, AnyWindowHandle, App, AppContext as _, Bounds, Context, IntoElement,
     Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -49,7 +51,7 @@ use luma_ui::node::{Node, NodeRegistry, Role};
 use serde_json::{json, Value};
 
 use crate::error::HarnessError;
-use crate::protocol::{Cmd, DragTarget, NodeRef, Restale, ScrollAt};
+use crate::protocol::{Cmd, DragTarget, NodeRef, PointerAt, Restale};
 
 /// Builds the view under test. `Fn`, not `FnOnce`, because [`Cmd::Reset`]
 /// builds it again.
@@ -70,6 +72,33 @@ pub enum Mode {
     Pixel,
 }
 
+/// How long a **GPU-backed** harness should let a single command run before
+/// declaring the pump wedged.
+///
+/// A liveness guard, never a performance budget. A pixel harness pays for
+/// device creation and shader compilation on its *first* drawn frame —
+/// measured at ~24.5s on an idle M3 Max in `luma-render`'s transport tests —
+/// while every frame after it lands in single-digit milliseconds. Any bound
+/// tight enough to say something interesting about the second frame therefore
+/// fails the first one the moment the machine is busy, and a correct result
+/// goes red for want of a spare second.
+///
+/// So this is several times the measured warmup, and a pixel-mode test that
+/// trips it has a genuinely stuck app rather than a slow one. What a frame
+/// *costs* belongs in the budget tests and `profile-volumetrics`, where it can
+/// be measured without shader compilation in the number.
+///
+/// [`Config::default`] keeps a short bound, because a harness driving its own
+/// small view really does have nothing to warm up.
+///
+/// **"Headless" is not the same as "no GPU".** The mode decides whether frames
+/// can be read back as images, not whether the app under test builds a
+/// renderer: the shell's stage pane mounts whenever a venue is on screen, and
+/// it acquires a device wherever it mounts. So an app-mode test that picks a
+/// venue or a track pays the same warmup as a pixel one and needs this bound
+/// too — `venues` and `tracks` are the two that do.
+pub const GPU_LIVENESS_TIMEOUT: Duration = Duration::from_secs(180);
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub mode: Mode,
@@ -80,6 +109,13 @@ pub struct Config {
     pub window_size: Size<Pixels>,
     /// How long a single command may take before the pump is declared wedged.
     pub call_timeout: Duration,
+    /// The library this app opens and the dev switches it draws under.
+    ///
+    /// Carried per-harness rather than read from the environment so that two
+    /// harnesses in one test binary cannot contradict each other — see
+    /// [`luma_ui::runtime::Runtime`]. [`run`] installs it on whichever thread
+    /// the pump ends up on, before the app opens.
+    pub runtime: Runtime,
 }
 
 impl Default for Config {
@@ -92,6 +128,7 @@ impl Default for Config {
                 .unwrap_or(0),
             window_size: size(px(1200.), px(800.)),
             call_timeout: Duration::from_secs(10),
+            runtime: Runtime::default(),
         }
     }
 }
@@ -151,18 +188,49 @@ impl PumpClient {
 /// than the other way round: the app is the long-lived thing this process
 /// exists to hold, and giving it the main thread means the process ends when
 /// the app does.
+///
+/// # Why `on_ready` runs before the app is built
+///
+/// It reads like a bug — the caller gets a client for a window that does not
+/// exist yet — and it was one while startup state travelled through the
+/// environment, because the app read those variables *after* the caller had
+/// moved on. That is fixed at the source now: the knobs ride in
+/// [`Config::runtime`] and are installed below, so nothing the app reads at
+/// startup can be changed by anyone else once this function has been called.
+///
+/// What remains is load-bearing. Handing the client over first lets the caller
+/// build its interpreter while [`Backend::open`] runs, so the first command
+/// lands as the window comes up. Deferring it until after `Backend::open`
+/// inserts the interpreter's construction between the two, and fixture delays
+/// — which start ticking when the app opens — burn down before the script
+/// arrives to watch them. Measured: three headless runs at 31/32 with
+/// `on_ready` moved after, the failure landing on `add_tracks_flow` twice and
+/// `graph` once, against 32/32 either side of the change under heavier load.
+/// Do not "fix" this ordering without re-running the suite several times.
 pub fn run(config: Config, root: RootFactory, on_ready: impl FnOnce(PumpClient)) {
     let (tx, rx) = mpsc::channel();
-    on_ready(PumpClient {
+    let client = PumpClient {
         tx,
         timeout: config.call_timeout,
-    });
+    };
+    // Before the app exists, and on the thread that will own it: everything
+    // downstream — the library directory, the motion timescale, the stage's
+    // GPU policy — resolves through the thread's runtime.
+    config.runtime.clone().install();
+    on_ready(client);
     let mut backend = Backend::open(&config, &root);
     serve(&mut backend, &config, &root, rx);
 }
 
 /// Run the pump on a thread of its own. This is what tests use — a test
 /// already owns its thread, and headless mode does not care which one it is.
+///
+/// The thread is deliberately not joinable. Teardown is asynchronous: dropping
+/// the last [`PumpClient`] disconnects `serve`'s receiver, the pump drops its
+/// backend and exits on its own. Waiting for that would mean waiting on a
+/// thread that may be wedged inside gpui — the exact case
+/// [`PumpClient::call`] refuses to block on — so a hung app would turn a clean
+/// timeout into a hung suite.
 pub fn spawn(config: Config, root: RootFactory) -> PumpClient {
     let (ready_tx, ready_rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -232,7 +300,13 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             modifiers,
             restale,
         } => {
-            let start = center(&resolve(backend, &from, restale)?);
+            let start = match &from {
+                PointerAt::Node(node) => center(&resolve(backend, node, restale)?),
+                PointerAt::At { x, y } => Point {
+                    x: px(*x),
+                    y: px(*y),
+                },
+            };
             let end = match &to {
                 DragTarget::Node(to) => center(&resolve(backend, to, restale)?),
                 DragTarget::By { dx, dy } => {
@@ -294,8 +368,8 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
             restale,
         } => {
             let point = match &at {
-                ScrollAt::Node(node) => center(&resolve(backend, node, restale)?),
-                ScrollAt::At { x, y } => Point {
+                PointerAt::Node(node) => center(&resolve(backend, node, restale)?),
+                PointerAt::At { x, y } => Point {
                     x: px(*x),
                     y: px(*y),
                 },

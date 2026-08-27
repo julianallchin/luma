@@ -48,15 +48,16 @@ pub enum DragTarget {
     By { dx: f32, dy: f32 },
 }
 
-/// Where a scroll happens: over a control, or at a point in the window.
+/// Where a pointer gesture lands: over a control, or at a point in the
+/// window.
 ///
-/// A point as well as a node because a wheel handler is usually scoped to a
-/// canvas hitbox rather than to any control on it — zooming a timeline means
-/// "wheel over the timeline", and the timeline may have no node at the exact
-/// spot you want to zoom about.
+/// A point as well as a node because a canvas handler is usually scoped to a
+/// hitbox rather than to any control on it — zooming a timeline means "wheel
+/// over the timeline", panning a graph or sweeping a marquee means "press on
+/// empty canvas", and neither spot has a control to name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ScrollAt {
+pub enum PointerAt {
     Node(NodeRef),
     At { x: f32, y: f32 },
 }
@@ -113,7 +114,7 @@ pub enum Cmd {
         restale: Restale,
     },
     Drag {
-        from: NodeRef,
+        from: PointerAt,
         to: DragTarget,
         #[serde(default = "default_steps")]
         steps: u32,
@@ -162,7 +163,7 @@ pub enum Cmd {
     /// handler reading `delta.pixel_delta(line_height)` passes through
     /// unchanged.
     Scroll {
-        at: ScrollAt,
+        at: PointerAt,
         #[serde(default)]
         dx: f32,
         #[serde(default)]

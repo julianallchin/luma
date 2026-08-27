@@ -42,8 +42,16 @@ globalThis.nav = {
 	// The venue picker's card for `name`. The picker is up whenever no venue
 	// is selected — the app opens there — so this is the first line of almost
 	// every walk. Selecting the venue closes the picker and fills the sidebar.
+	//
+	// Closing is not instant: a dismissed dialog stays mounted, and occluding,
+	// while its out-animation plays. Waiting for it to actually go is part of
+	// "go to this venue" — otherwise the next click in the walk lands on a
+	// dying dialog's scrim instead of the shell behind it, which is exactly
+	// the flake this file exists to remove.
 	venue(name) {
 		nav.step(`the venue ${name}`, "card", name, { restale: "match" });
+		until("the venue picker to finish leaving", (s) =>
+			s.find({ role: "card", label: "Venue dialog" }) === undefined ? s : undefined);
 	},
 
 	// A track, from the sidebar: its row opens (or reveals) the editor tab.
@@ -68,9 +76,33 @@ globalThis.nav = {
 	},
 
 	// A pattern's graph tab, via the picker.
+	//
+	// Waits for the picker to be *gone*, not merely for the row to be clicked.
+	// An overlay's close is deferred so it can animate out, and until it is
+	// reaped its scrim is still a full-window hit target — so a gesture aimed
+	// at the shell on the next line (the `+` control, a node on the canvas)
+	// lands on the dying dialog instead, silently doing nothing.
 	pattern(name) {
 		nav.patterns();
 		nav.step(`the pattern ${name}`, "row", name);
+		until("the dismissed pattern picker", (s) =>
+			s.find((n) => n.role === "text" && n.label.endsWith("PATTERNS")) === undefined,
+		);
+	},
+
+	// The venue's patch tab, via the `+` menu. The one tab that names a room
+	// without naming a score, which is what a test wants when it needs the
+	// stage pane up over an *unlit* rig — a track editor would composite one.
+	universe(venue) {
+		nav.venue(venue);
+		// The `+` lives only in the workspace panel's band now, so it is not on
+		// screen until something is open there. `luma::NewTab` is the path
+		// chrome.rs documents as surviving a closed panel.
+		app.action("luma::NewTab");
+		nav.step("the universe choice", "button", "Universe setup");
+		until("the universe tab", (s) =>
+			s.find({ role: "card", label: `${venue} Universe setup` }) !== undefined,
+		);
 	},
 
 	// Close the visible tab, dropping its state. What "leave and come back"
@@ -89,6 +121,18 @@ globalThis.nav = {
 		if (!globalThis.__expanded) {
 			app.action("luma::ToggleExpand");
 			globalThis.__expanded = true;
+			app.frames(2);
+		}
+	},
+
+	// Give the editor the whole workspace column. The stage rides above every
+	// tab that names a room, so a test about an *editor's* own geometry says
+	// this once rather than budgeting around a viewport it does not care
+	// about. Idempotent across one session, like `expand`.
+	stageOff() {
+		if (!globalThis.__stageOff) {
+			app.action("luma::ToggleVisualizer");
+			globalThis.__stageOff = true;
 			app.frames(2);
 		}
 	},

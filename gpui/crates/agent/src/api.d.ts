@@ -159,13 +159,16 @@ interface App {
    * The app gets a settled frame between every step, because drag previews
    * only appear on a repaint.
    *
-   * `to` is either another node, or `{dx, dy}` — a displacement in logical
-   * pixels from where the drag started. Use the delta form for anything on a
-   * canvas, where the destination is a position and not a control. A delta
-   * that would end outside the window is an error, not a shorter drag.
+   * `from` is a node, or `{x, y}` — a point in the window, for gestures that
+   * start where no control is: panning a canvas, sweeping a marquee across
+   * empty ground. `to` is either another node, or `{dx, dy}` — a displacement
+   * in logical pixels from where the drag started. Use the delta form for
+   * anything on a canvas, where the destination is a position and not a
+   * control. A delta that would end outside the window is an error, not a
+   * shorter drag.
    */
   drag(
-    from: Node,
+    from: Node | { x: number; y: number },
     to: Node | { dx: number; dy: number },
     options?: ActOptions & { steps?: number; button?: MouseButton },
   ): { frame: number };
