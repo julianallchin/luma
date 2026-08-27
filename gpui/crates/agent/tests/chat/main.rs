@@ -14,3 +14,6 @@
 //! `cargo test --test chat`.
 
 mod agent_chat;
+mod context_gauge;
+mod dialog_keyboard;
+mod subagents;

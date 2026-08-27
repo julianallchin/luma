@@ -1,10 +1,6 @@
 import type { Agent, AgentEvent } from "@earendil-works/pi-agent-core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-	AgentThread,
-	AuthoredProjectedDocument,
-	Graph,
-} from "@/bindings/schema";
+import type { AgentThread, Graph } from "@/bindings/schema";
 import { type ToolSet, toPiTools } from "@/shared/lib/agent/agent-tool";
 import {
 	type AuthoredRestoreMode,
@@ -17,12 +13,6 @@ import {
 	restoreAuthoredState,
 } from "@/shared/lib/agent/authored-state";
 import {
-	type AppliedAuthoredSubagent,
-	type AuthoredSubagentFinalization,
-	AuthoredSubagentSupervisor,
-	type PreparedAuthoredSubagent,
-} from "@/shared/lib/agent/authored-subagent-supervisor";
-import {
 	type AgentChatMessage,
 	applyAgentEvent,
 	userAgentMessage,
@@ -32,14 +22,6 @@ import {
 	createPiAgent,
 	type PiAgentModel,
 } from "@/shared/lib/agent/pi-agent-loop";
-import {
-	type AgentDefinition,
-	AgentLoader,
-	createPiSubagentRunner,
-	createSubagentTools,
-	SubagentManager,
-	type SubagentSnapshot,
-} from "@/shared/lib/agent/subagents";
 import {
 	type AgentKind,
 	appendThreadMessages,
@@ -51,6 +33,7 @@ import {
 	type PersistedMessage,
 	resolveThread,
 	type SubjectKind,
+	setThreadActor,
 	type ThreadInit,
 	threadMatchesScope,
 } from "@/shared/lib/agent/threads";
@@ -91,30 +74,6 @@ export type BuildToolsArgs<Bridge> = {
 	 * identity instead of ephemeral provider tool-call ids. */
 	turnMessageId: string;
 };
-
-/** The normal domain-tool surface rebound to one detached child revision. */
-export type BuildSubagentToolsArgs<Bridge> = BuildToolsArgs<Bridge> & {
-	subagentId: string;
-	workspaceId: string;
-	initialDocument: AuthoredProjectedDocument;
-	bindWorkspaceDocument: PreparedAuthoredSubagent["bindDocumentSink"];
-};
-
-function assertSameDomainToolSurface(
-	parentTools: ToolSet,
-	childTools: ToolSet,
-): void {
-	const parentNames = Object.keys(parentTools).sort();
-	const childNames = Object.keys(childTools).sort();
-	if (
-		parentNames.length !== childNames.length ||
-		parentNames.some((name, index) => name !== childNames[index])
-	) {
-		throw new Error(
-			`Subagent domain tools must match the parent surface (parent: ${parentNames.join(", ") || "none"}; child: ${childNames.join(", ") || "none"}).`,
-		);
-	}
-}
 
 export type TurnFinishedEvent<Bridge> = {
 	subjectKey: string;
@@ -166,18 +125,15 @@ export class AuthoredTurnConflictError extends Error {
 export type AuthoredStateAppliedEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
-	source: "turn" | "recovery" | "restore" | "subagent";
-	result:
-		| CommittedAuthoredTurn
-		| AuthoredRestoreResult
-		| AppliedAuthoredSubagent;
+	source: "turn" | "recovery" | "restore";
+	result: CommittedAuthoredTurn | AuthoredRestoreResult;
 	bridge: Bridge;
 };
 
 export type AuthoredStateRefreshEvent<Bridge> = {
 	subjectKey: string;
 	threadId: string;
-	source: "conflict" | "projection_failure" | "recovery_conflict";
+	source: "conflict" | "recovery_conflict";
 	bridge: Bridge;
 };
 
@@ -210,18 +166,13 @@ export type AgentChatSpec<Bridge> = {
 	/** Build the tool set for one turn. Constructed per turn so tools can close
 	 * over the turn's abort signal and thread id. */
 	buildTools: (args: BuildToolsArgs<Bridge>) => ToolSet;
-	/** Rebuild the parent's domain tools against a child's isolated authored
-	 * state. The manager adds recursive delegation tools after this hook. */
-	buildSubagentTools?: (args: BuildSubagentToolsArgs<Bridge>) => ToolSet;
-	/** System prompt for a turn; may read the live bridge for context. */
-	buildSystem: (bridge: Bridge) => string;
+	/** System prompt for a turn; may read the live bridge for context, and may
+	 * be async — the skills listing it carries comes from the Rust registry. */
+	buildSystem: (bridge: Bridge) => string | Promise<string>;
 	/** Tool-run display vocabulary for the shared renderer. */
 	vocab: ToolVocab;
 	/** Reasoning effort hint for providers that support it. */
 	reasoningEffort?: "low" | "medium" | "high";
-	/** Product agent definitions layered over the generic bundled default.
-	 * Later definitions with the same name override earlier ones. */
-	subagentDefinitions?: AgentDefinition[];
 	/** Called once when a turn begins, before streaming. Snapshot the world into
 	 * a working copy the tools mutate (so edits don't race UI state). */
 	onTurnStart?: (bridge: Bridge) => void;
@@ -263,8 +214,6 @@ export type AgentSession = {
 	restoring: boolean;
 	/** Every conversation in this exact account/subject/venue/score scope. */
 	threads: AgentThread[];
-	/** Live and terminal child runs owned by this conversation. */
-	subagents: import("./subagent-state").SubagentState[];
 	send: (text: string) => Promise<void>;
 	/** Inject guidance into the active Pi run at its next tool boundary. */
 	steer: (text: string) => void;
@@ -336,70 +285,6 @@ function threadScopeKey(subjectKey: string, init?: ThreadInit): string {
 	return JSON.stringify([principal, subjectKey, implementation, venue, score]);
 }
 
-type AuthoredSubagentContext = {
-	workspace: PreparedAuthoredSubagent;
-};
-
-function withAuthoredMergeResult(
-	childResult: string,
-	finalization: AuthoredSubagentFinalization,
-): string {
-	if (finalization.status === "conflicted") {
-		return `${childResult}\n\n<authored_merge status="conflicted" proposal_revision_id="${finalization.proposalRevisionId}">\n${JSON.stringify({ conflicts: finalization.conflicts })}\n</authored_merge>`;
-	}
-	return `${childResult}\n\n<authored_merge status="${finalization.status}" revision_id="${finalization.revisionId}"/>`;
-}
-
-function guardToolExecution(
-	tools: ToolSet,
-	ensureReady: () => Promise<void>,
-): ToolSet {
-	return Object.fromEntries(
-		Object.entries(tools).map(([name, guardedTool]) => {
-			const execute = guardedTool.execute;
-			if (!execute) return [name, guardedTool];
-			const run = execute as (
-				input: unknown,
-				options: unknown,
-			) => unknown | Promise<unknown>;
-			return [
-				name,
-				{
-					...guardedTool,
-					execute: async (input: unknown, options: unknown) => {
-						await ensureReady();
-						return run(input, options);
-					},
-				},
-			];
-		}),
-	) as ToolSet;
-}
-
-function serializeWorkspaceToolExecution(
-	tools: ToolSet,
-	runWorkspaceOperation: PreparedAuthoredSubagent["runWorkspaceOperation"],
-): ToolSet {
-	return Object.fromEntries(
-		Object.entries(tools).map(([name, workspaceTool]) => {
-			const execute = workspaceTool.execute;
-			if (!execute) return [name, workspaceTool];
-			const run = execute as (
-				input: unknown,
-				options: unknown,
-			) => unknown | Promise<unknown>;
-			return [
-				name,
-				{
-					...workspaceTool,
-					execute: (input: unknown, options: unknown) =>
-						runWorkspaceOperation(() => run(input, options)),
-				},
-			];
-		}),
-	) as ToolSet;
-}
-
 export function createAgentChat<Bridge>(
 	spec: AgentChatSpec<Bridge>,
 ): AgentChat<Bridge> {
@@ -415,13 +300,6 @@ export function createAgentChat<Bridge>(
 		streaming: boolean;
 		turnError: string | null;
 		turnAbortController: AbortController | null;
-		ensureProjectionReady: () => Promise<void>;
-		subagentManager: SubagentManager<AuthoredSubagentContext>;
-		subagents: SubagentSnapshot[];
-		unsubscribeSubagents: () => void;
-		authoredSubagentContexts: Set<AuthoredSubagentContext>;
-		pendingSubagentSnapshots: Map<string, SubagentSnapshot>;
-		flushingSubagents: Promise<void>;
 		baseline: PersistedMessage[];
 		/** Serializes writes so a turn's persist can't overtake the previous. */
 		persisting: Promise<void>;
@@ -581,43 +459,6 @@ export function createAgentChat<Bridge>(
 			});
 		session.persisting = next;
 		return next;
-	};
-
-	const flushSubagentSnapshots = (session: Session): Promise<void> => {
-		const attempt = session.flushingSubagents
-			.catch(() => undefined)
-			.then(async () => {
-				if (
-					session.activeTurns.size > 0 ||
-					session.pendingFinalization !== null ||
-					session.pendingSubagentSnapshots.size === 0
-				) {
-					return;
-				}
-				const snapshots = [...session.pendingSubagentSnapshots.values()].map(
-					(snapshot) => structuredClone(snapshot),
-				);
-				session.pendingSubagentSnapshots.clear();
-				const milestones: AgentChatMessage[] = snapshots.map((snapshot) => ({
-					id: `subagent:${snapshot.id}:${snapshot.status}`,
-					role: "assistant",
-					parts: [{ type: "data-subagent", data: snapshot }],
-				}));
-				const previous = session.messages;
-				const next = [...previous, ...milestones];
-				session.messages = next;
-				try {
-					await persist(session, next);
-				} catch (error) {
-					session.messages = previous;
-					for (const snapshot of snapshots) {
-						session.pendingSubagentSnapshots.set(snapshot.id, snapshot);
-					}
-					throw error;
-				}
-			});
-		session.flushingSubagents = attempt;
-		return attempt;
 	};
 
 	const applyAuthoredProjection = async (
@@ -785,143 +626,7 @@ export function createAgentChat<Bridge>(
 		baseline: PersistedMessage[],
 	): Session => {
 		const threadId = thread.id;
-		let session: Session;
-		const authoredSubagentContexts = new Set<AuthoredSubagentContext>();
-		let subagentCheckpointTail = Promise.resolve();
-		let projectionRecoveryPending = false;
-		const sessionScope = { subjectKey, scopeKey, threadId };
-		const ensureProjectionReady = async (): Promise<void> => {
-			if (!projectionRecoveryPending) return;
-			await refreshAuthoredProjection(sessionScope, "projection_failure");
-			projectionRecoveryPending = false;
-		};
-		const checkpointForSubagent = (): Promise<void> => {
-			if (!spec.checkpointAuthoredState) return Promise.resolve();
-			const checkpoint = subagentCheckpointTail
-				.catch(() => undefined)
-				.then(async () => {
-					await ensureProjectionReady();
-					const bridge = getBridgeForScope(scopeKey);
-					if (!bridge) {
-						throw new Error(
-							"Editor is unavailable; current state was not checkpointed before delegation.",
-						);
-					}
-					await spec.checkpointAuthoredState?.({
-						subjectKey,
-						threadId,
-						bridge,
-					});
-				});
-			subagentCheckpointTail = checkpoint.then(
-				() => undefined,
-				() => undefined,
-			);
-			return checkpoint;
-		};
-		const supervisor = new AuthoredSubagentSupervisor(
-			threadId,
-			async (result) => {
-				try {
-					await applyAuthoredProjection(sessionScope, result, "subagent");
-					projectionRecoveryPending = false;
-				} catch (applyError) {
-					try {
-						await refreshAuthoredProjection(sessionScope, "projection_failure");
-						projectionRecoveryPending = false;
-					} catch (refreshError) {
-						projectionRecoveryPending = true;
-						throw new AggregateError(
-							[applyError, refreshError],
-							"Failed to apply or refresh the authoritative subagent projection.",
-						);
-					}
-				}
-			},
-			checkpointForSubagent,
-		);
-		const runner = createPiSubagentRunner({
-			createModel: (modelId) => {
-				const model = spec.createModel(modelId);
-				if (!model) {
-					throw new Error(spec.notConfiguredMessage ?? "Agent not configured.");
-				}
-				return model;
-			},
-		});
-		const subagentManager = new SubagentManager<AuthoredSubagentContext>({
-			runner,
-			agentLoader: new AgentLoader({ definitions: spec.subagentDefinitions }),
-			environment:
-				"Application: Luma desktop\nAuthored state: isolated child revision\nEdits: parent-equivalent tools target only this revision; the supervisor merges it after completion",
-			prepareSpawn: async ({
-				id,
-				parentSubagentId,
-				turnMessageId,
-				abortSignal,
-			}) => {
-				await checkpointForSubagent();
-				const workspace = await supervisor.prepare(id, parentSubagentId);
-				try {
-					if (!turnMessageId) {
-						throw new Error(
-							"Subagent domain tools require the durable root turn message.",
-						);
-					}
-					if (!spec.buildSubagentTools) {
-						throw new Error(
-							"This agent has no isolated subagent domain-tool implementation.",
-						);
-					}
-					const buildArgs: BuildToolsArgs<Bridge> = {
-						getBridge: () => getBridgeForScope(scopeKey),
-						threadId,
-						turnMessageId,
-						abortSignal,
-					};
-					const domainTools = spec.buildSubagentTools({
-						...buildArgs,
-						subagentId: id,
-						workspaceId: workspace.workspaceId,
-						initialDocument: workspace.initialDocument,
-						bindWorkspaceDocument: workspace.bindDocumentSink,
-					});
-					assertSameDomainToolSurface(spec.buildTools(buildArgs), domainTools);
-					const tools = serializeWorkspaceToolExecution(
-						domainTools,
-						workspace.runWorkspaceOperation,
-					);
-					const context: AuthoredSubagentContext = { workspace };
-					authoredSubagentContexts.add(context);
-					return {
-						tools,
-						context,
-						finalize: async ({ outcome }) => {
-							if (outcome.status !== "completed") return;
-							let finalization: AuthoredSubagentFinalization;
-							try {
-								finalization = await workspace.finalize(outcome.result);
-							} catch {
-								// Workspace finalization is phase-resumable and uses stable
-								// operation ids. One immediate replay recovers a lost IPC response
-								// without duplicating a commit or merge.
-								finalization = await workspace.finalize(outcome.result);
-							}
-							authoredSubagentContexts.delete(context);
-							return withAuthoredMergeResult(outcome.result, finalization);
-						},
-						cleanup: async () => {
-							await workspace.discard();
-							authoredSubagentContexts.delete(context);
-						},
-					};
-				} catch (error) {
-					await workspace.discard();
-					throw error;
-				}
-			},
-		});
-		session = {
+		const session: Session = {
 			subjectKey,
 			scopeKey,
 			thread,
@@ -932,13 +637,6 @@ export function createAgentChat<Bridge>(
 			streaming: false,
 			turnError: null,
 			turnAbortController: null,
-			ensureProjectionReady,
-			subagentManager,
-			subagents: [],
-			unsubscribeSubagents: () => undefined,
-			authoredSubagentContexts,
-			pendingSubagentSnapshots: new Map(),
-			flushingSubagents: Promise.resolve(),
 			baseline,
 			persisting: Promise.resolve(),
 			activeTurns: new Set(),
@@ -946,21 +644,6 @@ export function createAgentChat<Bridge>(
 			pendingRestore: null,
 			finalizing: Promise.resolve(),
 		};
-		session.unsubscribeSubagents = subagentManager.subscribe((snapshots) => {
-			session.subagents = snapshots;
-			for (const snapshot of snapshots) {
-				if (
-					snapshot.status !== "running" &&
-					snapshot.finishedAt !== undefined
-				) {
-					session.pendingSubagentSnapshots.set(snapshot.id, snapshot);
-				}
-			}
-			notify(scopeKey);
-			void flushSubagentSnapshots(session).catch((error) =>
-				reportError(scopeKey, error),
-			);
-		});
 		return session;
 	};
 
@@ -1021,21 +704,12 @@ export function createAgentChat<Bridge>(
 					previous.agent?.abort();
 					previous.agent?.clearAllQueues();
 					await Promise.allSettled([...previous.activeTurns]);
-					await previous.subagentManager.dispose();
-					await Promise.allSettled(
-						[...previous.authoredSubagentContexts].map((context) =>
-							context.workspace.discard(),
-						),
-					);
-					previous.authoredSubagentContexts.clear();
 					// A failed authored-state commit remains pending even after its
 					// original send rejects. Switching retries it by assistant message
 					// id before the old session can be evicted.
 					await finalizePending(previous);
 					await completePendingRestore(previous);
-					await flushSubagentSnapshots(previous);
 					previous.unsubscribeAgent();
-					previous.unsubscribeSubagents();
 					// This is the strict boundary: activation cannot overtake an
 					// unpersisted tail from the conversation being left.
 					await persist(previous, previous.messages);
@@ -1182,29 +856,21 @@ export function createAgentChat<Bridge>(
 	): Promise<Agent> => {
 		const bridge = getBridgeForScope(session.scopeKey);
 		if (!bridge) throw new Error("Editor not ready.");
-		await session.ensureProjectionReady();
 		const runtime = spec.createModel();
 		if (!runtime) {
 			throw new Error(spec.notConfiguredMessage ?? "Agent not configured.");
 		}
+		// Authorship, recorded where the model is actually chosen. Every
+		// revision this turn writes reads the label back off the thread.
+		await setThreadActor(session.threadId, runtime.model.id);
 		spec.onTurnStart?.(bridge);
-		const systemPrompt = spec.buildSystem(bridge);
-		const parentTools = spec.buildTools({
+		const systemPrompt = await spec.buildSystem(bridge);
+		const tools = spec.buildTools({
 			getBridge: () => getBridgeForScope(session.scopeKey),
 			abortSignal,
 			threadId: session.threadId,
 			turnMessageId: userMessage.id,
 		});
-		const tools = guardToolExecution(
-			{
-				...parentTools,
-				...createSubagentTools(session.subagentManager, {
-					getParentSystemPrompt: () => systemPrompt,
-					turnMessageId: userMessage.id,
-				}),
-			},
-			session.ensureProjectionReady,
-		);
 
 		if (!session.agent) {
 			const agent = await createPiAgent({
@@ -1349,11 +1015,7 @@ export function createAgentChat<Bridge>(
 				.find((message) => message.role === "assistant");
 			const assistantMessage = [...session.messages]
 				.reverse()
-				.find(
-					(message) =>
-						message.role === "assistant" &&
-						!message.parts.every((part) => part.type === "data-subagent"),
-				);
+				.find((message) => message.role === "assistant");
 			if (!assistantMessage || !finalAgentMessage) {
 				if (runFailure) throw runFailure;
 				throw new Error("Pi agent turn ended without an assistant message.");
@@ -1373,9 +1035,6 @@ export function createAgentChat<Bridge>(
 			throw error;
 		} finally {
 			session.activeTurns.delete(completion);
-			void flushSubagentSnapshots(session).catch((error) =>
-				reportError(session.scopeKey, error),
-			);
 		}
 	};
 
@@ -1441,9 +1100,6 @@ export function createAgentChat<Bridge>(
 			session.activeTurns.delete(completion);
 			state.restoring = false;
 			notify(session.scopeKey);
-			void flushSubagentSnapshots(session).catch((error) =>
-				reportError(session.scopeKey, error),
-			);
 		}
 		const restoreResult = session.pendingRestore?.result;
 		if (restoreResult?.forkedThreadId) {
@@ -1559,7 +1215,6 @@ export function createAgentChat<Bridge>(
 			switching: scopeState?.switching ?? false,
 			restoring: scopeState?.restoring ?? false,
 			threads: scopeState?.threads ?? [],
-			subagents: session?.subagents ?? [],
 			send: doSend,
 			steer: doSteer,
 			stop,

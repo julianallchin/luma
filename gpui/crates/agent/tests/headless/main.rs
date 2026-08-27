@@ -20,6 +20,7 @@ mod add_tracks_focus;
 mod add_tracks_source_race;
 mod agent_chat_track;
 mod chrome_anchors;
+mod dialog_escape;
 mod dialog_focus;
 mod empty_panel;
 mod graph;

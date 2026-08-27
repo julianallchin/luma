@@ -68,7 +68,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 52
+        "line": 53
       },
       "name": "agent_thread_append_messages",
       "prose": {
@@ -92,16 +92,17 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 8
+        "line": 9
       },
       "name": "agent_thread_create",
       "prose": {
         "callerUsage": "createThread(input) wraps it as `{ input }`; createScopedThread builds requestId=crypto.randomUUID(), never sends the principal, retries once with the SAME payload on failure (relying on requestId idempotency), then fail-closed validates the returned row with threadMatchesScope().",
         "notes": "Owner is derived from auth::admitted_principal(db) — the caller CANNOT set ownerUserId; `null` owner is the signed-out principal, a real value, not 'unknown'. agentKind/subjectKind are plain strings on the wire but the backend enforces a closed routing invariant (models/agent_threads.rs authored_route): track_copilot requires subjectKind=\"track\" + non-empty subjectId/venueId/scoreId and NO implementationId; pattern_graph requires subjectKind=\"pattern\" + non-empty subjectId/implementationId and NO scoreId. Anything else errors.",
-        "returns": "AgentThread { id, ownerUserId, agentKind, subjectKind, subjectId, implementationId, venueId, scoreId, forkedFromThreadId, forkedAtMessageId, title, createdAt, updatedAt }",
+        "returns": "AgentThread { id, ownerUserId, agentKind, subjectKind, subjectId, implementationId, venueId, scoreId, forkedFromThreadId, forkedAtMessageId, parentThreadId, parentCallId, title, actor, createdAt, updatedAt }",
         "sideEffects": [
           "inserts the thread row (SQLite) AND initializes/attaches its authored document in the same operation",
-          "idempotent on requestId — a retried identical payload returns the previously created thread instead of a duplicate"
+          "idempotent on requestId — a retried identical payload returns the previously created thread instead of a duplicate",
+          "when parentThreadId is set (a subagent), also allocates the child's authored workspace from the parent's current head, keyed by the same requestId; the child's turns then prepare and finalize against that private head instead of the live document"
         ]
       },
       "returns": "AgentThread"
@@ -116,7 +117,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 79
+        "line": 80
       },
       "name": "agent_thread_delete",
       "prose": {
@@ -141,7 +142,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 21
+        "line": 22
       },
       "name": "agent_thread_get",
       "prose": {
@@ -172,7 +173,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 32
+        "line": 33
       },
       "name": "agent_thread_list",
       "prose": {
@@ -199,7 +200,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 104
+        "line": 121
       },
       "name": "agent_thread_rename",
       "prose": {
@@ -211,6 +212,28 @@
         ]
       },
       "returns": "AgentThread"
+    },
+    {
+      "args": [
+        {
+          "name": "threadId",
+          "rust": "String"
+        },
+        {
+          "name": "actor",
+          "rust": "String"
+        }
+      ],
+      "domain": "agent_threads",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "line": 110
+      },
+      "name": "agent_thread_set_actor",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
     },
     {
       "args": [
@@ -286,7 +309,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 128
+        "line": 118
       },
       "name": "authored_state_check_workspace",
       "prose": {
@@ -310,7 +333,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 161
+        "line": 134
       },
       "name": "authored_state_commit_workspace",
       "prose": {
@@ -334,7 +357,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 102
+        "line": 105
       },
       "name": "authored_state_create_workspace",
       "prose": {
@@ -351,29 +374,6 @@
     {
       "args": [
         {
-          "name": "threadId",
-          "rust": "String"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 91
-      },
-      "name": "authored_state_current_revision",
-      "prose": {
-        "callerUsage": "currentAuthoredRevision(threadId) — flat payload. Its revisionId is the only valid `expectedBaseRevisionId` for authored_state_create_workspace.",
-        "notes": "This is the read-then-create handshake for workspaces: read head here, pass it as expectedBaseRevisionId so allocation is pinned to an exact revision rather than 'whatever is current'. Errors if the thread is not active/admitted.",
-        "returns": "AuthoredCurrentRevision { documentId, revisionId, document: AuthoredProjectedDocument }",
-        "sideEffects": [
-          "read-only, but takes the thread's active-thread lock while reading"
-        ]
-      },
-      "returns": "AuthoredCurrentRevision"
-    },
-    {
-      "args": [
-        {
           "name": "input",
           "rust": "FinalizeAuthoredTurnInput"
         }
@@ -381,7 +381,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 31
+        "line": 45
       },
       "name": "authored_state_finalize_turn",
       "prose": {
@@ -394,30 +394,6 @@
         ]
       },
       "returns": "AuthoredTurnCommit"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
-          "rust": "ForkAuthoredWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 115
-      },
-      "name": "authored_state_fork_workspace",
-      "prose": {
-        "callerUsage": "forkAuthoredWorkspace(input) with `{ input }`. No headless-smoke coverage found for this one.",
-        "notes": "Forks from another workspace's detached head, not from the document head — so the child inherits uncommitted sibling work. Same path-free handle contract and same requestId idempotency as create_workspace. SMELL: only one caller and no smoke/e2e coverage in the harness, unlike its siblings.",
-        "returns": "AuthoredWorkspaceHandle { id, baseRevisionId, headRevisionId }",
-        "sideEffects": [
-          "reserves a new workspace row idempotently on (ownerThreadId, requestId)",
-          "materializes a copy of the SOURCE workspace's detached head files into a new bounded directory"
-        ]
-      },
-      "returns": "AuthoredWorkspaceHandle"
     },
     {
       "args": [
@@ -437,7 +413,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 54
+        "line": 68
       },
       "name": "authored_state_list_history",
       "prose": {
@@ -460,7 +436,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 172
+        "line": 145
       },
       "name": "authored_state_merge_workspace",
       "prose": {
@@ -478,40 +454,13 @@
       "args": [
         {
           "name": "input",
-          "rust": "MergeAuthoredWorkspaceIntoWorkspaceInput"
-        }
-      ],
-      "domain": "authored_state",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 183
-      },
-      "name": "authored_state_merge_workspace_into_workspace",
-      "prose": {
-        "notes": "Payload is a single `input` object (not flattened args); serde is camelCase on the wire. Merges a recursive CHILD workspace head into its detached PARENT workspace — publishing to live state is the sibling command authored_state_merge_workspace. Preconditions enforced backend-side, all surfaced as error strings: workspaceId != targetWorkspaceId; source.head must equal expectedHeadRevisionId; both workspaces must be clean (no uncommitted on-disk drift) — child dirty => \"commit it before merging\", parent dirty => \"checkpoint it before merging\"; both heads must still descend from the shared base. The supervisor calls it inside a serialized parent-workspace queue and retries once on throw, relying on operationId idempotency to cover a lost response; a port must keep operationId stable across that retry. On status===\"merged\" the caller applies `document` to the parent runtime; on \"conflicted\" it keeps the proposal revision + conflicts and then removes the child workspace.",
-        "returns": "AuthoredWorkspaceMerge — internally tagged on `status`: { status: \"merged\", documentId: string, revisionId: string, appliedToCurrentProjection: boolean, document: AuthoredProjectedDocument } | { status: \"conflicted\", conflicts: AuthoredMergeConflict[] }. Errors are plain strings (Result<_, String>).",
-        "sideEffects": [
-          "Resolves the admitted principal (database::local::auth::admitted_principal) — unauthenticated/unowned threads error",
-          "Takes the per-document write lock via lock_active_thread; both source and target workspace rows must be active",
-          "Writes a new merge revision into the authored document store (git-backed repo + SQLite projection) when the merge succeeds",
-          "Reads/validates on-disk workspace files for both source and target (restores missing required files from their committed revisions)",
-          "Idempotent by operationId: a recorded operation outcome replays through replay_workspace_merge_into_workspace instead of merging again",
-          "No Tauri events emitted"
-        ]
-      },
-      "returns": "AuthoredWorkspaceMerge"
-    },
-    {
-      "args": [
-        {
-          "name": "input",
           "rust": "PrepareAuthoredTurnInput"
         }
       ],
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 20
+        "line": 34
       },
       "name": "authored_state_prepare_turn",
       "prose": {
@@ -536,7 +485,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 43
+        "line": 57
       },
       "name": "authored_state_recover_turns",
       "prose": {
@@ -559,7 +508,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 194
+        "line": 156
       },
       "name": "authored_state_remove_workspace",
       "prose": {
@@ -585,7 +534,7 @@
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 73
+        "line": 87
       },
       "name": "authored_state_restore",
       "prose": {
@@ -603,40 +552,26 @@
     {
       "args": [
         {
-          "name": "input",
-          "rust": "WriteAuthoredWorkspaceGraphInput"
+          "name": "actor",
+          "rust": "String"
         }
       ],
       "domain": "authored_state",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
-        "line": 144
+        "line": 25
       },
-      "name": "authored_state_write_workspace_graph",
+      "name": "authored_state_set_session_actor",
       "prose": {
-        "callerUsage": "applyGraph(next) runs layoutGraph(next) client-side, invokes with `{ input: { threadId, workspaceId, graph: laidOut } }`, and REBINDS its local `graph` variable to the RETURNED value — the canonicalized result is authoritative, not the sent one.",
-        "notes": "Pattern threads only — errors with 'graph workspace writes require a pattern agent thread' on a track scope. This is the one authored_state command whose return type is a domain model rather than an Authored* wrapper, and the only one taking a full Graph payload (potentially large). The model never sees graph.json/layout.json; their encoding stays host-owned. Callers must treat write as canonicalizing (node ordering/ids may normalize) and must not assume idempotent byte-equality with the input.",
-        "returns": "Graph (models::node_graph::Graph — the canonicalized graph, not the input echoed back)",
-        "sideEffects": [
-          "canonicalizes the graph, encodes it to the host-owned workspace files (graph.json / layout.json), validates workspace limits, then REPLACES the workspace directory contents",
-          "does NOT create a revision — the detached head is unchanged until commit_workspace"
-        ]
+        "returns": "()"
       },
-      "returns": "Graph"
+      "returns": "()"
     },
     {
       "args": [
         {
           "name": "threadId",
           "rust": "String"
-        },
-        {
-          "name": "executionId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "authoredWorkspaceId",
-          "rust": "Option<String>"
         }
       ],
       "domain": "agent_execution",
@@ -646,11 +581,10 @@
       },
       "name": "cancel_python_cell",
       "prose": {
-        "notes": "Same flat camelCase args and same executionId/authoredWorkspaceId pairing rule as run_python_cell (both or neither, and equal). Fire-and-forget at the call site: bound to abortSignal's `abort` event with { once: true }, invoked with `void ... .catch(() => {})`, and the listener is removed in the run's finally block — the return boolean is discarded. Crucially, cancelling does NOT abandon the run: the caller still awaits run_python_cell so the transcript records whatever the cell emitted before interruption. If the turn is already aborted before the cell starts, the frontend short-circuits and never invokes either command.",
+        "notes": "Flat camelCase args, and the same thread-addressed kernel as run_python_cell. Fire-and-forget at the call site: bound to abortSignal's `abort` event with { once: true }, invoked with `void ... .catch(() => {})`, and the listener is removed in the run's finally block — the return boolean is discarded. Crucially, cancelling does NOT abandon the run: the caller still awaits run_python_cell so the transcript records whatever the cell emitted before interruption. If the turn is already aborted before the cell starts, the frontend short-circuits and never invokes either command.",
         "returns": "boolean — true if a cell was in flight and got interrupted, false if there was nothing to cancel",
         "sideEffects": [
           "Resolves the admitted principal and verifies the thread row is visible to it",
-          "When targeting a child, verifies the authored workspace is active and owned by the thread",
           "Cancels the in-flight cell's cancel token — the worker gets the interrupt ladder; the running run_python_cell call still returns a terminal result with status \"interrupted\"",
           "No Tauri events emitted, nothing written"
         ]
@@ -1730,6 +1664,24 @@
         ]
       },
       "returns": "AppSettings"
+    },
+    {
+      "args": [
+        {
+          "name": "name",
+          "rust": "String"
+        }
+      ],
+      "domain": "skills",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/skills.rs",
+        "line": 22
+      },
+      "name": "get_skill",
+      "prose": {
+        "returns": "String"
+      },
+      "returns": "String"
     },
     {
       "args": [
@@ -4088,14 +4040,6 @@
           "rust": "String"
         },
         {
-          "name": "executionId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "authoredWorkspaceId",
-          "rust": "Option<String>"
-        },
-        {
           "name": "turnMessageId",
           "rust": "String"
         },
@@ -4111,15 +4055,15 @@
       "domain": "agent_execution",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_execution.rs",
-        "line": 18
+        "line": 20
       },
       "name": "run_python_cell",
       "prose": {
-        "notes": "Args are FLAT camelCase (not wrapped in `input`) — unlike the authored_state_* commands. executionId and authoredWorkspaceId must be supplied together AND be equal, else the command errors (\"child Python execution id must match its authored workspace id\" / \"...requires both...\"); with neither, executionId defaults to threadId. The frontend spreads them conditionally so they are omitted rather than sent as null. `scope` must be fully explicit: the tool fills every unknown field with null (see the test at python-tool.test.ts:225) — a port that omits keys instead of nulling them changes the wire shape. Scope fields are asserted against the thread's pinned subject and rejected on mismatch; the thread, not the caller, is the authorization principal. turnMessageId must name a durable `user` message already persisted in the thread before the model call; editable cells hard-fail without it. Figure budget: 8 MB total PNG per cell, over-budget figures are dropped with a human-readable notice in `notices` rather than truncated; the frontend then drops any single figure over MAX_PERSISTED_FIGURE_BYTES when storing, keeping width/height. `status: \"error\"` = Python exception (kernel healthy), `\"failed\"` = infrastructure failure (worker died/timeout), reason always in `notices`. The caller serializes cells per execution id (enqueueCell) and converts any IPC throw into a synthetic `failed` result, so the tool never rejects.",
+        "notes": "Args are FLAT camelCase (not wrapped in `input`) — unlike the authored_state_* commands. The command always addresses the thread's own kernel: a subagent's cell is issued by run_python_cell_inner from inside the Rust turn loop, never over IPC, so there is no execution or workspace id on the wire. `scope` must be fully explicit: the tool fills every unknown field with null (see the test at python-tool.test.ts:225) — a port that omits keys instead of nulling them changes the wire shape. Scope fields are asserted against the thread's pinned subject and rejected on mismatch; the thread, not the caller, is the authorization principal. turnMessageId must name a durable `user` message already persisted in the thread before the model call; editable cells hard-fail without it. Figure budget: 8 MB total PNG per cell, over-budget figures are dropped with a human-readable notice in `notices` rather than truncated; the frontend then drops any single figure over MAX_PERSISTED_FIGURE_BYTES when storing, keeping width/height. `status: \"error\"` = Python exception (kernel healthy), `\"failed\"` = infrastructure failure (worker died/timeout), reason always in `notices`. The caller serializes cells per thread (enqueueCell) and converts any IPC throw into a synthetic `failed` result, so the tool never rejects.",
         "returns": "PythonCellResult { status: \"ok\" | \"error\" | \"interrupted\" | \"failed\"; stdout: string; stderr: string; repr: string|null; traceback: string|null; figures: PythonCellFigure[] { artifactRel, width, height, base64Png }; notices: string[]; durationMs: number }",
         "sideEffects": [
           "Resolves StorageRoot from the AppHandle and the fixtures resource root; resolves the admitted principal",
-          "Claims a per-execution cell lease (one cell at a time per execution id) and starts/reuses a sandboxed persistent Python kernel process for that execution",
+          "Claims the thread's cell lease (one cell at a time per thread) and starts/reuses a sandboxed persistent Python kernel process for it",
           "Assembles a fresh binding revision into the workspace artifact store — writes binding files into the workspace dir on disk",
           "Runs arbitrary user/model Python; through TrackHost the cell can mutate authored track state (only when the thread scope + owner authorize an edit scope AND a durable user turn message is supplied)",
           "Reads figure PNGs back off disk, registers them as outputs in the artifact store, and base64-encodes them into the response",
@@ -4423,6 +4367,19 @@
         ]
       },
       "returns": "()"
+    },
+    {
+      "args": [],
+      "domain": "skills",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/skills.rs",
+        "line": 17
+      },
+      "name": "skills_listing",
+      "prose": {
+        "returns": "String"
+      },
+      "returns": "String"
     },
     {
       "args": [],
@@ -4801,7 +4758,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/agent_execution.rs"
     },
     {
-      "commandCount": 6,
+      "commandCount": 7,
       "domain": "agent_threads",
       "handlers": "src-tauri/src/dispatch/handlers/agent_threads.rs"
     },
@@ -4821,7 +4778,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/auth.rs"
     },
     {
-      "commandCount": 14,
+      "commandCount": 11,
       "domain": "authored_state",
       "handlers": "src-tauri/src/dispatch/handlers/authored_state.rs"
     },
@@ -4916,6 +4873,11 @@
       "handlers": "src-tauri/src/dispatch/handlers/settings.rs"
     },
     {
+      "commandCount": 2,
+      "domain": "skills",
+      "handlers": "src-tauri/src/dispatch/handlers/skills.rs"
+    },
+    {
       "commandCount": 5,
       "domain": "stage",
       "handlers": "src-tauri/src/dispatch/handlers/stage.rs"
@@ -5002,10 +4964,10 @@
         "src-tauri/src/dispatch/handlers/tracks.rs:324",
         "src-tauri/src/dispatch/handlers/tracks.rs:362",
         "src-tauri/src/dispatch/handlers/tracks.rs:427",
-        "src-tauri/src/sync/orchestrator.rs:140",
-        "src-tauri/src/sync/orchestrator.rs:187",
-        "src-tauri/src/sync/push.rs:714",
-        "src-tauri/src/sync/push.rs:751"
+        "src-tauri/src/sync/orchestrator.rs:141",
+        "src-tauri/src/sync/orchestrator.rs:188",
+        "src-tauri/src/sync/push.rs:715",
+        "src-tauri/src/sync/push.rs:752"
       ],
       "listeners": [
         "src/App.tsx:468",
@@ -5050,7 +5012,7 @@
     },
     {
       "emitters": [
-        "src-tauri/src/lib.rs:159"
+        "src-tauri/src/lib.rs:161"
       ],
       "listeners": [
         "src/App.tsx:640"
@@ -5095,7 +5057,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:522"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:129",
+        "gpui/crates/app/src/library.rs:132",
         "src/features/dj-import/components/dj-import-browser.tsx:86",
         "src/features/tracks/components/track-browser.tsx:355"
       ],
@@ -5158,7 +5120,7 @@
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
     "commandCount": 186,
-    "domainCount": 31,
+    "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0
   },

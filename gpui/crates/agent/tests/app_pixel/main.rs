@@ -12,12 +12,14 @@
 mod support;
 
 mod add_tracks_pixels;
+mod chat_context_pixels;
 mod chrome_anchors_pixels;
 mod dialog_host_pixels;
 mod gauntlet;
 mod gauntlet_chat;
 mod graph_budget;
 mod sidebar_toggle_budget;
+mod subagents_pixels;
 mod tab_chrome_pixels;
 mod track_editor_budget;
 mod track_editor_preview_pixels;

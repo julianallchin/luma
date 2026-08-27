@@ -33,13 +33,15 @@ use serde_json::{json, Value};
 /// pattern — so two tests sharing a pattern would share a thread, and the
 /// second would open onto the first's transcript. One pattern each is what
 /// makes each test's panel empty when it opens.
-pub const PATTERNS: [&str; 7] = [
+pub const PATTERNS: [&str; 9] = [
     "chat-turn",
+    "chat-context",
     "chat-growth",
     "chat-typing",
     "chat-repoint",
     "chat-new",
     "chat-history",
+    "chat-subagent",
     CAPTURED,
 ];
 
@@ -112,19 +114,74 @@ impl Tool for ScriptedTool {
         })
     }
 
+    /// …and mirrors the real tool's *result* too: the chat has a typed view of
+    /// a python cell (`luma_chat::python_cell`), so a stand-in that answered
+    /// with a bare `{"stdout": …}` would exercise the generic JSON card
+    /// instead of the view the app actually ships. Every field the view can
+    /// draw is populated, figure included.
     async fn call(&self, _ctx: &ToolContext<'_>, _args: Value) -> Result<Value, String> {
         tokio::time::sleep(TOOL_LATENCY).await;
-        Ok(json!({ "stdout": "peak=3.0\n" }))
+        Ok(json!({
+            "status": "ok",
+            "stdout": "peak=3.0\nrelease=2 bars\n",
+            "stderr": "",
+            "repr": "<Ramp peak=3.0 release=2.0>",
+            "traceback": null,
+            "notices": [],
+            "figures": [{ "width": 1200, "height": 280, "base64Png": FIGURE }],
+            "durationMs": 247,
+        }))
     }
 }
 
+/// A real captured Luma figure, so the picture in a capture is the picture the
+/// app actually draws. Kept base64 rather than as a PNG: that is the form the
+/// transcript stores, and a fixture that had to encode it would be testing the
+/// encoder.
+const FIGURE: &str = include_str!("figure.png.base64");
+
+/// What the scripted provider reports it spent, per step.
+///
+/// A *warm* shape — most of the prompt arriving from the cache — because that
+/// is what every turn past the first looks like, and it is the shape a gauge
+/// fed from `input_tokens` alone gets wrong. The second step's numbers are the
+/// ones the context gauge reads: 626,800 against the default model's 1M window,
+/// which is a ring visibly filled and not yet hot.
+const STEP_USAGE: [Usage; 2] = [
+    Usage {
+        input_tokens: 12_400,
+        output_tokens: 96,
+        cache_read_input_tokens: 300_000,
+        cache_creation_input_tokens: 12_400,
+    },
+    Usage {
+        input_tokens: 4_800,
+        output_tokens: 512,
+        cache_read_input_tokens: 610_000,
+        cache_creation_input_tokens: 12_000,
+    },
+];
+
+/// What the context gauge reads once the scripted turn has finished:
+/// `STEP_USAGE[1]`'s whole prompt (4,800 + 610,000 + 12,000 = 626,800) against
+/// the default model's 1,000,000-token window. Spelled rather than computed —
+/// a change to either side of the division should have to be stated twice.
+pub const CONTEXT_READING: &str = "Context 62%";
+
+/// The model's own label for the delegation, which is the pill's whole text
+/// and the dialog row's name.
+pub const SUBAGENT_DESCRIPTION: &str = "Fitting the chorus ramp";
+
+/// What the child says before it hands back.
+pub const SUBAGENT_ANSWER: &str = "Raised the ramp two bars early.";
+
 /// The turn: prose, a tool call, then prose with a code block in it.
 fn script() -> Vec<Vec<ModelEvent>> {
-    let step = |events: Vec<ModelEvent>, stop: StopReason| {
+    let step = |events: Vec<ModelEvent>, stop: StopReason, usage: Usage| {
         let mut events = events;
         events.push(ModelEvent::StepEnded {
             stop_reason: stop,
-            usage: Usage::default(),
+            usage,
         });
         events
     };
@@ -152,24 +209,118 @@ fn script() -> Vec<Vec<ModelEvent>> {
         },
     ]);
     vec![
-        step(first, StopReason::ToolUse),
-        step(chunks(CLOSING), StopReason::EndTurn),
+        step(first, StopReason::ToolUse, STEP_USAGE[0]),
+        step(chunks(CLOSING), StopReason::EndTurn, STEP_USAGE[1]),
+    ]
+}
+
+/// One delegation, played by the **real** subagent tool.
+///
+/// Only the model is scripted. The child gets a real `agent_threads` row, runs
+/// a real turn on a private workspace head and really merges it — which is the
+/// whole point: the pill counts live snapshots the supervisor emits, and the
+/// dialog opens the child by thread id. A stand-in tool that returned a
+/// fabricated report would leave both of those untested and would have no
+/// thread for the dialog to read.
+///
+/// Four steps, because the model is one queue shared by both threads: the
+/// parent delegates, the child spends the scripted tool's latency, the child
+/// answers, and the parent closes. The child's slow tool is what makes the
+/// "1 subagent working" state observable at all — without it the delegation is
+/// over inside one frame.
+fn delegation_script() -> Vec<Vec<ModelEvent>> {
+    let end = |events: Vec<ModelEvent>, stop: StopReason| {
+        let mut events = events;
+        events.push(ModelEvent::StepEnded {
+            stop_reason: stop,
+            usage: STEP_USAGE[0],
+        });
+        events
+    };
+    let call = |id: &str, name: &str, arguments: String| {
+        end(
+            vec![
+                ModelEvent::ToolCallStarted {
+                    id: id.into(),
+                    name: name.into(),
+                },
+                ModelEvent::ToolCallArgsDelta {
+                    id: id.into(),
+                    json: arguments,
+                },
+                ModelEvent::ToolCallEnded { id: id.into() },
+            ],
+            StopReason::ToolUse,
+        )
+    };
+    vec![
+        call(
+            "call-sub",
+            "subagent",
+            json!({
+                "description": SUBAGENT_DESCRIPTION,
+                "task": "Move the ramp two bars earlier and report what you changed.",
+            })
+            .to_string(),
+        ),
+        call(
+            "call-child",
+            "python",
+            json!({ "purpose": "ramp bounds", "code": "ramp.bounds()" }).to_string(),
+        ),
+        end(
+            vec![ModelEvent::TextDelta(SUBAGENT_ANSWER.into())],
+            StopReason::EndTurn,
+        ),
+        end(
+            vec![ModelEvent::TextDelta(
+                "The subagent moved the ramp and its work is merged.".into(),
+            )],
+            StopReason::EndTurn,
+        ),
     ]
 }
 
 /// A library of its own, with one pattern in it, named after the process so
 /// two runs never share one.
+///
+/// # Why this retries instead of panicking
+///
+/// It is a [`OnceLock`](std::sync::OnceLock) initializer, and `get_or_init`
+/// re-runs one that panicked. That makes a panic here *destructive*: the next
+/// thread through would `remove_dir_all` the library a session already has
+/// open, turning one lost lock race into a cascade of "disk I/O error" in every
+/// test that follows. Seeding under load can genuinely lose that race —
+/// migrations against a fresh SQLite file, on a machine running the rest of the
+/// suite — so the retry is inside the initializer, where the caller still holds
+/// [`session`]'s gate and no other session can exist to be wiped out from under.
 fn config_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("luma-gpui-chat-{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
-    std::fs::create_dir_all(&dir).expect("failed to create the temporary config directory");
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("failed to start the fixture runtime")
-        .block_on(seed(&dir));
-    dir
+        .expect("failed to start the fixture runtime");
+    let mut last = None;
+    for attempt in 0..SEED_ATTEMPTS {
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("failed to create the temporary config directory");
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(seed(&dir))
+        })) {
+            Ok(()) => return dir,
+            Err(panic) => {
+                eprintln!("fixture seed attempt {attempt} failed; retrying");
+                last = Some(panic);
+            }
+        }
+    }
+    std::panic::resume_unwind(last.expect("the loop runs at least once"));
 }
+
+/// How many times seeding may lose a lock race before the suite gives up. Not
+/// one: a machine busy enough to lose it once usually is not busy the moment
+/// after.
+const SEED_ATTEMPTS: usize = 4;
 
 async fn seed(config_dir: &Path) {
     let db = luma_lib::database::local::database::init_app_db_at(config_dir)
@@ -317,17 +468,32 @@ pub struct Session {
 
 /// The app, on the seeded library, with the turn scripted.
 pub fn session(mode: Mode, window: (f32, f32)) -> Session {
+    start(mode, window, script)
+}
+
+/// The same app, scripted to delegate — see [`delegation_script`].
+pub fn delegating_session(mode: Mode, window: (f32, f32)) -> Session {
+    start(mode, window, delegation_script)
+}
+
+fn start(mode: Mode, window: (f32, f32), script: fn() -> Vec<Vec<ModelEvent>>) -> Session {
     static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let gate = GATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let root: gpui_agent::RootFactory = Arc::new(|_: &mut Window, cx: &mut App| -> AnyView {
+    let root: gpui_agent::RootFactory = Arc::new(move |_: &mut Window, cx: &mut App| -> AnyView {
         luma_app::init(cx);
         let mut library = luma_app::Library::open().expect("failed to open the fixture library");
         library.set_agent_model(Arc::new(
             ScriptedModel::new(script()).with_cadence(TEXT_CADENCE),
         ));
-        library.set_agent_tools(ToolRegistry::new(vec![Arc::new(ScriptedTool)]));
+        // The real delegation tool beside the scripted leaf one: what a
+        // subagent *is* — a child thread, a private workspace, a merge — is
+        // not something a fixture has any business restating.
+        library.set_agent_tools(ToolRegistry::new(vec![
+            Arc::new(ScriptedTool),
+            Arc::new(luma_lib::agent::tools::subagent::SubagentTool),
+        ]));
         cx.new(|cx| luma_app::Luma::new(library, cx)).into()
     });
     let app = Harness::headless(

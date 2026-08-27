@@ -120,7 +120,10 @@ function installThreadBackend(
 					scoreId: input.scoreId,
 					forkedFromThreadId: null,
 					forkedAtMessageId: null,
+					parentThreadId: input.parentThreadId,
+					parentCallId: input.parentCallId,
 					title: input.title,
+					actor: null,
 					createdAt: now,
 					updatedAt: now,
 				};
@@ -223,6 +226,15 @@ function installThreadBackend(
 					forkedThreadId: null,
 				} as T;
 			}
+			case "agent_thread_set_actor": {
+				const { threadId, actor } = args as {
+					threadId: string;
+					actor: string;
+				};
+				const detail = threads.get(threadId);
+				if (detail) detail.thread.actor = actor;
+				return undefined as T;
+			}
 			default:
 				throw new Error(`unexpected command ${command}`);
 		}
@@ -246,7 +258,10 @@ function persistedThread(
 			scoreId: "score-a",
 			forkedFromThreadId: null,
 			forkedAtMessageId: null,
+			parentThreadId: null,
+			parentCallId: null,
 			title: "Existing",
+			actor: null,
 			createdAt: "2026-08-01T00:00:00Z",
 			updatedAt: "2026-08-01T00:00:00Z",
 			...overrides,

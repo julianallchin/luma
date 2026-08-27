@@ -30,10 +30,6 @@ export type ToolPart = {
 	output?: unknown;
 	errorText?: string;
 };
-export type SubagentDataPart = {
-	type: "data-subagent";
-	data: import("./subagents/types").SubagentSnapshot;
-};
 export type PiMetadataPart = {
 	type: "data-pi-message";
 	data: Omit<AssistantMessage, "role" | "content">;
@@ -43,7 +39,6 @@ export type AgentChatPart =
 	| TextPart
 	| ReasoningPart
 	| ToolPart
-	| SubagentDataPart
 	| PiMetadataPart
 	| StepStartPart;
 
@@ -172,8 +167,7 @@ function withCurrentStep(
 
 /**
  * Start the round's step: a new one inside the turn's assistant message when a
- * response is already open, otherwise a new assistant message. Subagent
- * milestones are assistant-role bookkeeping and never a turn to continue.
+ * response is already open, otherwise a new assistant message.
  */
 function openAssistantStep(
 	messages: AgentChatMessage[],
@@ -182,10 +176,7 @@ function openAssistantStep(
 	const index = messages.length - 1;
 	const open = messages[index];
 	const step: AgentChatPart[] = [{ type: "step-start" }, ...partsOf(message)];
-	if (
-		open?.role === "assistant" &&
-		!open.parts.every((part) => part.type === "data-subagent")
-	) {
+	if (open?.role === "assistant") {
 		return replaceAt(messages, index, {
 			...open,
 			parts: [...open.parts, ...step],
@@ -427,7 +418,6 @@ export async function chatMessagesToAgentMessages(
 			out.push(userAgentMessage(message));
 			continue;
 		}
-		if (message.parts.every((part) => part.type === "data-subagent")) continue;
 		for (const [stepIndex, parts] of assistantSteps(message).entries()) {
 			if (
 				!parts.some(
@@ -473,7 +463,7 @@ function isAgentChatPart(value: unknown): value is AgentChatPart {
 		return typeof part.text === "string";
 	}
 	if (part.type === "step-start") return true;
-	if (part.type === "data-subagent" || part.type === "data-pi-message") {
+	if (part.type === "data-pi-message") {
 		return typeof part.data === "object" && part.data !== null;
 	}
 	if (

@@ -134,6 +134,25 @@ export async function deleteThread(threadId: string): Promise<void> {
 	pendingTranscriptAppends.delete(threadId);
 }
 
+/**
+ * Name the writer this thread's revisions are attributed to.
+ *
+ * Called at the start of every turn with the model that turn resolved: the
+ * model is a per-turn choice, so the turn is the only honest place to record
+ * it. Best effort — an unlabelled turn still runs, its revisions just fall
+ * back to this host's default actor.
+ */
+export async function setThreadActor(
+	threadId: string,
+	actor: string,
+): Promise<void> {
+	try {
+		await invoke<void>("agent_thread_set_actor", { threadId, actor });
+	} catch (error) {
+		console.warn("Failed to record the thread's writer", error);
+	}
+}
+
 export function renameThread(
 	threadId: string,
 	title: string | null,
@@ -175,6 +194,8 @@ export async function createScopedThread(
 		implementationId: scope.implementationId,
 		venueId: scope.venueId,
 		scoreId: scope.scoreId,
+		parentThreadId: null,
+		parentCallId: null,
 		title,
 	};
 	let thread: AgentThread;

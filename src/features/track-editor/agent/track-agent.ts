@@ -1,8 +1,5 @@
 import type { TrackScore } from "@/bindings/schema";
-import {
-	type BuildSubagentToolsArgs,
-	createAgentChat,
-} from "@/shared/components/agent-chat/create-agent-chat";
+import { createAgentChat } from "@/shared/components/agent-chat/create-agent-chat";
 import type { ToolVocab } from "@/shared/components/agent-chat/parts";
 import { renderPythonToolDetail } from "@/shared/components/agent-chat/python-tool-detail";
 import { lumaPiModel } from "@/shared/lib/agent/openrouter";
@@ -45,7 +42,7 @@ const VOCAB: ToolVocab = {
 	renderers: { python: renderPythonToolDetail },
 };
 
-function buildSystem(bridge: TrackBridge): string {
+function buildSystem(bridge: TrackBridge): Promise<string> | string {
 	const context = bridge.getContext();
 	if (!context) return "No track context is loaded yet.";
 	return buildSystemPrompt({
@@ -54,39 +51,6 @@ function buildSystem(bridge: TrackBridge): string {
 		beatGrid: context.beatGrid,
 		venueName: context.venueName,
 	});
-}
-
-export function buildTrackSubagentTools({
-	getBridge,
-	threadId,
-	turnMessageId,
-	abortSignal,
-	workspaceId,
-	initialDocument,
-}: BuildSubagentToolsArgs<TrackBridge>) {
-	if (initialDocument.kind !== "track_score") {
-		throw new Error("A track subagent requires a score workspace.");
-	}
-	return {
-		python: buildPythonTool({
-			threadId,
-			executionId: workspaceId,
-			authoredWorkspaceId: workspaceId,
-			turnMessageId,
-			abortSignal,
-			getScope: () => {
-				const bridge = getBridge();
-				const context = bridge?.getContext();
-				if (!bridge || !context) return null;
-				return {
-					trackId: bridge.trackId,
-					venueId: bridge.venueId,
-					scoreId: bridge.scoreId,
-				};
-			},
-		}),
-		skill: buildSkillTool(),
-	};
 }
 
 export const trackAgent = createAgentChat<TrackBridge>({
@@ -115,7 +79,6 @@ export const trackAgent = createAgentChat<TrackBridge>({
 	vocab: VOCAB,
 	reasoningEffort: "medium",
 	buildSystem,
-	buildSubagentTools: buildTrackSubagentTools,
 	buildTools: ({ getBridge, threadId, turnMessageId, abortSignal }) => ({
 		python: buildPythonTool({
 			threadId,

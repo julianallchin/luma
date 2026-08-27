@@ -46,6 +46,7 @@ mod library;
 mod patterns;
 mod settings;
 mod shell;
+mod subagents;
 mod tab_chrome;
 mod tabs;
 mod track_editor;

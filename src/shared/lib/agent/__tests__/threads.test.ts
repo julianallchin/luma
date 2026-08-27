@@ -64,7 +64,10 @@ function thread(id: string, updatedAt: string, createdAt = updatedAt) {
 		scoreId: null,
 		forkedFromThreadId: null,
 		forkedAtMessageId: null,
+		parentThreadId: null,
+		parentCallId: null,
 		title: null,
+		actor: null,
 		createdAt,
 		updatedAt,
 	} satisfies AgentThread;
@@ -477,6 +480,8 @@ describe("exact thread scopes", () => {
 					implementationId: null,
 					venueId: "v-1",
 					scoreId: "s-1",
+					parentThreadId: null,
+					parentCallId: null,
 					title: "Main",
 				},
 			},
@@ -607,6 +612,8 @@ describe("resolveThread", () => {
 			implementationId: null,
 			venueId: "v-1",
 			scoreId: "s-1",
+			parentThreadId: null,
+			parentCallId: null,
 			title: "Main",
 		});
 	});
@@ -643,6 +650,8 @@ describe("resolveThread", () => {
 			implementationId: "implementation-1",
 			venueId: "v-1",
 			scoreId: null,
+			parentThreadId: null,
+			parentCallId: null,
 			title: "Wash",
 		});
 	});

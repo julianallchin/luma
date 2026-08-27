@@ -27,7 +27,7 @@
 //! picker into an empty shell" is a state that cannot be reached.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Div, DragMoveEvent, SharedString, Window};
+use gpui::{div, px, AnyElement, App, Context, Div, DragMoveEvent, SharedString, Window};
 
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::node::{AgentNode, Instrument, Role};
@@ -36,8 +36,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, graph, keymap, patterns, settings, tab_chrome, track_editor,
-    tracks, universe, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, graph, keymap, patterns, settings, subagents, tab_chrome,
+    track_editor, tracks, universe, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -79,6 +79,9 @@ pub(crate) enum Overlay {
     /// are: it carries a text field, a scroll handle and a subscription, and an
     /// enum is as large as its largest variant.
     ChatHistory(Box<chat_history::ChatHistory>),
+    /// What the thread delegated, and one child's transcript. Boxed like the
+    /// rest: it carries a morph, a row of focus handles and a whole chat panel.
+    Subagents(Box<subagents::Subagents>),
 }
 
 impl Overlay {
@@ -91,6 +94,7 @@ impl Overlay {
             Self::Patterns(_) => keymap::context::PATTERNS,
             Self::Settings(_) => keymap::context::SETTINGS,
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
+            Self::Subagents(_) => keymap::context::SUBAGENTS,
         }
     }
 }
@@ -155,10 +159,11 @@ impl Luma {
         FocusSlot::Shell
     }
 
-    /// Take the keyboard when the slot changed hands or nothing holds it.
+    /// Take the keyboard when the slot changed hands or nothing on screen
+    /// holds it.
     pub(crate) fn take_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let slot = self.focus_slot();
-        if slot == self.focused_slot && window.focused(cx).is_some() {
+        if slot == self.focused_slot && self.keyboard_is_seated(window, cx) {
             return;
         }
         let leaving_overlay = matches!(self.focused_slot, FocusSlot::Overlay(_))
@@ -185,6 +190,31 @@ impl Luma {
             return;
         }
         window.focus(&self.focus, cx);
+    }
+
+    /// Whether the keyboard is somewhere the *last painted frame* can dispatch
+    /// from — the question [`Self::take_focus`] has to answer before it decides
+    /// nothing is owed.
+    ///
+    /// `window.focused()` is not that question. It reports the focus *id*, which
+    /// outlives the element that carried it: a handle whose element stopped
+    /// being rendered — a dialog stepping between morph routes unmounts the row
+    /// the keyboard was on — still answers `is_focused`, while gpui resolves
+    /// both key bindings and `on_key_down` against the rendered dispatch tree
+    /// and finds no path for it. The window then looks focused and is deaf:
+    /// every keystroke falls back to the tree's root, which carries no key
+    /// context, so not even Escape fires.
+    ///
+    /// A modal is the strict case and gets the strict test — the keyboard
+    /// belongs *inside the card*, since that is the whole claim of a focus
+    /// trap. Everywhere else the shell is deliberately permissive: a click into
+    /// the sidebar while a tab is up is focus the user moved on purpose, and
+    /// asking whether the tab still contains it would snatch it back.
+    fn keyboard_is_seated(&self, window: &Window, cx: &App) -> bool {
+        if matches!(self.focused_slot, FocusSlot::Overlay(_)) {
+            return self.dialog_focus.contains_focused(window, cx);
+        }
+        window.focused(cx).is_some()
     }
 
     /// Reveal `target`, building its body only if it is not already open.
@@ -260,6 +290,11 @@ impl Luma {
         }
         if self.dismiss_insert_menu() {
             cx.notify();
+            return;
+        }
+        // Innermost first: a dialog showing a child's transcript steps back to
+        // its list before the list itself closes.
+        if self.subagents_to_list(cx) {
             return;
         }
         match self.overlay.as_open() {
@@ -388,9 +423,12 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 // lift is a WASH over the root fill, not a plane: an opaque
                 // rung would be a slab sitting on the blur, and a translucent
                 // one would land on the root's own tone and vanish.
+                //
+                // No edge of its own: the rule on its trailing side is the
+                // `seam` below, which every region boundary here is drawn by.
+                // A border here would have been a second line beside that one,
+                // inside the clipping pane rather than between the regions.
                 .bg(glass::tone_column())
-                .border_r_1()
-                .border_color(glass::hairline(0.08))
                 .key_context(keymap::context::SIDEBAR)
                 .child(tracks::sidebar(
                     browser,
@@ -546,6 +584,18 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
     if let Some(Overlay::ChatHistory(state)) = app.overlay.open_mut() {
         chat_history::tick(state, window, cx);
+    }
+    if matches!(app.overlay.as_open(), Some(Overlay::Subagents(_))) {
+        // Read out of the chat before the overlay is borrowed: both live on
+        // `app`, and the dialog cannot reach back through the entity for them.
+        let rows = app
+            .chat
+            .as_ref()
+            .map(|chat| chat.read(cx).subagents().to_vec())
+            .unwrap_or_default();
+        if let Some(Overlay::Subagents(state)) = app.overlay.open_mut() {
+            subagents::tick(state, rows, window, cx);
+        }
     }
     if let Some(overlay) = app.overlay.get() {
         row = row.child(overlay_layer(app, overlay, &entity, window, cx));
@@ -959,6 +1009,10 @@ fn overlay_layer(
         Overlay::ChatHistory(state) => (
             chat_history::render(state, entity, window, cx),
             "Chat history dialog",
+        ),
+        Overlay::Subagents(state) => (
+            subagents::render(state, entity, window, cx),
+            "Subagents dialog",
         ),
     };
     let scrim_dismiss = if matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none() {

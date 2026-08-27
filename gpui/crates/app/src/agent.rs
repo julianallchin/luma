@@ -114,9 +114,15 @@ impl Luma {
         // so rewind arrives here as a request. Held with the chat: a re-pointed
         // centre builds a new entity, and a subscription to the old one would
         // be a button that stopped working after the first navigation.
-        self.chat_subscription = Some(cx.subscribe(&chat, |this, _, event, cx| match event {
-            luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
-        }));
+        self.chat_subscription =
+            Some(
+                cx.subscribe_in(&chat, window, |this, _, event, window, cx| match event {
+                    luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
+                    luma_chat::ChatEvent::SubagentsRequested(child) => {
+                        this.show_subagents(child.clone(), window, cx);
+                    }
+                }),
+            );
         self.chat = Some(chat);
         cx.notify();
     }

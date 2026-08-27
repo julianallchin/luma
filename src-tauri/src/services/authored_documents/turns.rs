@@ -6,31 +6,236 @@ use sqlx::{SqliteConnection, SqlitePool};
 use super::operations::{
     enqueue_local_row, insert_committed_operation, operation_outcome_on, OperationSpec,
 };
+use super::workspaces::{load_workspace_row, replace_workspace_files};
 use super::{
-    agent_threads, graph_files, operation_request_fingerprint, revision_metadata,
-    AuthoredConversationCheckpoint, AuthoredDocuments, AuthoredDocumentsError,
+    agent_threads, graph_files, operation_request_fingerprint, AgentThread,
+    AuthoredConversationCheckpoint, AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError,
     AuthoredHistoryEntry, AuthoredHistoryPage, AuthoredMergeConflict, AuthoredOperationKind,
-    AuthoredRestoreMode, AuthoredRestoreResult, AuthoredRevisionPosition, AuthoredSnapshot,
-    AuthoredTurnCommit, DocumentScope, FinalizeAuthoredTurnInput, PrepareAuthoredTurnInput,
-    PreparedAuthoredTurn, ResolvedScope, Result, RevisionId, RevisionInfo,
-    TrackProjectionAuthority, MAX_HISTORY_PAGE,
+    AuthoredProjectedDocument, AuthoredRestoreMode, AuthoredRestoreResult,
+    AuthoredRevisionPosition, AuthoredSnapshot, AuthoredTurnCommit, DocumentScope, FileMap,
+    FinalizeAuthoredTurnInput, MainState, PrepareAuthoredTurnInput, PreparedAuthoredTurn,
+    ResolvedScope, Result, RevisionId, RevisionInfo, TrackProjectionAuthority, MAX_HISTORY_PAGE,
 };
 
+/// The head an agent turn writes to.
+///
+/// Almost every thread writes to the live document head. A subagent thread
+/// writes to the private head of the workspace it owns instead, and the live
+/// head moves only later, when someone calls
+/// [`AuthoredDocuments::merge_workspace`]. Which of the two a turn uses is
+/// resolved exactly once — [`AuthoredDocuments::prepare_turn`] asks the
+/// thread, [`AuthoredDocuments::finalize_turn`] asks the preparation the first
+/// half recorded — so no step below ever has to ask again, and a workspace
+/// retired between the halves can never redirect a child's writes onto the
+/// live document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum TurnHead {
+    Live,
+    Workspace { workspace_id: String },
+}
+
+impl TurnHead {
+    fn of(workspace_id: Option<String>) -> Self {
+        match workspace_id {
+            None => Self::Live,
+            Some(workspace_id) => Self::Workspace { workspace_id },
+        }
+    }
+
+    pub(super) fn workspace_id(&self) -> Option<&str> {
+        match self {
+            Self::Live => None,
+            Self::Workspace { workspace_id } => Some(workspace_id),
+        }
+    }
+
+    /// The state this turn merges into: the head, its files and its decoded
+    /// document.
+    ///
+    /// The live document is loaded either way — a workspace's revisions belong
+    /// to the same document, and the guard that the live projection still
+    /// matches the live head is not something a subagent turn gets to skip.
+    async fn current(
+        &self,
+        documents: &AuthoredDocuments,
+        connection: &mut SqliteConnection,
+        scope: &ResolvedScope,
+    ) -> Result<MainState> {
+        let live = documents
+            .ensure_current_on_connection(connection, scope)
+            .await?;
+        let Self::Workspace { workspace_id } = self else {
+            return Ok(live);
+        };
+        let row = load_workspace_row(
+            connection,
+            scope,
+            owning_thread(scope)?,
+            Some(workspace_id),
+            None,
+        )
+        .await?;
+        if row.status != "active" {
+            return Err(AuthoredDocumentsError::Scope(
+                "authored workspace is retired".into(),
+            ));
+        }
+        let head = RevisionId::parse(&row.head_revision_id)?;
+        let snapshot = documents
+            .snapshot_from_revision(connection, scope, &head)
+            .await?;
+        Ok(MainState {
+            head,
+            files: snapshot.files,
+            document: snapshot.document,
+        })
+    }
+
+    /// Move this head from `from` to `revision`, inside the caller's write.
+    ///
+    /// Everything a head owns transactionally moves with it: the live head
+    /// owns the projected rows and the sync proposal, a workspace head owns
+    /// only its own row. The working copy is not transactional and follows in
+    /// [`Self::materialize`].
+    #[allow(clippy::too_many_arguments)]
+    async fn advance(
+        &self,
+        documents: &AuthoredDocuments,
+        connection: &mut SqliteConnection,
+        scope: &ResolvedScope,
+        from: &MainState,
+        revision: &RevisionId,
+        candidate: AuthoredDocument,
+        assistant_message_id: &str,
+    ) -> Result<AuthoredProjectedDocument> {
+        let Self::Workspace { workspace_id } = self else {
+            let (_, projected, _) = documents
+                .project_candidate_on_connection(
+                    connection,
+                    scope,
+                    candidate,
+                    from.document.revision(),
+                    TrackProjectionAuthority::TrustedRevision,
+                )
+                .await?;
+            documents
+                .store
+                .compare_and_swap_head(connection, &scope.document_id, &from.head, revision)
+                .await?;
+            documents
+                .create_head_proposal(
+                    connection,
+                    scope,
+                    Some(&from.head),
+                    revision,
+                    assistant_message_id,
+                )
+                .await?;
+            return Ok(projected);
+        };
+        let advanced = sqlx::query(
+            "UPDATE authored_subagent_workspaces
+             SET head_revision_id = ?, generation = generation + 1
+             WHERE workspace_id = ? AND owner_thread_id = ?
+               AND document_id = ? AND status = 'active' AND head_revision_id = ?",
+        )
+        .bind(revision.as_str())
+        .bind(workspace_id.as_str())
+        .bind(owning_thread(scope)?)
+        .bind(scope.document_id.as_str())
+        .bind(from.head.as_str())
+        .execute(&mut *connection)
+        .await
+        .map_err(storage("advance authored workspace head"))?
+        .rows_affected();
+        if advanced != 1 {
+            return Err(AuthoredDocumentsError::Invalid(
+                "workspace head moved before the turn was finalized".into(),
+            ));
+        }
+        Ok(candidate.projected())
+    }
+
+    /// Bring the head's working copy up to the revision just committed.
+    ///
+    /// The live head's working copy is the projected rows, already written
+    /// inside the transaction. A workspace head's is its directory, which is
+    /// not transactional and so is written after the commit — the same order
+    /// [`AuthoredDocuments::commit_workspace`] uses, and for the same reason:
+    /// a directory that runs ahead of its head reads as uncommitted edits,
+    /// which is recoverable, while one that lags reads as a revert.
+    async fn materialize(
+        &self,
+        documents: &AuthoredDocuments,
+        scope: &ResolvedScope,
+        files: &FileMap,
+    ) -> Result<()> {
+        let Self::Workspace { workspace_id } = self else {
+            return Ok(());
+        };
+        replace_workspace_files(&documents.workspace_path(scope, workspace_id)?, files).await
+    }
+}
+
+/// The thread a scope was resolved from. Every turn path reaches here through
+/// `lock_active_thread`, so an absent thread is a programming error rather
+/// than a state a caller can be in.
+fn owning_thread(scope: &ResolvedScope) -> Result<&str> {
+    scope.thread_id.as_deref().ok_or_else(|| {
+        AuthoredDocumentsError::Scope("a workspace head needs the thread that owns it".into())
+    })
+}
+
+/// What one prepared turn reserved: the staging revision, and the head it was
+/// staged against.
+struct TurnPreparation {
+    prepared_revision_id: RevisionId,
+    head: TurnHead,
+}
+
 impl AuthoredDocuments {
+    /// The private workspace this thread's turns write to, or `None` for a
+    /// thread that writes the live document.
+    ///
+    /// The agent loop asks once per turn and hands the answer to every tool
+    /// call it makes, so a subagent's Python namespace and its authored writes
+    /// address the same detached state that [`Self::prepare_turn`] resolved —
+    /// one question, one answer, no tool that could disagree.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthoredDocumentsError::Scope`] if the thread is gone, or is a
+    /// subagent thread that no longer owns exactly one active workspace.
+    pub async fn thread_workspace(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        thread_id: &str,
+    ) -> Result<Option<String>> {
+        let (thread, scope, _guard) = self.lock_active_thread(pool, principal, thread_id).await?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open agent thread workspace"))?;
+        Ok(turn_head_of_thread(&mut connection, &scope, &thread)
+            .await?
+            .workspace_id()
+            .map(str::to_owned))
+    }
+
     pub async fn prepare_turn(
         &self,
         pool: &SqlitePool,
         principal: Option<&str>,
         input: PrepareAuthoredTurnInput,
     ) -> Result<PreparedAuthoredTurn> {
-        let (_thread, scope, _guard) = self
+        let (thread, scope, _guard) = self
             .lock_active_thread(pool, principal, &input.thread_id)
             .await?;
         let mut write = self.scope_write(pool, &scope).await?;
         let connection = write.connection();
-        let main = self
-            .ensure_current_on_connection(connection, &scope)
-            .await?;
+        let head = turn_head_of_thread(connection, &scope, &thread).await?;
+        let main = head.current(self, connection, &scope).await?;
         if let Some(existing) = load_turn_preparation(
             connection,
             &scope,
@@ -40,7 +245,7 @@ impl AuthoredDocuments {
         .await?
         {
             let snapshot = self
-                .snapshot_from_revision(connection, &scope, &existing)
+                .snapshot_from_revision(connection, &scope, &existing.prepared_revision_id)
                 .await?;
             if let Some(graph) = input.graph {
                 let expected = graph_files(&graph)?;
@@ -53,7 +258,7 @@ impl AuthoredDocuments {
             write.commit().await?;
             return Ok(PreparedAuthoredTurn {
                 document_id: scope.document_id.to_string(),
-                prepared_revision_id: existing.to_string(),
+                prepared_revision_id: existing.prepared_revision_id.to_string(),
                 document: snapshot.document.projected(),
             });
         }
@@ -74,11 +279,11 @@ impl AuthoredDocuments {
                 document: main.document.clone(),
             },
         };
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            &scope,
             "agent_turn_prepare",
             Some(&input.assistant_message_id),
             "Prepare assistant turn state",
-            Some(&input.thread_id),
             None,
             None,
         )?;
@@ -95,8 +300,8 @@ impl AuthoredDocuments {
         sqlx::query(
             "INSERT INTO authored_turn_preparations
              (thread_id, assistant_message_id, owner_user_id, principal_key,
-              document_id, prepared_revision_id)
-             VALUES (?, ?, ?, ?, ?, ?)",
+              document_id, prepared_revision_id, workspace_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&input.thread_id)
         .bind(&input.assistant_message_id)
@@ -104,6 +309,7 @@ impl AuthoredDocuments {
         .bind(&scope.principal_key)
         .bind(scope.document_id.as_str())
         .bind(revision.id.as_str())
+        .bind(head.workspace_id())
         .execute(&mut *connection)
         .await
         .map_err(storage("record authored turn preparation"))?;
@@ -138,7 +344,7 @@ impl AuthoredDocuments {
         let prepared_id = RevisionId::parse(&input.prepared_revision_id)?;
         let mut write = self.scope_write(pool, &scope).await?;
         let connection = write.connection();
-        let stored_prepared = load_turn_preparation(
+        let stored = load_turn_preparation(
             connection,
             &scope,
             &input.thread_id,
@@ -146,11 +352,12 @@ impl AuthoredDocuments {
         )
         .await?
         .ok_or_else(|| AuthoredDocumentsError::Invalid("assistant turn was not prepared".into()))?;
-        if stored_prepared != prepared_id {
+        if stored.prepared_revision_id != prepared_id {
             return Err(AuthoredDocumentsError::Invalid(
                 "assistant turn prepared revision does not match".into(),
             ));
         }
+        let head = stored.head;
         if let Some(existing) = load_turn_outcome(
             connection,
             &scope,
@@ -172,9 +379,7 @@ impl AuthoredDocuments {
             principal,
         )
         .await?;
-        let current = self
-            .ensure_current_on_connection(connection, &scope)
-            .await?;
+        let current = head.current(self, connection, &scope).await?;
         let (prepared_info, prepared_files) = self
             .store
             .read_revision(connection, &scope.document_id, &prepared_id)
@@ -228,11 +433,11 @@ impl AuthoredDocuments {
                 });
             }
         };
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            &scope,
             "agent_turn",
             Some(&input.assistant_message_id),
             "Apply assistant turn",
-            Some(&input.thread_id),
             Some(&input.assistant_message_id),
             None,
         )?;
@@ -247,21 +452,15 @@ impl AuthoredDocuments {
             )
             .await?;
         let changed = files != current.files;
-        let (_, projected, _) = self
-            .project_candidate_on_connection(
+        let projected = head
+            .advance(
+                self,
                 connection,
                 &scope,
-                candidate,
-                current.document.revision(),
-                TrackProjectionAuthority::TrustedRevision,
-            )
-            .await?;
-        self.store
-            .compare_and_swap_head(
-                connection,
-                &scope.document_id,
-                &current.head,
+                &current,
                 &final_revision.id,
+                candidate,
+                &input.assistant_message_id,
             )
             .await?;
         insert_turn_commit(
@@ -282,19 +481,14 @@ impl AuthoredDocuments {
             &input.assistant_message_id,
         )
         .await?;
-        self.create_head_proposal(
-            connection,
-            &scope,
-            Some(&current.head),
-            &final_revision.id,
-            &input.assistant_message_id,
-        )
-        .await?;
         write.commit().await?;
+        head.materialize(self, &scope, &files).await?;
         Ok(AuthoredTurnCommit::Committed {
             document_id: scope.document_id.to_string(),
             revision_id: final_revision.id.to_string(),
-            applied_to_current_projection: true,
+            // A subagent turn lands on a private head; the editor still shows
+            // the live document until the workspace is merged.
+            applied_to_current_projection: head == TurnHead::Live,
             changed,
             document: projected,
         })
@@ -319,6 +513,14 @@ impl AuthoredDocuments {
              WHERE preparation.thread_id = ?
                AND preparation.owner_user_id IS ?
                AND outcome.thread_id IS NULL
+               AND (
+                   preparation.workspace_id IS NULL
+                   OR EXISTS (
+                       SELECT 1 FROM authored_subagent_workspaces workspace
+                       WHERE workspace.workspace_id = preparation.workspace_id
+                         AND workspace.status = \'active\'
+                   )
+               )
              ORDER BY preparation.created_at, preparation.assistant_message_id",
         )
         .bind(thread_id)
@@ -545,11 +747,11 @@ impl AuthoredDocuments {
                 Some(id)
             }
         };
-        let metadata = revision_metadata(
+        let metadata = self.revision_metadata(
+            &scope,
             "restore",
             Some(operation_id),
             "Restore authored state",
-            Some(thread_id),
             None,
             Some(target_id.clone()),
         )?;
@@ -691,14 +893,57 @@ struct RestoreOperationResult {
     forked_thread_id: Option<String>,
 }
 
+/// The head this thread's turns write to.
+///
+/// A subagent thread owns exactly one workspace, allocated when the thread was
+/// created; a thread with no parent owns none. There is therefore nothing to
+/// choose here, and a child whose workspace has gone missing must fail rather
+/// than fall back to the live head.
+/// Every active workspace a thread owns. Exactly one for a subagent thread
+/// mid-run, none once it has published, and any number for a thread that
+/// supervises workspaces it does not write to itself.
+pub(super) async fn active_workspaces_of_thread(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread_id: &str,
+) -> Result<Vec<String>> {
+    sqlx::query_scalar(
+        "SELECT workspace_id FROM authored_subagent_workspaces
+         WHERE owner_thread_id = ? AND document_id = ? AND status = 'active'",
+    )
+    .bind(thread_id)
+    .bind(scope.document_id.as_str())
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(storage("load subagent thread workspace"))
+}
+
+pub(super) async fn turn_head_of_thread(
+    connection: &mut SqliteConnection,
+    scope: &ResolvedScope,
+    thread: &AgentThread,
+) -> Result<TurnHead> {
+    if thread.parent_thread_id.is_none() {
+        return Ok(TurnHead::Live);
+    }
+    let owned = active_workspaces_of_thread(connection, scope, &thread.id).await?;
+    match <[String; 1]>::try_from(owned) {
+        Ok([workspace_id]) => Ok(TurnHead::Workspace { workspace_id }),
+        Err(found) => Err(AuthoredDocumentsError::Scope(format!(
+            "subagent thread owns {} active authored workspaces, not one",
+            found.len()
+        ))),
+    }
+}
+
 async fn load_turn_preparation(
     connection: &mut SqliteConnection,
     scope: &ResolvedScope,
     thread_id: &str,
     assistant_message_id: &str,
-) -> Result<Option<RevisionId>> {
-    let value: Option<String> = sqlx::query_scalar(
-        "SELECT prepared_revision_id FROM authored_turn_preparations
+) -> Result<Option<TurnPreparation>> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT prepared_revision_id, workspace_id FROM authored_turn_preparations
          WHERE thread_id = ? AND assistant_message_id = ?
            AND principal_key = ? AND document_id = ?",
     )
@@ -709,7 +954,13 @@ async fn load_turn_preparation(
     .fetch_optional(&mut *connection)
     .await
     .map_err(storage("load authored turn preparation"))?;
-    value.map(RevisionId::parse).transpose().map_err(Into::into)
+    row.map(|(revision, workspace_id)| {
+        Ok(TurnPreparation {
+            prepared_revision_id: RevisionId::parse(revision)?,
+            head: TurnHead::of(workspace_id),
+        })
+    })
+    .transpose()
 }
 
 async fn load_turn_outcome(
@@ -885,6 +1136,7 @@ fn history_entry(
         _ => None,
     };
     Ok(AuthoredHistoryEntry {
+        actor: info.metadata.actor.to_string(),
         revision_id: info.id.to_string(),
         parent_ids: info
             .parents

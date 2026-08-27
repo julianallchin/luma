@@ -3,15 +3,18 @@
 //! input and output one chevron away. Consecutive calls share one rail and,
 //! past one of them, a summary line above it.
 //!
-//! # The detail card is generic, not per-tool
+//! # The detail card is generic until a tool earns its own
 //!
 //! What a call *is* — over the wire and in storage — is a JSON input and a JSON
-//! output, so that is what the card shows, unwrapped one level into `key value`
-//! rows so a reader is not decoding a wire format. A per-tool renderer
-//! would be a second place that has to know each tool's schema, and it would go
-//! stale the first time a tool grew an argument. When a tool earns a bespoke
-//! view it can have one; until then the honest generic view beats a table of
-//! special cases.
+//! output, so that is what the card shows by default, unwrapped one level into
+//! `key value` rows so a reader is not decoding a wire format. A per-tool
+//! renderer for every tool would be a second place that has to know each
+//! schema, and it would go stale the first time a tool grew an argument.
+//!
+//! One tool has earned a view: `python`, whose output is a typed cell result
+//! and whose figures are pictures — see [`crate::python_cell`]. Everything
+//! else takes the honest generic view, and a python call this build cannot
+//! read falls back to it too.
 //!
 //! # Its height is declared, never measured
 //!
@@ -23,11 +26,12 @@
 //! relayout of the whole transcript — the same lesson the code block learns by
 //! rendering per line.
 
-use gpui::{div, prelude::*, px, AnyElement, Hsla, SharedString};
+use gpui::{div, prelude::*, px, AnyElement, Hsla, SharedString, Window};
 use gpui_component::{Icon, IconName};
 use luma_lib::agent::{ToolPart, ToolState};
 use luma_ui::node::{Instrument as _, Role as NodeRole};
 
+use crate::python_cell::Cell;
 use crate::theme::{self, Theme};
 use crate::transcript::RowCtx;
 
@@ -59,6 +63,16 @@ fn verb(tool: &str) -> Verb {
             running: "Reading",
             past: "Read",
             noun: "skill",
+        },
+        // The two tenses a delegation is read in, and the words React's pill
+        // used: a subagent is *started*, and later it has *finished*. The row
+        // narrates as a pill rather than as a rail chip (see [`subagent_pill`]),
+        // but the phrasing stays in this one table so the automation tree and
+        // the pill's trailing line cannot drift.
+        "subagent" => Verb {
+            running: "Started",
+            past: "Finished",
+            noun: "subagent",
         },
         _ => DEFAULT_VERB,
     }
@@ -94,6 +108,10 @@ fn detail(tool: &ToolPart) -> Option<String> {
     let line = match tool.tool_name() {
         "python" => python_detail(tool),
         "skill" => string_arg(tool, "name"),
+        // The model's own 3–5 word label, for the same reason `python` titles
+        // by `purpose`: it is what the delegation is *for*, and the brief it
+        // was handed is a paragraph nobody wants on one line.
+        "subagent" => string_arg(tool, "description"),
         // An unknown tool narrates by its verb alone. Guessing at a field name
         // would put whichever argument happened to match into the title.
         _ => None,
@@ -103,6 +121,10 @@ fn detail(tool: &ToolPart) -> Option<String> {
 
 /// A python cell's title: **the model-authored purpose, never the code.**
 ///
+/// The purpose alone — how the cell *ended* is the row's trailing dot, not a
+/// suffix on its title, so a reader scanning a rail reads one column of
+/// outcomes rather than parsing them out of prose.
+///
 /// The purpose is the whole reason the tool asks for one — it is a four-word
 /// noun phrase written to complete "Running …", and it says what the cell is
 /// *for*. Code says what it does, which the reader can already see by opening
@@ -110,30 +132,7 @@ fn detail(tool: &ToolPart) -> Option<String> {
 /// characters available. The TypeScript side has an explicit test that this
 /// does not fall back to code; so does this one.
 fn python_detail(tool: &ToolPart) -> Option<String> {
-    let purpose = string_arg(tool, "purpose");
-    match (purpose, failure_marker(tool)) {
-        (None, None) => None,
-        (Some(purpose), None) => Some(purpose),
-        (None, Some(marker)) => Some(marker),
-        (Some(purpose), Some(marker)) => Some(format!("{purpose} · {marker}")),
-    }
-}
-
-/// `error 1.5s` — appended only when the cell did not simply succeed, so an
-/// ordinary run is titled by its purpose alone.
-fn failure_marker(tool: &ToolPart) -> Option<String> {
-    let output = tool.output.as_ref()?;
-    let status = output.get("status")?.as_str()?;
-    if status == "ok" {
-        return None;
-    }
-    let seconds = output
-        .get("durationMs")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|ms| *ms > 0)
-        .map(|ms| format!(" {:.1}s", ms as f64 / 1000.0))
-        .unwrap_or_default();
-    Some(format!("{status}{seconds}"))
+    string_arg(tool, "purpose")
 }
 
 /// One non-empty string argument, trimmed.
@@ -159,7 +158,7 @@ fn clip(line: &str, max: usize) -> String {
 /// A run of consecutive tool calls, as one rail. With more than one call the
 /// rail carries comet's group header — a chevron tile and a summary — above
 /// the rows; a lone call is its own row and needs no introduction.
-pub fn rail(tools: &[&ToolPart], ctx: &RowCtx) -> AnyElement {
+pub fn rail(tools: &[&ToolPart], ctx: &RowCtx, window: &Window) -> AnyElement {
     let theme = ctx.theme;
     let mut rows = div().flex().flex_none().flex_col().min_w_0().flex_1();
     if tools.len() > 1 {
@@ -192,7 +191,7 @@ pub fn rail(tools: &[&ToolPart], ctx: &RowCtx) -> AnyElement {
         );
     }
     for tool in tools {
-        rows = rows.child(row(tool, ctx));
+        rows = rows.child(row(tool, ctx, window));
     }
     // The guide: one hairline running the group's whole height, with the rows
     // inset past it. It is what makes a run of calls read as *one step* rather
@@ -252,7 +251,10 @@ fn tool_icon(tool: &str) -> IconName {
 /// Mirrors the card element below term for term. The two are a pair, and the
 /// tests at the bottom of this file are what hold them together.
 #[must_use]
-pub fn card_height(tool: &ToolPart) -> f32 {
+pub fn card_height(tool: &ToolPart, cell: Option<&Cell>) -> f32 {
+    if let Some(cell) = cell {
+        return cell.height();
+    }
     let mut sections = 0.0;
     let mut lines = 0.0;
     if let Some(input) = tool.input.as_ref() {
@@ -294,11 +296,159 @@ fn openness(open: bool, fold: Option<f32>) -> f32 {
     }
 }
 
+/// Which of a delegation's three ends a chip is showing.
+///
+/// Read off the *stored output*, not off [`ToolState`]: a subagent that ran
+/// and failed still answers its call successfully — losing the child's thread
+/// id would lose the only record of what it did — so the outcome lives inside
+/// the result rather than in the call's state. A call with no output yet has
+/// not finished, and the loop never fabricates a finish call.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Delegation {
+    Working,
+    Finished,
+    Failed,
+}
+
+impl Delegation {
+    /// The pill's trailing line, in React's own words.
+    fn line(self) -> &'static str {
+        match self {
+            Self::Working => "started working",
+            Self::Finished => "finished working",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+fn delegation(tool: &ToolPart) -> Delegation {
+    if matches!(tool.state, ToolState::OutputError) || tool.error_text.is_some() {
+        return Delegation::Failed;
+    }
+    let Some(output) = tool.output.as_ref() else {
+        return Delegation::Working;
+    };
+    match output
+        .get("outcome")
+        .and_then(|outcome| outcome.get("status"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("merged") => Delegation::Finished,
+        // Conflicted or failed. Both mean nothing was applied, and the chip has
+        // one column for that.
+        Some(_) => Delegation::Failed,
+        // An output this build cannot read is still an output: the call is over.
+        None => Delegation::Finished,
+    }
+}
+
+/// The child thread a finished delegation left behind, once there is one.
+fn child_thread(tool: &ToolPart) -> Option<SharedString> {
+    let id = tool
+        .output
+        .as_ref()?
+        .get("childThreadId")?
+        .as_str()?
+        .to_owned();
+    Some(SharedString::from(id))
+}
+
+/// One delegation, as a pill rather than as a rail row.
+///
+/// A tool chip's grammar — tile, verb, chevron, card — exists so a reader can
+/// see *what a call did*. A subagent's call did one thing, and what it did is a
+/// whole conversation: the card would show a brief and a blob, and the
+/// conversation is a thread id away. So the row keeps the rail's rhythm and
+/// spends its width on the two facts that identify the child instead: its face
+/// and the label the model wrote for it.
+///
+/// Clicking opens that child in the subagents dialog. It is also the *only*
+/// durable way in — the floating pill counts live state and is gone the moment
+/// nothing is running — which is why the chip is pressable even when the
+/// delegation is over.
+fn subagent_pill(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
+    let theme = ctx.theme;
+    let state = delegation(tool);
+    let text = label(tool);
+    let description: SharedString = detail(tool).unwrap_or_else(|| "Subagent".into()).into();
+    let tint = match state {
+        Delegation::Failed => theme.danger,
+        _ => theme.text_muted,
+    };
+    let chat = ctx.chat.clone();
+    let child = child_thread(tool);
+    div()
+        .h(px(theme::CHIP_HEIGHT))
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(theme::SPACE_SM))
+        .child(
+            div()
+                .id(SharedString::from(format!(
+                    "chat-subagent-{}",
+                    tool.call_id
+                )))
+                .flex()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .gap(px(theme::SPACE_XS + 2.0))
+                .max_w(px(PILL_MAX_WIDTH))
+                .px(px(theme::SPACE_SM))
+                .py(px(2.0))
+                .border_1()
+                .border_color(theme.border)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::wash(0.06)))
+                .on_click(move |_, _, cx| {
+                    let child = child.clone();
+                    chat.update(cx, |this, cx| this.request_subagents(child, cx));
+                })
+                .child(crate::subagents::avatar(
+                    &tool.call_id,
+                    crate::subagents::AVATAR,
+                ))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.0))
+                        .text_color(tint)
+                        .child(description),
+                ),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(12.0))
+                .text_color(theme.text_faint)
+                .child(SharedString::from(state.line()))
+                // Named in its own right: the pill's title says *which*
+                // delegation and this says *where it got to*, and a tree that
+                // reported only the former could not tell the two apart.
+                .agent_node(NodeRole::Text, state.line()),
+        )
+        .agent_node(NodeRole::Chip, text)
+        .into_any_element()
+}
+
+/// React's `max-w-64`, which is what the pill's truncation was measured
+/// against.
+const PILL_MAX_WIDTH: f32 = 256.0;
+
 /// One tool call: an unboxed 38px row — tile, narration, trailing chevron —
 /// and its detail card when the chevron has been answered.
-fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
+fn row(tool: &ToolPart, ctx: &RowCtx, window: &Window) -> AnyElement {
+    if tool.tool_name() == "subagent" {
+        return subagent_pill(tool, ctx);
+    }
     let theme = ctx.theme;
     let text = label(tool);
+    // Read once: the reading is what the card, the height and the outcome dot
+    // all run on, and it is the expensive half of drawing a python chip.
+    let cell = ctx.cells.borrow_mut().read(tool);
     let open = ctx.is_expanded(&tool.call_id);
     let openness = openness(open, ctx.fold_progress(&tool.call_id));
     let chat = ctx.chat.clone();
@@ -341,6 +491,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
                         .text_color(theme.text_muted)
                         .child(text.clone()),
                 )
+                .when_some(cell.as_ref(), |el, cell| el.child(outcome(cell, theme)))
                 .child(
                     div()
                         .size(px(theme::CHIP_CHEVRON))
@@ -363,7 +514,9 @@ fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
         .when(openness > 0.0, |el| {
             // Indented under the narration, past the tile, so the detail reads
             // as the row's own and not as a new block.
-            let card = div().pl(px(32.0)).child(detail_card(tool, theme));
+            let card = div()
+                .pl(px(crate::python_cell::CARD_INDENT))
+                .child(detail_card(tool, cell.as_deref(), theme, window));
             el.child(if openness >= 1.0 {
                 // Fully open renders at its natural height. Clamping a settled
                 // card to a computed number would turn any drift between
@@ -372,7 +525,7 @@ fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
                 card.into_any_element()
             } else {
                 div()
-                    .h(px(card_height(tool) * openness))
+                    .h(px(card_height(tool, cell.as_deref()) * openness))
                     .overflow_hidden()
                     .child(card)
                     .into_any_element()
@@ -386,7 +539,10 @@ fn row(tool: &ToolPart, ctx: &RowCtx) -> AnyElement {
 /// Painted on the mono face and never wrapped — one source line is one card
 /// line, which is what keeps the open height a multiplication rather than a
 /// measurement.
-fn detail_card(tool: &ToolPart, theme: &Theme) -> impl IntoElement {
+fn detail_card(tool: &ToolPart, cell: Option<&Cell>, theme: &Theme, window: &Window) -> AnyElement {
+    if let Some(cell) = cell {
+        return cell.card(theme, window);
+    }
     let failed = matches!(tool.state, ToolState::OutputError);
     let answer = match (&tool.error_text, &tool.output) {
         (Some(error), _) => Some(lines_of_text(error)),
@@ -407,6 +563,7 @@ fn detail_card(tool: &ToolPart, theme: &Theme) -> impl IntoElement {
                 "Input",
                 lines_of_json(input),
                 theme.text_muted,
+                None,
                 theme,
             ))
         })
@@ -419,18 +576,44 @@ fn detail_card(tool: &ToolPart, theme: &Theme) -> impl IntoElement {
                 } else {
                     theme.text_muted
                 },
+                None,
                 theme,
             ))
         })
+        .into_any_element()
 }
 
-/// One labelled block of the detail card.
-fn section(
+/// One labelled block of the detail card: a silkscreen heading over mono lines.
+///
+/// `scroll` names the block when its lines are allowed to run past the card
+/// rather than being clipped to [`DETAIL_LINE_MAX`] — the one is what a cell's
+/// own output gets, the other is what a JSON dump gets, because a card that
+/// laid out a megabyte of base64 on one unwrapped line would shape every
+/// glyph of it. Either way the *height* is the same count of lines.
+pub(crate) fn section(
     heading: &'static str,
     lines: Vec<SharedString>,
     tone: Hsla,
+    scroll: Option<SharedString>,
     theme: &Theme,
 ) -> impl IntoElement {
+    let body = div()
+        .flex()
+        .flex_col()
+        .font_family(theme.font_mono.clone())
+        .text_size(px(11.0))
+        .text_color(tone)
+        .children(lines.into_iter().map(|line| {
+            div()
+                .h(px(theme::CHIP_DETAIL_LINE))
+                .flex_none()
+                .whitespace_nowrap()
+                .child(line)
+        }));
+    let body: AnyElement = match scroll {
+        Some(id) => body.id(id).overflow_x_scroll().into_any_element(),
+        None => body.overflow_hidden().into_any_element(),
+    };
     div()
         .flex()
         .flex_col()
@@ -441,22 +624,46 @@ fn section(
                 .text_color(theme.text_faint)
                 .child(SharedString::from(heading)),
         )
+        .child(body)
+}
+
+/// How a python cell ended, at the chip's trailing edge: how long it ran, and
+/// a dot in the one colour that says what happened.
+///
+/// The dot rather than a word: a rail of calls is scanned, and a column of
+/// dots is read at a glance where a column of "ok" / "error" has to be parsed.
+fn outcome(cell: &Cell, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(theme::SPACE_XS))
+        .when_some(cell.duration_ms(), |el, ms| {
+            el.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme.text_faint)
+                    .child(SharedString::from(duration(ms))),
+            )
+        })
         .child(
             div()
-                .flex()
-                .flex_col()
-                .font_family(theme.font_mono.clone())
-                .text_size(px(11.0))
-                .text_color(tone)
-                .children(lines.into_iter().map(|line| {
-                    div()
-                        .h(px(theme::CHIP_DETAIL_LINE))
-                        .flex_none()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(line)
-                })),
+                .size(px(5.0))
+                .flex_none()
+                .rounded_full()
+                .bg(cell.status().color(theme)),
         )
+}
+
+/// A cell's run time, at the coarsest precision that still says something:
+/// milliseconds under a second, then one decimal of seconds.
+fn duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
 }
 
 /// Longest detail line a card carries. The card does not scroll horizontally —
@@ -581,7 +788,7 @@ mod tests {
     #[test]
     fn a_chip_with_no_detail_has_no_card() {
         let bare = part("python", ToolState::OutputAvailable, None);
-        assert_eq!(card_height(&bare), 0.0);
+        assert_eq!(card_height(&bare, None), 0.0);
     }
 
     /// The card's height is a count, and it stays bounded however much the
@@ -593,12 +800,12 @@ mod tests {
             ToolState::OutputAvailable,
             Some(json!({ "code": "a" })),
         );
-        let single = card_height(&one);
+        let single = card_height(&one, None);
         assert!(single > 0.0);
 
         let mut many = one.clone();
         many.output = Some(json!("x\n".repeat(500)));
-        let both = card_height(&many);
+        let both = card_height(&many, None);
         assert!(both > single, "a second section must add height");
 
         // Both sections at their clipped maximum: the ceiling a card can reach.
@@ -657,22 +864,27 @@ mod tests {
         assert!(!label(&tool).contains("print"));
     }
 
-    /// A cell that did not simply succeed says so, with how long it took.
+    /// However a cell ended, the title is the purpose and only the purpose —
+    /// the outcome is the row's trailing dot, not a suffix on its prose.
     #[test]
-    fn a_failed_cell_appends_its_status_and_duration() {
+    fn a_failed_cell_is_still_titled_by_its_purpose() {
         let mut tool = part(
             "python",
             ToolState::OutputError,
             Some(json!({ "purpose": "a validation pass", "code": "boom()" })),
         );
         tool.output = Some(json!({ "status": "error", "durationMs": 1500 }));
-        assert_eq!(
-            label(&tool),
-            "Ran python cell · a validation pass · error 1.5s"
-        );
-        // A cell that succeeded carries no marker at all.
+        assert_eq!(label(&tool), "Ran python cell · a validation pass");
         tool.output = Some(json!({ "status": "ok", "durationMs": 1500 }));
         assert_eq!(label(&tool), "Ran python cell · a validation pass");
+    }
+
+    /// The trailing stamp reads at the precision a person cares about: a fast
+    /// cell in milliseconds, a slow one in seconds.
+    #[test]
+    fn a_duration_reads_at_the_precision_that_matters() {
+        assert_eq!(duration(247), "247ms");
+        assert_eq!(duration(1500), "1.5s");
     }
 
     /// A skill is titled by the skill it read — its own argument, not python's.

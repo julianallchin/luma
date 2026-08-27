@@ -31,7 +31,18 @@ pub struct AgentThread {
     pub forked_from_thread_id: Option<String>,
     /// Last shared message in the forked prefix, or `None` for an empty fork.
     pub forked_at_message_id: Option<String>,
+    /// The thread whose turn spawned this one, for a subagent. A child edits
+    /// the same document as its parent, through a workspace of its own, and
+    /// does not outlive it.
+    pub parent_thread_id: Option<String>,
+    /// The parent's tool call that spawned this thread, so the transcript chip
+    /// and the child thread name each other.
+    pub parent_call_id: Option<String>,
     pub title: Option<String>,
+    /// Who this thread's writes are attributed to: the model key the last turn
+    /// resolved, or an external MCP client's label. `None` until a turn names
+    /// one, and then the host's own session actor answers instead.
+    pub actor: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -105,6 +116,13 @@ pub struct CreateAgentThreadInput {
     pub venue_id: Option<String>,
     pub score_id: Option<String>,
     pub title: Option<String>,
+    /// Spawn this thread as a subagent of another. The parent must be an
+    /// active thread of the same principal over the same document; creation
+    /// then allocates the child's authored workspace from the parent's current
+    /// head, so "a child thread has a private head" is a construction
+    /// invariant rather than something a caller has to remember.
+    pub parent_thread_id: Option<String>,
+    pub parent_call_id: Option<String>,
 }
 
 /// A message to write into a transcript tail. `id` is the caller's
