@@ -10,10 +10,11 @@ pub mod macos;
 
 use crate::agent_execution::worker_launcher::{PassthroughLauncher, WorkerLauncher};
 
-/// Debug-only escape hatch. Never consulted in a release build: §17.7 says a
-/// production build without a sandbox is a hard stop, not a warning.
-#[cfg(target_os = "macos")]
-const UNSANDBOXED_VAR: &str = "LUMA_UNSANDBOXED_PYTHON";
+/// The one spelling of the escape hatch that skips the sandbox. This module
+/// owns the policy, so every launcher reads the name from here rather than
+/// repeating the literal. Debug builds honour it freely; §17.7 makes a release
+/// build without a real sandbox a hard stop that only this variable lifts.
+pub const UNSANDBOXED_VAR: &str = "LUMA_UNSANDBOXED_PYTHON";
 
 /// The launcher this platform+build should use for agent Python.
 ///

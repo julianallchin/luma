@@ -788,8 +788,8 @@ python({
 })
 ```
 
-`purpose` is a one- to four-word noun phrase used only to label the running
-cell in the UI (for example, `"section energy analysis"`). It does not select
+`purpose` is a short noun phrase used only to label the running cell in the UI
+(for example, `"section energy analysis"`). It does not select
 scope, authority, execution policy, or a different operation. `code` is the
 ordinary cell-shaped Python source.
 
@@ -1424,9 +1424,11 @@ luma.venue
   id
   name
   fixtures
+  pieces                    set design; flattened world pose per piece
   groups
   positions                 [primitive, xyz]
-  attributes                only when truly populated
+  uv                        [primitive, uv] rig-intrinsic pattern space
+  views                     camera names render(view=...) accepts
 ```
 
 ### 10.2 Track agent
@@ -2593,6 +2595,75 @@ knows nothing about model messages.
 
 Tauri commands are thin adapters.
 
+### 20.1 Headless hosts
+
+Two binaries serve this data plane to a process that is not the desktop app.
+Both are thin adapters over `luma_lib::dispatch` — the seam the
+`#[tauri::command]` wrappers sit on — so neither owns scope resolution, the
+binding manifest, the write-admission gate, or the interrupt ladder. Both boot
+through `luma_lib::headless_host`: same flags (`--config-dir`,
+`--fixtures-root`, `--cache-dir`, `--fixture-principal`), same migrations, same
+managed-venv workspace service, same startup recovery of half-deleted threads.
+Events go to stderr, because both put their protocol on stdout.
+
+| | |
+|---|---|
+| `src-tauri/src/bin/agent_harness.rs` | one JSON request per line; the shim in `scripts/headless/shim.ts` puts `window.__TAURI_INTERNALS__.invoke` on top of it so unmodified frontend agent code runs under Bun |
+| `src-tauri/src/bin/luma-mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
+
+`luma-mcp` exposes four tools:
+
+```text
+open   {track_id | track_query, venue_id?}  the bound namespace's catalog
+python {code}                               stdout/repr/traceback + figures
+reset  {}                                   a fresh workspace and kernel
+cancel {}                                   interrupt the cell in flight
+```
+
+`open` with no arguments lists the library instead of binding it. The
+difference from the in-app tool is the *session*: an MCP client has no editor
+to read a track from, so `open` resolves the track (and the venue and score
+that make `luma.venue` and `luma.track` real — a venue scope is only legible
+together with a score, §10.2), creates one durable `track_copilot` thread
+pinned to it, appends one user message for cells to be attributed to, and
+returns `luma.catalog()`. Every later call addresses that thread, so `python`
+takes only code, exactly as §7.1 requires. `reset` deletes the thread — which
+is what takes the workspace and kernel with it — and opens the same scope
+again.
+
+`python`'s description is `PYTHON_TOOL_DESCRIPTION`, and its result is
+`agent::tools::python::cell_content_blocks` — the same text and the same
+projection the in-app tool gives its model, clamping and figure budget
+included. A second wording or a second projection would be a second tool.
+
+The loop is concurrent, one task per request, for the reason the JSON-RPC
+harness's is: `cancel` exists precisely to interrupt a `python` that is still
+in flight. The framing, `initialize`, `ping` and `tools/list` live in
+`src-tauri/crates/mcp-stdio`, shared with the GPUI harness's server; the loop
+does not, because that harness is deliberately serial.
+
+The sandbox is not a flag on these hosts. They resolve the worker environment
+through `agent_execution::headless_env`, so `sandbox::default_launcher` decides,
+and §17.7 still holds: a release build cannot reach the passthrough at all, and
+a debug build only with `LUMA_UNSANDBOXED_PYTHON=1`.
+
+Register the server with a `.mcp.json` at the repository root (not committed):
+
+```json
+{
+  "mcpServers": {
+    "luma": {
+      "command": "./src-tauri/target/debug/luma-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Add `["--config-dir", "/path/to/scratch"]` to work against a disposable copy of
+the library rather than the real one. `scripts/headless/mcp_smoke.ts` drives the
+whole protocol against such a copy.
+
 ---
 
 ## 21. Testing requirements
@@ -2917,7 +2988,7 @@ for the new persistent worker, data plane, or sandbox.
 - evaluator positions and primitive ordering;
 - current graph definition and pattern arguments;
 - timeline annotations, pattern summaries, and argument schemas;
-- venue fixtures and group data.
+- venue fixtures, stage pieces, and group data.
 
 ### 23.3 Import timings measured on this machine
 

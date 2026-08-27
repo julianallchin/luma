@@ -1,0 +1,13 @@
+[package]
+name = "mcp-stdio"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Shield-1.0.0"
+description = "MCP's stdio JSON-RPC vocabulary, without a runtime"
+
+[lib]
+name = "mcp_stdio"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"

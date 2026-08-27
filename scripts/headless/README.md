@@ -3,7 +3,7 @@
 Runs Luma's backend command surface — and, in the E2E wave, the frontend agent
 code that calls it — without a window, an `AppHandle`, or an audio device.
 
-Two halves:
+The pieces:
 
 | | |
 |---|---|
@@ -11,6 +11,8 @@ Two halves:
 | `scripts/headless/shim.ts` | spawns it and installs `window.__TAURI_INTERNALS__` so unmodified frontend `invoke()` calls land on the pipe |
 | `scripts/headless/smoke.ts` | end-to-end check of both halves against a copy of the real `luma.db` |
 | `scripts/headless/e2e.ts` | drives the *real frontend agents* and audits the design's §22 acceptance criteria |
+| `src-tauri/src/bin/luma-mcp.rs` | MCP over stdio: the same sandboxed Python workspace, for an out-of-process coding agent |
+| `scripts/headless/mcp_smoke.ts` | speaks MCP at that binary over a pipe — handshake, `open`, `python`, figures, `reset` |
 
 ## Build + run
 
@@ -18,6 +20,9 @@ Two halves:
 cargo build --manifest-path src-tauri/Cargo.toml --bin agent_harness
 bun run scripts/headless/smoke.ts
 bun run scripts/headless/e2e.ts
+
+cargo build --manifest-path src-tauri/Cargo.toml --bin luma-mcp
+bun run scripts/headless/mcp_smoke.ts
 ```
 
 The smoke driver creates its own scratch config dir under `$TMPDIR`, copies the
@@ -206,3 +211,12 @@ Add a `match` arm in `agent_harness.rs` calling the same db/service function the
 `#[tauri::command]` calls. If the command body is more than a delegation, move
 the body into a `pub` service fn and have *both* call it — never transcribe
 logic into the harness.
+
+## The MCP server (`luma-mcp`)
+
+Same bootstrap as the harness — same flags, same migrations, same managed venv,
+same seatbelt sandbox — but the wire is MCP over stdio instead of the line
+protocol above, so an out-of-process coding agent gets the `python` tool itself:
+`open` a track, then `python`, `reset` and `cancel` against its persistent
+kernel. See `docs/design/agent-code-execution.md` §20.1 for the tool contract
+and a `.mcp.json` to register it with.

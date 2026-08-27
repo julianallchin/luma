@@ -17,13 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 use crate::agent_execution::artifacts::SCRATCH_DIR;
+use crate::agent_execution::sandbox::UNSANDBOXED_VAR;
 use crate::cmd_util::new_process_group;
-
-/// Environment variable that unlocks the unsandboxed launcher in a release
-/// build. Debug builds don't need it; production without a real sandbox is a
-/// hard stop (design §17.7).
-pub const UNSANDBOXED_ENV: &str = "LUMA_UNSANDBOXED_PYTHON=1";
-const UNSANDBOXED_VAR: &str = "LUMA_UNSANDBOXED_PYTHON";
 
 /// The filesystem and environment authority one worker gets.
 ///
@@ -142,7 +137,7 @@ impl PassthroughLauncher {
         }
         Err(format!(
             "refusing to run agent Python without a sandbox in a release build; \
-             set {UNSANDBOXED_ENV} to override for local experiments"
+             set {UNSANDBOXED_VAR}=1 to override for local experiments"
         ))
     }
 }

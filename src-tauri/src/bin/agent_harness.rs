@@ -26,130 +26,11 @@
 //! devices, and the loops — nothing spawns a render loop or a sync loop here,
 //! so a `RenderEngine` exists but drives nothing. Emitted events go to stderr.
 
-use std::path::{Path, PathBuf};
-
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
-use luma_lib::agent_execution::headless_env;
-use luma_lib::agent_execution::workspace::PythonWorkspaceService;
-use luma_lib::database::local::{auth, database::init_app_db_at, state::init_state_db_at};
-use luma_lib::dispatch::{self, AppServices, EventSink, Events};
-use luma_lib::services::fixtures as fixtures_service;
-use luma_lib::storage::StorageRoot;
-
-/// Emitted events land on stderr, alongside the harness's other diagnostics.
-struct StderrEvents;
-
-impl EventSink for StderrEvents {
-    fn emit(&self, event: &str, payload: Value) {
-        eprintln!("[event] {event} {payload}");
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Setup
-// -----------------------------------------------------------------------------
-
-struct Cli {
-    config_dir: Option<PathBuf>,
-    fixtures_root: Option<PathBuf>,
-    cache_dir: Option<PathBuf>,
-    fixture_principal: Option<String>,
-}
-
-fn parse_cli() -> Result<Cli, String> {
-    let mut cli = Cli {
-        config_dir: None,
-        fixtures_root: None,
-        cache_dir: None,
-        fixture_principal: None,
-    };
-    let mut it = std::env::args().skip(1);
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--config-dir" => {
-                cli.config_dir = Some(PathBuf::from(
-                    it.next()
-                        .ok_or_else(|| "--config-dir requires a path".to_string())?,
-                ));
-            }
-            "--fixtures-root" => {
-                cli.fixtures_root =
-                    Some(PathBuf::from(it.next().ok_or_else(|| {
-                        "--fixtures-root requires a path".to_string()
-                    })?));
-            }
-            "--cache-dir" => {
-                cli.cache_dir = Some(PathBuf::from(
-                    it.next()
-                        .ok_or_else(|| "--cache-dir requires a path".to_string())?,
-                ));
-            }
-            "--fixture-principal" => {
-                let principal = it
-                    .next()
-                    .ok_or_else(|| "--fixture-principal requires an id".to_string())?;
-                if principal.trim().is_empty() || principal.chars().any(char::is_control) {
-                    return Err("--fixture-principal requires a non-empty printable id".into());
-                }
-                cli.fixture_principal = Some(principal);
-            }
-            other => return Err(format!("unknown flag `{other}`")),
-        }
-    }
-    if cli.fixture_principal.is_some() && cli.config_dir.is_none() {
-        return Err("--fixture-principal requires an explicit --config-dir".into());
-    }
-    Ok(cli)
-}
-
-/// Repo-relative fixtures root, resolved against `CARGO_MANIFEST_DIR` rather
-/// than the CWD so the harness works no matter where it was launched from.
-/// Picks the newest (lexicographically greatest) version directory, matching
-/// how `resolve_fixtures_root` hardcodes today's bundle.
-fn repo_fixtures_root() -> Option<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .join("resources/fixtures");
-    std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.path())
-        .max()
-}
-
-fn resolve_config_dir(cli: &Cli) -> Result<StorageRoot, String> {
-    if let Some(p) = &cli.config_dir {
-        return Ok(StorageRoot::from_path(p.clone()));
-    }
-    if let Some(p) = std::env::var_os("LUMA_CONFIG_DIR") {
-        return Ok(StorageRoot::from_path(PathBuf::from(p)));
-    }
-    StorageRoot::from_env_default()
-}
-
-/// The app cache dir, with the CLI's override ahead of the shared default.
-fn resolve_cache_dir(cli: &Cli) -> Result<PathBuf, String> {
-    match &cli.cache_dir {
-        Some(path) => Ok(path.clone()),
-        None => headless_env::cache_dir(),
-    }
-}
-
-fn resolve_fixtures(cli: &Cli) -> Result<PathBuf, String> {
-    if let Some(p) = &cli.fixtures_root {
-        return Ok(p.clone());
-    }
-    if let Some(p) = std::env::var_os("LUMA_FIXTURES_ROOT") {
-        return Ok(PathBuf::from(p));
-    }
-    if let Some(p) = repo_fixtures_root() {
-        return Ok(p);
-    }
-    fixtures_service::resolve_fixtures_root_from(None)
-}
+use luma_lib::dispatch;
+use luma_lib::headless_host::{boot, HostConfig};
 
 // -----------------------------------------------------------------------------
 // Main loop
@@ -164,45 +45,8 @@ async fn main() {
 }
 
 async fn run() -> Result<(), String> {
-    let cli = parse_cli()?;
-    let storage = resolve_config_dir(&cli)?;
-    let fixtures_root = resolve_fixtures(&cli)?;
-
-    let cache_dir = resolve_cache_dir(&cli)?;
-
-    let db = init_app_db_at(storage.path()).await?;
-    let state_db = init_state_db_at(storage.path()).await?;
-    if let Some(principal) = cli.fixture_principal.as_deref() {
-        // The caller explicitly owns this disposable fixture. Avoid creating
-        // or copying a Supabase token merely to exercise authenticated command
-        // plumbing; arm the same app-database admission gate startup normally
-        // derives from the verified host session.
-        auth::arm_write_admission(&db.0, Some(principal)).await?;
-    } else {
-        auth::bootstrap_host_admission(&db.0, &state_db.0).await?;
-    }
-
-    let workspaces = std::sync::Arc::new(PythonWorkspaceService::new(
-        storage.agent_workspaces_dir(),
-        std::sync::Arc::new(move || headless_env::resolve_worker_env(&cache_dir)),
-    ));
-
-    // Events go to stderr: stdout carries the response protocol and must stay
-    // one JSON frame per line.
-    let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
-        .with_events(Events::new(StderrEvents))
-        .with_fixture_principal(cli.fixture_principal);
-
-    if let Err(error) = luma_lib::agent_execution::thread_cleanup::recover_deleting_agent_threads(
-        &services.db().0,
-        services.authored(),
-        services.workspaces(),
-        services.graph_runs(),
-    )
-    .await
-    {
-        eprintln!("[agent-threads] startup deletion recovery: {error}");
-    }
+    let config = HostConfig::parse_args(std::env::args().skip(1))?;
+    let services = boot(&config).await?;
 
     eprintln!(
         "[agent_harness] ready: config={} fixtures={}",
@@ -215,7 +59,10 @@ async fn run() -> Result<(), String> {
     // `cancel_python_cell` exists precisely to interrupt a `run_python_cell`
     // that is still in flight, and a strictly serial loop could never deliver
     // it. Responses are matched by `id`, so completion order is free.
-    let services = std::sync::Arc::new(services);
+    // `into_shared`, not a bare `Arc::new`: the turn loop outlives the command
+    // that starts it, so it needs the back-reference that attaches here. A
+    // plain Arc leaves `agent_turn_start` failing on every call.
+    let services = services.into_shared();
     let stdout = std::sync::Arc::new(tokio::sync::Mutex::new(std::io::stdout()));
 
     // stdin is blocking; read it on its own thread and feed the runtime.

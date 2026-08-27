@@ -9,20 +9,24 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::{clamp_for_model, Tool, ToolContext, ToolOutcome};
 use crate::agent::model::ContentBlock;
 use crate::agent_execution::workspace::PythonWorkspaceService;
-use crate::models::agent_execution::PythonCellResult;
+use crate::models::agent_execution::{PythonCellResult, PythonStoredFigure, PythonToolOutput};
 use crate::services::agent_execution::{
     cancel_python_cell_inner, resolve_execution_id, run_python_cell_inner,
 };
 
 /// The description is a cached prompt prefix: it must stay byte-stable for a
 /// thread's lifetime, so it lives in a file rather than in a format string.
-const DESCRIPTION: &str = include_str!("../prompts/python-tool.md");
+///
+/// Public because it is the contract for *any* host that exposes this kernel —
+/// `luma-mcp` hands the same text to an out-of-process coding agent, and a
+/// second wording would be a second tool.
+pub const PYTHON_TOOL_DESCRIPTION: &str = include_str!("../prompts/python-tool.md");
 
 /// Above this, a single figure's base64 is not persisted in the transcript.
 const MAX_PERSISTED_FIGURE_BYTES: usize = 2_000_000;
@@ -32,36 +36,15 @@ const MAX_MODEL_FIGURE_BYTES: usize = 6_000_000;
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PythonArgs {
-    /// A noun phrase of no more than four words describing the intended
-    /// outcome; it must read naturally after "Running".
+    /// A short noun phrase describing the intended outcome; it must read
+    /// naturally after "Running".
+    ///
+    /// Never read on this side: the chat titles a chip from the *persisted*
+    /// input, so this field's whole job is to put itself in the schema.
+    #[allow(dead_code)]
     purpose: String,
     /// Python cell source.
     code: String,
-}
-
-/// What the transcript keeps for one cell. Figure bytes are kept (the chat
-/// renders them) but a single oversized figure is dropped.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct PythonToolOutput {
-    pub status: String,
-    pub stdout: String,
-    pub stderr: String,
-    pub repr: Option<String>,
-    pub traceback: Option<String>,
-    pub notices: Vec<String>,
-    pub figure_count: usize,
-    pub figures: Vec<StoredFigure>,
-    pub duration_ms: u64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct StoredFigure {
-    pub width: u32,
-    pub height: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base64_png: Option<String>,
 }
 
 pub struct PythonTool;
@@ -73,7 +56,7 @@ impl Tool for PythonTool {
     }
 
     fn description(&self) -> Cow<'static, str> {
-        Cow::Borrowed(DESCRIPTION)
+        Cow::Borrowed(PYTHON_TOOL_DESCRIPTION)
     }
 
     fn schema(&self) -> Value {
@@ -85,10 +68,6 @@ impl Tool for PythonTool {
     async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<Value, String> {
         let args: PythonArgs =
             serde_json::from_value(args).map_err(|error| format!("invalid arguments: {error}"))?;
-        if args.purpose.split_whitespace().count() > 4 {
-            return Err("purpose must be four words or fewer".into());
-        }
-
         // Interrupting the kernel is the *only* thing cancellation has to do
         // here, and dropping this future is the only way a turn is cancelled —
         // so the interrupt hangs off `Drop` rather than a token some caller
@@ -99,23 +78,23 @@ impl Tool for PythonTool {
             ctx.authored_workspace_id,
         )?;
         let guard = InterruptOnDrop {
-            workspaces: Arc::clone(&ctx.services.workspaces),
+            workspaces: Arc::clone(&ctx.services().workspaces),
             execution_id,
             armed: true,
         };
 
         let principal = ctx
-            .services
+            .services()
             .admitted_principal()
             .await
             .map_err(|error| error.to_string())?;
         let result = run_python_cell_inner(
-            &ctx.services.db.0,
-            &ctx.services.storage,
-            &ctx.services.fixtures_root,
-            &ctx.services.workspaces,
-            &ctx.services.graph_runs,
-            &ctx.services.authored,
+            &ctx.services().db.0,
+            &ctx.services().storage,
+            &ctx.services().fixtures_root,
+            &ctx.services().workspaces,
+            &ctx.services().graph_runs,
+            &ctx.services().authored,
             ctx.thread_id.to_string(),
             args.code,
             ctx.scope.clone(),
@@ -168,11 +147,10 @@ fn to_stored_output(result: PythonCellResult) -> PythonToolOutput {
         repr: result.repr,
         traceback: result.traceback,
         notices: result.notices,
-        figure_count: result.figures.len(),
         figures: result
             .figures
             .into_iter()
-            .map(|figure| StoredFigure {
+            .map(|figure| PythonStoredFigure {
                 width: figure.width,
                 height: figure.height,
                 base64_png: (figure.base64_png.len() <= MAX_PERSISTED_FIGURE_BYTES)
@@ -181,6 +159,17 @@ fn to_stored_output(result: PythonCellResult) -> PythonToolOutput {
             .collect(),
         duration_ms: result.duration_ms,
     }
+}
+
+/// The model-facing projection of one executed cell.
+///
+/// Every host that shows a cell to a model goes through here: the in-app tool
+/// after it has persisted the transcript row, `luma-mcp` straight off the
+/// service result. The clamping and the figure budget are part of the contract,
+/// not of either transport.
+#[must_use]
+pub fn cell_content_blocks(result: PythonCellResult) -> Vec<ContentBlock> {
+    model_output(&to_stored_output(result))
 }
 
 /// Notebook-native model output: one text block assembling notices, stdout,
@@ -216,7 +205,7 @@ fn model_output(output: &PythonToolOutput) -> Vec<ContentBlock> {
     }
     if output.status == "interrupted" {
         sections.push("Cell interrupted before it finished.".into());
-    } else if sections.is_empty() && output.figure_count == 0 {
+    } else if sections.is_empty() && output.figures.is_empty() {
         sections.push("(no output)".into());
     }
 
@@ -274,6 +263,21 @@ mod tests {
             ..PythonToolOutput::default()
         });
         assert_eq!(blocks, vec![ContentBlock::Text("(no output)".into())]);
+    }
+
+    /// Rows persisted before a field was removed must still read: the
+    /// transcript is append-only and never migrated.
+    #[test]
+    fn a_stored_row_with_a_retired_field_still_reads() {
+        let stored = serde_json::json!({
+            "status": "ok", "stdout": "", "stderr": "", "repr": null,
+            "traceback": null, "notices": [], "figures": [], "durationMs": 1,
+            "figureCount": 0,
+        });
+        assert!(matches!(
+            PythonTool.stored_output(&stored),
+            ToolOutcome::Content(_)
+        ));
     }
 
     #[test]
