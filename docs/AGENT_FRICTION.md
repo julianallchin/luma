@@ -3,6 +3,9 @@
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
 
+- [2026-08-27] `luma_render` has four `submit_readback` call sites whose only difference is a bare positional `true`/`false` for `temporal` — I read the wrong one, built a whole mode on the belief that capture already ran the temporal pass, and only caught it by printf-probing the GPU path; a `Temporal(bool)`-shaped argument would have made the mistake impossible
+- [2026-08-27] `cargo build` in `src-tauri` after editing `gpui/crates/render` sometimes reports only "Compiling luma" in the tail of its output while having rebuilt the dependency too, so `tail -3` is not evidence about what got rebuilt
+- [2026-08-27] zsh does not word-split unquoted `$var`, so every `for spec in "a b"; do set -- $spec` loop copied from a bash snippet silently binds `$2` to nothing and ffmpeg reports it as "Invalid duration specification for ss: -i"
 - [2026-08-27] ffmpeg's `-shortest` quietly drops ~7 s of audio off every recording when the video arrives down a slow pipe — the file muxes, plays, and reports two stream durations that differ, and nothing anywhere warns you
 - [2026-08-27] `ffmpeg_env`'s dev search hardcoded `target/debug` and `target/release`, so anything built with the repo's own `perf` profile fell through to system PATH and rendered fine with the *wrong* ffmpeg
 - [2026-08-27] `headless_host::boot` runs migrations against whatever `--config-dir` it is given, so "read the real library read-only" actually means copying `luma.db`, `-wal`, `-shm` *and* `state.db` first — and nothing lists that set

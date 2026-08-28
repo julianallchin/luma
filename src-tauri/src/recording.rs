@@ -25,22 +25,110 @@ use sqlx::SqlitePool;
 use crate::eval::{Arena, Scope};
 use crate::models::scores::TrackScore;
 use crate::models::universe::UniverseState;
-use crate::stage_render::{self, Sequence, VenueGeometry};
+use crate::stage_render::{self, Continuity, Sequence, VenueGeometry};
 use crate::storage::StorageRoot;
-use luma_render::{coords, DEFAULT_SUBFRAMES};
+use luma_render::{coords, DEFAULT_SUBFRAMES, LIVE_SUBFRAMES};
 use luma_scene::View;
 
-/// Sub-samples integrated into each output frame.
+/// How a recording integrates time into each output frame.
+///
+/// The renderer's haze march is stochastic, and there are two ways to pay for
+/// a clean one. Both are here because they are not interchangeable — one is a
+/// camera and one is a memory — and which one a recording wants is a question
+/// about the *content*, not a quality dial.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Haze {
+    /// Every output frame is a function of its own `t` alone.
+    ///
+    /// `SHUTTER_SAMPLES` sub-renders stratified over a 180° shutter,
+    /// averaged in linear light, with the renderer's temporal history cut
+    /// before each so nothing leaks between them. Everything that varies with
+    /// time integrates — eval, the strobe gate, haze drift — for
+    /// [`DEFAULT_SUBFRAMES`] haze marches per output frame. Deterministic and
+    /// slow.
+    #[default]
+    Accumulate,
+    /// Frames are consecutive, so let the renderer remember.
+    ///
+    /// Exactly the live viewport's path: [`LIVE_SUBFRAMES`] marches per frame,
+    /// blended into the haze history at 18% each, warmed up over
+    /// `WARMUP_FRAMES` discarded frames before the span starts. Eight times
+    /// fewer marches than [`Haze::Accumulate`].
+    ///
+    /// **The shutter collapses to one sub-render**, and not only to save the
+    /// three fixed passes. The history *is* a shutter — an exponential one
+    /// with a ~11-frame tail, some twenty times longer than the 180° box
+    /// `Accumulate` integrates over. Stacking a 180° box inside a tail that
+    /// long buys nothing the tail has not already smeared, and it would
+    /// multiply the cost this mode exists to remove. The trade is honest and
+    /// it is a trade: a physically-shaped shutter for a longer, one-sided one.
+    ///
+    /// The tail is also conditional. The renderer resets its history whenever
+    /// the *cone geometry* changes — any moving head, every frame — so on a
+    /// rig with movers this mode degrades to a bare [`LIVE_SUBFRAMES`]-sample
+    /// march with no integration at all. See §9.
+    Temporal,
+}
+
+impl Haze {
+    /// Sub-renders folded into one output frame.
+    const fn shutter(self) -> u32 {
+        match self {
+            Self::Accumulate => SHUTTER_SAMPLES,
+            Self::Temporal => 1,
+        }
+    }
+
+    /// Jitter samples per sub-render.
+    ///
+    /// `Accumulate` *divides* the export budget between its sub-renders, so
+    /// the total haze work is [`DEFAULT_SUBFRAMES`] either way it is spent.
+    const fn subframes(self) -> u32 {
+        match self {
+            Self::Accumulate => DEFAULT_SUBFRAMES / SHUTTER_SAMPLES,
+            Self::Temporal => LIVE_SUBFRAMES,
+        }
+    }
+
+    const fn continuity(self) -> Continuity {
+        match self {
+            Self::Accumulate => Continuity::Cut,
+            Self::Temporal => Continuity::Next,
+        }
+    }
+
+    /// Frames rendered and thrown away before the span, so the history is
+    /// converged when the first kept frame is drawn.
+    const fn warmup(self) -> u64 {
+        match self {
+            Self::Accumulate => 0,
+            Self::Temporal => WARMUP_FRAMES,
+        }
+    }
+}
+
+impl std::str::FromStr for Haze {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "accumulate" => Ok(Self::Accumulate),
+            "temporal" => Ok(Self::Temporal),
+            other => Err(format!(
+                "--haze takes accumulate or temporal, not {other:?}"
+            )),
+        }
+    }
+}
+
+/// Sub-renders integrated into each [`Haze::Accumulate`] output frame.
 ///
 /// A point-sampled frame beats against anything faster than the frame rate —
 /// strobes above ~10 Hz and sixteenth-note chases both alias into an irregular
 /// stutter. Four samples is what a shutter costs here for free: the renderer's
-/// jitter budget ([`DEFAULT_SUBFRAMES`]) is *divided* between them
-/// ([`SUBFRAMES`]), so the haze march — which is the whole GPU cost — does the
-/// same total work, now spread over time as well as over the pixel.
-///
-/// Not a flag. A recording that samples time differently from another
-/// recording is two answers to one question.
+/// jitter budget ([`DEFAULT_SUBFRAMES`]) is *divided* between them, so the haze
+/// march — which is the whole GPU cost — does the same total work, now spread
+/// over time as well as over the pixel.
 const SHUTTER_SAMPLES: u32 = 4;
 
 /// Fraction of the frame interval the shutter is open, as a cinema shutter
@@ -52,8 +140,14 @@ const SHUTTER_SAMPLES: u32 = 4;
 /// would have recorded.
 const SHUTTER_ANGLE: f32 = 0.5;
 
-/// Jitter samples per sub-render. See [`SHUTTER_SAMPLES`].
-const SUBFRAMES: u32 = DEFAULT_SUBFRAMES / SHUTTER_SAMPLES;
+/// Frames [`Haze::Temporal`] draws and discards before the span starts.
+///
+/// The temporal resolve keeps 82% of the history and mixes in 18% of the new
+/// march, so the weight of the unconverged first frame decays as `0.82^n`:
+/// under 5% by 16 frames and under 1% by 24. Twenty-four is 0.8 s at 30 fps
+/// and about a second of wall time — cheap insurance against a recording that
+/// opens visibly noisier than it ends.
+const WARMUP_FRAMES: u64 = 24;
 
 /// Bits per pixel per second for the hardware encoder's target bitrate.
 /// Volumetric haze is dense noise, and a light show is mostly dark with small
@@ -70,6 +164,8 @@ pub struct Recording {
     pub span: Option<(f32, f32)>,
     pub size: (u32, u32),
     pub fps: u32,
+    /// How each output frame integrates time.
+    pub haze: Haze,
     pub output: PathBuf,
 }
 
@@ -173,12 +269,18 @@ struct TimeAxis {
     start: f32,
     fps: u32,
     frames: u64,
+    haze: Haze,
 }
 
 impl TimeAxis {
     /// `fps` is clamped to at least 1: zero frames per second is not a
     /// recording, and refusing it would only push the check to every caller.
-    fn new(span: Option<(f32, f32)>, duration: f32, fps: u32) -> Result<Self, RecordError> {
+    fn new(
+        span: Option<(f32, f32)>,
+        duration: f32,
+        fps: u32,
+        haze: Haze,
+    ) -> Result<Self, RecordError> {
         let fps = fps.max(1);
         let (start, end) = span.unwrap_or((0.0, duration));
         // Checked before the clamp, not after: `f32::clamp` *panics* on a NaN
@@ -198,6 +300,7 @@ impl TimeAxis {
             start,
             fps,
             frames: frames as u64,
+            haze,
         })
     }
 
@@ -216,10 +319,28 @@ impl TimeAxis {
 
     /// The moments integrated into frame `n`, stratified across the open part
     /// of its interval.
+    ///
+    /// One sample lands mid-interval rather than on its edge, so a single-shot
+    /// mode is a centred point sample and not a leading one.
     fn exposure(&self, n: u64) -> impl Iterator<Item = f32> + use<> {
         let opens = self.opens(n);
-        let step = SHUTTER_ANGLE / (self.fps * SHUTTER_SAMPLES) as f32;
-        (0..SHUTTER_SAMPLES).map(move |k| opens + (k as f32 + 0.5) * step)
+        let samples = self.haze.shutter();
+        let step = SHUTTER_ANGLE / (self.fps * samples) as f32;
+        (0..samples).map(move |k| opens + (k as f32 + 0.5) * step)
+    }
+
+    /// The moments drawn and discarded before frame zero, in order, so that the
+    /// renderer's haze history is converged by the time the span opens.
+    ///
+    /// They run up to the start on the output grid, so the last of them is one
+    /// frame interval before the first kept frame and the history stays
+    /// continuous across the join. Clamped at zero: a recording that starts at
+    /// the top of the track warms up on its own first moment, which converges
+    /// the haze without inventing a `t` the score has no state for.
+    fn warmup(&self) -> impl Iterator<Item = f32> + use<> {
+        let (start, fps) = (self.start, self.fps);
+        let count = self.haze.warmup();
+        (0..count).map(move |i| (start - (count - i) as f32 / fps as f32).max(0.0))
     }
 }
 
@@ -360,7 +481,7 @@ impl Session {
         let duration = crate::database::local::tracks::get_track_duration(pool, &track_id)
             .await?
             .ok_or(RecordError::NoDuration)? as f32;
-        let axis = TimeAxis::new(spec.span, duration, spec.fps)?;
+        let axis = TimeAxis::new(spec.span, duration, spec.fps, spec.haze)?;
 
         let audio = PathBuf::from(
             crate::database::local::tracks::get_track_path_and_hash(pool, &track_id)
@@ -440,8 +561,18 @@ impl Session {
             text
         });
 
+        let haze = self.axis.haze;
         let mut arena = Arena::default();
-        let mut exposure = Exposure::new(width, height);
+        let mut exposure = Exposure::new(width, height, haze.shutter());
+        // Warm the haze history before the clock starts, so the discarded
+        // frames do not land in the measured cost of the kept ones.
+        for t in self.axis.warmup() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let states = self.lighting.render(&[t], Scope::Composite, &mut arena);
+            sequence.frame(states.first(), t, haze.subframes(), haze.continuity())?;
+        }
         let started = Instant::now();
         let (mut render, mut encode) = (Duration::ZERO, Duration::ZERO);
         let mut written = 0u64;
@@ -458,12 +589,21 @@ impl Session {
                 self.lighting.render(&times, Scope::Composite, &mut arena);
             exposure.reset();
             for (k, &t) in times.iter().enumerate() {
-                exposure.add(&sequence.frame(states.get(k), t, SUBFRAMES)?);
+                exposure.add(&sequence.frame(
+                    states.get(k),
+                    t,
+                    haze.subframes(),
+                    haze.continuity(),
+                )?);
             }
+            // Resolving the exposure is frame assembly, not encoding: at 720p
+            // the linear-light average is ~6 ms of CPU, and timing it as
+            // "encode" made the pipe look like a bottleneck it is not.
+            let pixels = exposure.resolve();
             render += clock.elapsed();
 
             let clock = Instant::now();
-            if let Err(error) = stdin.write_all(exposure.resolve()) {
+            if let Err(error) = stdin.write_all(pixels) {
                 // A broken pipe means ffmpeg died; its stderr is the real
                 // diagnosis, so fall through to the exit check.
                 broken = Some(RecordError::Pipe(error));
@@ -517,6 +657,10 @@ impl Session {
 /// *code value* instead of 50% of the light, about a stop and a half too dark.
 /// Decode, sum, re-encode.
 struct Exposure {
+    /// Linear accumulator, and empty when one sub-render is the whole frame:
+    /// there is no mean to take, and a decode/re-encode round trip would spend
+    /// eleven million operations per 720p frame to reproduce the renderer's
+    /// own bytes to within a code value.
     linear: Vec<f32>,
     out: Vec<u8>,
     samples: f32,
@@ -529,10 +673,14 @@ impl Exposure {
         std::array::from_fn(|byte| coords::srgb_to_linear(byte as f32 / 255.0))
     }
 
-    fn new(width: u32, height: u32) -> Self {
+    fn new(width: u32, height: u32, shutter: u32) -> Self {
         let pixels = width as usize * height as usize;
         Self {
-            linear: vec![0.0; pixels * 3],
+            linear: if shutter > 1 {
+                vec![0.0; pixels * 3]
+            } else {
+                Vec::new()
+            },
             out: vec![0xff; pixels * 4],
             samples: 0.0,
         }
@@ -544,6 +692,11 @@ impl Exposure {
     }
 
     fn add(&mut self, rgba: &[u8]) {
+        if self.linear.is_empty() {
+            self.out.copy_from_slice(rgba);
+            self.samples = 1.0;
+            return;
+        }
         static TABLE: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(Exposure::table);
         for (acc, pixel) in self.linear.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
             acc[0] += TABLE[pixel[0] as usize];
@@ -556,6 +709,9 @@ impl Exposure {
     /// The mean exposure, re-encoded. Alpha is left opaque: the pipe is
     /// `yuv420p` and nothing downstream reads it.
     fn resolve(&mut self) -> &[u8] {
+        if self.linear.is_empty() {
+            return &self.out;
+        }
         let scale = if self.samples > 0.0 {
             1.0 / self.samples
         } else {
@@ -614,7 +770,8 @@ mod tests {
 
     #[test]
     fn the_whole_track_is_the_default_span() {
-        let axis = TimeAxis::new(None, 10.0, 30).expect("a ten second track records");
+        let axis =
+            TimeAxis::new(None, 10.0, 30, Haze::Accumulate).expect("a ten second track records");
         assert_eq!(axis.frames(), 300);
         assert!((axis.opens(0) - 0.0).abs() < 1e-6);
         // The last frame opens one interval before the end, not at it.
@@ -624,13 +781,18 @@ mod tests {
 
     #[test]
     fn a_span_is_clamped_into_the_track_rather_than_refused() {
-        let axis = TimeAxis::new(Some((-5.0, 400.0)), 10.0, 30).expect("clamps to the track");
-        assert_eq!(axis, TimeAxis::new(None, 10.0, 30).unwrap());
+        let axis = TimeAxis::new(Some((-5.0, 400.0)), 10.0, 30, Haze::Accumulate)
+            .expect("clamps to the track");
+        assert_eq!(
+            axis,
+            TimeAxis::new(None, 10.0, 30, Haze::Accumulate).unwrap()
+        );
     }
 
     #[test]
     fn a_span_records_only_its_own_frames() {
-        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 25).expect("a ten second span");
+        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 25, Haze::Accumulate)
+            .expect("a ten second span");
         assert_eq!(axis.frames(), 250);
         assert!((axis.opens(0) - 30.0).abs() < 1e-5);
     }
@@ -638,28 +800,29 @@ mod tests {
     #[test]
     fn a_span_that_clamps_to_nothing_is_the_one_error() {
         assert!(matches!(
-            TimeAxis::new(Some((40.0, 30.0)), 200.0, 30),
+            TimeAxis::new(Some((40.0, 30.0)), 200.0, 30, Haze::Accumulate),
             Err(RecordError::EmptySpan(..))
         ));
         assert!(matches!(
-            TimeAxis::new(Some((300.0, 400.0)), 200.0, 30),
+            TimeAxis::new(Some((300.0, 400.0)), 200.0, 30, Haze::Accumulate),
             Err(RecordError::EmptySpan(..))
         ));
         assert!(matches!(
-            TimeAxis::new(None, f32::NAN, 30),
+            TimeAxis::new(None, f32::NAN, 30, Haze::Accumulate),
             Err(RecordError::EmptySpan(..))
         ));
     }
 
     #[test]
     fn zero_fps_is_repaired_not_refused() {
-        let axis = TimeAxis::new(None, 4.0, 0).expect("clamped to one frame per second");
+        let axis =
+            TimeAxis::new(None, 4.0, 0, Haze::Accumulate).expect("clamped to one frame per second");
         assert_eq!(axis.frames(), 4);
     }
 
     #[test]
     fn the_exposure_stays_inside_the_open_part_of_the_frame() {
-        let axis = TimeAxis::new(None, 10.0, 30).unwrap();
+        let axis = TimeAxis::new(None, 10.0, 30, Haze::Accumulate).unwrap();
         let interval = 1.0 / 30.0;
         for n in [0u64, 1, 299] {
             let times: Vec<f32> = axis.exposure(n).collect();
@@ -675,6 +838,73 @@ mod tests {
                 assert!(pair[1] > pair[0]);
             }
         }
+    }
+
+    #[test]
+    fn a_single_sub_render_is_the_frame_and_is_not_round_tripped() {
+        let mut exposure = Exposure::new(2, 1, Haze::Temporal.shutter());
+        let frame = [17u8, 128, 240, 255, 3, 99, 200, 255];
+        exposure.add(&frame);
+        assert_eq!(exposure.resolve(), &frame);
+    }
+
+    #[test]
+    fn temporal_point_samples_the_middle_of_the_open_shutter() {
+        let axis = TimeAxis::new(None, 10.0, 30, Haze::Temporal).unwrap();
+        let times: Vec<f32> = axis.exposure(3).collect();
+        assert_eq!(times.len(), 1);
+        // Half of the 180° opening past the frame boundary.
+        let want = axis.opens(3) + SHUTTER_ANGLE / 2.0 / 30.0;
+        assert!((times[0] - want).abs() < 1e-6, "{times:?}");
+    }
+
+    #[test]
+    fn only_temporal_warms_up_and_it_lands_on_the_output_grid() {
+        assert_eq!(
+            TimeAxis::new(None, 10.0, 30, Haze::Accumulate)
+                .unwrap()
+                .warmup()
+                .count(),
+            0
+        );
+        let axis = TimeAxis::new(Some((30.0, 40.0)), 200.0, 30, Haze::Temporal).unwrap();
+        let warm: Vec<f32> = axis.warmup().collect();
+        assert_eq!(warm.len(), WARMUP_FRAMES as usize);
+        // Ascending, and the last one is one interval before frame zero, so
+        // the history is continuous across the join.
+        for pair in warm.windows(2) {
+            assert!(pair[1] > pair[0]);
+        }
+        assert!((warm[warm.len() - 1] - (30.0 - 1.0 / 30.0)).abs() < 1e-4);
+        assert!(warm[0] >= 0.0);
+    }
+
+    #[test]
+    fn a_warm_up_never_walks_off_the_front_of_the_track() {
+        let axis = TimeAxis::new(None, 10.0, 30, Haze::Temporal).unwrap();
+        assert!(axis.warmup().all(|t| t >= 0.0));
+    }
+
+    #[test]
+    fn the_two_modes_spend_the_same_haze_budget_per_sub_render_ratio() {
+        assert_eq!(
+            Haze::Accumulate.shutter() * Haze::Accumulate.subframes(),
+            DEFAULT_SUBFRAMES
+        );
+        assert_eq!(Haze::Temporal.shutter(), 1);
+        assert_eq!(Haze::Temporal.subframes(), LIVE_SUBFRAMES);
+        assert_eq!(Haze::Accumulate.continuity(), Continuity::Cut);
+        assert_eq!(Haze::Temporal.continuity(), Continuity::Next);
+    }
+
+    #[test]
+    fn a_mode_is_named_by_its_flag_value() {
+        use std::str::FromStr;
+        assert_eq!(Haze::from_str("temporal"), Ok(Haze::Temporal));
+        assert_eq!(Haze::from_str("accumulate"), Ok(Haze::Accumulate));
+        assert_eq!(Haze::default(), Haze::Accumulate);
+        assert!(Haze::from_str("Temporal").is_err());
+        assert!(Haze::from_str("").is_err());
     }
 
     #[test]
@@ -734,7 +964,7 @@ mod tests {
     fn averaging_happens_in_linear_light() {
         // Half the sub-frames fully lit, half black: a 50%-duty strobe. Linear
         // mean is 0.5, which is code value ~188, not 128.
-        let mut exposure = Exposure::new(1, 1);
+        let mut exposure = Exposure::new(1, 1, SHUTTER_SAMPLES);
         exposure.add(&[255, 255, 255, 255]);
         exposure.add(&[0, 0, 0, 255]);
         let out = exposure.resolve();
@@ -748,7 +978,7 @@ mod tests {
 
     #[test]
     fn a_constant_exposure_survives_the_round_trip() {
-        let mut exposure = Exposure::new(2, 1);
+        let mut exposure = Exposure::new(2, 1, SHUTTER_SAMPLES);
         for _ in 0..SHUTTER_SAMPLES {
             exposure.add(&[17, 128, 240, 255, 3, 99, 200, 255]);
         }

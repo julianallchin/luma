@@ -8,6 +8,7 @@
 //! luma-record <score-id> <out.mp4>
 //!     [--view front|audience|overhead|quarter-left|quarter-right|dj]
 //!     [--width 1280] [--height 720] [--fps 30] [--span 30:90]
+//!     [--haze accumulate|temporal]
 //!     [--config-dir DIR] [--fixtures-root DIR] [--cache-dir DIR]
 //! ```
 
@@ -19,11 +20,12 @@ use std::time::Instant;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use luma_lib::headless_host::{boot, HostConfig};
-use luma_lib::recording::{record, Recording};
+use luma_lib::recording::{record, Haze, Recording};
 use luma_scene::View;
 
 const USAGE: &str = "usage: luma-record <score-id> <output.mp4> \
 [--view front] [--width 1280] [--height 720] [--fps 30] [--span start:end] \
+[--haze accumulate|temporal] \
 [--config-dir DIR] [--fixtures-root DIR] [--cache-dir DIR]";
 
 #[tokio::main]
@@ -112,6 +114,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), 
     let mut size = (1280u32, 720u32);
     let mut fps = 30u32;
     let mut span = None;
+    let mut haze = Haze::default();
 
     let mut args = args;
     while let Some(arg) = args.next() {
@@ -125,6 +128,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), 
             "--height" => size.1 = number(args.next(), "--height")?,
             "--fps" => fps = number(args.next(), "--fps")?,
             "--span" => span = Some(parse_span(&args.next().ok_or("--span needs a value")?)?),
+            "--haze" => haze = Haze::from_str(&args.next().ok_or("--haze needs a value")?)?,
             other if other.starts_with("--") => {
                 let value = args
                     .next()
@@ -144,6 +148,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), 
             span,
             size,
             fps,
+            haze,
             output: PathBuf::from(output),
         },
         HostConfig::parse_args(shared.into_iter())?,
@@ -208,6 +213,21 @@ mod tests {
             spec(&["s", "o.mp4", "--span", ":30"]).span,
             Some((0.0, 30.0))
         );
+    }
+
+    #[test]
+    fn the_default_mode_is_accumulate_and_the_flag_picks_the_other() {
+        assert_eq!(spec(&["s", "o.mp4"]).haze, Haze::Accumulate);
+        assert_eq!(
+            spec(&["s", "o.mp4", "--haze", "temporal"]).haze,
+            Haze::Temporal
+        );
+        assert!(parse(
+            ["s", "o.mp4", "--haze", "fast"]
+                .iter()
+                .map(|s| (*s).to_string())
+        )
+        .is_err());
     }
 
     #[test]
