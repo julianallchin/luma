@@ -75,6 +75,8 @@ These are the working vocabulary for design review here — cite them by name wh
 
 # UI design system
 
+**Scope: this section is the React app (`src/`).** The gpui app (`gpui/crates/*`) follows `docs/design/comet-ui-spec.md` and the primitives in `gpui/crates/ui` — match an existing gpui dialog, never `BUTTON_CLASS`. The two are different contracts.
+
 The UI is intentionally minimal — "brutalist instrument panel." Surface language is a monochrome value ladder; depth comes from stacked planes separated by darker trim, not from shadows, gradients, or motion. Treat every new component as part of a hardware-control surface — labels look like silkscreen on a panel, controls feel like slabs you can press, transitions are absent. The rules below are not stylistic preferences; they are the contract.
 
 ## Color ladder (dark mode is the canonical mode)

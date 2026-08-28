@@ -1148,11 +1148,9 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
             // `arg_selection`, so neither is a second way to say it.
             let opened = app.clone();
             let picked_def = cell.def.clone();
-            let pick_chip = luma_ui::slab()
+            let pick_chip = luma_ui::float::chip()
                 .id(SharedString::from(format!("{name}:pick")))
-                .cursor_pointer()
-                .hover(|style| style.bg(luma_ui::ladder::hover()))
-                .child("PICK")
+                .child("Pick")
                 .on_click(move |_, _, cx| {
                     let def = picked_def.clone();
                     opened.update(cx, |this, cx| this.pick_fixtures(&def, cx));

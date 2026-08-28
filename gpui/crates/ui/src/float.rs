@@ -51,6 +51,9 @@ pub fn band() -> Div {
 /// The seam a band presents to the card body it is welded to.
 const BAND_SEAM: f32 = 0.06;
 
+/// The one row of chrome a [`header_band`] is tall.
+pub const HEADER_HEIGHT: f32 = 46.0;
+
 /// [`band`] at the top of a card: outer corners rounded, bottom edge a seam.
 ///
 /// A fixed height, because a header holds one row of chrome — a search field,
@@ -59,7 +62,7 @@ const BAND_SEAM: f32 = 0.06;
 pub fn header_band() -> Div {
     band()
         .flex_none()
-        .h(px(46.0))
+        .h(px(HEADER_HEIGHT))
         .rounded_t(px(radius::MODAL))
         .border_b_1()
         .border_color(glass::hairline(BAND_SEAM))
@@ -79,9 +82,20 @@ pub fn footer_band() -> Div {
         .border_t_1()
         .border_color(glass::hairline(BAND_SEAM))
         .px(px(12.0))
-        .py(px(8.0))
+        .py(px(FOOTER_PAD_Y))
         .gap(px(12.0))
 }
+
+const FOOTER_PAD_Y: f32 = 8.0;
+
+/// What a [`footer_band`] holding one row of [`key_cap`]s comes out at: pad,
+/// cap, pad, seam.
+///
+/// A *consequence* of the recipe above rather than a setting — a footer is
+/// padded, not fixed. It is named because a fixed-size card sizing a child
+/// against its own bands needs the number, and one derived here cannot drift
+/// from the band the way a 46 written at the call site did.
+pub const FOOTER_HEIGHT: f32 = FOOTER_PAD_Y * 2.0 + KEY_CAP_HEIGHT + 1.0;
 
 /// Hairline divider between sections of a floating card.
 pub fn divider() -> Div {
@@ -225,15 +239,24 @@ pub fn rail() -> Div {
         .gap(px(2.0))
 }
 
-/// A quiet heading over a group of [`nav_row`]s.
-pub fn section_heading(label: impl Into<SharedString>) -> Div {
+/// A quiet word on glass — the name of a control, or (padded, as
+/// [`section_heading`]) the heading over a group of rows.
+///
+/// One step under body text and muted with it, so it reads as chrome. The
+/// instrument tier answers this with [`crate::silkscreen`]'s 9px uppercase,
+/// which is a *panel* legend and looks stencilled onto glass.
+pub fn label(text: impl Into<SharedString>) -> Div {
     div()
-        .px(px(8.0))
-        .pb(px(4.0))
+        .flex_none()
         .text_size(px(11.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(ladder::foreground_alpha(0.55))
-        .child(label.into())
+        .child(text.into())
+}
+
+/// A quiet heading over a group of [`nav_row`]s.
+pub fn section_heading(text: impl Into<SharedString>) -> Div {
+    label(text).px(px(8.0)).pb(px(4.0))
 }
 
 /// The scroll viewport for a picker's list, with its vertical gutters on a
@@ -268,9 +291,35 @@ pub fn empty_row(message: impl Into<SharedString>) -> Div {
         .child(message.into())
 }
 
+/// The float tier's "this one is chosen" mark, and the hole it leaves when it
+/// is not.
+///
+/// A fixed-width hole rather than nothing, so a label does not shift when the
+/// mark arrives — and one function rather than a glyph at each call site, so
+/// the single-select menus ([`crate::luma_select_item`]) and the multi-select
+/// lists that tick several rows cannot end up marking chosen-ness two
+/// different ways. This is what a checkbox is on glass; the instrument tier's
+/// square [`crate::luma_checkbox`] belongs on a plane.
+pub fn check(checked: bool) -> AnyElement {
+    if checked {
+        Icon::new(IconName::Check)
+            .size(px(CHECK))
+            .into_any_element()
+    } else {
+        div().size(px(CHECK)).into_any_element()
+    }
+}
+
+/// The mark's box — the glyph and the hole share it or rows jump.
+const CHECK: f32 = 12.0;
+
 // ---------------------------------------------------------------------------
 // Key caps
 // ---------------------------------------------------------------------------
+
+/// The height of a [`key_cap`], and so of the chips that must read as one of
+/// them ([`btn_primary_chip`], `add_tracks`'s submit).
+pub const KEY_CAP_HEIGHT: f32 = 22.0;
 
 /// A footer key-cap — the `⌘K` / `esc` chip in a palette's legend.
 ///
@@ -278,7 +327,7 @@ pub fn empty_row(message: impl Into<SharedString>) -> Div {
 /// split by [`cap_split`].
 pub fn key_cap() -> Div {
     div()
-        .h(px(22.0))
+        .h(px(KEY_CAP_HEIGHT))
         .px(px(6.0))
         .rounded(px(radius::CAP))
         .flex()
@@ -420,7 +469,7 @@ pub fn btn_primary(label: impl Into<SharedString>) -> Div {
 pub fn btn_primary_chip() -> Div {
     btn_primary_paint(
         div()
-            .h(px(22.0))
+            .h(px(KEY_CAP_HEIGHT))
             .px(px(8.0))
             .rounded(px(radius::CAP))
             .flex_none()
@@ -490,11 +539,36 @@ fn btn_shape() -> Div {
 /// ghost-stack the slabs use, so picking a different value never resizes the
 /// trigger and never moves its neighbours.
 pub fn picker_chip(value: &str, options: &[&str]) -> Div {
-    let shell = div()
-        .relative()
+    select::ghost_stack(
+        chip_plate().relative(),
+        select::sentence_case(value),
+        options.iter().map(|o| select::sentence_case(o)).collect(),
+        PICKER_CHIP_PAD,
+        ladder::foreground_alpha(0.45),
+    )
+}
+
+/// A chip that acts instead of picking — the "Pick fixtures" affordance beside
+/// the strip's expression field.
+///
+/// The same plate as [`picker_chip`] minus its chevron and ghost stack,
+/// because a chip button and a chip trigger sitting in one row are the same
+/// object with and without a menu; the moment they are drawn from two recipes
+/// the row has two heights, two radii and two hovers. The caller supplies the
+/// `.id()`, the click and the children.
+pub fn chip() -> Div {
+    chip_plate().justify_center().px(px(PICKER_CHIP_PAD))
+}
+
+/// The plate both chips wear. Padding is left off because [`picker_chip`]'s
+/// ghost stack applies its own inset to two overlapping layers, and a plate
+/// that already carried it would inset them twice.
+fn chip_plate() -> Div {
+    div()
         .flex()
         .items_center()
         .flex_shrink_0()
+        .gap(px(6.0))
         .h(px(crate::CONTROL_HEIGHT))
         .rounded(px(radius::ROW))
         .text_size(px(12.0))
@@ -506,14 +580,7 @@ pub fn picker_chip(value: &str, options: &[&str]) -> Div {
                 .bg(glass::glass_hover())
                 .text_color(ladder::foreground())
         })
-        .cursor_pointer();
-    select::ghost_stack(
-        shell,
-        select::sentence_case(value),
-        options.iter().map(|o| select::sentence_case(o)).collect(),
-        PICKER_CHIP_PAD,
-        ladder::foreground_alpha(0.45),
-    )
+        .cursor_pointer()
 }
 
 /// Comet's `px(10)` on its picker chips — and, through [`field`], on every

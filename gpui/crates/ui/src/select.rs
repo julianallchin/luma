@@ -145,13 +145,7 @@ pub fn luma_select_item(label: &str, state: RowState) -> Div {
     crate::float::menu_row(state, label.to_string())
         .justify_between()
         .child(sentence_case(label))
-        .child(if selected {
-            Icon::new(IconName::Check).size(px(12.)).into_any_element()
-        } else {
-            // A fixed-width hole, so a row's label does not shift when the
-            // selection moves to it.
-            div().size(px(12.)).into_any_element()
-        })
+        .child(crate::float::check(selected))
 }
 
 /// First letter up, the rest untouched — idempotent on labels that already

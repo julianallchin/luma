@@ -47,8 +47,8 @@ use luma_lib::stage_render::{self, Continuity, Sequence};
 use luma_scene::View;
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::float::{self, RowState};
+use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, AgentNode as _, Instrument as _, Role};
-use luma_ui::{ladder, luma_button, luma_checkbox, Enabled};
 
 use crate::shell::Overlay;
 use crate::track_editor::SUBSETS;
@@ -57,14 +57,15 @@ use crate::Luma;
 /// The card. Wide enough for a landscape frame beside a column of group names,
 /// tall enough for a dozen rows without the list becoming the whole dialog.
 const CARD_SIZE: MorphSize = MorphSize::new(880.0, 540.0);
-/// The header and footer bands, which is what the picture's height is the card
-/// minus.
-const BAND_H: f32 = 46.0;
 /// The frame's box inside the card. The renderer is asked for exactly
 /// [`PREVIEW_PIXELS`] and the result is painted into this, so a retina and a
 /// non-retina machine get the same picture and the same render cost.
+///
+/// The height is the card minus its two bands, taken from the bands
+/// themselves — a number written here would be a second opinion about how tall
+/// a footer is, and the footer's height is a consequence of its padding.
 const PREVIEW_W: f32 = 520.0;
-const PREVIEW_H: f32 = CARD_SIZE.height - 2.0 * BAND_H;
+const PREVIEW_H: f32 = CARD_SIZE.height - float::HEADER_HEIGHT - float::FOOTER_HEIGHT;
 /// What the offscreen renderer is asked for, in pixels: the box at 2x.
 ///
 /// Fixed rather than derived from the window's scale factor — every distinct
@@ -419,7 +420,7 @@ fn body(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElemen
             let event = event.clone();
             keys.update(cx, |this, cx| this.fixture_picker_key(&event, cx));
         })
-        .child(header(state))
+        .child(header(state, app, window))
         .child(
             div()
                 .flex_1()
@@ -429,12 +430,21 @@ fn body(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElemen
                 .child(preview(state))
                 .child(rows(state, app, window)),
         )
-        .child(footer(state, app, window))
+        .child(footer(state))
         .into_any_element()
 }
 
-fn header(state: &FixturePicker) -> impl IntoElement {
+/// Title, the note about an unreadable expression, and the card's two actions.
+///
+/// The actions live *here*, not in the footer, because that is where every
+/// other dialog in the app keeps them (`welcome`, `add_tracks`): the primary
+/// is a [`float::btn_primary_chip`] carrying the chord the footer legend
+/// promises, and the dismissal is the `esc` [`float::key_cap`] at the trailing
+/// edge. The footer is a legend.
+fn header(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
     let title: SharedString = "Fixtures".into();
+    let applied = app.clone();
+    let cancelled = app.clone();
     float::header_band()
         .child(
             div()
@@ -452,7 +462,7 @@ fn header(state: &FixturePicker) -> impl IntoElement {
             let note: SharedString = format!("{raw} — tick a group to replace it").into();
             band.child(
                 div()
-                    .max_w(px(420.0))
+                    .max_w(px(360.0))
                     .truncate()
                     .text_size(px(11.0))
                     .text_color(ladder::muted_foreground())
@@ -460,6 +470,32 @@ fn header(state: &FixturePicker) -> impl IntoElement {
                     .agent_node(Role::Text, note),
             )
         })
+        .child(
+            float::btn_primary_chip()
+                .id("fixture-picker-apply")
+                .track_focus(&state.apply_focus)
+                .tab_index(0)
+                .on_click(move |_, _, cx| {
+                    applied.update(cx, |this, cx| this.apply_fixture_picker(cx));
+                })
+                // The glyph must name the chord the footer legend promises.
+                .child("↵")
+                .child("Apply")
+                .agent_node(Role::Button, "Apply")
+                .agent_focused(state.apply_focus.is_focused(window)),
+        )
+        .child(
+            float::key_cap_pressable(float::key_cap())
+                .id("fixture-picker-cancel")
+                .track_focus(&state.cancel_focus)
+                .tab_index(0)
+                .on_click(move |_, _, cx| {
+                    cancelled.update(cx, |this, cx| this.dismiss_overlay(cx));
+                })
+                .child("esc")
+                .agent_node(Role::Button, "Cancel")
+                .agent_focused(state.cancel_focus.is_focused(window)),
+        )
 }
 
 /// The room, lit by whatever the picker is pointing at.
@@ -578,7 +614,6 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
                 .h(px(ROW_HEIGHT))
                 .px(px(10.0))
                 .gap(px(10.0))
-                .child(luma_checkbox(checked))
                 .child(
                     div()
                         .flex_1()
@@ -587,6 +622,9 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
                         .text_size(px(12.5))
                         .child(group.clone()),
                 )
+                // The float tier's chosen-mark, the same one an open menu's
+                // rows wear — a ticked row here is a chosen row there.
+                .child(float::check(checked))
                 .on_click(move |_, _, cx| {
                     let name = name.clone();
                     clicked.update(cx, |this, cx| {
@@ -614,13 +652,7 @@ fn how_many(state: &FixturePicker, app: &Entity<Luma>, _window: &Window) -> impl
         .flex_row()
         .items_center()
         .gap(px(10.0))
-        .child(
-            div()
-                .text_size(px(9.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(ladder::muted_foreground())
-                .child("USE"),
-        )
+        .child(float::label("Use"))
         .child(luma_ui::arg::select::luma_arg_select(
             "fixture-picker:subset",
             &crate::track_editor::subset_label(state.subset),
@@ -646,46 +678,21 @@ fn how_many(state: &FixturePicker, app: &Entity<Luma>, _window: &Window) -> impl
         ))
 }
 
-fn footer(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
-    let cancelled = app.clone();
-    let applied = app.clone();
+/// The key legend, and — after the spacer, where `add_tracks` puts its import
+/// status — what Apply would write. The readout is not an action, so it sits
+/// on the quiet side of the band rather than competing with the chip above it.
+fn footer(state: &FixturePicker) -> impl IntoElement {
     let summary: SharedString = state.expression().into();
     float::footer_band()
-        .h(px(BAND_H))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
+        .child(float::key_hint_text("↵", "Apply"))
+        .child(div().flex_1().min_w_0())
         .child(
             div()
-                .flex_1()
                 .min_w_0()
                 .truncate()
                 .text_size(px(11.0))
                 .text_color(ladder::muted_foreground())
                 .child(summary.clone())
                 .agent_node(Role::Text, summary),
-        )
-        .child(
-            luma_button("Cancel", Enabled::Yes)
-                .id("fixture-picker-cancel")
-                .track_focus(&state.cancel_focus)
-                .tab_index(0)
-                .on_click(move |_, _, cx| {
-                    cancelled.update(cx, |this, cx| this.dismiss_overlay(cx));
-                })
-                .agent_node(Role::Button, "Cancel")
-                .agent_focused(state.cancel_focus.is_focused(window)),
-        )
-        .child(
-            luma_button("Apply", Enabled::Yes)
-                .id("fixture-picker-apply")
-                .track_focus(&state.apply_focus)
-                .tab_index(0)
-                .on_click(move |_, _, cx| {
-                    applied.update(cx, |this, cx| this.apply_fixture_picker(cx));
-                })
-                .agent_node(Role::Button, "Apply")
-                .agent_focused(state.apply_focus.is_focused(window)),
         )
 }
