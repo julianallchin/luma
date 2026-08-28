@@ -43,6 +43,19 @@ pub enum Enabled {
     No,
 }
 
+impl From<bool> for Enabled {
+    /// `true` is [`Enabled::Yes`]. Call sites almost always hold a predicate
+    /// rather than the enum, and the two-armed `if` they were writing to bridge
+    /// the gap said nothing the type did not already.
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Yes
+        } else {
+            Self::No
+        }
+    }
+}
+
 /// `<Button>`: control fill, `text-foreground/90`, hover lifts to `--hover`.
 pub fn luma_button(label: &str, enabled: Enabled) -> Div {
     slab()

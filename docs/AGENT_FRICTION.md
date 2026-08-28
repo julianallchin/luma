@@ -3,6 +3,7 @@
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
 
+- [2026-08-27] `.agent_node()` is a no-op passthrough without the `pixel`/instrumented feature and an `Instrumented<T>` wrapper with it, so a helper typed `-> Div` compiles green under `cargo check` and fails only in the pixel build — a whole extra 4-minute round trip to learn the return type has to be `AnyElement`
 - [2026-08-27] `gpui/crates/app/src/welcome.rs` is the venue picker *dialog*, not a welcome screen — the only full-screen "welcome" in the repo is the React `src/features/app/components/welcome-screen.tsx`, so "do it like welcome.rs" points at a modal and there is no full-screen-state precedent in the gpui app to copy
 - [2026-08-27] the node protocol reports a flex-crushed control as a real node with a real box — the args strip's tint swatch came back as `{ width: 0 }` and its mode select as `width: 11` — so a geometry assertion reading only `x + width` cannot tell "laid out past the right edge" from "squeezed to nothing and unclickable"; the widths have to be sanity-checked against the control's own constant
 - [2026-08-27] renaming a `pub fn` in `src-tauri` builds green in that workspace and leaves the whole `gpui` workspace uncompilable — `luma_lib` is a path dependency of `luma-app`, but nothing in a `src-tauri` check, clippy or test run looks at its out-of-workspace callers

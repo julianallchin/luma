@@ -86,11 +86,10 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
         &mut harness,
         r#"
         const gate = until("the sign-in screen", (s) =>
-            s.find({ role: "card", label: "Sign-in card" }) !== undefined
-                && s.find({ role: "text", label: "Sign in to Luma" }) !== undefined);
+            s.find({ role: "text", label: "Sign in to Luma" }) !== undefined);
         ({
-            field: gate.find({ role: "input", label: "you@example.com" }) !== undefined,
-            submit: gate.find({ role: "button", label: "Send code" }) !== undefined,
+            field: gate.find({ role: "input", label: "Email" }) !== undefined,
+            submit: gate.find({ role: "button", label: "Continue" }) !== undefined,
             offline: gate.find({ role: "button", label: "Work offline" }) !== undefined,
             venues: gate.find({ role: "card", label: "Venue dialog" }) !== undefined,
             // A state, not a plane: the shell is not behind it, so neither
@@ -109,14 +108,14 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
                 app.key("escape");
                 return until("the shell the gate stood in front of", (s) =>
                     s.find({ role: "card", label: "Venue dialog" }) !== undefined
-                        && s.find({ role: "card", label: "Sign-in card" }) === undefined)
+                        && s.find({ role: "text", label: "Sign in to Luma" }) === undefined)
                     !== undefined;
             })(),
         })
     "#,
     );
     assert_eq!(out["field"], true, "the gate shows an email field");
-    assert_eq!(out["submit"], true, "the gate offers the committing chip");
+    assert_eq!(out["submit"], true, "the gate offers its primary capsule");
     assert_eq!(out["offline"], true, "the gate offers a way past it");
     assert_eq!(out["venues"], false, "the gate replaces the venue picker");
     assert_eq!(
@@ -152,13 +151,13 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
             s.find({ role: "button", label: "Sign in" }) !== undefined);
         app.click(shown.find({ role: "button", label: "Sign in" }));
         const reopened = until("the gate reopened from settings", (s) =>
-            s.find({ role: "card", label: "Sign-in card" }) !== undefined
+            s.find({ role: "text", label: "Sign in to Luma" }) !== undefined
                 // Settings went with the shell rather than lingering under it.
                 && s.find({ role: "toggle", label: "Account" }) === undefined);
         ({
             identity: shown.find({ role: "input", label: "Signed out — working locally" })
                 !== undefined,
-            reopened: reopened.find({ role: "text", label: "Sign in to Luma" }) !== undefined,
+            reopened: reopened.find({ role: "button", label: "Continue" }) !== undefined,
         })
     "#,
     );
@@ -184,7 +183,7 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
         r#"
         const shown = until("the venue picker", (s) =>
             s.find({ role: "card", label: "Sign-in Venue" }) !== undefined);
-        ({ gate: shown.find({ role: "card", label: "Sign-in card" }) !== undefined })
+        ({ gate: shown.find({ role: "text", label: "Sign in to Luma" }) !== undefined })
     "#,
     );
     assert_eq!(out["gate"], false, "a proven session skips the gate");

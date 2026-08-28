@@ -454,7 +454,7 @@ fn account(state: &Settings, app: &Entity<Luma>) -> Vec<Div> {
         field(Some("Signed in as"), readonly_value(&identity, ""), None),
         field(
             None,
-            luma_ui::luma_button(label, if pressable { Enabled::Yes } else { Enabled::No })
+            luma_ui::luma_button(label, Enabled::from(pressable))
                 .id("settings-account-action")
                 .when(pressable, |button| {
                     button.on_click(move |_, _, cx| {

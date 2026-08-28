@@ -3,14 +3,25 @@
 //! **A state of the app, not a plane over it.** While it is up the shell is
 //! not rendered at all: there is no scrim, nothing behind it to reach, and
 //! nothing under it to keep alive — signing in is a change of identity, and
-//! the regions on the far side of it belong to whoever the app admits. The
-//! card in the middle wears the palette every other card wears (a header band
-//! carrying the field and the committing chip, a body, a footer legend); what
-//! it sits on is the app's own ground rather than a dimmed shell.
+//! the regions on the far side of it belong to whoever the app admits.
+//!
+//! # There is no card
+//!
+//! A dialog is a thing *over* something. This screen is over nothing, so it
+//! wears no surface: the app's own ground edge to edge, the window's controls
+//! in the corner, and one centred column — mark, title, and the capsules of
+//! [`luma_ui::pill`]. A card here would draw a box around a room that is
+//! already empty, and the box, not the question, would be what the eye lands
+//! on.
+//!
+//! Because the column is the whole screen, the two routes are a *swap* rather
+//! than a morph: nothing encloses the content, so there is no outline for a
+//! tween to carry between two shapes.
 //!
 //! # It is a gate, not a wall
 //!
-//! "Work offline" sits under the card and Escape does the same thing. A
+//! Every route offers the way past it — the secondary capsule on the first
+//! step, the quiet link on the second — and Escape does the same thing. A
 //! signed-out Luma is not a broken Luma: guest rows carry no `uid`, and the
 //! app database's admission triggers admit those unconditionally, so the whole
 //! local library — venues, tracks, patterns, scores — opens and edits without
@@ -28,50 +39,35 @@
 //! how a session is obtained; admitting one is an identity switch, and the
 //! host owns that.
 
-use std::time::Instant;
-
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::IconName;
-use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
-use luma_ui::float;
-use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
+use luma_ui::{ladder, mark, pill, Enabled};
 
 use crate::{chrome, keymap, Luma};
-
-/// One size for both steps. Asking for an address and asking for the code that
-/// address received are the same question a step apart, so the card holds
-/// still and the morph spends its whole span on the content.
-///
-/// Shorter than a palette's card because nothing scrolls in it: the body holds
-/// a heading, a line of prose and the error line the Code route may grow, and
-/// the height is what those need with air around them rather than a list's
-/// worth of room left empty.
-const GATE_SIZE: MorphSize = MorphSize::new(520.0, 244.0);
 
 /// What Supabase mails. Anything longer is a paste of something else.
 const CODE_LENGTH: usize = 6;
 
-/// Between the card and the one way past it. Wide enough that the secondary
-/// action reads as the screen's, not as a strip fallen off the card's footer.
-const SECONDARY_GAP: f32 = 20.0;
+/// The mark's box, and the air under it before the title.
+const MARK_SIZE: f32 = 44.0;
+const MARK_GAP: f32 = 20.0;
+
+/// The one heading. Large and regular rather than small and bold: it is the
+/// only sentence on the screen, so it does not have to shout to be found.
+const TITLE_SIZE: f32 = 28.0;
+
+/// Between the title and the line under it that names the address.
+const SUBTITLE_GAP: f32 = 8.0;
+
+/// Between the field and the error it grew, and between the last capsule and
+/// the link below it. Half a [`pill::GAP`] — an error belongs to the field
+/// above it, and the link is not one of the capsules.
+const TIGHT_GAP: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
-    Email,
-    Code,
-}
-
-impl Route {
-    fn descriptor(self) -> RouteDescriptor<Self> {
-        RouteDescriptor::exact(self, GATE_SIZE.width, GATE_SIZE.height)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FocusTarget {
     Email,
     Code,
 }
@@ -85,7 +81,7 @@ pub(crate) struct SignIn {
     /// Correlates a submit with the screen that made it. A slow answer landing
     /// after the user backed out is a stale answer, not the current state.
     generation: u64,
-    morph: MorphDialog<Route>,
+    route: Route,
     email: String,
     code: String,
     sent_to: Option<String>,
@@ -98,21 +94,21 @@ pub(crate) struct SignIn {
     email_focus: FocusHandle,
     code_focus: FocusHandle,
     /// The screen's own handle. The keyboard rests here whenever no field
-    /// holds it — mid-morph, or before the first field commits — so the root's
-    /// key handler always has a dispatch path to be on.
+    /// holds it, so the root's key handler always has a dispatch path to be on.
     screen_focus: FocusHandle,
-    /// The Code route's Back cap. Email is the root of this screen.
-    leading_focus: FocusHandle,
     action_focus: FocusHandle,
-    offline_focus: FocusHandle,
-    focus_pending: Option<FocusTarget>,
+    secondary_focus: FocusHandle,
+    /// The quiet link, which only the Code route carries.
+    link_focus: FocusHandle,
+    /// Which route's field should take the keyboard on the next frame.
+    focus_pending: Option<Route>,
     _field_subscriptions: [Subscription; 2],
 }
 
 impl SignIn {
     fn new(generation: u64, cx: &mut Context<Luma>) -> Self {
-        let email_field = cx.new(|cx| TextInput::search("you@example.com", cx));
-        let code_field = cx.new(|cx| TextInput::search("000000", cx));
+        let email_field = cx.new(|cx| TextInput::search("Email", cx));
+        let code_field = cx.new(|cx| TextInput::search("Code", cx));
         let email_focus = email_field.read(cx).focus_handle(cx);
         let code_focus = code_field.read(cx).focus_handle(cx);
         let subscriptions = [
@@ -135,7 +131,7 @@ impl SignIn {
         ];
         Self {
             generation,
-            morph: MorphDialog::new(Route::Email.descriptor(), GATE_SIZE),
+            route: Route::Email,
             email: String::new(),
             code: String::new(),
             sent_to: None,
@@ -146,29 +142,18 @@ impl SignIn {
             email_focus,
             code_focus,
             screen_focus: cx.focus_handle(),
-            leading_focus: cx.focus_handle().tab_stop(true),
             action_focus: cx.focus_handle().tab_stop(true),
-            offline_focus: cx.focus_handle().tab_stop(true),
-            focus_pending: Some(FocusTarget::Email),
+            secondary_focus: cx.focus_handle().tab_stop(true),
+            link_focus: cx.focus_handle().tab_stop(true),
+            focus_pending: Some(Route::Email),
             _field_subscriptions: subscriptions,
         }
     }
 
-    /// The route the screen is on, or arriving at. Read through the morph so a
-    /// request mid-flight already reports its destination.
-    fn route(&self) -> Route {
-        *self.morph.target_key()
-    }
-
-    fn go(&mut self, route: Route, reduced: bool) {
-        self.morph
-            .request(route.descriptor(), Instant::now(), reduced);
-    }
-
-    /// Whether the committing chip may be pressed on this route.
+    /// Whether the primary capsule may be pressed on this route.
     fn can_submit(&self) -> bool {
         !self.busy
-            && match self.route() {
+            && match self.route {
                 Route::Email => self.email.trim().contains('@'),
                 Route::Code => self.code.trim().len() == CODE_LENGTH,
             }
@@ -229,7 +214,7 @@ impl Luma {
         let Some(state) = self.sign_in.as_ref() else {
             return;
         };
-        let route = state.route();
+        let route = state.route;
         let field_empty = match route {
             Route::Email => state.email.is_empty(),
             Route::Code => state.code.is_empty(),
@@ -244,14 +229,13 @@ impl Luma {
     }
 
     fn sign_in_back(&mut self, cx: &mut Context<Self>) {
-        let reduced = luma_ui::motion::reduced_motion(cx);
-        self.with_sign_in(cx, move |state| {
+        self.with_sign_in(cx, |state| {
             if state.busy {
                 return;
             }
-            state.go(Route::Email, reduced);
+            state.route = Route::Email;
             state.error = None;
-            state.focus_pending = Some(FocusTarget::Email);
+            state.focus_pending = Some(Route::Email);
         });
     }
 
@@ -263,7 +247,7 @@ impl Luma {
         if !state.can_submit() {
             return;
         }
-        match state.route() {
+        match state.route {
             Route::Email => self.send_login_code(cx),
             Route::Code => self.verify_login_code(cx),
         }
@@ -278,7 +262,6 @@ impl Luma {
         state.busy = true;
         state.error = None;
         let pending = self.library.send_login_code(&email);
-        let reduced = luma_ui::motion::reduced_motion(cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
@@ -289,8 +272,8 @@ impl Luma {
                         Ok(()) => {
                             state.sent_to = Some(email);
                             state.code.clear();
-                            state.go(Route::Code, reduced);
-                            state.focus_pending = Some(FocusTarget::Code);
+                            state.route = Route::Code;
+                            state.focus_pending = Some(Route::Code);
                         }
                         Err(error) => state.error = Some(error.to_string()),
                     }
@@ -339,7 +322,7 @@ impl Luma {
                         state.busy = false;
                         state.code.clear();
                         state.error = Some(error.to_string());
-                        state.focus_pending = Some(FocusTarget::Code);
+                        state.focus_pending = Some(Route::Code);
                     }),
                 }
             })
@@ -376,8 +359,8 @@ impl Luma {
 // The screen
 // ---------------------------------------------------------------------------
 
-/// The whole window while nobody is signed in: the drag band and the window's
-/// controls, the card centred on the app's own ground, and the one way past it.
+/// The whole window while nobody is signed in: the drag band, the window's
+/// controls, and the centred column.
 ///
 /// Called instead of `shell::regions`, not beside it — see the module docs.
 pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
@@ -385,13 +368,16 @@ pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>
     let Some(state) = app.sign_in.as_mut() else {
         return div().into_any_element();
     };
-    tick(state, window, cx);
+    match state.focus_pending.take() {
+        Some(Route::Email) => window.focus(&state.email_focus, cx),
+        Some(Route::Code) => window.focus(&state.code_focus, cx),
+        None => {}
+    }
     let state = app.sign_in.as_ref().expect("the screen is up");
     let keys = entity.clone();
     let viewport = f32::from(window.viewport_size().width);
     div()
         .size_full()
-        .relative()
         .flex()
         .flex_col()
         // The app's ground, not a scrim: nothing is behind this screen.
@@ -412,299 +398,210 @@ pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>
             width: viewport,
             viewport,
         }))
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(SECONDARY_GAP))
-                .child(card(state, &entity, window))
-                .child(offline(state, &entity, window)),
-        )
+        .child(column(state, &entity, window))
         // Last, so nothing can cover the only controls that move and close the
         // window.
         .child(chrome::window_controls())
         .into_any_element()
 }
 
-/// Advance the morph and commit focus, never while a route is in flight — an
-/// in-flight copy carries no focus handles (see [`field`]).
-fn tick(state: &mut SignIn, window: &mut Window, cx: &mut Context<Luma>) {
-    let now = Instant::now();
-    if state.morph.tick(now, luma_ui::motion::reduced_motion(cx)) {
-        window.request_animation_frame();
-    }
-    if state.morph.sample(now).animating {
-        window.focus(&state.screen_focus, cx);
-        return;
-    }
-    if let Some(route) = state.morph.take_focus_after_commit() {
-        state.focus_pending = Some(match route {
-            Route::Email => FocusTarget::Email,
-            Route::Code => FocusTarget::Code,
-        });
-    }
-    match state.focus_pending.take() {
-        Some(FocusTarget::Email) => window.focus(&state.email_focus, cx),
-        Some(FocusTarget::Code) => window.focus(&state.code_focus, cx),
-        None => {}
-    }
-}
-
-/// The centred card. The one card mechanism in the app, on the app's ground
-/// instead of on a modal plane.
-fn card(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
-    let sample = state.morph.sample(Instant::now());
-    let app = app.clone();
-    morph::card(&sample, "Sign-in card", move |route, mode| {
-        route_body(state, *route, mode, &app, window)
-    })
-}
-
-/// The screen's secondary action: the door out, under the card rather than in
-/// its bands.
-///
-/// It carries its own key cap instead of the footer legend carrying a second
-/// `esc Work offline` line — one gesture, offered once, by an object that is
-/// both the button and the legend. A card whose footer advertised a key that a
-/// button eight pixels below it also performed would be arguing with itself
-/// about which one is the way out.
-fn offline(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
-    let leave = app.clone();
-    float::btn("Work offline", "sign-in-offline")
-        .child(float::key_cap().child("esc"))
-        .id("sign-in-offline")
-        .track_focus(&state.offline_focus)
-        .tab_index(0)
-        .on_click(move |_, _, cx| {
-            leave.update(cx, |this, cx| this.continue_offline(cx));
-        })
-        .agent_node(Role::Button, "Work offline")
-        .agent_focused(state.offline_focus.is_focused(window))
-        .into_any_element()
-}
-
-fn route_body(
-    state: &SignIn,
-    route: Route,
-    mode: ContentMode,
-    app: &Entity<Luma>,
-    window: &Window,
-) -> AnyElement {
+/// Mark, title, and the capsules — the only thing on the screen.
+fn column(state: &SignIn, app: &Entity<Luma>, window: &Window) -> Div {
     div()
-        .size_full()
+        .flex_1()
+        .min_h_0()
         .flex()
         .flex_col()
-        .overflow_hidden()
-        .text_color(ladder::foreground())
-        .child(header(state, route, mode, app, window))
-        .child(div().flex_1().min_h_0().flex().child(body(state, route)))
-        .child(footer(route))
-        .into_any_element()
+        .items_center()
+        .justify_center()
+        .gap(px(pill::HEAD_GAP))
+        // The band takes its height off the top of the flex, so the column
+        // pays the same at the bottom: centred on the *window*, not on what
+        // the chrome left over.
+        .pb(px(luma_ui::dialog::TITLEBAR_CLEARANCE))
+        .child(head(state))
+        .child(stack(state, app, window))
 }
 
-// ---------------------------------------------------------------------------
-// Bands
-// ---------------------------------------------------------------------------
+fn head(state: &SignIn) -> Div {
+    let title = match state.route {
+        Route::Email => "Sign in to Luma",
+        Route::Code => "Check your email",
+    };
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(MARK_GAP))
+        .child(mark::luma(MARK_SIZE))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(SUBTITLE_GAP))
+                .child(
+                    div()
+                        .text_size(px(TITLE_SIZE))
+                        .font_weight(FontWeight::NORMAL)
+                        .child(title)
+                        .agent_node(Role::Text, title),
+                )
+                // Only the Code route has anything to add: which address is
+                // waiting. The Email route's question is its own title.
+                .when_some(subtitle(state), |column, line| {
+                    column.child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(ladder::muted_foreground())
+                            .child(line.clone())
+                            .agent_node(Role::Text, line),
+                    )
+                }),
+        )
+}
 
-fn header(
-    state: &SignIn,
-    route: Route,
-    mode: ContentMode,
-    app: &Entity<Luma>,
-    window: &Window,
-) -> Div {
-    let interactive = mode == ContentMode::Interactive;
-    let mut band = float::header_band();
-
-    if route == Route::Code {
-        let back = app.clone();
-        let pressable = interactive && !state.busy;
-        let cap = float::key_cap();
-        let cap = if pressable {
-            float::key_cap_pressable(cap)
-        } else {
-            cap
-        };
-        band = band.child(
-            cap.id("sign-in-back")
-                .when(interactive, |cap| {
-                    cap.track_focus(&state.leading_focus).tab_index(0)
-                })
-                .when(pressable, |cap| {
-                    cap.on_click(move |_, _, cx| {
-                        back.update(cx, |this, cx| this.sign_in_back(cx));
-                    })
-                })
-                .child(gpui_component::Icon::new(IconName::ArrowLeft).size(px(12.5)))
-                .agent_node(Role::Button, "Back")
-                .agent_disabled(!pressable)
-                .agent_focused(interactive && state.leading_focus.is_focused(window)),
-        );
+fn subtitle(state: &SignIn) -> Option<SharedString> {
+    match state.route {
+        Route::Email => None,
+        Route::Code => Some(SharedString::from(match &state.sent_to {
+            Some(address) => format!("We sent a code to {address}"),
+            None => "We sent you a six-digit code".to_string(),
+        })),
     }
-
-    band.child(field(state, route, mode, window))
-        .child(submit_chip(state, route, mode, app, window))
 }
 
-/// The header's one field: the address on the first step, the code on the
-/// second. Same slot, because it is the same question one step apart.
-fn field(state: &SignIn, route: Route, mode: ContentMode, window: &Window) -> AnyElement {
-    let slot = div().flex_1().min_w_0().text_size(px(14.0));
-    let (entity, focus, value, placeholder) = match route {
+fn stack(state: &SignIn, app: &Entity<Luma>, window: &Window) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(pill::GAP))
+        .child(field(state, window))
+        .child(primary(state, app, window))
+        .child(secondary(state, app, window))
+        .when(state.route == Route::Code, |column| {
+            column.child(link(state, app, window))
+        })
+}
+
+/// The route's one field, inside its capsule: the address on the first step,
+/// the code on the second.
+fn field(state: &SignIn, window: &Window) -> Div {
+    let (entity, focus, value, placeholder) = match state.route {
         Route::Email => (
             &state.email_field,
             &state.email_focus,
             state.email.as_str(),
-            "you@example.com",
+            "Email",
         ),
         Route::Code => (
             &state.code_field,
             &state.code_focus,
             state.code.as_str(),
-            "000000",
+            "Code",
         ),
     };
     // The semantic label is the VALUE once there is one: a driver asking what
     // this field says wants what it says, not what it would say if empty.
     let label = if value.is_empty() { placeholder } else { value };
-    if mode != ContentMode::Interactive {
-        // An in-flight copy paints the text; a live field would register a
-        // focus handle, which the morph contract forbids of a paint-only layer.
-        return slot
-            .text_color(if value.is_empty() {
-                ladder::muted_foreground().into()
-            } else {
-                ladder::foreground_alpha(1.0)
-            })
-            .child(label.to_string())
-            .agent_node(Role::Input, label.to_string())
-            .agent_disabled(true)
-            .into_any_element();
-    }
-    slot.child(entity.clone())
-        .agent_node(Role::Input, label.to_string())
-        .agent_focused(focus.is_focused(window))
-        .into_any_element()
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(TIGHT_GAP))
+        .child(
+            pill::field()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(luma_ui::text_input::TEXT_SIZE))
+                        .child(entity.clone()),
+                )
+                .agent_node(Role::Input, label.to_string())
+                .agent_focused(focus.is_focused(window)),
+        )
+        // One line, bounded and clipped: GoTrue's prose is short, but a proxy
+        // or a captive portal can answer with a page, and one enormous token
+        // has no wrap point. The semantic node keeps the whole string.
+        .when_some(state.error.clone(), |column, error| {
+            column.child(
+                div()
+                    .w(px(pill::WIDTH))
+                    .truncate()
+                    .text_center()
+                    .text_size(px(12.5))
+                    .text_color(ladder::danger())
+                    .child(error.clone())
+                    .agent_node(Role::Text, error),
+            )
+        })
 }
 
-/// The committing chip. One label per route, and its glyph must match the
-/// chord the footer legend promises.
-fn submit_chip(
-    state: &SignIn,
-    route: Route,
-    mode: ContentMode,
-    app: &Entity<Luma>,
-    window: &Window,
-) -> AnyElement {
-    let interactive = mode == ContentMode::Interactive;
-    let label = match (route, state.busy) {
-        (Route::Email, false) => "Send code",
+fn primary(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
+    let label = match (state.route, state.busy) {
+        (Route::Email, false) => "Continue",
         (Route::Email, true) => "Sending…",
         (Route::Code, false) => "Sign in",
         (Route::Code, true) => "Verifying…",
     };
     let enabled = state.can_submit();
     let submit = app.clone();
-    float::btn_primary_chip()
+    pill::primary(label, Enabled::from(enabled))
         .id("sign-in-submit")
-        .when(enabled && interactive, |chip| {
-            chip.track_focus(&state.action_focus)
+        .when(enabled, |capsule| {
+            capsule
+                .track_focus(&state.action_focus)
                 .tab_index(0)
                 .on_click(move |_, _, cx| {
                     submit.update(cx, |this, cx| this.sign_in_submit(cx));
                 })
         })
-        .when(!enabled || !interactive, |chip| {
-            chip.opacity(float::INERT_OPACITY)
-        })
-        .child("↵")
-        .child(label)
         .agent_node(Role::Button, label)
-        .agent_disabled(!enabled || !interactive)
-        .agent_focused(interactive && state.action_focus.is_focused(window))
+        .agent_disabled(!enabled)
+        .agent_focused(state.action_focus.is_focused(window))
         .into_any_element()
 }
 
-fn footer(route: Route) -> Div {
-    let mut band = float::footer_band();
-    if route == Route::Code {
-        band = band.child(float::key_hint(IconName::ArrowLeft, "Back"));
-    }
-    band.child(float::key_hint_text(
-        "↵",
-        match route {
-            Route::Email => "Send code",
-            Route::Code => "Sign in",
-        },
-    ))
-    .child(div().flex_1().min_w_0())
+/// The route's alternative: the door out on the first step, the way back on
+/// the second. One outlined capsule either way, because both answer the same
+/// question — "not this".
+fn secondary(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
+    let (label, id) = match state.route {
+        Route::Email => ("Work offline", "sign-in-offline"),
+        Route::Code => ("Use a different email", "sign-in-back"),
+    };
+    let route = state.route;
+    let pressed = app.clone();
+    pill::secondary(label)
+        .id(id)
+        .track_focus(&state.secondary_focus)
+        .tab_index(0)
+        .on_click(move |_, _, cx| {
+            pressed.update(cx, |this, cx| match route {
+                Route::Email => this.continue_offline(cx),
+                Route::Code => this.sign_in_back(cx),
+            });
+        })
+        .agent_node(Role::Button, label)
+        .agent_focused(state.secondary_focus.is_focused(window))
+        .into_any_element()
 }
 
-// ---------------------------------------------------------------------------
-// Body
-// ---------------------------------------------------------------------------
-
-fn body(state: &SignIn, route: Route) -> AnyElement {
-    let heading = match route {
-        Route::Email => "Sign in to Luma",
-        Route::Code => "Check your email",
-    };
-    let subtitle = match route {
-        Route::Email => "Enter your email and we'll send a six-digit code.".to_string(),
-        Route::Code => match &state.sent_to {
-            Some(address) => format!("Enter the six-digit code sent to {address}."),
-            None => "Enter the six-digit code we sent you.".to_string(),
-        },
-    };
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(10.0))
-        .px(px(40.0))
-        .child(
-            div()
-                .text_size(px(22.0))
-                .font_weight(FontWeight::LIGHT)
-                .child(heading)
-                .agent_node(Role::Text, heading),
-        )
-        .child(
-            div()
-                .text_size(px(12.5))
-                .text_color(ladder::muted_foreground())
-                .text_center()
-                .child(subtitle),
-        )
-        // Bounded and clipped: GoTrue's prose is short, but a proxy or a
-        // captive portal can answer with a page, and one enormous token has no
-        // wrap point. The semantic node keeps the whole string.
-        .when_some(state.error.clone(), |column, error| {
-            column.child(
-                div()
-                    .w_full()
-                    .max_w(px(400.0))
-                    .h(px(20.0))
-                    .overflow_hidden()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_center()
-                            .text_size(px(12.5))
-                            .text_color(ladder::danger())
-                            .child(error.clone())
-                            .agent_node(Role::Text, error),
-                    ),
-            )
+/// The Code route's way out. A link rather than a third capsule: leaving is
+/// still offered, but it is not one of the two things this step is about.
+fn link(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
+    let leave = app.clone();
+    pill::link("Work offline")
+        .id("sign-in-offline")
+        .mt(px(TIGHT_GAP))
+        .track_focus(&state.link_focus)
+        .tab_index(0)
+        .on_click(move |_, _, cx| {
+            leave.update(cx, |this, cx| this.continue_offline(cx));
         })
+        .agent_node(Role::Button, "Work offline")
+        .agent_focused(state.link_focus.is_focused(window))
         .into_any_element()
 }
