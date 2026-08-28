@@ -186,6 +186,39 @@ class Clip:
             "args": _thaw(self.args),
         }
 
+    @property
+    def selection(self) -> str | None:
+        """The group expression this clip targets, if it has exactly one
+        Selection argument."""
+        value = self._selection_value()
+        return None if value is None else str(_field(value, "expression", default=""))
+
+    @property
+    def subset(self) -> Any:
+        """How much of the selection the clip lights: ``"all"``, a float
+        fraction, or an integer count.  ``None`` when the clip has no single
+        Selection argument."""
+        value = self._selection_value()
+        if value is None:
+            return None
+        raw = _field(value, "subset", default="all")
+        if isinstance(raw, Mapping):
+            if "fraction" in raw:
+                return float(raw["fraction"])
+            if "count" in raw:
+                return int(raw["count"])
+        return "all"
+
+    def _selection_value(self) -> Mapping[str, Any] | None:
+        if not isinstance(self.args, Mapping):
+            return None
+        found = [
+            value
+            for value in self.args.values()
+            if isinstance(value, Mapping) and "expression" in value
+        ]
+        return found[0] if len(found) == 1 else None
+
     def __repr__(self) -> str:
         name = self.pattern_name or self.pattern_id
         return (
@@ -305,11 +338,28 @@ class _PatternCatalog:
             return None
         return str(_field(summary, "name", default=pattern_id))
 
+    def selection_arg_id(self, pattern_id: str) -> str:
+        """The pattern's sole Selection argument id.  A pattern with none, or
+        with several, cannot take the ``selection=`` shorthand at all."""
+        ids = [
+            str(_required(d, "id"))
+            for d in _sequence(self._schemas.get(pattern_id, []))
+            if str(_field(d, "arg_type", "argType", default="")).casefold() == "selection"
+        ]
+        if len(ids) != 1:
+            detail = "none" if not ids else "more than one"
+            raise TrackError(
+                f"pattern {pattern_id!r} has {detail} Selection argument; "
+                "put the value in args by argument id"
+            )
+        return ids[0]
+
     def normalize_args(
         self,
         pattern_id: str,
         args: Mapping[str, Any] | None,
         selection: str | None,
+        subset: Any = None,
     ) -> dict[str, Any]:
         definitions = list(_sequence(self._schemas.get(pattern_id, [])))
         by_id = {str(_required(d, "id")): d for d in definitions}
@@ -339,19 +389,7 @@ class _PatternCatalog:
             normalized[key] = self._normalize_arg_value(by_id.get(key), value)
 
         if selection is not None:
-            selection_ids = [
-                str(_required(d, "id"))
-                for d in definitions
-                if str(_field(d, "arg_type", "argType", default="")).casefold()
-                == "selection"
-            ]
-            if len(selection_ids) != 1:
-                detail = "none" if not selection_ids else "more than one"
-                raise TrackError(
-                    f"pattern {pattern_id!r} has {detail} Selection argument; "
-                    "put the value in args by argument id"
-                )
-            normalized[selection_ids[0]] = _selection(selection)
+            normalized[self.selection_arg_id(pattern_id)] = _selection(selection, subset)
         return normalized
 
     @staticmethod
@@ -576,13 +614,21 @@ class Edit:
         blend: str = "replace",
         args: Mapping[str, Any] | None = None,
         selection: str | None = None,
+        subset: Any = None,
     ) -> Clip:
+        """Place a clip.  ``selection`` is the group expression to light;
+        ``subset`` narrows it to a share of those fixtures — a float fraction
+        (``0.5``), an integer count (``3``), or ``"all"`` (the default)."""
         self._ensure_open()
         pattern_id, pattern_name = self._track._pattern(pattern_id)
         start_s, end_s = self._track._resolve_range(bars=bars, seconds=seconds)
         blend = _blend(blend)
         z = _z(z)
-        normalized = self._track._patterns.normalize_args(pattern_id, args, selection)
+        if subset is not None and selection is None:
+            raise TrackError("subset needs a selection; pass selection= as well")
+        normalized = self._track._patterns.normalize_args(
+            pattern_id, args, selection, subset
+        )
         clip_id = self._temp_id()
         clip = Clip(
             id=clip_id,
@@ -609,7 +655,11 @@ class Edit:
         args: Mapping[str, Any] | None = None,
         unset_args: Iterable[str] = (),
         selection: str | None = None,
+        subset: Any = None,
     ) -> Clip:
+        """Change a clip in place.  ``subset`` may be given without
+        ``selection`` to re-aim how many fixtures the existing expression
+        lights."""
         self._ensure_open()
         before = self._find(clip_id)
         if bars is not None or seconds is not None:
@@ -627,7 +677,12 @@ class Edit:
             prior_args = {} if pattern_id != before.pattern_id else _thaw(before.args)
 
         unset_args = tuple(unset_args)
-        touches_args = args is not None or selection is not None or bool(unset_args)
+        touches_args = (
+            args is not None
+            or selection is not None
+            or subset is not None
+            or bool(unset_args)
+        )
         if not touches_args:
             next_args = prior_args
         else:
@@ -637,7 +692,14 @@ class Edit:
                     "before setting arguments"
                 )
             merged_args = dict(prior_args)
-            normalized = self._track._patterns.normalize_args(pattern_id, args, selection)
+            if subset is not None and selection is None:
+                # Re-aiming the count alone: keep whatever expression is stored.
+                arg_id = self._track._patterns.selection_arg_id(pattern_id)
+                stored = prior_args.get(arg_id)
+                selection = str(_field(stored, "expression", default="all")) or "all"
+            normalized = self._track._patterns.normalize_args(
+                pattern_id, args, selection, subset
+            )
             merged_args.update(normalized)
             next_args = merged_args
         for key in unset_args:
@@ -1126,11 +1188,33 @@ def _clip_line(clip: Clip) -> str:
     )
 
 
-def _selection(expression: str) -> dict[str, str]:
+def _selection(expression: str, subset: Any = None) -> dict[str, Any]:
     expression = str(expression).strip()
     if not expression:
         raise TrackError("Selection expression cannot be empty")
-    return {"expression": expression, "spatialReference": "global"}
+    value: dict[str, Any] = {"expression": expression, "spatialReference": "global"}
+    if subset is not None:
+        value["subset"] = _subset(subset)
+    return value
+
+
+def _subset(value: Any) -> Any:
+    """Which fixtures of the expression to keep: ``"all"``, a float share, or an
+    integer count.  A float is a fraction of the matched set (``0.5`` = half);
+    an int is a fixed number of fixtures.  Omitting it entirely means all."""
+    if value is None or (isinstance(value, str) and value.strip().casefold() == "all"):
+        return "all"
+    if isinstance(value, bool):
+        raise TrackError(f"invalid subset {value!r}; expected 'all', a fraction, or a count")
+    if isinstance(value, int):
+        if value < 1:
+            raise TrackError(f"subset count must be at least 1, got {value}")
+        return {"count": value}
+    if isinstance(value, float):
+        if not 0.0 < value <= 1.0:
+            raise TrackError(f"subset fraction must be in (0, 1], got {value}")
+        return {"fraction": value}
+    raise TrackError(f"invalid subset {value!r}; expected 'all', a fraction, or a count")
 
 
 def _blend(value: str) -> str:

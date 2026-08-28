@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::models::node_graph::{Graph, NodeInstance, PatternArgType};
+use crate::models::selection::Selection;
 use crate::services::graph_documents::{canonicalize_graph, exact_graph_json};
 
 const PATTERN_ARGS_NODE_ID: &str = "pattern_args";
@@ -311,10 +312,9 @@ fn upgrade_argument_values(implementation_id: &str, graph: &mut Graph) -> Result
                     continue;
                 };
                 if is_legacy_string_spread(default, expression) {
-                    arg.default_value = json!({
-                        "expression": expression,
-                        "spatialReference": spatial_reference,
-                    });
+                    arg.default_value = Selection::new(expression)
+                        .with_spatial_reference(spatial_reference)
+                        .to_value();
                     changed = true;
                 }
             }
@@ -485,10 +485,9 @@ fn migrate_select_nodes(implementation_id: &str, graph: &mut Graph) -> Result<bo
             id: arg_id.clone(),
             name: arg_id.clone(),
             arg_type: PatternArgType::Selection,
-            default_value: json!({
-                "expression": expression,
-                "spatialReference": spatial_reference,
-            }),
+            default_value: Selection::new(expression)
+                .with_spatial_reference(spatial_reference)
+                .to_value(),
         });
         for edge in &mut graph.edges {
             if edge.from_node == node.id && edge.from_port == "out" {

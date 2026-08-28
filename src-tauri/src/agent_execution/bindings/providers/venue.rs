@@ -253,9 +253,15 @@ async fn positions(
 ) -> Result<(), String> {
     // The `all` selection: no nodes, no edges, no args ⇒ the whole venue in the
     // evaluator's own order.
-    let resolved =
-        resolve_primitive_ids_with_access(access, ctx.resource_root, &[], &[], &HashMap::new())
-            .await;
+    let resolved = resolve_primitive_ids_with_access(
+        access,
+        ctx.resource_root,
+        &[],
+        &[],
+        &HashMap::new(),
+        None,
+    )
+    .await;
 
     if resolved.is_empty() {
         for path in ["venue.positions", "venue.uv"] {

@@ -974,6 +974,7 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
         &[],
         &[],
         &HashMap::new(),
+        None,
     )
     .await
     .into_iter()

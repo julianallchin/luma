@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use serde_json::{json, Map, Number, Value};
+use serde_json::{Map, Number, Value};
 use uuid::Uuid;
 
 use crate::models::node_graph::{BeatGrid, PatternArgDef, PatternArgType};
 use crate::models::patterns::PatternSummary;
+use crate::models::selection::Selection;
 use crate::services::track_edits::{TrackClip, TrackDocument};
 
 use super::error::{DslError, DslWarning};
@@ -887,13 +888,14 @@ fn compile_arguments(
         }) {
             args.insert(
                 definition.id.clone(),
-                json!({
-                    "expression": serialize_group_expression(selection),
-                    "spatialReference": annotation
-                        .selection_spatial_reference
-                        .as_deref()
-                        .unwrap_or("global"),
-                }),
+                Selection::new(serialize_group_expression(selection))
+                    .with_spatial_reference(
+                        annotation
+                            .selection_spatial_reference
+                            .as_deref()
+                            .unwrap_or("global"),
+                    )
+                    .to_value(),
             );
         }
     }
@@ -978,6 +980,9 @@ fn number_value(value: f64) -> Value {
     }
 }
 
+/// The DSL's `selection` sugar carries an expression and a space, and nothing
+/// else — so a selection with a `subset` fails the two-key test here and is
+/// exported as a plain JSON arg instead, which is lossless but unsugared.
 fn canonical_selection(value: &Value) -> Option<(GroupExpr, String)> {
     let object = value.as_object()?;
     if object.len() != 2

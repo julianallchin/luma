@@ -145,6 +145,7 @@ async fn compile_annotation(
         resource_root,
         track_id,
         venue_id,
+        Some(&annotation.id),
         &graph.nodes,
         &graph.edges,
         &args,

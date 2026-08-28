@@ -42,6 +42,7 @@ async fn eval_pattern_frames(
     resource_root: &std::path::Path,
     track_id: &str,
     venue_id: &str,
+    instance: Option<&str>,
     graph: &Graph,
     args: &HashMap<String, serde_json::Value>,
     start_time: f32,
@@ -64,6 +65,7 @@ async fn eval_pattern_frames(
         resource_root,
         track_id,
         venue_id,
+        instance,
         &graph.nodes,
         &graph.edges,
         &args,
@@ -134,6 +136,7 @@ pub async fn preview_annotation(
         resource_root,
         track_id,
         venue_id,
+        Some(&annotation.id),
         &graph,
         &args,
         start,
@@ -203,6 +206,7 @@ pub async fn generate_annotation_previews(
             resource_root,
             track_id,
             venue_id,
+            Some(&annotation.id),
             &graph,
             &args,
             start,
@@ -379,7 +383,7 @@ fn preview_arg_values(graph: &Graph) -> HashMap<String, serde_json::Value> {
         .map(|arg| {
             let value = match arg.arg_type {
                 crate::models::node_graph::PatternArgType::Selection => {
-                    serde_json::json!({ "expression": "all", "spatialReference": "global" })
+                    crate::models::selection::Selection::all().to_value()
                 }
                 _ => arg.default_value.clone(),
             };
@@ -422,6 +426,7 @@ pub async fn preview_pattern_image(
         resource_root,
         track_id,
         venue_id,
+        None,
         &graph,
         &args,
         start_time,
@@ -469,6 +474,7 @@ pub async fn preview_graph_image(
         resource_root,
         track_id,
         venue_id,
+        None,
         graph,
         &args,
         start_time,

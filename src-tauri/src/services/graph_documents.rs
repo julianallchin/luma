@@ -1310,13 +1310,9 @@ fn validate_arg_default(issues: &mut Vec<GraphValidationIssue>, path: &str, arg:
                 })
             })
         }
-        PatternArgType::Selection => value.as_object().is_some_and(|object| {
-            object.get("expression").and_then(Value::as_str).is_some()
-                && object
-                    .get("spatialReference")
-                    .and_then(Value::as_str)
-                    .is_some()
-        }),
+        PatternArgType::Selection => {
+            crate::models::selection::Selection::from_value(value).is_some()
+        }
         PatternArgType::Palette => value.get("colors").and_then(Value::as_array).is_some(),
         PatternArgType::Gradient => value.get("stops").and_then(Value::as_array).is_some(),
     };

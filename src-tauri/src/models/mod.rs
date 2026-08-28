@@ -10,6 +10,7 @@ pub mod node_graph;
 pub mod patterns;
 pub mod perform;
 pub mod scores;
+pub mod selection;
 pub mod stage;
 pub mod tracks;
 pub mod universe;
