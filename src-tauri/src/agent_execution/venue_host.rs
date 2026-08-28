@@ -23,8 +23,11 @@ use tokio::runtime::Handle;
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::{Arena, Scope};
+use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
+use crate::services::groups;
 use crate::services::track_edits::TrackScope;
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
 use crate::storage::StorageRoot;
@@ -72,7 +75,18 @@ impl VenueHost {
         let height = clamp_dimension("height", request.height)?;
         let time = self.clamp_time(request.t).await?;
 
-        let geometry = VenueGeometry::load(&self.pool, &self.resource_root, &self.venue_id)
+        // One venue snapshot for the geometry *and* the selection: a mark on a
+        // fixture that is not in the frame is worse than no mark at all.
+        let mut access =
+            VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
+                .await
+                .map_err(|error| {
+                    HostCallError::new(
+                        "invalid_venue",
+                        format!("the venue is not available: {error}"),
+                    )
+                })?;
+        let geometry = VenueGeometry::read(&mut access, &self.resource_root)
             .await
             .map_err(|error| HostCallError::new("invalid_venue", error))?;
         if geometry.is_empty() {
@@ -83,7 +97,26 @@ impl VenueHost {
             ));
         }
 
-        let state = self.state_at(time).await?;
+        // A highlight *replaces* the lighting: the question it answers is
+        // "which heads are these?", and a score playing over the answer is
+        // only noise on top of it.
+        let state = match request.highlight.as_deref() {
+            None => self.state_at(time).await?,
+            Some(expression) => Some(stage_render::highlight_state(
+                &groups::resolve_selection_expression_with_path(
+                    &self.resource_root,
+                    &mut access,
+                    &Selection::new(expression),
+                    // A highlight is a picture of one answer, so the random
+                    // selectors have to give the same answer twice.
+                    0,
+                )
+                .await
+                .map_err(|error| HostCallError::new("invalid_selection", error))?,
+            )),
+        };
+        drop(access);
+
         let (scene, definitions) = geometry.scene();
         let booth = geometry.booth();
         let meshes_root = stage_render::meshes_root(Some(&self.resource_root));
@@ -232,4 +265,7 @@ struct RenderRequest {
     t: f64,
     width: u32,
     height: u32,
+    /// A selection expression. Present, its heads are the only thing lit, and
+    /// the score at `t` is not drawn at all. Absent, the score lights the room.
+    highlight: Option<String>,
 }

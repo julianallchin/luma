@@ -8,6 +8,7 @@ photorealistic frame of the venue at a moment in the track and hands back a
 
     luma.venue.render()                              # front, t=0
     luma.venue.render(view="dj", t=64.0)             # the operator's own view
+    luma.venue.render(highlight="moving_spots")      # light only those heads
     shot = luma.venue.render(view="overhead")
     Image.open(shot.path)                            # the PNG on disk
 
@@ -19,7 +20,8 @@ Host call
 
 ``venue.render`` receives::
 
-    {"view": str, "t": float, "width": int, "height": int}
+    {"view": str, "t": float, "width": int, "height": int,
+     "highlight": str | None}
 
 and returns::
 
@@ -165,6 +167,7 @@ class Venue:
         t: float = 0.0,
         width: int = DEFAULT_WIDTH,
         height: int = DEFAULT_HEIGHT,
+        highlight: str | None = None,
     ) -> StageImage:
         """Render the stage at `t` seconds and return the resulting figure.
 
@@ -172,6 +175,13 @@ class Venue:
         to the track's span. The room is always drawn under the editor's work
         light and ground grid, so the hardware stays legible next to whatever
         the score is doing at `t`.
+
+        `highlight` is a group selection expression (`"moving_spots"`,
+        `"~back_wash & left"`). It *replaces* the lighting: every head it
+        resolves to comes on open and white and every other head goes dark, so
+        the picture is the answer to "which fixtures is this?". The score at `t`
+        is not drawn; `t` still only picks the moment, and the view still picks
+        the camera.
 
         Raises `LumaHostCallError` if `t` is not finite or a frame side is
         under one pixel.
@@ -191,6 +201,7 @@ class Venue:
                 "t": t,
                 "width": width,
                 "height": height,
+                "highlight": None if highlight is None else str(highlight),
             },
         )
         shot = StageImage(

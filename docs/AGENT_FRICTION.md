@@ -3,6 +3,9 @@
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
 
+- [2026-08-27] `luma-record`'s mp4 is not byte-reproducible run to run (the encoder's own nondeterminism), so "hash a frame before and after your change" cannot mean hashing the file — you have to decode a frame to rawvideo and compare that, and nothing says so
+- [2026-08-27] selection expressions negate with `~`, not `!`; `!moving_spots` lexes into the error "Unexpected token And", which names a token that is nowhere in the input
+- [2026-08-27] `ffmpeg_env`'s dev search is relative to the *binary's* directory, so a `cp target/perf/luma-record /tmp/before` used as an A/B baseline silently encodes with a different ffmpeg than the one in the tree — the two recordings then differ for a reason that has nothing to do with the change under test
 - [2026-08-27] The bundled python env has no pytest and `unittest discover -s luma_exec/tests` dies with "Start directory is not importable"; the only invocation that works is `python3 -m unittest luma_exec.tests.test_track` from `src-tauri/python`, which nothing documents.
 - [2026-08-27] `cargo check -p luma --lib` in `src-tauri` still compiles `gpui/crates/render` (the lib depends on it for `venue.render`), so a second agent's half-finished edit in a crate you were told not to touch blocks every build and test you can run — `-p`/`--lib` buys no isolation from that dependency edge
 - [2026-08-27] the repo's python tests need `~/Library/Caches/com.luma.luma/python-env/bin/python3`; a system `python3` fails deep inside matplotlib's `pyexpat` import with a dyld symbol error that says nothing about the real problem, and nothing in AGENTS.md names the interpreter to use
