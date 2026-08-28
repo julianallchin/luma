@@ -1,7 +1,10 @@
-// Live-only temporal stabilization for the low-resolution volumetric target.
-// Capture mode bypasses this pass and uses fixed blue-noise seeds. History is
-// rejected at depth discontinuities here and reset by the CPU contract when
-// size, camera, medium density, light topology, or time continuity changes.
+// Temporal stabilization for the low-resolution volumetric target, run by any
+// caller sampling consecutive moments — the live viewport, and an offscreen
+// recording through `Renderer::render_next`. A one-off frame
+// (`Renderer::render`) bypasses this pass and uses fixed blue-noise seeds.
+// History is rejected at depth discontinuities here and reset by the CPU
+// contract when size, camera, medium density, light topology, or time
+// continuity changes.
 
 struct Temporal {
     // x: history weight, y: history valid, z: linear-depth threshold in metres.

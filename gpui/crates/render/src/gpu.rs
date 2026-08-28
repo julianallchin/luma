@@ -1876,6 +1876,10 @@ impl Renderer {
     /// `subframes` is the jitter-accumulation count (spec §6): the same jitter
     /// primitive the live temporal pass uses, applied deterministically.
     ///
+    /// The frame stands alone: the temporal history is bypassed and reset, so
+    /// the image is a function of this `frame` and `subframes` alone. Sampling
+    /// a sequence of *consecutive* moments is [`Renderer::render_next`].
+    ///
     /// # Errors
     /// Fails if the readback buffer cannot be mapped.
     pub fn render(
@@ -1887,6 +1891,38 @@ impl Renderer {
     ) -> anyhow::Result<Vec<u8>> {
         let mut out = Vec::new();
         self.render_into(frame, width, height, subframes, Channels::Rgba, &mut out)?;
+        Ok(out)
+    }
+
+    /// Render the *next* frame of a sequence and read it back as
+    /// sRGB-encoded RGBA8, row-major, no padding.
+    ///
+    /// The haze march is progressive. Where [`Renderer::render`] pays for a
+    /// clean volumetric in `subframes` jittered marches of one moment, this
+    /// blends each march into the history the last call left behind — the
+    /// live viewport's own path, which is how it gets a usable image out of
+    /// [`crate::LIVE_SUBFRAMES`]. The history is discarded whenever this
+    /// frame is not plausibly the successor of the last one drawn through
+    /// this renderer: a different size, camera, medium, or cone geometry, a
+    /// clock that jumped, or an intervening [`Renderer::render`].
+    ///
+    /// So a caller sweeping a time axis calls this in order and warms up over
+    /// the frames it can afford to throw away, and any caller that wants one
+    /// moment on its own calls [`Renderer::render`] instead — there is no
+    /// ordering rule to remember, only which of the two questions is being
+    /// asked.
+    ///
+    /// # Errors
+    /// Fails if the readback buffer cannot be mapped.
+    pub fn render_next(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+    ) -> anyhow::Result<Vec<u8>> {
+        let mut out = Vec::new();
+        self.render_live_into(frame, width, height, subframes, Channels::Rgba, &mut out)?;
         Ok(out)
     }
 

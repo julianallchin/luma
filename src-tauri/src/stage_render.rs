@@ -355,8 +355,29 @@ pub fn render_rgba(
         shot.size,
     )?;
     let (width, height) = sequence.size();
-    let rgba = sequence.frame(shot.state.as_ref(), shot.time, DEFAULT_SUBFRAMES)?;
+    // A still is one moment; nothing before it is its predecessor.
+    let rgba = sequence.frame(
+        shot.state.as_ref(),
+        shot.time,
+        DEFAULT_SUBFRAMES,
+        Continuity::Cut,
+    )?;
     Ok((rgba, width, height))
+}
+
+/// Whether a frame carries on from the one before it.
+///
+/// The renderer's haze march is progressive — consecutive frames blend into a
+/// shared history, which is how the live viewport gets a clean image out of two
+/// samples per frame. A still, and any frame that must be a function of its own
+/// `t` alone, is a [`Continuity::Cut`]. This picks between the renderer's two
+/// entries; it is not an ordering rule the caller has to keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Continuity {
+    /// This frame follows its predecessor in time; accumulate.
+    Next,
+    /// This frame stands alone; discard whatever came before.
+    Cut,
 }
 
 /// A venue installed on the render thread, ready to be lit repeatedly.
@@ -425,6 +446,12 @@ impl Sequence {
 
     /// One frame, tightly packed sRGB RGBA8. Blocks until it is back.
     ///
+    /// `continuity` says whether this frame carries on from the last one drawn
+    /// through *any* sequence on the render thread — the haze history is the
+    /// renderer's, not the sequence's. Getting it wrong costs image quality,
+    /// never correctness: the renderer re-checks size, camera, cone geometry
+    /// and clock, and drops a history that could not be this frame's past.
+    ///
     /// # Errors
     /// Fails if the GPU device cannot be created, if a referenced mesh is
     /// missing, or if the frame cannot be read back.
@@ -433,6 +460,7 @@ impl Sequence {
         state: Option<&UniverseState>,
         time: f32,
         subframes: u32,
+        continuity: Continuity,
     ) -> Result<Vec<u8>, String> {
         let (reply, answer) = mpsc::sync_channel(1);
         jobs()
@@ -443,6 +471,7 @@ impl Sequence {
                 state: state.cloned(),
                 time,
                 subframes,
+                continuity,
                 reply,
             })
             .map_err(|_| "the offscreen renderer stopped".to_string())?;
@@ -514,6 +543,7 @@ enum Job {
         state: Option<UniverseState>,
         time: f32,
         subframes: u32,
+        continuity: Continuity,
         reply: mpsc::SyncSender<Result<Vec<u8>, String>>,
     },
     Uninstall(u64),
@@ -547,7 +577,7 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
     let mut stage: Option<(Renderer, assets::Library, PathBuf)> = None;
     let mut installed: HashMap<u64, Installed> = HashMap::new();
     while let Ok(job) = rx.recv() {
-        let (id, state, time, subframes, reply) = match job {
+        let (id, state, time, subframes, continuity, reply) = match job {
             Job::Install(scene) => {
                 installed.insert(scene.id, *scene);
                 continue;
@@ -561,8 +591,9 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
                 state,
                 time,
                 subframes,
+                continuity,
                 reply,
-            } => (id, state, time, subframes, reply),
+            } => (id, state, time, subframes, continuity, reply),
         };
         let Some(scene) = installed.get(&id) else {
             // Only reachable if the handle outlived its own `Drop`, which it
@@ -598,6 +629,7 @@ fn render_loop(rx: &mpsc::Receiver<Job>) {
             state.as_ref(),
             time,
             subframes,
+            continuity,
         ));
     }
 }
@@ -609,6 +641,7 @@ fn one_frame(
     state: Option<&UniverseState>,
     time: f32,
     subframes: u32,
+    continuity: Continuity,
 ) -> Result<Vec<u8>, String> {
     let (width, height) = scene.size;
     let mut frame = build_frame_with(
@@ -624,9 +657,11 @@ fn one_frame(
         target: scene.camera.target,
         fov_y_deg: scene.camera.fov_y_deg,
     };
-    renderer
-        .render(&frame, width, height, subframes)
-        .map_err(|error| format!("could not render the frame: {error}"))
+    match continuity {
+        Continuity::Next => renderer.render_next(&frame, width, height, subframes),
+        Continuity::Cut => renderer.render(&frame, width, height, subframes),
+    }
+    .map_err(|error| format!("could not render the frame: {error}"))
 }
 
 /// Where the stage GLBs live.

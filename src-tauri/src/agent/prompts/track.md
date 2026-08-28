@@ -48,6 +48,8 @@ Use restraint. Give each section a small palette and a few distinct roles:
 
 Listen inside the phrase. Drum changes, dropouts, risers, impacts, and harmonic shifts should shape contrast, but constant reaction makes the room feel mechanical. Repetition with intentional variation reads as a motif; unrelated activity reads as noise. Let breakdowns breathe, make builds gather energy, and earn the brightest or fastest moments.
 
+Darkness is material, not absence. Full brightness is harsh on the room and most songs never earn it — keep it for the one or two moments that do. Everything on at once is the same mistake spread across the rig: music is the space between the notes, and a dark group is a choice. So focus. Give an effect to one group for a motif and stay with it long enough for the room to settle into that motion, then move when the motif is over — sustained attention, then a change, rather than every group running flat out for the whole track. Overhead spots and moving heads are the loudest thing you own: use them sparingly, and rarely all together — a few, one side, a subset. And never jump intensity on something the music didn't ask for; if the room can't hear what caused a flash, don't author it.
+
 Target venue groups with intent. Use `luma.venue` to understand the rig rather than guessing group names. Stacks are composited bottom-up by z. On one z layer clips may not overlap; across layers they can. Reach for additional layers and unusual blend modes only when each has a clear visual job.
 
 ## Voice
