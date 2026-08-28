@@ -2,9 +2,9 @@
 //!
 //! Four facts, each observable only through the node protocol:
 //!
-//! 1. **Selecting a clip populates the strip** — the timing fields read the
-//!    clip's span in beats, the blend select reads its mode, and the
-//!    pattern's args render as their widgets.
+//! 1. **Selecting a clip populates the strip** — the blend select reads the
+//!    clip's mode and the pattern's args render as their widgets. The clip's
+//!    span is deliberately absent: bounds are edited on the timeline.
 //! 2. **A scalar arg edit is a document write** — it survives leaving the
 //!    screen and coming back, which a repaint would not.
 //! 3. **A same-pattern multi-selection batch-applies** — the edit lands on
@@ -30,9 +30,7 @@ use support::{Clip, Fixture};
 
 const TRACK_SECONDS: u32 = 20;
 
-/// Two clips of one pattern and one of another. At the fixture's 120 bpm a
-/// beat is half a second, so Glow at 2–5 s reads 4–10 in the strip's beat
-/// fields — the exactness every timing assertion below leans on.
+/// Two clips of one pattern and one of another.
 fn harness() -> Harness {
     Fixture::new(
         "track-editor-strip",
@@ -75,6 +73,13 @@ const SCRIPT: &str = r#"
             cells,
             inputs,
             selects: shot.findAll({ role: "select" }).map((n) => n.label),
+            // The subset select is the last of the shared-shape controls a
+            // one-selection-arg pattern draws; where its right edge lands is
+            // the strip's fit against the window.
+            howMany: (() => {
+                const n = shot.find({ role: "select", label: "All" });
+                return n === undefined ? null : n.bounds;
+            })(),
             texts: shot.findAll({ role: "text" }).map((n) => n.label),
         };
     }
@@ -157,12 +162,16 @@ fn the_strip_populates_writes_batches_and_never_moves() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    // 1. Populated from the selection: the span in beats, the canonical blend
-    //    name, the pattern's args as widgets.
+    // 1. Populated from the selection: the canonical blend name and the
+    //    pattern's args as widgets — and no span, which the timeline owns.
     let populated = &out["populated"];
-    assert_eq!(populated["inputs"]["start"], "4", "{populated:#}");
-    assert_eq!(populated["inputs"]["end"], "10", "{populated:#}");
     assert_eq!(populated["inputs"]["intensity"], "1", "{populated:#}");
+    for bound in ["start", "end"] {
+        assert!(
+            populated["inputs"][bound].is_null(),
+            "the strip still offers a {bound} field: {populated:#}"
+        );
+    }
     assert!(
         populated["inputs"]["expression"]
             .as_str()
@@ -224,6 +233,17 @@ fn the_strip_populates_writes_batches_and_never_moves() {
         "a mixed selection must not offer args: {mixed:#}"
     );
 
+    // The common strip fits the window: with the clip's span gone to the
+    // timeline, a pattern with a selection arg draws its subset select wholly
+    // inside the strip's box at the harness's 1200pt window. Wider schemas
+    // still run off the end — the strip scrolls for those.
+    let strip_right = strip_edge(&out["populated"]["strip"]);
+    let how_many = strip_edge(&out["populated"]["howMany"]);
+    assert!(
+        how_many <= strip_right,
+        "the subset select runs off the strip: {how_many} > {strip_right}"
+    );
+
     // 5. The no-reflow contract: the strip's box and the canvas's box are the
     //    same in every state this test visited.
     let strip = &out["empty"]["strip"];
@@ -249,4 +269,14 @@ fn the_strip_populates_writes_batches_and_never_moves() {
         "deselecting did not empty the strip: {:#}",
         out["cleared"]
     );
+}
+
+/// A rect's right edge, from the node protocol's `{ x, width }`.
+fn strip_edge(bounds: &Value) -> f64 {
+    let read = |key: &str| {
+        bounds[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("no {key} in {bounds:#}"))
+    };
+    read("x") + read("width")
 }

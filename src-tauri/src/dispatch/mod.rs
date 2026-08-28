@@ -688,6 +688,8 @@ commands! {
     tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
     tracks::reprocess_track(track_id: String) -> ();
 
+    auth::send_login_code(email: String) -> ();
+    auth::verify_login_code(email: String, code: String) -> String;
     auth::get_session_item(key: String) -> Option<String>;
     auth::set_session_item(key: String, value: String) -> ();
     auth::remove_session_item(key: String) -> ();

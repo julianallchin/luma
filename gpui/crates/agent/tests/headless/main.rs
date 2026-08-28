@@ -29,6 +29,7 @@ mod keyboard;
 mod library_foundation;
 mod settings;
 mod shell_panels;
+mod signin;
 mod slider;
 mod tab_chrome;
 mod track_editor;

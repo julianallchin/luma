@@ -292,7 +292,7 @@ mod tests {
         .unwrap();
 
         let state_db = state::init_state_db_at(directory).await.unwrap();
-        auth::bootstrap_host_admission(&db.0, &state_db.0)
+        auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .unwrap();
         let storage = crate::storage::StorageRoot::from_path(directory.to_path_buf());

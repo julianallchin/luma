@@ -65,6 +65,8 @@ pub(crate) mod context {
     pub const SUBAGENTS: &str = "Subagents";
     /// Picking a clip's fixtures off the room.
     pub const FIXTURE_PICKER: &str = "FixturePicker";
+    /// The email-code sign-in gate.
+    pub const SIGN_IN: &str = "SignIn";
 
     /// Every dialog context, once.
     ///
@@ -73,7 +75,8 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 7] = [
+    pub const DIALOGS: [&str; 8] = [
+        SIGN_IN,
         VENUES,
         PATTERNS,
         SETTINGS,

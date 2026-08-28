@@ -3532,6 +3532,7 @@ name = "gpui-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.21.7",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
@@ -3545,6 +3546,7 @@ dependencies = [
  "rquickjs",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "tokio",
 ]

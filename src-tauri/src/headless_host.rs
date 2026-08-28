@@ -1,15 +1,15 @@
 //! Bootstrapping a windowless Luma host.
 //!
-//! Two binaries serve Luma's backend to an out-of-process client — the JSON-RPC
-//! `agent_harness` and the MCP `luma-mcp` server — and neither has an
-//! `AppHandle`, a WebView, or an NSApplication. What they share is everything up
-//! to the first request: the same flags, the same database migrations, the same
+//! Three binaries serve Luma's backend without a renderer — the JSON-RPC
+//! `agent_harness`, the MCP `luma-mcp` server, and the `luma-record` encoder —
+//! and none has an `AppHandle`, a WebView, or an NSApplication. What they share
+//! is everything up to the first request: the same flags, the same database migrations, the same
 //! write-admission gate, the same managed-venv workspace service, and the same
 //! startup recovery of half-deleted agent threads. Only the wire protocol
 //! differs, so only the wire protocol lives in the bins.
 //!
 //! Deliberately absent, exactly as [`AppServices::headless`] describes: ArtNet,
-//! audio devices, and the loops. Events go to stderr, because both hosts put
+//! audio devices, and the loops. Events go to stderr, because these hosts put
 //! their protocol on stdout.
 
 use std::path::{Path, PathBuf};
@@ -139,6 +139,10 @@ fn repo_fixtures_root() -> Option<PathBuf> {
 /// does — pointing a host at an empty directory produces a fresh, fully
 /// migrated `luma.db` + `state.db`.
 ///
+/// Boot never touches the network. The principal comes from the session the app
+/// already verified — see [`auth::bootstrap_headless_admission`] for why
+/// refreshing it here would sign the app out — or from `--fixture-principal`.
+///
 /// # Errors
 ///
 /// If a path cannot be resolved, a migration fails, or write admission cannot
@@ -162,7 +166,10 @@ pub async fn boot(config: &HostConfig) -> Result<AppServices, String> {
         // derives from the verified host session.
         auth::arm_write_admission(&db.0, Some(principal)).await?;
     } else {
-        auth::bootstrap_host_admission(&db.0, &state_db.0).await?;
+        // Offline: the app's stored proof names the principal, and the same
+        // machine's headless bins are the same user. Never spend the refresh
+        // token here — it is single-use and the app owns rotation.
+        auth::bootstrap_headless_admission(&db.0, &state_db.0).await?;
     }
 
     let workspaces = std::sync::Arc::new(headless_env::workspace_service(&storage, cache_dir));

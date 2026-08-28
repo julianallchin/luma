@@ -243,7 +243,7 @@ impl Luma {
             query: String::new(),
             search,
             _search_subscription: search_subscription,
-            user: self.library.user_id().map(str::to_string),
+            user: self.library.user_id(),
             venue_focus: cx.focus_handle().tab_stop(true),
             search_focus,
         });

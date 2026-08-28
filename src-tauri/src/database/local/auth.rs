@@ -312,49 +312,55 @@ pub async fn initialize_auth_state_schema(pool: &SqlitePool) -> Result<(), Strin
         .map_err(|error| format!("Failed to commit auth state initialization: {error}"))
 }
 
-/// Bring a host's app database to a usable admission state at startup, and
-/// report the principal it admitted.
+/// Bring a headless host's app database to a usable admission state at
+/// startup, and report the principal it admitted.
 ///
 /// Nothing in the app database is readable before this runs — `auth_visible_*`
 /// and `auth_venue_access` both require an armed, accepting admission — so
-/// every host calls it before serving its first command. `Ok(None)` covers two
-/// states a caller cannot act on differently: the guest namespace, and a
-/// recovered committed sign-out, which deliberately leaves admission closed
-/// until the renderer consumes the transition.
+/// every headless host calls it before serving its first command.
+///
+/// **Trust boundary.** A headless Luma binary on this machine is the same user
+/// as the app on this machine: it reads the `StateDb` the app wrote, and the
+/// host proof stored beside the session binds a principal to those exact
+/// session bytes, so identity is established entirely offline. This is the
+/// same trust the app extends to its own stored session between refreshes.
+/// Token *rotation* is knowledge that belongs to the app's auth service alone:
+/// Supabase refresh tokens are single-use, and a headless process that spent
+/// one would break the app's next refresh — Supabase treats reuse as a leak and
+/// can revoke the whole session family. So this path never calls the network
+/// and never writes `StateDb`; an expired access token still yields its
+/// principal, because nothing headless presents a token — the principal only
+/// scopes the local library.
+///
+/// `Ok(None)` is the guest namespace: either no one has signed in on this
+/// machine (identical to what the app arms when signed out), or a sign-out
+/// committed and is waiting for the app's renderer to consume it, in which
+/// case admission stays closed and every write fails loudly rather than
+/// landing in the wrong namespace.
 ///
 /// # Errors
 ///
-/// If the persisted session cannot be read or host-verified, or the admission
-/// row cannot be armed.
-pub async fn bootstrap_host_admission(
+/// If a persisted session cannot be host-verified from its stored proof — the
+/// app must repair that, headless hosts refuse to guess an identity — or the
+/// admission row cannot be armed.
+pub async fn bootstrap_headless_admission(
     app_pool: &SqlitePool,
     state_pool: &SqlitePool,
 ) -> Result<Option<String>, String> {
-    async fn recovered(app_pool: &SqlitePool, state_pool: &SqlitePool) -> Result<bool, String> {
-        let mut connection = state_pool
-            .acquire()
-            .await
-            .map_err(|error| format!("Failed to lock authenticated session: {error}"))?;
-        recover_committed_signout(app_pool, &mut connection).await
-    }
-
-    if recovered(app_pool, state_pool).await? {
+    if committed_signout_principal(app_pool).await?.is_some() {
         return Ok(None);
     }
-    // Reading the session is what bootstraps legacy state and refreshes an
-    // expiring token, so the principal is only trustworthy afterwards — and
-    // that read can itself commit a sign-out, hence the second check.
-    get_session_item(state_pool, SUPABASE_SESSION_KEY).await?;
     let mut connection = state_pool
         .acquire()
         .await
-        .map_err(|error| format!("Failed to lock authenticated session: {error}"))?;
-    if recover_committed_signout(app_pool, &mut connection).await? {
-        return Ok(None);
-    }
-    let principal = load_verified_principal_for_connection(&mut connection)
-        .await?
-        .map(|principal| principal.user_id);
+        .map_err(|error| format!("Failed to read authenticated session: {error}"))?;
+    let principal = load_verified_snapshot_for_connection(&mut connection, unix_now(), true)
+        .await
+        .map_err(|error| {
+            format!("{error}; sign in with the Luma app on this machine to repair it")
+        })?
+        .map(|snapshot| snapshot.proof.user_id);
+    drop(connection);
     arm_write_admission(app_pool, principal.as_deref()).await?;
     Ok(principal)
 }
@@ -808,6 +814,21 @@ async fn arm_signout_transition_for_test(
     Ok(())
 }
 
+/// The principal whose app-database wipe committed, if one is awaiting the
+/// renderer's one-shot sign-out transition. Read-only: it is the journal every
+/// host inspects before deciding whether admission may be reopened.
+async fn committed_signout_principal(app_pool: &SqlitePool) -> Result<Option<String>, String> {
+    Ok(sqlx::query_scalar::<_, Option<String>>(
+        "SELECT active_uid FROM auth_write_admission
+         WHERE singleton = 1 AND armed = 1 AND accepting = 0
+           AND maintenance = 0 AND remote_writes = 0 AND active_uid IS NOT NULL",
+    )
+    .fetch_optional(app_pool)
+    .await
+    .map_err(|error| format!("Failed to inspect durable sign-out commit state: {error}"))?
+    .flatten())
+}
+
 /// Recover the cross-database commit point after a crash or a failed StateDb
 /// write. The app DB transaction itself is the journal: only a fully committed
 /// wipe leaves admission armed, closed, out of maintenance/remote-write mode,
@@ -817,17 +838,7 @@ pub async fn recover_committed_signout(
     app_pool: &SqlitePool,
     state_connection: &mut SqliteConnection,
 ) -> Result<bool, String> {
-    let committed_principal: Option<String> = sqlx::query_scalar(
-        "SELECT active_uid FROM auth_write_admission
-         WHERE singleton = 1 AND armed = 1 AND accepting = 0
-           AND maintenance = 0 AND remote_writes = 0 AND active_uid IS NOT NULL",
-    )
-    .fetch_optional(app_pool)
-    .await
-    .map_err(|error| format!("Failed to inspect durable sign-out commit state: {error}"))?
-    .flatten();
-
-    let Some(committed_principal) = committed_principal else {
+    let Some(committed_principal) = committed_signout_principal(app_pool).await? else {
         if read_signout_transition_for_connection(state_connection)
             .await?
             .is_some()
@@ -1209,7 +1220,7 @@ async fn load_verified_principal_for_connection_at(
 async fn load_verified_snapshot_for_connection(
     connection: &mut SqliteConnection,
     now: i64,
-    allow_expired_for_refresh: bool,
+    allow_expired: bool,
 ) -> Result<Option<VerifiedSnapshot>, String> {
     let session_json =
         read_raw_session_item_for_connection(connection, SUPABASE_SESSION_KEY).await?;
@@ -1221,8 +1232,7 @@ async fn load_verified_snapshot_for_connection(
             Err("Persisted Supabase session has no host-authenticated principal proof".into())
         }
         (Some(session_json), Some(proof)) => {
-            let envelope =
-                validate_snapshot_parts(&session_json, &proof, now, allow_expired_for_refresh)?;
+            let envelope = validate_snapshot_parts(&session_json, &proof, now, allow_expired)?;
             if let Some(transition) = read_signout_transition_for_connection(connection).await? {
                 validate_transition(&transition, &proof)?;
                 return Err(
@@ -1243,7 +1253,7 @@ fn validate_snapshot_parts(
     session_json: &str,
     proof: &PrincipalProof,
     now: i64,
-    allow_expired_for_refresh: bool,
+    allow_expired: bool,
 ) -> Result<SessionEnvelope, String> {
     if sha256(session_json.as_bytes()) != proof.session_sha256 {
         return Err("Persisted Supabase session does not match its host proof".into());
@@ -1252,7 +1262,7 @@ fn validate_snapshot_parts(
     if sha256(envelope.access_token.as_bytes()) != proof.access_token_sha256 {
         return Err("Persisted access token does not match its host proof".into());
     }
-    let claims = parse_and_validate_claims(&envelope.access_token, now, allow_expired_for_refresh)?;
+    let claims = parse_and_validate_claims(&envelope.access_token, now, allow_expired)?;
     let audience_json = serde_json::to_string(&claims.aud)
         .map_err(|error| format!("Failed to compare JWT audience: {error}"))?;
     if proof.user_id != proof.jwt_sub
@@ -1505,7 +1515,7 @@ fn parse_session(session_json: &str) -> Result<SessionEnvelope, String> {
 fn parse_and_validate_claims(
     access_token: &str,
     now: i64,
-    allow_expired_for_refresh: bool,
+    allow_expired: bool,
 ) -> Result<JwtClaims, String> {
     let mut segments = access_token.split('.');
     let _header = segments.next();
@@ -1533,7 +1543,7 @@ fn parse_and_validate_claims(
     if !claims.aud.contains(AUTHENTICATED_AUDIENCE) {
         return Err("Supabase access token is not for an authenticated user".into());
     }
-    if !allow_expired_for_refresh && claims.exp <= now {
+    if !allow_expired && claims.exp <= now {
         return Err("Supabase access token has expired".into());
     }
     Ok(claims)
@@ -2441,5 +2451,106 @@ mod tests {
         assert!(recover_committed_signout(&app_pool, &mut restarted_state)
             .await
             .unwrap());
+    }
+
+    /// A headless host runs long after the app's access token expired. It must
+    /// still admit the same principal, without a network call and without
+    /// rewriting the session bytes the app owns.
+    #[tokio::test]
+    async fn headless_admission_uses_an_expired_session_offline() {
+        const PAST: i64 = 1_600_000_000;
+        let state_pool = test_pool().await;
+        let app_pool = app_admission_pool("nobody", true).await;
+        let server = FakeAuthServer::new();
+        let token = jwt("alice", PAST + 600);
+        server.accept(&token, "alice");
+        let stored = session("alice", &token, "single-use-refresh");
+        let validated = validate_session_with(&stored, &server, PAST).await.unwrap();
+        let mut connection = state_pool.acquire().await.unwrap();
+        replace_session_for_connection(&mut connection, &validated)
+            .await
+            .unwrap();
+        drop(connection);
+
+        assert_eq!(
+            bootstrap_headless_admission(&app_pool, &state_pool)
+                .await
+                .unwrap(),
+            Some("alice".to_string())
+        );
+        assert_eq!(
+            admitted_principal(&app_pool).await.unwrap(),
+            Some("alice".to_string())
+        );
+        let mut connection = state_pool.acquire().await.unwrap();
+        assert_eq!(
+            read_raw_session_item_for_connection(&mut connection, SUPABASE_SESSION_KEY)
+                .await
+                .unwrap(),
+            Some(stored)
+        );
+    }
+
+    /// A committed wipe stays closed: the headless host neither reopens
+    /// admission nor arms the renderer's one-shot transition on its behalf.
+    #[tokio::test]
+    async fn headless_admission_leaves_a_committed_signout_closed() {
+        let state_pool = test_pool().await;
+        let app_pool = app_admission_pool("alice", false).await;
+        let server = FakeAuthServer::new();
+        let token = jwt("alice", NOW + 600);
+        server.accept(&token, "alice");
+        install_with(&state_pool, &server, &session("alice", &token, "refresh"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            bootstrap_headless_admission(&app_pool, &state_pool)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(admitted_principal(&app_pool).await.is_err());
+        let mut connection = state_pool.acquire().await.unwrap();
+        assert!(read_signout_transition_for_connection(&mut connection)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// Nobody signed in on this machine is the guest namespace, exactly as the
+    /// app arms it — not a hard failure.
+    #[tokio::test]
+    async fn headless_admission_without_a_session_is_the_guest_namespace() {
+        let state_pool = test_pool().await;
+        let app_pool = app_admission_pool("stale", true).await;
+        assert_eq!(
+            bootstrap_headless_admission(&app_pool, &state_pool)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(admitted_principal(&app_pool).await.unwrap(), None);
+    }
+
+    /// An unproven (legacy) session cannot be verified offline. Guessing the
+    /// identity from renderer JSON would scope the library wrong, so refuse.
+    #[tokio::test]
+    async fn headless_admission_refuses_an_unproven_session() {
+        let state_pool = test_pool().await;
+        let app_pool = app_admission_pool("stale", true).await;
+        set_raw_session_item(
+            &state_pool,
+            SUPABASE_SESSION_KEY,
+            &session("legacy", &jwt("legacy", NOW + 600), "refresh"),
+        )
+        .await
+        .unwrap();
+
+        let error = bootstrap_headless_admission(&app_pool, &state_pool)
+            .await
+            .unwrap_err();
+        assert!(error.contains("host-authenticated principal proof"));
+        assert!(error.contains("sign in with the Luma app"));
     }
 }

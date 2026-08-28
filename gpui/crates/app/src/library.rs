@@ -49,9 +49,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-#[cfg(feature = "agent")]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{de::DeserializeOwned, Deserialize};
@@ -61,7 +59,7 @@ use luma_lib::agent::model::ModelClient;
 use luma_lib::agent::tools::ToolRegistry;
 use luma_lib::agent::{AgentService, ThreadScope};
 use luma_lib::agent_execution::headless_env;
-use luma_lib::database::local::auth::bootstrap_host_admission;
+use luma_lib::database::local::auth::{arm_write_admission, bootstrap_headless_admission};
 use luma_lib::database::local::database::init_app_db_at;
 use luma_lib::database::local::state::init_state_db_at;
 use luma_lib::dispatch::{dispatch, AppServices, CommandError, EventSink, Events, SharedServices};
@@ -499,9 +497,19 @@ impl std::error::Error for LibraryError {}
 /// A connection to the real Luma library.
 pub struct Library {
     services: SharedServices,
-    /// Who the app database admitted at startup. `None` is the guest
-    /// namespace, which is also what an un-signed-in host gets.
-    user_id: Option<String>,
+    /// Who the app database admitted. `None` is the guest namespace, which is
+    /// also what an un-signed-in host gets.
+    ///
+    /// Shared and mutable because identity is no longer fixed for the life of
+    /// the process: signing in and signing out both move it, and every row a
+    /// screen writes afterwards is stamped with what this says. The database's
+    /// `auth_write_admission.active_uid` remains the authority — this is the
+    /// cache of it, written through at the two moments it can change.
+    user_id: Arc<Mutex<Option<String>>>,
+    /// Why boot admitted the guest namespace despite finding credentials —
+    /// see [`Library::lapsed`]. Fixed at open: it is a fact about how this
+    /// process started, and signing in afterwards does not rewrite it.
+    lapsed: Option<String>,
     /// Owns the reactor every dispatched command runs on. Dropping it cancels
     /// in-flight work, so it lives exactly as long as the `Library`.
     runtime: tokio::runtime::Runtime,
@@ -572,13 +580,49 @@ impl Library {
             import_delay: Arc::clone(&source_import_fixture_delay),
             fallback: system_track_sources(),
         });
-        let (services, user_id) = runtime.block_on(async {
+        let (services, user_id, lapsed) = runtime.block_on(async {
             let db = init_app_db_at(storage.path()).await?;
             let state_db = init_state_db_at(storage.path()).await?;
             // Admission is host bootstrap, not a command: until it is armed
             // every `auth_visible_*` view is empty, so a host that skipped
             // this would show an empty library and no error to explain it.
-            let user_id = bootstrap_host_admission(&db.0, &state_db.0).await?;
+            //
+            // Offline, and deliberately: `bootstrap_headless_admission`
+            // proves the stored session against the host proof beside it and
+            // never spends the single-use refresh token. Whether Supabase
+            // still honours that token is a question for the network, and a
+            // question the network can refuse to answer — asking it here is
+            // what made a dead token, or an airport, into a launch failure.
+            //
+            // So auth is never a reason not to open. Anything short of a
+            // proven principal is the guest namespace, which is a *working*
+            // library: guest rows carry no `uid` and the admission triggers
+            // admit those unconditionally. The shell shows sign-in over it
+            // (see `crate::signin`); the user can also just work offline.
+            //
+            // Arming guest explicitly rather than trusting the bootstrap's
+            // own arming covers the one state it deliberately leaves closed —
+            // a committed sign-out still waiting for a renderer to consume its
+            // journal. That journal outlives this and is consumed by the next
+            // sign-in's identity switch; leaving admission shut instead would
+            // fail every read with "App database admission is closed".
+            let (user_id, lapsed) = match bootstrap_headless_admission(&db.0, &state_db.0).await {
+                Ok(Some(user_id)) => (Some(user_id), None),
+                // Nothing stored, or a sign-out that already committed. The
+                // guest namespace on purpose, so nothing is owed the user.
+                Ok(None) => {
+                    arm_write_admission(&db.0, None).await?;
+                    (None, None)
+                }
+                // Credentials are on this machine and cannot be turned into a
+                // principal. Only signing in again repairs that, which is the
+                // one state that owes the user the gate.
+                Err(error) => {
+                    eprintln!("[luma] the stored session no longer proves anyone: {error}");
+                    arm_write_admission(&db.0, None).await?;
+                    (None, Some(error))
+                }
+            };
             // This host runs the agent, and the agent's only tool is Python —
             // so it resolves the same managed environment the Tauri app
             // created, through the one resolver every non-Tauri host shares.
@@ -599,7 +643,7 @@ impl Library {
                 .apply_persisted_settings()
                 .await
                 .map_err(|error| error.to_string())?;
-            Ok::<_, String>((services, user_id))
+            Ok::<_, String>((services, user_id, lapsed))
         })?;
 
         let services = services.into_shared();
@@ -631,7 +675,8 @@ impl Library {
 
         Ok(Self {
             services,
-            user_id,
+            user_id: Arc::new(Mutex::new(user_id)),
+            lapsed,
             runtime,
             import_progress: progress_tx,
             session_writes,
@@ -717,11 +762,71 @@ impl Library {
         self.source_fixture.lock().unwrap().clone()
     }
 
-    /// The signed-in principal, or `None` for the guest namespace. Identity is
-    /// fixed for the life of the process here — this host has no sign-in — so
-    /// it is a field rather than a query.
-    pub fn user_id(&self) -> Option<&str> {
-        self.user_id.as_deref()
+    /// Why the stored session could not be verified at launch, if there was
+    /// one to verify.
+    ///
+    /// Distinct from `user_id().is_none()`, and the distinction is the whole
+    /// point: a library nobody has signed into is a guest library, which is a
+    /// working library and owes the user nothing. A library holding
+    /// credentials that no longer prove anyone has lost something the user
+    /// had, and only signing in again gets it back — so that is the one state
+    /// that raises the sign-in gate unasked.
+    pub fn lapsed(&self) -> Option<&str> {
+        self.lapsed.as_deref()
+    }
+
+    /// The signed-in principal, or `None` for the guest namespace.
+    pub fn user_id(&self) -> Option<String> {
+        self.user_id.lock().unwrap().clone()
+    }
+
+    /// Email a six-digit login code to `email`.
+    pub fn send_login_code(
+        &self,
+        email: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("send_login_code", json!({ "email": email }))
+    }
+
+    /// Exchange an emailed code for a session and adopt the principal it
+    /// proves. The host performs the identity switch; this only refreshes the
+    /// cached answer to [`Library::user_id`] so rows written next carry it.
+    pub fn verify_login_code(
+        &self,
+        email: &str,
+        code: &str,
+    ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
+        let pending =
+            self.call::<String>("verify_login_code", json!({ "email": email, "code": code }));
+        let cache = Arc::clone(&self.user_id);
+        async move {
+            let user_id = pending.await?;
+            *cache.lock().unwrap() = Some(user_id.clone());
+            Ok(user_id)
+        }
+    }
+
+    /// Sign out: make the signed-in projection durable, wipe it, then release
+    /// the session.
+    ///
+    /// Two commands in this order because they are two commit points and only
+    /// this order is recoverable — `wipe_database` is the durability boundary
+    /// and leaves a journal that `remove_session_item` consumes. The web store
+    /// sequences them identically; a host that reversed them would delete the
+    /// credential it still needs to flush with.
+    pub fn sign_out(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let wipe = self.call::<Value>("wipe_database", json!({}));
+        let release = self.call::<Value>(
+            "remove_session_item",
+            json!({ "key": luma_lib::database::local::auth::SUPABASE_SESSION_KEY }),
+        );
+        let cache = Arc::clone(&self.user_id);
+        async move {
+            wipe.await?;
+            release.await?;
+            *cache.lock().unwrap() = None;
+            Ok(())
+        }
     }
 
     /// Every venue in the library, newest activity first.

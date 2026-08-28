@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**187 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
+**189 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -19,7 +19,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `agent_threads` | 7 | `src-tauri/src/dispatch/handlers/agent_threads.rs` |
 | `annotation_preview` | 5 | `src-tauri/src/dispatch/handlers/annotation_preview.rs` |
 | `artnet` | 3 | `src-tauri/src/dispatch/handlers/artnet.rs` |
-| `auth` | 4 | `src-tauri/src/dispatch/handlers/auth.rs` |
+| `auth` | 6 | `src-tauri/src/dispatch/handlers/auth.rs` |
 | `authored_state` | 11 | `src-tauri/src/dispatch/handlers/authored_state.rs` |
 | `categories` | 1 | `src-tauri/src/dispatch/handlers/categories.rs` |
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
@@ -46,7 +46,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **187** | |
+| **total** | **189** | |
 
 ## Commands
 
@@ -101,6 +101,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
+| `send_login_code` | `email: String` | `()` |
+| `verify_login_code` | `email: String`<br>`code: String` | `String` |
 | `get_session_item` | `key: String` | `Option<String>` |
 | `set_session_item` | `key: String`<br>`value: String` | `()` |
 | `remove_session_item` | `key: String` | `()` |

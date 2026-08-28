@@ -499,7 +499,7 @@ impl Fixture {
         let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
             .await
             .expect("failed to open the fixture state database");
-        luma_lib::database::local::auth::bootstrap_host_admission(&db.0, &state_db.0)
+        luma_lib::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
             .await
             .expect("failed to arm admission");
         let storage = luma_lib::storage::StorageRoot::from_path(config_dir.to_path_buf());
@@ -850,6 +850,7 @@ pub fn wav(seconds: u32) -> Vec<u8> {
 
 #[cfg(feature = "pixel")]
 pub mod image;
+pub mod session;
 
 /// Reading `app.timings()` — shared so two suites cannot disagree about what a
 /// percentile means.

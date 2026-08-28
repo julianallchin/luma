@@ -30,17 +30,19 @@ use crate::Luma;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     General,
+    Account,
     Ai,
     ArtNet,
     About,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::General, Tab::Ai, Tab::ArtNet, Tab::About];
+    const ALL: [Tab; 5] = [Tab::General, Tab::Account, Tab::Ai, Tab::ArtNet, Tab::About];
 
     fn label(self) -> &'static str {
         match self {
             Tab::General => "General",
+            Tab::Account => "Account",
             Tab::Ai => "AI",
             Tab::ArtNet => "Art-Net / DMX",
             Tab::About => "About",
@@ -59,15 +61,27 @@ pub struct Settings {
     /// the key is enough of an identity because no two selects on this screen
     /// write the same setting.
     open_menu: Option<&'static str>,
+    /// The principal admitted when this screen opened, and after any sign-out
+    /// it performs. A snapshot rather than a live read for the same reason
+    /// `values` is one: the screen shows what the host said, so a transition
+    /// that failed shows as the row not changing.
+    account: Option<String>,
+    /// A sign-out is in flight. It is a multi-command durability boundary —
+    /// flush, wipe, release — and pressing it twice would race its own journal.
+    signing_out: bool,
+    account_error: Option<String>,
 }
 
 impl Settings {
-    fn new() -> Self {
+    fn new(account: Option<String>) -> Self {
         Self {
             tab: Tab::General,
             values: None,
             error: None,
             open_menu: None,
+            account,
+            signing_out: false,
+            account_error: None,
         }
     }
 }
@@ -88,8 +102,9 @@ impl Luma {
         ) {
             return;
         }
+        let account = self.library.user_id();
         self.overlay
-            .open(crate::shell::Overlay::Settings(Settings::new()));
+            .open(crate::shell::Overlay::Settings(Settings::new(account)));
         cx.notify();
         self.reload_settings(cx);
     }
@@ -124,6 +139,48 @@ impl Luma {
     }
 
     /// Write one setting, then read every setting back.
+    /// Leave settings for the sign-in gate. One dialog is up at a time, so
+    /// this is a replacement, not a stack.
+    fn sign_in_from_settings(&mut self, cx: &mut Context<Self>) {
+        self.close_overlay(cx);
+        self.show_sign_in(cx);
+    }
+
+    /// Sign out, and show the result where it was asked for. The screen is not
+    /// dismissed on success: sign-out is a long durability boundary and the row
+    /// changing to "Signed out" is the only honest proof it landed.
+    fn sign_out(&mut self, cx: &mut Context<Self>) {
+        let Some(crate::shell::Overlay::Settings(state)) = self.overlay.open_mut() else {
+            return;
+        };
+        if state.signing_out {
+            return;
+        }
+        state.signing_out = true;
+        state.account_error = None;
+        let pending = self.library.sign_out();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.with_settings(cx, |state| {
+                    state.signing_out = false;
+                    match result {
+                        Ok(()) => {
+                            state.account = None;
+                            state.account_error = None;
+                        }
+                        Err(error) => {
+                            state.account_error = Some(format!("Could not sign out: {error}"));
+                        }
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn write_setting(&mut self, key: &str, value: String, cx: &mut Context<Self>) {
         self.with_settings(cx, |state| state.open_menu = None);
         let pending = self.library.set_setting(key, &value);
@@ -250,6 +307,7 @@ fn body(state: &Settings, values: &AppSettings, error: Option<&str>, app: &Entit
         })
         .children(match state.tab {
             Tab::General => general(values, app),
+            Tab::Account => account(state, app),
             Tab::Ai => ai(state, values, app),
             Tab::ArtNet => artnet(values, app),
             Tab::About => about(),
@@ -370,6 +428,69 @@ fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         // result, so it lands with them.
         note("Text fields and node discovery are not editable from the native host yet."),
     ]
+}
+
+/// Who this library belongs to, and the one gesture that changes it.
+///
+/// The web app hangs sign-out off a titlebar dropdown; there is no titlebar
+/// here (see `crate::chrome`), and the gear that opens this screen sits in the
+/// same corner that dropdown did. So this *is* the account menu.
+fn account(state: &Settings, app: &Entity<Luma>) -> Vec<Div> {
+    let signed_in = state.account.is_some();
+    let identity = state
+        .account
+        .clone()
+        .unwrap_or_else(|| "Signed out — working locally".to_string());
+    let label = if state.signing_out {
+        "Signing out…"
+    } else if signed_in {
+        "Sign out"
+    } else {
+        "Sign in"
+    };
+    let pressable = !state.signing_out;
+    let act = app.clone();
+    let mut rows = vec![
+        field(Some("Signed in as"), readonly_value(&identity, ""), None),
+        field(
+            None,
+            luma_ui::luma_button(label, if pressable { Enabled::Yes } else { Enabled::No })
+                .id("settings-account-action")
+                .when(pressable, |button| {
+                    button.on_click(move |_, _, cx| {
+                        act.update(cx, |this, cx| {
+                            if signed_in {
+                                this.sign_out(cx);
+                            } else {
+                                this.sign_in_from_settings(cx);
+                            }
+                        });
+                    })
+                })
+                .agent_node(Role::Button, label)
+                .agent_disabled(!pressable)
+                .into_any_element(),
+            Some(if signed_in {
+                "Signing out flushes this library to the cloud, then removes the signed-in copy. Guest work stays."
+            } else {
+                "Signing in claims the rows you write from here; work already done as a guest stays a guest's."
+            }),
+        ),
+    ];
+    if let Some(error) = &state.account_error {
+        rows.push(field(
+            None,
+            div()
+                .max_w(px(560.))
+                .text_size(px(12.))
+                .text_color(ladder::danger())
+                .child(error.clone())
+                .agent_node(Role::Text, error.clone())
+                .into_any_element(),
+            None,
+        ));
+    }
+    rows
 }
 
 fn about() -> Vec<Div> {
