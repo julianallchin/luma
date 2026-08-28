@@ -485,7 +485,7 @@ pub fn btn_primary_chip() -> Div {
 
 /// The emphasised fill, once, so the button and its chip cannot drift apart in
 /// colour the way they legitimately differ in size.
-fn btn_primary_paint(shape: Div) -> Div {
+pub(crate) fn btn_primary_paint(shape: Div) -> Div {
     shape
         .bg(glass::ink(0.92))
         .font_weight(FontWeight::MEDIUM)
