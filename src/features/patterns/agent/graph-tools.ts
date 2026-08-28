@@ -441,7 +441,7 @@ export function buildGraphAgentTools(b: GraphAgentBindings) {
 argType + defaultValue shapes:
   Color     -> { r, g, b, a }            (0-255, a 0-1)
   Scalar    -> a bare number
-  Selection -> { expression, spatialReference }  — ALWAYS set expression to "all"; never bake a venue-specific selection into a pattern. Use set_preview_selection to preview on specific groups.
+  Selection -> { expression }             — ALWAYS set expression to "all"; never bake a venue-specific selection into a pattern. Use set_preview_selection to preview on specific groups.
   Palette   -> { colors: ["#rrggbb", …] }
   Gradient  -> { stops: [{ color: "#rrggbb", t: 0..1 }, …] }
 
@@ -483,14 +483,11 @@ The pattern_args node's output ports update to match. Wire nodes from pattern_ar
 			// pattern; venue-specific previewing goes through set_preview_selection.
 			const normalized = args.map((a) => {
 				if (a.argType === "Selection") {
-					const dv = (a.defaultValue ?? {}) as Record<string, unknown>;
+					const { spatialReference: _dead, ...dv } = (a.defaultValue ??
+						{}) as Record<string, unknown>;
 					return {
 						...a,
-						defaultValue: {
-							...dv,
-							expression: "all",
-							spatialReference: dv.spatialReference ?? "global",
-						},
+						defaultValue: { ...dv, expression: "all" },
 					};
 				}
 				return a;

@@ -305,16 +305,11 @@ fn upgrade_argument_values(implementation_id: &str, graph: &mut Graph) -> Result
                 let Some(default) = arg.default_value.as_object() else {
                     continue;
                 };
-                let (Some(expression), Some(spatial_reference)) = (
-                    default.get("expression").and_then(Value::as_str),
-                    default.get("spatialReference").and_then(Value::as_str),
-                ) else {
+                let Some(expression) = default.get("expression").and_then(Value::as_str) else {
                     continue;
                 };
                 if is_legacy_string_spread(default, expression) {
-                    arg.default_value = Selection::new(expression)
-                        .with_spatial_reference(spatial_reference)
-                        .to_value();
+                    arg.default_value = Selection::new(expression).to_value();
                     changed = true;
                 }
             }
@@ -449,6 +444,8 @@ fn migrate_select_nodes(implementation_id: &str, graph: &mut Graph) -> Result<bo
         if let Some(param) = node
             .params
             .keys()
+            // `spatial_reference` is a dead legacy param: known, so it does not
+            // fail the upgrade, and dropped rather than carried forward.
             .find(|param| !matches!(param.as_str(), "tag_expression" | "spatial_reference"))
         {
             return Err(format!(
@@ -473,8 +470,6 @@ fn migrate_select_nodes(implementation_id: &str, graph: &mut Graph) -> Result<bo
             ));
         }
         let expression = legacy_truthy_text(implementation_id, &node, "tag_expression", "all")?;
-        let spatial_reference =
-            legacy_truthy_text(implementation_id, &node, "spatial_reference", "global")?;
         let mut arg_id = "selection".to_string();
         let mut suffix = 2;
         while graph.args.iter().any(|arg| arg.id == arg_id) {
@@ -485,9 +480,7 @@ fn migrate_select_nodes(implementation_id: &str, graph: &mut Graph) -> Result<bo
             id: arg_id.clone(),
             name: arg_id.clone(),
             arg_type: PatternArgType::Selection,
-            default_value: Selection::new(expression)
-                .with_spatial_reference(spatial_reference)
-                .to_value(),
+            default_value: Selection::new(expression).to_value(),
         });
         for edge in &mut graph.edges {
             if edge.from_node == node.id && edge.from_port == "out" {
@@ -819,16 +812,10 @@ mod tests {
             .iter()
             .find(|arg| arg.id == "selection_2")
             .unwrap();
-        assert_eq!(
-            selection.default_value,
-            json!({"expression":"front_wash","spatialReference":"group_local"})
-        );
+        assert_eq!(selection.default_value, json!({"expression":"front_wash"}));
         let fixtures = graph.args.iter().find(|arg| arg.id == "fixtures").unwrap();
         assert_eq!(fixtures.name, "fixtures");
-        assert_eq!(
-            fixtures.default_value,
-            json!({"expression":"all","spatialReference":"global"})
-        );
+        assert_eq!(fixtures.default_value, json!({"expression":"all"}));
         assert_eq!(
             graph
                 .args

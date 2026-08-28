@@ -229,7 +229,6 @@ pub fn clips_to_document(
         })?;
 
         let mut selection = None;
-        let mut selection_spatial_reference = None;
         let mut represented_selection_key = None;
         for definition in &pattern.args {
             if definition.arg_type != PatternArgType::Selection {
@@ -238,9 +237,8 @@ pub fn clips_to_document(
             let Some(value) = raw_args.get(&definition.id) else {
                 continue;
             };
-            if let Some((expression, spatial_reference)) = canonical_selection(value) {
+            if let Some(expression) = canonical_selection(value) {
                 selection = Some(expression);
-                selection_spatial_reference = Some(spatial_reference);
                 represented_selection_key = Some(definition.id.as_str());
                 break;
             }
@@ -287,7 +285,6 @@ pub fn clips_to_document(
             pattern: pattern.name.clone(),
             pattern_id: Some(clip.pattern_id.clone()),
             selection,
-            selection_spatial_reference,
             range,
             args,
             blend: clip.blend_mode,
@@ -375,7 +372,6 @@ pub fn clips_to_canonical_document(
             pattern: pattern.clone(),
             pattern_id: Some(clip.pattern_id.clone()),
             selection: None,
-            selection_spatial_reference: None,
             range: BarRange {
                 start: clip.start_time,
                 end: clip.end_time,
@@ -570,7 +566,7 @@ fn canonical_document_to_clips(document: &Document) -> Result<Vec<TrackClip>, Co
                     Some(annotation.span),
                 )
             })?;
-            if annotation.selection.is_some() || annotation.selection_spatial_reference.is_some() {
+            if annotation.selection.is_some() {
                 return Err(compile_error(
                     CompileErrorCode::NonCanonicalSelection,
                     format!(
@@ -888,14 +884,7 @@ fn compile_arguments(
         }) {
             args.insert(
                 definition.id.clone(),
-                Selection::new(serialize_group_expression(selection))
-                    .with_spatial_reference(
-                        annotation
-                            .selection_spatial_reference
-                            .as_deref()
-                            .unwrap_or("global"),
-                    )
-                    .to_value(),
+                Selection::new(serialize_group_expression(selection)).to_value(),
             );
         }
     }
@@ -980,26 +969,26 @@ fn number_value(value: f64) -> Value {
     }
 }
 
-/// The DSL's `selection` sugar carries an expression and a space, and nothing
-/// else — so a selection with a `subset` fails the two-key test here and is
-/// exported as a plain JSON arg instead, which is lossless but unsugared.
-fn canonical_selection(value: &Value) -> Option<(GroupExpr, String)> {
+/// The DSL's `selection` sugar carries an expression and nothing else — a
+/// selection with a `subset`, or any other content, is exported as a plain JSON
+/// arg instead, which is lossless but unsugared. `spatialReference` is the one
+/// key that does not count as content: selections written before it was deleted
+/// still carry it, and it means nothing.
+fn canonical_selection(value: &Value) -> Option<GroupExpr> {
     let object = value.as_object()?;
-    if object.len() != 2
-        || !object.contains_key("expression")
-        || !object.contains_key("spatialReference")
+    if !object
+        .keys()
+        .all(|key| matches!(key.as_str(), "expression" | "spatialReference"))
     {
         return None;
     }
     let expression = object.get("expression")?.as_str()?;
-    let spatial_reference = object.get("spatialReference")?.as_str()?;
     if expression.trim().is_empty()
         || !expression.chars().all(|character| {
             character.is_ascii_alphanumeric()
                 || matches!(character, '_' | '~' | '&' | '|' | '^' | '>' | '(' | ')')
                 || character.is_whitespace()
         })
-        || !is_identifier(spatial_reference)
     {
         return None;
     }
@@ -1007,7 +996,7 @@ fn canonical_selection(value: &Value) -> Option<(GroupExpr, String)> {
     if serialize_group_expression(&parsed) != expression {
         return None;
     }
-    Some((parsed, spatial_reference.to_owned()))
+    Some(parsed)
 }
 
 pub fn parse_group_expression(source: &str) -> Result<GroupExpr, CompileError> {

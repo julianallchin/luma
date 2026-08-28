@@ -6,7 +6,7 @@
 //! Python — goes through this type rather than re-spelling the object.
 //!
 //! ```json
-//! { "expression": "front_wash & left", "spatialReference": "global", "subset": {"fraction": 0.5} }
+//! { "expression": "front_wash & left", "subset": {"fraction": 0.5} }
 //! ```
 //!
 //! *Which* is the group expression alone: there is no positional grammar, so a
@@ -14,9 +14,10 @@
 //! a separate field.
 //!
 //! Absence is meaning, not an error: a value without `subset` is the whole set,
-//! and one without `spatialReference` is `global` — so every selection stored
-//! before this field existed reads back unchanged, and an all-subset never
-//! serializes the key.
+//! so a selection stored before that field existed reads back unchanged and an
+//! all-subset never serializes the key. Keys this type does not name — a
+//! `spatialReference` from an older writer, the junk of the legacy string-spread
+//! bug — are dropped on read and never written back.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,10 +64,6 @@ impl Subset {
     }
 }
 
-fn global() -> String {
-    "global".to_owned()
-}
-
 /// A Selection arg value.
 ///
 /// Deserializing tolerates the two optional halves being absent (see the module
@@ -76,8 +73,6 @@ fn global() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Selection {
     pub expression: String,
-    #[serde(default = "global")]
-    pub spatial_reference: String,
     /// Skipped when `All` so a selection that never used a subset keeps the
     /// exact bytes it had before the field existed.
     #[serde(default, skip_serializing_if = "Subset::is_all")]
@@ -91,20 +86,13 @@ impl Selection {
         Self::new("all")
     }
 
-    /// A whole-set selection over `expression`, in the `global` space.
+    /// A whole-set selection over `expression`.
     #[must_use]
     pub fn new(expression: impl Into<String>) -> Self {
         Self {
             expression: expression.into(),
-            spatial_reference: global(),
             subset: Subset::All,
         }
-    }
-
-    #[must_use]
-    pub fn with_spatial_reference(mut self, spatial_reference: impl Into<String>) -> Self {
-        self.spatial_reference = spatial_reference.into();
-        self
     }
 
     #[must_use]
@@ -132,21 +120,28 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The zero-migration promise: a stored two-key selection reads back as an
-    /// all-subset, and writing it emits the same two keys.
+    /// The zero-migration promise: a stored expression-only selection reads
+    /// back as an all-subset and writes the same single key.
     #[test]
     fn absence_of_subset_round_trips_as_all() {
-        let value = json!({"expression": "front_wash", "spatialReference": "group_local"});
+        let value = json!({"expression": "front_wash"});
         let selection = Selection::from_value(&value).unwrap();
         assert_eq!(selection.subset, Subset::All);
         assert_eq!(selection.to_value(), value);
     }
 
+    /// Stored selections still carry `spatialReference`, which no longer means
+    /// anything: reading tolerates it and writing drops it.
     #[test]
-    fn both_optional_halves_may_be_absent() {
-        let selection = Selection::from_value(&json!({"expression": "all"})).unwrap();
-        assert_eq!(selection.spatial_reference, "global");
-        assert_eq!(selection.subset, Subset::All);
+    fn a_stored_spatial_reference_loads_and_is_dropped_on_save() {
+        for stored in [
+            json!({"expression": "front_wash", "spatialReference": "global"}),
+            json!({"expression": "front_wash", "spatialReference": "group_local"}),
+        ] {
+            let selection = Selection::from_value(&stored).unwrap();
+            assert_eq!(selection.expression, "front_wash");
+            assert_eq!(selection.to_value(), json!({"expression": "front_wash"}));
+        }
     }
 
     #[test]
@@ -155,11 +150,7 @@ mod tests {
             (json!({"fraction": 0.5}), Subset::Fraction(0.5)),
             (json!({"count": 3}), Subset::Count(3)),
         ] {
-            let value = json!({
-                "expression": "spots",
-                "spatialReference": "global",
-                "subset": wire,
-            });
+            let value = json!({"expression": "spots", "subset": wire});
             let selection = Selection::from_value(&value).unwrap();
             assert_eq!(selection.subset, subset);
             assert_eq!(selection.to_value(), value);

@@ -326,10 +326,7 @@ mod tests {
             z_index: -2,
             blend_mode: BlendMode::Add,
             args: json!({
-                "selection": {
-                    "expression": "front & left",
-                    "spatialReference": "group_local"
-                },
+                "selection": {"expression": "front & left", "spatialReference": "group_local"},
                 "gain": 0.625,
                 "orphaned_arg": {"nested": [true, null, "preserved"]}
             }),
@@ -340,9 +337,14 @@ mod tests {
             &context.registry,
         )
         .expect("stale graph internals must not block score export");
+        // The exemplar round trip is lossless in every field that means
+        // something: the dead `spatialReference` the clip was stored with is
+        // sugared away on export and not written back on import.
+        let mut expected = clip.clone();
+        expected.args["selection"] = json!({"expression": "front & left"});
         assert_eq!(
             document_to_clips(&document, &context.beat_grid, &context.registry).unwrap(),
-            vec![clip]
+            vec![expected]
         );
 
         compile_import_track_document("good[\"good-pattern\"](all) @0s-1s", &context, true)

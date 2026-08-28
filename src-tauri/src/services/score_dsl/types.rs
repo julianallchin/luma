@@ -200,7 +200,6 @@ pub struct Annotation {
     pub pattern_id: Option<String>,
     /// `None` is an absent Selection override; `Some(all)` is explicit `all`.
     pub selection: Option<GroupExpr>,
-    pub selection_spatial_reference: Option<String>,
     pub range: BarRange,
     pub args: Vec<Arg>,
     pub blend: BlendMode,

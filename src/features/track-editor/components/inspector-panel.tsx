@@ -41,7 +41,6 @@ type RgbaValue = { r: number; g: number; b: number; a?: number };
 
 type SelectionValue = {
 	expression: string;
-	spatialReference: string;
 	// "all" | { fraction } | { count }; absent means all. Carried, not edited
 	// here — the gpui strip owns the subset control.
 	subset?: unknown;
@@ -123,18 +122,15 @@ function ScalarArgInput({
 
 /** Selection (tag-expression) arg editor. Unlike colors/sliders, the expression
  * must NOT live-update per keystroke (half-typed expressions are invalid and
- * expensive to resolve). It holds a local draft and only commits on Enter / blur;
- * the spatial-reference dropdown commits immediately. */
+ * expensive to resolve). It holds a local draft and only commits on Enter / blur. */
 function SelectionArgEditor({
 	expression,
-	spatialReference,
 	venueId,
 	onCommit,
 }: {
 	expression: string;
-	spatialReference: string;
 	venueId: string | null;
-	onCommit: (expression: string, spatialReference: string) => void;
+	onCommit: (expression: string) => void;
 }) {
 	const [draft, setDraft] = useState(expression);
 	// Re-sync the draft when the committed value changes externally (undo, or
@@ -143,26 +139,12 @@ function SelectionArgEditor({
 		setDraft(expression);
 	}, [expression]);
 	return (
-		<>
-			<GroupExpressionEditor
-				value={draft}
-				onChange={setDraft}
-				onCommit={(v) => onCommit(v, spatialReference)}
-				venueId={venueId}
-			/>
-			<Select
-				value={spatialReference}
-				onValueChange={(value) => onCommit(draft, value)}
-			>
-				<SelectTrigger className="w-full">
-					<SelectValue />
-				</SelectTrigger>
-				<SelectContent>
-					<SelectItem value="global">Global</SelectItem>
-					<SelectItem value="group_local">Group Local</SelectItem>
-				</SelectContent>
-			</Select>
-		</>
+		<GroupExpressionEditor
+			value={draft}
+			onChange={setDraft}
+			onCommit={onCommit}
+			venueId={venueId}
+		/>
 	);
 }
 
@@ -617,13 +599,10 @@ export function InspectorPanel() {
 								if (arg.argType === "Selection") {
 									const defaultSelection = (arg.defaultValue ?? {
 										expression: "all",
-										spatialReference: "global",
 									}) as SelectionValue;
 									const selectionValue = (currentValue ??
 										defaultSelection) as SelectionValue;
 									const expression = selectionValue.expression ?? "all";
-									const spatialReference =
-										selectionValue.spatialReference ?? "global";
 
 									return (
 										<div key={arg.id} className="space-y-2">
@@ -750,16 +729,17 @@ export function InspectorPanel() {
 											</div>
 											<SelectionArgEditor
 												expression={expression}
-												spatialReference={spatialReference}
 												venueId={currentVenueId}
-												onCommit={(expr, spatial) =>
-													// Spread first: the value carries a `subset` this
-													// editor does not show, and editing the expression
-													// must not silently drop it.
+												onCommit={(expr) =>
+													// The wire shape is exactly what Rust's `Selection`
+													// writes: the expression, plus the `subset` this
+													// editor does not show but must not drop. Anything
+													// else a stored value carries is not part of it.
 													updateArgs(arg.id, {
-														...selectionValue,
 														expression: expr,
-														spatialReference: spatial,
+														...(selectionValue.subset === undefined
+															? {}
+															: { subset: selectionValue.subset }),
 													})
 												}
 											/>

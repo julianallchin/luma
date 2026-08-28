@@ -1192,7 +1192,7 @@ def _selection(expression: str, subset: Any = None) -> dict[str, Any]:
     expression = str(expression).strip()
     if not expression:
         raise TrackError("Selection expression cannot be empty")
-    value: dict[str, Any] = {"expression": expression, "spatialReference": "global"}
+    value: dict[str, Any] = {"expression": expression}
     if subset is not None:
         value["subset"] = _subset(subset)
     return value

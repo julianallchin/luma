@@ -36,7 +36,6 @@ pub enum SerializeError {
     CanonicalSelectionSugar { clip_id: String },
     CanonicalArgumentSugar { clip_id: String, key: String },
     DuplicateArgument { clip_id: String, key: String },
-    InvalidSpatialReference { value: String },
     UnrepresentableBarPosition { value: String },
     InvalidJsonNumber,
 }
@@ -86,10 +85,6 @@ impl fmt::Display for SerializeError {
             Self::DuplicateArgument { clip_id, key } => write!(
                 formatter,
                 "canonical clip {clip_id:?} assigns arg {key:?} more than once"
-            ),
-            Self::InvalidSpatialReference { value } => write!(
-                formatter,
-                "selection spatial reference {value:?} is not a DSL identifier"
             ),
             Self::UnrepresentableBarPosition { value } => write!(
                 formatter,
@@ -311,36 +306,15 @@ fn serialize_annotation(
             clip_id: annotation.id.clone().expect("checked above"),
         });
     }
-    if mode == CanonicalMode::Stable
-        && (annotation.selection.is_some() || annotation.selection_spatial_reference.is_some())
-    {
+    if mode == CanonicalMode::Stable && annotation.selection.is_some() {
         return Err(SerializeError::CanonicalSelectionSugar {
             clip_id: annotation.id.clone().expect("checked above"),
         });
     }
-    let selection = if let Some(selection) = &annotation.selection {
-        let expression = serialize_group_expression(selection);
-        if annotation
-            .selection_spatial_reference
-            .as_deref()
-            .is_none_or(|value| value == "global")
-        {
-            expression
-        } else {
-            let spatial_reference = annotation
-                .selection_spatial_reference
-                .as_deref()
-                .expect("checked above");
-            if !is_identifier(spatial_reference) {
-                return Err(SerializeError::InvalidSpatialReference {
-                    value: spatial_reference.to_owned(),
-                });
-            }
-            format!("{spatial_reference}: {expression}")
-        }
-    } else {
-        String::new()
-    };
+    let selection = annotation
+        .selection
+        .as_ref()
+        .map_or_else(String::new, serialize_group_expression);
     parts.push(format!("{pattern_reference}({selection})"));
     parts.push(serialize_range(annotation.range, options)?);
 

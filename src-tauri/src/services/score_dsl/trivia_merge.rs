@@ -581,7 +581,6 @@ mod tests {
             pattern: "solid_color".to_owned(),
             pattern_id: Some("pattern-id".to_owned()),
             selection: None,
-            selection_spatial_reference: None,
             range: BarRange {
                 start: 0.0,
                 end: 1.0,
