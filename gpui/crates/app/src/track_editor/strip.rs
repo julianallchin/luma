@@ -42,6 +42,7 @@
 //! through [`Library::venue_groups`].
 
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
+use luma_lib::models::selection::{Selection, Subset};
 use luma_ui::arg::color::{luma_hsv_picker, ColorArg, ColorArgEditor, ColorArgEvent, Hsv};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
 use luma_ui::arg::gradient::{luma_gradient_bar, Gradient, GradientEvent, GradientStop};
@@ -97,6 +98,36 @@ const ARG_FLUSH: Duration = Duration::from_millis(250);
 
 /// The spatial-reference select's rows: label shown, value stored.
 const SPACES: [(&str, &str); 2] = [("Global", "global"), ("Group Local", "group_local")];
+
+/// The subset select's rows: how much of the expression's match to light.
+///
+/// A closed ladder, not a number field — the strip is a panel of slabs, and the
+/// shares a lighting desk actually asks for are halves and thirds. A value
+/// authored elsewhere (Python, an agent) that is not on the ladder still shows,
+/// via [`subset_label`]; picking then snaps to a rung.
+const SUBSETS: [(&str, Subset); 7] = [
+    ("All", Subset::All),
+    ("1/2", Subset::Fraction(0.5)),
+    ("1/3", Subset::Fraction(1. / 3.)),
+    ("1/4", Subset::Fraction(0.25)),
+    ("1", Subset::Count(1)),
+    ("2", Subset::Count(2)),
+    ("3", Subset::Count(3)),
+];
+
+/// What the subset cell shows. Off-ladder values keep their own reading —
+/// a percentage for a share, a bare number for a count — so an agent's
+/// `subset=0.7` is legible rather than silently displayed as "All".
+fn subset_label(subset: Subset) -> SharedString {
+    if let Some((label, _)) = SUBSETS.iter().find(|(_, rung)| *rung == subset) {
+        return (*label).into();
+    }
+    match subset {
+        Subset::All => "All".into(),
+        Subset::Fraction(f) => format!("{}%", (f * 100.).round()).into(),
+        Subset::Count(c) => c.to_string().into(),
+    }
+}
 
 /// Timing fields are edited in beats to two decimals, the web panel's
 /// `toFixed(2)` — also the resync threshold, so a redraw never fights a draft
@@ -173,6 +204,8 @@ enum Menu {
     Blend,
     /// The spatial-reference select of the selection cell at this index.
     Space(usize),
+    /// The subset select of the selection cell at this index.
+    Subset(usize),
     /// The HSV plate for the selected swatch/stop of the cell at this index.
     Swatch(usize),
 }
@@ -266,18 +299,10 @@ fn scalar_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> 
         .unwrap_or(1.)
 }
 
-fn selection_from_wire(value: &serde_json::Value) -> (String, String) {
-    let field = |key: &str, or: &str| {
-        value
-            .get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or(or)
-            .to_string()
-    };
-    (
-        field("expression", "all"),
-        field("spatialReference", "global"),
-    )
+/// A stored arg value as a selection, falling back to the whole venue when the
+/// value is missing or malformed — a strip cell always has something to show.
+fn selection_from_wire(value: &serde_json::Value) -> Selection {
+    Selection::from_value(value).unwrap_or_else(Selection::all)
 }
 
 fn hex_to_rgba(hex: &str) -> Option<Rgba> {
@@ -564,11 +589,10 @@ fn build(
                     Widget::Scalar(entity)
                 }
                 PatternArgType::Selection => {
-                    let (expression, _) = selection_from_wire(&stored);
                     let entity = cx.new(|cx| {
                         GroupExpressionEditor::new(
                             groups.iter().cloned(),
-                            expression,
+                            selection_from_wire(&stored).expression,
                             EXPR_W,
                             window,
                             cx,
@@ -580,7 +604,9 @@ fn build(
                         &entity,
                         move |this: &mut Luma, _, event: &ExpressionEvent, cx| {
                             let ExpressionEvent::Committed(expression) = event.clone();
-                            this.arg_selection(&arg_id, &def_for_event, Some(expression), None, cx);
+                            this.arg_selection(&arg_id, &def_for_event, cx, |selection| {
+                                selection.expression = expression;
+                            });
                         },
                     ));
                     Widget::Selection(entity)
@@ -679,7 +705,7 @@ fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
                 entity.update(cx, |field, cx| field.set_value(value, cx));
             }
             Widget::Selection(entity) => {
-                let (expression, _) = selection_from_wire(&stored);
+                let expression = selection_from_wire(&stored).expression;
                 entity.update(cx, |editor, cx| editor.set_text(expression, cx));
             }
             // Stateless rows re-read the stored value every render; only the
@@ -809,25 +835,22 @@ impl Luma {
         self.schedule_arg_flush(cx);
     }
 
-    /// A selection arg edit: merge one half — the expression, or the spatial
-    /// reference — over the other half's stored value, then ride the fast
-    /// path. The two controls commit independently and the wire wants both.
+    /// A selection arg edit: apply `edit` to the whole stored selection, then
+    /// ride the fast path. The cell's controls — expression, space, subset —
+    /// commit independently, and each writes the whole value back, so editing
+    /// one can never drop what the others hold.
     pub(crate) fn arg_selection(
         &mut self,
         arg_id: &str,
         def: &PatternArgDef,
-        expression: Option<String>,
-        spatial: Option<String>,
         cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Selection),
     ) {
         let mut wire = None;
         self.with_track_editor(cx, |editor| {
-            let stored = stored_arg(editor, def);
-            let (was_expression, was_spatial) = selection_from_wire(&stored);
-            wire = Some(serde_json::json!({
-                "expression": expression.clone().unwrap_or(was_expression),
-                "spatialReference": spatial.clone().unwrap_or(was_spatial),
-            }));
+            let mut selection = selection_from_wire(&stored_arg(editor, def));
+            edit(&mut selection);
+            wire = Some(selection.to_value());
         });
         if let Some(wire) = wire {
             self.arg_live(arg_id, wire, cx);
@@ -1069,14 +1092,13 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
         Widget::Color(entity) => row.child(arg_cell(name, entity.clone())),
         Widget::Scalar(entity) => row.child(arg_cell(name, entity.clone())),
         Widget::Selection(entity) => {
-            let stored = stored_arg(state, &cell.def);
-            let (_, spatial) = selection_from_wire(&stored);
+            let selection = selection_from_wire(&stored_arg(state, &cell.def));
+
             let shown = SPACES
                 .iter()
-                .find(|(_, value)| *value == spatial)
+                .find(|(_, value)| *value == selection.spatial_reference)
                 .map_or(SPACES[0].0, |(label, _)| label);
             let labels: Vec<&str> = SPACES.iter().map(|(label, _)| *label).collect();
-            let open = state.strip.open == Some(Menu::Space(index));
             let toggle = app.clone();
             let pick = app.clone();
             let def = cell.def.clone();
@@ -1084,7 +1106,7 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
                 format!("{name}:space"),
                 shown,
                 &labels,
-                open,
+                state.strip.open == Some(Menu::Space(index)),
                 move |_, cx| {
                     toggle.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| {
@@ -1099,18 +1121,46 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
                     let def = def.clone();
                     pick.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| editor.strip.open = None);
-                        this.arg_selection(
-                            &def.id,
-                            &def,
-                            None,
-                            Some(SPACES[picked].1.to_string()),
-                            cx,
-                        );
+                        this.arg_selection(&def.id, &def, cx, |selection| {
+                            selection.spatial_reference = SPACES[picked].1.to_string();
+                        });
                     });
                 },
             );
+
+            let subset_labels: Vec<&str> = SUBSETS.iter().map(|(label, _)| *label).collect();
+            let toggle = app.clone();
+            let pick = app.clone();
+            let def = cell.def.clone();
+            let amount = luma_arg_select(
+                format!("{name}:subset"),
+                &subset_label(selection.subset),
+                &subset_labels,
+                state.strip.open == Some(Menu::Subset(index)),
+                move |_, cx| {
+                    toggle.update(cx, |this, cx| {
+                        this.with_track_editor(cx, |editor| {
+                            editor.strip.open = match editor.strip.open {
+                                Some(Menu::Subset(at)) if at == index => None,
+                                _ => Some(Menu::Subset(index)),
+                            };
+                        });
+                    });
+                },
+                move |picked, _, cx| {
+                    let def = def.clone();
+                    pick.update(cx, |this, cx| {
+                        this.with_track_editor(cx, |editor| editor.strip.open = None);
+                        this.arg_selection(&def.id, &def, cx, |selection| {
+                            selection.subset = SUBSETS[picked].1;
+                        });
+                    });
+                },
+            );
+
             row.child(arg_cell(name, entity.clone()))
                 .child(arg_cell("space", space))
+                .child(arg_cell("how many", amount))
         }
         Widget::Palette { selected, hsv } => {
             let colors = palette_from_wire(&stored_arg(state, &cell.def), &cell.def.default_value);

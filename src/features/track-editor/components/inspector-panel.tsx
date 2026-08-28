@@ -39,7 +39,13 @@ import { useTrackEditorStore } from "../stores/use-track-editor-store";
 type ColorMode = "inherit" | "override" | "mix";
 type RgbaValue = { r: number; g: number; b: number; a?: number };
 
-type SelectionValue = { expression: string; spatialReference: string };
+type SelectionValue = {
+	expression: string;
+	spatialReference: string;
+	// "all" | { fraction } | { count }; absent means all. Carried, not edited
+	// here — the gpui strip owns the subset control.
+	subset?: unknown;
+};
 
 function formatScalarInputValue(value: unknown, fallback: unknown): string {
 	const numberValue =
@@ -747,7 +753,11 @@ export function InspectorPanel() {
 												spatialReference={spatialReference}
 												venueId={currentVenueId}
 												onCommit={(expr, spatial) =>
+													// Spread first: the value carries a `subset` this
+													// editor does not show, and editing the expression
+													// must not silently drop it.
 													updateArgs(arg.id, {
+														...selectionValue,
 														expression: expr,
 														spatialReference: spatial,
 													})

@@ -125,6 +125,10 @@ pub async fn evaluate_graph(
 ) -> Result<GraphEvaluation, String> {
     let span = (context.start_time, context.end_time);
     let args = merge_arg_values(graph, context.arg_values.as_ref(), false);
+    // A bare graph run has no clip; `instance_seed` is the only occurrence
+    // identity it carries — the pattern editor bumps it to re-roll a preview's
+    // selection draw, and it is `None` for the plain, stable preview.
+    let instance = context.instance_seed.map(|seed| seed.to_string());
 
     // An empty graph has nothing to select against and nothing to compile; skip
     // the DB round-trip rather than resolving "all" fixtures for a no-op plan.
@@ -138,6 +142,7 @@ pub async fn evaluate_graph(
             resource_root,
             &context.track_id,
             &context.venue_id,
+            instance.as_deref(),
             &graph.nodes,
             &graph.edges,
             &args,
@@ -299,7 +304,7 @@ pub fn merge_arg_values(
         if force_selection_all && matches!(ad.arg_type, PatternArgType::Selection) {
             args.insert(
                 ad.id.clone(),
-                serde_json::json!({ "expression": "all", "spatialReference": "global" }),
+                crate::models::selection::Selection::all().to_value(),
             );
         } else {
             args.entry(ad.id.clone())

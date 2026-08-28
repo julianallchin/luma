@@ -191,6 +191,57 @@ class TrackEditingTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             added.args["intensity"] = 1.0  # type: ignore[index]
 
+    def test_subset_narrows_the_selection_and_is_absent_when_all(self) -> None:
+        edit = make_track().edit()
+
+        whole = edit.add_clip(
+            "wash-blue", seconds=(0.0, 2.0), z=0, selection="spots"
+        )
+        self.assertNotIn("subset", dict(whole.args["selection"]))
+        self.assertEqual(whole.subset, "all")
+        self.assertEqual(whole.selection, "spots")
+
+        half = edit.add_clip(
+            "wash-blue", seconds=(2.0, 4.0), z=0, selection="spots", subset=0.5
+        )
+        self.assertEqual(
+            dict(half.args["selection"]),
+            {
+                "expression": "spots",
+                "spatialReference": "global",
+                "subset": {"fraction": 0.5},
+            },
+        )
+        self.assertEqual(half.subset, 0.5)
+
+        three = edit.add_clip(
+            "wash-blue", seconds=(4.0, 6.0), z=0, selection="spots", subset=3
+        )
+        self.assertEqual(dict(three.args["selection"])["subset"], {"count": 3})
+        self.assertEqual(three.subset, 3)
+
+        # A subset alone re-aims the count over the stored expression.
+        retargeted = edit.update_clip(three.id, subset=0.25)
+        self.assertEqual(
+            dict(retargeted.args["selection"]),
+            {
+                "expression": "spots",
+                "spatialReference": "global",
+                "subset": {"fraction": 0.25},
+            },
+        )
+
+        # And a selection alone clears it back to the whole set.
+        cleared = edit.update_clip(three.id, selection="spots")
+        self.assertNotIn("subset", dict(cleared.args["selection"]))
+
+        with self.assertRaisesRegex(TrackError, "at least 1"):
+            edit.add_clip("wash-blue", seconds=(6.0, 8.0), z=0, selection="a", subset=0)
+        with self.assertRaisesRegex(TrackError, "fraction must be"):
+            edit.add_clip("wash-blue", seconds=(6.0, 8.0), z=0, selection="a", subset=1.5)
+        with self.assertRaisesRegex(TrackError, "needs a selection"):
+            edit.add_clip("wash-blue", seconds=(6.0, 8.0), z=0, subset=2)
+
     def test_existing_nested_arguments_can_be_reused_losslessly(self) -> None:
         original = values(
             clips=[

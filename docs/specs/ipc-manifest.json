@@ -19,7 +19,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 77
+        "line": 78
       },
       "name": "add_fixture_to_group",
       "prose": {
@@ -843,7 +843,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 19
+        "line": 20
       },
       "name": "create_group",
       "prose": {
@@ -984,7 +984,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 64
+        "line": 65
       },
       "name": "delete_group",
       "prose": {
@@ -1478,7 +1478,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 127
+        "line": 128
       },
       "name": "get_grouped_hierarchy",
       "prose": {
@@ -1836,7 +1836,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 159
+        "line": 160
       },
       "name": "get_ungrouped_fixtures",
       "prose": {
@@ -2218,7 +2218,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 37
+        "line": 38
       },
       "name": "list_groups",
       "prose": {
@@ -3409,7 +3409,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 139
+        "line": 140
       },
       "name": "preview_selection_query",
       "prose": {
@@ -3617,7 +3617,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 95
+        "line": 96
       },
       "name": "remove_fixture_from_group",
       "prose": {
@@ -4503,7 +4503,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 46
+        "line": 47
       },
       "name": "update_group",
       "prose": {
@@ -4531,7 +4531,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 174
+        "line": 175
       },
       "name": "update_movement_config",
       "prose": {

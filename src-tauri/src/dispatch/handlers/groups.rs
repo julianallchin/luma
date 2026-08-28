@@ -4,6 +4,7 @@ use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{normalize_group_name, FixtureGroup, FixtureGroupNode, MovementConfig};
+use crate::models::selection::Selection;
 use crate::services::groups as groups_service;
 use crate::services::groups::invalidate_venue_fixture_cache;
 
@@ -147,7 +148,7 @@ pub async fn preview_selection_query(
     let resolved = groups_service::resolve_selection_expression_with_path(
         &services.fixtures_root,
         &mut access,
-        query.trim(),
+        &Selection::new(query.trim()),
         seed.unwrap_or(DEFAULT_PREVIEW_SEED),
     )
     .await?;

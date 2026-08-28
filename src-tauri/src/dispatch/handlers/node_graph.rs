@@ -170,6 +170,7 @@ pub async fn preview_pattern(
         &services.fixtures_root,
         &track_id,
         &venue_id,
+        None,
         &graph.nodes,
         &graph.edges,
         &args,

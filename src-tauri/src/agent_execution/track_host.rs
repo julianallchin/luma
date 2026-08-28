@@ -162,6 +162,7 @@ impl TrackHost {
             &[],
             &[],
             &HashMap::new(),
+            None,
         )
         .await;
         let light_ids: Vec<String> = resolved.into_iter().map(|(id, _)| id).collect();

@@ -235,24 +235,6 @@ pub struct Series {
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/schema.ts")]
-#[ts(rename_all = "camelCase")]
-pub struct SelectableItem {
-    pub id: String, // Unique primitive ID (e.g., "fixture-1:0")
-    pub fixture_id: String,
-    pub head_index: usize,
-    pub pos: (f32, f32, f32), // Global position (x, y, z)
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
-pub struct Selection {
-    pub items: Vec<SelectableItem>,
-}
-
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct Signal {
     pub n: usize,       // Spatial dimension (Selection size)
     pub t: usize,       // Temporal dimension (Time samples)

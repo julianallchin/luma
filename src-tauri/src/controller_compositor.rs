@@ -208,6 +208,7 @@ async fn compile_single_cue(
         resource_path_root,
         track_id,
         venue_id,
+        Some(&cue.id),
         &graph.nodes,
         &graph.edges,
         &args,

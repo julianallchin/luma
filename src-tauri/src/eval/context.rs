@@ -22,6 +22,7 @@ use crate::eval::{ResidentAudio, ResidentContext};
 use crate::fixtures::layout::{compute_head_offsets, head_world_position, HeadLayout};
 use crate::fixtures::parser::parse_definition;
 use crate::models::node_graph::{BeatGrid, Edge, NodeInstance};
+use crate::models::selection::Selection;
 use crate::services::tracks::{get_track_beats, TARGET_SAMPLE_RATE};
 use crate::storage::StorageRoot;
 use once_cell::sync::Lazy;
@@ -52,21 +53,24 @@ pub fn clear_track_audio_cache(track_hash: &str) {
     }
 }
 
-/// Read the selection expression a graph scopes to, if any. Two forms:
-///   - Static: the expression lives on a Selection-type input (value
-///     `{expression, spatialReference}`) surfaced onto a node's `params`, or a
-///     flat `tagExpression`/`tag_expr` param.
+/// Read the [`Selection`] a graph scopes to, if any. Two forms:
+///   - Static: the value lives on a Selection-type input surfaced onto a node's
+///     `params`, or as a flat `tagExpression`/`tag_expr` param (expression only —
+///     a flat param has no subset).
 ///   - Arg-wired: the selection is a pattern arg, flowing over an edge from the
 ///     `pattern_args` node into a node's selection input — the value lives only
 ///     in `args` (annotation/cue overrides + pattern defaults), keyed by the
 ///     edge's `from_port` (the arg id).
-/// Returns `(expr, seed)` where `seed` is the deterministic per-node hash
-/// (matching `LowerCtx::seed` / the legacy executor).
+///
+/// Returns `(selection, seed)` where `seed` is the deterministic per-node hash
+/// (matching `LowerCtx::seed` / the legacy executor) — see the determinism
+/// contract on `groups::resolve_selection_expression_with_path`.
 fn graph_selection(
     nodes: &[NodeInstance],
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
-) -> Option<(String, u64)> {
+    instance: Option<&str>,
+) -> Option<(Selection, u64)> {
     let arg_node_ids: std::collections::HashSet<&str> = nodes
         .iter()
         .filter(|n| n.type_id == "pattern_args")
@@ -75,16 +79,11 @@ fn graph_selection(
 
     for node in nodes {
         let is_selection_source = matches!(node.type_id.as_str(), "filter_selection" | "select");
-        // Prefer an explicit nested selection value `{ expression, spatialReference }`.
+        // Prefer an explicit nested selection value.
         for key in ["selection", "value"] {
-            if let Some(expr) = node
-                .params
-                .get(key)
-                .and_then(|v| v.get("expression"))
-                .and_then(|v| v.as_str())
-            {
-                if !expr.trim().is_empty() {
-                    return Some((expr.to_string(), seed_for(&node.id)));
+            if let Some(selection) = node.params.get(key).and_then(Selection::from_value) {
+                if !selection.expression.trim().is_empty() {
+                    return Some((selection, seed_for(instance, &node.id)));
                 }
             }
         }
@@ -92,7 +91,7 @@ fn graph_selection(
         for key in ["tagExpression", "tag_expr", "expression"] {
             if let Some(expr) = node.params.get(key).and_then(|v| v.as_str()) {
                 if !expr.trim().is_empty() {
-                    return Some((expr.to_string(), seed_for(&node.id)));
+                    return Some((Selection::new(expr), seed_for(instance, &node.id)));
                 }
             }
         }
@@ -102,19 +101,15 @@ fn graph_selection(
             if edge.to_node != node.id || !arg_node_ids.contains(edge.from_node.as_str()) {
                 continue;
             }
-            if let Some(expr) = args
-                .get(&edge.from_port)
-                .and_then(|v| v.get("expression"))
-                .and_then(|v| v.as_str())
-            {
-                if !expr.trim().is_empty() {
-                    return Some((expr.to_string(), seed_for(&node.id)));
+            if let Some(selection) = args.get(&edge.from_port).and_then(Selection::from_value) {
+                if !selection.expression.trim().is_empty() {
+                    return Some((selection, seed_for(instance, &node.id)));
                 }
             }
         }
         // A selection-source node with no expression still pins the seed.
         if is_selection_source {
-            return Some(("all".to_string(), seed_for(&node.id)));
+            return Some((Selection::all(), seed_for(instance, &node.id)));
         }
     }
     None
@@ -136,11 +131,21 @@ fn needs_audio_context(nodes: &[NodeInstance]) -> bool {
     })
 }
 
-/// Deterministic per-node seed: `DefaultHasher(node.id)`, matching `LowerCtx::seed`.
-fn seed_for(node_id: &str) -> u64 {
+/// Deterministic seed for one node's selection draw.
+///
+/// The node id alone is `DefaultHasher(node.id)`, matching `LowerCtx::seed`.
+/// An [`instance`](resolve_primitive_ids) — the clip or cue this occurrence of
+/// the pattern belongs to — is mixed in after it, so the same pattern placed
+/// twice draws two different halves of a group while either clip on its own
+/// draws the same one on every run. Omitting the instance leaves the seed
+/// exactly what it was before instances existed.
+pub(crate) fn seed_for(instance: Option<&str>, node_id: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     node_id.hash(&mut h);
+    if let Some(instance) = instance {
+        instance.hash(&mut h);
+    }
     h.finish()
 }
 
@@ -177,12 +182,18 @@ fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> Ve
 /// Resolve the ordered `(primitive_id = "{fixtureUuid}:{head}", world_position)`
 /// list a pattern graph covers, for one `(venue, graph)`.
 ///
-/// T-invariant pre-pass: find the graph's selection expression (see
-/// [`graph_selection`]); resolve it to venue fixtures via
+/// T-invariant pre-pass: find the graph's selection (see [`graph_selection`]);
+/// resolve it to venue fixtures via
 /// `groups::resolve_selection_expression_with_path` (whole venue when there is no
 /// selection node / empty expression — expression `"all"`). Each resolved
 /// fixture expands to its *member* heads via `compute_head_offsets` +
 /// `head_world_position` (all heads for whole-fixture matches).
+///
+/// `instance` identifies the *occurrence* of the pattern — the clip or cue id —
+/// and is what makes the same pattern draw a different half of a group each time
+/// it is placed. `None` where there is no occurrence: a pattern's own hover
+/// preview, or the venue manifest's whole-rig probe. Preview and render must
+/// pass the same instance or they disagree about which lights the clip owns.
 pub async fn resolve_primitive_ids(
     project_pool: &SqlitePool,
     venue_id: &str,
@@ -190,6 +201,7 @@ pub async fn resolve_primitive_ids(
     nodes: &[NodeInstance],
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
+    instance: Option<&str>,
 ) -> Vec<(String, [f32; 3])> {
     let Ok(mut access) = crate::database::local::venue_access::VenueAccess::<
         crate::database::local::venue_access::Read,
@@ -201,7 +213,8 @@ pub async fn resolve_primitive_ids(
     else {
         return Vec::new();
     };
-    resolve_primitive_ids_with_access(&mut access, resource_root, nodes, edges, args).await
+    resolve_primitive_ids_with_access(&mut access, resource_root, nodes, edges, args, instance)
+        .await
 }
 
 /// Resolve primitives inside an already-authorized venue snapshot. Agent
@@ -213,13 +226,14 @@ pub async fn resolve_primitive_ids_with_access(
     nodes: &[NodeInstance],
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
+    instance: Option<&str>,
 ) -> Vec<(String, [f32; 3])> {
-    let (expr, seed) =
-        graph_selection(nodes, edges, args).unwrap_or_else(|| ("all".to_string(), 0));
+    let (selection, seed) =
+        graph_selection(nodes, edges, args, instance).unwrap_or_else(|| (Selection::all(), 0));
 
     let root_buf = resource_root.to_path_buf();
     let fixtures = crate::services::groups::resolve_selection_expression_with_path(
-        &root_buf, access, &expr, seed,
+        &root_buf, access, &selection, seed,
     )
     .await
     .unwrap_or_default();
@@ -376,7 +390,8 @@ async fn load_needed_stems(
 ///
 /// `local_pool` is the local DB (`luma.db`: tracks, beats, onsets, roots, stems
 /// hash); `project_pool` is the project DB (fixtures / groups for the venue);
-/// `storage` resolves the on-disk audio/stem caches.
+/// `storage` resolves the on-disk audio/stem caches. `instance` is the clip or
+/// cue this evaluation belongs to — see [`resolve_primitive_ids`].
 #[allow(clippy::too_many_arguments)]
 pub async fn build_resident_context(
     local_pool: &SqlitePool,
@@ -385,6 +400,7 @@ pub async fn build_resident_context(
     resource_root: &Path,
     track_id: &str,
     venue_id: &str,
+    instance: Option<&str>,
     nodes: &[NodeInstance],
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
@@ -392,8 +408,16 @@ pub async fn build_resident_context(
     beat_grid_override: Option<BeatGrid>,
 ) -> (ResidentContext, Vec<String>) {
     // Selection pre-pass → ordered primitive ids + positions.
-    let resolved =
-        resolve_primitive_ids(project_pool, venue_id, resource_root, nodes, edges, args).await;
+    let resolved = resolve_primitive_ids(
+        project_pool,
+        venue_id,
+        resource_root,
+        nodes,
+        edges,
+        args,
+        instance,
+    )
+    .await;
     let mut primitive_ids = Vec::with_capacity(resolved.len());
     let mut positions = Vec::with_capacity(resolved.len());
     for (id, pos) in resolved {

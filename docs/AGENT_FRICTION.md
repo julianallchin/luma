@@ -3,6 +3,8 @@
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
 
+- [2026-08-27] `cargo check -p luma --lib` in `src-tauri` still compiles `gpui/crates/render` (the lib depends on it for `venue.render`), so a second agent's half-finished edit in a crate you were told not to touch blocks every build and test you can run — `-p`/`--lib` buys no isolation from that dependency edge
+- [2026-08-27] the repo's python tests need `~/Library/Caches/com.luma.luma/python-env/bin/python3`; a system `python3` fails deep inside matplotlib's `pyexpat` import with a dyld symbol error that says nothing about the real problem, and nothing in AGENTS.md names the interpreter to use
 - [2026-08-27] `luma_render` has four `submit_readback` call sites whose only difference is a bare positional `true`/`false` for `temporal` — I read the wrong one, built a whole mode on the belief that capture already ran the temporal pass, and only caught it by printf-probing the GPU path; a `Temporal(bool)`-shaped argument would have made the mistake impossible
 - [2026-08-27] `cargo build` in `src-tauri` after editing `gpui/crates/render` sometimes reports only "Compiling luma" in the tail of its output while having rebuilt the dependency too, so `tail -3` is not evidence about what got rebuilt
 - [2026-08-27] zsh does not word-split unquoted `$var`, so every `for spec in "a b"; do set -- $spec` loop copied from a bash snippet silently binds `$2` to nothing and ffmpeg reports it as "Invalid duration specification for ss: -i"
