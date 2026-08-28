@@ -1966,7 +1966,7 @@ impl Luma {
             };
 
             this.update(cx, |this, cx| {
-                let user = this.library.user_id().map(str::to_string);
+                let user = this.library.user_id();
                 // Addressed to the tab the load was started for, not to
                 // whichever tab is visible when it lands.
                 this.edit_track_tab(&target, cx, |editor| {

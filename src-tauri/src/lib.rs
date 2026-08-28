@@ -633,6 +633,8 @@ pub fn run() {
             dispatch::adapter::stop_discovery,
             dispatch::adapter::get_discovered_nodes,
             // Auth
+            dispatch::adapter::send_login_code,
+            dispatch::adapter::verify_login_code,
             dispatch::adapter::get_session_item,
             dispatch::adapter::set_session_item,
             dispatch::adapter::remove_session_item,

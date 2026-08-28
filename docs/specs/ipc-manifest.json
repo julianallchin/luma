@@ -1635,7 +1635,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 25
+        "line": 148
       },
       "name": "get_session_item",
       "prose": {
@@ -3691,7 +3691,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 305
+        "line": 428
       },
       "name": "remove_session_item",
       "prose": {
@@ -4312,6 +4312,24 @@
     {
       "args": [
         {
+          "name": "email",
+          "rust": "String"
+        }
+      ],
+      "domain": "auth",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "line": 37
+      },
+      "name": "send_login_code",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "patternId",
           "rust": "String"
         },
@@ -4349,7 +4367,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 98
+        "line": 221
       },
       "name": "set_session_item",
       "prose": {
@@ -4689,6 +4707,28 @@
     {
       "args": [
         {
+          "name": "email",
+          "rust": "String"
+        },
+        {
+          "name": "code",
+          "rust": "String"
+        }
+      ],
+      "domain": "auth",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "line": 65
+      },
+      "name": "verify_login_code",
+      "prose": {
+        "returns": "String"
+      },
+      "returns": "String"
+    },
+    {
+      "args": [
+        {
           "name": "id",
           "rust": "String"
         },
@@ -4750,7 +4790,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 460
+        "line": 583
       },
       "name": "wipe_database",
       "prose": {
@@ -4795,7 +4835,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/artnet.rs"
     },
     {
-      "commandCount": 4,
+      "commandCount": 6,
       "domain": "auth",
       "handlers": "src-tauri/src/dispatch/handlers/auth.rs"
     },
@@ -5079,7 +5119,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:522"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:133",
+        "gpui/crates/app/src/library.rs:131",
         "src/features/dj-import/components/dj-import-browser.tsx:86",
         "src/features/tracks/components/track-browser.tsx:355"
       ],
@@ -5141,7 +5181,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 187,
+    "commandCount": 189,
     "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0

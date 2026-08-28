@@ -47,6 +47,7 @@ mod library;
 mod patterns;
 mod settings;
 mod shell;
+mod signin;
 mod subagents;
 mod tab_chrome;
 mod tabs;
@@ -189,6 +190,9 @@ pub struct Luma {
     /// Correlates a history read with the dialog that asked for it — a slow
     /// list arriving after the reader reopened the picker is a stale answer.
     pub(crate) chat_history_generation: u64,
+    /// Correlates a sign-in round trip with the gate that made it. A code
+    /// verified after the user chose to work offline is a stale answer.
+    pub(crate) sign_in_generation: u64,
     /// Correlates per-venue track reads. Venue identity is checked as well;
     /// the generation distinguishes reopening the same venue twice.
     pub(crate) venue_selection_generation: u64,
@@ -236,9 +240,19 @@ impl Luma {
             overlay_return_focus: None,
             focused_slot: FocusSlot::Shell,
             venue_picker_generation: 0,
+            sign_in_generation: 0,
             venue_selection_generation: 0,
         };
-        app.restore_venue(cx);
+        // Which door the app opens on. The gate is raised only for a session
+        // that stopped proving anyone (see `Library::lapsed`) — not for merely
+        // being signed out, which is a working state a guest may have chosen.
+        // Either way it is a first screen, not a failure: the gate dismisses
+        // to exactly what the other branch opens.
+        if app.library.lapsed().is_some() {
+            app.show_sign_in(cx);
+        } else {
+            app.restore_venue(cx);
+        }
         app.auto_repro(cx);
         app
     }

@@ -329,7 +329,7 @@ async fn seed(config_dir: &Path) {
     let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
         .await
         .expect("failed to open the fixture state database");
-    luma_lib::database::local::auth::bootstrap_host_admission(&db.0, &state_db.0)
+    luma_lib::database::local::auth::bootstrap_headless_admission(&db.0, &state_db.0)
         .await
         .expect("failed to arm admission");
     // …and a few tracks, so the sidebar has rows rather than an empty plate.

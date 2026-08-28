@@ -1,6 +1,12 @@
-//! Auth session storage, and the identity transitions that hang off it.
+//! Sign-in, auth session storage, and the identity transitions that hang off
+//! them.
 //!
-//! Three of these four commands are session *storage* in name only: writing,
+//! Sign-in is email OTP and nothing else. Both halves of it live here rather
+//! than in a renderer because the host already owns the Supabase endpoint and
+//! key, and because verifying a code has to hand its session straight to the
+//! identity-switch boundary below without a round trip through a client.
+//!
+//! Three of the storage commands are session *storage* in name only: writing,
 //! reading or clearing the Supabase session key is Luma's identity-switch
 //! boundary, and it has to fence every process-global capability (Python
 //! workspaces, host audio, render, MIDI devices, stem cache, analysis) against
@@ -17,6 +23,123 @@ use crate::dispatch::{AppServices, CommandError};
 use crate::services::authored_documents::AuthoredDocuments;
 use crate::sync::orchestrator::enqueue_dirty;
 use crate::sync::{push, registry};
+
+/// Ask Supabase to email a six-digit login code.
+///
+/// Email OTP is Luma's only sign-in method: no password, no OAuth, no redirect
+/// URL. A renderer that owned this call would have to own `SUPABASE_URL` and
+/// the anon key too, and the host already does — so both halves of the
+/// exchange live here and a renderer only says which email and which code.
+///
+/// # Errors
+///
+/// If Supabase is unreachable, or rejects the address.
+pub async fn send_login_code(_services: &AppServices, email: String) -> Result<(), CommandError> {
+    let email = email.trim();
+    if email.is_empty() {
+        return Err(CommandError::Internal("Enter an email address".into()));
+    }
+    otp_post(
+        "otp",
+        &serde_json::json!({ "email": email, "create_user": true }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Exchange an emailed code for a session, and install it.
+///
+/// Installation goes through [`set_session_item`] rather than a second
+/// persistence path: verifying a code is how a session is *obtained*, but
+/// admitting one is an identity switch, and there is exactly one place that
+/// fences the process-global capabilities that switch invalidates.
+///
+/// Returns the principal now admitted, so a caller holding a cached identity
+/// does not have to re-derive it from the database it just wrote.
+///
+/// # Errors
+///
+/// If Supabase is unreachable, the code is wrong or expired, or the identity
+/// switch fails — in which case [`set_session_item`]'s rollback prose says
+/// what survived.
+pub async fn verify_login_code(
+    services: &AppServices,
+    email: String,
+    code: String,
+) -> Result<String, CommandError> {
+    let session = otp_post(
+        "verify",
+        &serde_json::json!({
+            "email": email.trim(),
+            "token": code.trim(),
+            "type": "email",
+        }),
+    )
+    .await?;
+    set_session_item(
+        services,
+        crate::database::local::auth::SUPABASE_SESSION_KEY.to_string(),
+        session,
+    )
+    .await?;
+    crate::database::local::auth::get_current_user_id(&services.state_db.0)
+        .await?
+        .ok_or_else(|| {
+            CommandError::Internal("Supabase accepted the code but installed no session".into())
+        })
+}
+
+/// One POST to a GoTrue endpoint that answers with JSON, returned verbatim.
+///
+/// Verbatim matters: `/verify`'s body *is* the session blob the host persists,
+/// and re-serializing it through a typed struct would drop whatever fields
+/// Supabase added since — the very bytes the principal proof is a hash of.
+async fn otp_post(endpoint: &str, body: &serde_json::Value) -> Result<String, CommandError> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("Failed to initialize auth client: {error}"))?;
+    let response = client
+        .post(format!(
+            "{}/auth/v1/{endpoint}",
+            crate::config::SUPABASE_URL.trim_end_matches('/')
+        ))
+        .header("apikey", crate::config::SUPABASE_ANON_KEY)
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach Supabase: {error}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("Supabase returned an unreadable response: {error}"))?;
+    if !status.is_success() {
+        return Err(CommandError::Internal(supabase_message(status, &text)));
+    }
+    Ok(text)
+}
+
+/// GoTrue's own words where it has any. Its errors are the ones a person
+/// acting on them needs — "Token has expired or is invalid" is actionable
+/// where "auth request failed (403)" is not — so the status is only the
+/// fallback for a body that carries no message.
+fn supabase_message(status: reqwest::StatusCode, body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            for key in ["error_description", "msg", "message", "error"] {
+                if let Some(text) = value.get(key).and_then(serde_json::Value::as_str) {
+                    if !text.trim().is_empty() {
+                        return Some(text.trim().to_string());
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| format!("Supabase rejected the request ({status})"))
+}
 
 /// Read one session item. For the Supabase session key this is a *getter with
 /// write side effects*: Supabase's storage adapter calls it on client

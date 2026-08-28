@@ -20,6 +20,7 @@ mod gauntlet;
 mod gauntlet_chat;
 mod graph_budget;
 mod sidebar_toggle_budget;
+mod signin_pixels;
 mod subagents_pixels;
 mod tab_chrome_pixels;
 mod track_editor_budget;
