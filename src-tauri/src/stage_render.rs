@@ -33,7 +33,8 @@ use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::models::stage::StagePiece;
-use crate::models::universe::UniverseState;
+use crate::models::universe::{PrimitiveState, UniverseState};
+use crate::services::groups::ResolvedFixture;
 
 /// Vertical field of view every derived camera uses. Matches the desktop
 /// viewport, so `view="front"` offscreen is the pose the operator would see.
@@ -92,7 +93,12 @@ impl VenueGeometry {
         Self::read(&mut access, fixtures_root).await
     }
 
-    async fn read(
+    /// [`Self::load`] against an access the caller already holds, so a reader
+    /// that also resolves a selection sees one venue snapshot rather than two.
+    ///
+    /// # Errors
+    /// Fails if the venue's fixtures or pieces cannot be read.
+    pub async fn read(
         access: &mut VenueAccess<'_, Read>,
         fixtures_root: &Path,
     ) -> Result<Self, String> {
@@ -310,6 +316,45 @@ pub fn definition(def: &FixtureDefinition) -> scene_desc::Definition {
             }),
         }),
     }
+}
+
+/// A head lit for a highlight: open white, pointed home, not strobing.
+const MARKED: PrimitiveState = PrimitiveState {
+    dimmer: 1.0,
+    color: [1.0, 1.0, 1.0],
+    strobe: 0.0,
+    position: [0.0, 0.0],
+    speed: 0.0,
+};
+
+/// The universe that *is* the answer to "what does this selection resolve to":
+/// every matched head open and white, every other head dark.
+///
+/// A highlight needs nothing from the renderer because it is not an annotation
+/// drawn over a frame — it is a frame. The same editor-lit path that shows what
+/// a score does at `t` shows what a selection covers, so there is one way a
+/// venue is pictured, not two.
+///
+/// A whole-fixture match is stored under the bare fixture id, which is
+/// [`primitive_state`]'s "every head of this fixture" key — so no head count is
+/// needed to expand one. An unmatched head has no entry at all, and a head with
+/// no state is drawn dark.
+#[must_use]
+pub fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
+    let mut primitives = HashMap::new();
+    for entry in resolved {
+        match &entry.heads {
+            None => {
+                primitives.insert(entry.fixture.id.clone(), MARKED);
+            }
+            Some(heads) => {
+                for head in heads {
+                    primitives.insert(format!("{}:{head}", entry.fixture.id), MARKED);
+                }
+            }
+        }
+    }
+    UniverseState { primitives }
 }
 
 /// Everything one offscreen frame needs that the scene itself does not carry.
@@ -708,6 +753,71 @@ fn confined(path: &str) -> Option<&Path> {
 mod tests {
     use super::*;
     use crate::models::universe::PrimitiveState;
+
+    fn patched(id: &str) -> PatchedFixture {
+        PatchedFixture {
+            id: id.into(),
+            uid: None,
+            venue_id: "venue".into(),
+            universe: 1,
+            address: 1,
+            num_channels: 8,
+            manufacturer: "test".into(),
+            model: "test".into(),
+            mode_name: "Standard".into(),
+            fixture_path: "test.qxf".into(),
+            label: None,
+            pos_x: 0.0,
+            pos_y: 0.0,
+            pos_z: 0.0,
+            rot_x: 0.0,
+            rot_y: 0.0,
+            rot_z: 0.0,
+        }
+    }
+
+    /// A whole-fixture match keys the bare id, which is what makes every head
+    /// of it read as lit without the resolver ever naming a head count.
+    #[test]
+    fn a_whole_fixture_match_lights_every_head_it_has() {
+        let state = highlight_state(&[ResolvedFixture {
+            fixture: patched("mover"),
+            heads: None,
+        }]);
+        for head in [0, 1, 7] {
+            let lit = primitive_state(Some(&state), "mover", head)
+                .expect("a whole-fixture match answers for every head");
+            assert!((lit.dimmer - 1.0).abs() < f32::EPSILON);
+            assert_eq!(lit.color, [1.0, 1.0, 1.0]);
+            assert!(lit.strobe.abs() < f32::EPSILON);
+        }
+        assert!(primitive_state(Some(&state), "other", 0).is_none());
+    }
+
+    /// A partial match lights exactly the heads it names; the rest of the
+    /// fixture stays dark, which is the whole point of drawing it.
+    #[test]
+    fn a_partial_match_leaves_the_unnamed_heads_dark() {
+        let state = highlight_state(&[ResolvedFixture {
+            fixture: patched("bar"),
+            heads: Some(vec![1, 3]),
+        }]);
+        for head in [1, 3] {
+            assert!(primitive_state(Some(&state), "bar", head).is_some());
+        }
+        for head in [0, 2, 4] {
+            assert!(primitive_state(Some(&state), "bar", head).is_none());
+        }
+    }
+
+    /// An expression that matched nothing draws an unlit room rather than
+    /// falling back to the score — the answer "no heads" is a picture too.
+    #[test]
+    fn an_empty_match_lights_nothing() {
+        let state = highlight_state(&[]);
+        assert!(state.primitives.is_empty());
+        assert!(primitive_state(Some(&state), "anything", 0).is_none());
+    }
 
     fn piece(id: &str, kind: &str, pos: [f64; 3]) -> StagePiece {
         StagePiece {

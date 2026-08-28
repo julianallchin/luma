@@ -1,8 +1,9 @@
 # Recording a score as video
 
 Status: **built** for the CLI slice — see §8 for what landed, what was measured,
-and what the measurements changed. §1–§7 are the original design; where §8
-disagrees with them, §8 is what the code does.
+and what the measurements changed, and §9 for the second sampling mode. §1–§7
+are the original design; where a later section disagrees with an earlier one,
+the later one is what the code does.
 
 Original scope note: Scope: one new module in `src-tauri/src`, one small change to
 `stage_render`, one change to `ffmpeg_env`, three thin callers.
@@ -540,3 +541,164 @@ the source segment decoded independently.
 that score's clips alone (`get_clips_of_score`), which is what the request
 means. The two disagree whenever a track carries two scores in one venue, and
 the compositor is the half that should grow a score id.
+
+---
+
+## 9. The second way to pay for a clean haze
+
+§8 measured one sampling strategy and called it the recording. It is not: it is
+the *isolated-frame* strategy, and the renderer has always had a second one that
+only the live viewport could reach. `luma-record --haze temporal|accumulate`
+now picks between them.
+
+```rust
+// recording.rs
+pub enum Haze { Accumulate, Temporal }
+```
+
+The names are the two questions, not two quality levels:
+
+- **`Accumulate`** (the default, and §8's behaviour): every output frame is a
+  function of its own `t`. K = 4 sub-renders over a 180° shutter, the export
+  jitter budget divided between them, averaged in linear light. 16 haze marches
+  per frame.
+- **`Temporal`**: frames are consecutive, so the renderer's haze history does
+  the integrating. `LIVE_SUBFRAMES` = 2 marches per frame, each blended into the
+  history at 18%, warmed up over 24 discarded frames before the span opens.
+
+### The renderer already had both entries; one of them was private
+
+`Renderer::render` passes `temporal: false` — it bypasses the history *and*
+pins the blue-noise seed, which is what makes a golden reproducible. The
+temporal path is `render_live_into`, `pub(crate)`, called by `viewport.rs` and
+nothing else. The whole renderer change is one public method beside `render`:
+
+```rust
+/// Render the *next* frame of a sequence.
+pub fn render_next(&mut self, frame: &Frame, width: u32, height: u32, subframes: u32)
+    -> anyhow::Result<Vec<u8>>;
+```
+
+Three lines of body over the existing `render_live_into`. `stage_render` gained
+a `Continuity { Next, Cut }` on `Sequence::frame` that picks between the two;
+`render_rgba` — one still — passes `Cut`. There is deliberately no
+`Renderer::cut()` and no ordering rule: `render` resets the history as a side
+effect of bypassing it, so "call A before B" never arises, and a caller that
+passes the wrong `Continuity` loses image quality, not correctness — the
+renderer re-checks size, camera, cone geometry and clock and drops a history
+that could not be this frame's past.
+
+**Warm-up.** The resolve keeps 82% of history and mixes in 18% of the new
+march, so the weight of the unconverged first frame decays as `0.82^n`: 4.2% at
+16 frames, 0.9% at 24. `WARMUP_FRAMES = 24` — 0.8 s of frames, ~0.2 s of wall —
+rendered on the output grid up to the span start and discarded, so the history
+is continuous across the join. Clamped at zero, so a recording that starts at
+the top of the track warms on its own first moment.
+
+**The shutter collapses to K = 1 under `Temporal`, and that is the trade.** The
+history *is* a shutter — an exponential one with a ~11-frame tail, twenty times
+longer than the 180° box. Stacking a box inside a tail that long buys nothing,
+and it would multiply the cost the mode exists to remove. What it costs is the
+motion blur: see below.
+
+### Measured, M3 Max, `perf` profile, score `47f4c5ef`, `--span 60:120`, front
+
+| mode | | render ms/frame | encode ms/frame | realtime |
+|---|---|---|---|---|
+| `accumulate` | 720p30 | 55 | 0.8 | **0.60×** |
+| `accumulate` | 1080p30 | 108 | 1.7 | **0.30×** |
+| `temporal` | 720p30 | 8 | 0.8 | **3.62×** |
+| `temporal` | 1080p30 | 12 | 1.8 | **2.35×** |
+
+**6.0× at 720p, 7.8× at 1080p.** A five-minute track goes from ~8 min to
+~1.4 min at 720p30, and from ~17 min to ~2.1 min at 1080p30.
+
+Two corrections to §8's table while passing:
+
+- `Exposure::resolve` — the linear-light average, ~6 ms of CPU at 720p — was
+  being timed as *encode*. It is frame assembly and now runs before the encode
+  clock starts. That is the whole of 720p `accumulate` reading 55/0.8 here
+  against §8's 50/6.8; wall time is unchanged. **`encode` really is the pipe
+  now, and the pipe is not a bottleneck in any of the four rows** — §8's "a
+  writer thread would buy ~15% at 1080p" was measuring a `powf` loop.
+- Wall time on a shared machine varies more than these numbers suggest: two
+  back-to-back runs of 720p `accumulate` came in at 100 s and 146 s. The
+  `render ms/frame` column is the stable one; treat the realtime factors as
+  best-case.
+
+### Does the history survive a real show? Mostly.
+
+The renderer drops history whenever the *cone geometry* changes — every cone's
+position, direction, beam and field angle, wash and gobo are hashed into the
+key — which on a rig with sixteen moving heads sounded fatal. Instrumented over
+the recording (84 frames = 60 output + 24 warm-up):
+
+| span | history valid |
+|---|---|
+| 100–102 s (`y_chase`, intensity only) | 83 / 84 |
+| 60–62 s (`z_chase` + `y_chase`, heads moving) | 45 / 84 |
+
+So it degrades gracefully rather than collapsing: a moving section runs at about
+half strength, and the frames that lose their history still get their two
+jittered marches. The cost model does not change either way — the temporal
+resolve is one full-screen triangle.
+
+### Quality, honestly
+
+Three timestamps out of both 720p files — a steady moment (video 40.0 s), a
+flash (50.62 s), and 0.14 s after the hard cut at track 94.76 s — cropped 440×280
+into the beams and pixel-doubled:
+
+- **Haze grain: a wash, if anything favouring `temporal`.** Two marches folded
+  into an ~11-frame tail is more effective samples than sixteen marches of one
+  moment, and the cones read slightly creamier. Neither is noisy.
+- **Motion blur: `accumulate` has it, `temporal` does not.** This is the one
+  visible difference and it is not subtle at the flash: `accumulate`'s cones are
+  wider and softer because the 180° shutter integrates the head's sweep across
+  the frame interval; `temporal`'s are crisp point samples. Per still,
+  `temporal` looks *sharper*. In motion it will judder where the other one
+  blurs.
+- **No smear at a hard cut.** Mean luma across the 94.76 s cut steps 32.3 → 28.5
+  in one frame in both modes — the cut changes the cone set, which is exactly
+  what invalidates the history.
+
+Per-frame mean luminance across a real `bass_strobe` clip (score `f9effb89`,
+61–63.4 s, 480×270), the same instrument §8 used:
+
+| | frame-to-frame mean \|Δ\| | peak-to-trough spread |
+|---|---|---|
+| `accumulate` (K=4 @ 180°) | 2.25 | 11.11 |
+| `temporal` (K=1) | 2.80 | 11.13 |
+| §8's point sample, for reference | 2.81 | 11.8 |
+
+`temporal` sits on the point-sample line, and it has to: **the temporal resolve
+stabilises the haze buffer only.** Surface lighting and the strobe gate are not
+in it, so nothing in this mode integrates the time axis. The 24% more
+frame-to-frame stutter is exactly the aliasing the shutter was added to remove.
+
+### Recommendation
+
+**Keep `accumulate` as the default.** It is the mode that answers "what did the
+room look like during this frame"; `temporal` answers "what did the room look
+like at this instant, and here is a clean haze for free". For a 63-clip
+dance-music score whose whole vocabulary is strobes and sixteenth-note chases,
+the first question is the right one, and the 6× is bought with the only visible
+quality difference there is.
+
+`temporal` earns its place at the other end: previews, `--all` batches, the
+"render every score `claude -p` authored" loop, and anything where 2.4× realtime
+at 1080p versus 0.3× is the difference between a nightly job and no job. It is
+also the honest mode for *checking what the app shows*, since it is the app's
+own path.
+
+Two things would change the recommendation and neither is built:
+
+1. **A shutter that is not four sub-renders.** The reason `accumulate` costs 6×
+   is that it re-renders the whole frame K times to integrate `t`. K = 2 with the
+   temporal history on would get most of the motion blur at ~2× — worth measuring
+   before anyone flips the default.
+2. **Putting the strobe gate somewhere it can be integrated.** §8 established
+   that folding evaluated states cannot fix strobes because the gate lives in
+   `build_frame_with`. That is still the root cause of why time integration costs
+   a whole re-render, and it is a `luma_render::frame` change, not a recording
+   one.
