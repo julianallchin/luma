@@ -39,6 +39,7 @@ mod add_tracks;
 mod agent;
 mod chat_history;
 mod chrome;
+mod fixture_picker;
 mod graph;
 mod history;
 mod keymap;

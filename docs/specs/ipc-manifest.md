@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**186 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
+**187 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -27,7 +27,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `controller` | 8 | `src-tauri/src/dispatch/handlers/controller.rs` |
 | `engine_dj` | 7 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 9 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
-| `groups` | 10 | `src-tauri/src/dispatch/handlers/groups.rs` |
+| `groups` | 11 | `src-tauri/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `src-tauri/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `src-tauri/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `src-tauri/src/dispatch/handlers/mixer.rs` |
@@ -46,7 +46,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **186** | |
+| **total** | **187** | |
 
 ## Commands
 
@@ -195,6 +195,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_ungrouped_fixtures` | `venueId: String` | `Vec<PatchedFixture>` |
 | `update_movement_config` | `groupId: String`<br>`config: Option<MovementConfig>` | `FixtureGroup` |
 | `preview_selection_query` | `venueId: String`<br>`query: String`<br>`seed: Option<u64>` | `Vec<PatchedFixture>` |
+| `highlight_selection` | `venueId: String`<br>`selection: Selection` | `UniverseState` |
 
 ### `host_audio`
 

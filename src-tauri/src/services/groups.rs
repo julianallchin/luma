@@ -538,6 +538,61 @@ fn parse_selection_expression(input: &str) -> Result<Expr, String> {
     Ok(expr)
 }
 
+/// The group names a selection expression is a plain union of, or `None` when
+/// it says something a list of checkboxes cannot.
+///
+/// The picker dialog's whole contract with the grammar. A union of bare tokens
+/// is exactly what a set of checked rows means, so those expressions round-trip
+/// through the picker unchanged; anything using `&`, `~`, `^` or `?` — or a
+/// parenthesised sub-expression that is not itself a bare token — has no
+/// checkbox spelling and is handed back as `None` for the caller to show
+/// read-only. Parsing here rather than in the UI keeps one grammar: the picker
+/// cannot drift from what the resolver actually evaluates.
+///
+/// The whole venue — an empty expression or `all` — is the empty list, so
+/// "nothing checked" and "everything lit" are the same state in both
+/// directions.
+///
+/// Names come back normalized and deduplicated, in first-mention order.
+#[must_use]
+pub fn or_terms(expression: &str) -> Option<Vec<String>> {
+    let trimmed = expression.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+        return Some(Vec::new());
+    }
+    let mut terms = Vec::new();
+    collect_or_terms(&parse_selection_expression(trimmed).ok()?, &mut terms).then_some(terms)
+}
+
+/// Flatten a union of bare tokens into `out`; `false` as soon as any other
+/// operator is reached.
+fn collect_or_terms(expr: &Expr, out: &mut Vec<String>) -> bool {
+    match expr {
+        Expr::Token(name) => {
+            // `all` inside a union is redundant with every other arm of it,
+            // and as a checkbox it would be a row that is not a group.
+            if !name.eq_ignore_ascii_case("all") && !out.iter().any(|seen| seen == name) {
+                out.push(name.clone());
+            }
+            true
+        }
+        Expr::Or(a, b) => collect_or_terms(a, out) && collect_or_terms(b, out),
+        _ => false,
+    }
+}
+
+/// The expression a set of checked groups spells — the inverse of [`or_terms`].
+///
+/// Empty is `all`, which is what an LD unchecking every row means and what
+/// [`or_terms`] reads back as empty.
+#[must_use]
+pub fn or_expression(terms: &[String]) -> String {
+    if terms.is_empty() {
+        return "all".into();
+    }
+    terms.join(" | ")
+}
+
 /// Selection sets are `(fixture index, head index)` pairs — the atom of
 /// targeting is a head, so boolean algebra (esp. negation and intersection)
 /// stays exact when groups contain partial fixtures.
@@ -799,7 +854,7 @@ pub async fn remove_head_from_group(
 
 #[cfg(test)]
 mod tests {
-    use super::{narrow, venue_cache_key, HeadSet};
+    use super::{narrow, or_expression, or_terms, venue_cache_key, HeadSet};
     use crate::models::selection::Subset;
     use rand::{rngs::StdRng, SeedableRng};
     use std::path::Path;
@@ -944,5 +999,50 @@ mod tests {
             venue_cache_key(Path::new("/tmp/luma"), "a/venue-main"),
             venue_cache_key(Path::new("/tmp/luma/a"), "venue-main"),
         );
+    }
+
+    /// A union of bare tokens is what a set of checkboxes means; anything
+    /// else has no checkbox spelling.
+    #[test]
+    fn or_terms_reads_back_only_plain_unions() {
+        assert_eq!(or_terms("front_wash"), Some(vec!["front_wash".into()]));
+        assert_eq!(
+            or_terms("front_wash | back_movers|spots"),
+            Some(vec![
+                "front_wash".into(),
+                "back_movers".into(),
+                "spots".into()
+            ])
+        );
+        assert_eq!(
+            or_terms("(front_wash) | (spots)"),
+            or_terms("front_wash | spots")
+        );
+        assert_eq!(
+            or_terms("front_wash | front_wash"),
+            Some(vec!["front_wash".into()])
+        );
+
+        for opaque in [
+            "front_wash & left",
+            "~spots",
+            "a ^ b",
+            "a ? b",
+            "a & (b | c)",
+        ] {
+            assert_eq!(or_terms(opaque), None, "{opaque}");
+        }
+        assert_eq!(or_terms("front_wash |"), None);
+    }
+
+    /// Nothing checked and the whole venue are the same state, both ways.
+    #[test]
+    fn the_whole_venue_is_the_empty_term_list() {
+        assert_eq!(or_terms(""), Some(vec![]));
+        assert_eq!(or_terms("  ALL "), Some(vec![]));
+        assert_eq!(or_terms("all | spots"), Some(vec!["spots".into()]));
+        assert_eq!(or_expression(&[]), "all");
+        assert_eq!(or_expression(&["a".to_string(), "b".to_string()]), "a | b");
+        assert_eq!(or_terms(&or_expression(&[])), Some(vec![]));
     }
 }

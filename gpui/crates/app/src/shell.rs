@@ -36,8 +36,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, graph, keymap, patterns, settings, subagents, tab_chrome,
-    track_editor, tracks, universe, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, fixture_picker, graph, keymap, patterns, settings, subagents,
+    tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -82,6 +82,10 @@ pub(crate) enum Overlay {
     /// What the thread delegated, and one child's transcript. Boxed like the
     /// rest: it carries a morph, a row of focus handles and a whole chat panel.
     Subagents(Box<subagents::Subagents>),
+    /// Choosing a clip's fixtures by pointing at the room. Boxed like the
+    /// rest: it carries the venue's group list, a parked render sequence and
+    /// the frame on screen.
+    FixturePicker(Box<fixture_picker::FixturePicker>),
 }
 
 impl Overlay {
@@ -95,6 +99,7 @@ impl Overlay {
             Self::Settings(_) => keymap::context::SETTINGS,
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
+            Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
         }
     }
 }
@@ -585,6 +590,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if let Some(Overlay::ChatHistory(state)) = app.overlay.open_mut() {
         chat_history::tick(state, window, cx);
     }
+    if matches!(app.overlay.as_open(), Some(Overlay::FixturePicker(_))) {
+        fixture_picker::tick(app, window, cx);
+    }
     if matches!(app.overlay.as_open(), Some(Overlay::Subagents(_))) {
         // Read out of the chat before the overlay is borrowed: both live on
         // `app`, and the dialog cannot reach back through the entity for them.
@@ -1013,6 +1021,10 @@ fn overlay_layer(
         Overlay::Subagents(state) => (
             subagents::render(state, entity, window, cx),
             "Subagents dialog",
+        ),
+        Overlay::FixturePicker(state) => (
+            fixture_picker::render(state, entity, window, cx),
+            "Fixture picker dialog",
         ),
     };
     let scrim_dismiss = if matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none() {

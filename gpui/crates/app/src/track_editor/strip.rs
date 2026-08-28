@@ -102,7 +102,7 @@ const ARG_FLUSH: Duration = Duration::from_millis(250);
 /// shares a lighting desk actually asks for are halves and thirds. A value
 /// authored elsewhere (Python, an agent) that is not on the ladder still shows,
 /// via [`subset_label`]; picking then snaps to a rung.
-const SUBSETS: [(&str, Subset); 7] = [
+pub(crate) const SUBSETS: [(&str, Subset); 7] = [
     ("All", Subset::All),
     ("1/2", Subset::Fraction(0.5)),
     ("1/3", Subset::Fraction(1. / 3.)),
@@ -115,7 +115,7 @@ const SUBSETS: [(&str, Subset); 7] = [
 /// What the subset cell shows. Off-ladder values keep their own reading —
 /// a percentage for a share, a bare number for a count — so an agent's
 /// `subset=0.7` is legible rather than silently displayed as "All".
-fn subset_label(subset: Subset) -> SharedString {
+pub(crate) fn subset_label(subset: Subset) -> SharedString {
     if let Some((label, _)) = SUBSETS.iter().find(|(_, rung)| *rung == subset) {
         return (*label).into();
     }
@@ -830,6 +830,30 @@ impl Luma {
         self.schedule_arg_flush(cx);
     }
 
+    /// Open the fixture picker on one selection arg.
+    ///
+    /// The strip reads out what the dialog cannot see for itself: which arg,
+    /// what it currently says, and the venue's group vocabulary the expression
+    /// field already loaded for its autocomplete — asking for it twice would
+    /// be a second load of the same list.
+    fn pick_fixtures(&mut self, def: &PatternArgDef, cx: &mut Context<Self>) {
+        let mut opened = None;
+        self.with_track_editor(cx, |editor| {
+            let groups = match &editor.strip.groups {
+                Groups::Ready(names) => names.as_ref().clone(),
+                Groups::NotAsked | Groups::Loading => Vec::new(),
+            };
+            opened = Some((
+                editor.venue_id.clone(),
+                groups,
+                selection_from_wire(&stored_arg(editor, def)),
+            ));
+        });
+        if let Some((venue, groups, selection)) = opened {
+            self.open_fixture_picker(def.clone(), venue, groups, &selection, cx);
+        }
+    }
+
     /// A selection arg edit: apply `edit` to the whole stored selection, then
     /// ride the fast path. The cell's controls — expression, space, subset —
     /// commit independently, and each writes the whole value back, so editing
@@ -1119,8 +1143,33 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
                 },
             );
 
-            row.child(arg_cell(name, entity.clone()))
-                .child(arg_cell("how many", amount))
+            // The field stays the power user's spelling; the chip beside it
+            // opens the picture. Both write the same value through
+            // `arg_selection`, so neither is a second way to say it.
+            let opened = app.clone();
+            let picked_def = cell.def.clone();
+            let pick_chip = luma_ui::slab()
+                .id(SharedString::from(format!("{name}:pick")))
+                .cursor_pointer()
+                .hover(|style| style.bg(luma_ui::ladder::hover()))
+                .child("PICK")
+                .on_click(move |_, _, cx| {
+                    let def = picked_def.clone();
+                    opened.update(cx, |this, cx| this.pick_fixtures(&def, cx));
+                })
+                .agent_node(Role::Button, "Pick fixtures");
+
+            row.child(arg_cell(
+                name,
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(entity.clone())
+                    .child(pick_chip),
+            ))
+            .child(arg_cell("how many", amount))
         }
         Widget::Palette { selected, hsv } => {
             let colors = palette_from_wire(&stored_arg(state, &cell.def), &cell.def.default_value);
