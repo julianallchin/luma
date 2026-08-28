@@ -85,14 +85,20 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
     let out = exec(
         &mut harness,
         r#"
-        const gate = until("the sign-in gate", (s) =>
-            s.find({ role: "card", label: "Sign-in dialog" }) !== undefined
+        const gate = until("the sign-in screen", (s) =>
+            s.find({ role: "card", label: "Sign-in card" }) !== undefined
                 && s.find({ role: "text", label: "Sign in to Luma" }) !== undefined);
         ({
             field: gate.find({ role: "input", label: "you@example.com" }) !== undefined,
             submit: gate.find({ role: "button", label: "Send code" }) !== undefined,
             offline: gate.find({ role: "button", label: "Work offline" }) !== undefined,
             venues: gate.find({ role: "card", label: "Venue dialog" }) !== undefined,
+            // A state, not a plane: the shell is not behind it, so neither
+            // pane toggle is there to be pressed through it.
+            shell: gate.find({ role: "button", label: "sidebar-toggle" }) !== undefined
+                || gate.find({ role: "button", label: "panel-toggle" }) !== undefined,
+            // …and the window still moves and closes.
+            lights: gate.find({ role: "button", label: "close" }) !== undefined,
             // Nothing failed. A launch that could not verify a session is a
             // signed-out launch, not an error to report.
             failure: gate.find((n) => n.role === "text"
@@ -101,9 +107,9 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
             // the launch was heading for.
             dismissed: (() => {
                 app.key("escape");
-                return until("the venue picker behind the gate", (s) =>
+                return until("the shell the gate stood in front of", (s) =>
                     s.find({ role: "card", label: "Venue dialog" }) !== undefined
-                        && s.find({ role: "card", label: "Sign-in dialog" }) === undefined)
+                        && s.find({ role: "card", label: "Sign-in card" }) === undefined)
                     !== undefined;
             })(),
         })
@@ -113,6 +119,14 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
     assert_eq!(out["submit"], true, "the gate offers the committing chip");
     assert_eq!(out["offline"], true, "the gate offers a way past it");
     assert_eq!(out["venues"], false, "the gate replaces the venue picker");
+    assert_eq!(
+        out["shell"], false,
+        "the gate replaces the shell, it does not cover it"
+    );
+    assert_eq!(
+        out["lights"], true,
+        "the screen carries the window's own controls"
+    );
     assert_eq!(out["failure"], false, "nothing is reported as a failure");
     assert_eq!(
         out["dismissed"], true,
@@ -138,7 +152,9 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
             s.find({ role: "button", label: "Sign in" }) !== undefined);
         app.click(shown.find({ role: "button", label: "Sign in" }));
         const reopened = until("the gate reopened from settings", (s) =>
-            s.find({ role: "card", label: "Sign-in dialog" }) !== undefined);
+            s.find({ role: "card", label: "Sign-in card" }) !== undefined
+                // Settings went with the shell rather than lingering under it.
+                && s.find({ role: "toggle", label: "Account" }) === undefined);
         ({
             identity: shown.find({ role: "input", label: "Signed out — working locally" })
                 !== undefined,
@@ -168,7 +184,7 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
         r#"
         const shown = until("the venue picker", (s) =>
             s.find({ role: "card", label: "Sign-in Venue" }) !== undefined);
-        ({ gate: shown.find({ role: "card", label: "Sign-in dialog" }) !== undefined })
+        ({ gate: shown.find({ role: "card", label: "Sign-in card" }) !== undefined })
     "#,
     );
     assert_eq!(out["gate"], false, "a proven session skips the gate");

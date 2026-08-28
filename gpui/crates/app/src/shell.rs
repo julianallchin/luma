@@ -36,8 +36,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, fixture_picker, graph, keymap, patterns, settings, signin,
-    subagents, tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, fixture_picker, graph, keymap, patterns, settings, subagents,
+    tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -86,12 +86,6 @@ pub(crate) enum Overlay {
     /// rest: it carries the venue's group list, a parked render sequence and
     /// the frame on screen.
     FixturePicker(Box<fixture_picker::FixturePicker>),
-    /// The email-code sign-in gate — see [`crate::signin`]. Opens itself at
-    /// launch when nothing is signed in, and is dismissible, because a
-    /// signed-out library is a working library.
-    /// Boxed like the rest: it carries a morph, two text fields and their
-    /// subscriptions.
-    SignIn(Box<signin::SignIn>),
 }
 
 impl Overlay {
@@ -106,7 +100,6 @@ impl Overlay {
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
-            Self::SignIn(_) => keymap::context::SIGN_IN,
         }
     }
 }
@@ -311,10 +304,6 @@ impl Luma {
         }
         match self.overlay.as_open() {
             Some(Overlay::Venues(_)) if self.sidebar.is_none() => {}
-            // Not merely a close: leaving the gate is choosing to work as a
-            // guest, and the launch it interrupted still has a venue to
-            // restore. One transition, so both ways out land alike.
-            Some(Overlay::SignIn(_)) => self.continue_offline(cx),
             Some(_) => self.close_overlay(cx),
             None => {}
         }
@@ -597,9 +586,6 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
     if let Some(Overlay::AddTracks(state)) = app.overlay.open_mut() {
         add_tracks::tick(state, &dialog_focus, window, cx);
-    }
-    if let Some(Overlay::SignIn(state)) = app.overlay.open_mut() {
-        signin::tick(state, &dialog_focus, window, cx);
     }
     if let Some(Overlay::ChatHistory(state)) = app.overlay.open_mut() {
         chat_history::tick(state, window, cx);
@@ -1040,7 +1026,6 @@ fn overlay_layer(
             fixture_picker::render(state, entity, window, cx),
             "Fixture picker dialog",
         ),
-        Overlay::SignIn(state) => (signin::render(state, entity, window, cx), "Sign-in dialog"),
     };
     let scrim_dismiss = if matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none() {
         luma_ui::dialog::ScrimDismiss::Disabled

@@ -65,7 +65,9 @@ pub(crate) mod context {
     pub const SUBAGENTS: &str = "Subagents";
     /// Picking a clip's fixtures off the room.
     pub const FIXTURE_PICKER: &str = "FixturePicker";
-    /// The email-code sign-in gate.
+    /// The full-screen sign-in state. Not in [`DIALOGS`]: it is not a plane
+    /// over the shell, it *is* the app while it is up, so the shell's bindings
+    /// are absent because the shell is — not because a predicate excluded them.
     pub const SIGN_IN: &str = "SignIn";
 
     /// Every dialog context, once.
@@ -75,8 +77,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 8] = [
-        SIGN_IN,
+    pub const DIALOGS: [&str; 7] = [
         VENUES,
         PATTERNS,
         SETTINGS,

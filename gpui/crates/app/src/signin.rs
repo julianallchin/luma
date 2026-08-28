@@ -1,20 +1,22 @@
-//! The sign-in gate: email, then the six-digit code Supabase mailed back.
+//! The sign-in screen: email, then the six-digit code Supabase mailed back.
 //!
-//! Route content inside the shell's one dialog host, exactly like the venue
-//! picker — the host owns the scrim, the backdrop samples and the focus trap,
-//! and this module owns only which of the two steps is showing. The palette is
-//! the same one every dialog wears: a header band carrying the field and the
-//! committing chip, a body, a footer legend.
+//! **A state of the app, not a plane over it.** While it is up the shell is
+//! not rendered at all: there is no scrim, nothing behind it to reach, and
+//! nothing under it to keep alive — signing in is a change of identity, and
+//! the regions on the far side of it belong to whoever the app admits. The
+//! card in the middle wears the palette every other card wears (a header band
+//! carrying the field and the committing chip, a body, a footer legend); what
+//! it sits on is the app's own ground rather than a dimmed shell.
 //!
 //! # It is a gate, not a wall
 //!
-//! Escape works, and the chip beside it says so. A signed-out Luma is not a
-//! broken Luma: guest rows carry no `uid`, and the app database's admission
-//! triggers admit those unconditionally, so the whole local library — venues,
-//! tracks, patterns, scores — opens and edits without a session. What being
-//! signed out costs is the cloud: sync, shared venues, anything that needs a
-//! principal to own the row. So this dialog offers the door and holds it open;
-//! it does not bar it.
+//! "Work offline" sits under the card and Escape does the same thing. A
+//! signed-out Luma is not a broken Luma: guest rows carry no `uid`, and the
+//! app database's admission triggers admit those unconditionally, so the whole
+//! local library — venues, tracks, patterns, scores — opens and edits without
+//! a session. What being signed out costs is the cloud: sync, shared venues,
+//! anything that needs a principal to own the row. So this screen offers the
+//! door and holds it open; it does not bar it.
 //!
 //! # Why the host performs the exchange
 //!
@@ -37,15 +39,24 @@ use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 
-use crate::{shell::Overlay, Luma};
+use crate::{chrome, keymap, Luma};
 
 /// One size for both steps. Asking for an address and asking for the code that
 /// address received are the same question a step apart, so the card holds
 /// still and the morph spends its whole span on the content.
-const GATE_SIZE: MorphSize = MorphSize::new(520.0, 296.0);
+///
+/// Shorter than a palette's card because nothing scrolls in it: the body holds
+/// a heading, a line of prose and the error line the Code route may grow, and
+/// the height is what those need with air around them rather than a list's
+/// worth of room left empty.
+const GATE_SIZE: MorphSize = MorphSize::new(520.0, 244.0);
 
 /// What Supabase mails. Anything longer is a paste of something else.
 const CODE_LENGTH: usize = 6;
+
+/// Between the card and the one way past it. Wide enough that the secondary
+/// action reads as the screen's, not as a strip fallen off the card's footer.
+const SECONDARY_GAP: f32 = 20.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Route {
@@ -71,7 +82,7 @@ enum FocusTarget {
 /// was mailed to, and a user who edits the field on the way back would
 /// otherwise verify a code against an address that never received one.
 pub(crate) struct SignIn {
-    /// Correlates a submit with the dialog that made it. A slow answer landing
+    /// Correlates a submit with the screen that made it. A slow answer landing
     /// after the user backed out is a stale answer, not the current state.
     generation: u64,
     morph: MorphDialog<Route>,
@@ -86,10 +97,14 @@ pub(crate) struct SignIn {
     code_field: Entity<TextInput>,
     email_focus: FocusHandle,
     code_focus: FocusHandle,
-    /// The Code route's Back cap. Email is the root of this dialog.
+    /// The screen's own handle. The keyboard rests here whenever no field
+    /// holds it — mid-morph, or before the first field commits — so the root's
+    /// key handler always has a dispatch path to be on.
+    screen_focus: FocusHandle,
+    /// The Code route's Back cap. Email is the root of this screen.
     leading_focus: FocusHandle,
     action_focus: FocusHandle,
-    close_focus: FocusHandle,
+    offline_focus: FocusHandle,
     focus_pending: Option<FocusTarget>,
     _field_subscriptions: [Subscription; 2],
 }
@@ -130,15 +145,16 @@ impl SignIn {
             code_field,
             email_focus,
             code_focus,
+            screen_focus: cx.focus_handle(),
             leading_focus: cx.focus_handle().tab_stop(true),
             action_focus: cx.focus_handle().tab_stop(true),
-            close_focus: cx.focus_handle().tab_stop(true),
+            offline_focus: cx.focus_handle().tab_stop(true),
             focus_pending: Some(FocusTarget::Email),
             _field_subscriptions: subscriptions,
         }
     }
 
-    /// The route the gate is on, or arriving at. Read through the morph so a
+    /// The route the screen is on, or arriving at. Read through the morph so a
     /// request mid-flight already reports its destination.
     fn route(&self) -> Route {
         *self.morph.target_key()
@@ -165,28 +181,31 @@ impl SignIn {
 // a submit is a `Library` call and a screen transition, and `Luma` owns both.
 
 impl Luma {
-    /// Put the gate up. The shell keeps whatever is under it; signing in does
-    /// not rebuild the app, it only changes who owns the rows it writes next.
+    /// Show the sign-in screen. Whatever the shell was showing stays in state
+    /// and comes back untouched when the screen leaves — except any dialog,
+    /// which goes now rather than animating out later over a shell the user
+    /// has not looked at since (settings is the one route that gets here with
+    /// an overlay up).
     pub(crate) fn show_sign_in(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.overlay.as_open(), Some(Overlay::SignIn(_))) {
+        if self.sign_in.is_some() {
             return;
         }
+        self.overlay = luma_ui::dialog::Popup::default();
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
-        self.overlay
-            .open(Overlay::SignIn(Box::new(SignIn::new(generation, cx))));
+        self.sign_in = Some(Box::new(SignIn::new(generation, cx)));
         cx.notify();
     }
 
-    /// Leave the gate and use the library as a guest. The venue restore that a
-    /// signed-in launch would have run happens here instead, so both ways in
+    /// Leave the screen and use the library as a guest. The venue restore that
+    /// a signed-in launch would have run happens here instead, so both ways in
     /// land on the same screen.
     pub(crate) fn continue_offline(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.overlay.as_open(), Some(Overlay::SignIn(_))) {
+        if self.sign_in.take().is_none() {
             return;
         }
-        self.close_overlay(cx);
         self.restore_venue(cx);
+        cx.notify();
     }
 
     fn sign_in_email_changed(&mut self, email: String, cx: &mut Context<Self>) {
@@ -203,11 +222,11 @@ impl Luma {
         });
     }
 
-    /// The gate's keyboard, in the same navigator shape as the other dialogs:
+    /// The screen's keyboard, in the same navigator shape as the dialogs':
     /// Enter commits the route, ← / ⌫-on-empty step back, Escape works
     /// offline.
     fn sign_in_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let Some(Overlay::SignIn(state)) = self.overlay.as_open() else {
+        let Some(state) = self.sign_in.as_ref() else {
             return;
         };
         let route = state.route();
@@ -238,7 +257,7 @@ impl Luma {
 
     /// Commit whichever step is showing: mail a code, or spend one.
     fn sign_in_submit(&mut self, cx: &mut Context<Self>) {
-        let Some(Overlay::SignIn(state)) = self.overlay.as_open() else {
+        let Some(state) = self.sign_in.as_ref() else {
             return;
         };
         if !state.can_submit() {
@@ -251,7 +270,7 @@ impl Luma {
     }
 
     fn send_login_code(&mut self, cx: &mut Context<Self>) {
-        let Some(Overlay::SignIn(state)) = self.overlay.open_mut() else {
+        let Some(state) = self.sign_in.as_mut() else {
             return;
         };
         let email = state.email.trim().to_string();
@@ -283,7 +302,7 @@ impl Luma {
     }
 
     fn verify_login_code(&mut self, cx: &mut Context<Self>) {
-        let Some(Overlay::SignIn(state)) = self.overlay.open_mut() else {
+        let Some(state) = self.sign_in.as_mut() else {
             return;
         };
         // The address the code was mailed to, never the field: see `sent_to`.
@@ -301,18 +320,19 @@ impl Luma {
             this.update(cx, |this, cx| {
                 match result {
                     // Signed in: the library is now the principal's, so the
-                    // gate leaves and the launch it was standing in front of
+                    // screen leaves and the launch it was standing in front of
                     // resumes. No restart — nothing above the seam cached the
                     // old identity except `Library::user_id`, and the sign-in
                     // wrote through it.
                     Ok(_) => {
-                        let current = matches!(
-                            this.overlay.as_open(),
-                            Some(Overlay::SignIn(state)) if state.generation == generation
-                        );
+                        let current = this
+                            .sign_in
+                            .as_ref()
+                            .is_some_and(|state| state.generation == generation);
                         if current {
-                            this.close_overlay(cx);
+                            this.sign_in = None;
                             this.restore_venue(cx);
+                            cx.notify();
                         }
                     }
                     Err(error) => this.with_current_sign_in(generation, cx, |state| {
@@ -329,21 +349,21 @@ impl Luma {
     }
 
     fn with_sign_in(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut SignIn)) {
-        if let Some(Overlay::SignIn(state)) = self.overlay.open_mut() {
+        if let Some(state) = self.sign_in.as_mut() {
             edit(state);
             cx.notify();
         }
     }
 
-    /// Apply `edit` only if the gate that made request `generation` is still
-    /// the one on screen.
+    /// Apply `edit` only if the screen that made request `generation` is still
+    /// the one showing.
     fn with_current_sign_in(
         &mut self,
         generation: u64,
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut SignIn),
     ) {
-        if let Some(Overlay::SignIn(state)) = self.overlay.open_mut() {
+        if let Some(state) = self.sign_in.as_mut() {
             if state.generation == generation {
                 edit(state);
                 cx.notify();
@@ -352,20 +372,73 @@ impl Luma {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The screen
+// ---------------------------------------------------------------------------
+
+/// The whole window while nobody is signed in: the drag band and the window's
+/// controls, the card centred on the app's own ground, and the one way past it.
+///
+/// Called instead of `shell::regions`, not beside it — see the module docs.
+pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> AnyElement {
+    let entity = cx.entity();
+    let Some(state) = app.sign_in.as_mut() else {
+        return div().into_any_element();
+    };
+    tick(state, window, cx);
+    let state = app.sign_in.as_ref().expect("the screen is up");
+    let keys = entity.clone();
+    let viewport = f32::from(window.viewport_size().width);
+    div()
+        .size_full()
+        .relative()
+        .flex()
+        .flex_col()
+        // The app's ground, not a scrim: nothing is behind this screen.
+        .bg(ladder::background())
+        .font_family(luma_ui::fonts::FAMILY)
+        .text_color(ladder::foreground())
+        .key_context(keymap::context::SIGN_IN)
+        .track_focus(&state.screen_focus)
+        .on_key_down(move |event, _, cx| {
+            let event = event.clone();
+            keys.update(cx, |this, cx| this.sign_in_key(&event, cx));
+        })
+        // The window still has to move and close. A screen with no regions
+        // has no region head band either, so it carries its own — see
+        // [`crate::chrome`].
+        .child(chrome::band(chrome::BandSpan {
+            x: 0.0,
+            width: viewport,
+            viewport,
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(SECONDARY_GAP))
+                .child(card(state, &entity, window))
+                .child(offline(state, &entity, window)),
+        )
+        // Last, so nothing can cover the only controls that move and close the
+        // window.
+        .child(chrome::window_controls())
+        .into_any_element()
+}
+
 /// Advance the morph and commit focus, never while a route is in flight — an
 /// in-flight copy carries no focus handles (see [`field`]).
-pub(crate) fn tick(
-    state: &mut SignIn,
-    dialog_focus: &FocusHandle,
-    window: &mut Window,
-    cx: &mut Context<Luma>,
-) {
+fn tick(state: &mut SignIn, window: &mut Window, cx: &mut Context<Luma>) {
     let now = Instant::now();
     if state.morph.tick(now, luma_ui::motion::reduced_motion(cx)) {
         window.request_animation_frame();
     }
     if state.morph.sample(now).animating {
-        window.focus(dialog_focus, cx);
+        window.focus(&state.screen_focus, cx);
         return;
     }
     if let Some(route) = state.morph.take_focus_after_commit() {
@@ -381,19 +454,37 @@ pub(crate) fn tick(
     }
 }
 
-/// The gate's card. Like the other dialogs, it owns its own `morph::card` —
-/// the shell hands it no box to live in.
-pub(crate) fn render(
-    state: &SignIn,
-    app: &Entity<Luma>,
-    window: &Window,
-    _cx: &mut gpui::App,
-) -> AnyElement {
+/// The centred card. The one card mechanism in the app, on the app's ground
+/// instead of on a modal plane.
+fn card(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
     let sample = state.morph.sample(Instant::now());
     let app = app.clone();
-    morph::card(&sample, "Sign-in dialog", move |route, mode| {
+    morph::card(&sample, "Sign-in card", move |route, mode| {
         route_body(state, *route, mode, &app, window)
     })
+}
+
+/// The screen's secondary action: the door out, under the card rather than in
+/// its bands.
+///
+/// It carries its own key cap instead of the footer legend carrying a second
+/// `esc Work offline` line — one gesture, offered once, by an object that is
+/// both the button and the legend. A card whose footer advertised a key that a
+/// button eight pixels below it also performed would be arguing with itself
+/// about which one is the way out.
+fn offline(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
+    let leave = app.clone();
+    float::btn("Work offline", "sign-in-offline")
+        .child(float::key_cap().child("esc"))
+        .id("sign-in-offline")
+        .track_focus(&state.offline_focus)
+        .tab_index(0)
+        .on_click(move |_, _, cx| {
+            leave.update(cx, |this, cx| this.continue_offline(cx));
+        })
+        .agent_node(Role::Button, "Work offline")
+        .agent_focused(state.offline_focus.is_focused(window))
+        .into_any_element()
 }
 
 fn route_body(
@@ -403,21 +494,12 @@ fn route_body(
     app: &Entity<Luma>,
     window: &Window,
 ) -> AnyElement {
-    let keys = app.clone();
-    let mut frame = div()
+    div()
         .size_full()
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_color(ladder::foreground());
-    if mode == ContentMode::Interactive {
-        // No `track_focus`: the dialog host already owns this card's trap.
-        frame = frame.on_key_down(move |event, _, cx| {
-            let event = event.clone();
-            keys.update(cx, |this, cx| this.sign_in_key(&event, cx));
-        });
-    }
-    frame
+        .text_color(ladder::foreground())
         .child(header(state, route, mode, app, window))
         .child(div().flex_1().min_h_0().flex().child(body(state, route)))
         .child(footer(route))
@@ -464,29 +546,8 @@ fn header(
         );
     }
 
-    band = band.child(field(state, route, mode, window));
-    band = band.child(submit_chip(state, route, mode, app, window));
-
-    let offline = app.clone();
-    let cap = if interactive {
-        float::key_cap_pressable(float::key_cap())
-    } else {
-        float::key_cap()
-    };
-    band.child(
-        cap.id("sign-in-offline")
-            .when(interactive, |cap| {
-                cap.track_focus(&state.close_focus)
-                    .tab_index(0)
-                    .on_click(move |_, _, cx| {
-                        offline.update(cx, |this, cx| this.continue_offline(cx));
-                    })
-            })
-            .child("esc")
-            .agent_node(Role::Button, "Work offline")
-            .agent_disabled(!interactive)
-            .agent_focused(interactive && state.close_focus.is_focused(window)),
-    )
+    band.child(field(state, route, mode, window))
+        .child(submit_chip(state, route, mode, app, window))
 }
 
 /// The header's one field: the address on the first step, the code on the
@@ -580,7 +641,6 @@ fn footer(route: Route) -> Div {
             Route::Code => "Sign in",
         },
     ))
-    .child(float::key_hint_text("esc", "Work offline"))
     .child(div().flex_1().min_w_0())
 }
 
@@ -588,9 +648,6 @@ fn footer(route: Route) -> Div {
 // Body
 // ---------------------------------------------------------------------------
 
-/// The message. Leaving the gate is offered by the `esc` cap and the footer
-/// legend, and once by each: a third affordance for one gesture would make the
-/// card argue with itself about which one is the way out.
 fn body(state: &SignIn, route: Route) -> AnyElement {
     let heading = match route {
         Route::Email => "Sign in to Luma",

@@ -153,6 +153,12 @@ pub struct Luma {
     /// Session-lived, like `workspace_split`: a split chosen for one window is
     /// not a preference about every future window.
     pub(crate) visualizer_split: luma_ui::split::SplitFraction,
+    /// The sign-in screen, or none. **Not an overlay**: while it is up it is
+    /// the app's whole content and the shell is not rendered at all — see
+    /// [`signin`]. Boxed because it carries a morph, two text fields and their
+    /// subscriptions, and `Luma` is one entity that would otherwise carry all
+    /// of that for the entire session it is not showing.
+    pub(crate) sign_in: Option<Box<signin::SignIn>>,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
     /// The dialog on screen, and — for the frames after it is dismissed —
     /// the one leaving. See [`luma_ui::dialog::Popup`]: gpui unmounts an
@@ -226,6 +232,7 @@ impl Luma {
             visualizer: None,
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
+            sign_in: None,
             overlay: luma_ui::dialog::Popup::default(),
             chat: None,
             chat_subscription: None,
@@ -346,6 +353,11 @@ impl Luma {
 
 impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Nobody is signed in yet, so there is no library to show and no shell
+        // to show it in — the gate is the app, not a plane over it.
+        if self.sign_in.is_some() {
+            return signin::screen(self, window, cx);
+        }
         // The shell with nothing to show *is* the venue picker: keep the
         // overlay up while no venue is selected, nothing else is up, and no
         // tab is open. A workspace with tabs is a shell with something to
@@ -459,7 +471,8 @@ impl Render for Luma {
             .on_action(cx.listener(|this, _: &keymap::CommitInsertOption, _, cx| {
                 this.commit_insert_menu(cx)
             }))
-            .child(shell::regions(self, window, cx));
+            .child(shell::regions(self, window, cx))
+            .into_any_element();
         // The once-per-frame hover tick, at the tail so it runs after every
         // row above has read its blend. Without it a hover wash is evaluated
         // exactly once — on the frame the pointer's own `refresh` produced —

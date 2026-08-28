@@ -139,10 +139,10 @@ impl Luma {
     }
 
     /// Write one setting, then read every setting back.
-    /// Leave settings for the sign-in gate. One dialog is up at a time, so
-    /// this is a replacement, not a stack.
+    /// Leave settings for the sign-in screen. The screen takes the whole
+    /// window and [`Luma::show_sign_in`] takes this dialog down with it — no
+    /// exit to play, because there is no shell left for it to play over.
     fn sign_in_from_settings(&mut self, cx: &mut Context<Self>) {
-        self.close_overlay(cx);
         self.show_sign_in(cx);
     }
 
