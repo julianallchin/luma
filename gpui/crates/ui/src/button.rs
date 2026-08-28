@@ -14,7 +14,7 @@ use crate::ladder;
 
 /// `inline-flex items-center justify-center gap-1 shrink-0 h-6 px-2 border
 /// rounded-none` + `text-[9px] uppercase font-bold`. Colors are the caller's.
-pub fn slab() -> Div {
+pub(crate) fn slab() -> Div {
     div()
         .flex()
         .items_center()

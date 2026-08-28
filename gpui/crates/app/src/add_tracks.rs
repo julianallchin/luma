@@ -1249,10 +1249,11 @@ fn submit_chip(
     )
 }
 
-/// The height of [`float::btn_primary_chip`], which the source menu hangs off.
-/// Named here because `anchored_below` needs it to know how far a menu that
-/// opens *upward* has to clear the chip.
-const SUBMIT_CHIP_HEIGHT: f32 = 22.;
+/// The height of [`float::btn_primary_chip`], which the source menu hangs off
+/// — `anchored_below` needs it to know how far a menu that opens *upward* has
+/// to clear the chip. The chip is cap-sized by construction, so the number
+/// comes from the cap rather than being written down a second time.
+const SUBMIT_CHIP_HEIGHT: f32 = float::KEY_CAP_HEIGHT;
 
 /// The import-source menu, hanging off the header chip.
 ///
