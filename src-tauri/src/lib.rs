@@ -614,6 +614,7 @@ pub fn run() {
             dispatch::adapter::remove_fixture_from_group,
             dispatch::adapter::get_grouped_hierarchy,
             dispatch::adapter::preview_selection_query,
+            dispatch::adapter::highlight_selection,
             dispatch::adapter::get_ungrouped_fixtures,
             dispatch::adapter::update_movement_config,
             dispatch::adapter::composite_track,

@@ -19,7 +19,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 78
+        "line": 80
       },
       "name": "add_fixture_to_group",
       "prose": {
@@ -843,7 +843,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 20
+        "line": 22
       },
       "name": "create_group",
       "prose": {
@@ -984,7 +984,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 65
+        "line": 67
       },
       "name": "delete_group",
       "prose": {
@@ -1478,7 +1478,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 128
+        "line": 130
       },
       "name": "get_grouped_hierarchy",
       "prose": {
@@ -1836,7 +1836,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 160
+        "line": 191
       },
       "name": "get_ungrouped_fixtures",
       "prose": {
@@ -1891,6 +1891,28 @@
         ]
       },
       "returns": "HashMap<String, i64>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "selection",
+          "rust": "Selection"
+        }
+      ],
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 172
+      },
+      "name": "highlight_selection",
+      "prose": {
+        "returns": "UniverseState"
+      },
+      "returns": "UniverseState"
     },
     {
       "args": [
@@ -2218,7 +2240,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 38
+        "line": 40
       },
       "name": "list_groups",
       "prose": {
@@ -3409,7 +3431,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 140
+        "line": 142
       },
       "name": "preview_selection_query",
       "prose": {
@@ -3617,7 +3639,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 96
+        "line": 98
       },
       "name": "remove_fixture_from_group",
       "prose": {
@@ -4503,7 +4525,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 47
+        "line": 49
       },
       "name": "update_group",
       "prose": {
@@ -4531,7 +4553,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 175
+        "line": 206
       },
       "name": "update_movement_config",
       "prose": {
@@ -4813,7 +4835,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/fixtures.rs"
     },
     {
-      "commandCount": 10,
+      "commandCount": 11,
       "domain": "groups",
       "handlers": "src-tauri/src/dispatch/handlers/groups.rs"
     },
@@ -5057,7 +5079,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:522"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:132",
+        "gpui/crates/app/src/library.rs:133",
         "src/features/dj-import/components/dj-import-browser.tsx:86",
         "src/features/tracks/components/track-browser.tsx:355"
       ],
@@ -5119,7 +5141,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 186,
+    "commandCount": 187,
     "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0

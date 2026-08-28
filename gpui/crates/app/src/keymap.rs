@@ -63,6 +63,25 @@ pub(crate) mod context {
     pub const CHAT_HISTORY: &str = "ChatHistory";
     /// The subagents dialog: the delegation list and one child's transcript.
     pub const SUBAGENTS: &str = "Subagents";
+    /// Picking a clip's fixtures off the room.
+    pub const FIXTURE_PICKER: &str = "FixturePicker";
+
+    /// Every dialog context, once.
+    ///
+    /// Two predicates are built from this list — the shell's bindings are
+    /// disabled inside any dialog, and Escape is enabled inside every one —
+    /// and a context named in one but not the other is a dialog whose Escape
+    /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
+    /// from drifting.
+    pub const DIALOGS: [&str; 7] = [
+        VENUES,
+        PATTERNS,
+        SETTINGS,
+        ADD_TRACKS,
+        CHAT_HISTORY,
+        SUBAGENTS,
+        FIXTURE_PICKER,
+    ];
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
     /// because the chat's composer, in another crate, declares the same
@@ -151,28 +170,14 @@ pub(crate) fn init(cx: &mut App) {
     // `secondary-` is cmd on macOS and ctrl elsewhere: gpui resolves it per
     // platform, which is why there is no `cfg` here.
     let escape = format!("{} && !{}", context::ROOT, context::TEXT_INPUT);
-    let shell = format!(
-        "{} && !{} && !{} && !{} && !{} && !{} && !{}",
-        context::ROOT,
-        context::VENUES,
-        context::PATTERNS,
-        context::SETTINGS,
-        context::ADD_TRACKS,
-        context::CHAT_HISTORY,
-        context::SUBAGENTS
-    );
+    let shell = std::iter::once(context::ROOT.to_string())
+        .chain(context::DIALOGS.iter().map(|name| format!("!{name}")))
+        .collect::<Vec<_>>()
+        .join(" && ");
     // A dialog owns Escape even when its current child is a text field. Route
     // dismissal policy remains in `Luma::dismiss_overlay` (notably, the
     // required first-venue screen refuses to close).
-    let dialog = format!(
-        "{} || {} || {} || {} || {} || {}",
-        context::VENUES,
-        context::PATTERNS,
-        context::SETTINGS,
-        context::ADD_TRACKS,
-        context::CHAT_HISTORY,
-        context::SUBAGENTS
-    );
+    let dialog = context::DIALOGS.join(" || ");
     // Every track-editor binding shares one predicate: it means something in
     // that tab and nothing anywhere else, and a field taking typed text
     // out-ranks all of it — `f` is a letter, `delete` is a correction, and

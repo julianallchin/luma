@@ -707,6 +707,45 @@ impl Fixture {
             .expect("failed to patch a fixture");
         }
 
+        // Two groups over that line, left half and right half. A picker needs
+        // names to tick, and two disjoint halves are the smallest rig where a
+        // union is observably not either arm of it.
+        for (index, (group, name)) in [
+            ("group-left", "left_movers"),
+            ("group-right", "right_movers"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sqlx::query(
+                "INSERT INTO fixture_groups (id, uid, venue_id, name, display_order)
+                 VALUES (?, NULL, ?, ?, ?)",
+            )
+            .bind(group)
+            .bind(VENUE)
+            .bind(name)
+            .bind(index as i64)
+            .execute(pool)
+            .await
+            .expect("failed to create a fixture group");
+            let half = count.div_ceil(2);
+            let members = if index == 0 { 0..half } else { half..count };
+            for (order, fixture) in members.enumerate() {
+                sqlx::query(
+                    "INSERT INTO fixture_group_members
+                         (id, fixture_id, group_id, head_index, display_order)
+                     VALUES (?, ?, ?, -1, ?)",
+                )
+                .bind(format!("{group}-{fixture}"))
+                .bind(format!("fixture-{fixture}"))
+                .bind(group)
+                .bind(order as i64)
+                .execute(pool)
+                .await
+                .expect("failed to add a fixture to a group");
+            }
+        }
+
         sqlx::query(
             "INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label,
                                        pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, scale)

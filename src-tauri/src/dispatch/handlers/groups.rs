@@ -5,8 +5,10 @@ use crate::dispatch::{AppServices, CommandError};
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{normalize_group_name, FixtureGroup, FixtureGroupNode, MovementConfig};
 use crate::models::selection::Selection;
+use crate::models::universe::UniverseState;
 use crate::services::groups as groups_service;
 use crate::services::groups::invalidate_venue_fixture_cache;
+use crate::stage_render;
 
 /// Seed used when a selection preview does not supply one. Previews must resolve
 /// `random()` selectors the same way evaluation does, so this default is part of
@@ -153,6 +155,35 @@ pub async fn preview_selection_query(
     )
     .await?;
     Ok(resolved.into_iter().map(|r| r.fixture).collect())
+}
+
+/// The frame that answers "which heads is this?": every head the selection
+/// matches open and white, the rest of the rig dark.
+///
+/// A [`UniverseState`] rather than a fixture list because the answer is
+/// head-accurate — [`preview_selection_query`] above collapses a match to whole
+/// fixtures and so cannot picture a group that owns half a bar. The caller
+/// installs it on a scene and renders; there is no second way to draw a
+/// highlight.
+///
+/// The seed is fixed for the same reason the agent's `venue.render` fixes it:
+/// a highlight is a picture of *one* answer, and a picker that redrew a
+/// different half on every hover would be lying about what applying does.
+pub async fn highlight_selection(
+    services: &AppServices,
+    venue_id: String,
+    selection: Selection,
+) -> Result<UniverseState, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    let resolved = groups_service::resolve_selection_expression_with_path(
+        &services.fixtures_root,
+        &mut access,
+        &selection,
+        DEFAULT_PREVIEW_SEED,
+    )
+    .await?;
+    Ok(stage_render::highlight_state(&resolved))
 }
 
 /// Fixtures in the venue with no group membership row at all — what the group

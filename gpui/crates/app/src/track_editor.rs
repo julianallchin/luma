@@ -137,6 +137,10 @@ use crate::{LibraryError, Luma};
 
 mod strip;
 
+/// The subset ladder and its reading, shared with the fixture picker so the
+/// two surfaces cannot offer different rungs.
+pub(crate) use strip::{subset_label, SUBSETS};
+
 // -- state --------------------------------------------------------------------
 
 /// The screen's whole state: the track it is showing, everything the seam

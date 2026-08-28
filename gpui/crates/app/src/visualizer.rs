@@ -82,7 +82,7 @@ use crate::{Library, LibraryError, Luma};
 
 /// The three.js `<Canvas camera>` the web visualizer mounts with, in three
 /// space: `position [0, 1, 3]`, target at the origin, 50° vertical field.
-const FOV_Y_DEG: f32 = 50.0;
+pub(crate) const FOV_Y_DEG: f32 = 50.0;
 
 /// Frame shape to fit against before the viewport has been laid out once.
 const DEFAULT_ASPECT: f32 = 16.0 / 9.0;
@@ -1289,7 +1289,10 @@ fn zoom_scale(distance: f32) -> f32 {
 /// One venue as a scene description: geometry in data space, the render dials
 /// the web's dark-stage view pins, and an **empty** state map — head state
 /// arrives per frame through [`luma_render::StateSource`] instead.
-fn scene(rig: &Rig, definitions: &BTreeMap<String, scene_desc::Definition>) -> scene_desc::Scene {
+pub(crate) fn scene(
+    rig: &Rig,
+    definitions: &BTreeMap<String, scene_desc::Definition>,
+) -> scene_desc::Scene {
     scene_desc::Scene {
         id: "live".into(),
         times: Vec::new(),

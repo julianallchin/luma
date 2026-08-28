@@ -8,6 +8,11 @@
 //! `TrackEditResult`) belong in [`crate::models`] — until they move, the seam's
 //! wire vocabulary is published out of an implementation module, which is why
 //! `graph_documents` and `track_edits` are still `pub`.
+//!
+//! `groups` is `pub` for the same reason: [`crate::stage_render::highlight_state`]
+//! already takes its `ResolvedFixture` in a public signature, and the GPUI
+//! fixture picker reads an expression back through its parser
+//! ([`groups::or_terms`]) rather than growing a second one.
 
 pub(crate) mod agent_execution;
 pub(crate) mod authored_documents;
@@ -16,7 +21,7 @@ pub(crate) mod authored_state;
 pub(crate) mod authored_sync_merge;
 pub mod fixtures;
 pub mod graph_documents;
-pub(crate) mod groups;
+pub mod groups;
 pub(crate) mod score_dsl;
 pub(crate) mod score_mutations;
 pub mod track_edits;

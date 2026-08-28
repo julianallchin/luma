@@ -80,6 +80,7 @@ use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
 use luma_lib::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
 };
+use luma_lib::models::selection::Selection;
 use luma_lib::models::stage::StagePiece;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
@@ -1227,6 +1228,23 @@ impl Library {
         venue_id: &str,
     ) -> impl Future<Output = Result<Vec<FixtureGroup>, LibraryError>> + use<> {
         self.call("list_groups", json!({ "venueId": venue_id }))
+    }
+
+    /// The frame that answers "which heads does this selection light?" — every
+    /// matched head open and white, the rest of the rig dark.
+    ///
+    /// The picker draws this over the venue's own geometry, so the picture a
+    /// person points at and the fixtures a clip will drive are resolved by one
+    /// evaluator. Head-accurate, which is why it is not `preview_selection_query`.
+    pub fn highlight_selection(
+        &self,
+        venue_id: &str,
+        selection: &Selection,
+    ) -> impl Future<Output = Result<UniverseState, LibraryError>> + use<> {
+        self.call(
+            "highlight_selection",
+            json!({ "venueId": venue_id, "selection": selection.to_value() }),
+        )
     }
 
     /// The node catalogue: what every `typeId` in a graph means. Static for

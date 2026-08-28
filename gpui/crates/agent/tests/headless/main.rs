@@ -23,6 +23,7 @@ mod chrome_anchors;
 mod dialog_escape;
 mod dialog_focus;
 mod empty_panel;
+mod fixture_picker;
 mod graph;
 mod keyboard;
 mod library_foundation;

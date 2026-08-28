@@ -182,6 +182,7 @@ use crate::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
     UpdateTrackScoreInput,
 };
+use crate::models::selection::Selection;
 use crate::models::stage::StagePiece;
 use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
 use crate::models::universe::UniverseState;
@@ -385,6 +386,10 @@ commands! {
         query: String,
         seed: Option<u64>,
     ) -> Vec<PatchedFixture>;
+    groups::highlight_selection(
+        venue_id: String,
+        selection: Selection,
+    ) -> UniverseState;
 
     artnet::start_discovery() -> ();
     artnet::stop_discovery() -> ();
