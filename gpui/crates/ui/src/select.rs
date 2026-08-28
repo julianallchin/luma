@@ -155,7 +155,7 @@ pub fn luma_select_item(label: &str, state: RowState) -> Div {
 }
 
 /// First letter up, the rest untouched — idempotent on labels that already
-/// arrive cased ("Group Local"). The float tier's casing, shared with the
+/// arrive cased ("Multiply"). The float tier's casing, shared with the
 /// trigger ([`crate::float::picker_chip`]) so a row and the value it becomes
 /// are spelled the same.
 pub(crate) fn sentence_case(label: &str) -> String {

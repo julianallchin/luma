@@ -1032,8 +1032,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 	const [newArgColor, setNewArgColor] = useState("#ff0000");
 	const [newArgScalar, setNewArgScalar] = useState(1.0);
 	const [newArgExpression, setNewArgExpression] = useState("all");
-	const [newArgSpatialReference, setNewArgSpatialReference] =
-		useState("global");
 	const [newArgPalette, setNewArgPalette] = useState<PaletteValue>({
 		colors: ["#ff0080", "#00ffc8", "#ffbe28"],
 	});
@@ -1995,12 +1993,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 		} else if (arg.argType === "Scalar") {
 			setNewArgScalar(arg.defaultValue as unknown as number);
 		} else if (arg.argType === "Selection") {
-			const sel = arg.defaultValue as {
-				expression: string;
-				spatialReference: string;
-			};
+			const sel = arg.defaultValue as { expression: string };
 			setNewArgExpression(sel.expression ?? "all");
-			setNewArgSpatialReference(sel.spatialReference ?? "global");
 		} else if (arg.argType === "Palette") {
 			setNewArgPalette(
 				(arg.defaultValue as PaletteValue | undefined) ?? {
@@ -2293,7 +2287,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 						setNewArgColor("#ff0000");
 						setNewArgScalar(1.0);
 						setNewArgExpression("all");
-						setNewArgSpatialReference("global");
 						setNewArgPalette({ colors: ["#ff0080", "#00ffc8", "#ffbe28"] });
 						setNewArgGradient({
 							stops: [
@@ -2466,26 +2459,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 										venueId={currentVenue?.id ?? null}
 									/>
 								</div>
-								<div className="space-y-2">
-									<label
-										htmlFor="pattern-arg-spatial-ref"
-										className="text-xs text-muted-foreground"
-									>
-										Default Spatial Reference
-									</label>
-									<Select
-										value={newArgSpatialReference}
-										onValueChange={setNewArgSpatialReference}
-									>
-										<SelectTrigger id="pattern-arg-spatial-ref">
-											<SelectValue />
-										</SelectTrigger>
-										<SelectContent>
-											<SelectItem value="global">Global</SelectItem>
-											<SelectItem value="group_local">Group Local</SelectItem>
-										</SelectContent>
-									</Select>
-								</div>
 							</div>
 						)}
 					</div>
@@ -2526,10 +2499,7 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 									}
 									defaultValue = { r, g, b, a };
 								} else if (newArgType === "Selection") {
-									defaultValue = {
-										expression: newArgExpression,
-										spatialReference: newArgSpatialReference,
-									};
+									defaultValue = { expression: newArgExpression };
 								} else if (newArgType === "Palette") {
 									defaultValue = newArgPalette as unknown as Record<
 										string,
@@ -2570,7 +2540,6 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 								setNewArgColor("#ff0000");
 								setNewArgScalar(1.0);
 								setNewArgExpression("all");
-								setNewArgSpatialReference("global");
 								setNewArgPalette({ colors: ["#ff0080", "#00ffc8", "#ffbe28"] });
 								setNewArgGradient({
 									stops: [

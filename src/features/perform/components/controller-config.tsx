@@ -78,7 +78,7 @@ export function argDefaultValue(arg: PatternArgDef): unknown {
 	}
 	// Selection
 	const d = arg.defaultValue as Record<string, unknown> | null | undefined;
-	return d ?? { expression: "all", spatialReference: "global" };
+	return d ?? { expression: "all" };
 }
 
 export function hexFromColor(val: unknown): string {

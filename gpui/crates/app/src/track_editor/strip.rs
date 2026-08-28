@@ -96,9 +96,6 @@ const GHOST_W: f32 = SCALAR_W;
 /// panel's 250 ms.
 const ARG_FLUSH: Duration = Duration::from_millis(250);
 
-/// The spatial-reference select's rows: label shown, value stored.
-const SPACES: [(&str, &str); 2] = [("Global", "global"), ("Group Local", "group_local")];
-
 /// The subset select's rows: how much of the expression's match to light.
 ///
 /// A closed ladder, not a number field — the strip is a panel of slabs, and the
@@ -202,8 +199,6 @@ enum Groups {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Menu {
     Blend,
-    /// The spatial-reference select of the selection cell at this index.
-    Space(usize),
     /// The subset select of the selection cell at this index.
     Subset(usize),
     /// The HSV plate for the selected swatch/stop of the cell at this index.
@@ -1085,7 +1080,7 @@ fn blend_select(state: &Editor, app: &Entity<Luma>) -> Div {
     )
 }
 
-/// One arg's cell (or two — a selection arg carries its spatial select).
+/// One arg's cell (or two — a selection arg carries its subset select).
 fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Div {
     let name = cell.def.name.as_str();
     match &cell.widget {
@@ -1093,40 +1088,6 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
         Widget::Scalar(entity) => row.child(arg_cell(name, entity.clone())),
         Widget::Selection(entity) => {
             let selection = selection_from_wire(&stored_arg(state, &cell.def));
-
-            let shown = SPACES
-                .iter()
-                .find(|(_, value)| *value == selection.spatial_reference)
-                .map_or(SPACES[0].0, |(label, _)| label);
-            let labels: Vec<&str> = SPACES.iter().map(|(label, _)| *label).collect();
-            let toggle = app.clone();
-            let pick = app.clone();
-            let def = cell.def.clone();
-            let space = luma_arg_select(
-                format!("{name}:space"),
-                shown,
-                &labels,
-                state.strip.open == Some(Menu::Space(index)),
-                move |_, cx| {
-                    toggle.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| {
-                            editor.strip.open = match editor.strip.open {
-                                Some(Menu::Space(at)) if at == index => None,
-                                _ => Some(Menu::Space(index)),
-                            };
-                        });
-                    });
-                },
-                move |picked, _, cx| {
-                    let def = def.clone();
-                    pick.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| editor.strip.open = None);
-                        this.arg_selection(&def.id, &def, cx, |selection| {
-                            selection.spatial_reference = SPACES[picked].1.to_string();
-                        });
-                    });
-                },
-            );
 
             let subset_labels: Vec<&str> = SUBSETS.iter().map(|(label, _)| *label).collect();
             let toggle = app.clone();
@@ -1159,7 +1120,6 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
             );
 
             row.child(arg_cell(name, entity.clone()))
-                .child(arg_cell("space", space))
                 .child(arg_cell("how many", amount))
         }
         Widget::Palette { selected, hsv } => {

@@ -260,12 +260,7 @@ impl<'a> Parser<'a> {
         }
         self.advance();
         let mut selection = None;
-        let mut selection_spatial_reference = None;
         if !self.check(TokenKind::RightParen) {
-            if self.check(TokenKind::Identifier) && self.kind_at(1) == Some(TokenKind::Colon) {
-                selection_spatial_reference = Some(self.advance().value.clone());
-                self.advance();
-            }
             selection = Some(self.parse_group_expression());
         }
         if self.expect(TokenKind::RightParen).is_none() {
@@ -379,7 +374,6 @@ impl<'a> Parser<'a> {
             pattern: pattern_name,
             pattern_id,
             selection,
-            selection_spatial_reference,
             range,
             args,
             blend,

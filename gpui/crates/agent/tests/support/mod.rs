@@ -657,7 +657,7 @@ impl Fixture {
                         "id": "selection",
                         "name": "selection",
                         "argType": "Selection",
-                        "defaultValue": { "expression": "all", "spatialReference": "global" },
+                        "defaultValue": { "expression": "all" },
                     }, {
                         "id": "intensity",
                         "name": "intensity",

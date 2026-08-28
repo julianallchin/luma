@@ -3383,7 +3383,7 @@
       },
       "name": "preview_pattern_image",
       "prose": {
-        "notes": "Errors with 'end_time must be greater than start_time' if the span is non-positive — validate before calling. Args are the PATTERN DEFAULTS with every Selection-typed arg forced to `{\"expression\":\"all\",\"spatialReference\":\"global\"}` (preview_arg_values), so this is not what the timeline clip would render. Without beatGrid the column count falls back to the non-beat-aligned width rule. The `_at` variant takes (pool, StorageRoot, resource_root) directly — the AppHandle only ever supplied those two roots, so a port needs no Tauri handle.",
+        "notes": "Errors with 'end_time must be greater than start_time' if the span is non-positive — validate before calling. Args are the PATTERN DEFAULTS with every Selection-typed arg forced to `{\"expression\":\"all\"}` (preview_arg_values), so this is not what the timeline clip would render. Without beatGrid the column count falls back to the non-beat-aligned width rule. The `_at` variant takes (pool, StorageRoot, resource_root) directly — the AppHandle only ever supplied those two roots, so a port needs no Tauri handle.",
         "returns": "AnnotationPreview with annotationId = `preview_{patternId}`",
         "sideEffects": [
           "read-only; VenueAccess::<Read> on the venue"
@@ -4953,7 +4953,7 @@
         "src-tauri/src/host_audio.rs:25"
       ],
       "listeners": [
-        "src/features/patterns/components/pattern-editor.tsx:1391",
+        "src/features/patterns/components/pattern-editor.tsx:1389",
         "src/features/track-editor/components/track-editor.tsx:312"
       ],
       "name": "host-audio://state",

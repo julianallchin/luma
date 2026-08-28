@@ -148,7 +148,7 @@ fn parser_ports_ranges_layers_args_and_precedence() {
         "\"one\": solid_color[\"solid-id\"]((left | right) & ~high > all) @5:3-7:2 color=#ff0000\n",
         "\n",
         "layer -7:\n",
-        "\"two\": intensity_spikes[\"spikes-id\"](group_local: hit) @0.3333333333333333s-1.23456789012345s subdivision=2 blend=subtract",
+        "\"two\": intensity_spikes[\"spikes-id\"](hit) @0.3333333333333333s-1.23456789012345s subdivision=2 blend=subtract",
     );
     let (document, warnings) = parse_ok(source, &registry());
     assert!(warnings.is_empty());
@@ -160,10 +160,6 @@ fn parser_ports_ranges_layers_args_and_precedence() {
     assert_eq!(document.layers[1].z_index, -7);
     assert_eq!(second.id.as_deref(), Some("two"));
     assert_eq!(second.pattern_id.as_deref(), Some("spikes-id"));
-    assert_eq!(
-        second.selection_spatial_reference.as_deref(),
-        Some("group_local")
-    );
     assert_eq!(second.range.unit, TimeUnit::Seconds);
     assert_eq!(
         second.range.start.to_bits(),

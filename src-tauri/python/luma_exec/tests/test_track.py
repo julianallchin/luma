@@ -182,10 +182,7 @@ class TrackEditingTests(unittest.TestCase):
         self.assertEqual(added.pattern_id, "wash-blue")
         self.assertEqual(added.pattern_name, "Blue Wash")
         self.assertEqual(added.args["intensity"], 0.7)
-        self.assertEqual(
-            dict(added.args["selection"]),
-            {"expression": "front_wash", "spatialReference": "global"},
-        )
+        self.assertEqual(dict(added.args["selection"]), {"expression": "front_wash"})
         self.assertEqual(len(track.clips), 4)
         self.assertEqual(len(edit.clips), 5)
         with self.assertRaises(TypeError):
@@ -206,11 +203,7 @@ class TrackEditingTests(unittest.TestCase):
         )
         self.assertEqual(
             dict(half.args["selection"]),
-            {
-                "expression": "spots",
-                "spatialReference": "global",
-                "subset": {"fraction": 0.5},
-            },
+            {"expression": "spots", "subset": {"fraction": 0.5}},
         )
         self.assertEqual(half.subset, 0.5)
 
@@ -224,11 +217,7 @@ class TrackEditingTests(unittest.TestCase):
         retargeted = edit.update_clip(three.id, subset=0.25)
         self.assertEqual(
             dict(retargeted.args["selection"]),
-            {
-                "expression": "spots",
-                "spatialReference": "global",
-                "subset": {"fraction": 0.25},
-            },
+            {"expression": "spots", "subset": {"fraction": 0.25}},
         )
 
         # And a selection alone clears it back to the whole set.
