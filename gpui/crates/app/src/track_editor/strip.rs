@@ -13,16 +13,19 @@
 //! The clip selection. One clip shows its pattern's name; several sharing a
 //! pattern show the name and a count; a mixed selection names only the count
 //! and ghosts the args, because there is no one schema to edit against. The
-//! timing cells and the blend select always follow the *primary* (first
-//! selected) clip, as the web panel's do; blend applies to every selected
-//! clip, args batch-apply whenever the whole selection shares the pattern.
+//! blend select follows the *primary* (first selected) clip, as the web
+//! panel's does; blend applies to every selected clip, args batch-apply
+//! whenever the whole selection shares the pattern.
+//!
+//! A clip's span is not here. Bounds are edited by dragging the clip on the
+//! timeline, which is the one place they can be read against the waveform
+//! they mean something relative to; the strip is for args.
 //!
 //! # Two write paths, deliberately
 //!
-//! Timing and blend edits are ordinary committed writes: they ride
-//! [`Luma::track_command`], so each control gesture is one [`History`]
-//! checkpoint and one compare-and-swap publish, exactly like a drag on the
-//! canvas.
+//! A blend pick is an ordinary committed write: it rides
+//! [`Luma::track_command`], so the gesture is one [`History`] checkpoint and
+//! one compare-and-swap publish, exactly like a drag on the canvas.
 //!
 //! Arg edits ride the web's fast path instead. A change lands in the working
 //! copy at once and re-renders the touched clips' heatmap previews (through
@@ -76,14 +79,12 @@ pub(crate) const STRIP_HEIGHT: f32 = CELL_HEIGHT + 2. * STRIP_PAD;
 ///
 /// Sized *down* to what each field's own content actually needs at 12px mono
 /// — a pattern name and an expression truncate anyway, and a scalar is four
-/// or five characters — because inline labels already spend ~440px of the
-/// strip on words. Together with [`CELL_GAP`] this is 68px, which is what a
-/// pattern with two args costs over the shared columns: the common strip now
-/// fits a 1200px window instead of clipping its last control. It does not and
-/// cannot fix the general case — a schema may declare any number of args, so
-/// [`dress`] still scrolls.
+/// or five characters — because inline labels already spend a few hundred
+/// pixels of the strip on words. That, and the two columns a clip's span no
+/// longer costs here, is what keeps the common pattern's whole schema inside
+/// a 1200px window. It does not and cannot fix the general case — a schema
+/// may declare any number of args, so [`dress`] still scrolls.
 const PATTERN_W: f32 = 120.;
-const TIME_W: f32 = 64.;
 const SCALAR_W: f32 = 64.;
 const EXPR_W: f32 = 160.;
 const GRADIENT_W: f32 = 140.;
@@ -123,32 +124,6 @@ pub(crate) fn subset_label(subset: Subset) -> SharedString {
         Subset::All => "All".into(),
         Subset::Fraction(f) => format!("{}%", (f * 100.).round()).into(),
         Subset::Count(c) => c.to_string().into(),
-    }
-}
-
-/// Timing fields are edited in beats to two decimals, the web panel's
-/// `toFixed(2)` — also the resync threshold, so a redraw never fights a draft
-/// over digits the field does not show.
-fn round2(value: f64) -> f64 {
-    (value * 100.).round() / 100.
-}
-
-/// `secondsToBeats`: identity for a track with no usable grid, as on the web.
-fn seconds_to_beats(beats: Option<&BeatGrid>, seconds: f64) -> f64 {
-    match beats {
-        Some(grid) if grid.bpm != 0. => {
-            (seconds - f64::from(grid.downbeat_offset)) / (60. / f64::from(grid.bpm))
-        }
-        _ => seconds,
-    }
-}
-
-fn beats_to_seconds(beats: Option<&BeatGrid>, value: f64) -> f64 {
-    match beats {
-        Some(grid) if grid.bpm != 0. => {
-            value * (60. / f64::from(grid.bpm)) + f64::from(grid.downbeat_offset)
-        }
-        _ => value,
     }
 }
 
@@ -207,17 +182,11 @@ enum Menu {
 
 /// What the entities were built for, and the entities themselves.
 struct Built {
-    /// The primary (first selected) clip the timing cells follow.
+    /// The primary (first selected) clip the cells read their values from.
     primary: SharedString,
     /// The selection's shared pattern; `None` for a mixed selection, whose
-    /// timing cells still exist but whose args are ghosts.
+    /// args are ghosts.
     pattern: Option<SharedString>,
-    start: Entity<DraftedNumber>,
-    end: Entity<DraftedNumber>,
-    /// The beat values last pushed into the timing fields — the resync guard
-    /// that keeps a redraw from stomping a draft.
-    synced_start: f64,
-    synced_end: f64,
     cells: Vec<Cell>,
     _subs: Vec<Subscription>,
 }
@@ -245,13 +214,6 @@ enum Widget {
         selected: Option<usize>,
         hsv: Hsv,
     },
-}
-
-/// Which timing bound a committed number names.
-#[derive(Clone, Copy)]
-pub(crate) enum Bound {
-    Start,
-    End,
 }
 
 // -- wire codecs --------------------------------------------------------------
@@ -524,26 +486,7 @@ fn build(
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> Built {
-    let beats = editor.beats.as_deref();
-    let clip = primary_clip(editor).expect("build is only called with a primary clip");
-    let start_beats = round2(seconds_to_beats(beats, clip.start));
-    let end_beats = round2(seconds_to_beats(beats, clip.end));
     let mut subs = Vec::new();
-
-    let bound = |value: f64, id: &'static str, window: &mut Window, cx: &mut Context<Luma>| {
-        cx.new(|cx| DraftedNumber::new(id, value, -1e9, 1e9, TIME_W, window, cx))
-    };
-    let start = bound(start_beats, "start", window, cx);
-    let end = bound(end_beats, "end", window, cx);
-    for (entity, at) in [(&start, Bound::Start), (&end, Bound::End)] {
-        subs.push(cx.subscribe(
-            entity,
-            move |this: &mut Luma, _, event: &NumberEvent, cx| {
-                let NumberEvent::Committed(value) = *event;
-                this.strip_timing(at, value, cx);
-            },
-        ));
-    }
 
     let groups: Vec<SharedString> = match &editor.strip.groups {
         Groups::Ready(names) => names.as_ref().clone(),
@@ -634,10 +577,6 @@ fn build(
     Built {
         primary,
         pattern,
-        start,
-        end,
-        synced_start: start_beats,
-        synced_end: end_beats,
         cells,
         _subs: subs,
     }
@@ -651,10 +590,6 @@ fn build(
 /// wrote round-trips byte-identical, so the guard sees no movement and the
 /// widget's in-progress state survives.
 fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
-    let beats = editor.beats.clone();
-    let Some(clip) = primary_clip(editor).cloned() else {
-        return;
-    };
     let stored: Vec<serde_json::Value> = editor
         .strip
         .built
@@ -670,21 +605,6 @@ fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(built) = editor.strip.built.as_mut() else {
         return;
     };
-
-    let start_beats = round2(seconds_to_beats(beats.as_deref(), clip.start));
-    if built.synced_start != start_beats {
-        built.synced_start = start_beats;
-        built
-            .start
-            .update(cx, |field, cx| field.set_value(start_beats, cx));
-    }
-    let end_beats = round2(seconds_to_beats(beats.as_deref(), clip.end));
-    if built.synced_end != end_beats {
-        built.synced_end = end_beats;
-        built
-            .end
-            .update(cx, |field, cx| field.set_value(end_beats, cx));
-    }
 
     for (cell, stored) in built.cells.iter_mut().zip(stored) {
         if cell.synced == stored {
@@ -727,40 +647,6 @@ fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
 // -- the write paths ----------------------------------------------------------
 
 impl Luma {
-    /// A committed timing edit from the strip: one bound of the primary clip,
-    /// in beats. Rides [`Self::track_command`] — checkpoint, rewrite, one
-    /// publish — like any canvas gesture.
-    pub(crate) fn strip_timing(&mut self, bound: Bound, beats_value: f64, cx: &mut Context<Self>) {
-        self.track_command(
-            move |editor| {
-                let Some(primary) = editor.selected.first().cloned() else {
-                    return;
-                };
-                let seconds = beats_to_seconds(editor.beats.as_deref(), beats_value);
-                let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
-                for clip in &mut clips {
-                    if clip.id != primary {
-                        continue;
-                    }
-                    match bound {
-                        Bound::Start if seconds < clip.end - MIN_CLIP => {
-                            clip.start = seconds.max(0.);
-                        }
-                        Bound::End if seconds > clip.start + MIN_CLIP => {
-                            clip.end = seconds;
-                        }
-                        // A bound that would invert the clip is refused whole;
-                        // the resync then snaps the field back to the truth.
-                        _ => return,
-                    }
-                }
-                editor.replace_clips(clips);
-                editor.sync_cursor();
-            },
-            cx,
-        );
-    }
-
     /// A blend pick from the strip: every selected clip takes the mode, in
     /// one committed write — the web's `updateAnnotationsBatch`.
     pub(crate) fn strip_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
@@ -944,15 +830,22 @@ fn dress(row: Div) -> impl IntoElement {
 }
 
 fn strip_row(state: &Editor, app: &Entity<Luma>) -> Div {
-    let mut row = div().flex().items_center().gap(px(CELL_GAP));
+    // `flex_shrink_0` is what makes [`dress`]'s scroll real: without it the
+    // row is a shrinkable flex child, so a schema wider than the window is
+    // squeezed instead of scrolled — the trailing controls crush to zero
+    // width and stop being clickable rather than moving off the right edge.
+    let mut row = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(CELL_GAP));
     let subject = state.strip.built.as_ref().zip(primary_clip(state));
 
     // -- the shared columns --------------------------------------------------
     //
-    // Pattern, start, end and blend exist in *every* state, and each renders
-    // the same box either way — the ghost differs only by content and
-    // dimming, never by width or treatment, so selection cannot move a
-    // column. Each is wrapped in a named probe node ("cell:…") whose bounds
+    // Pattern and blend exist in *every* state, and each renders the same
+    // box either way — the ghost differs only by content and dimming, never
+    // by width or treatment, so selection cannot move a column. Each is wrapped in a named probe node ("cell:…") whose bounds
     // the geometry test asserts state-invariant.
 
     // Pattern is a readout, not a control — bare text on the strip in both
@@ -987,21 +880,6 @@ fn strip_row(state: &Editor, app: &Entity<Luma>) -> Div {
             None => arg_cell("pattern", pattern_plate()).opacity(ladder::DISABLED_OPACITY),
         },
     ));
-
-    // The timing fields' ghost is [`arg_cell_ghost`], whose slab is the same
-    // border-on-control-fill box a [`DraftedNumber`] draws, at the same width.
-    for (label, field) in [
-        ("start", subject.map(|(built, _)| built.start.clone())),
-        ("end", subject.map(|(built, _)| built.end.clone())),
-    ] {
-        row = row.child(probe(
-            format!("cell:{label}"),
-            match field {
-                Some(entity) => arg_cell(label, entity),
-                None => arg_cell_ghost(label, TIME_W),
-            },
-        ));
-    }
 
     // The blend ghost is the same ghost-stack-sized selector as the live
     // trigger, over the same nine names — one sizing path, so the two widths
