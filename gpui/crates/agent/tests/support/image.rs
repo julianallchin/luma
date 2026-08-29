@@ -25,3 +25,32 @@ pub fn differing_fraction(left: &image::RgbaImage, right: &image::RgbaImage, thr
         .count();
     changed as f32 / (left.width() * left.height()) as f32
 }
+
+/// Copy a screenshot out of the harness's own directory — which it deletes —
+/// into `<temp>/luma-shots/<drawer>/<name>.png`, and decode it.
+///
+/// Two things at once, because they are always wanted together: a failing
+/// assertion has to name a path that still exists when a person goes to look,
+/// and the same assertion has to compare the pixels. `drawer` keeps one
+/// suite's shots from overwriting another's when both like the same name, and
+/// `LUMA_SHOTS` moves the whole tree — one knob for every suite that keeps a
+/// shot this way.
+pub fn keep_in(
+    drawer: &str,
+    shot: &serde_json::Value,
+    name: &str,
+) -> (std::path::PathBuf, image::RgbaImage) {
+    let source = shot["path"].as_str().expect("a shot has a path");
+    let root = std::env::var("LUMA_SHOTS").map_or_else(
+        |_| std::env::temp_dir().join("luma-shots"),
+        std::path::PathBuf::from,
+    );
+    let directory = root.join(drawer);
+    std::fs::create_dir_all(&directory).expect("failed to create the shot directory");
+    let kept = directory.join(format!("{name}.png"));
+    std::fs::copy(source, &kept).expect("failed to keep the shot");
+    let decoded = image::open(&kept)
+        .expect("the harness wrote a shot that is not an image")
+        .to_rgba8();
+    (kept, decoded)
+}

@@ -15,22 +15,11 @@
 
 use super::support;
 
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
-use image::RgbaImage;
 use serde_json::Value;
 use support::{Clip, Fixture};
-
-/// Where the shots are kept. Outside the harness's own directory, which it
-/// deletes, so a failing assertion names a path that still exists.
-fn directory() -> PathBuf {
-    std::env::var("LUMA_PICKER_SHOTS").map_or_else(
-        |_| std::env::temp_dir().join("luma-fixture-picker"),
-        PathBuf::from,
-    )
-}
 
 fn harness() -> Harness {
     Fixture::new(
@@ -86,8 +75,10 @@ fn ticking_a_group_changes_the_picture() {
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    let (whole_path, whole) = keep(&out["whole"], "picker-dialog");
-    let (half_path, half) = keep(&out["half"], "picker-dialog-one-group");
+    let (whole_path, whole) =
+        support::image::keep_in("fixture-picker", &out["whole"], "picker-dialog");
+    let (half_path, half) =
+        support::image::keep_in("fixture-picker", &out["half"], "picker-dialog-one-group");
     eprintln!(
         "fixture picker shots:\n  {}\n  {}",
         whole_path.display(),
@@ -113,16 +104,4 @@ fn ticking_a_group_changes_the_picture() {
         whole_path.display(),
         half_path.display(),
     );
-}
-
-fn keep(shot: &Value, name: &str) -> (PathBuf, RgbaImage) {
-    let source = shot["path"].as_str().expect("a shot has a path");
-    let directory = directory();
-    std::fs::create_dir_all(&directory).expect("failed to create the shot directory");
-    let kept = directory.join(format!("{name}.png"));
-    std::fs::copy(Path::new(source), &kept).expect("failed to keep the shot");
-    let image = image::open(&kept)
-        .expect("the harness wrote a shot that is not an image")
-        .to_rgba8();
-    (kept, image)
 }

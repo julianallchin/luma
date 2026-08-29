@@ -26,7 +26,6 @@
 use super::support;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
@@ -132,8 +131,8 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    let below = keep(&out["below"], "below-threshold");
-    let above = keep(&out["above"], "above-threshold");
+    let below = support::image::keep_in("waveform-threshold", &out["below"], "below-threshold");
+    let above = support::image::keep_in("waveform-threshold", &out["above"], "above-threshold");
 
     // Every colour worth a percent of the strip, either side. The bed and the
     // three band bars are opaque fills, so these are exact quad colours and not
@@ -335,20 +334,4 @@ fn palette(image: &RgbaImage) -> (HashMap<[u8; 4], f64>, f64) {
         .filter(|(_, share)| *share > 0.01)
         .collect();
     (palette, ink / total)
-}
-
-/// Copy a shot somewhere stable and decode it.
-///
-/// The harness writes into a temporary directory it owns; a failing assertion
-/// that names a path already deleted is a failing assertion nobody can look at.
-fn keep(shot: &Value, name: &str) -> (PathBuf, RgbaImage) {
-    let source = shot["path"].as_str().expect("a shot has a path");
-    let directory = std::env::temp_dir().join("luma-waveform-threshold");
-    std::fs::create_dir_all(&directory).expect("failed to create the shot directory");
-    let kept = directory.join(format!("{name}.png"));
-    std::fs::copy(source, &kept).expect("failed to keep the shot");
-    let image = image::open(&kept)
-        .expect("the harness wrote a shot that is not an image")
-        .to_rgba8();
-    (kept, image)
 }
