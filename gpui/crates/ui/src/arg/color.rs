@@ -525,10 +525,17 @@ impl Render for ColorArgEditor {
             });
         };
         let select = luma_arg_select(id, value, &MODES, open, on_toggle, on_pick);
+        let close = cx.entity();
         let plate = (self.picker_open && self.value.mode != ColorMode::Inherit).then(|| {
             crate::float::anchored_below(
                 format!("{}:picker", self.id),
                 CONTROL_HEIGHT,
+                crate::float::Dismiss::on_press_out(move |_, cx| {
+                    close.update(cx, |editor, cx| {
+                        editor.picker_open = false;
+                        cx.notify();
+                    });
+                }),
                 self.picker_plate(cx).into_any_element(),
             )
         });

@@ -379,6 +379,12 @@ impl GroupExpressionEditor {
         float::anchored_below(
             "expression-suggestions",
             CONTROL_HEIGHT,
+            // The field's focus owns this menu, not the pointer — see
+            // [`float::Dismiss::Never`]. A press outside blurs the field and
+            // the menu goes with it; a dismissal that also *swallowed* that
+            // press would eat the first click of every gesture aimed anywhere
+            // else while the field is focused.
+            float::Dismiss::Never,
             card.into_any_element(),
         )
     }

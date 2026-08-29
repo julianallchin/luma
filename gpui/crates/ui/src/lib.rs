@@ -54,6 +54,7 @@ pub mod fonts;
 pub mod glass;
 pub mod ladder;
 pub mod mark;
+pub mod menu;
 pub mod motion;
 pub mod node;
 pub mod paint;
@@ -61,6 +62,7 @@ pub mod pane;
 pub mod pill;
 pub mod radius;
 pub mod runtime;
+pub mod sheet;
 pub mod split;
 pub mod text_input;
 

@@ -1,15 +1,15 @@
 //! The pattern-arg widget kit: the vocabulary a pattern-args inspector (the
-//! track editor's bottom channel strip) and the graph editor's node params
-//! both compose from.
+//! track editor's args sheet) and the graph editor's node params both compose
+//! from.
 //!
-//! # The strip is the layout contract
+//! # One arg per row
 //!
-//! Every widget here is designed for one consuming shape: a **horizontal**
-//! channel strip of fixed height, cells composing left-to-right. So each
-//! widget is a cell — a 9px silkscreen label beside a [`CONTROL_HEIGHT`]
-//! control — with a footprint that does not depend on its value, and a ghosted
-//! rendering ([`arg_cell_ghost`]) for the strip's empty state that occupies
-//! exactly the same box, so selection appearing never shifts the layout.
+//! Every widget here is designed for one consuming shape: a **vertical**
+//! column of full-width rows ([`arg_row`]), label over control. A row is the
+//! shape that stops being wrong as a schema grows — a horizontal strip of
+//! cells runs a pattern's third arg off the right edge of the window, where no
+//! amount of scrolling makes it a control anybody finds — and it is the shape
+//! a node's params want too, which is why it is stated once here.
 //!
 //! # Values in, typed change events out
 //!
@@ -42,10 +42,14 @@ use gpui::{
     canvas, div, point, px, App, Bounds, Div, DragMoveEvent, Pixels, Point, SharedString, Window,
 };
 
-use crate::{ladder, text, CONTROL_HEIGHT};
+use crate::text;
 
 /// Where a stateless control's box landed, readable by its own mouse
 /// listeners.
+///
+/// Public because it is not really an arg-editor's device: any element whose
+/// click handler needs its *own* geometry has the same problem, and a second
+/// copy of this canvas is how two of them drift.
 ///
 /// A click event carries a window position but not the element's bounds, and a
 /// stateless widget has no entity to remember them in. So the widget lays an
@@ -54,13 +58,20 @@ use crate::{ladder, text, CONTROL_HEIGHT};
 /// click listener reads the cell it holds this frame's geometry. (Drags don't
 /// need this — `DragMoveEvent::bounds` carries the listener's box — which is
 /// why only click-addressed widgets carry a probe.)
-pub(crate) fn bounds_probe() -> (Rc<Cell<Option<Bounds<Pixels>>>>, impl IntoElement) {
+pub fn bounds_probe() -> (Rc<Cell<Option<Bounds<Pixels>>>>, impl IntoElement) {
     let cell: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
-    let write = cell.clone();
-    let probe = canvas(move |bounds, _, _| write.set(Some(bounds)), |_, _, _, _| {})
-        .absolute()
-        .size_full();
+    let probe = bounds_into(&cell);
     (cell, probe)
+}
+
+/// The same probe, writing into a cell the caller already owns — for an
+/// element whose geometry outlives one frame's builder (a view that remembers
+/// where its list painted, so a later click can measure against it).
+pub fn bounds_into(cell: &Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
+    let write = Rc::clone(cell);
+    canvas(move |bounds, _, _| write.set(Some(bounds)), |_, _, _, _| {})
+        .absolute()
+        .size_full()
 }
 
 /// A window-space x mapped to a fraction of `bounds`' width, clamped into
@@ -118,67 +129,25 @@ pub(crate) fn drag_fraction<T: OwnedDrag + Clone + 'static>(
     }
 }
 
-/// The seam between a cell's label and its control.
-const LABEL_GAP: f32 = 8.;
+/// The seam between a row's label and its control.
+const LABEL_GAP: f32 = 6.;
 
-/// Height of a whole cell. One control row — the label rides *beside* the
-/// control, not above it, so the strip is exactly as tall as the tallest thing
-/// in it.
-pub const CELL_HEIGHT: f32 = CONTROL_HEIGHT;
-
-/// One slot of the strip: silkscreen label, then the control, on one line.
+/// One arg of a schema: a 9px silkscreen label with its control under it,
+/// spanning the column's whole width.
 ///
-/// The label is inline rather than stacked above because this kit's consumer
-/// is a strip docked to the *bottom* of a window, where every menu opens
-/// upward and a label overhead is the first thing it covers. Beside the
-/// control it stays legible with a menu up, and the strip loses a row of
-/// height it was only spending on labels.
-///
-/// The row is a fixed-height, shrink-proof box, so a control that measures
-/// oddly cannot move the cell's bottom edge. [`arg_cell_ghost`] goes through
-/// here too; the two boxes cannot diverge because there is only one.
-pub fn arg_cell(label: &str, control: impl IntoElement) -> Div {
+/// Label *over* rather than beside, which is the one thing this shape decides:
+/// beside, every row spends its label's width — a few hundred pixels across a
+/// schema — on words, and the controls that are left are as narrow as the
+/// longest label is long. Over, every control gets the full column whatever it
+/// is called, so a colour picker and an expression field are the same width
+/// and the column reads as one stack rather than as ragged pairs.
+pub fn arg_row(label: &str, control: impl IntoElement) -> Div {
     div()
         .flex()
-        .flex_row()
-        .items_center()
+        .flex_col()
+        .items_start()
         .gap(px(LABEL_GAP))
-        .flex_shrink_0()
-        .h(px(CELL_HEIGHT))
-        .child(
-            div()
-                .flex_shrink_0()
-                .whitespace_nowrap()
-                .child(text::silkscreen(label.to_uppercase())),
-        )
+        .w_full()
+        .child(text::silkscreen(label.to_uppercase()))
         .child(control)
-}
-
-/// The strip's empty state for one slot: same label, same box, and a dimmed
-/// empty [`crate::float::field`] where the control would be. Same footprint as
-/// [`arg_cell`] by construction — the whole point is that populating the strip
-/// moves nothing — and the same *shape*, because a populated cell draws that
-/// very field around its editor.
-pub fn arg_cell_ghost(label: &str, width: f32) -> Div {
-    arg_cell(
-        label,
-        crate::float::field()
-            .w(px(width))
-            .opacity(ladder::DISABLED_OPACITY),
-    )
-    .opacity(ladder::DISABLED_OPACITY)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A cell is one control row tall — the label rides beside the control,
-    /// so nothing above or below it may add height. Guards a future hand-edit
-    /// of `CELL_HEIGHT` to a literal that then drifts from what `arg_cell`
-    /// actually lays out.
-    #[test]
-    fn the_cell_is_one_control_row_tall() {
-        assert_eq!(CELL_HEIGHT, CONTROL_HEIGHT);
-    }
 }
