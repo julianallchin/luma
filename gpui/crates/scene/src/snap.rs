@@ -7,15 +7,10 @@
 //!
 //! For each candidate (held socket `Sh`, host socket `Sho` on host piece `Ph`):
 //!
-//! 1. Build local-space frames for `Sh` and `Sho` (normal = +Z, tangent = +X).
-//! 2. Compute the held piece's world transform that puts `Sh` on top of `Sho`,
-//!    with the relative orientation chosen by the socket [`SocketMode`]:
-//!    - [`SocketMode::Face`] → 180° flip about the host socket's X (tangent)
-//!      axis, so the normals oppose (face-to-face).
-//!    - [`SocketMode::Edge`] → identity: the held piece takes the host's
-//!      orientation and only translates, so both pieces stay upright with
-//!      their tangents running the same way along the shared edge.
-//! 3. Score the candidate by how close the host socket's world position is to
+//! 1. Mate the pair through [`crate::venue::place_on`] with
+//!    [`crate::venue::SurfacePlacement::FLUSH`] — the one copy of the mate
+//!    arithmetic in the crate, shared with the venue resolver.
+//! 2. Score the candidate by how close the host socket's world position is to
 //!    the cursor target. This is what actually drives "snap when the user
 //!    clicks near a corner" — not where the held piece's centroid lands.
 //!
@@ -24,9 +19,15 @@
 //! becomes `Ph`. Otherwise a surface under the cursor is offered, then ground,
 //! then free placement.
 //!
+//! This is the **candidate search**, and it is the half of snapping the venue
+//! resolver does not do: [`crate::venue::resolve`] mates a pair the graph has
+//! already chosen, and this chooses the pair. Phase 4's drag-snap is its
+//! caller, which is why it stays even with no production caller yet.
+//!
 //! Frame: asset/world space is Y-up here, f64. See the crate docs.
 
 use crate::sockets::{ResolvedSocket, SocketMode, SocketType};
+use crate::venue::{place_on, NodeKind, SurfacePlacement};
 use glam::{DMat3, DMat4, DQuat, DVec3};
 use std::collections::HashMap;
 
@@ -69,7 +70,7 @@ const PERPENDICULAR_UP_PARALLEL: f64 = 0.99;
 /// The world up axis, as the *socket layer* sees it: +Y, because sockets are
 /// authored in asset space and glTF is Y-up (see the crate docs). This is the
 /// solver's only world-frame assumption — the ground plane and
-/// [`derive_perpendicular`] are the whole of it. Moving the socket layer into
+/// `derive_perpendicular` are the whole of it. Moving the socket layer into
 /// the renderer's Z-up frame means flipping this constant, converting at the
 /// scene boundary, and re-recording `harness/goldens/stage-snap.json`.
 pub const WORLD_UP: DVec3 = DVec3::Y;
@@ -159,36 +160,6 @@ fn transform_direction(v: DVec3, m: &DMat4) -> DVec3 {
 fn decompose(m: &DMat4) -> (DVec3, DQuat, DVec3) {
     let (scale, rotation, translation) = m.to_scale_rotation_translation();
     (translation, rotation, scale)
-}
-
-// ---------------------------------------------------------------------------
-// Socket frame helpers
-// ---------------------------------------------------------------------------
-
-/// Frame: origin at `socket.position`; +Z = normal; +X = tangent (re-
-/// orthogonalized against the normal); +Y = Z×X.
-fn build_socket_frame(socket: &ResolvedSocket) -> DMat4 {
-    let z = normalize(socket.normal);
-    let x = normalize(socket.tangent);
-    let x = normalize(x - z * z.dot(x));
-    let y = normalize(z.cross(x));
-    DMat4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        socket.position.extend(1.0),
-    )
-}
-
-/// The relative orientation the two socket frames meet at. Face mode flips
-/// 180° about the host socket's X (tangent) axis so the normals oppose; edge
-/// mode is identity — the held piece keeps the host's orientation and only
-/// translates.
-fn flip_for(mode: SocketMode) -> DMat4 {
-    match mode {
-        SocketMode::Edge => DMat4::IDENTITY,
-        SocketMode::Face => DMat4::from_rotation_x(std::f64::consts::PI),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,11 +253,17 @@ fn evaluate_candidate(
     held_grab: Option<&ResolvedSocket>,
     current_quaternion: Option<DQuat>,
 ) -> Candidate {
-    let held_local = build_socket_frame(held_socket);
-    let host_local = build_socket_frame(host_socket);
-    let flip = flip_for(held_socket.mode);
-
-    let mut matrix = host.world_matrix * host_local * flip * held_local.inverse();
+    // The mate itself is `venue::place_on` with nothing added: same socket
+    // frames, same face/edge flip, one copy. What this solver contributes is
+    // the *search* — which pair, scored against the cursor — not the
+    // arithmetic.
+    let mut matrix = place_on(
+        host.world_matrix,
+        host_socket,
+        held_socket,
+        NodeKind::Piece,
+        SurfacePlacement::FLUSH,
+    );
 
     // Face-mode snaps preserve the user's rotation around the shared normal.
     // (Edge mode's relative rotation is identity — no extra freedom.)
@@ -512,16 +489,6 @@ pub fn world_to_parent_local(world_matrix: &DMat4, parent_world: Option<&DMat4>)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn edge_mode_is_identity_not_a_flip() {
-        // The TS docstrings claimed a 180° rotation about the host normal;
-        // `flipFor()` returned identity. The code is what shipped.
-        assert_eq!(flip_for(SocketMode::Edge), DMat4::IDENTITY);
-        let face = flip_for(SocketMode::Face);
-        assert!((face.y_axis.y + 1.0).abs() < 1e-12);
-        assert!((face.z_axis.z + 1.0).abs() < 1e-12);
-    }
 
     #[test]
     fn ground_piece_sits_on_the_up_plane() {

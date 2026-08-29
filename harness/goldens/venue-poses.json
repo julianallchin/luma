@@ -26,11 +26,6 @@
       "type": "floor_edge"
     },
     {
-      "node": "deck_a",
-      "socket": "edge_right",
-      "type": "floor_edge"
-    },
-    {
       "node": "deck_b",
       "socket": "edge_front",
       "type": "floor_edge"
@@ -42,43 +37,8 @@
     },
     {
       "node": "deck_b",
-      "socket": "edge_left",
-      "type": "floor_edge"
-    },
-    {
-      "node": "deck_b",
       "socket": "edge_right",
       "type": "floor_edge"
-    },
-    {
-      "node": "tower",
-      "socket": "end_a",
-      "type": "truss_end"
-    },
-    {
-      "node": "tower",
-      "socket": "end_b",
-      "type": "truss_end"
-    },
-    {
-      "node": "corner",
-      "socket": "face_-x",
-      "type": "truss_end"
-    },
-    {
-      "node": "corner",
-      "socket": "face_-z",
-      "type": "truss_end"
-    },
-    {
-      "node": "run",
-      "socket": "end_a",
-      "type": "truss_end"
-    },
-    {
-      "node": "run",
-      "socket": "end_b",
-      "type": "truss_end"
     }
   ],
   "nodes": [
@@ -259,6 +219,28 @@
       ]
     },
     {
+      "arrayIndex": null,
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "array",
+      "node": "wall",
+      "parent": "venue",
+      "position": [
+        0.2036,
+        0.225384,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        0.0,
+        1.570796
+      ]
+    },
+    {
       "arrayIndex": 0,
       "catalogRef": "stage_lab/speaker_dbr15.glb",
       "facing": [
@@ -268,7 +250,7 @@
       ],
       "kind": "array",
       "node": "wall#0",
-      "parent": "venue",
+      "parent": "wall",
       "position": [
         -1.7964,
         0.225384,
@@ -290,7 +272,7 @@
       ],
       "kind": "array",
       "node": "wall#1",
-      "parent": "venue",
+      "parent": "wall",
       "position": [
         -0.7964,
         0.225384,
@@ -312,7 +294,7 @@
       ],
       "kind": "array",
       "node": "wall#2",
-      "parent": "venue",
+      "parent": "wall",
       "position": [
         0.2036,
         0.225384,
@@ -334,7 +316,7 @@
       ],
       "kind": "array",
       "node": "wall#3",
-      "parent": "venue",
+      "parent": "wall",
       "position": [
         1.2036,
         0.225384,
@@ -356,7 +338,7 @@
       ],
       "kind": "array",
       "node": "wall#4",
-      "parent": "venue",
+      "parent": "wall",
       "position": [
         2.2036,
         0.225384,

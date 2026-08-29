@@ -28,6 +28,22 @@ on the downstage truss" is not expressible.
   how high it flies**: `trim = 0` sits on the deck, `trim = 6.0` hangs 6 m up.
   Flown is a parameter, not a structure. "Lift" edits `trim`; the whole subtree
   comes along. This `(u, v)` is the **only position-like number in the system**.
+  - **The root has two synthesized surfaces, not one.** `floor` is the up-facing
+    plane at the venue origin; **`rig` is the same plane facing *down***. Beam is
+    the mount normal, so a fixture flown off an up-facing floor would point at the
+    ceiling; `rig` is the host `trim` was written for. Same origin, same `(u, v)`,
+    same `trim` — only the normal differs. A `stage` deck's own top surface is its
+    **`top`** socket, so "on the deck at (u, v)" and "on the floor at (u, v)" are
+    the same call with a different host.
+  - **`trim` runs along world up, not along the host's normal.** A light on the
+    grid rises the same 6 m a light on the deck does, and nobody has to remember
+    which way a host faces. `(u, v)` stay in the surface's own plane, which is what
+    makes them continuous over it. A perfectly vertical surface has no "higher", so
+    there `trim` is inert — the same thing as saying a bolted joint has no lift.
+  - **`yaw` is stored as the edge's `roll`.** A socket's freedom *is* a roll about
+    the shared normal, and on a surface placement that roll is what the stage
+    vocabulary calls yaw. One number, one home: `venue_edges.roll`, clamped at solve
+    by the host socket's roll freedom. It is not a param.
 - **Origin = mount point** — bottom-centre for anything sitting or hanging, the
   joining socket for anything snapped. Trim and yaw act about it.
 - **Beam = mount normal.** A fixture's rest direction is the outward normal of its
@@ -45,8 +61,13 @@ on the downstage truss" is not expressible.
   - `array` — `count`, `span` along a parent feature; children are **derived**, not
     stored rows, and expand at solve time. No "re-solve" step exists, because solving
     is the only way poses exist at all.
-  - Params: `u, v, yaw, trim` on a surface placement; `length` on an extend;
-    `count, span` on an array; `angle` on a hinge; `pan, tilt` on a fixture.
+  - Params: `u, v, trim` on a surface placement (`yaw` is the edge's `roll`, not a
+    param); `length` on an extend; `count, span` on an array; `angle` on a hinge;
+    `pan, tilt` on a fixture.
+  - An **array node is placed at its anchor** — the seat its `span` is centred on,
+    where a single member would sit — and its members are derived from it and name
+    it as their parent. Without a pose of its own a successful `array(...)` reported
+    `ok: false, parent: null`, and anything hung off it vanished for want of a frame.
 - **Truss is fully procedural — one generator, one family, everything mates.**
   Straight (any span in 0.5 m steps — landed in `gpui/crates/render/src/truss.rs`),
   corner box (2/3/4/5/6-way), hinge (two half-boxes on a pin, 0–180°, where the
@@ -79,10 +100,18 @@ on the downstage truss" is not expressible.
   `run.along(0.25)`. Fractions and counts for positions, never metres; metres are
   fine for *lengths* and for `trim`. There is no `set_position`.
 - **Every mutating call returns a `Placement` report** — `ok`, `parent`, `warnings`,
-  `collisions` (OBB against neighbours), `span_exceeds` (past the run's end, carrying
-  a suggested `extend`), dangling sockets, unsatisfied far-end constraints. Reports
-  **suggest fixes, they do not refuse**. Only two hard errors: a type-level socket
-  mismatch, and an extend longer than a ray-measured gap.
+  dangling sockets, unsatisfied far-end constraints. Reports **suggest fixes, they do
+  not refuse**. Only two hard errors: a type-level socket mismatch, and an extend
+  longer than a ray-measured gap.
+  - `collisions` (OBB against neighbours) and `span_exceeds` (past the run's end,
+    carrying a suggested `extend`) are **deferred, not dropped**. Both need a piece's
+    *bounds*, which the socket supply does not carry; shipping them as fields that
+    are always empty would be a promise the type does not keep. They arrive with the
+    builder that can draw them (phase 4).
+  - A **`dangling` socket is one no relation accounts for**: neither half of a joint
+    is dangling, and neither is an end a far-end constraint checks — a constraint is
+    exactly what the builder writes down instead of a second parent. Only self-mating
+    (`Neutral`) joints are counted at all; an empty deck top is not an open end.
 - **Verification channels, ranked:** `describe(node)` (the tree in stage words) →
   `dangling()` and the `Placement` reports → a top-down quantized tile map ("Gauntlet
   view") → `render(view=fixture.pov)` → `render(view="front")` last. A front render is
@@ -148,7 +177,7 @@ table's rows are converted by one solve-and-invert pass at migration time, then 
 dropped):
 
     venue_nodes(id, venue_id, kind, catalog_ref, label, created_at, …)
-    venue_edges(child_id PK, parent_id, my_socket, their_socket, roll)
+    venue_edges(child_id PK, parent_id, my_socket, their_socket, roll)  -- roll = yaw
     venue_node_params(node_id, key, value)   -- u, v, yaw, trim, length, count, span, angle
     venue_constraints(node_id, my_socket, target_node, target_socket)
 
