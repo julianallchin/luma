@@ -549,20 +549,31 @@ async fn pull_table(
 /// 3. repair it and mark it dirty — the row lands, the push loop sends the
 ///    repair back, and the remote stops being wrong.
 ///
-/// (3), and it applies exactly the repair the migration applied to local rows:
+/// (3), and it applies exactly the repair the migrations applied to local rows:
 /// there is no address a broken footprint could be moved to that is more right
 /// than the start of its universe, and auto-patch is what puts it somewhere
 /// real. Returns the repaired row and a one-line account of what changed.
+///
+/// # Both halves of the footprint have to be repaired
+///
+/// The trigger's condition is `address + num_channels - 1 > 512`, so a width
+/// wider than a universe fails it at *every* address: moving such a row to
+/// address 1 does not make it writable, and the pull wedges exactly as it did
+/// before the repair existed. The width is therefore clamped as well, which is
+/// the one place this repair overrules the remote about something other than
+/// where a fixture sits — a 600-channel fixture is not a fixture, and the
+/// alternative is a venue that never syncs again.
 fn repair_incoming(table: &str, row: &Value) -> Option<(Value, String)> {
     if table != "fixtures" {
         return None;
     }
+    let universe_size = i64::from(luma_scene::patch::UNIVERSE_SIZE);
     let number = |column: &str| row.get(column).and_then(Value::as_i64);
-    let channels = number("num_channels").unwrap_or(1).max(1);
+    let stored_channels = number("num_channels");
+    let channels = stored_channels.unwrap_or(1).clamp(1, universe_size);
     let address = number("address").unwrap_or(1);
-    let sane =
-        address >= 1 && address + channels - 1 <= i64::from(luma_scene::patch::UNIVERSE_SIZE);
-    if sane && number("num_channels") == Some(channels) {
+    let sane = address >= 1 && address + channels - 1 <= universe_size;
+    if sane && stored_channels == Some(channels) {
         return None;
     }
 
@@ -572,13 +583,17 @@ fn repair_incoming(table: &str, row: &Value) -> Option<(Value, String)> {
     if !sane {
         object.insert("address".into(), 1.into());
     }
-    Some((
-        repaired,
-        format!(
-            "footprint {address}+{} does not fit in a universe; moved to address 1",
-            number("num_channels").unwrap_or(0)
-        ),
-    ))
+    let mut account = format!(
+        "footprint {address}+{} is not addressable",
+        stored_channels.unwrap_or(0)
+    );
+    if stored_channels != Some(channels) {
+        account.push_str(&format!("; width narrowed to {channels}"));
+    }
+    if !sane {
+        account.push_str("; moved to address 1");
+    }
+    Some((repaired, account))
 }
 
 /// Clear a row's `synced_at` so the push loop treats it as a local edit.

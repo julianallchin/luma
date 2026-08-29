@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] A `git worktree` is not an isolated build: `.cargo/config.toml` points every checkout at the main tree's target dir, so a "standalone" worktree queues behind the main tree's `.cargo-lock` and shares its incremental state — the isolation is source-only, and nothing says so.
 - [2026-08-29] Sibling agents pick colliding worktree paths under the shared scratchpad (`…/scratchpad/wt`), so a critic's checkout silently acquires another owner's dirty files mid-review; no convention reserves a per-agent name.
 - [2026-08-29] `bun run build` is unrunnable in any fresh worktree: `src/bindings/*.ts` is gitignored and only materialises as a side effect of `cargo test` in src-tauri — a ~40-minute prerequisite for a type check.
 - [2026-08-29] `sync/tests.rs` has two pool helpers with different schemas — `test_pool` hand-rolls a subset of tables, `migrated_pool` runs the real migrations — and the `authenticate` helper only works with the hand-rolled one; on the other it dies with "no such table: auth_session", which reads as a migration bug rather than a wrong-helper bug.

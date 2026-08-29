@@ -769,15 +769,17 @@ mod tests {
         let graph_runs = crate::agent_execution::GraphRunStore::new();
         let subagents = crate::agent::subagent::SubagentRegistry::default();
         let remote = MockRemoteClient::new();
-        // One page: a sound row, then one whose 32 channels run off the end of
-        // the universe, then another sound row *after* it — the one the old
+        // One page: a sound row; one whose 32 channels run off the end of the
+        // universe; one whose *width alone* is wider than a universe, which no
+        // address can rescue; and a sound row after them all — the one the old
         // break would never have reached.
         remote.on_select_page(
             "fixtures",
             vec![
                 fixture("ok-1", 1, 16, 1),
                 fixture("broken", 500, 32, 2),
-                fixture("ok-2", 100, 16, 3),
+                fixture("too-wide", 1, 600, 3),
+                fixture("ok-2", 100, 16, 4),
             ],
         );
 
@@ -839,12 +841,116 @@ mod tests {
             "the repair has to be pushed back, so the row must be dirty"
         );
 
+        // The too-wide one is the case moving the address cannot fix: the
+        // trigger's condition holds at every address once the width is over
+        // 512, so the width itself has to come down or the pull wedges.
+        let wide = by_id("too-wide");
+        assert_eq!(wide.2, 512, "a width no universe can hold is clamped");
+        assert_eq!(wide.1, 1);
+        assert!(wide.3.is_none());
+
         // And the cursor advanced past the whole page, so the next pull does
         // not replay it.
         let cursor = state::get_last_pulled_seq(&pool, "u-1", "fixtures")
             .await
             .unwrap();
-        assert_eq!(cursor, 3);
+        assert_eq!(cursor, 4);
+    }
+
+    /// What it costs that `address_pinned` is local and `address` is not.
+    ///
+    /// A pulls a fixture it had pinned at 1/100; B auto-patched it to 3/17 and
+    /// pushed. The address is registry-driven so it lands; the pin is not in
+    /// the registry, so it stays — and A now holds a *pin* at an address
+    /// nobody chose, which no auto-patch will move.
+    ///
+    /// This pins the behaviour rather than blessing it: the fix is a remote
+    /// column (`supabase/migrations/20260831000000_fixtures_address_pinned_
+    /// NOT_DEPLOYED.sql`), and when it lands this test should be turned around
+    /// — the pin follows the pusher — not deleted.
+    #[tokio::test]
+    async fn a_pulled_address_keeps_a_local_pin_until_the_pin_syncs() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("u-1"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('v-1', 'u-1', 'Room')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Clean (`synced_at` set), so the pull is allowed to overwrite it.
+        sqlx::query(
+            "INSERT INTO fixtures
+               (id, uid, venue_id, universe, address, num_channels, manufacturer, model,
+                mode_name, fixture_path, address_pinned, synced_at)
+             VALUES ('f-1', 'u-1', 'v-1', 1, 100, 16, 'Acme', 'Mover', '16ch',
+                'acme/mover.qxf', 1, '2026-08-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let authored_directory = tempfile::tempdir().unwrap();
+        let authored = crate::services::authored_documents::AuthoredDocuments::new(
+            crate::storage::StorageRoot::from_path(authored_directory.path().join("authored")),
+        );
+        let workspaces = crate::agent_execution::PythonWorkspaceService::new(
+            authored_directory.path().join("python-workspaces"),
+            std::sync::Arc::new(|| Err("python is not used by this sync test".into())),
+        );
+        let graph_runs = crate::agent_execution::GraphRunStore::new();
+        let subagents = crate::agent::subagent::SubagentRegistry::default();
+        let remote = MockRemoteClient::new();
+        remote.on_select_page(
+            "fixtures",
+            vec![json!({
+                "id": "f-1",
+                "uid": "u-1",
+                "venue_id": "v-1",
+                "universe": 3,
+                "address": 17,
+                "num_channels": 16,
+                "manufacturer": "Acme",
+                "model": "Mover",
+                "mode_name": "16ch",
+                "fixture_path": "acme/mover.qxf",
+                "label": null,
+                "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0,
+                "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0,
+                "created_at": "2026-08-01T00:00:00Z",
+                "updated_at": "2026-08-02T00:00:00Z",
+                "sync_seq": 1,
+            })],
+        );
+
+        pull::pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &subagents,
+            &remote,
+            "token",
+            Some("u-1"),
+        )
+        .await
+        .unwrap();
+
+        let (universe, address, pinned): (i64, i64, i64) = sqlx::query_as(
+            "SELECT universe, address, address_pinned FROM fixtures WHERE id = 'f-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (universe, address),
+            (3, 17),
+            "the address is registry-driven, so the remote's wins"
+        );
+        assert_eq!(
+            pinned, 1,
+            "and the pin, which is not, stays behind on the address it did not choose"
+        );
     }
 
     #[tokio::test]
