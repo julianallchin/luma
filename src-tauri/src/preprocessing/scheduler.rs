@@ -363,7 +363,16 @@ async fn run_one(
         );
     }
 
+    let started = std::time::Instant::now();
     let result = p.run(ctx, track_id).await;
+    // The only stage-cost record the pipeline keeps. Emitted for failures too,
+    // because a slow failure and a fast one are different problems.
+    eprintln!(
+        "[preprocessing] {} track={track_id} duration_ms={} {}",
+        p.name(),
+        started.elapsed().as_millis(),
+        if result.is_ok() { "ok" } else { "failed" }
+    );
 
     // Cancellation is a lifecycle outcome, not a failed analysis. Do not
     // publish status or exponential-backoff rows for a retired identity.

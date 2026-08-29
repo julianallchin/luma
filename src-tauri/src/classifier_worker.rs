@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::preprocessing::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
@@ -81,8 +81,6 @@ pub fn classify_bars(
     mert_path: &Path,
     bar_boundaries: &[(f64, f64)],
 ) -> Result<ClassifierAnalysis, String> {
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let weights_path = ensure_weights_file(env.cache_dir())?;
 
     if !mert_path.exists() {
@@ -95,11 +93,8 @@ pub fn classify_bars(
     let boundaries_json = serde_json::to_vec(bar_boundaries)
         .map_err(|e| format!("Failed to encode bar boundaries: {e}"))?;
 
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let mut child = cmd
-        .env("PYTHONUNBUFFERED", "1")
-        .arg(&script_path)
         .arg(mert_path)
         .arg(&weights_path)
         .stdin(Stdio::piped())

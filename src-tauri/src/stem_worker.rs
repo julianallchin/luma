@@ -2,7 +2,7 @@ use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 const WORKER_SOURCE: &str = include_str!("../python/audio_preprocessor.py");
@@ -31,14 +31,8 @@ pub fn separate_stems(
     audio_path: &Path,
     target_dir: &Path,
 ) -> Result<Vec<StemFile>, String> {
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
-
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
-    cmd.env("PYTHONUNBUFFERED", "1")
-        .arg(&script_path)
-        .arg(audio_path)
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    cmd.arg(audio_path)
         .arg(target_dir)
         .arg("--model")
         .arg(DEMUCS_MODEL)

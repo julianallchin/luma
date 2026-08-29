@@ -1,7 +1,6 @@
 use crate::preprocessing::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Command;
 
 const WORKER_SOURCE: &str = include_str!("../python/ace_chord_sections_worker.py");
 const WORKER_SCRIPT_NAME: &str = "ace_chord_sections_worker.py";
@@ -40,13 +39,8 @@ pub fn compute_roots(
     env: &WorkerEnvironment,
     audio_paths: &[PathBuf],
 ) -> Result<RootAnalysis, String> {
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // Copy bundled consonance-ACE repo alongside the worker so imports like `ACE.*` resolve.
     let resource_dir = env.deploy_resource("consonance-ACE")?;
-    let workdir = script_path
-        .parent()
-        .ok_or_else(|| "Worker script missing parent directory".to_string())?;
     if !resource_dir.exists() {
         return Err(format!(
             "consonance-ACE resource dir missing after copy at {}",
@@ -54,13 +48,8 @@ pub fn compute_roots(
         ));
     }
 
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
-    cmd.env("PYTHONUNBUFFERED", "1")
-        .arg(&script_path)
-        .args(audio_paths)
-        .arg("--save-logits")
-        .current_dir(workdir);
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    cmd.args(audio_paths).arg("--save-logits");
 
     let output = cmd
         .output()

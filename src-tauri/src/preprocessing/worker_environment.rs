@@ -6,6 +6,7 @@
 //! without carrying an `AppHandle` through background work.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::python_env;
 
@@ -95,5 +96,29 @@ impl WorkerEnvironment {
             self.resource_dir.as_deref(),
             relative,
         )
+    }
+
+    /// The launch line every python-backed worker shares: managed interpreter,
+    /// the deployed copy of `name` as argv[1], and a working directory of the
+    /// deploy dir so sibling resources unpacked by [`Self::deploy_resource`]
+    /// (`consonance-ACE/`, `n2n/`) resolve as plain imports.
+    ///
+    /// Callers append their own arguments, stdio and any worker-specific
+    /// environment. Every path a worker receives on argv is absolute, so the
+    /// shared working directory never changes how an argument resolves.
+    pub fn worker_command(&self, name: &str, source: &str) -> Result<Command, String> {
+        let python = self.python()?;
+        let script = self.deploy_script(name, source)?;
+        let workdir = script
+            .parent()
+            .ok_or_else(|| format!("worker script {} has no parent directory", script.display()))?
+            .to_path_buf();
+
+        let mut cmd = Command::new(python);
+        crate::cmd_util::no_window(&mut cmd);
+        cmd.env("PYTHONUNBUFFERED", "1")
+            .current_dir(workdir)
+            .arg(script);
+        Ok(cmd)
     }
 }

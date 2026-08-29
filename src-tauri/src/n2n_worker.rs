@@ -11,7 +11,6 @@ use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 const WORKER_SOURCE: &str = include_str!("../python/n2n_worker.py");
 const WORKER_SCRIPT_NAME: &str = "n2n_worker.py";
@@ -33,8 +32,6 @@ pub fn compute_drum_onsets(
     audio_path: &Path,
     mert_path: &Path,
 ) -> Result<DrumOnsets, String> {
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // Copy the vendored n2n package + bundled checkpoint into the cache dir
     // so `import n2n.infer` resolves and the checkpoint path is stable.
     let n2n_dir = env.deploy_resource("n2n")?;
@@ -51,21 +48,13 @@ pub fn compute_drum_onsets(
             mert_path.display()
         ));
     }
-    let workdir = script_path
-        .parent()
-        .ok_or_else(|| "Worker script missing parent directory".to_string())?;
-
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let output = cmd
-        .env("PYTHONUNBUFFERED", "1")
-        .arg(&script_path)
         .arg(audio_path)
         .arg("--ckpt")
         .arg(&ckpt_path)
         .arg("--mert")
         .arg(mert_path)
-        .current_dir(workdir)
         .output()
         .map_err(|e| format!("Failed to launch n2n worker: {e}"))?;
 
