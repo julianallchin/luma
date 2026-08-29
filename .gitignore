@@ -55,6 +55,7 @@ src/bindings/*.ts
 # The headless agent harness driver is source, not vendored bytes — keep it.
 scripts/*
 !scripts/headless/
+!scripts/arena/
 
 # Root docs (canonical docs live in www/)
 /docs/*
