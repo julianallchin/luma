@@ -142,8 +142,12 @@ impl VenueGraphRows {
                 None => graph.insert(node),
             }
         }
+        // Constraints go in with `load_constraint` for `insert_placed`'s
+        // reason: they were admitted when they were written, and a check whose
+        // target has since been deleted reports `Dangling` and claims nothing
+        // rather than costing the venue the rest of its paperwork.
         for c in &self.constraints {
-            graph.constrain(Constraint {
+            graph.load_constraint(Constraint {
                 node: c.node_id.clone(),
                 my_socket: c.my_socket.clone(),
                 target_node: c.target_node.clone(),
@@ -442,9 +446,9 @@ mod tests {
         }
     }
 
-    /// Defect: a row outside the `kind` alphabet was dropped without a word,
-    /// so a piece standing on it disappeared with no way to ask why. The
-    /// contract is that resolving a venue never loses a row silently.
+    /// Resolving a venue never loses a row in silence. A row outside the
+    /// `kind` alphabet becomes no node — there is no variant for it to be —
+    /// and is reported as itself, along with whatever was standing on it.
     #[test]
     fn a_row_with_an_unknown_kind_is_warned_about_not_swallowed() {
         let rows = VenueGraphRows {

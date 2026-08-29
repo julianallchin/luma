@@ -1,6 +1,6 @@
 //! The venue graph across the host boundary.
 //!
-//! Five verbs and two reads. Every verb writes rows and then returns the whole
+//! Six verbs and two reads. Every verb writes rows and then returns the whole
 //! solved venue ([`PlacementReport`]), because a graph edit moves everything
 //! bolted to what it touched: handing back the one row that changed would make
 //! every caller re-fetch, and a second fetch is a second solve of the same
@@ -17,7 +17,7 @@ use crate::database::local::venue_graph as venue_graph_db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
 use crate::venue_graph;
-use luma_scene::venue::{Edge, NodeKind, FLOOR_SOCKET};
+use luma_scene::venue::{Constraint, Edge, NodeKind, FLOOR_SOCKET};
 
 /// The rows themselves — what the builder edits.
 ///
@@ -178,6 +178,54 @@ pub async fn detach(
     let mut access = write(services, &venue_id).await?;
     require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
     venue_graph_db::delete_edge(&mut access, &node_id).await?;
+    report(access, services, &node_id).await
+}
+
+/// Write down a far end: this socket meets that one.
+///
+/// A **check**, not an edge — it is evaluated after the solve and never takes
+/// part in it, which is how a bridging piece has one parent and still says
+/// where its other end belongs. A socket carries one far end or none, so
+/// naming the same socket again replaces the check it had.
+///
+/// # Errors
+/// Refuses a socket pair that does not exist or whose polarity forbids the
+/// joint, and an array at either end: an array's ends belong to its derived
+/// members, so one check would name one socket where the room has `count` of
+/// them. Whether the ends actually *meet* is not an error — that is the
+/// satisfied / violated / dangling the report carries.
+pub async fn constrain(
+    services: &AppServices,
+    venue_id: String,
+    node_id: String,
+    my_socket: String,
+    target_node: String,
+    target_socket: String,
+) -> Result<PlacementReport, CommandError> {
+    let mut access = write(services, &venue_id).await?;
+    require_in_venue(&mut access, &[node_id.clone(), target_node.clone()]).await?;
+
+    let mut graph = venue_graph::graph(&mut access).await?;
+    let sockets = venue_graph::sockets(&services.fixtures_root)?;
+    graph
+        .constrain(
+            Constraint {
+                node: node_id.clone(),
+                my_socket: my_socket.clone(),
+                target_node: target_node.clone(),
+                target_socket: target_socket.clone(),
+            },
+            sockets,
+        )
+        .map_err(|e| CommandError::Invalid(e.to_string()))?;
+    venue_graph_db::upsert_constraint(
+        &mut access,
+        &node_id,
+        &my_socket,
+        &target_node,
+        &target_socket,
+    )
+    .await?;
     report(access, services, &node_id).await
 }
 
@@ -510,9 +558,9 @@ mod tests {
         );
     }
 
-    /// Defect: `collect_dangling` filtered on polarity alone, so both halves of
-    /// a bolted joint were reported open. Two decks butted edge to edge leave
-    /// the outer six edges dangling, not all eight.
+    /// A joint accounts for **both** of its halves, the held one and the host
+    /// one. Two decks butted edge to edge have eight edges between them and
+    /// six of them open.
     #[tokio::test]
     async fn a_mated_edge_is_not_reported_dangling() {
         let (_dir, services, venue) = room().await;
@@ -550,9 +598,9 @@ mod tests {
         assert_eq!(open.len(), 6, "six outer edges stay open: {open:?}");
     }
 
-    /// Defect: an array node had no pose, so a successful `array(...)` reported
-    /// `ok: false, parent: null`. One row, `count` poses, plus the anchor the
-    /// span is centred on.
+    /// An array is one row and reports a placement like any other node: the
+    /// anchor gets a pose the span is centred on, and each of `count` members
+    /// gets one of its own.
     #[tokio::test]
     async fn an_array_is_one_row_and_reports_a_placement() {
         let (_dir, services, venue) = room().await;
@@ -618,6 +666,217 @@ mod tests {
                 assert_eq!(member["parentId"], json!(id));
             }
         }
+    }
+
+    /// A far end is what the builder writes down instead of a second parent,
+    /// so it accounts for both sockets it names — whether or not they meet.
+    /// A violated check has *measured* those ends; the gap is reported as
+    /// itself.
+    #[tokio::test]
+    async fn a_far_end_check_accounts_for_both_its_ends() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let left = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+        let right = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fr",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+        let before = open_ends(&services, &venue).await;
+        assert!(before.contains(&(left.clone(), "end_b".into())));
+        assert!(before.contains(&(right.clone(), "end_b".into())));
+
+        let report = constrain(&services, &venue, &left, "end_b", &right, "end_b")
+            .await
+            .expect("two truss ends can be checked against each other");
+        assert_eq!(
+            report["venue"]["constraints"][0]["status"],
+            json!("violated"),
+            "the towers stand apart, so the check resolved and failed"
+        );
+
+        let after = open_ends(&services, &venue).await;
+        assert!(
+            !after.contains(&(left.clone(), "end_b".into()))
+                && !after.contains(&(right.clone(), "end_b".into())),
+            "a resolved check accounts for both ends it names: {after:?}"
+        );
+    }
+
+    /// A check whose target is gone claims nothing: the node is not in the
+    /// room, so the socket it named is still standing open. Closing it on the
+    /// strength of the paperwork would hide the very end the paperwork was
+    /// meant to explain.
+    #[tokio::test]
+    async fn a_dangling_constraint_leaves_its_end_open() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let left = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+        let right = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fr",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+        constrain(&services, &venue, &left, "end_b", &right, "end_b")
+            .await
+            .unwrap();
+
+        // Delete the target out from under the check. The row goes with it
+        // (`ON DELETE CASCADE` names `target_node`), so this is the general
+        // case: unplaced, gone, or a socket the geometry lost.
+        dispatch(
+            &services,
+            "detach",
+            &json!({ "venueId": venue, "nodeId": right }),
+        )
+        .await
+        .unwrap();
+
+        let venue_json = resolved(&services, &venue).await;
+        assert_eq!(
+            venue_json["constraints"][0]["status"],
+            json!("dangling"),
+            "the target has no pose to measure against"
+        );
+        let open = open_ends(&services, &venue).await;
+        assert!(
+            open.contains(&(left.clone(), "end_b".into())),
+            "the checked end is still standing open: {open:?}"
+        );
+    }
+
+    /// An array's ends belong to its derived members, which hold no rows — so
+    /// one check naming the anchor would name one socket where the room has
+    /// `count` of them. Refused at either end.
+    #[tokio::test]
+    async fn a_constraint_cannot_name_an_array() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let array = attach(
+            &services,
+            &venue,
+            "array",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "count": 3.0, "span": 4.0 })),
+        )
+        .await
+        .unwrap();
+        let stick = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fr",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+        let before = open_ends(&services, &venue).await;
+
+        let error = constrain(&services, &venue, &stick, "end_b", &array, "end_b")
+            .await
+            .expect_err("a far end was pointed at an array");
+        assert_invalid(&error, "is an array");
+
+        let error = constrain(&services, &venue, &array, "end_b", &stick, "end_b")
+            .await
+            .expect_err("an array end was checked against a truss");
+        assert_invalid(&error, "is an array");
+
+        assert_eq!(
+            constraint_count(&services, &venue).await,
+            0,
+            "refused before any write"
+        );
+        assert_eq!(
+            open_ends(&services, &venue).await,
+            before,
+            "and nothing was accounted for"
+        );
+    }
+
+    /// A check names two sockets that exist and could meet. One that no
+    /// placement could ever satisfy is a typo, and reporting it every solve as
+    /// a gap would say the rig is wrong where the paperwork is.
+    #[tokio::test]
+    async fn a_constraint_needs_two_sockets_that_could_mate() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let tower = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+
+        let error = constrain(&services, &venue, &tower, "nope", &deck, "top")
+            .await
+            .expect_err("a truss has no socket called `nope`");
+        assert_invalid(&error, "has no socket `nope`");
+
+        // Two receptacles do not make a joint, here as at an edge: a deck's
+        // `top` is a host, never a thing that is held.
+        let error = constrain(&services, &venue, &deck, "top", &tower, "end_b")
+            .await
+            .expect_err("a floor top was checked against a truss end");
+        assert_invalid(&error, "does not mate");
+
+        assert_eq!(constraint_count(&services, &venue).await, 0);
     }
 
     /// An array's members are derived at solve time, so the anchor is the only
@@ -718,9 +977,10 @@ mod tests {
         assert_eq!(open, ["end_b"], "the bolted end is not open: {open:?}");
     }
 
-    /// Defect: `detach` left a branch with no edge, and the solve dropped it —
-    /// no pose, no warning, no mention. A builder dragging a wing off could not
-    /// tell "unplaced" from "deleted".
+    /// A branch with no edge is reported, never dropped: `detach` names the
+    /// subtree's root and how many nodes hang off it. Silence is what makes
+    /// "unplaced" and "deleted" look identical to whoever just dragged a wing
+    /// off.
     #[tokio::test]
     async fn a_detached_subtree_is_reported_unplaced() {
         let (_dir, services, venue) = room().await;
@@ -910,6 +1170,52 @@ mod tests {
             }),
         )
         .await
+    }
+
+    async fn constrain(
+        services: &AppServices,
+        venue: &str,
+        node: &str,
+        my_socket: &str,
+        target_node: &str,
+        target_socket: &str,
+    ) -> Result<Value, CommandError> {
+        dispatch(
+            services,
+            "constrain",
+            &json!({
+                "venueId": venue,
+                "nodeId": node,
+                "mySocket": my_socket,
+                "targetNode": target_node,
+                "targetSocket": target_socket,
+            }),
+        )
+        .await
+    }
+
+    /// Every open end in the solved venue, as `(node, socket)`.
+    async fn open_ends(services: &AppServices, venue: &str) -> Vec<(String, String)> {
+        resolved(services, venue).await["dangling"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d["nodeId"].as_str().unwrap().to_string(),
+                    d["socket"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    async fn constraint_count(services: &AppServices, venue: &str) -> usize {
+        dispatch(services, "get_venue_graph", &json!({ "venueId": venue }))
+            .await
+            .unwrap()["constraints"]
+            .as_array()
+            .unwrap()
+            .len()
     }
 
     async fn resolved(services: &AppServices, venue: &str) -> Value {

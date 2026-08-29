@@ -611,6 +611,7 @@ pub fn run() {
             dispatch::adapter::get_resolved_venue,
             dispatch::adapter::attach,
             dispatch::adapter::reattach,
+            dispatch::adapter::constrain,
             dispatch::adapter::place_free,
             dispatch::adapter::detach,
             dispatch::adapter::set_params,

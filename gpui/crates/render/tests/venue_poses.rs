@@ -217,12 +217,17 @@ fn venue() -> VenueGraph {
     // Violated by construction — the run goes nowhere near it — which is the
     // status a golden most needs to pin, because "satisfied" is also what a
     // check that never ran looks like.
-    graph.constrain(luma_scene::venue::Constraint {
-        node: "run".into(),
-        my_socket: "end_b".into(),
-        target_node: "tower".into(),
-        target_socket: "end_a".into(),
-    });
+    graph
+        .constrain(
+            luma_scene::venue::Constraint {
+                node: "run".into(),
+                my_socket: "end_b".into(),
+                target_node: "tower".into(),
+                target_socket: "end_a".into(),
+            },
+            catalog(),
+        )
+        .expect("both truss ends exist and mate");
 
     graph
 }

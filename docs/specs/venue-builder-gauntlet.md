@@ -238,7 +238,7 @@ cargo check -p gpui-agent --all-targets        # headless tree; no --features
 cargo clippy --workspace --all-targets
 cargo test -p luma-scene
 cargo test -p luma-render
-cargo test --test headless                     # append a name to filter a file
+cargo test -p gpui-agent --test headless       # append a name to filter a file
 cargo run -p luma-render --release --bin render-goldens -- --check
 
 cargo test --manifest-path ../src-tauri/Cargo.toml
