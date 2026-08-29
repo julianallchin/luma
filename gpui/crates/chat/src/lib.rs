@@ -220,6 +220,29 @@ impl Turn {
 
 // -- the panel ---------------------------------------------------------------
 
+/// Which conversation is on screen, as a *state* rather than an absence.
+///
+/// An empty transcript means two different things — "this conversation has
+/// nothing in it" and "the read has not landed yet" — and the panel paints
+/// the opening over the first. Splitting them here is what stops the second
+/// being paintable at all: the opening is drawn from [`Self::Open`] only, so
+/// a conversation with history cannot flash "where do you want to start?" on
+/// its way in. The panel is rebuilt whole when the screen's subject changes,
+/// so there is no previous transcript to hold over: a load shows the plate
+/// and nothing in the column, which is the honest frame.
+enum Conversation {
+    /// Nothing was ever asked for — the unattached panel, which resolves no
+    /// thread at all.
+    Idle,
+    /// A read is in flight, carrying the token it was started with. Answers
+    /// are matched against the token so a slow resolve landing after a newer
+    /// open is dropped rather than painted over it.
+    Loading(u64),
+    /// The read landed. This is the thread, and the transcript beside it is
+    /// its whole history — empty included, and that empty is a fact.
+    Open(String),
+}
+
 /// Whether a turn is running, and the task driving it. Dropping the task drops
 /// the [`Turn`], which cancels — so "cancel" is `self.turn = TurnState::Idle`
 /// and there is no second call a caller could forget.
@@ -244,10 +267,13 @@ pub struct AgentChat {
     /// says what it could attach to, and it never resolves a thread — which is
     /// what keeps "the chat did not open" out of the vocabulary entirely.
     scope: Option<ThreadScope>,
-    /// The resolved thread, once it has come back. Until then the composer is
-    /// live but a send waits — the alternative is a send that silently starts
-    /// a conversation in a thread nobody asked for.
-    thread: Option<String>,
+    /// Which conversation, and whether its read has landed. Until it has, the
+    /// composer is live but a send waits — the alternative is a send that
+    /// silently starts a conversation in a thread nobody asked for.
+    conversation: Conversation,
+    /// The next read's token. Monotonic, so no two reads of this panel ever
+    /// share one — see [`Conversation::Loading`].
+    reads: u64,
     transcript: Transcript,
     /// Render state, one per message — parsers, veil, render cache.
     entries: Vec<Entry>,
@@ -342,7 +368,8 @@ impl AgentChat {
         let chat = Self {
             agent,
             scope: scope.clone(),
-            thread: None,
+            conversation: Conversation::Idle,
+            reads: 0,
             transcript: Transcript::default(),
             entries: Vec::new(),
             rows: Vec::new(),
@@ -442,13 +469,27 @@ impl AgentChat {
     /// Read the thread back and seat its history. Restored rows do not fade —
     /// history that dissolved onto the screen every time the panel opened
     /// would read as a reply nobody asked for.
-    fn load(&self, scope: ThreadScope, cx: &mut Context<Self>) {
+    fn load(&mut self, scope: ThreadScope, cx: &mut Context<Self>) {
+        let read = self.begin_read(cx);
         let pending = self.agent.resolve_thread(scope);
         cx.spawn(async move |this, cx| {
             let resolved = pending.await;
-            this.update(cx, |this, cx| this.receive(resolved, cx)).ok();
+            this.update(cx, |this, cx| this.receive(read, resolved, cx))
+                .ok();
         })
         .detach();
+    }
+
+    /// Enter [`Conversation::Loading`] and hand back the token the answer must
+    /// carry. The one place a read starts, so "the column is blank while a
+    /// conversation is arriving" is stated once rather than at each of the
+    /// three call sites.
+    fn begin_read(&mut self, cx: &mut Context<Self>) -> u64 {
+        self.reads += 1;
+        self.conversation = Conversation::Loading(self.reads);
+        self.error = None;
+        self.seat(Transcript::default(), cx);
+        self.reads
     }
 
     /// Replace the whole transcript — the one path that resets the list.
@@ -633,14 +674,12 @@ impl AgentChat {
         // Whatever is running belongs to the conversation being left.
         self.cancel(cx);
         self.chosen = true;
-        self.thread = None;
-        self.error = None;
-        self.seat(Transcript::default(), cx);
+        let read = self.begin_read(cx);
         let pending = self.agent.open_thread(thread_id.to_string());
         cx.spawn(async move |this, cx| {
             let opened = pending.await;
             this.update(cx, |this, cx| {
-                this.receive(opened, cx);
+                this.receive(read, opened, cx);
             })
             .ok();
         })
@@ -659,14 +698,12 @@ impl AgentChat {
         };
         self.cancel(cx);
         self.chosen = false;
-        self.thread = None;
-        self.error = None;
-        self.seat(Transcript::default(), cx);
+        let read = self.begin_read(cx);
         let pending = self.agent.new_thread(scope);
         cx.spawn(async move |this, cx| {
             let created = pending.await;
             this.update(cx, |this, cx| {
-                this.receive(created, cx);
+                this.receive(read, created, cx);
             })
             .ok();
         })
@@ -676,11 +713,23 @@ impl AgentChat {
     /// Seat whatever a thread read came back with — the one place a resolve, an
     /// open and a create all land, so the three cannot drift about what
     /// "showing a thread" means.
-    fn receive(&mut self, detail: Result<AgentThreadDetail, String>, cx: &mut Context<Self>) {
+    ///
+    /// Answers are dropped unless they belong to the read still in flight: two
+    /// reads can be outstanding at once — a fast open issued after a slow
+    /// resolve — and the later *answer* is not necessarily the later *ask*.
+    fn receive(
+        &mut self,
+        read: u64,
+        detail: Result<AgentThreadDetail, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.conversation, Conversation::Loading(current) if current == read) {
+            return;
+        }
         match detail {
             Ok(detail) => match Transcript::from_rows(&detail.messages) {
                 Ok(transcript) => {
-                    self.thread = Some(detail.thread.id);
+                    self.conversation = Conversation::Open(detail.thread.id);
                     self.seat(transcript, cx);
                 }
                 Err(error) => self.error = Some(error),
@@ -688,6 +737,21 @@ impl AgentChat {
             Err(error) => self.error = Some(error),
         }
         cx.notify();
+    }
+
+    /// The conversation a send lands in, once its read has landed.
+    fn thread(&self) -> Option<&str> {
+        match &self.conversation {
+            Conversation::Open(id) => Some(id.as_str()),
+            Conversation::Idle | Conversation::Loading(_) => None,
+        }
+    }
+
+    /// Whether the panel is showing a conversation rather than waiting for
+    /// one. The empty state hangs off this: an opening painted while a read is
+    /// in flight is a claim the panel cannot yet make.
+    fn is_open(&self) -> bool {
+        matches!(self.conversation, Conversation::Open(_))
     }
 
     /// Whether this panel is showing a conversation the reader chose by hand.
@@ -745,12 +809,12 @@ impl AgentChat {
     /// list caches heights.
     fn tick_fold(&mut self, reduced_motion: bool) -> Option<(SharedString, f32)> {
         let (call, at, row) = self.fold.clone()?;
-        if reduced_motion || at.elapsed() >= luma_ui::motion::span(&luma_ui::motion::RESIZE) {
+        if reduced_motion || at.elapsed() >= luma_ui::motion::span(&luma_ui::motion::SURFACE) {
             self.fold = None;
             self.list.remeasure_items(row..row + 1);
             return None;
         }
-        let progress = luma_ui::motion::exit_progress(&luma_ui::motion::RESIZE, at);
+        let progress = luma_ui::motion::exit_progress(&luma_ui::motion::SURFACE, at);
         self.list.remeasure_items(row..row + 1);
         Some((call, progress))
     }
@@ -799,7 +863,7 @@ impl AgentChat {
             cx.notify();
             return;
         }
-        let Some(thread) = self.thread.clone() else {
+        let Some(thread) = self.thread().map(str::to_owned) else {
             self.error = Some("The conversation is still opening.".into());
             cx.notify();
             return;
@@ -853,7 +917,7 @@ impl AgentChat {
                 working::Working::Sending
             },
             since: *since,
-            seed: working::flavour_seed(self.thread.as_deref().unwrap_or_default()),
+            seed: working::flavour_seed(self.thread().unwrap_or_default()),
         })
     }
 
@@ -1093,8 +1157,12 @@ impl AgentChat {
                     // painted text element pushes into, and nothing else
                     // empties it.
                     .child(luma_md::render::selection_frame_reset())
+                    // Only over a conversation that has *landed* empty. A read
+                    // in flight has an empty transcript too, and the opening
+                    // painted over that is a conversation with history being
+                    // told it has none — see [`Conversation`].
                     .when_some(
-                        kind.filter(|_| self.transcript.messages.is_empty()),
+                        kind.filter(|_| self.transcript.messages.is_empty() && self.is_open()),
                         |el, kind| {
                             // A turn sent from the empty state has no row to
                             // trail yet — the user's own row arrives with the
@@ -1438,7 +1506,7 @@ impl Opening {
     fn of(kind: luma_lib::agent::AgentKind) -> Self {
         match kind {
             luma_lib::agent::AgentKind::PatternGraph => Self {
-                headline: HEADLINE,
+                headline: OPENING_HEADLINE,
                 blurb: "It reads the graph, runs Python against it, and says what it finds.",
                 hint: None,
                 prompts: &[
@@ -1448,7 +1516,7 @@ impl Opening {
                 ],
             },
             luma_lib::agent::AgentKind::TrackCopilot => Self {
-                headline: HEADLINE,
+                headline: OPENING_HEADLINE,
                 blurb:
                     "It reads the track's analysis, runs Python against it, and says what it finds.",
                 hint: None,
@@ -1462,8 +1530,11 @@ impl Opening {
     }
 }
 
-/// What a conversation that has not started asks the reader.
-const HEADLINE: &str = "Where do you want to start?";
+/// What a conversation that has not started asks the reader. Public for the
+/// same reason [`UNATTACHED_BLURB`] is: it is what a test asserting the empty
+/// state never flashes over a loading thread looks for, and a test spelling
+/// the copy itself would pass while the shipped words said something else.
+pub const OPENING_HEADLINE: &str = "Where do you want to start?";
 
 /// The way out of an unattached panel, in the panel's own words. Public
 /// because it is what the exit gate looks for: a test that spelled the promise

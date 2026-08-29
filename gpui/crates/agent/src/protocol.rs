@@ -90,8 +90,21 @@ impl From<Button> for gpui::MouseButton {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Cmd {
-    /// Settle the app and return `{frame, nodes}`.
-    Snapshot,
+    /// Return `{frame, nodes}`, settling first unless told not to.
+    ///
+    /// `settle: false` describes the frame **already on screen** rather than
+    /// making a new one, which is the only way to read a frame an acting call
+    /// drew: a click settles, and the frame its own handlers produced is gone
+    /// by the time the next `snapshot` has settled again. That frame is where
+    /// a one-frame flash lives, so it has to be readable.
+    Snapshot {
+        #[serde(default = "default_settle")]
+        settle: bool,
+    },
+    /// Every frame drawn recently, oldest first, without settling — the
+    /// frames a settled command drew *through* on its way to the one it left
+    /// behind. Where a one-frame flash is visible.
+    Painted,
     /// Read the frame counter without settling. Used to stamp an exec result.
     CurrentFrame,
     /// Every frame the pump has timed, with the mode that produced them.
@@ -190,6 +203,12 @@ pub enum Cmd {
 
 fn default_steps() -> u32 {
     8
+}
+
+/// A snapshot settles unless a script says otherwise: describing a frame that
+/// pending work has not been folded into yet is the exception, not the rule.
+fn default_settle() -> bool {
+    true
 }
 
 fn default_count() -> u32 {

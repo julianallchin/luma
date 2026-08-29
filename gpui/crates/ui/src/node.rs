@@ -281,6 +281,13 @@ mod imp {
     pub struct NodeRegistry {
         frame: u64,
         nodes: Vec<Node>,
+        /// Finished frames, oldest first, capped at [`Self::keep`].
+        past: std::collections::VecDeque<(u64, Vec<Node>)>,
+        /// How many finished frames to hold. Zero — the app's own value — is
+        /// what makes this cost nothing outside a test: a driver that wants to
+        /// see the frames *between* its commands turns it on, and nothing else
+        /// pays for the retention.
+        keep: usize,
     }
 
     impl Global for NodeRegistry {}
@@ -296,12 +303,42 @@ mod imp {
             &self.nodes
         }
 
+        /// Retain the last `frames` finished frames for [`Self::past`].
+        ///
+        /// A settled command draws more than once — an async answer landing
+        /// between two draws is an ordinary frame nobody asked for — and the
+        /// registry alone only ever describes the last of them. A one-frame
+        /// flash lives in the ones it drops, so a driver hunting one asks for
+        /// them to be kept.
+        pub fn keep(cx: &mut App, frames: usize) {
+            let registry = cx.default_global::<NodeRegistry>();
+            registry.keep = frames;
+            while registry.past.len() > frames {
+                registry.past.pop_front();
+            }
+        }
+
+        /// The finished frames still held, oldest first. Empty unless
+        /// [`Self::keep`] asked for them.
+        pub fn past(&self) -> impl Iterator<Item = (u64, &[Node])> {
+            self.past
+                .iter()
+                .map(|(frame, nodes)| (*frame, nodes.as_slice()))
+        }
+
         /// Start a new frame: drop the previous one's nodes and bump the
         /// counter. Called from [`Instrumented::request_layout`] on the root,
         /// which is the first thing gpui runs in a draw and therefore the one
         /// place that is guaranteed to be "before every prepaint".
         fn begin_frame(cx: &mut App) {
             let registry = cx.default_global::<NodeRegistry>();
+            if registry.keep > 0 {
+                let done = std::mem::take(&mut registry.nodes);
+                registry.past.push_back((registry.frame, done));
+                while registry.past.len() > registry.keep {
+                    registry.past.pop_front();
+                }
+            }
             registry.frame += 1;
             registry.nodes.clear();
         }

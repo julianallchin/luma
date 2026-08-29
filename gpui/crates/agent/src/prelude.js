@@ -59,8 +59,8 @@
       ? { at: { x: value.x, y: value.y } }
       : { node: node(value, which) };
 
-  const snapshot = () => {
-    const shot = call("snapshot");
+  const snapshot = (opts) => {
+    const shot = call("snapshot", options(opts, { settle: "settle" }));
     shot.find = (query) => shot.nodes.find(predicate(query));
     shot.findAll = (query) => shot.nodes.filter(predicate(query));
     return shot;
@@ -83,8 +83,19 @@
     return out;
   };
 
+  // Every frame drawn recently, oldest first, the one on screen last. Each is
+  // a snapshot with `find`/`findAll` on it, so a sweep over the frames a
+  // gesture drew reads exactly like a sweep over one.
+  const painted = () =>
+    call("painted").map((shot) => {
+      shot.find = (query) => shot.nodes.find(predicate(query));
+      shot.findAll = (query) => shot.nodes.filter(predicate(query));
+      return shot;
+    });
+
   globalThis.app = {
     snapshot,
+    painted,
     click: (target, opts) =>
       call("click", {
         node: node(target, "node"),
