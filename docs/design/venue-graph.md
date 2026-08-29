@@ -108,6 +108,39 @@ on the downstage truss" is not expressible.
   generated TS binding: it exists twice today (`src/features/stage/lib/sockets.ts`,
   `gpui/crates/scene/src/sockets.rs`) and the goldens exist because it drifted.
 
+## Two pages: patch and stage
+
+The "Universe" tab is replaced by two pages, split by the question each answers:
+what exists, and where it is.
+
+- **Patch page = inventory** — the rental sheet: fixture, mode, universe, address,
+  label, N of a fixture added at once. **One allocator, in the backend, per
+  universe.** Three frontend first-fit allocators exist today and none of them
+  looks at the universe (`add-fixture-dialog.tsx:22-38`,
+  `use-fixture-store.ts:625-655`, `:768-790`); they are deleted. Collisions and
+  addresses past 512 render red and are **refused by `patch_fixture`** — today
+  nothing validates and `engine.rs:429` silently truncates. Address and mode are
+  editable; Auto Patch becomes real.
+- **Outputs live on the patch page.** Discovered Art-Net nodes bind to universes as
+  a **table**, not the `(net<<8)|(sub<<4)|(u&0xF)` arithmetic in `artnet.rs:218`
+  that aliases universe 17 onto 1. sACN later.
+- **Stage page = the builder** — the venue graph above, plus a **tray of unplaced
+  fixtures** drawn from the patch list. Drag from the tray onto a truss: snapped,
+  placed, label defaulting from location ("Truss L · mover 3"). Array is N from the
+  tray onto a run. A fixture may be patched but unplaced, and **the tray is the only
+  place that is allowed** — no more fixtures piled at the origin.
+- **The fixture row splits in two: patch and placement.** Patch is
+  `(universe, address, mode, definition)`; placement is a `venue_edges` row like any
+  other node. Re-addressing never touches placement, moving never touches the
+  address.
+- **Groups default from structure** — same truss face is a group — with manual
+  groups as an override. The "must group everything before leaving" gate
+  (`App.tsx:328`) goes.
+- **Build order:** patch page lands with **phase 3** (it needs the split row), stage
+  page with **phase 4**. Today `gpui/crates/app/src/universe.rs` is a read-only list
+  and the React page cannot edit an address at all — `move_patched_fixture` has zero
+  callers.
+
 ## Data model
 
 `stage_pieces` is replaced, not extended. New tables (append-only migrations; the old
