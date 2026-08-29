@@ -494,6 +494,36 @@ impl fmt::Display for LibraryError {
 
 impl std::error::Error for LibraryError {}
 
+/// Who the app database admitted, as the app names them.
+///
+/// Two halves that are not interchangeable: [`Self::id`] is the proven
+/// principal every row is stamped with, [`Self::email`] is the address the
+/// session was obtained with and exists only to put a name on screen. A
+/// session whose blob carries no address is still a perfectly good identity —
+/// hence [`Self::label`], which never shows the id.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Account {
+    pub id: String,
+    pub email: Option<String>,
+}
+
+impl Account {
+    /// What to call this account in front of a person.
+    ///
+    /// The id is deliberately *not* the fallback. A uuid is not a name — it
+    /// tells the reader nothing they can act on, and reads as a bug in a row
+    /// that is supposed to say who they are. "Signed in" is the honest answer
+    /// to a session that proved someone without saying which address it was
+    /// issued to.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self.email.as_deref() {
+            Some(email) if !email.is_empty() => email,
+            _ => "Signed in",
+        }
+    }
+}
+
 /// A connection to the real Luma library.
 pub struct Library {
     services: SharedServices,
@@ -504,8 +534,12 @@ pub struct Library {
     /// the process: signing in and signing out both move it, and every row a
     /// screen writes afterwards is stamped with what this says. The database's
     /// `auth_write_admission.active_uid` remains the authority — this is the
-    /// cache of it, written through at the two moments it can change.
-    user_id: Arc<Mutex<Option<String>>>,
+    /// cache of it, written through at the three moments it can change.
+    ///
+    /// One cache, not two: the id and the address it is shown under move
+    /// together at every one of those moments, and a screen reading them from
+    /// separate places would be able to name the previous account.
+    account: Arc<Mutex<Option<Account>>>,
     /// Why boot admitted the guest namespace despite finding credentials —
     /// see [`Library::lapsed`]. Fixed at open: it is a fact about how this
     /// process started, and signing in afterwards does not rewrite it.
@@ -580,7 +614,7 @@ impl Library {
             import_delay: Arc::clone(&source_import_fixture_delay),
             fallback: system_track_sources(),
         });
-        let (services, user_id, lapsed) = runtime.block_on(async {
+        let (services, account, lapsed) = runtime.block_on(async {
             let db = init_app_db_at(storage.path()).await?;
             let state_db = init_state_db_at(storage.path()).await?;
             // Admission is host bootstrap, not a command: until it is armed
@@ -643,7 +677,22 @@ impl Library {
                 .apply_persisted_settings()
                 .await
                 .map_err(|error| error.to_string())?;
-            Ok::<_, String>((services, user_id, lapsed))
+            // The address to name the principal by, out of the same stored
+            // snapshot the admission above was proven from. `current_account`
+            // makes no request — see its handler — which is the property this
+            // line depends on: boot never touches the network, so a launch on
+            // a plane still knows whose library this is.
+            //
+            // A label that cannot be read is not a launch failure and not a
+            // different identity: the id is already proven, so it stands alone.
+            let email = match command::<Option<Account>>(&services, "current_account", &Value::Null)
+                .await
+            {
+                Ok(Some(account)) if Some(&account.id) == user_id.as_ref() => account.email,
+                _ => None,
+            };
+            let account = user_id.map(|id| Account { id, email });
+            Ok::<_, String>((services, account, lapsed))
         })?;
 
         let services = services.into_shared();
@@ -675,7 +724,7 @@ impl Library {
 
         Ok(Self {
             services,
-            user_id: Arc::new(Mutex::new(user_id)),
+            account: Arc::new(Mutex::new(account)),
             lapsed,
             runtime,
             import_progress: progress_tx,
@@ -777,7 +826,13 @@ impl Library {
 
     /// The signed-in principal, or `None` for the guest namespace.
     pub fn user_id(&self) -> Option<String> {
-        self.user_id.lock().unwrap().clone()
+        self.account.lock().unwrap().as_ref().map(|a| a.id.clone())
+    }
+
+    /// [`Self::user_id`] with the address to show it under — what a screen
+    /// naming the account reads.
+    pub fn account(&self) -> Option<Account> {
+        self.account.lock().unwrap().clone()
     }
 
     /// Email a six-digit login code to `email`.
@@ -790,7 +845,11 @@ impl Library {
 
     /// Exchange an emailed code for a session and adopt the principal it
     /// proves. The host performs the identity switch; this only refreshes the
-    /// cached answer to [`Library::user_id`] so rows written next carry it.
+    /// cached answer to [`Library::account`] so rows written next carry it.
+    ///
+    /// The address needs no second read: a code is only ever verified against
+    /// the address it was mailed to, so this call already holds the label the
+    /// new session will be shown under.
     pub fn verify_login_code(
         &self,
         email: &str,
@@ -798,10 +857,14 @@ impl Library {
     ) -> impl Future<Output = Result<String, LibraryError>> + use<> {
         let pending =
             self.call::<String>("verify_login_code", json!({ "email": email, "code": code }));
-        let cache = Arc::clone(&self.user_id);
+        let cache = Arc::clone(&self.account);
+        let email = email.trim().to_string();
         async move {
             let user_id = pending.await?;
-            *cache.lock().unwrap() = Some(user_id.clone());
+            *cache.lock().unwrap() = Some(Account {
+                id: user_id.clone(),
+                email: Some(email),
+            });
             Ok(user_id)
         }
     }
@@ -814,16 +877,30 @@ impl Library {
     /// and leaves a journal that `remove_session_item` consumes. The web store
     /// sequences them identically; a host that reversed them would delete the
     /// credential it still needs to flush with.
+    ///
+    /// Both run inside *one* spawned task, not two: [`Self::call`] dispatches
+    /// the moment it is called, so holding two of its futures and awaiting
+    /// them in order sequences the awaits and nothing else — the commands
+    /// themselves race for the sync lock, and a release that won would clear
+    /// the credential the wipe is still flushing with. That is the reversal
+    /// this comment says is unrecoverable, arrived at by accident.
     pub fn sign_out(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
-        let wipe = self.call::<Value>("wipe_database", json!({}));
-        let release = self.call::<Value>(
-            "remove_session_item",
-            json!({ "key": luma_lib::database::local::auth::SUPABASE_SESSION_KEY }),
-        );
-        let cache = Arc::clone(&self.user_id);
+        let services = self.services.clone();
+        let cache = Arc::clone(&self.account);
+        let task = self.runtime.spawn(async move {
+            command::<Value>(&services, "wipe_database", &json!({})).await?;
+            command::<Value>(
+                &services,
+                "remove_session_item",
+                &json!({ "key": luma_lib::database::local::auth::SUPABASE_SESSION_KEY }),
+            )
+            .await?;
+            Ok::<_, LibraryError>(())
+        });
         async move {
-            wipe.await?;
-            release.await?;
+            task.await.map_err(|error| {
+                LibraryError::at("sign_out", Cause::Cancelled(error.to_string()))
+            })??;
             *cache.lock().unwrap() = None;
             Ok(())
         }
@@ -1311,7 +1388,7 @@ impl Library {
     }
 
     /// One pattern's arg definitions, resolved against a venue — the schema
-    /// the args strip renders from. Venue-resolved on purpose, unlike
+    /// the args sheet renders from. Venue-resolved on purpose, unlike
     /// [`Self::pattern_graph`]: a venue can pin a different implementation of
     /// the same pattern (`pattern-args-venue-divergence` in the IPC manifest),
     /// and the strip must show the args of the graph that will actually run.
@@ -1445,6 +1522,16 @@ impl Library {
         )
     }
 
+    /// Every score for this track the current admission may see, in any
+    /// venue, newest first. What the editor's score rail lists: the venue in
+    /// hand is one grouping of this, not a separate read.
+    pub fn scores_across_venues(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<Vec<ScoreSummary>, LibraryError>> + use<> {
+        self.call("list_scores_across_venues", json!({ "trackId": track_id }))
+    }
+
     /// Create another score for a track. Multiple scores per track/venue are
     /// intentional; use [`Self::ensure_track_in_venue`] for the Add action.
     /// `request_id` only makes a retry of this exact creation idempotent.
@@ -1464,6 +1551,13 @@ impl Library {
                 "name": name,
             }),
         )
+    }
+
+    /// Archive a score. The authored document keeps its history — the seam
+    /// tombstones the row rather than rewriting it — so this is "take it off
+    /// the list", not "unmake it".
+    pub fn delete_score(&self, id: &str) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("delete_score", json!({ "id": id }))
     }
 
     /// Atomically add a track to a venue. Repeated Add actions return the
@@ -1843,27 +1937,30 @@ impl Library {
         self.call("agent_thread_delete", json!({ "threadId": thread_id }))
     }
 
-    /// Install `track_id`'s score as the render engine's active scene, so
+    /// Install one score as the render engine's active scene, so
     /// [`Self::sample_universe`] has something to sample.
     ///
-    /// `clips` is load-bearing three ways. `None` says "use the persisted score
-    /// rows" — the right answer for a screen that is only *watching* a track,
-    /// which has no working copy to offer. `Some(list)` composites that list
-    /// instead, which is how an editor's live edits reach the rig before the
-    /// trailing write does. An empty `Some` is an authoritative empty document
-    /// and clears the scene; `None` and `Some(vec![])` are therefore *not* the
-    /// same request (see `dispatch::handlers::compositor`).
-    pub fn composite_track(
+    /// **The score is the subject, not the `(track, venue)` pair.** A pair
+    /// carries as many scores as there are people who annotated it, and the rig
+    /// shows the one that is open rather than a blend of all of them — which is
+    /// why this takes the id the editor holds and does not look one up.
+    ///
+    /// `clips` is load-bearing three ways. `None` says "use the score's
+    /// persisted rows" — the right answer for a screen that is only *watching*
+    /// it, which has no working copy to offer. `Some(list)` composites that
+    /// list instead, which is how an editor's live edits reach the rig before
+    /// the trailing write does. An empty `Some` is an authoritative empty
+    /// document and clears the scene; `None` and `Some(vec![])` are therefore
+    /// *not* the same request (see `dispatch::handlers::compositor`).
+    pub fn composite_score(
         &self,
-        track_id: &str,
-        venue_id: &str,
+        score_id: &str,
         clips: Option<Vec<TrackClip>>,
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
             "composite_track",
             json!({
-                "trackId": track_id,
-                "venueId": venue_id,
+                "scoreId": score_id,
                 "annotations": clips,
             }),
         )

@@ -284,11 +284,11 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
         app.frames(2);
         const forwardFirst = focusedLeaf(app.snapshot());
         focusTrace.push(...forwardLeaves, forwardFirst);
-        // Coordinate activation of the shell setting behind the modal lands
+        // Coordinate activation of the shell control behind the modal lands
         // on the optional scrim: the venue dialog dismisses, but the covered
-        // settings action must not run.
-        const occludedSettings = app.snapshot().find({ role: "button", label: "Settings" });
-        app.click(occludedSettings);
+        // account action must not run.
+        const occludedAccount = app.snapshot().find({ role: "button", label: "Account" });
+        app.click(occludedAccount);
         app.frames(2);
         const afterOccludedClick = app.snapshot();
         app.key("escape");
@@ -327,7 +327,7 @@ fn venue_launch_picker_create_and_stale_reads_are_correlated() {
                && forwardFirst === focusOrder[0],
            focusTrace,
            occluded: afterOccludedClick.find({ role: "card", label: "Venue dialog" }) === undefined
-               && afterOccludedClick.find({ role: "card", label: "Settings dialog" }) === undefined,
+               && afterOccludedClick.find({ role: "row", label: "Settings" }) === undefined,
            restoredOpener: restoredOpener.find({ role: "button", label: "Beta Room" })?.focused === true })
     "#,
     );
@@ -586,9 +586,12 @@ fn switching_venues_parks_the_track_subject_and_revokes_it_from_the_new_tab_menu
             s.find({ role: "card", label: "Alpha Hall" }) !== undefined
                 && s.find({ role: "card", label: "Beta Room" }) !== undefined);
         app.click(picker.find({ role: "card", label: "Alpha Hall" }));
-        let alpha = until("Alpha's track", (s) =>
+        until("Alpha's track", (s) =>
             s.find({ role: "row", label: "Alpha Hall Track" }) !== undefined ? s : undefined);
-        app.click(alpha.find({ role: "row", label: "Alpha Hall Track" }));
+        // Two gestures now: the row goes to the track's scores, and one of
+        // them is the timeline. `nav.track` is that walk, and it comes back
+        // out to the list.
+        nav.track("Alpha Hall Track");
         until("the selected Alpha tab", (s) =>
             s.find({ role: "button", label: "Alpha Hall Track" }) !== undefined);
 

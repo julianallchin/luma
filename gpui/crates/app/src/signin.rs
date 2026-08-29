@@ -175,7 +175,10 @@ impl Luma {
         if self.sign_in.is_some() {
             return;
         }
+        // The gate is the whole window: nothing the shell was floating gets
+        // to play its exit over a shell that is no longer rendered.
         self.overlay = luma_ui::dialog::Popup::default();
+        self.account_menu = luma_ui::dialog::Popup::default();
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
         self.sign_in = Some(Box::new(SignIn::new(generation, cx)));

@@ -39,6 +39,7 @@ mod add_tracks;
 mod agent;
 mod chat_history;
 mod chrome;
+mod confirm;
 mod fixture_picker;
 mod graph;
 mod history;
@@ -63,7 +64,7 @@ pub use graph::ViewData;
 #[cfg(feature = "agent")]
 pub use library::NavigationFixture;
 pub use library::{
-    Library, LibraryError, SourceLibrary, SourcePlaylist, SourceTrack, TrackImportRequest,
+    Account, Library, LibraryError, SourceLibrary, SourcePlaylist, SourceTrack, TrackImportRequest,
     TrackSource,
 };
 #[cfg(feature = "agent")]
@@ -165,6 +166,15 @@ pub struct Luma {
     /// element the frame its state drops, so an exit animation needs the state
     /// held alive while it plays.
     pub(crate) overlay: luma_ui::dialog::Popup<Overlay>,
+    /// The account menu hanging off the sidebar's foot, or none. A `Popup` for
+    /// the same reason the overlay is one — see [`crate::tracks::account_menu`].
+    pub(crate) account_menu: luma_ui::dialog::Popup<()>,
+    /// The foot itself: a tab stop, so the account is reachable without the
+    /// pointer, and a return target the menu hands the keyboard back to.
+    pub(crate) account_focus: FocusHandle,
+    /// What the one sign-out gesture is doing — see [`settings::AccountAction`].
+    /// Who is signed in is not here: `Library` is the cache of that.
+    pub(crate) account_action: settings::AccountAction,
     /// The agent thread, the shell's centre. Built at first render (its
     /// composer needs a `Window`) and then kept for the app's life — it is a
     /// region, not a panel, and it cannot be closed.
@@ -234,6 +244,9 @@ impl Luma {
             visualizer_split: shell::visualizer_split(),
             sign_in: None,
             overlay: luma_ui::dialog::Popup::default(),
+            account_menu: luma_ui::dialog::Popup::default(),
+            account_focus: cx.focus_handle().tab_stop(true),
+            account_action: settings::AccountAction::default(),
             chat: None,
             chat_subscription: None,
             chat_history_generation: 0,
@@ -392,6 +405,12 @@ impl Render for Luma {
             .on_action(
                 cx.listener(|this, _: &keymap::DismissOverlay, _, cx| this.dismiss_overlay(cx)),
             )
+            .on_action(cx.listener(|this, _: &keymap::EnterScores, window, cx| {
+                this.enter_selected_scores(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &keymap::LeaveScores, _, cx| {
+                this.leave_scores(cx);
+            }))
             .on_action(cx.listener(|this, _: &keymap::OpenSettings, _, cx| this.open_settings(cx)))
             .on_action(cx.listener(|this, _: &keymap::OpenPatterns, _, cx| this.show_patterns(cx)))
             .on_action(

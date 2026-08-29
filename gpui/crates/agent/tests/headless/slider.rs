@@ -36,7 +36,7 @@ const SCRIPT: &str = r#"
     nav.venue("Test Venue");
 
     function openArtnet() {
-        nav.step("the settings button", "button", "Settings");
+        nav.settings();
         nav.step("the Art-Net settings section", "toggle", "Art-Net / DMX");
         return until("the loaded Art-Net settings", (s) =>
             s.find(isMaxBrightness) !== undefined ? s : undefined);

@@ -577,3 +577,87 @@ mod tests {
         assert!(!declaration.contains("bigint"));
     }
 }
+
+/// A revision's actor, split into the parts a surface shows.
+///
+/// The stored vocabulary is open (see [`AuthoredHistoryEntry::actor`]) and the
+/// display side is here so it stays one mapping: the sidebar's score rows, the
+/// history list and settings all read a label the same way rather than each
+/// slicing the string.
+///
+/// Parsing never fails. An actor this build has no reading for is
+/// [`Self::Named`] and shows verbatim — an unrecognized writer is still an
+/// honest one, and inventing "unknown" for it would lose the only fact the row
+/// has.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActorLabel<'a> {
+    /// `user` — the human at the keyboard. Deliberately *nameless*: which
+    /// human is the document's principal, which the actor does not record, so
+    /// the surface names them ("You", a short uid) and this does not.
+    User,
+    /// `client:<name>/<version>[:<model>]` — an out-of-process MCP client.
+    /// The version is parsed and dropped: it identifies a build of the client,
+    /// not a writer, and no surface has room for it.
+    Client {
+        name: &'a str,
+        model: Option<&'a str>,
+    },
+    /// Everything else: a model key the in-app loop wrote under, or a label
+    /// from a producer this build does not know.
+    Named(&'a str),
+}
+
+impl<'a> ActorLabel<'a> {
+    #[must_use]
+    pub fn parse(actor: &'a str) -> Self {
+        if actor == "user" {
+            return Self::User;
+        }
+        let Some(client) = actor.strip_prefix("client:") else {
+            return Self::Named(actor);
+        };
+        // `name/version` then an optional `:model`. A client label missing its
+        // version is still a client, and reading it as one beats falling back
+        // to the raw string with the prefix still on it.
+        let (name, rest) = client.split_once('/').unwrap_or((client, ""));
+        let model = rest.split_once(':').map(|(_, model)| model);
+        Self::Client { name, model }
+    }
+}
+
+impl std::fmt::Display for ActorLabel<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::User => formatter.write_str("user"),
+            Self::Client {
+                name,
+                model: Some(model),
+            } => write!(formatter, "{name} · {model}"),
+            Self::Client { name, model: None } => formatter.write_str(name),
+            Self::Named(actor) => formatter.write_str(actor),
+        }
+    }
+}
+
+#[cfg(test)]
+mod actor_label_tests {
+    use super::ActorLabel;
+
+    #[test]
+    fn every_shape_of_the_open_actor_vocabulary_reads() {
+        assert_eq!(ActorLabel::parse("user"), ActorLabel::User);
+        assert_eq!(
+            ActorLabel::parse("client:claude-code/2.1.247:opus").to_string(),
+            "claude-code · opus"
+        );
+        assert_eq!(
+            ActorLabel::parse("client:author_score/0").to_string(),
+            "author_score"
+        );
+        assert_eq!(
+            ActorLabel::parse("claude-opus-5").to_string(),
+            "claude-opus-5"
+        );
+        assert_eq!(ActorLabel::parse("agent").to_string(), "agent");
+    }
+}

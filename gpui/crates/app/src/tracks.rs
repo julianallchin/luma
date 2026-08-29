@@ -22,18 +22,65 @@
 //! native host just reads the file, so `img(path)` is the whole story and
 //! GPUI's image cache handles the decode and the lazy load.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use luma_ui::ladder;
+use luma_ui::float::{self, RowState};
 use luma_ui::node::{AgentNode, Instrument, Role};
+use luma_ui::{ladder, motion};
 
 use luma_lib::models::tracks::TrackBrowserRow;
 use luma_lib::models::venues::Venue;
 
 use crate::Luma;
+
+pub(crate) mod scores;
+
+/// Which of the sidebar's two levels the column is showing.
+///
+/// A *level*, not a screen: both are the same column showing the same
+/// person's library at two depths, and the way between them is one gesture
+/// with one reverse. Keeping them in one enum is what makes "the sidebar is
+/// somewhere" a single fact — the filters, the search and the scroll offset
+/// all belong to [`Level::Tracks`] and travel with it.
+pub(crate) enum Level {
+    Tracks,
+    /// Boxed for the reason [`crate::Luma::sign_in`] is: the deep level
+    /// carries a whole track row and a listing, and the shallow one is the
+    /// state the sidebar is in for most of a session.
+    Scores(Box<scores::Scores>),
+}
+
+/// Which way a level change is travelling.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    /// Into the scores: the tracks leave left, the scores arrive from the right.
+    In,
+    /// Back out again — the exact reverse.
+    Out,
+}
+
+/// A level change in flight.
+///
+/// Driven by hand off the wall clock rather than by `with_animation`, for the
+/// reason [`luma_ui::pane::PaneWidth`] states: gpui keys an animation
+/// element's start time by its element-id path, so any remount above it
+/// replays the tween from zero — and a virtualized row list remounts
+/// constantly.
+pub(crate) struct Push {
+    direction: Direction,
+    /// Where the flying track row starts (or ends, popping): the top of its
+    /// list row, in pixels from the top of the pushing region.
+    ///
+    /// Snapshotted at the gesture rather than derived per frame, because the
+    /// list it was measured in is sliding away underneath the flight.
+    row_top: f32,
+    started: Instant,
+}
 
 /// Which tracks the ownership filter admits. Mutually exclusive, and `Mine` is
 /// the default the web browser opens with.
@@ -103,6 +150,19 @@ pub struct Tracks {
     /// itself rather than the sidebar region generically.
     venue_focus: FocusHandle,
     search_focus: FocusHandle,
+    /// Which level the column is on, and the change taking it there.
+    pub(crate) level: Level,
+    push: Option<Push>,
+    /// The row list's scroll offset, which the shared element's start position
+    /// is measured against — a row's `y` is its index times [`ROW_HEIGHT`]
+    /// plus this.
+    list_scroll: UniformListScrollHandle,
+    /// The pushing region's box and the list viewport's, as they painted last.
+    /// A click carries a window position but not the boxes it landed in, so
+    /// the two that the flight's arithmetic needs are probed — see
+    /// [`luma_ui::arg::bounds_probe`].
+    region: Rc<Cell<Option<Bounds<Pixels>>>>,
+    list_box: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 impl Tracks {
@@ -167,6 +227,97 @@ impl Tracks {
 
     fn refilter(&mut self) {
         self.shown = self.filter().into();
+    }
+
+    /// Push to `level`, with the shared element starting at `row_top`.
+    ///
+    /// Under reduced motion the column simply *is* on the new level: no
+    /// flight, no ghost, nothing to wait for — the same rule
+    /// [`luma_ui::pane::PaneWidth::retarget`] applies to a sliding region.
+    fn enter(&mut self, level: scores::Scores, row_top: f32, cx: &App) {
+        self.level = Level::Scores(Box::new(level));
+        self.push = (!motion::reduced_motion(cx)).then(|| Push {
+            direction: Direction::In,
+            row_top,
+            started: Instant::now(),
+        });
+    }
+
+    /// Pop back to the track list. The flight is the entrance's exact reverse,
+    /// so it reads the row's original position back out of the push it is
+    /// undoing rather than measuring a list that is not on screen.
+    fn leave(&mut self, cx: &App) {
+        if !matches!(self.level, Level::Scores(_)) {
+            return;
+        }
+        if motion::reduced_motion(cx) {
+            self.level = Level::Tracks;
+            self.push = None;
+            return;
+        }
+        let row_top = self.push.as_ref().map_or_else(
+            || self.row_top(self.flying_index().unwrap_or(0)),
+            |push| push.row_top,
+        );
+        self.push = Some(Push {
+            direction: Direction::Out,
+            row_top,
+            started: Instant::now(),
+        });
+    }
+
+    /// How far the column is towards the scores level: 0 is the track list, 1
+    /// is the scores, and anything between is a push in flight.
+    fn progress(&self) -> f32 {
+        let Some(push) = &self.push else {
+            return match self.level {
+                Level::Tracks => 0.,
+                Level::Scores(_) => 1.,
+            };
+        };
+        let eased = motion::exit_progress(&motion::PUSH, push.started);
+        match push.direction {
+            Direction::In => eased,
+            Direction::Out => 1. - eased,
+        }
+    }
+
+    /// Whether the level change has arrived, so the frame after it can drop
+    /// the bookkeeping and stop asking for frames.
+    fn push_settled(&self) -> bool {
+        self.push
+            .as_ref()
+            .is_some_and(|push| motion::exit_progress(&motion::PUSH, push.started) >= 1.)
+    }
+
+    /// The track the shared element is carrying, while one is in flight.
+    fn flying(&self) -> Option<&TrackBrowserRow> {
+        let Level::Scores(level) = &self.level else {
+            return None;
+        };
+        self.push.as_ref().map(|_| &level.track)
+    }
+
+    /// Where the flying row's list position is, in pixels from the top of the
+    /// pushing region. `index` is a position in [`Self::shown`], which is what
+    /// the list draws.
+    fn row_top(&self, index: usize) -> f32 {
+        let (Some(region), Some(list)) = (self.region.get(), self.list_box.get()) else {
+            return 0.;
+        };
+        let offset = f32::from(self.list_scroll.0.borrow().base_handle.offset().y);
+        f32::from(list.origin.y - region.origin.y) + index as f32 * ROW_HEIGHT + offset
+    }
+
+    /// The scores level's track, as an index into the rows currently shown —
+    /// the position a pop with no entrance to reverse would fly back to.
+    fn flying_index(&self) -> Option<usize> {
+        let Level::Scores(level) = &self.level else {
+            return None;
+        };
+        self.shown
+            .iter()
+            .position(|row| self.rows[*row].id == level.track.id)
     }
 }
 
@@ -246,6 +397,11 @@ impl Luma {
             user: self.library.user_id(),
             venue_focus: cx.focus_handle().tab_stop(true),
             search_focus,
+            level: Level::Tracks,
+            push: None,
+            list_scroll: UniformListScrollHandle::new(),
+            region: Rc::new(Cell::new(None)),
+            list_box: Rc::new(Cell::new(None)),
         });
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -269,6 +425,96 @@ impl Luma {
             let _ = remember.await;
         })
         .detach();
+    }
+
+    /// Enter the scores level for the row at `index` of what the list is
+    /// showing. The index, not the id, because the flight starts at the row's
+    /// *place* — and two rows of the same track cannot be on screen at once.
+    fn push_scores(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(browser) = &self.sidebar else {
+            return;
+        };
+        let Some(track) = browser
+            .shown
+            .get(index)
+            .map(|row| browser.rows[*row].id.clone())
+        else {
+            return;
+        };
+        let row_top = browser.row_top(index);
+        // Going into a track's scores *is* picking that track: the strip and
+        // the stage are scoped to the pick, and a column reading one track
+        // while they read another was the disagreement this avoids. Setting
+        // the field is the whole gesture — the scope is synced at draw
+        // ([`crate::Luma::sync_workspace_scope`]).
+        self.selected_track = Some(track.clone());
+        self.show_scores(&track, row_top, window, cx);
+    }
+
+    /// `→` in the sidebar: into the picked track's scores.
+    ///
+    /// The picked track rather than a focused row, because the list is
+    /// virtualized and its rows carry no focus handles — the pick is the one
+    /// notion of "the row this column is currently about" that survives a
+    /// scroll.
+    pub(crate) fn enter_selected_scores(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(browser) = &self.sidebar else {
+            return;
+        };
+        if matches!(browser.level, Level::Scores(_)) {
+            return;
+        }
+        let Some(picked) = self.selected_track.as_deref() else {
+            return;
+        };
+        let Some(index) = browser
+            .shown
+            .iter()
+            .position(|row| browser.rows[*row].id == picked)
+        else {
+            return;
+        };
+        self.push_scores(index, window, cx);
+    }
+
+    /// Pop back to the track list. Escape reaches this through
+    /// [`Luma::dismiss_overlay`] — one dismissal ladder, innermost first.
+    pub(crate) fn leave_scores(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(browser) = &mut self.sidebar else {
+            return false;
+        };
+        if !matches!(browser.level, Level::Scores(_)) {
+            return false;
+        }
+        browser.leave(cx);
+        cx.notify();
+        true
+    }
+
+    /// Retire a finished level change and keep an unfinished one drawing.
+    ///
+    /// Called once per frame from the shell, before the sidebar is rendered
+    /// immutably — the same place and for the same reason the sidebar's own
+    /// width tween is stepped there.
+    pub(crate) fn tick_sidebar_push(&mut self, window: &mut Window) {
+        let Some(browser) = &mut self.sidebar else {
+            return;
+        };
+        if browser.push.is_none() {
+            return;
+        }
+        if browser.push_settled() {
+            if browser
+                .push
+                .as_ref()
+                .is_some_and(|push| push.direction == Direction::Out)
+            {
+                browser.level = Level::Tracks;
+            }
+            browser.push = None;
+        } else {
+            window.request_animation_frame();
+        }
     }
 
     fn show_ownership(&mut self, ownership: Ownership, cx: &mut Context<Self>) {
@@ -358,17 +604,34 @@ const GAP: f32 = 8.;
 const PAD_X: f32 = 12.;
 /// The coverage dot's box, matching the web side's `w-1.5 h-1.5`.
 const DOT: f32 = 6.;
+/// The trailing slot a track row reserves for its chevron.
+const CHEVRON_SLOT: f32 = 20.;
 /// The album-art thumbnail's box, and the row's second lead. Square, so the
 /// placeholder and a loaded cover occupy the same rect and a row cannot change
 /// shape when its art arrives.
 const ART: f32 = 32.;
 
-/// The sidebar: the venue's name (the way back to the picker), the search,
-/// the filters, and the venue's tracks as a row list.
-/// `selected` is the picked track, which is *not* the same as the open editor
-/// tab: the pick is what the strip and the stage are scoped to, and it survives
-/// closing that track's tabs.
-pub fn sidebar(state: &Tracks, selected: Option<&str>, app: &Entity<Luma>, window: &Window) -> Div {
+/// The sidebar: the two levels, the push between them, and the account at the
+/// foot.
+///
+/// Takes the whole shell rather than the browser alone, because the column's
+/// two ends are about different things: the levels are the venue's, the foot
+/// is the person's — and the foot is *outside* the pushing region for exactly
+/// that reason. The picked track comes from there too — it is not the same as
+/// the open editor tab: the pick is what the strip and the stage are scoped
+/// to, and it survives closing that track's tabs.
+///
+/// # The push
+///
+/// Both levels are laid out at the column's full width and offset along one
+/// axis, so neither reflows while it travels. The track row the gesture named
+/// is drawn *once*, over both, flying from its place in the list to the head
+/// of the arriving level — which is why the two share a horizontal inset and
+/// a row height: the shared element then travels in `y` alone, and there is no
+/// box interpolation to get wrong.
+pub fn sidebar(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+    let t = state.progress();
+    let travel = crate::shell::SIDEBAR_WIDTH;
     div()
         .size_full()
         .flex()
@@ -376,6 +639,75 @@ pub fn sidebar(state: &Tracks, selected: Option<&str>, app: &Entity<Luma>, windo
         // Glass tier: the sidebar sits transparent on the shell's frost —
         // depth comes from the content cards beside it, not from a fill.
         .text_color(luma_ui::glass::ink(0.85))
+        .child(
+            div()
+                .flex_1()
+                .min_h(px(0.))
+                .relative()
+                .overflow_hidden()
+                .child(luma_ui::arg::bounds_into(&state.region))
+                // Each level is mounted only while it is on screen. A level
+                // parked off the edge at zero opacity is not merely wasted
+                // layout: it is still in the accessibility tree and still a
+                // tab stop, so the column would answer for two subjects at
+                // once.
+                .children((t < 1.).then(|| {
+                    sliding(-travel * t, 1. - t).child(tracks_level(shell, state, app, window))
+                }))
+                .children(match &state.level {
+                    Level::Scores(level) => Some(sliding(travel * (1. - t), t).child(
+                        scores::level(shell, state, level, app, window, state.push.is_some()),
+                    )),
+                    Level::Tracks => None,
+                })
+                .children(flight(state, t))
+                // A column mid-flight answers no pointer — the same rule a
+                // leaving dialog follows, and for the same reason: the thing
+                // under the cursor is not where it appears to be.
+                .when(state.push.is_some(), |el| {
+                    el.child(div().absolute().inset_0().occlude())
+                }),
+        )
+        .child(account_foot(shell, app, window))
+}
+
+/// One level, at its offset along the push. Laid out at the column's full
+/// width whatever the offset, so a travelling level never re-wraps.
+fn sliding(x: f32, opacity: f32) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(x))
+        .w(px(crate::shell::SIDEBAR_WIDTH))
+        .flex()
+        .flex_col()
+        .when(opacity < 1., |el| el.opacity(opacity.max(0.)))
+}
+
+/// The shared element: the track row itself, over both levels, on its way
+/// between its place in the list and the head of the scores.
+fn flight(state: &Tracks, t: f32) -> Option<Div> {
+    let track = state.flying()?;
+    let push = state.push.as_ref()?;
+    Some(
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(px(motion::lerp(push.row_top, scores::BACK_ROW_HEIGHT, t)))
+            .child(track_face(track, true)),
+    )
+}
+
+/// The track list itself: the venue's name (the way back to the picker), the
+/// search, the filters, and the rows.
+fn tracks_level(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
+    let flying = state.flying().map(|track| track.id.as_str());
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
         .child(head(state, app, window))
         .child(filters(state, app, window))
         .child(match &state.error {
@@ -394,9 +726,170 @@ pub fn sidebar(state: &Tracks, selected: Option<&str>, app: &Entity<Luma>, windo
                 },
                 ladder::muted_foreground(),
             ),
-            None => body(state, selected, app).into_any_element(),
+            None => body(state, shell.selected_track.as_deref(), flying, app).into_any_element(),
         })
 }
+
+/// What the foot says when nobody is signed in — the guest namespace, which is
+/// a working library and not a failure. One spelling, shared with the settings
+/// screen's account row.
+pub(crate) const GUEST_ACCOUNT: &str = "Working locally";
+
+/// The account, at the foot of the sidebar: who this library belongs to, and
+/// the door to the two things that can be done about it.
+///
+/// It is here rather than in a corner of the window because it is the one
+/// control that is *about the person* rather than about the venue — and
+/// because a corner control shares its band with the tab strip, which means a
+/// narrow window has to choose between them. The sidebar's own column always
+/// has a bottom edge.
+fn account_foot(shell: &Luma, app: &Entity<Luma>, window: &Window) -> Div {
+    let label = shell
+        .library
+        .account()
+        .map_or_else(|| GUEST_ACCOUNT.to_string(), |a| a.label().to_string());
+    let toggle = app.clone();
+    let keyed = app.clone();
+    let focus = shell.account_focus.clone();
+    div()
+        .flex()
+        .flex_shrink_0()
+        .flex_col()
+        // No fill of its own. The sidebar's tone is painted once, by the
+        // region (`glass::tone_column`); a second wash down here would read as
+        // a plane bolted to the bottom of the column rather than the end of
+        // it. The hairline is the whole separation.
+        .border_t_1()
+        .border_color(luma_ui::glass::hairline(0.07))
+        .px(px(PAD_X - float::ROW_INSET))
+        .py(px(6.))
+        .child(
+            float::nav_row(RowState::Rest, "account-foot")
+                .id("account")
+                .track_focus(&shell.account_focus)
+                .tab_stop(true)
+                .on_key_down(move |event, _, cx| {
+                    if event.keystroke.key == "enter" {
+                        keyed.update(cx, |this, cx| this.toggle_account_menu(cx));
+                    }
+                })
+                .on_click(move |_, window, cx| {
+                    window.focus(&focus, cx);
+                    toggle.update(cx, |this, cx| this.toggle_account_menu(cx));
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(luma_ui::glass::ink(0.72))
+                        .child(label.clone())
+                        .agent_node(Role::Text, label),
+                )
+                .child(
+                    gpui_component::Icon::new(gpui_component::IconName::ChevronUp)
+                        .size(px(11.))
+                        .text_color(luma_ui::glass::ink(0.45)),
+                )
+                .children(account_menu(shell, app))
+                // Named for what it is, not for whose it is: the address
+                // beside it is a value that changes with the session, and a
+                // control addressed by its value cannot be found before the
+                // session is known.
+                .agent_node(Role::Button, "Account")
+                .agent_focused(shell.account_focus.is_focused(window)),
+        )
+        .children(account_failure(shell))
+}
+
+/// What a sign-out that could not land says, under the row it was pressed on.
+///
+/// The settings screen shows the same string, but a person who never opened
+/// settings pressed this gesture from the foot — and a gesture whose only
+/// report lives on a screen they are not on is a gesture that silently does
+/// nothing. Both doors, one message; the error is on [`crate::Luma`] rather
+/// than on either screen for exactly this reason.
+fn account_failure(shell: &Luma) -> Option<AnyElement> {
+    let error = shell.account_action.error.clone()?;
+    Some(
+        div()
+            .px(px(float::ROW_INSET))
+            .pt(px(4.))
+            .text_size(px(11.))
+            .text_color(ladder::danger())
+            .child(error.clone())
+            .agent_node(Role::Text, error)
+            .into_any_element(),
+    )
+}
+
+/// The menu the foot opens, above it — the two things there are to do about an
+/// account. An actions menu, not a value picker: each row goes somewhere.
+///
+/// A child of the trigger, so [`float::anchored_above`] has an edge to hang
+/// from, and a [`luma_ui::dialog::Popup`] so it leaves with the same motion
+/// every other menu in the app does.
+fn account_menu(shell: &Luma, app: &Entity<Luma>) -> Option<AnyElement> {
+    shell.account_menu.get()?;
+    let closing = shell.account_menu.closing_since();
+    let identity = if shell.account_action.signing_out {
+        "Signing out…"
+    } else if shell.library.user_id().is_some() {
+        "Sign out"
+    } else {
+        "Sign in"
+    };
+    let pressable = closing.is_none() && !shell.account_action.signing_out;
+    let dismiss = app.clone();
+    let settings = app.clone();
+    let switch = app.clone();
+    let card = float::popover_card()
+        .w(px(ACCOUNT_MENU_WIDTH))
+        .child(
+            float::menu_row(RowState::Rest, "account-settings")
+                .id("account-settings")
+                .when(closing.is_none(), |row| {
+                    row.on_click(move |_, _, cx| {
+                        settings.update(cx, |this, cx| {
+                            this.close_account_menu(cx);
+                            this.open_settings(cx);
+                        });
+                    })
+                })
+                .child(div().flex_1().min_w_0().child("Settings"))
+                // The chord is the other door to this row, and saying so here
+                // is the only place a person meets it.
+                .child(float::key_cap().child("⌘,"))
+                .agent_node(Role::Row, "Settings"),
+        )
+        .child(
+            float::menu_row(RowState::Rest, "account-identity")
+                .id("account-identity")
+                .when(pressable, |row| {
+                    row.on_click(move |_, _, cx| {
+                        switch.update(cx, |this, cx| {
+                            this.close_account_menu(cx);
+                            this.switch_identity(cx);
+                        });
+                    })
+                })
+                .child(div().flex_1().min_w_0().child(identity))
+                .agent_node(Role::Row, identity)
+                .agent_disabled(!pressable),
+        );
+    Some(float::anchored_above(
+        "account-menu",
+        float::NAV_ROW_HEIGHT,
+        float::Dismiss::on_press_out(move |_, cx| {
+            dismiss.update(cx, |this, cx| this.close_account_menu(cx));
+        }),
+        card.into_any_element(),
+    ))
+}
+
+/// Wide enough for the longer of the two rows plus its key cap, and no wider:
+/// a menu of two words that spanned the sidebar would read as a panel.
+const ACCOUNT_MENU_WIDTH: f32 = 200.0;
 
 /// The venue at the head of the sidebar. Pressing it reopens the venue picker
 /// — the picker overlay is the one venue-choosing mechanism, so the head is a
@@ -587,29 +1080,46 @@ fn in_venue_filter(state: &Tracks, app: &Entity<Luma>) -> Div {
 /// thousands costs one screenful of elements — the same reason the web side
 /// runs a virtualizer. Everything the closure needs is refcounted, so a redraw
 /// copies two pointers rather than the library.
-fn body(state: &Tracks, selected: Option<&str>, app: &Entity<Luma>) -> Div {
+///
+/// The viewport's box is probed rather than derived from the chrome above it:
+/// the push measures a row's `y` against it, and a constant restating the
+/// head's and the filters' heights is a constant that drifts the first time
+/// either is retuned.
+fn body(state: &Tracks, selected: Option<&str>, flying: Option<&str>, app: &Entity<Luma>) -> Div {
     let rows = Rc::clone(&state.rows);
     let shown = Rc::clone(&state.shown);
     let app = app.clone();
     let selected = selected.map(str::to_string);
-    div().flex_1().overflow_hidden().child(
-        uniform_list("tracks", shown.len(), move |range, _, _| {
-            range
-                .map(|index| {
-                    let row = &rows[shown[index]];
-                    let picked = selected.as_deref() == Some(row.id.as_str());
-                    track_row(row, picked, &app)
-                })
-                .collect()
-        })
-        .size_full(),
-    )
+    let flying = flying.map(str::to_string);
+    div()
+        .flex_1()
+        .min_h(px(0.))
+        .relative()
+        .overflow_hidden()
+        .child(luma_ui::arg::bounds_into(&state.list_box))
+        .child(
+            uniform_list("tracks", shown.len(), move |range, _, _| {
+                range
+                    .map(|index| {
+                        let row = &rows[shown[index]];
+                        let picked = selected.as_deref() == Some(row.id.as_str());
+                        let flew = flying.as_deref() == Some(row.id.as_str());
+                        track_row(row, index, picked, flew, &app)
+                    })
+                    .collect()
+            })
+            .track_scroll(&state.list_scroll)
+            .size_full(),
+        )
 }
 
-fn track_row(track: &TrackBrowserRow, picked: bool, app: &Entity<Luma>) -> AnyElement {
-    let name = track_name(track);
-    let opened = app.clone();
-    let track_id = track.id.clone();
+/// One track as the column draws it wherever it appears: in the list, at the
+/// head of its scores, and in flight between the two.
+///
+/// Shared so the push has something to *be*. Two spellings of this row would
+/// make the shared element a lookalike rather than the same object, and the
+/// flight would read as a cross-fade between two similar things.
+fn track_face(track: &TrackBrowserRow, lit: bool) -> Div {
     let artist = track
         .artist
         .clone()
@@ -618,9 +1128,7 @@ fn track_row(track: &TrackBrowserRow, picked: bool, app: &Entity<Luma>) -> AnyEl
         Some(bpm) => format!("{artist} · {bpm:.1}"),
         None => artist,
     };
-    let membership = format!("{name} venue scores: {}", track.venue_score_count);
     div()
-        .id(SharedString::from(track.id.clone()))
         .w_full()
         .h(px(ROW_HEIGHT))
         .flex()
@@ -628,28 +1136,18 @@ fn track_row(track: &TrackBrowserRow, picked: bool, app: &Entity<Luma>) -> AnyEl
         .gap(px(GAP))
         .px(px(PAD_X))
         .overflow_hidden()
-        .on_click(move |_, _, cx| {
-            let track_id = track_id.clone();
-            opened.update(cx, |this, cx| this.open_track(&track_id, cx));
-        })
-        // Comet's selection recipe, from the one place it is written down:
-        // hover and selection share the *fill*, and only the picked row also
-        // carries the inset ring. Two fills would make a hovered row and the
-        // picked row compete for one reading, and the moment the pointer rests
-        // on the picked row they would have to resolve into one anyway.
-        .rounded(px(luma_ui::radius::ROW))
-        .when(picked, |row| {
-            row.bg(luma_ui::glass::card_selected_bg())
-                .shadow(luma_ui::glass::card_selected_shadows())
-        })
-        .when(!picked, |row| {
-            row.hover(|row| row.bg(luma_ui::glass::glass_hover()))
-        })
+        // The lead column: how much of the track this venue has annotated,
+        // and — when there is more than nothing — how many scores say so. The
+        // count is the second level's subject stated at sidebar width, so a
+        // track two people have scored is legible before it is opened.
         .child(
             div()
                 .flex_shrink_0()
-                .w(px(DOT))
-                .children(coverage_dot(track)),
+                .flex()
+                .items_center()
+                .gap(px(3.))
+                .children(coverage_dot(track))
+                .children(score_count(track)),
         )
         .child(album_art(track.album_art_path.as_deref(), ART))
         .child(
@@ -672,18 +1170,84 @@ fn track_row(track: &TrackBrowserRow, picked: bool, app: &Entity<Luma>) -> AnyEl
                         // The picked row is the one the whole workspace is
                         // scoped to, so it carries full ink; the rest sit back
                         // as a quiet list. This is the only weight difference —
-                        // the ring above already says which row is picked, and
-                        // a second louder signal would just be shouting.
-                        .text_color(luma_ui::glass::ink(if picked { 0.95 } else { 0.72 }))
-                        .child(name.clone()),
+                        // the ring already says which row is picked, and a
+                        // second louder signal would just be shouting.
+                        .text_color(luma_ui::glass::ink(if lit { 0.95 } else { 0.72 }))
+                        .child(track_name(track)),
                 )
                 .child(
                     div()
                         .truncate()
                         .text_size(px(10.))
                         .text_color(luma_ui::glass::ink(0.45))
-                        .child(sub)
-                        .agent_node(Role::Text, membership),
+                        .child(sub.clone())
+                        .agent_node(Role::Text, sub),
+                ),
+        )
+        // The trailing slot the list row's chevron sits in, reserved on every
+        // face so the head and the list row are the *same box* — the shared
+        // element then travels in `y` alone. Empty at the head, which is the
+        // price of that and cheaper than interpolating a width.
+        .child(div().flex_shrink_0().w(px(CHEVRON_SLOT)))
+}
+
+/// One list row: the track, the gesture on it, and the selection ring.
+///
+/// The row is a door to the track's *documents*, not to a timeline: pressing
+/// it pushes to the scores level, where choosing which score the editor opens
+/// is a deliberate act rather than a guess at which one you meant. The chevron
+/// is the hint that the row goes somewhere, and is drawn — not pressed. One
+/// row, one target.
+fn track_row(
+    track: &TrackBrowserRow,
+    index: usize,
+    picked: bool,
+    flying: bool,
+    app: &Entity<Luma>,
+) -> AnyElement {
+    let name = track_name(track);
+    let deeper = app.clone();
+    div()
+        .id(SharedString::from(track.id.clone()))
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .relative()
+        .flex()
+        .items_center()
+        .on_click(move |_, window, cx| {
+            deeper.update(cx, |this, cx| this.push_scores(index, window, cx));
+        })
+        // Comet's selection recipe, from the one place it is written down:
+        // hover and selection share the *fill*, and only the picked row also
+        // carries the inset ring. Two fills would make a hovered row and the
+        // picked row compete for one reading, and the moment the pointer rests
+        // on the picked row they would have to resolve into one anyway.
+        .rounded(px(luma_ui::radius::ROW))
+        .when(picked, |row| {
+            row.bg(luma_ui::glass::card_selected_bg())
+                .shadow(luma_ui::glass::card_selected_shadows())
+        })
+        .when(!picked, |row| {
+            row.hover(|row| row.bg(luma_ui::glass::glass_hover()))
+        })
+        // The row the shared element is carrying is drawn by the flight, not
+        // here — one track, one row on screen.
+        .child(track_face(track, picked).when(flying, |face| face.opacity(0.)))
+        // Silkscreen, not a control: the whole row is the door, so a second
+        // hit target here would be two ways to say one thing — and a chevron
+        // that could be pressed *separately* is a promise that it does
+        // something else.
+        .child(
+            div()
+                .absolute()
+                .right(px(PAD_X - 2.))
+                .size(px(CHEVRON_SLOT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(luma_ui::glass::ink(if picked { 0.6 } else { 0.35 }))
+                .child(
+                    gpui_component::Icon::new(gpui_component::IconName::ChevronRight).size(px(11.)),
                 ),
         )
         .agent_node(Role::Row, name)
@@ -736,6 +1300,33 @@ fn track_name(track: &TrackBrowserRow) -> String {
 /// flag lives only in a frontend store, never in the library, so this host
 /// cannot know it — and a dot that silently said "uncovered" for it would be
 /// worse than one state fewer.
+/// How many scores this venue holds for the track, when it holds any.
+///
+/// Zero draws nothing rather than a `0`: the row's lead is a status column,
+/// and a column of zeros reads as data when it is really the absence of any.
+/// This is the only place the count is spelled — the automation label is this
+/// element's, so a script and a pair of eyes cannot be told different numbers.
+fn score_count(track: &TrackBrowserRow) -> Option<impl IntoElement> {
+    let count = track.venue_score_count;
+    if count <= 0 {
+        return None;
+    }
+    Some(
+        div()
+            .flex_shrink_0()
+            .text_size(px(9.))
+            .font_weight(FontWeight::BOLD)
+            .text_color(luma_ui::glass::ink(0.45))
+            .child(format!("{count}"))
+            // Track-scoped, because a script finds nodes across the whole
+            // tree and a bare count would match every row at once.
+            .agent_node(
+                Role::Text,
+                format!("{} venue scores: {count}", track_name(track)),
+            ),
+    )
+}
+
 fn coverage_dot(track: &TrackBrowserRow) -> Option<Div> {
     let duration = track.duration_seconds.filter(|seconds| *seconds > 0.)?;
     let covered = (track.venue_annotation_coverage_seconds / duration).clamp(0., 1.);
