@@ -19,11 +19,9 @@
 use super::support;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_agent::{Harness, Mode};
-use image::RgbaImage;
 use serde_json::Value;
 use support::{Clip, Fixture};
 
@@ -78,10 +76,10 @@ fn the_clip_body_paints_the_heatmap_rather_than_a_flat_fill() {
     let result = harness.exec(&support::script(SCRIPT), Duration::from_secs(600));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
-    let (path, image) = keep(&out["shot"], "clip-body");
+    let (path, image) = support::image::keep_in("clip-preview", &out["shot"], "clip-body");
     // Kept beside the body shot, for eyes rather than assertions: the whole
     // timeline wearing its previews, one clip selected.
-    let (window, _) = keep(&out["window"], "timeline");
+    let (window, _) = support::image::keep_in("clip-preview", &out["window"], "timeline");
     eprintln!(
         "clip preview shots:\n  body: {}\n  window: {}",
         path.display(),
@@ -122,18 +120,4 @@ fn the_clip_body_paints_the_heatmap_rather_than_a_flat_fill() {
         levels.len(),
         path.display(),
     );
-}
-
-/// Copy the shot somewhere stable and decode it, so a failing assertion names
-/// a path that still exists — the harness deletes its own directory.
-fn keep(shot: &Value, name: &str) -> (PathBuf, RgbaImage) {
-    let source = shot["path"].as_str().expect("a shot has a path");
-    let directory = std::env::temp_dir().join("luma-clip-preview");
-    std::fs::create_dir_all(&directory).expect("failed to create the shot directory");
-    let kept = directory.join(format!("{name}.png"));
-    std::fs::copy(source, &kept).expect("failed to keep the shot");
-    let image = image::open(&kept)
-        .expect("the harness wrote a shot that is not an image")
-        .to_rgba8();
-    (kept, image)
 }
