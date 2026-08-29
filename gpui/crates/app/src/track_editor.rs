@@ -135,11 +135,11 @@ use crate::shell::Body;
 use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
-mod strip;
+mod sheet;
 
 /// The subset ladder and its reading, shared with the fixture picker so the
 /// two surfaces cannot offer different rungs.
-pub(crate) use strip::{subset_label, SUBSETS};
+pub(crate) use sheet::{subset_label, SUBSETS};
 
 // -- state --------------------------------------------------------------------
 
@@ -156,6 +156,16 @@ pub struct Editor {
     /// track this venue has never annotated — there is no score to edit then,
     /// and the web app shows the same empty lanes.
     score: Option<Score>,
+    /// Whether anything has yet decided what this tab is showing — set by
+    /// [`rebase`], which is the only thing that ever writes [`Self::score`].
+    ///
+    /// Not derivable from `score.is_none()`, and that is the whole point: "no
+    /// score chosen yet" and "chosen to be on none, because the score was
+    /// deleted" are different facts, and the tab's own opening read lands
+    /// *after* both. Without this latch a delete raced the initial listing and
+    /// the timeline reopened the document that had just been archived — with a
+    /// listing taken before it was.
+    score_chosen: bool,
     waveform: Option<Rc<TrackWaveform>>,
     /// The measured envelope of the range on screen, at a bucket per pixel.
     /// `None` until the zoom outruns the stored envelope and the seam answers
@@ -269,16 +279,45 @@ pub struct Editor {
     /// landed later lighting the rig, and that is not necessarily the later
     /// edit. The reconcile re-issues from what it sees when this clears.
     compositing: bool,
-    /// The args inspector under the timeline — see [`strip`].
-    strip: strip::Strip,
+    /// The args inspector over the timeline's right edge — see [`sheet`].
+    sheet: sheet::State,
 }
 
-/// The score being edited, and whether this host owns it.
-struct Score {
-    id: String,
+/// The score being edited, how it is spoken about, and whether this host owns
+/// it.
+///
+/// Minted by the sidebar's scores level ([`crate::tracks::scores`]), which is
+/// the one place a listing row becomes an open document.
+#[derive(Clone)]
+pub(crate) struct Score {
+    pub(crate) id: String,
+    /// Its display ordinal within `(track, venue)` — the `#2` the sidebar and
+    /// the toolbar name it by. A position, not identity: [`Self::id`] is the
+    /// key.
+    pub(crate) ordinal: i64,
     /// Somebody else's score: visible, not writable. The web browser computes
     /// the same flag from `score.uid !== currentUserId`.
-    read_only: bool,
+    pub(crate) read_only: bool,
+}
+
+/// Point the editor at `score`, or at nothing, with none of the last one left
+/// behind.
+///
+/// `composited` is reset with the rest: it records what was last *sent to the
+/// rig*, and after a rebase the rig is holding another document's scene —
+/// keeping the old value would make the next reconcile compare against a list
+/// that is not on the timeline any more and skip the install.
+fn rebase(editor: &mut Editor, score: Option<Score>) {
+    editor.score = score;
+    editor.score_chosen = true;
+    editor.selected.clear();
+    editor.cursor = None;
+    editor.history = History::default();
+    editor.clipboard = None;
+    editor.clips = Vec::new().into();
+    editor.base = Vec::new().into();
+    editor.composited = None;
+    editor.dirty = false;
 }
 
 /// One clip, with everything a draw *and* a write need already resolved.
@@ -910,6 +949,21 @@ impl Editor {
         ))
     }
 
+    /// The room this timeline is being worked on in.
+    pub(crate) fn venue_id(&self) -> &str {
+        &self.venue_id
+    }
+
+    /// The score the stage above this timeline should be lit by — the open
+    /// document, which is this screen's own fact and nobody else's to derive.
+    pub(crate) fn lit(&self) -> Option<crate::visualizer::Lit> {
+        let score = self.score.as_ref()?;
+        Some(crate::visualizer::Lit {
+            score: score.id.clone(),
+            ordinal: score.ordinal,
+        })
+    }
+
     /// The range on screen, from the canvas the last frame painted.
     fn visible(&self) -> (f64, f64) {
         self.view.visible(f32::from(self.canvas.get().size.width))
@@ -1334,6 +1388,21 @@ impl Editor {
         if let Some((id, preview)) = Preview::decode(row, identity) {
             previews.insert(id, preview);
         }
+    }
+
+    /// Re-derive every clip's label from the patterns list.
+    ///
+    /// A label is a function of that list, and the list arrives on its own
+    /// schedule — a score opened before it landed resolves every clip to
+    /// `Pattern <uuid>` and, without this, never comes back. Relabelling
+    /// rather than re-resolving because the working copy may hold edits the
+    /// stored list has never seen; only the *name* is derived.
+    fn relabel(&mut self) {
+        let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
+        for clip in &mut clips {
+            clip.label = label_of(&clip.pattern, &self.patterns);
+        }
+        self.clips = clips.into();
     }
 
     /// Clear both the selection and the cursor: what a press on anything that
@@ -1812,14 +1881,7 @@ fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
         .map(|clip| Clip {
             id: clip.id.clone().into(),
             pattern: clip.pattern_id.clone().into(),
-            label: patterns
-                .iter()
-                .find(|pattern| pattern.id == clip.pattern_id)
-                .map_or_else(
-                    || format!("Pattern {}", clip.pattern_id),
-                    |pattern| pattern.name.clone(),
-                )
-                .into(),
+            label: label_of(&clip.pattern_id, patterns),
             color: ladder::pattern(&clip.pattern_id),
             start: clip.start_time,
             end: clip.end_time,
@@ -1829,6 +1891,19 @@ fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
             args: clip.args.clone(),
         })
         .collect()
+}
+
+/// What a clip is called: its pattern's name, or the id spelled out for a
+/// pattern the list does not have.
+fn label_of(pattern_id: &str, patterns: &[PatternSummary]) -> SharedString {
+    patterns
+        .iter()
+        .find(|pattern| pattern.id == pattern_id)
+        .map_or_else(
+            || format!("Pattern {pattern_id}"),
+            |pattern| pattern.name.clone(),
+        )
+        .into()
 }
 
 // -- navigation, gestures and writes ------------------------------------------
@@ -1876,7 +1951,7 @@ impl Luma {
 
         let waveform = self.library.track_waveform(track_id);
         let beats = self.library.track_beats(track_id);
-        let scores = self.library.scores_for_track(track_id, &venue_id);
+        let scores = self.library.scores_across_venues(track_id);
         let patterns = self.library.patterns();
         let audio = self.library.load_audio(track_id);
 
@@ -1919,9 +1994,10 @@ impl Luma {
             saving: false,
             error: None,
             loaded: false,
+            score_chosen: false,
             composited: None,
             compositing: false,
-            strip: strip::Strip::default(),
+            sheet: sheet::State::default(),
         });
         self.open_tab(target.clone(), move || Body::TrackEditor(state), cx);
 
@@ -1944,7 +2020,6 @@ impl Luma {
         })
         .detach();
 
-        let library = cx.entity();
         cx.spawn(async move |this, cx| {
             let waveform = waveform.await;
             let beats = beats.await;
@@ -1954,19 +2029,12 @@ impl Luma {
 
             let patterns = patterns.unwrap_or_default();
 
-            // The one dependent read: a clip list is keyed by a score id that
-            // only the score lookup knows.
-            let clips = match scores.as_ref().ok().and_then(|scores| scores.first()) {
-                Some(score) => Some(
-                    library
-                        .read_with(cx, |this, _| this.library.track_scores(&score.id))
-                        .await,
-                ),
-                None => None,
-            };
-
             this.update(cx, |this, cx| {
                 let user = this.library.user_id();
+                // Which score the timeline opens on, decided inside the tab
+                // edit and acted on outside it — the clip read is a second
+                // trip, and `edit_track_tab` holds the tab, not the app.
+                let mut open = None;
                 // Addressed to the tab the load was started for, not to
                 // whichever tab is visible when it lands.
                 this.edit_track_tab(&target, cx, |editor| {
@@ -1983,29 +2051,33 @@ impl Luma {
                         editor.error = Some(error.to_string());
                     }
                     match scores {
-                        Ok(scores) => {
-                            editor.score = scores.first().map(|score| Score {
-                                id: score.id.clone(),
-                                read_only: score.uid.is_some() && score.uid != user,
-                            });
+                        // The venue in hand, in the order the seam listed —
+                        // `scores.updated_at DESC`, which in practice is
+                        // creation order, because a clip write touches
+                        // `track_scores` and never bumps the score row (see
+                        // `list_scores_for_track`). Only when nothing has been
+                        // chosen yet: a gesture that named a *particular*
+                        // score got here first — or took one away — and this
+                        // listing must not overrule either. See
+                        // [`Editor::score_chosen`].
+                        Ok(summaries) if !editor.score_chosen => {
+                            open = crate::tracks::scores::rows(&summaries, user.as_deref())
+                                .iter()
+                                .find(|row| row.venue_id.as_ref() == editor.venue_id)
+                                .map(crate::tracks::scores::open_row);
                         }
+                        Ok(_) => {}
                         Err(error) => editor.error = Some(error.to_string()),
                     }
                     editor.patterns = Rc::new(patterns);
-                    match clips {
-                        Some(Ok(clips)) => {
-                            let clips: Vec<TrackClip> = clips.iter().map(TrackClip::from).collect();
-                            editor.clips = resolve(&clips, &editor.patterns);
-                            editor.base = clips.into();
-                            // What just loaded *is* what a watcher composites
-                            // from the score rows, so opening the screen owes
-                            // no install of its own — only an edit does.
-                            editor.composited = Some(Rc::clone(&editor.clips));
-                        }
-                        Some(Err(error)) => editor.error = Some(error.to_string()),
-                        None => {}
-                    }
+                    // The score may already be on the timeline: opening one
+                    // from the sidebar's scores level gets there before this
+                    // load does, and its clips resolved against an empty list.
+                    editor.relabel();
                 });
+                if let Some(score) = open {
+                    this.load_score(target.clone(), score, cx);
+                }
                 this.poll_transport(cx);
                 // A long track at the opening zoom can already be past the
                 // stored envelope's resolution, so the first measurement is
@@ -2018,6 +2090,100 @@ impl Luma {
             .ok();
         })
         .detach();
+    }
+
+    /// Show `score_id`'s clips on the timeline at `target`.
+    ///
+    /// The one way a score reaches the canvas: the first open takes it as
+    /// soon as the listing lands, and the rail takes it again on every
+    /// switch, so "which score am I looking at" has a single answer and a
+    /// single code path that sets it.
+    ///
+    /// Everything that was *about* the outgoing score goes with it — the
+    /// selection, the cursor, the undo stack, the clipboard. They name clip
+    /// ids that the arriving score does not contain, and carrying them over
+    /// would leave an undo that restores clips into a document they were
+    /// never in.
+    ///
+    /// The rig follows. The stage is lit by *this* score
+    /// ([`Editor::lit`]), so a switch here is a switch there — done by the
+    /// stage's own reconcile rather than from inside this call, which knows
+    /// nothing about whether a stage is even mounted.
+    pub(crate) fn load_score(&mut self, target: Target, score: Score, cx: &mut Context<Self>) {
+        // Whatever the outgoing score still owes goes out first. The write
+        // names its own score, so it lands on the document it was made
+        // against however long it takes to return.
+        self.commit_clips(cx);
+        let pending = self.library.track_scores(&score.id);
+        let score_id = score.id.clone();
+        self.edit_track_tab(&target, cx, |editor| rebase(editor, Some(score)));
+        cx.spawn(async move |this, cx| {
+            let clips = pending.await;
+            this.update(cx, |this, cx| {
+                this.edit_track_tab(&target, cx, |editor| {
+                    // The tab may have moved on — onto another score, or off
+                    // every score because this one was deleted while the read
+                    // was out. Either way this answer is about a document the
+                    // timeline is no longer showing, and neither its clips nor
+                    // its error belong here.
+                    if editor.score.as_ref().map(|open| open.id.as_str()) != Some(score_id.as_str())
+                    {
+                        return;
+                    }
+                    match clips {
+                        Ok(clips) => {
+                            let clips: Vec<TrackClip> = clips.iter().map(TrackClip::from).collect();
+                            editor.clips = resolve(&clips, &editor.patterns);
+                            editor.base = clips.into();
+                            editor.composited = Some(Rc::clone(&editor.clips));
+                        }
+                        Err(error) => editor.error = Some(error.to_string()),
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Which score the tab for `(track, venue)` is showing, if there is one.
+    ///
+    /// The sidebar's scores level asks this to decide which row wears the
+    /// selection ring: the open document is the editor's fact, not the
+    /// listing's, and a second copy of it in the sidebar would be a second
+    /// answer to the same question.
+    /// Take the editor off `score_id` if that is what it is showing, leaving it
+    /// in the same defined state a tab has before any score is chosen: no
+    /// score, no clips, nothing selected, and — through
+    /// [`Editor::lit`] — no scene on the rig.
+    ///
+    /// Called *before* the seam has answered the delete, deliberately. The
+    /// alternative is a timeline that keeps drawing a document that no longer
+    /// exists for as long as the round trip takes, and then blinks; "the score
+    /// is gone" is true the moment the operator agreed to it.
+    pub(crate) fn unload_score(&mut self, target: &Target, score_id: &str, cx: &mut Context<Self>) {
+        let showing = match self.workspace.body(target) {
+            Some(Body::TrackEditor(editor)) => editor
+                .score
+                .as_ref()
+                .is_some_and(|open| open.id == score_id),
+            _ => false,
+        };
+        if !showing {
+            return;
+        }
+        self.edit_track_tab(target, cx, |editor| rebase(editor, None));
+    }
+
+    pub(crate) fn open_score_id(&self, track_id: &str, venue_id: &str) -> Option<String> {
+        let target = Target::TrackEditor {
+            track: track_id.to_string(),
+            venue: venue_id.to_string(),
+        };
+        match self.workspace.body(&target)? {
+            Body::TrackEditor(editor) => editor.score.as_ref().map(|score| score.id.clone()),
+            _ => None,
+        }
     }
 
     /// Run `edit` against one editor tab, wherever it sits in the strip. The
@@ -2365,6 +2531,35 @@ impl Luma {
             Some(Body::TrackEditor(state)) => state.menu.take().is_some(),
             _ => false,
         }
+    }
+
+    /// Close whichever menu the args sheet has up, if it has one. `Escape`'s
+    /// first business once nothing is floating over the screen.
+    pub(crate) fn dismiss_sheet_menu(&mut self) -> bool {
+        match self.workspace.active_body_mut() {
+            Some(Body::TrackEditor(state)) => state.sheet.dismiss_menu(),
+            _ => false,
+        }
+    }
+
+    /// Clear the clip selection, if there is one — which is what sends the
+    /// args sheet away. Reported so `Escape` knows the key was spent.
+    ///
+    /// The sheet is not closed directly: it *is* the selection, rendered, and
+    /// a second way to dismiss it would be a state the timeline's own
+    /// highlight could disagree with.
+    pub(crate) fn clear_clip_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut cleared = false;
+        self.with_track_editor(cx, |editor| {
+            cleared = editor.sheet.is_open();
+            if cleared {
+                editor.deselect();
+            }
+        });
+        if cleared {
+            cx.notify();
+        }
+        cleared
     }
 
     /// Commit an insertion on the pattern the pointer chose.
@@ -2846,6 +3041,13 @@ impl Luma {
                 let mut refresh: Vec<SharedString> = Vec::new();
                 this.with_track_editor(cx, |editor| {
                     editor.saving = false;
+                    // A write belongs to the score it was made against. The
+                    // rail can put a different one on the timeline while this
+                    // is in the air, and adopting the returned list then would
+                    // overwrite the arriving score with the outgoing one's.
+                    if editor.score.as_ref().map(|open| open.id.as_str()) != Some(score.as_str()) {
+                        return;
+                    }
                     match result {
                         Ok(saved) => {
                             // The stored edit is what makes these renders
@@ -3170,8 +3372,13 @@ impl Layout {
 /// The comparison is the *scene's* inputs, not the list's identity: a write
 /// landing re-resolves the working copy into an equal list, and re-compiling
 /// for that would put one composite behind every save.
+///
+/// Which *document* is installed is not this reconcile's question — a score
+/// switch is the stage's ([`crate::visualizer::Visualizer::relight`]), which
+/// is also the only path that survives the editor tab not being the one on
+/// screen. This keeps the open score's scene abreast of edits to it.
 fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
-    if editor.compositing || editor.score.is_none() {
+    if editor.compositing {
         return;
     }
     let Some(last) = editor.composited.as_ref() else {
@@ -3182,11 +3389,15 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     }
     let sent = Rc::clone(&editor.clips);
     let clips: Vec<TrackClip> = sent.iter().map(Clip::to_track_clip).collect();
-    let (track, venue) = (editor.track_id.clone(), editor.venue_id.clone());
+    // Addressed to the score, so a working copy can never land on the document
+    // next to the one it was edited against.
+    let Some(score) = editor.score.as_ref().map(|score| score.id.clone()) else {
+        return;
+    };
     editor.compositing = true;
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| {
-            this.library.composite_track(&track, &venue, Some(clips))
+            this.library.composite_score(&score, Some(clips))
         }) else {
             return;
         };
@@ -3233,10 +3444,11 @@ pub fn track_editor(
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> Div {
-    // Reconcile the args strip against the selection before drawing it — the
+    // Reconcile the args sheet against the selection before drawing it — the
     // render pass is where every path that can move the subject converges,
-    // and the one place a `Window` is in hand to build its entities.
-    strip::sync(state, window, cx);
+    // and the one place a `Window` is in hand to build its entities and to
+    // ask for the slide's next frame.
+    let sheet_revealed = sheet::sync(state, window, cx);
     // …and the rig against the working copy, for the same reason: an edit is
     // only real once the scene it changed has been installed.
     sync_composite(state, cx);
@@ -3268,12 +3480,13 @@ pub fn track_editor(
                 .overflow_hidden()
                 .child(canvas_element(state, app))
                 .children(state.menu.map(|target| insert_menu(state, target, app)))
+                // The args inspector, over the timeline's right edge and
+                // inside the tab rather than on the app's overlay plane: it
+                // belongs to this screen, and it must not outlive a tab swap
+                // or paint over the shell's chrome.
+                .children(sheet::sheet(state, sheet_revealed, app))
                 .into_any_element(),
         })
-        // The args inspector, under everything and in every state — a
-        // fixed-height plane, so what the selection does can never reflow
-        // the timeline above it.
-        .child(strip::strip(state, app))
 }
 
 /// The patterns a right-click offers, and where its clip would land.
@@ -3417,6 +3630,11 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             el.child(luma_ui::silkscreen(format!("FINE {buckets}")))
         })
         .child(div().flex_1())
+        // Which score is on the timeline, by the handle the sidebar names it
+        // by.
+        .when_some(state.score.as_ref(), |el, score| {
+            el.child(luma_ui::silkscreen(format!("SCORE #{}", score.ordinal)))
+        })
         .when(state.score.is_none() && state.loaded, |el| {
             el.child(luma_ui::silkscreen("NO SCORE".to_string()))
         })

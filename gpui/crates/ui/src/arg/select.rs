@@ -36,10 +36,16 @@ pub fn luma_arg_select(
     value: &str,
     options: &[&str],
     open: bool,
-    on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+    on_toggle: impl Fn(&mut Window, &mut App) + Clone + 'static,
     on_pick: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
 ) -> Div {
     let id = id.into();
+    // The trigger's press and the dismissing press are the same gesture seen
+    // from two sides: a click on an open trigger lands *outside* the card, so
+    // `Dismiss` swallows it and closes the menu, and the toggle below never
+    // runs. Which is the wanted outcome — a toggle that also fired would close
+    // and reopen in one press.
+    let dismiss = on_toggle.clone();
     let trigger = float::picker_chip(value, options)
         .id(ElementId::Name(id.clone()))
         .on_click(move |_, window, cx| on_toggle(window, cx))
@@ -53,6 +59,7 @@ pub fn luma_arg_select(
         el.child(float::anchored_below(
             menu_id,
             CONTROL_HEIGHT,
+            float::Dismiss::on_press_out(move |window, cx| dismiss(window, cx)),
             options
                 .iter()
                 .enumerate()

@@ -328,9 +328,14 @@ const SCRIPT: &str = r#"
     function count(label) {
         return shot().findAll({ role: "card" }).filter((c) => c.label === label).length;
     }
+    // Clips, by elimination: every card on the screen that is not chrome.
+    // The args sheet is chrome that comes and goes with the selection, so it
+    // has to be named here or a count taken with a clip selected would differ
+    // from one taken without by the sheet rather than by a clip.
+    const CHROME = ["Waveform", "Ruler", "Args sheet"];
     function total() {
         return shot().findAll({ role: "card" })
-            .filter((c) => c.label !== "Waveform" && c.label !== "Ruler").length;
+            .filter((c) => !CHROME.includes(c.label)).length;
     }
     function reopen() {
         settled();

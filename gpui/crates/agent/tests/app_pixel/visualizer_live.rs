@@ -195,7 +195,7 @@ fn an_arg_edit_relights_the_rig() {
             until("the clip", (s) => s.find({{ role: "card", label: "Pulse" }}) !== undefined);
             nav.expand();
             app.frames(10, {{ waitMs: 60 }});
-            // Selecting the clip is what populates the args strip; the schema
+            // Selecting the clip is what populates the args sheet; the schema
             // is a round trip, so the expression field arriving is the signal
             // that there is something to edit.
             app.click(app.snapshot().find({{ role: "card", label: "Pulse" }}));

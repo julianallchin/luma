@@ -155,22 +155,26 @@ pub fn all() -> Vec<Fixture> {
         },
         // -- the pattern-arg widget kit (luma_ui::arg) -----------------------
         Fixture {
-            // A populated cell and the ghost cell side by side: the pair must
-            // occupy identical boxes, which is the strip's no-layout-shift
-            // contract made visible in one frame.
-            id: "arg-cell-ghost",
+            // Two rows stacked the way a sheet stacks them: label over
+            // control, both spanning the column, so a long label cannot
+            // narrow the control beside it.
+            id: "arg-row",
             width: 320.,
-            height: 88.,
+            height: 136.,
             build: Build::Static(|| {
                 div()
                     .flex()
-                    .items_end()
+                    .flex_col()
+                    .w(px(272.))
                     .gap(px(12.))
-                    .child(luma_ui::arg::arg_cell(
+                    .child(luma_ui::arg::arg_row(
                         "Blend",
                         luma_selector("Multiply", &["Multiply", "Replace", "Screen"]),
                     ))
-                    .child(luma_ui::arg::arg_cell_ghost("Blend", 96.))
+                    .child(luma_ui::arg::arg_row(
+                        "Intensity",
+                        luma_input("1.0", true, 272.),
+                    ))
                     .into_any_element()
             }),
         },

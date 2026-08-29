@@ -1,25 +1,29 @@
-//! The args inspector: a persistent channel strip under the timeline.
+//! The args inspector: a sheet over the right edge of the timeline.
 //!
-//! One fixed-height horizontal band, console-style, cells left-to-right —
-//! the mirror of the web's right-hand inspector panel
-//! (`src/features/track-editor/components/inspector-panel.tsx`), re-shaped to
-//! the brutalist strip the widget kit in `luma_ui::arg` was built for. The
-//! strip is **always there**: empty it shows dimmed ghost cells of exactly the
-//! same footprint ([`luma_ui::arg::arg_cell_ghost`]), so selecting or
-//! deselecting a clip never reflows the timeline above it.
+//! A selected clip slides one in; clearing the selection slides it out;
+//! selecting a *different* clip retargets the one that is up, without a
+//! close-and-reopen bounce. The frame, the slide and the ghost are
+//! [`luma_ui::sheet`]'s; this module owns what goes in it.
+//!
+//! # Non-modal, and that is load-bearing
+//!
+//! The timeline keeps every click, key and wheel it had while the sheet is
+//! open — the sheet occludes its own box and nothing else. That is what lets a
+//! person nudge a clip and then correct its intensity without dismissing
+//! anything, and it is why this is a sheet rather than a dialog.
 //!
 //! # What populates it
 //!
 //! The clip selection. One clip shows its pattern's name; several sharing a
 //! pattern show the name and a count; a mixed selection names only the count
-//! and ghosts the args, because there is no one schema to edit against. The
-//! blend select follows the *primary* (first selected) clip, as the web
-//! panel's does; blend applies to every selected clip, args batch-apply
-//! whenever the whole selection shares the pattern.
+//! and offers no args, because there is no one schema to edit against. The
+//! blend select follows the *primary* (first selected) clip; blend applies to
+//! every selected clip, args batch-apply whenever the whole selection shares
+//! the pattern.
 //!
 //! A clip's span is not here. Bounds are edited by dragging the clip on the
-//! timeline, which is the one place they can be read against the waveform
-//! they mean something relative to; the strip is for args.
+//! timeline, which is the one place they can be read against the waveform they
+//! mean something relative to; the sheet is for args.
 //!
 //! # Two write paths, deliberately
 //!
@@ -35,6 +39,16 @@
 //! as everything else, so a burst of picker motion is one checkpoint and one
 //! write, and two consecutive tweaks cannot race their own compare-and-swap.
 //!
+//! # The rendered state is [`Built`], never the selection
+//!
+//! Every reading the sheet draws — the pattern line, the blend mode, each
+//! cell's value — is taken from [`Built`], which [`resync`] refreshes against
+//! the working copy once per frame. Nothing in the render path reaches for the
+//! primary clip. That is what makes a *leaving* sheet legible: the selection is
+//! already empty while the exit plays, so a render that read through it would
+//! spend the slide showing a pattern's defaults instead of what the user just
+//! deselected.
+//!
 //! # Where the schema comes from
 //!
 //! The arg definitions are the pattern's, read venue-resolved through
@@ -46,52 +60,26 @@
 
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
 use luma_lib::models::selection::{Selection, Subset};
+use luma_ui::arg::arg_row;
 use luma_ui::arg::color::{luma_hsv_picker, ColorArg, ColorArgEditor, ColorArgEvent, Hsv};
 use luma_ui::arg::expression::{ExpressionEvent, GroupExpressionEditor};
 use luma_ui::arg::gradient::{luma_gradient_bar, Gradient, GradientEvent, GradientStop};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::palette::{luma_palette_row, PaletteEvent};
 use luma_ui::arg::select::luma_arg_select;
-use luma_ui::arg::{arg_cell, arg_cell_ghost, CELL_HEIGHT};
+use luma_ui::pane::PaneWidth;
 use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
 
-/// The strip's vertical padding; with [`CELL_HEIGHT`] it fixes the strip's
-/// height for good — the one number the timeline's own height depends on.
-const STRIP_PAD: f32 = 8.;
+/// Air between one arg row and the next, and between the sheet's bands.
+const ROW_GAP: f32 = 14.;
 
-/// Air between one cell and the next.
-///
-/// Exactly twice the gap *inside* a cell ([`luma_ui::arg`]'s 8px label seam),
-/// which is what makes an inline "LABEL control" pair read as one unit rather
-/// than as two neighbours; with both gaps equal the labels attach to the wrong
-/// side. Twice is the smallest ratio that still reads as a grouping, and the
-/// strip spends the difference on staying inside the window — see the widths
-/// below.
-const CELL_GAP: f32 = 16.;
+/// A full-bleed control's width inside the sheet.
+const FIELD_W: f32 = luma_ui::sheet::CONTENT_WIDTH;
 
-/// The strip's height, constant across empty, populated and mixed states.
-pub(crate) const STRIP_HEIGHT: f32 = CELL_HEIGHT + 2. * STRIP_PAD;
-
-/// Fixed cell widths. Fixed because a cell whose width followed its value
-/// would walk its neighbours on every keystroke.
-///
-/// Sized *down* to what each field's own content actually needs at 12px mono
-/// — a pattern name and an expression truncate anyway, and a scalar is four
-/// or five characters — because inline labels already spend a few hundred
-/// pixels of the strip on words. That, and the two columns a clip's span no
-/// longer costs here, is what keeps the common pattern's whole schema inside
-/// a 1200px window. It does not and cannot fix the general case — a schema
-/// may declare any number of args, so [`dress`] still scrolls.
-const PATTERN_W: f32 = 120.;
-const SCALAR_W: f32 = 64.;
-const EXPR_W: f32 = 160.;
-const GRADIENT_W: f32 = 140.;
-/// What a ghost arg slot is drawn at: the scalar cell's width, because a
-/// scalar is the commonest arg and a ghost that is not the size of what
-/// replaces it is a lie about the strip's footprint.
-const GHOST_W: f32 = SCALAR_W;
+/// The expression field, which shares its row with the fixture-picker chip.
+const EXPR_W: f32 = FIELD_W - 62.;
 
 /// The trailing edge a burst of live arg edits is committed on — the web
 /// panel's 250 ms.
@@ -99,8 +87,8 @@ const ARG_FLUSH: Duration = Duration::from_millis(250);
 
 /// The subset select's rows: how much of the expression's match to light.
 ///
-/// A closed ladder, not a number field — the strip is a panel of slabs, and the
-/// shares a lighting desk actually asks for are halves and thirds. A value
+/// A closed ladder, not a number field: the shares a lighting desk actually
+/// asks for are halves and thirds. A value
 /// authored elsewhere (Python, an agent) that is not on the ladder still shows,
 /// via [`subset_label`]; picking then snaps to a rung.
 pub(crate) const SUBSETS: [(&str, Subset); 7] = [
@@ -129,17 +117,23 @@ pub(crate) fn subset_label(subset: Subset) -> SharedString {
 
 // -- state --------------------------------------------------------------------
 
-/// The strip's own state, owned by the [`Editor`].
-pub(crate) struct Strip {
+/// The sheet's own state, owned by the [`Editor`].
+pub(crate) struct State {
+    /// How much of the sheet is on screen — see [`luma_ui::sheet`]. The one
+    /// place "is the sheet up" is stored: [`PaneWidth::target`] is the
+    /// destination and [`PaneWidth::current`] is the picture, so the two
+    /// cannot disagree mid-slide the way a separate flag would.
+    slide: PaneWidth,
     /// The venue's group names, for the expression editor's autocomplete.
     groups: Groups,
     /// Arg definitions per pattern id, venue-resolved, cached for the life of
     /// the editor — the web store's `patternArgs`.
     defs: HashMap<String, Rc<[PatternArgDef]>>,
     defs_inflight: HashSet<String>,
-    /// The entities built for the current subject, if there is one.
+    /// Everything the sheet draws, for as long as it is on screen — including
+    /// the slide out, after the selection it was built from is already gone.
     built: Option<Built>,
-    /// Which strip-owned menu is open. One at a time — opening one closes the
+    /// Which sheet-owned menu is open. One at a time — opening one closes the
     /// rest, which is what a single field states for free.
     open: Option<Menu>,
     /// A live arg burst is running: its checkpoint is recorded and a trailing
@@ -150,9 +144,10 @@ pub(crate) struct Strip {
     flush_gen: u64,
 }
 
-impl Default for Strip {
+impl Default for State {
     fn default() -> Self {
         Self {
+            slide: PaneWidth::new(0.),
             groups: Groups::NotAsked,
             defs: HashMap::new(),
             defs_inflight: HashSet::new(),
@@ -164,13 +159,26 @@ impl Default for Strip {
     }
 }
 
+impl State {
+    /// Whether the sheet is up — heading open, not merely still painted. What
+    /// `Escape` asks before it decides the key meant "clear the selection".
+    pub(crate) fn is_open(&self) -> bool {
+        self.slide.target() > 0.
+    }
+
+    /// Close whichever menu the sheet has up, reporting whether there was one.
+    pub(crate) fn dismiss_menu(&mut self) -> bool {
+        self.open.take().is_some()
+    }
+}
+
 enum Groups {
     NotAsked,
     Loading,
     Ready(Rc<Vec<SharedString>>),
 }
 
-/// Which strip-owned menu is up. The color editor's two menus are its own.
+/// Which sheet-owned menu is up. The color editor's two menus are its own.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Menu {
     Blend,
@@ -180,13 +188,19 @@ enum Menu {
     Swatch(usize),
 }
 
-/// What the entities were built for, and the entities themselves.
+/// What the entities were built for, the entities themselves, and every
+/// reading the sheet draws — see the module docs on why the render path may
+/// not go back to the selection for them.
 struct Built {
     /// The primary (first selected) clip the cells read their values from.
     primary: SharedString,
-    /// The selection's shared pattern; `None` for a mixed selection, whose
-    /// args are ghosts.
+    /// The selection's shared pattern; `None` for a mixed selection, which
+    /// has no args to offer.
     pattern: Option<SharedString>,
+    /// The header line: a pattern name, a name and a count, or a bare count.
+    reading: SharedString,
+    /// The primary clip's blend mode, which the select reads.
+    blend: BlendMode,
     cells: Vec<Cell>,
     _subs: Vec<Subscription>,
 }
@@ -218,7 +232,7 @@ enum Widget {
 
 // -- wire codecs --------------------------------------------------------------
 //
-// The strip's serialization edge: everything below speaks the widget kit's
+// The sheet's serialization edge: everything below speaks the widget kit's
 // typed values, everything above speaks the args JSON the score stores. The
 // shapes are the web panel's exactly — colors as 0–255 rgb with the tri-mode
 // alpha, palettes as hex lists, gradients as (color, t) stops.
@@ -257,7 +271,7 @@ fn scalar_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -> 
 }
 
 /// A stored arg value as a selection, falling back to the whole venue when the
-/// value is missing or malformed — a strip cell always has something to show.
+/// value is missing or malformed — an arg row always has something to show.
 fn selection_from_wire(value: &serde_json::Value) -> Selection {
     Selection::from_value(value).unwrap_or_else(Selection::all)
 }
@@ -368,53 +382,71 @@ fn stored_arg(editor: &Editor, def: &PatternArgDef) -> serde_json::Value {
 
 // -- sync ---------------------------------------------------------------------
 
-/// Reconcile the strip against the editor, on every frame the editor draws.
+/// Reconcile the sheet against the editor, on every frame the editor draws,
+/// and report how much of it is on screen this frame.
 ///
-/// Three jobs, all idempotent: ask for the vocabulary and the schema the strip
-/// is missing (venue groups, the selected pattern's arg defs — each asked for
-/// once); rebuild the widget entities when the *subject* changed (another
-/// primary clip, another pattern, the defs arriving); and push externally
-/// moved values into the widgets that show them, guarded per cell so a draft
-/// in progress is never stomped by its own echo.
+/// Four jobs, all idempotent: aim the slide at whatever the selection says;
+/// ask for the vocabulary and the schema the sheet is missing (venue groups,
+/// the selected pattern's arg defs — each asked for once); rebuild the widget
+/// entities when the *subject* changed (another primary clip, another pattern,
+/// the defs arriving); and refresh [`Built`]'s readings from the working copy,
+/// guarded per cell so a draft in progress is never stomped by its own echo.
 ///
 /// Runs in the render pass because that is the one place every path that can
 /// change the subject already converges — and the one place a [`Window`] is
-/// in hand to build entities with.
-pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
+/// in hand to build entities with and to ask for the slide's next frame.
+pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) -> Pixels {
     ensure_groups(editor, cx);
     ensure_defs(editor, cx);
 
-    let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
-        editor.strip.built = None;
-        editor.strip.open = None;
-        return;
+    let primary = primary_clip(editor).map(|clip| clip.id.clone());
+    editor.sheet.slide.retarget(
+        if primary.is_some() {
+            luma_ui::sheet::WIDTH
+        } else {
+            0.
+        },
+        cx,
+    );
+    let revealed = editor.sheet.slide.eval(window);
+
+    let Some(primary) = primary else {
+        // Nothing selected: the sheet is leaving, and what it draws on the way
+        // out is what it was already drawing. Only once it is wholly gone is
+        // the state it was drawing from let go.
+        if revealed <= px(0.) {
+            editor.sheet.built = None;
+            editor.sheet.open = None;
+        }
+        return revealed;
     };
     let pattern = shared_pattern(editor);
     let defs = pattern
         .as_ref()
-        .and_then(|id| editor.strip.defs.get(id.as_ref()).cloned())
+        .and_then(|id| editor.sheet.defs.get(id.as_ref()).cloned())
         .unwrap_or_else(|| Rc::from(Vec::new()));
 
-    let stale = match &editor.strip.built {
+    let stale = match &editor.sheet.built {
         Some(built) => {
             built.primary != primary || built.pattern != pattern || built.cells.len() != defs.len()
         }
         None => true,
     };
     if stale {
-        editor.strip.open = None;
+        editor.sheet.open = None;
         let built = build(editor, primary, pattern, &defs, window, cx);
-        editor.strip.built = Some(built);
+        editor.sheet.built = Some(built);
     }
-    resync_values(editor, cx);
+    resync(editor, cx);
+    revealed
 }
 
 /// Ask for the venue's group names, once.
 fn ensure_groups(editor: &mut Editor, cx: &mut Context<Luma>) {
-    if !matches!(editor.strip.groups, Groups::NotAsked) {
+    if !matches!(editor.sheet.groups, Groups::NotAsked) {
         return;
     }
-    editor.strip.groups = Groups::Loading;
+    editor.sheet.groups = Groups::Loading;
     let venue = editor.venue_id.clone();
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| this.library.venue_groups(&venue)) else {
@@ -432,7 +464,7 @@ fn ensure_groups(editor: &mut Editor, cx: &mut Context<Luma>) {
                     .filter_map(|group| group.name)
                     .map(SharedString::from)
                     .collect();
-                editor.strip.groups = Groups::Ready(Rc::new(names));
+                editor.sheet.groups = Groups::Ready(Rc::new(names));
             });
         })
         .ok();
@@ -446,10 +478,10 @@ fn ensure_defs(editor: &mut Editor, cx: &mut Context<Luma>) {
         return;
     };
     let key = pattern.to_string();
-    if editor.strip.defs.contains_key(&key) || editor.strip.defs_inflight.contains(&key) {
+    if editor.sheet.defs.contains_key(&key) || editor.sheet.defs_inflight.contains(&key) {
         return;
     }
-    editor.strip.defs_inflight.insert(key.clone());
+    editor.sheet.defs_inflight.insert(key.clone());
     let venue = editor.venue_id.clone();
     cx.spawn(async move |this, cx| {
         let Ok(pending) = this.update(cx, |this, _| this.library.pattern_args(&key, &venue)) else {
@@ -458,7 +490,7 @@ fn ensure_defs(editor: &mut Editor, cx: &mut Context<Luma>) {
         let rows = pending.await;
         this.update(cx, |this, cx| {
             this.with_track_editor(cx, |editor| {
-                editor.strip.defs_inflight.remove(&key);
+                editor.sheet.defs_inflight.remove(&key);
                 if editor.venue_id != venue {
                     return;
                 }
@@ -466,7 +498,7 @@ fn ensure_defs(editor: &mut Editor, cx: &mut Context<Luma>) {
                 // that is a pattern with no args, and asking again would only
                 // fail again.
                 editor
-                    .strip
+                    .sheet
                     .defs
                     .insert(key.clone(), rows.unwrap_or_default().into());
             });
@@ -488,7 +520,7 @@ fn build(
 ) -> Built {
     let mut subs = Vec::new();
 
-    let groups: Vec<SharedString> = match &editor.strip.groups {
+    let groups: Vec<SharedString> = match &editor.sheet.groups {
         Groups::Ready(names) => names.as_ref().clone(),
         _ => Vec::new(),
     };
@@ -514,7 +546,7 @@ fn build(
                 PatternArgType::Scalar => {
                     let value = scalar_from_wire(&stored, &def.default_value);
                     let entity = cx.new(|cx| {
-                        DraftedNumber::new(def.name.clone(), value, -1e9, 1e9, SCALAR_W, window, cx)
+                        DraftedNumber::new(def.name.clone(), value, -1e9, 1e9, FIELD_W, window, cx)
                     });
                     let arg_id = def.id.clone();
                     subs.push(cx.subscribe(
@@ -577,21 +609,39 @@ fn build(
     Built {
         primary,
         pattern,
+        reading: reading(editor),
+        blend: primary_clip(editor).map_or(BlendMode::Replace, |clip| clip.blend),
         cells,
         _subs: subs,
     }
 }
 
-/// Push externally moved values into the widgets that show them.
+/// The header line for the current selection.
+fn reading(editor: &Editor) -> SharedString {
+    let count = editor.selected.len();
+    let Some(clip) = primary_clip(editor) else {
+        return SharedString::default();
+    };
+    match (shared_pattern(editor), count) {
+        (Some(_), 1) => clip.label.clone(),
+        (Some(_), n) => format!("{} ({n})", clip.label).into(),
+        (None, n) => format!("{n} patterns").into(),
+    }
+}
+
+/// Refresh every reading the sheet draws, and push externally moved values
+/// into the widgets that show them.
 ///
 /// "Externally" is anything that rewrote the working copy — an undo, a lost
-/// write reloading, another gesture — including this strip's own edits, whose
-/// echo the per-cell `synced` guard filters out: a value the strip itself
+/// write reloading, another gesture — including this sheet's own edits, whose
+/// echo the per-cell `synced` guard filters out: a value the sheet itself
 /// wrote round-trips byte-identical, so the guard sees no movement and the
 /// widget's in-progress state survives.
-fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
+fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
+    let reading = reading(editor);
+    let blend = primary_clip(editor).map_or(BlendMode::Replace, |clip| clip.blend);
     let stored: Vec<serde_json::Value> = editor
-        .strip
+        .sheet
         .built
         .as_ref()
         .map(|built| {
@@ -602,9 +652,11 @@ fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
                 .collect()
         })
         .unwrap_or_default();
-    let Some(built) = editor.strip.built.as_mut() else {
+    let Some(built) = editor.sheet.built.as_mut() else {
         return;
     };
+    built.reading = reading;
+    built.blend = blend;
 
     for (cell, stored) in built.cells.iter_mut().zip(stored) {
         if cell.synced == stored {
@@ -623,7 +675,7 @@ fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
                 let expression = selection_from_wire(&stored).expression;
                 entity.update(cx, |editor, cx| editor.set_text(expression, cx));
             }
-            // Stateless rows re-read the stored value every render; only the
+            // Stateless rows read `Cell::synced` at render; only the
             // selection index needs a bound check.
             Widget::Palette { selected, .. } => {
                 let count = palette_from_wire(&stored, &cell.def.default_value).len();
@@ -647,9 +699,9 @@ fn resync_values(editor: &mut Editor, cx: &mut Context<Luma>) {
 // -- the write paths ----------------------------------------------------------
 
 impl Luma {
-    /// A blend pick from the strip: every selected clip takes the mode, in
+    /// A blend pick from the sheet: every selected clip takes the mode, in
     /// one committed write — the web's `updateAnnotationsBatch`.
-    pub(crate) fn strip_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
+    pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
         self.track_command(
             move |editor| {
                 if editor.selected.is_empty() {
@@ -685,9 +737,9 @@ impl Luma {
             if !editor.writable() || editor.selected.is_empty() {
                 return;
             }
-            if !editor.strip.burst {
+            if !editor.sheet.burst {
                 editor.checkpoint();
-                editor.strip.burst = true;
+                editor.sheet.burst = true;
             }
             let selected = editor.selected.clone();
             let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
@@ -718,14 +770,14 @@ impl Luma {
 
     /// Open the fixture picker on one selection arg.
     ///
-    /// The strip reads out what the dialog cannot see for itself: which arg,
+    /// The sheet reads out what the dialog cannot see for itself: which arg,
     /// what it currently says, and the venue's group vocabulary the expression
     /// field already loaded for its autocomplete — asking for it twice would
     /// be a second load of the same list.
     fn pick_fixtures(&mut self, def: &PatternArgDef, cx: &mut Context<Self>) {
         let mut opened = None;
         self.with_track_editor(cx, |editor| {
-            let groups = match &editor.strip.groups {
+            let groups = match &editor.sheet.groups {
                 Groups::Ready(names) => names.as_ref().clone(),
                 Groups::NotAsked | Groups::Loading => Vec::new(),
             };
@@ -768,8 +820,8 @@ impl Luma {
     fn schedule_arg_flush(&mut self, cx: &mut Context<Self>) {
         let mut gen = None;
         self.with_track_editor(cx, |editor| {
-            editor.strip.flush_gen += 1;
-            gen = Some(editor.strip.flush_gen);
+            editor.sheet.flush_gen += 1;
+            gen = Some(editor.sheet.flush_gen);
         });
         let Some(gen) = gen else { return };
         let pending = self.library.debounce(ARG_FLUSH);
@@ -778,8 +830,8 @@ impl Luma {
             this.update(cx, |this, cx| {
                 let mut flush = false;
                 this.with_track_editor(cx, |editor| {
-                    if editor.strip.flush_gen == gen {
-                        editor.strip.burst = false;
+                    if editor.sheet.flush_gen == gen {
+                        editor.sheet.burst = false;
                         flush = true;
                     }
                 });
@@ -795,178 +847,118 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
-/// The strip: one fixed-height band under the canvas, ghosted when nothing is
-/// selected, populated from the selection otherwise. Same height in every
-/// state — the reason the timeline above never reflows.
-pub(super) fn strip(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
-    // The container is named last — `agent_node` wraps, and a wrapped Div
-    // takes no more children.
-    dress(strip_row(state, app))
-}
-
-/// The strip's frame and its automation name, over whatever cells it holds.
+/// The sheet, when there is any of it on screen.
 ///
-/// It scrolls sideways rather than clipping. Inline labels cost every cell its
-/// label's width, and a pattern with a few args now outruns the window — where
-/// clipping would put an editable control permanently out of reach, and a
-/// wrap would break the one promise the strip makes, that its height never
-/// changes. A console strip that scrolls is the only one of the three that
-/// keeps both the fixed height and every arg reachable.
-fn dress(row: Div) -> impl IntoElement {
-    div()
-        .id("args-strip")
-        .flex_shrink_0()
-        .h(px(STRIP_HEIGHT))
-        .flex()
-        .items_center()
-        .gap(px(CELL_GAP))
-        .px(px(16.))
-        .border_t_1()
-        .border_color(ladder::trim())
-        .bg(ladder::background())
-        .overflow_x_scroll()
-        .child(row)
-        .agent_node(Role::Card, "Args strip")
-}
-
-fn strip_row(state: &Editor, app: &Entity<Luma>) -> Div {
-    // `flex_shrink_0` is what makes [`dress`]'s scroll real: without it the
-    // row is a shrinkable flex child, so a schema wider than the window is
-    // squeezed instead of scrolled — the trailing controls crush to zero
-    // width and stop being clickable rather than moving off the right edge.
-    let mut row = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(CELL_GAP));
-    let subject = state.strip.built.as_ref().zip(primary_clip(state));
-
-    // -- the shared columns --------------------------------------------------
-    //
-    // Pattern and blend exist in *every* state, and each renders the same
-    // box either way — the ghost differs only by content and dimming, never
-    // by width or treatment, so selection cannot move a column. Each is wrapped in a named probe node ("cell:…") whose bounds
-    // the geometry test asserts state-invariant.
-
-    // Pattern is a readout, not a control — bare text on the strip in both
-    // states, no slab.
-    let pattern_plate = || {
-        div()
-            .w(px(PATTERN_W))
-            .h(px(CONTROL_HEIGHT))
-            .flex()
-            .items_center()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_size(px(12.))
-            .text_color(ladder::foreground_90())
-    };
-    row = row.child(probe(
-        "cell:pattern",
-        match subject {
-            Some((built, clip)) => {
-                let reading: SharedString = match (&built.pattern, state.selected.len()) {
-                    (Some(_), 1) => clip.label.clone(),
-                    (Some(_), n) => format!("{} ({n})", clip.label).into(),
-                    (None, n) => format!("{n} patterns").into(),
-                };
-                arg_cell(
-                    "pattern",
-                    pattern_plate()
-                        .child(reading.clone())
-                        .agent_node(Role::Text, reading),
-                )
-            }
-            None => arg_cell("pattern", pattern_plate()).opacity(ladder::DISABLED_OPACITY),
-        },
-    ));
-
-    // The blend ghost is the same ghost-stack-sized selector as the live
-    // trigger, over the same nine names — one sizing path, so the two widths
-    // cannot disagree.
-    row = row.child(probe(
-        "cell:blend",
-        match subject {
-            Some(_) => arg_cell("blend", blend_select(state, app)),
-            None => {
-                let names: Vec<&str> = BlendMode::ALL.iter().map(|mode| mode.name()).collect();
-                arg_cell("blend", luma_ui::float::picker_chip("", &names))
-                    .opacity(ladder::DISABLED_OPACITY)
-            }
-        },
-    ));
-
-    // -- the args region -----------------------------------------------------
-    //
-    // Everything right of blend is the pattern's own schema, so only here may
-    // the empty and populated strips differ.
-    match subject.map(|(built, _)| built) {
-        None => {
-            row = row
-                .child(arg_cell_ghost("args", GHOST_W))
-                .child(arg_cell_ghost("", GHOST_W));
-        }
-        Some(built) => match &built.pattern {
-            None => {
-                row = row.child(
-                    arg_cell(
-                        "args",
-                        div()
-                            .h(px(CONTROL_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .child(luma_ui::silkscreen("MIXED PATTERNS".to_string()))
-                            .agent_node(Role::Text, "Mixed patterns"),
-                    )
-                    .opacity(ladder::DISABLED_OPACITY),
-                );
-            }
-            Some(_) if built.cells.is_empty() => {
-                row = row.child(
-                    arg_cell(
-                        "args",
-                        div()
-                            .h(px(CONTROL_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .child(luma_ui::silkscreen("NO ARGS".to_string())),
-                    )
-                    .opacity(ladder::DISABLED_OPACITY),
-                );
-            }
-            Some(_) => {
-                for (index, cell) in built.cells.iter().enumerate() {
-                    row = arg_cells(row, state, app, index, cell);
-                }
-            }
-        },
+/// `revealed` is [`sync`]'s return — zero means gone. Being *painted* and
+/// being *open* are different questions and both are asked here: a sheet on
+/// its way out is still painted, so it is still built, but it is no longer
+/// open, which is what makes it a ghost.
+pub(super) fn sheet(
+    state: &Editor,
+    revealed: Pixels,
+    app: &Entity<Luma>,
+) -> Option<impl IntoElement> {
+    if revealed <= px(0.) {
+        return None;
     }
-    row
+    let built = state.sheet.built.as_ref()?;
+    Some(
+        luma_ui::sheet::Sheet {
+            label: "Args sheet".into(),
+            width: luma_ui::sheet::WIDTH,
+            revealed,
+            interactive: state.sheet.is_open(),
+        }
+        .render(body(state, built, app)),
+    )
 }
 
-/// One shared column's probe: a named box around the cell, so the geometry
-/// test can read the column's rect by name in every state.
-fn probe(name: impl Into<SharedString>, cell: Div) -> impl IntoElement {
-    div().child(cell).agent_node(Role::Card, name.into())
+/// The sheet's content: what is selected, then the controls for it.
+fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
+    let pad = px(luma_ui::sheet::PAD);
+    div()
+        .size_full()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .px(pad)
+                .pt(pad)
+                .pb(px(12.))
+                .child(luma_ui::silkscreen("PATTERN".to_string()))
+                .child(
+                    div()
+                        .w_full()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_size(px(13.))
+                        .text_color(ladder::foreground())
+                        .child(built.reading.clone())
+                        .agent_node(Role::Text, built.reading.clone()),
+                ),
+        )
+        .child(luma_ui::float::divider())
+        // The gutters live on a wrapper outside the scroller — `float::viewport`'s
+        // contract — so a schema long enough to scroll still has air at both ends.
+        .child(
+            luma_ui::float::viewport().child(
+                div()
+                    .id("args-sheet-fields")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .px(pad)
+                    .flex()
+                    .flex_col()
+                    .gap(px(ROW_GAP))
+                    .child(named("blend", blend_select(state, built, app)))
+                    .children(args(state, built, app)),
+            ),
+        )
+        .into_any_element()
 }
 
-/// The blend cell: the canonical nine, from [`BlendMode::ALL`] and nowhere
+/// The pattern's own schema, or the one line that says why there is none.
+fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
+    let note = |message: &str| {
+        vec![div()
+            .child(luma_ui::silkscreen(message.to_string()))
+            .opacity(ladder::DISABLED_OPACITY)
+            .agent_node(Role::Text, message.to_string())
+            .into_any_element()]
+    };
+    match &built.pattern {
+        None => note("Mixed patterns"),
+        Some(_) if built.cells.is_empty() => note("No args"),
+        Some(_) => built
+            .cells
+            .iter()
+            .enumerate()
+            .flat_map(|(index, cell)| arg_rows(state, app, index, cell))
+            .collect(),
+    }
+}
+
+/// The blend row: the canonical nine, from [`BlendMode::ALL`] and nowhere
 /// else, applied to the whole selection on pick.
-fn blend_select(state: &Editor, app: &Entity<Luma>) -> Div {
+fn blend_select(state: &Editor, built: &Built, app: &Entity<Luma>) -> Div {
     let names: Vec<&str> = BlendMode::ALL.iter().map(|mode| mode.name()).collect();
-    let current = primary_clip(state).map_or(BlendMode::Replace, |clip| clip.blend);
-    let open = state.strip.open == Some(Menu::Blend);
+    let open = state.sheet.open == Some(Menu::Blend);
     let toggle = app.clone();
     let pick = app.clone();
     luma_arg_select(
         "blend",
-        current.name(),
+        built.blend.name(),
         &names,
         open,
         move |_, cx| {
             toggle.update(cx, |this, cx| {
                 this.with_track_editor(cx, |editor| {
-                    editor.strip.open = match editor.strip.open {
+                    editor.sheet.open = match editor.sheet.open {
                         Some(Menu::Blend) => None,
                         _ => Some(Menu::Blend),
                     };
@@ -975,21 +967,22 @@ fn blend_select(state: &Editor, app: &Entity<Luma>) -> Div {
         },
         move |index, _, cx| {
             pick.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| editor.strip.open = None);
-                this.strip_blend(BlendMode::ALL[index], cx);
+                this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                this.sheet_blend(BlendMode::ALL[index], cx);
             });
         },
     )
 }
 
-/// One arg's cell (or two — a selection arg carries its subset select).
-fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Div {
+/// One arg's row (or two — a selection arg carries its subset select).
+fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Vec<AnyElement> {
     let name = cell.def.name.as_str();
+    let one = |control: Div| vec![named(name, control)];
     match &cell.widget {
-        Widget::Color(entity) => row.child(arg_cell(name, entity.clone())),
-        Widget::Scalar(entity) => row.child(arg_cell(name, entity.clone())),
+        Widget::Color(entity) => one(div().child(entity.clone())),
+        Widget::Scalar(entity) => one(div().child(entity.clone())),
         Widget::Selection(entity) => {
-            let selection = selection_from_wire(&stored_arg(state, &cell.def));
+            let selection = selection_from_wire(&cell.synced);
 
             let subset_labels: Vec<&str> = SUBSETS.iter().map(|(label, _)| *label).collect();
             let toggle = app.clone();
@@ -999,11 +992,11 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
                 format!("{name}:subset"),
                 &subset_label(selection.subset),
                 &subset_labels,
-                state.strip.open == Some(Menu::Subset(index)),
+                state.sheet.open == Some(Menu::Subset(index)),
                 move |_, cx| {
                     toggle.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| {
-                            editor.strip.open = match editor.strip.open {
+                            editor.sheet.open = match editor.sheet.open {
                                 Some(Menu::Subset(at)) if at == index => None,
                                 _ => Some(Menu::Subset(index)),
                             };
@@ -1013,7 +1006,7 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
                 move |picked, _, cx| {
                     let def = def.clone();
                     pick.update(cx, |this, cx| {
-                        this.with_track_editor(cx, |editor| editor.strip.open = None);
+                        this.with_track_editor(cx, |editor| editor.sheet.open = None);
                         this.arg_selection(&def.id, &def, cx, |selection| {
                             selection.subset = SUBSETS[picked].1;
                         });
@@ -1035,34 +1028,57 @@ fn arg_cells(row: Div, state: &Editor, app: &Entity<Luma>, index: usize, cell: &
                 })
                 .agent_node(Role::Button, "Pick fixtures");
 
-            row.child(arg_cell(
-                name,
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(entity.clone())
-                    .child(pick_chip),
-            ))
-            .child(arg_cell("how many", amount))
+            vec![
+                named(
+                    name,
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(entity.clone())
+                        .child(pick_chip),
+                ),
+                named("how many", amount),
+            ]
         }
         Widget::Palette { selected, hsv } => {
-            let colors = palette_from_wire(&stored_arg(state, &cell.def), &cell.def.default_value);
-            row.child(arg_cell(
-                name,
-                palette_widget(state, app, index, cell, colors, *selected, *hsv),
+            let colors = palette_from_wire(&cell.synced, &cell.def.default_value);
+            one(palette_widget(
+                app,
+                index,
+                cell,
+                colors,
+                *selected,
+                *hsv,
+                plate_open(state, index),
             ))
         }
         Widget::Gradient { selected, hsv } => {
-            let gradient =
-                gradient_from_wire(&stored_arg(state, &cell.def), &cell.def.default_value);
-            row.child(arg_cell(
-                name,
-                gradient_widget(state, app, index, cell, gradient, *selected, *hsv),
+            let gradient = gradient_from_wire(&cell.synced, &cell.def.default_value);
+            one(gradient_widget(
+                app,
+                index,
+                cell,
+                gradient,
+                *selected,
+                *hsv,
+                plate_open(state, index),
             ))
         }
     }
+}
+
+/// One labelled row, named for the agent tree.
+fn named(label: &str, control: Div) -> AnyElement {
+    arg_row(label, control)
+        .agent_node(Role::Row, label.to_string())
+        .into_any_element()
+}
+
+/// Whether the HSV plate for the cell at `index` is up.
+fn plate_open(state: &Editor, index: usize) -> bool {
+    state.sheet.open == Some(Menu::Swatch(index))
 }
 
 /// Run `edit` against one palette/gradient cell's widget state, from inside
@@ -1074,7 +1090,7 @@ fn edit_widget(
     edit: impl FnOnce(&mut Widget),
 ) {
     this.with_track_editor(cx, |editor| {
-        if let Some(built) = editor.strip.built.as_mut() {
+        if let Some(built) = editor.sheet.built.as_mut() {
             if let Some(cell) = built.cells.get_mut(index) {
                 edit(&mut cell.widget);
             }
@@ -1083,16 +1099,18 @@ fn edit_widget(
 }
 
 /// The host-side HSV plate for a palette swatch or gradient stop — a float
-/// (the float tier's card) anchored off the cell; from the strip's bottom
-/// edge the window snap is what lands it above.
+/// (the float tier's card) anchored off the row; the window snap decides
+/// which way it opens.
 fn swatch_plate(
     id: String,
     hsv: Hsv,
+    dismiss: impl Fn(&mut Window, &mut App) + 'static,
     on_change: impl Fn(Hsv, &mut Window, &mut App) + Clone + 'static,
 ) -> impl IntoElement {
     luma_ui::float::anchored_below(
         SharedString::from(format!("{id}:plate")),
         CONTROL_HEIGHT,
+        luma_ui::float::Dismiss::on_press_out(dismiss),
         luma_ui::float::popover_card()
             .p(px(8.))
             .child(luma_hsv_picker(id, hsv, on_change))
@@ -1101,13 +1119,13 @@ fn swatch_plate(
 }
 
 fn palette_widget(
-    state: &Editor,
     app: &Entity<Luma>,
     index: usize,
     cell: &Cell,
     colors: Vec<Rgba>,
     selected: Option<usize>,
     hsv: Hsv,
+    plate_open: bool,
 ) -> Div {
     let def = cell.def.clone();
     let events = app.clone();
@@ -1121,7 +1139,7 @@ fn palette_widget(
                     let color = colors.get(at).copied();
                     this.with_track_editor(cx, |editor| {
                         if let Some(color) = color {
-                            if let Some(built) = editor.strip.built.as_mut() {
+                            if let Some(built) = editor.sheet.built.as_mut() {
                                 if let Some(cell) = built.cells.get_mut(index) {
                                     if let Widget::Palette { selected, hsv } = &mut cell.widget {
                                         *selected = Some(at);
@@ -1129,7 +1147,7 @@ fn palette_widget(
                                     }
                                 }
                             }
-                            editor.strip.open = Some(Menu::Swatch(index));
+                            editor.sheet.open = Some(Menu::Swatch(index));
                         }
                     });
                     None
@@ -1143,14 +1161,14 @@ fn palette_widget(
                     if colors.len() > 1 && at < colors.len() {
                         colors.remove(at);
                         this.with_track_editor(cx, |editor| {
-                            if let Some(built) = editor.strip.built.as_mut() {
+                            if let Some(built) = editor.sheet.built.as_mut() {
                                 if let Some(cell) = built.cells.get_mut(index) {
                                     if let Widget::Palette { selected, .. } = &mut cell.widget {
                                         *selected = None;
                                     }
                                 }
                             }
-                            editor.strip.open = None;
+                            editor.sheet.open = None;
                         });
                         Some(colors)
                     } else {
@@ -1172,45 +1190,50 @@ fn palette_widget(
             }
         });
     });
-    let plate = (state.strip.open == Some(Menu::Swatch(index)))
-        .then(|| selected)
-        .flatten()
-        .map(|at| {
-            let def = cell.def.clone();
-            let picker_app = app.clone();
-            let colors = colors.clone();
-            swatch_plate(
-                format!("{}:swatch-picker", cell.def.name),
-                hsv,
-                move |hsv, _, cx| {
-                    let def = def.clone();
-                    let mut colors = colors.clone();
-                    picker_app.update(cx, |this, cx| {
-                        edit_widget(this, index, cx, |widget| {
-                            if let Widget::Palette { hsv: held, .. } = widget {
-                                *held = hsv;
-                            }
-                        });
-                        if let Some(slot) = colors.get_mut(at) {
-                            let [r, g, b] = hsv.to_rgb();
-                            *slot = Rgba { r, g, b, a: 1. };
-                            this.arg_live(&def.id, palette_to_wire(&colors), cx);
+    let plate = plate_open.then_some(selected).flatten().map(|at| {
+        let def = cell.def.clone();
+        let picker_app = app.clone();
+        let colors = colors.clone();
+        let dismiss = app.clone();
+        swatch_plate(
+            format!("{}:swatch-picker", cell.def.name),
+            hsv,
+            move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    if this.dismiss_sheet_menu() {
+                        cx.notify();
+                    }
+                });
+            },
+            move |hsv, _, cx| {
+                let def = def.clone();
+                let mut colors = colors.clone();
+                picker_app.update(cx, |this, cx| {
+                    edit_widget(this, index, cx, |widget| {
+                        if let Widget::Palette { hsv: held, .. } = widget {
+                            *held = hsv;
                         }
                     });
-                },
-            )
-        });
+                    if let Some(slot) = colors.get_mut(at) {
+                        let [r, g, b] = hsv.to_rgb();
+                        *slot = Rgba { r, g, b, a: 1. };
+                        this.arg_live(&def.id, palette_to_wire(&colors), cx);
+                    }
+                });
+            },
+        )
+    });
     div().relative().child(row).children(plate)
 }
 
 fn gradient_widget(
-    state: &Editor,
     app: &Entity<Luma>,
     index: usize,
     cell: &Cell,
     gradient: Gradient,
     selected: Option<usize>,
     hsv: Hsv,
+    plate_open: bool,
 ) -> Div {
     let def = cell.def.clone();
     let events = app.clone();
@@ -1219,7 +1242,7 @@ fn gradient_widget(
         def.name.clone(),
         &gradient,
         selected,
-        GRADIENT_W,
+        FIELD_W,
         move |event, _, cx| {
             let def = def.clone();
             let mut gradient = gradient_for_events.clone();
@@ -1229,7 +1252,7 @@ fn gradient_widget(
                         let color = gradient.stops().get(at).map(|stop| stop.color);
                         this.with_track_editor(cx, |editor| {
                             if let Some(color) = color {
-                                if let Some(built) = editor.strip.built.as_mut() {
+                                if let Some(built) = editor.sheet.built.as_mut() {
                                     if let Some(cell) = built.cells.get_mut(index) {
                                         if let Widget::Gradient { selected, hsv } = &mut cell.widget
                                         {
@@ -1238,7 +1261,7 @@ fn gradient_widget(
                                         }
                                     }
                                 }
-                                editor.strip.open = Some(Menu::Swatch(index));
+                                editor.sheet.open = Some(Menu::Swatch(index));
                             }
                         });
                         None
@@ -1251,7 +1274,7 @@ fn gradient_widget(
                         let at = gradient.insert(t);
                         let color = gradient.stops()[at].color;
                         this.with_track_editor(cx, |editor| {
-                            if let Some(built) = editor.strip.built.as_mut() {
+                            if let Some(built) = editor.sheet.built.as_mut() {
                                 if let Some(cell) = built.cells.get_mut(index) {
                                     if let Widget::Gradient { selected, hsv } = &mut cell.widget {
                                         *selected = Some(at);
@@ -1269,33 +1292,38 @@ fn gradient_widget(
             });
         },
     );
-    let plate = (state.strip.open == Some(Menu::Swatch(index)))
-        .then(|| selected)
-        .flatten()
-        .map(|at| {
-            let def = cell.def.clone();
-            let picker_app = app.clone();
-            let gradient = gradient.clone();
-            swatch_plate(
-                format!("{}:stop-picker", cell.def.name),
-                hsv,
-                move |hsv, _, cx| {
-                    let def = def.clone();
-                    let mut gradient = gradient.clone();
-                    picker_app.update(cx, |this, cx| {
-                        edit_widget(this, index, cx, |widget| {
-                            if let Widget::Gradient { hsv: held, .. } = widget {
-                                *held = hsv;
-                            }
-                        });
-                        if at < gradient.stops().len() {
-                            let [r, g, b] = hsv.to_rgb();
-                            gradient.set_color(at, Rgba { r, g, b, a: 1. });
-                            this.arg_live(&def.id, gradient_to_wire(&gradient), cx);
+    let plate = plate_open.then_some(selected).flatten().map(|at| {
+        let def = cell.def.clone();
+        let picker_app = app.clone();
+        let gradient = gradient.clone();
+        let dismiss = app.clone();
+        swatch_plate(
+            format!("{}:stop-picker", cell.def.name),
+            hsv,
+            move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    if this.dismiss_sheet_menu() {
+                        cx.notify();
+                    }
+                });
+            },
+            move |hsv, _, cx| {
+                let def = def.clone();
+                let mut gradient = gradient.clone();
+                picker_app.update(cx, |this, cx| {
+                    edit_widget(this, index, cx, |widget| {
+                        if let Widget::Gradient { hsv: held, .. } = widget {
+                            *held = hsv;
                         }
                     });
-                },
-            )
-        });
+                    if at < gradient.stops().len() {
+                        let [r, g, b] = hsv.to_rgb();
+                        gradient.set_color(at, Rgba { r, g, b, a: 1. });
+                        this.arg_live(&def.id, gradient_to_wire(&gradient), cx);
+                    }
+                });
+            },
+        )
+    });
     div().relative().child(bar).children(plate)
 }
