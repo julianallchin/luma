@@ -1,0 +1,90 @@
+{
+  "params": {
+    "size": 200,
+    "holdout": 0.2,
+    "seed": 1,
+    "minPerGenre": 8,
+    "durationSeconds": [
+      120,
+      480
+    ],
+    "tracksPerArtist": 2
+  },
+  "library": {
+    "path": "/Users/julian/Library/Application Support/com.luma.luma/luma.db",
+    "sha256": "910d782660f8a7f868d65adf25c6979658ae75e9e9a8b465834b3a1b6734bfa0",
+    "mtime": "2026-08-28T23:51:03.796Z",
+    "tracks": 427,
+    "analyzed": 424,
+    "eligible": 368
+  },
+  "dropped": {
+    "duration": 18,
+    "duplicate_title": 16,
+    "artist_cap": 22
+  },
+  "genres": {
+    "Electronic---Bassline": {
+      "eligible": 38,
+      "selected": 23,
+      "holdout": 5,
+      "quota": 23
+    },
+    "Electronic---Drum n Bass": {
+      "eligible": 24,
+      "selected": 23,
+      "holdout": 5,
+      "quota": 23
+    },
+    "Electronic---Dubstep": {
+      "eligible": 47,
+      "selected": 24,
+      "holdout": 5,
+      "quota": 24
+    },
+    "Electronic---Electro House": {
+      "eligible": 12,
+      "selected": 12,
+      "holdout": 2,
+      "quota": 12
+    },
+    "Electronic---Halftime": {
+      "eligible": 31,
+      "selected": 23,
+      "holdout": 5,
+      "quota": 23
+    },
+    "Electronic---House": {
+      "eligible": 57,
+      "selected": 24,
+      "holdout": 5,
+      "quota": 24
+    },
+    "Electronic---Tech Trance": {
+      "eligible": 8,
+      "selected": 8,
+      "holdout": 2,
+      "quota": 8
+    },
+    "Electronic---Techno": {
+      "eligible": 59,
+      "selected": 24,
+      "holdout": 5,
+      "quota": 24
+    },
+    "Hip Hop---Trap": {
+      "eligible": 15,
+      "selected": 15,
+      "holdout": 3,
+      "quota": 15
+    },
+    "other": {
+      "eligible": 77,
+      "selected": 24,
+      "holdout": 5,
+      "quota": 24
+    }
+  },
+  "selected": 200,
+  "holdout": 42
+}
