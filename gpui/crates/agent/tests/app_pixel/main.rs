@@ -33,6 +33,7 @@ mod venues_pixels;
 mod visualizer;
 mod visualizer_budget;
 mod visualizer_capture;
+mod visualizer_gizmo;
 mod visualizer_live;
 mod visualizer_playback_budget;
 mod visualizer_playback_soak;

@@ -152,6 +152,9 @@ pub struct Fixture {
     /// fixture in this file is testing rows and geometry, and a rig would only
     /// be a slower seed.
     rig: usize,
+    /// Whether the rig is placed where a coordinate-space bug would show. See
+    /// [`Fixture::with_skewed_rig`].
+    skewed_rig: bool,
     seed_track: bool,
     track_created_at: Option<String>,
     window: Option<gpui::Size<gpui::Pixels>>,
@@ -175,6 +178,7 @@ impl Fixture {
             seconds,
             clips,
             rig: 0,
+            skewed_rig: false,
             seed_track: true,
             track_created_at: None,
             window: None,
@@ -237,6 +241,19 @@ impl Fixture {
     /// resolves the definition this fixture wrote rather than the developer's.
     pub fn with_rig(self) -> Self {
         self.with_rig_of(4)
+    }
+
+    /// `count` movers placed where a space bug is *visible*, and no deck.
+    ///
+    /// Every coordinate in the default rig lies on `y = 0`, which is the one
+    /// plane the data→world mirror (`coords::world_from_data`) leaves fixed —
+    /// so a screen that drew the editor's affordances in the wrong space could
+    /// and did look perfectly correct in it. This rig sits off that plane. The
+    /// deck is left out so a marquee across the viewport selects fixtures and
+    /// nothing else.
+    pub fn with_skewed_rig(mut self, count: usize) -> Self {
+        self.skewed_rig = true;
+        self.with_rig_of(count)
     }
 
     /// Patch `count` movers instead of the default four.
@@ -807,12 +824,13 @@ impl Fixture {
 
         let count = self.rig;
         let span = (count as f64).max(1.0) * 0.6;
+        let depth = if self.skewed_rig { SKEW_DEPTH_M } else { 0.0 };
         for i in 0..count {
             sqlx::query(
                 "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
                                        manufacturer, model, mode_name, fixture_path, label,
                                        pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-                 VALUES (?, NULL, ?, 1, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, 0.0, 3.0, 0.0, 0.0, 0.0)",
+                 VALUES (?, NULL, ?, 1, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, ?, 3.0, 0.0, 0.0, 0.0)",
             )
             .bind(format!("fixture-{i}"))
             .bind(VENUE)
@@ -820,6 +838,7 @@ impl Fixture {
             .bind(MOVER_PATH)
             .bind(format!("Mover {i}"))
             .bind((i as f64 / (count.max(2) - 1) as f64 - 0.5) * span)
+            .bind(depth)
             .execute(pool)
             .await
             .expect("failed to patch a fixture");
@@ -864,6 +883,9 @@ impl Fixture {
             }
         }
 
+        if self.skewed_rig {
+            return;
+        }
         sqlx::query(
             "INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label,
                                        pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, scale)
@@ -896,6 +918,11 @@ impl Fixture {
         .expect("failed to seed the beat grid");
     }
 }
+
+/// How far off the `y = 0` plane [`Fixture::with_skewed_rig`] patches its
+/// movers, in metres. Public because a test that projects one of them has to
+/// know where it put it.
+pub const SKEW_DEPTH_M: f64 = 2.0;
 
 /// Where [`Fixture::with_rig`]'s fixtures are patched from, relative to the
 /// bundle root it writes.

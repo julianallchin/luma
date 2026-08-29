@@ -176,6 +176,10 @@ pub struct Frame {
     pub grid_draws: usize,
     /// Editor affordances, in paint order, after every lit draw.
     pub overlays: Vec<Overlay>,
+    /// World point the transform gizmo in `overlays` stands on, if one is
+    /// drawn. The picker takes its pivot from here rather than deriving one
+    /// again — see `overlay::pivot`.
+    pub gizmo_pivot: Option<Vec3>,
     /// Fixture face lights, in submission order.
     pub point_lights: Vec<PointLight>,
     /// Resolved fixture cones, capped at [`MAX_FIXTURE_CONES`].
@@ -748,7 +752,21 @@ pub fn build_with(
         });
     }
 
-    let overlays = crate::overlay::build(scene, definitions, &camera, to_world, &mut bank);
+    // The pivot is measured here, where the mesh library is, and travels on the
+    // frame: the widget's position and the picker's must be one number, or the
+    // gizmo is drawn somewhere the pointer cannot find it.
+    let gizmo_pivot = scene
+        .editing
+        .then(|| crate::overlay::pivot(scene, lib, to_world))
+        .flatten();
+    let overlays = crate::overlay::build(
+        scene,
+        definitions,
+        &camera,
+        to_world,
+        gizmo_pivot,
+        &mut bank,
+    );
 
     let environment = scene
         .render
@@ -771,6 +789,7 @@ pub fn build_with(
         images: bank.images,
         draws,
         grid_draws,
+        gizmo_pivot,
         point_lights,
         fixture_cones,
         fixture_surface_lighting: scene.render.fixture_surface_lighting,

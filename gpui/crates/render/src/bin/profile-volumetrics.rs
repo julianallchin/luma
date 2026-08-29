@@ -1055,6 +1055,7 @@ fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
         editing: false,
         render: settings,
         selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
         fixtures: Vec::new(),
         pieces: if with_geometry {
             vec![
@@ -1160,6 +1161,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
             })
             .collect(),
         grid_draws: base.grid_draws,
+        gizmo_pivot: base.gizmo_pivot,
         overlays: Vec::new(),
         point_lights: base.point_lights.clone(),
         fixture_cones: Vec::with_capacity(count),

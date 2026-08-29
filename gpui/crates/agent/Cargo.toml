@@ -51,6 +51,10 @@ required-features = ["app"]
 # `scripted-model` is what lets a test drive a turn without a network.
 luma = { path = "../../../src-tauri", features = ["scripted-model"] }
 luma-chat = { path = "../chat" }
+# The pixel suite projects world points through the camera the app reports, so
+# it needs the same camera and the same gizmo scale the renderer uses.
+luma-scene = { path = "../scene" }
+glam = "0.30"
 async-trait = "0.1"
 # The sign-in suite writes a Supabase session and its host proof directly:
 # the proof is a pair of hashes over exact bytes plus base64url JWT claims, and

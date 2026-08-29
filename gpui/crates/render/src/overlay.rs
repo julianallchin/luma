@@ -12,11 +12,13 @@
 //! `size = 0.5`. The handle table, the constant-screen-size factor and the
 //! edge-on hide/flip rules below are that implementation, term for term.
 
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3};
+use luma_scene::{gizmo_scale, GizmoMode, RING_RADIUS};
 
+use crate::assets::Library;
 use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_pose_from_data};
 use crate::frame::{Camera, Definitions, MeshData};
-use crate::scene_desc::Scene;
+use crate::scene_desc::{Geometry, Scene};
 
 /// How an overlay sits against the scene it is drawn over. The two variants are
 /// the two material configurations three.js uses, not a free combination:
@@ -48,9 +50,6 @@ pub struct Overlay {
     /// Depth and blend behaviour.
     pub depth: OverlayDepth,
 }
-
-/// `TransformControls.size`, as `unified-transform.tsx` passes it.
-const GIZMO_SIZE: f32 = 0.5;
 
 /// Handles hide when their axis points within this much of straight at the
 /// camera, where the drag math degenerates (`AXIS_HIDE_TRESHOLD`).
@@ -137,10 +136,11 @@ pub(crate) fn build(
     definitions: &Definitions,
     camera: &Camera,
     to_world: Mat4,
+    pivot: Option<Vec3>,
     bank: &mut crate::frame::Bank,
 ) -> Vec<Overlay> {
     let mut out = Vec::new();
-    if !scene.editing || scene.selected_fixture_ids.is_empty() {
+    if !scene.editing {
         return out;
     }
 
@@ -177,30 +177,25 @@ pub(crate) fn build(
         });
     }
 
-    // --- translate gizmo ---------------------------------------------------
-    // One widget on an empty pivot node, parked at the primary's position with
+    // --- transform gizmo ---------------------------------------------------
+    // One widget on an empty pivot node, parked on the selection's anchor with
     // identity rotation (`restingPivotPosition`, `space = "world"`).
-    let Some(primary) = scene
-        .fixtures
-        .iter()
-        .find(|f| Some(&f.id) == scene.selected_fixture_ids.first())
-    else {
+    let Some(pivot_world) = pivot else {
         return out;
     };
-    let pivot_three = three_from_data(Vec3::from(primary.pos));
-    let pivot_world = to_world.transform_point3(pivot_three);
-
-    // Constant screen size: `factor * size / 7` where `factor` is the distance
-    // to the camera times a field-of-view term, capped at 7.
-    let distance = (camera.eye - pivot_world).length();
-    let fov_term = (1.9 * (camera.fov_y_deg.to_radians() / 2.0).tan()).min(7.0);
-    let scale = distance * fov_term * GIZMO_SIZE / 7.0;
+    let pivot_three = to_world.transpose().transform_point3(pivot_world);
+    let scale = gizmo_scale((camera.eye - pivot_world).length(), camera.fov_y_deg);
 
     // `eye` is expressed in the gizmo's own (three) space, where the world axes
     // are the unit vectors the hide/flip rules test against.
     let eye_world = (camera.eye - pivot_world).normalize_or_zero();
     let eye = to_world.transpose().transform_vector3(eye_world);
     let dots = [eye.x, eye.y, eye.z];
+
+    if scene.editor.gizmo == GizmoMode::Rotate {
+        out.extend(rotate_rings(pivot_three, scale, eye, to_world, bank));
+        return out;
+    }
 
     for handle in translate_handles() {
         if handle.axis_only.is_some_and(|a| dots[a].abs() > AXIS_HIDE)
@@ -245,6 +240,121 @@ pub(crate) fn build(
     }
 
     out
+}
+
+/// The world point the gizmo stands on, or `None` with nothing selected.
+///
+/// Ported from `unified-transform.tsx`'s `stagePieceAnchorWorld`, which picked
+/// these to match what a hand expects to grab:
+///
+/// * **fixture** — its own origin, which is where its body is.
+/// * **stage piece** — the bottom centre of its mesh's bounds. Stage GLBs put
+///   their local origin at a corner, so the origin parks the widget off in
+///   space; bottom centre sits in the middle of the footprint, on the surface
+///   the piece rests on.
+/// * **several of either** — the mean of their anchors.
+///
+/// The third React rule, a *parented* piece anchoring on the socket that
+/// attaches it to its parent, is not portable yet and is deliberately absent:
+/// a [`crate::scene_desc::Piece`] arrives flattened, with no parent, and the
+/// socket catalogue is still TypeScript-only. Both land in the venue graph
+/// (`docs/design/venue-graph.md`, phases 2–3).
+pub(crate) fn pivot(scene: &Scene, lib: &mut Library, to_world: Mat4) -> Option<Vec3> {
+    let fixtures = scene.selected_fixture_ids.iter().filter_map(|id| {
+        let fixture = scene.fixtures.iter().find(|f| &f.id == id)?;
+        Some(to_world.transform_point3(three_from_data(Vec3::from(fixture.pos))))
+    });
+    let pieces = scene.editor.selected_piece_ids.iter().filter_map(|id| {
+        let piece = scene.pieces.iter().find(|p| &p.id == id)?;
+        let model = to_world
+            * three_pose_from_data(piece.pos, piece.rot)
+            * Mat4::from_scale(Vec3::splat(piece.scale));
+        Some(model.transform_point3(footprint_centre(&piece.geometry, lib)))
+    });
+    let (sum, count) = fixtures
+        .chain(pieces)
+        .fold((Vec3::ZERO, 0u32), |(sum, n), p| (sum + p, n + 1));
+    (count > 0).then(|| sum / count as f32)
+}
+
+/// Bottom centre of a piece's bounds, in its own (three) space.
+///
+/// A procedural family has no loaded mesh to measure and answers with its
+/// origin, which is already where it is built from.
+fn footprint_centre(geometry: &Geometry, lib: &mut Library) -> Vec3 {
+    let Geometry::MeshPath(path) = geometry else {
+        return Vec3::ZERO;
+    };
+    let Ok(glb) = lib.get(path) else {
+        return Vec3::ZERO;
+    };
+    let (lo, hi) = glb.bounds();
+    Vec3::new(lo.x.midpoint(hi.x), lo.y, lo.z.midpoint(hi.z))
+}
+
+/// The rotate widget: one ring per axis, plus the screen-facing ring.
+///
+/// Rings rather than three's fuller `gizmoRotate` because these are the four
+/// shapes [`luma_scene::hit_test_gizmo`] picks, at the radius it picks them —
+/// the axis rings in the gizmo's own space, where three's X/Y/Z become world
+/// X/Z/Y under the mirror, and a ring is the same circle either way round.
+fn rotate_rings(
+    pivot_three: Vec3,
+    scale: f32,
+    eye: Vec3,
+    to_world: Mat4,
+    bank: &mut crate::frame::Bank,
+) -> Vec<Overlay> {
+    let mesh = bank.insert("::gizmo-ring".to_string(), ring);
+    let q = std::f32::consts::FRAC_PI_2;
+    let axes = [
+        (Vec3::new(0.0, q, 0.0), hex_srgb(0xff_00_00)),
+        (Vec3::new(q, 0.0, 0.0), hex_srgb(0x00_ff_00)),
+        (Vec3::ZERO, hex_srgb(0x00_00_ff)),
+    ];
+    // The screen ring's plane is normal to the view, so its basis is built from
+    // the eye direction rather than from an axis.
+    let n = eye.normalize_or(Vec3::Z);
+    let u = n.cross(Vec3::Y).normalize_or(Vec3::X);
+    let screen = Mat4::from_mat3(Mat3::from_cols(u, n.cross(u), n));
+    axes.into_iter()
+        .map(|(rot, color)| (Mat4::from_mat3(euler_xyz(rot.x, rot.y, rot.z)), color))
+        // Grey, three's `XYZE`: the screen ring is the one handle that is not
+        // an axis, and yellow is the selection cage's colour.
+        .chain(std::iter::once((screen, hex_srgb(0x78_78_78))))
+        .map(|(orientation, color)| Overlay {
+            mesh,
+            model: to_world
+                * Mat4::from_translation(pivot_three)
+                * Mat4::from_scale(Vec3::splat(scale))
+                * orientation,
+            lines: true,
+            color,
+            opacity: 1.0,
+            depth: OverlayDepth::Free,
+        })
+        .collect()
+}
+
+/// A line-list circle of [`RING_RADIUS`] in the XY plane.
+fn ring() -> MeshData {
+    const SEGMENTS: u32 = 64;
+    let mut vertices = Vec::with_capacity(SEGMENTS as usize);
+    let mut indices = Vec::with_capacity(SEGMENTS as usize * 2);
+    for i in 0..SEGMENTS {
+        let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        vertices.push(vertex(Vec3::new(
+            angle.cos() * RING_RADIUS,
+            angle.sin() * RING_RADIUS,
+            0.0,
+        )));
+        indices.extend([i, (i + 1) % SEGMENTS]);
+    }
+    MeshData {
+        key: String::new(),
+        vertices: vertices.into(),
+        indices: indices.into(),
+    }
 }
 
 /// `three-stdlib`'s `gizmoTranslate`, flattened into the child order

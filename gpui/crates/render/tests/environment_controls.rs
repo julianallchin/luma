@@ -21,6 +21,7 @@ fn scene(render: RenderSettings, pieces: Vec<Piece>) -> Scene {
         editing: false,
         render,
         selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
         fixtures: Vec::new(),
         pieces,
         state: BTreeMap::new(),
@@ -289,6 +290,7 @@ fn gpu_far_cascade_keeps_directional_occlusion() {
             editing: false,
             render,
             selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
             fixtures: Vec::new(),
             pieces: vec![Piece {
                 id: "far-shadow-caster".into(),

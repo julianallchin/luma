@@ -8,9 +8,25 @@ const AXIS_RADIUS: f32 = 0.08;
 const PLANE_OFFSET: f32 = 0.22;
 const PLANE_RADIUS: f32 = 0.16;
 const SCREEN_RADIUS: f32 = 0.13;
-const RING_RADIUS: f32 = 0.8;
+/// Radius of a rotate ring, in gizmo-local units. Public because the drawer
+/// (`luma_render::overlay`) sizes its rings from it: a ring that is picked at
+/// one radius and painted at another is a handle nobody can hit.
+pub const RING_RADIUS: f32 = 0.8;
 const RING_WIDTH: f32 = 0.08;
 const PARALLEL_EPSILON: f32 = 1e-5;
+
+/// `TransformControls.size`, as `unified-transform.tsx` passes it.
+const GIZMO_SIZE: f32 = 0.5;
+
+/// Which side of the pivot a handle is drawn on: three's gizmo mirrors every
+/// arm toward the viewer, so the picker has to mirror with it.
+fn side(towards_eye: f32) -> f32 {
+    if towards_eye < 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Axis {
@@ -30,8 +46,9 @@ impl Axis {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum GizmoMode {
+    #[default]
     Translate,
     Rotate,
 }
@@ -92,6 +109,18 @@ pub struct TransformTarget {
     pub anchor: Vec3,
 }
 
+/// The world scale that keeps the widget the same size on screen.
+///
+/// `TransformControls.updateMatrixWorld`: the distance to the camera times a
+/// field-of-view term, capped, times `size / 7`. Spelled once because the
+/// drawer and the hit test must agree to the last decimal — a widget drawn at
+/// one scale and picked at another is off by a fraction of itself everywhere
+/// except dead centre.
+#[must_use]
+pub fn gizmo_scale(distance: f32, fov_y_deg: f32) -> f32 {
+    distance * (1.9 * (fov_y_deg.to_radians() / 2.0).tan()).min(7.0) * GIZMO_SIZE / 7.0
+}
+
 /// Pick visible transform handles analytically. `scale` is the gizmo's
 /// constant-screen-size world scale; `view_direction` points pivot→camera.
 #[must_use]
@@ -109,11 +138,15 @@ pub fn hit_test_gizmo(
         GizmoMode::Translate => {
             for axis in [Axis::X, Axis::Y, Axis::Z] {
                 let vector = axis.vector();
+                // The arm the viewer sees, not the one the axis names: an arm
+                // flipped away by the drawer is not there to be clicked, and
+                // its mirror image is.
+                let arm = vector * side(vector.dot(view));
                 if vector.dot(view).abs() <= 0.99 {
                     if let Some(t) = ray_capsule(
                         ray,
-                        pivot + vector * (SCREEN_RADIUS * scale),
-                        pivot + vector * (AXIS_LENGTH * scale),
+                        pivot + arm * (SCREEN_RADIUS * scale),
+                        pivot + arm * (AXIS_LENGTH * scale),
                         AXIS_RADIUS * scale,
                     ) {
                         hits.push(GizmoHit {
@@ -123,9 +156,10 @@ pub fn hit_test_gizmo(
                     }
                 }
                 if vector.dot(view).abs() >= 0.2 {
+                    let (u, v) = plane_basis(axis);
                     let center = pivot
-                        + plane_basis(axis).0 * (PLANE_OFFSET * scale)
-                        + plane_basis(axis).1 * (PLANE_OFFSET * scale);
+                        + u * (PLANE_OFFSET * scale * side(u.dot(view)))
+                        + v * (PLANE_OFFSET * scale * side(v.dot(view)));
                     if let Some(t) = ray_disc(ray, center, vector, PLANE_RADIUS * scale) {
                         hits.push(GizmoHit {
                             handle: GizmoHandle::TranslatePlane(axis),
@@ -294,6 +328,35 @@ mod tests {
             GizmoMode::Translate,
         );
         assert!(hidden.is_none_or(|hit| hit.handle != GizmoHandle::TranslateAxis(Axis::Z)));
+    }
+
+    /// The drawer mirrors every arm toward the viewer (`overlay.rs`'s flip
+    /// pass), so from behind, the X handle lives at −X and there is nothing at
+    /// +X to click. Picking the axis by name rather than by where it is drawn
+    /// is how half the arms became dead.
+    #[test]
+    fn an_arm_is_picked_where_it_is_drawn_not_where_its_axis_points() {
+        let from_behind = Vec3::new(-0.9, 0.2, 0.3);
+        let drawn = hit_test_gizmo(
+            Ray::new(Vec3::new(-0.7, 0.0, 3.0), -Vec3::Z),
+            Vec3::ZERO,
+            1.0,
+            from_behind,
+            GizmoMode::Translate,
+        )
+        .expect("the mirrored X arm should hit");
+        assert_eq!(drawn.handle, GizmoHandle::TranslateAxis(Axis::X));
+        assert!(
+            hit_test_gizmo(
+                Ray::new(Vec3::new(0.7, 0.0, 3.0), -Vec3::Z),
+                Vec3::ZERO,
+                1.0,
+                from_behind,
+                GizmoMode::Translate,
+            )
+            .is_none(),
+            "nothing is drawn at +X from this side"
+        );
     }
 
     #[test]
