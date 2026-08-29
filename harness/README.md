@@ -109,6 +109,19 @@ node harness/compare-shots.mjs harness/goldens /tmp/run-b
 node harness/compare-shots.mjs harness/goldens harness/wgpu --blur 4 --min 0.98
 ```
 
+The wgpu side of the same eight scenes is captured by `render-goldens`, which
+reads the dumped catalogue and writes `harness/goldens/scenes-wgpu/`:
+
+```sh
+cargo run -p luma-render --release --bin render-goldens            # all scenes
+cargo run -p luma-render --release --bin render-goldens -- led-bar # one scene
+cargo run -p luma-render --release --bin render-goldens -- --check # diff, no write
+```
+
+`--check` renders every requested frame and diffs it against the tracked PNG
+without touching the tree, reporting unchanged / changed (pixel count and worst
+channel delta) per frame and exiting non-zero on any drift.
+
 ## What makes a frame reproducible
 
 Four pins, and all four are load-bearing:

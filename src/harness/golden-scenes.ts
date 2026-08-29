@@ -306,13 +306,12 @@ function parOcclusion(): GoldenScene {
 }
 
 function ledBar(): GoldenScene {
-	// Pitched down: an unrotated bar fires its pixel cones straight along +Z,
-	// which from any useful camera is one blown-out lobe rather than 8 cones.
+	// Hung, so the row of pixel cones fires down at the floor: a fixture rests
+	// along its mount normal, and an unrotated mount hangs.
 	const bar = fixture({
 		id: "bar",
 		path: BAR_PATH,
 		pos: [0, 0, 2.6],
-		rot: [Math.PI / 2, 0, 0],
 		mode: "Pixels",
 	});
 	const state: Record<string, PrimitiveState> = { "hazer:0": head(1, WHITE) };
