@@ -572,6 +572,13 @@ commands! {
         their_socket: String,
         yaw: Option<f64>,
     ) -> PlacementReport;
+    stage::constrain(
+        venue_id: String,
+        node_id: String,
+        my_socket: String,
+        target_node: String,
+        target_socket: String,
+    ) -> PlacementReport;
     stage::place_free(
         venue_id: String,
         kind: String,

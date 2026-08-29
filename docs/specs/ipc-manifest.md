@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**207 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
+**208 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -40,13 +40,13 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `scores` | 10 | `src-tauri/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
 | `skills` | 2 | `src-tauri/src/dispatch/handlers/skills.rs` |
-| `stage` | 8 | `src-tauri/src/dispatch/handlers/stage.rs` |
+| `stage` | 9 | `src-tauri/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `src-tauri/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **207** | |
+| **total** | **208** | |
 
 ## Commands
 
@@ -363,6 +363,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_resolved_venue` | `venueId: String` | `ResolvedVenue` |
 | `attach` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`parentId: String`<br>`mySocket: String`<br>`theirSocket: String`<br>`yaw: Option<f64>`<br>`params: Option<BTreeMap<String, f64>>` | `PlacementReport` |
 | `reattach` | `venueId: String`<br>`nodeId: String`<br>`parentId: String`<br>`mySocket: String`<br>`theirSocket: String`<br>`yaw: Option<f64>` | `PlacementReport` |
+| `constrain` | `venueId: String`<br>`nodeId: String`<br>`mySocket: String`<br>`targetNode: String`<br>`targetSocket: String` | `PlacementReport` |
 | `place_free` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`surfaceNodeId: Option<String>`<br>`surfaceSocket: Option<String>`<br>`mySocket: String`<br>`u: f64`<br>`v: f64`<br>`yaw: Option<f64>`<br>`trim: Option<f64>` | `PlacementReport` |
 | `detach` | `venueId: String`<br>`nodeId: String` | `PlacementReport` |
 | `set_params` | `venueId: String`<br>`nodeId: String`<br>`params: BTreeMap<String, f64>`<br>`label: Option<String>` | `PlacementReport` |

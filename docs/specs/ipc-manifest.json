@@ -750,6 +750,40 @@
         {
           "name": "venueId",
           "rust": "String"
+        },
+        {
+          "name": "nodeId",
+          "rust": "String"
+        },
+        {
+          "name": "mySocket",
+          "rust": "String"
+        },
+        {
+          "name": "targetNode",
+          "rust": "String"
+        },
+        {
+          "name": "targetSocket",
+          "rust": "String"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 197
+      },
+      "name": "constrain",
+      "prose": {
+        "returns": "PlacementReport"
+      },
+      "returns": "PlacementReport"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
         }
       ],
       "domain": "controller",
@@ -1187,7 +1221,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 234
+        "line": 282
       },
       "name": "delete_subtree",
       "prose": {
@@ -4612,7 +4646,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 191
+        "line": 239
       },
       "name": "set_params",
       "prose": {
@@ -5291,7 +5325,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/skills.rs"
     },
     {
-      "commandCount": 8,
+      "commandCount": 9,
       "domain": "stage",
       "handlers": "src-tauri/src/dispatch/handlers/stage.rs"
     },
@@ -5532,7 +5566,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 207,
+    "commandCount": 208,
     "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0

@@ -120,9 +120,14 @@ on the downstage truss" is not expressible.
     have three pairs of ends standing in the room; the anchor is a seat with no
     geometry, and reporting it once under-counts by `count - 1`.
   - A **`dangling` socket is one no relation accounts for**: neither half of a joint
-    is dangling, and neither is an end a far-end constraint checks — a constraint is
-    exactly what the builder writes down instead of a second parent. Only self-mating
-    (`Neutral`) joints are counted at all; an empty deck top is not an open end.
+    is dangling, and neither is an end a **resolved** far-end constraint checks — a
+    constraint is exactly what the builder writes down instead of a second parent.
+    Satisfied and violated both account for their ends; a violated end has been
+    *measured*, and the gap is reported as itself. A constraint reported `dangling`
+    accounts for nothing — its target is unplaced or gone, so it describes no end
+    that is in the room, and closing a socket on it would hide the open end behind
+    the paperwork meant to explain it. Only self-mating (`Neutral`) joints are
+    counted at all; an empty deck top is not an open end.
 - **Verification channels, ranked:** `describe(node)` (the tree in stage words) →
   `dangling()` and the `Placement` reports → a top-down quantized tile map ("Gauntlet
   view") → `render(view=fixture.pov)` → `render(view="front")` last. A front render is

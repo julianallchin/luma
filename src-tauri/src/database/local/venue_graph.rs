@@ -217,6 +217,43 @@ pub async fn upsert_edge(
     Ok(())
 }
 
+/// Record a far end, replacing whatever check that socket already carried.
+///
+/// One statement, because `(node_id, my_socket)` is the primary key: a socket
+/// has one far end or none, and an insert-then-delete would be two states that
+/// is false in.
+///
+/// Admission is [`luma_scene::venue::VenueGraph::constrain`]'s, upstream of
+/// here, exactly as it is for [`upsert_edge`]: this layer writes rows the
+/// caller has already had admitted against the solved graph.
+///
+/// # Errors
+/// Fails if the upsert is refused.
+pub async fn upsert_constraint(
+    access: &mut VenueAccess<'_, Write>,
+    node_id: &str,
+    my_socket: &str,
+    target_node: &str,
+    target_socket: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO venue_constraints (node_id, my_socket, target_node, target_socket)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(node_id, my_socket) DO UPDATE SET
+             target_node = excluded.target_node,
+             target_socket = excluded.target_socket",
+    )
+    .bind(node_id)
+    .bind(my_socket)
+    .bind(target_node)
+    .bind(target_socket)
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to record venue constraint: {e}"))?;
+    graph_changed();
+    Ok(())
+}
+
 /// Unplace a node, leaving it and its subtree out of the solve.
 ///
 /// # Errors

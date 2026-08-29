@@ -285,6 +285,59 @@ impl std::fmt::Display for EdgeError {
 
 impl std::error::Error for EdgeError {}
 
+/// Why a far-end check may not be recorded.
+///
+/// A constraint is what the builder writes down *instead of* a second parent,
+/// so it is admitted on the same terms as an edge: both ends name a row, both
+/// rows have the socket, and the pair could mate. The one invariant an edge
+/// has and a constraint does not is acyclicity — a check never participates in
+/// the solve, so it cannot loop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConstraintError {
+    /// No node with this id holds the constrained end.
+    UnknownNode(String),
+    /// No node with this id holds the far end.
+    UnknownTarget(String),
+    /// The constrained end is an array. Its ends belong to derived members,
+    /// which hold no rows, so the anchor's socket is not one end but `count`.
+    NodeIsArray(String),
+    /// The far end is an array, for the same reason.
+    TargetIsArray(String),
+    /// The constrained node's geometry has no socket by that name.
+    MissingSocket { node: String, socket: String },
+    /// The target node's geometry has no socket by that name.
+    MissingTargetSocket { node: String, socket: String },
+    /// The pair exists but cannot mate, so no placement could ever satisfy it.
+    Polarity { held: SocketType, host: SocketType },
+}
+
+impl std::fmt::Display for ConstraintError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstraintError::UnknownNode(id) => write!(f, "no node `{id}` in this venue"),
+            ConstraintError::UnknownTarget(id) => {
+                write!(f, "no target node `{id}` in this venue")
+            }
+            ConstraintError::NodeIsArray(id) | ConstraintError::TargetIsArray(id) => write!(
+                f,
+                "`{id}` is an array: its ends belong to its members, so one check cannot name them"
+            ),
+            ConstraintError::MissingSocket { node, socket }
+            | ConstraintError::MissingTargetSocket { node, socket } => {
+                write!(f, "`{node}` has no socket `{socket}`")
+            }
+            ConstraintError::Polarity { held, host } => write!(
+                f,
+                "a `{}` socket does not mate a `{}` socket",
+                held.as_str(),
+                host.as_str()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConstraintError {}
+
 /// One venue's nodes, edges, params and constraints.
 ///
 /// Built from the four tables and handed to [`resolve`]. Nodes are keyed by id
@@ -352,8 +405,83 @@ impl VenueGraph {
     }
 
     /// Record a far-end check. Not an edge: it never participates in the solve.
-    pub fn constrain(&mut self, constraint: Constraint) {
+    ///
+    /// The **only** checked writer of a constraint, as [`Self::attach`] is of
+    /// an edge, and admitted on the same terms — see [`ConstraintError`]. A
+    /// check that could not be met by any placement is a typo, and reporting
+    /// it every solve as `Dangling` would say the rig is wrong where the
+    /// paperwork is.
+    ///
+    /// # Errors
+    /// Every variant of [`ConstraintError`]: an unknown node or target, an
+    /// array at either end, a socket neither geometry declares, or a pair
+    /// whose polarity forbids the joint.
+    pub fn constrain<S: NodeSockets + ?Sized>(
+        &mut self,
+        constraint: Constraint,
+        sockets: &S,
+    ) -> Result<(), ConstraintError> {
+        self.check_constraint(&constraint, sockets)?;
         self.constraints.push(constraint);
+        Ok(())
+    }
+
+    /// Record a far-end check that was already admitted when it was written.
+    ///
+    /// The loader's entry point, and [`Self::insert_placed`]'s reason: rows
+    /// outlive catalogs, and re-checking a stored check on read would mean a
+    /// venue whose catalog entry has since been dropped loses the rest of its
+    /// paperwork too. A check whose ends no longer resolve reports
+    /// [`ConstraintStatus::Dangling`] and claims nothing, which is the whole
+    /// of what the solve has to do about it.
+    pub fn load_constraint(&mut self, constraint: Constraint) {
+        self.constraints.push(constraint);
+    }
+
+    /// Whether [`Self::constrain`] would succeed, without performing it.
+    ///
+    /// # Errors
+    /// As [`Self::constrain`].
+    pub fn check_constraint<S: NodeSockets + ?Sized>(
+        &self,
+        constraint: &Constraint,
+        sockets: &S,
+    ) -> Result<(), ConstraintError> {
+        let node = self
+            .nodes
+            .get(&constraint.node)
+            .ok_or_else(|| ConstraintError::UnknownNode(constraint.node.clone()))?;
+        let target = self
+            .nodes
+            .get(&constraint.target_node)
+            .ok_or_else(|| ConstraintError::UnknownTarget(constraint.target_node.clone()))?;
+        if node.kind == NodeKind::Array {
+            return Err(ConstraintError::NodeIsArray(constraint.node.clone()));
+        }
+        if target.kind == NodeKind::Array {
+            return Err(ConstraintError::TargetIsArray(
+                constraint.target_node.clone(),
+            ));
+        }
+        let held = self
+            .socket_on(node, &constraint.my_socket, sockets)
+            .ok_or_else(|| ConstraintError::MissingSocket {
+                node: constraint.node.clone(),
+                socket: constraint.my_socket.clone(),
+            })?;
+        let host = self
+            .socket_on(target, &constraint.target_socket, sockets)
+            .ok_or_else(|| ConstraintError::MissingTargetSocket {
+                node: constraint.target_node.clone(),
+                socket: constraint.target_socket.clone(),
+            })?;
+        if !held.socket_type.mates(host.socket_type) {
+            return Err(ConstraintError::Polarity {
+                held: held.socket_type,
+                host: host.socket_type,
+            });
+        }
+        Ok(())
     }
 
     /// Place `child` by mating two sockets.
@@ -484,7 +612,7 @@ impl VenueGraph {
             }
         })?;
         let host = self
-            .host_socket(parent_node, &edge.their_socket, sockets)
+            .socket_on(parent_node, &edge.their_socket, sockets)
             .ok_or_else(|| EdgeError::MissingHostSocket {
                 node: edge.parent.clone(),
                 socket: edge.their_socket.clone(),
@@ -527,19 +655,23 @@ impl VenueGraph {
         }
     }
 
-    /// A parent's socket by name, with the root's synthesized floor.
-    fn host_socket<S: NodeSockets + ?Sized>(
+    /// One node's socket by name, with the root's synthesized floor.
+    ///
+    /// The root has no catalog entry, so [`root_socket`] is the only place
+    /// its floor exists; every relation that can name a node can name the
+    /// root, so the fallback belongs here rather than at each caller.
+    fn socket_on<S: NodeSockets + ?Sized>(
         &self,
-        parent: &Node,
+        node: &Node,
         name: &str,
         sockets: &S,
     ) -> Option<ResolvedSocket> {
-        if parent.kind == NodeKind::Venue {
+        if node.kind == NodeKind::Venue {
             if let Some(socket) = root_socket(name) {
                 return Some(socket);
             }
         }
-        find_socket(&sockets.sockets(parent), name)
+        find_socket(&sockets.sockets(node), name)
     }
 }
 
@@ -662,7 +794,9 @@ pub enum ConstraintStatus {
     /// Both ends resolved and they do not meet, by this many metres.
     Violated { gap_m: f64 },
     /// One end does not resolve: the node is unplaced, gone, or has no such
-    /// socket.
+    /// socket. The check claims nothing — both its sockets stay in
+    /// [`ResolvedVenue::dangling`], because a relation to a node that is not
+    /// in the room accounts for no end that is.
     Dangling,
 }
 
@@ -682,9 +816,12 @@ pub struct ConstraintReport {
 /// deck's four corners are not "dangling" for having nothing standing on them,
 /// but the open end of a run is what a builder needs told about.
 ///
-/// "Open" means no relation names it: neither half of a joint is dangling, and
-/// neither is an end a [`Constraint`] checks — a far end is exactly the case
-/// where the builder has already said what the socket is for.
+/// "Open" means no relation *accounts* for it: neither half of a joint is
+/// dangling, and neither is an end a resolved [`Constraint`] checks — a far
+/// end is exactly the case where the builder has already said what the socket
+/// is for. A check whose target does not resolve
+/// ([`ConstraintStatus::Dangling`]) says nothing about the room, so both its
+/// ends stay open.
 #[derive(Clone, Debug)]
 pub struct DanglingSocket {
     pub node: String,
@@ -883,11 +1020,6 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
     let Some(root) = graph.node(&graph.root) else {
         return out;
     };
-    // Which sockets are spoken for, computed once over the whole graph: a
-    // socket is open or it is not, and that is a property of the relations,
-    // not of the order the walk reaches them in.
-    let claimed = claimed_sockets(graph);
-
     push_pose(
         &mut out,
         NodePose {
@@ -901,7 +1033,12 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
             params: root.params.clone(),
         },
     );
-    dangling_of(&mut out, root, 0, sockets, &claimed);
+    // Open ends are collected in a second pass, not here: a socket is open
+    // unless some relation accounts for it, and whether a far-end check
+    // accounts for anything is only known once there are poses to measure it
+    // against. What the walk owes that pass is each placed node and how many
+    // members an array expanded to, in solve order.
+    let mut visited: Vec<(&Node, u32)> = vec![(root, 0)];
 
     // Explicit stack rather than recursion: a corrupted graph must not blow the
     // real one, and the depth bound is the node count.
@@ -919,7 +1056,7 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
             (step.node, step.edge, step.parent, step.parent_world);
         let id = node.id.as_str();
 
-        let host = graph.host_socket(parent_node, &edge.their_socket, sockets);
+        let host = graph.socket_on(parent_node, &edge.their_socket, sockets);
         let mine = sockets.sockets(node);
         let held = find_socket(&mine, &edge.my_socket);
 
@@ -936,15 +1073,16 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
                 } else {
                     edge.my_socket.clone()
                 };
-                out.warnings.push(NodeWarning {
-                    node: id.to_string(),
-                    warning: match &node.catalog_ref {
-                        Some(catalog_ref) if sockets.sockets(node).is_empty() => {
-                            Warning::UnknownCatalogRef(catalog_ref.clone())
-                        }
-                        _ => Warning::MissingSocket(missing),
-                    },
-                });
+                // A node whose geometry is not the geometry it names has no
+                // socket to be missing: the `is_known` check below reports
+                // that one cause, and naming a socket as well would be the
+                // same fact told twice under two names.
+                if sockets.is_known(node) {
+                    out.warnings.push(NodeWarning {
+                        node: id.to_string(),
+                        warning: Warning::MissingSocket(missing),
+                    });
+                }
                 push_pose(
                     &mut out,
                     NodePose {
@@ -962,7 +1100,7 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
             }
         };
 
-        dangling_of(&mut out, node, members, sockets, &claimed);
+        visited.push((node, members));
         if !sockets.is_known(node) {
             out.warnings.push(NodeWarning {
                 node: node.id.clone(),
@@ -979,6 +1117,15 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
         .iter()
         .map(|c| evaluate_constraint(c, &out, graph, sockets))
         .collect();
+
+    // Which sockets are spoken for, computed once over the whole graph: a
+    // socket is open or it is not, and that is a property of the relations,
+    // not of the order the walk reaches them in.
+    let claimed = claimed_sockets(graph, &out.constraints);
+    for (node, members) in visited {
+        dangling_of(&mut out, node, members, sockets, &claimed);
+    }
+
     out.unplaced = unplaced_subtrees(graph, &out);
     out
 }
@@ -1307,34 +1454,43 @@ fn array_count(out: &mut ResolvedVenue, node: &Node) -> u32 {
 /// Every socket some relation already accounts for, as `(node, socket)`.
 ///
 /// A joint claims **both** its halves — the child's `my_socket` and the host's
-/// `their_socket` — and a far end claims both of its, because a constraint is
-/// what the builder writes down instead of a second parent. Everything else a
-/// piece offers is open.
+/// `their_socket`. A far-end check claims both of its **only once its target
+/// resolves**: a check naming a node that is unplaced or gone accounts for
+/// nothing that is in the room, and letting it close a socket would hide the
+/// open end behind the paperwork that was supposed to explain it. Satisfied
+/// and violated both claim — a violated end is a *measured* end, and the gap
+/// is already reported as itself. Everything else a piece offers is open.
+///
+/// `reports` is [`resolve`]'s evaluation of `graph.constraints`, one for one
+/// and in order, which is how a status pairs with the check it came from.
 ///
 /// Keyed by the row that holds the relation, which for an array is its anchor.
 /// The two relations an array can be named by — its own edge and a far-end
 /// check — are properties of *every* copy: each member mates the same held
 /// socket against the same host, so a claim on the anchor is one claim per
 /// member ([`collect_dangling`] spends it that way). Nothing can claim one
-/// member and not the rest, because a member has no row to name and
-/// [`EdgeError::ParentIsArray`] refuses the only edge that could try.
-fn claimed_sockets(graph: &VenueGraph) -> BTreeSet<(&str, &str)> {
+/// member and not the rest: a member has no row to name, and the two writers
+/// that could try are refused by [`EdgeError::ParentIsArray`] and
+/// [`ConstraintError::TargetIsArray`].
+fn claimed_sockets<'a>(
+    graph: &'a VenueGraph,
+    reports: &[ConstraintReport],
+) -> BTreeSet<(&'a str, &'a str)> {
     let mut claimed = BTreeSet::new();
     for (child, edge) in &graph.edges {
         claimed.insert((child.as_str(), edge.my_socket.as_str()));
         claimed.insert((edge.parent.as_str(), edge.their_socket.as_str()));
     }
-    for constraint in &graph.constraints {
+    for (constraint, report) in graph.constraints.iter().zip(reports) {
+        if report.status == ConstraintStatus::Dangling {
+            continue;
+        }
         claimed.insert((constraint.node.as_str(), constraint.my_socket.as_str()));
         claimed.insert((
             constraint.target_node.as_str(),
             constraint.target_socket.as_str(),
         ));
     }
-    debug_assert!(
-        claimed.iter().all(|(node, _)| member_of(node).is_none()),
-        "a derived member has no row, so no relation can name one: {claimed:?}"
-    );
     claimed
 }
 
@@ -1524,6 +1680,15 @@ mod tests {
     }
 
     impl NodeSockets for Table {
+        /// Honest about its own contents, as the real supply is about the
+        /// catalog: a ref this table does not hold is a ref whose geometry is
+        /// not the geometry it names.
+        fn is_known(&self, node: &Node) -> bool {
+            node.catalog_ref
+                .as_ref()
+                .is_some_and(|id| self.0.contains_key(id))
+        }
+
         fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
             node.catalog_ref
                 .as_ref()
@@ -2246,21 +2411,32 @@ mod tests {
 
         // b's far end meets its own near end's host — trivially satisfied by
         // pointing the check at the socket it is already bolted to.
-        graph.constrain(Constraint {
-            node: "b".into(),
-            my_socket: "end_a".into(),
-            target_node: "a".into(),
-            target_socket: "end_b".into(),
-        });
+        graph
+            .constrain(
+                Constraint {
+                    node: "b".into(),
+                    my_socket: "end_a".into(),
+                    target_node: "a".into(),
+                    target_socket: "end_b".into(),
+                },
+                &table(),
+            )
+            .unwrap();
         // b's other end is a metre away from a's other end.
-        graph.constrain(Constraint {
-            node: "b".into(),
-            my_socket: "end_b".into(),
-            target_node: "a".into(),
-            target_socket: "end_a".into(),
-        });
-        // Nothing called `ghost` exists.
-        graph.constrain(Constraint {
+        graph
+            .constrain(
+                Constraint {
+                    node: "b".into(),
+                    my_socket: "end_b".into(),
+                    target_node: "a".into(),
+                    target_socket: "end_a".into(),
+                },
+                &table(),
+            )
+            .unwrap();
+        // Nothing called `ghost` exists: a stored row whose target was deleted
+        // after it was written, which `constrain` refuses and the loader keeps.
+        graph.load_constraint(Constraint {
             node: "b".into(),
             my_socket: "end_b".into(),
             target_node: "ghost".into(),
@@ -2323,8 +2499,9 @@ mod tests {
 
     /// A far end is what the builder writes down instead of a second parent,
     /// so the socket it checks is not open either.
-    #[test]
-    fn a_constrained_far_end_is_not_dangling() {
+    /// The graph the far-end tests share: a run on the floor with a second
+    /// bolted to its `end_b`, leaving `a.end_a` and `b.end_b` standing open.
+    fn a_run_of_two() -> VenueGraph {
         let mut graph = VenueGraph::new(root());
         let mut a = node("a", NodeKind::Run, "truss");
         a.params = on_floor(0.0, 0.0, 0.0);
@@ -2341,30 +2518,253 @@ mod tests {
                 &table(),
             )
             .unwrap();
-        assert_eq!(
-            resolve(&graph, &table())
-                .dangling()
-                .iter()
-                .filter(|d| d.node == "a")
-                .count(),
-            2,
-            "both ends start open"
+        graph.insert(node("b", NodeKind::Run, "truss"));
+        graph
+            .attach(
+                "b",
+                Edge {
+                    parent: "a".into(),
+                    my_socket: "end_a".into(),
+                    their_socket: "end_b".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        graph
+    }
+
+    /// Every open end in the venue, as `(node, socket)`.
+    fn open_ends(graph: &VenueGraph) -> Vec<(String, String)> {
+        resolve(graph, &table())
+            .dangling()
+            .iter()
+            .map(|d| (d.node.clone(), d.socket.clone()))
+            .collect()
+    }
+
+    /// A piece whose geometry is not the geometry it names is reported once.
+    /// Such a piece has no socket to be missing either, so naming one as well
+    /// would read as a second problem where there is one cause.
+    #[test]
+    fn an_unknown_catalog_ref_is_reported_once() {
+        let mut graph = VenueGraph::new(root());
+        let mut deck = node("deck", NodeKind::Stage, "deck");
+        deck.params = on_floor(0.0, 0.0, 0.0);
+        graph.insert(deck);
+        graph.attach("deck", floor_edge(0.0), &table()).unwrap();
+        // `insert_placed`, because this is the row that outlived its catalog
+        // entry: it was admitted when it was written, and `attach` would
+        // refuse it now.
+        graph.insert_placed(
+            node("ripped", NodeKind::Piece, "truss/ripped"),
+            Edge {
+                parent: "deck".into(),
+                my_socket: "end_a".into(),
+                their_socket: "top".into(),
+                roll: 0.0,
+            },
         );
 
-        graph.constrain(Constraint {
-            node: "a".into(),
+        let resolved = resolve(&graph, &table());
+        let said: Vec<&Warning> = resolved
+            .warnings()
+            .iter()
+            .filter(|w| w.node == "ripped")
+            .map(|w| &w.warning)
+            .collect();
+        assert_eq!(
+            said,
+            [&Warning::UnknownCatalogRef("truss/ripped".into())],
+            "one cause, one warning"
+        );
+        assert!(
+            resolved.pose("ripped").is_some(),
+            "and the piece keeps a pose to be debugged from"
+        );
+    }
+
+    /// A far end the builder wrote down is what a constraint says *instead of*
+    /// a second parent, so it accounts for both sockets it names. It counts
+    /// whether or not the ends meet: a violated check has measured them, and
+    /// the gap is already reported as itself.
+    #[test]
+    fn a_constrained_far_end_is_not_dangling() {
+        let mut graph = a_run_of_two();
+        assert_eq!(
+            open_ends(&graph),
+            [("a".into(), "end_a".into()), ("b".into(), "end_b".into())],
+            "the run starts with an end at each extreme"
+        );
+
+        graph
+            .constrain(
+                Constraint {
+                    node: "b".into(),
+                    my_socket: "end_b".into(),
+                    target_node: "a".into(),
+                    target_socket: "end_a".into(),
+                },
+                &table(),
+            )
+            .unwrap();
+
+        let resolved = resolve(&graph, &table());
+        assert!(
+            matches!(
+                resolved.constraints()[0].status,
+                ConstraintStatus::Violated { .. }
+            ),
+            "the two ends are a metre apart, so the check resolved and failed"
+        );
+        assert!(
+            open_ends(&graph).is_empty(),
+            "a resolved check accounts for both ends it names: {:?}",
+            open_ends(&graph)
+        );
+    }
+
+    /// A check whose target does not resolve claims nothing. The node is
+    /// unplaced or gone, so the check describes no end that is in the room,
+    /// and closing a socket on it would hide the open end behind the very
+    /// paperwork that was meant to explain it.
+    #[test]
+    fn a_dangling_constraint_leaves_its_end_open() {
+        let mut graph = a_run_of_two();
+        let before = open_ends(&graph);
+
+        graph.load_constraint(Constraint {
+            node: "b".into(),
             my_socket: "end_b".into(),
             target_node: "ghost".into(),
             target_socket: "end_a".into(),
         });
+
         let resolved = resolve(&graph, &table());
-        let open: Vec<&str> = resolved
-            .dangling()
-            .iter()
-            .filter(|d| d.node == "a")
-            .map(|d| d.socket.as_str())
-            .collect();
-        assert_eq!(open, ["end_a"], "the checked end is accounted for");
+        assert_eq!(
+            resolved.constraints()[0].status,
+            ConstraintStatus::Dangling,
+            "nothing called `ghost` is in the venue"
+        );
+        assert_eq!(
+            open_ends(&graph),
+            before,
+            "a check that resolved nothing closed nothing"
+        );
+    }
+
+    /// An array's ends belong to its members, which hold no rows — so a check
+    /// naming the anchor names one socket where the room has `count` of them,
+    /// in either direction.
+    #[test]
+    fn a_constraint_cannot_name_an_array() {
+        let mut graph = a_run_of_two();
+        let mut array = node("wall", NodeKind::Array, "truss");
+        array.params = on_floor(0.0, 0.0, 0.0);
+        array.params.set("count", 3.0);
+        array.params.set("span", 4.0);
+        graph.insert(array);
+        graph
+            .attach(
+                "wall",
+                Edge {
+                    parent: "venue".into(),
+                    my_socket: "base".into(),
+                    their_socket: FLOOR_SOCKET.into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        let before = open_ends(&graph);
+
+        let err = graph
+            .constrain(
+                Constraint {
+                    node: "b".into(),
+                    my_socket: "end_b".into(),
+                    target_node: "wall".into(),
+                    target_socket: "end_a".into(),
+                },
+                &table(),
+            )
+            .expect_err("a far end was pointed at an array");
+        assert_eq!(err, ConstraintError::TargetIsArray("wall".into()));
+        assert!(
+            err.to_string().contains("`wall` is an array"),
+            "the refusal names the array: {err}"
+        );
+
+        let err = graph
+            .constrain(
+                Constraint {
+                    node: "wall".into(),
+                    my_socket: "end_b".into(),
+                    target_node: "b".into(),
+                    target_socket: "end_b".into(),
+                },
+                &table(),
+            )
+            .expect_err("an array end was checked against a truss");
+        assert_eq!(err, ConstraintError::NodeIsArray("wall".into()));
+
+        assert!(graph.constraints().is_empty(), "refused before any write");
+        assert_eq!(open_ends(&graph), before, "and nothing was accounted for");
+    }
+
+    /// A check names two sockets that exist and could meet. One that could not
+    /// be met by any placement is a typo, and reporting it every solve as a
+    /// gap would say the rig is wrong where the paperwork is.
+    #[test]
+    fn a_constraint_needs_two_sockets_that_could_mate() {
+        let mut graph = a_run_of_two();
+        graph.insert(node("mover", NodeKind::Fixture, "mover"));
+
+        let check = |node: &str, my: &str, target: &str, theirs: &str| {
+            VenueGraph::check_constraint(
+                &graph,
+                &Constraint {
+                    node: node.into(),
+                    my_socket: my.into(),
+                    target_node: target.into(),
+                    target_socket: theirs.into(),
+                },
+                &table(),
+            )
+            .expect_err("the check was admitted")
+        };
+
+        assert_eq!(
+            check("ghost", "end_a", "a", "end_a"),
+            ConstraintError::UnknownNode("ghost".into())
+        );
+        assert_eq!(
+            check("a", "end_a", "ghost", "end_a"),
+            ConstraintError::UnknownTarget("ghost".into())
+        );
+        assert_eq!(
+            check("a", "end_z", "b", "end_b"),
+            ConstraintError::MissingSocket {
+                node: "a".into(),
+                socket: "end_z".into()
+            }
+        );
+        assert_eq!(
+            check("a", "end_a", "b", "end_z"),
+            ConstraintError::MissingTargetSocket {
+                node: "b".into(),
+                socket: "end_z".into()
+            }
+        );
+        // A clamp is `Male`: it can be held, never hosted, so no placement of
+        // the mover ever puts a truss end on it.
+        assert_eq!(
+            check("a", "end_a", "mover", "clamp"),
+            ConstraintError::Polarity {
+                held: SocketType::TrussEnd,
+                host: SocketType::EquipmentMount
+            }
+        );
     }
 
     #[test]
