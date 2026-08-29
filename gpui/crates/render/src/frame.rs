@@ -16,7 +16,7 @@ use crate::luminaire::{
     beam_direction, cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL,
 };
 use crate::overlay::Overlay;
-use crate::scene_desc::{Definition, Geometry, PrimitiveState, Procedural, Scene};
+use crate::scene_desc::{Definition, Geometry, PrimitiveState, Scene};
 
 /// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
 pub type Definitions = std::collections::BTreeMap<String, Definition>;
@@ -705,9 +705,8 @@ pub fn build_with(
                     }
                 }
             }
-            Geometry::Procedural(Procedural::Truss { span }) => {
-                let truss = crate::truss::Truss::new(*span);
-                let mesh = bank.insert(truss.mesh_key(), || truss.mesh());
+            Geometry::Procedural(procedural) => {
+                let mesh = bank.insert(procedural.mesh_key(), || procedural.mesh());
                 draws.push(Draw {
                     mesh,
                     model: root,

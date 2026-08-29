@@ -24,6 +24,9 @@ const CASES: &[&str] = &[
     "gobo-seam-negative",
     "gobo-seam-positive",
     "volumetric-performance-smooth",
+    "truss-side-by-side",
+    "truss-corner-vs-ripped",
+    "truss-joints",
 ];
 
 #[derive(Deserialize)]
