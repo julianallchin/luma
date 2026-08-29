@@ -52,14 +52,30 @@ pub struct Scene {
     pub editing: bool,
     /// Every render dial the frame depends on, pinned.
     pub render: RenderSettings,
-    /// Drives the gizmo and the selection outline.
+    /// Drives the selection outline, and its first entry is the primary.
     pub selected_fixture_ids: Vec<String>,
+    /// Live editor state: what the app's selection and gizmo are doing right
+    /// now. Never captured — the catalogue describes a picture, and this is
+    /// what a *running* editor draws over one. `selected_fixture_ids` predates
+    /// it and stays where the goldens write it, so [`Scene::selected`] is the
+    /// one place that knows the selection is spelled in two fields.
+    #[serde(skip)]
+    pub editor: Editor,
     /// Patched fixtures, in submission order.
     pub fixtures: Vec<Fixture>,
     /// Stage pieces (decks, trusses, speakers).
     pub pieces: Vec<Piece>,
     /// Fixed primitive state per `"<fixtureId>:<head>"` key.
     pub state: BTreeMap<String, PrimitiveState>,
+}
+
+/// What the editor is doing to the scene it is drawn over.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Editor {
+    /// Selected stage pieces. Fixtures are in [`Scene::selected_fixture_ids`].
+    pub selected_piece_ids: Vec<String>,
+    /// Which widget the transform gizmo shows.
+    pub gizmo: luma_scene::GizmoMode,
 }
 
 /// Three.js Y-up, because that is the space `useCameraStore` holds.
@@ -410,16 +426,99 @@ impl Geometry {
 
 /// The generated piece families. A closed vocabulary: a new set object is an
 /// authored mesh unless its shape is genuinely parametric.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+///
+/// Every variant is a truss piece today, and every one of them mates with every
+/// other — see [`crate::truss`]. Parameters here are *requests*: each is
+/// quantized or clamped by the generator's constructor, so an unbuildable value
+/// is not an error, it is the nearest buildable one.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Procedural {
-    /// A continuous F34 lattice. `span` is metres and is quantized by
-    /// [`crate::truss::Truss::new`], so an unbuildable length is not an error —
-    /// it is the nearest buildable one.
+    /// A continuous F34 lattice.
     Truss {
-        /// Requested span in metres, before snapping.
+        /// Requested span in metres, before snapping to whole panels.
         span: f32,
     },
+    /// A box corner, open on two to six faces.
+    Corner {
+        /// Which faces are open; fewer than two widens to straight-through.
+        faces: crate::truss::FaceSet,
+    },
+    /// Two half-boxes on a vertical pin.
+    Hinge {
+        /// Deflection in degrees, before clamping to `0..=180` and rounding.
+        angle: f32,
+    },
+}
+
+impl Procedural {
+    /// The generated piece this describes, with its parameters made buildable.
+    ///
+    /// One place converts a scene file's requests into geometry, so the frame
+    /// builder, the camera framing, and any future collision box all see the
+    /// same clamped piece rather than each re-deriving it.
+    fn part(self) -> Part {
+        match self {
+            Self::Truss { span } => Part::Truss(crate::truss::Truss::new(span)),
+            Self::Corner { faces } => Part::Corner(crate::truss::Corner::new(faces)),
+            Self::Hinge { angle } => Part::Hinge(crate::truss::Hinge::new(angle)),
+        }
+    }
+
+    /// Stable identity of this piece's geometry in the frame's mesh bank.
+    ///
+    /// Every parameter that changes a vertex is in the key, and every key is
+    /// drawn from a finite set — spans are whole panels, corners are one of 64
+    /// face sets, hinges are whole degrees — so a venue of generated pieces
+    /// interns a bounded number of meshes.
+    #[must_use]
+    pub fn mesh_key(self) -> String {
+        match self.part() {
+            Part::Truss(t) => t.mesh_key(),
+            Part::Corner(c) => c.mesh_key(),
+            Part::Hinge(h) => h.mesh_key(),
+        }
+    }
+
+    /// The piece as one uploadable triangle list, in piece-local space.
+    #[must_use]
+    pub fn mesh(self) -> crate::frame::MeshData {
+        match self.part() {
+            Part::Truss(t) => t.mesh(),
+            Part::Corner(c) => c.mesh(),
+            Part::Hinge(h) => h.mesh(),
+        }
+    }
+
+    /// Every face another piece can bolt onto, in piece-local space.
+    #[must_use]
+    pub fn end_frames(self) -> Vec<crate::truss::EndFrame> {
+        match self.part() {
+            Part::Truss(t) => t.end_frames().to_vec(),
+            Part::Corner(c) => c.end_frames().collect(),
+            Part::Hinge(h) => h.end_frames().to_vec(),
+        }
+    }
+
+    /// Half-width of the box [`Scene::framing`] stands on this piece's origin.
+    #[must_use]
+    pub fn half_extent_m(self) -> f32 {
+        match self.part() {
+            Part::Truss(t) => t.span_m() / 2.0,
+            // A block is the same size whatever its ways, and a hinge is one
+            // block long in the worst case.
+            Part::Corner(_) | Part::Hinge(_) => crate::truss::OUTER_M,
+        }
+    }
+}
+
+/// A [`Procedural`]'s parameters, made buildable. Private: the vocabulary the
+/// wire and the callers share is [`Procedural`], and a second public enum over
+/// the same three shapes would be a list to keep in sync.
+enum Part {
+    Truss(crate::truss::Truss),
+    Corner(crate::truss::Corner),
+    Hinge(crate::truss::Hinge),
 }
 
 /// A stage piece, in the same Z-up data space as [`Fixture`].
@@ -473,9 +572,7 @@ impl Piece {
     pub fn framing_half_extent(&self) -> f32 {
         match &self.geometry {
             Geometry::MeshPath(_) => self.scale.abs().max(0.25),
-            Geometry::Procedural(Procedural::Truss { span }) => {
-                self.scale.abs() * crate::truss::Truss::new(*span).span_m() / 2.0
-            }
+            Geometry::Procedural(p) => self.scale.abs() * p.half_extent_m(),
         }
     }
 }
@@ -773,6 +870,7 @@ mod tests {
             editing: false,
             render: RenderSettings::dark_stage(50.0, 1.0),
             selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
             fixtures: (0..4)
                 .map(|i| Fixture {
                     id: format!("fixture-{i}"),

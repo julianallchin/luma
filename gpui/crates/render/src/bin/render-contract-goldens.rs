@@ -5,9 +5,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use luma_render::coords::data_pose_of;
 use luma_render::scene_desc::{
     CameraPose, DirectionalLight, Environment, Geometry, Piece, Procedural, RenderSettings, Scene,
 };
+use luma_render::truss::{Face, FaceSet};
 use luma_render::{assets, build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
 
 const TIME: f32 = 1.37;
@@ -140,7 +142,7 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
-    for scene in [truss_scene()] {
+    for scene in [truss_scene(), corner_scene(), joint_scene()] {
         if requested.is_empty() || requested.contains(&scene.id) {
             render_case(
                 &mut renderer,
@@ -215,6 +217,7 @@ fn material_scenes() -> Vec<Scene> {
             editing: false,
             render,
             selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
             fixtures: Vec::new(),
             pieces: vec![Piece {
                 id: "lab".into(),
@@ -252,9 +255,9 @@ fn material_scenes() -> Vec<Scene> {
     ]
 }
 
-/// The ripped SketchUp F33 stick over the procedural F34 lattice, same span,
-/// same camera. The picture the procedural generator is read against.
-fn truss_scene() -> Scene {
+/// The stage the whole truss family is read against: one hard sun, no haze, no
+/// grid, so the only thing in the picture is tube.
+fn truss_bench(id: &str, camera: CameraPose, pieces: Vec<Piece>) -> Scene {
     let mut render = RenderSettings::dark_stage(38.0, 1.0);
     render.environment = Environment {
         background: [0.004, 0.006, 0.01],
@@ -272,17 +275,64 @@ fn truss_scene() -> Scene {
         shadow_softness: 1.0,
     });
     Scene {
-        id: "truss-side-by-side".into(),
+        id: id.into(),
         times: vec![TIME],
-        camera: CameraPose {
-            position: [0.0, 0.95, 2.7],
-            target: [0.0, 0.95, 0.0],
-        },
+        camera,
         editing: false,
+        editor: Default::default(),
         render,
         selected_fixture_ids: Vec::new(),
         fixtures: Vec::new(),
-        pieces: vec![
+        pieces,
+        state: BTreeMap::new(),
+    }
+}
+
+/// A generated truss piece, posed in three space rather than stored space.
+///
+/// The family's local space *is* three space, so a piece's pose is the same
+/// matrix its geometry is built in — which is what lets [`bolted`] hand a
+/// mating transform straight to [`data_pose_of`].
+fn generated(id: &str, geometry: Procedural, pose: glam::Mat4) -> Piece {
+    let (pos, rot) = data_pose_of(pose);
+    Piece {
+        id: id.into(),
+        geometry: Geometry::Procedural(geometry),
+        kind: "truss".into(),
+        pos,
+        rot,
+        scale: 1.0,
+    }
+}
+
+/// `guest` bolted onto the `nth` open face of a host posed at `host_pose`.
+///
+/// Every joint in the joint golden is built this way, through
+/// `EndFrame::mating` and nothing else — so a generator whose end frames drift
+/// out of register does not quietly render straight, it renders a visibly
+/// broken run. That is the entire point of the picture.
+fn bolted(
+    id: &str,
+    host: Procedural,
+    host_pose: glam::Mat4,
+    nth: usize,
+    guest: Procedural,
+) -> Piece {
+    let face = host.end_frames()[nth].transformed(host_pose);
+    let pose = face.mating(guest.end_frames()[0]);
+    generated(id, guest, pose)
+}
+
+/// The ripped SketchUp F33 stick over the procedural F34 lattice, same span,
+/// same camera. The picture the procedural generator is read against.
+fn truss_scene() -> Scene {
+    truss_bench(
+        "truss-side-by-side",
+        CameraPose {
+            position: [0.0, 0.95, 2.7],
+            target: [0.0, 0.95, 0.0],
+        },
+        vec![
             Piece {
                 id: "reference".into(),
                 geometry: Geometry::mesh("stage_lab/truss_q30_1.22m.glb"),
@@ -312,8 +362,105 @@ fn truss_scene() -> Scene {
                 scale: 1.0,
             },
         ],
-        state: BTreeMap::new(),
+    )
+}
+
+/// The ripped Q30 corner block beside the generated ones, left to right: the
+/// reference, a two-way L, and a six-way.
+///
+/// The reference is modelled with its origin on a corner of its own bounding
+/// box rather than at its centre, so it is offset by half a block to put the
+/// three on one axis — the mismatch a generated family does not have.
+fn corner_scene() -> Scene {
+    const RIPPED_HALF: f32 = 0.1524;
+    truss_bench(
+        "truss-corner-vs-ripped",
+        CameraPose {
+            position: [0.0, 1.25, 1.85],
+            target: [0.0, 0.9, 0.0],
+        },
+        vec![
+            Piece {
+                id: "reference".into(),
+                geometry: Geometry::mesh("stage_lab/truss_q30_box.glb"),
+                kind: "truss".into(),
+                // Stored pose is data space: `(x, y, z)` with `z` up.
+                pos: [-0.62 - RIPPED_HALF, RIPPED_HALF, 0.9 - RIPPED_HALF],
+                rot: [0.0; 3],
+                scale: 1.0,
+            },
+            generated(
+                "corner-2-way",
+                Procedural::Corner {
+                    faces: FaceSet::of([Face::NegX, Face::PosY]),
+                },
+                glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.9, 0.0)),
+            ),
+            generated(
+                "corner-6-way",
+                Procedural::Corner {
+                    faces: FaceSet::ALL,
+                },
+                glam::Mat4::from_translation(glam::Vec3::new(0.62, 0.9, 0.0)),
+            ),
+        ],
+    )
+}
+
+/// Three joints with a stick bolted to every open face: an L, a T, and a hinge
+/// at 45°.
+///
+/// Every stick's pose comes from `EndFrame::mating` against the block's own
+/// face, so any disagreement between a stick's end and a block's face — a
+/// half-square that is not half a square, a roll a quarter turn out — shows up
+/// as a kinked run rather than as a number in a test nobody reads.
+fn joint_scene() -> Scene {
+    const STICK: Procedural = Procedural::Truss { span: 0.5 };
+    let mut pieces = Vec::new();
+    // Yaw is composition, not decoration: a 45° hinge seen end-on is two
+    // foreshortened stubs, so the joint is turned to straddle the view and the
+    // legs — which are placed by mating, not by this angle — splay evenly.
+    let joints: [(&str, Procedural, f32, f32); 3] = [
+        (
+            "l",
+            Procedural::Corner {
+                faces: FaceSet::of([Face::PosX, Face::PosY]),
+            },
+            -2.0,
+            0.0,
+        ),
+        (
+            "t",
+            Procedural::Corner {
+                faces: FaceSet::of([Face::NegX, Face::PosX, Face::PosY]),
+            },
+            0.0,
+            0.0,
+        ),
+        ("hinge", Procedural::Hinge { angle: 45.0 }, 2.0, -22.5),
+    ];
+    for (name, joint, x, yaw) in joints {
+        let pose = glam::Mat4::from_translation(glam::Vec3::new(x, 0.85, 0.0))
+            * glam::Mat4::from_rotation_y(yaw.to_radians());
+        pieces.push(generated(name, joint, pose));
+        for (nth, _) in joint.end_frames().iter().enumerate() {
+            pieces.push(bolted(
+                &format!("{name}-leg-{nth}"),
+                joint,
+                pose,
+                nth,
+                STICK,
+            ));
+        }
     }
+    truss_bench(
+        "truss-joints",
+        CameraPose {
+            position: [0.0, 3.0, 3.5],
+            target: [0.0, 0.75, 0.0],
+        },
+        pieces,
+    )
 }
 
 fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
@@ -343,6 +490,7 @@ fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
         editing: false,
         render,
         selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
         fixtures: Vec::new(),
         pieces: vec![
             Piece {

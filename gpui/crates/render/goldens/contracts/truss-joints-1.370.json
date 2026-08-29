@@ -1,0 +1,289 @@
+{
+  "schema": "luma.renderer-frame/1",
+  "image": "truss-joints-1.370.png",
+  "viewport": {
+    "width": 1100,
+    "height": 480
+  },
+  "deviceScaleFactor": 1.0,
+  "outputSize": [
+    1100,
+    480
+  ],
+  "subframes": 16,
+  "timeSeconds": 1.37,
+  "scene": {
+    "id": "truss-joints",
+    "times": [
+      1.37
+    ],
+    "camera": {
+      "position": [
+        0.0,
+        3.0,
+        3.5
+      ],
+      "target": [
+        0.0,
+        0.75,
+        0.0
+      ]
+    },
+    "editing": false,
+    "render": {
+      "environment": {
+        "background": [
+          0.004,
+          0.006,
+          0.01
+        ],
+        "ambientColor": [
+          0.35,
+          0.45,
+          0.65
+        ],
+        "ambientIntensity": 0.1
+      },
+      "haze": {
+        "enabled": false,
+        "steps": 8,
+        "resolution": 1.0,
+        "density": 0.8
+      },
+      "sun": {
+        "direction": [
+          2.0,
+          -2.5,
+          6.0
+        ],
+        "color": [
+          1.0,
+          0.95,
+          0.88
+        ],
+        "intensity": 2.6,
+        "shadows": false,
+        "shadowSoftness": 1.0
+      },
+      "showGrid": false,
+      "debugView": "pbr",
+      "fixtureSurfaceLighting": true,
+      "fixtureShadows": true,
+      "clusterDebug": false,
+      "fov": 38.0
+    },
+    "selectedFixtureIds": [],
+    "fixtures": [],
+    "pieces": [
+      {
+        "id": "l",
+        "procedural": {
+          "corner": {
+            "faces": [
+              "+x",
+              "+y"
+            ]
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          -2.0,
+          0.0,
+          0.85
+        ],
+        "rot": [
+          -0.0,
+          -0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "l-leg-0",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          -1.605,
+          0.0,
+          0.85
+        ],
+        "rot": [
+          -0.0,
+          -0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "l-leg-1",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          -2.0,
+          0.0,
+          1.245
+        ],
+        "rot": [
+          1.5707964,
+          0.0,
+          1.5707963
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "t",
+        "procedural": {
+          "corner": {
+            "faces": [
+              "-x",
+              "+x",
+              "+y"
+            ]
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          0.0,
+          0.0,
+          0.85
+        ],
+        "rot": [
+          -0.0,
+          -0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "t-leg-0",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          -0.39499998,
+          0.0,
+          0.85
+        ],
+        "rot": [
+          -3.1415925,
+          -3.1415925,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "t-leg-1",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          0.39499998,
+          0.0,
+          0.85
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "t-leg-2",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          0.0,
+          0.0,
+          1.245
+        ],
+        "rot": [
+          1.5707964,
+          0.0,
+          1.5707963
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "hinge",
+        "procedural": {
+          "hinge": {
+            "angle": 45.0
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          2.0,
+          0.0,
+          0.85
+        ],
+        "rot": [
+          0.0,
+          0.0,
+          -0.39269915
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "hinge-leg-0",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          1.6350676,
+          -0.15115997,
+          0.85
+        ],
+        "rot": [
+          -3.1415925,
+          -3.1415925,
+          0.39269915
+        ],
+        "scale": 1.0
+      },
+      {
+        "id": "hinge-leg-1",
+        "procedural": {
+          "truss": {
+            "span": 0.5
+          }
+        },
+        "kind": "truss",
+        "pos": [
+          2.3649325,
+          -0.15116,
+          0.85
+        ],
+        "rot": [
+          -0.0,
+          -0.0,
+          0.39269924
+        ],
+        "scale": 1.0
+      }
+    ],
+    "state": {}
+  },
+  "definitions": {}
+}
