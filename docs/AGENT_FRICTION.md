@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] Nothing in the truss family rendered a face until now, so `Face::frame()` putting a block's mating plane on the *chord-centre* square went unnoticed for two commits — every corner's in-plane edge tubes bulged a chord radius through every face, and every bolted joint interpenetrated invisibly. A geometry invariant with no picture and no test is not a contract, it is a comment.
 - [2026-08-29] `render-goldens` had no dry run: the only way to learn whether a change moved a golden was to overwrite all 24 of them and read `git status`, which conflates "I checked" with "I recaptured" and makes a stale scene indistinguishable from a fresh one. Two separate tasks today wanted to ask the question without answering it; `--check` now exists.
 - [2026-08-29] Two agents in one checkout means `git commit -a` from either sweeps up the other's half-written files: my `scene_desc::Editor` field landed inside someone else's truss commit, which therefore does not build on its own. Path-scoped commits are the only safe form in a shared tree, and nothing enforces them.
 - [2026-08-29] A shared checkout also means someone else's mid-edit crate is *your* compile error: `cargo check -p luma-render` failed on `truss.rs` and `fixture-kinematics` for twenty minutes for reasons that had nothing to do with the diff in front of me, and the forbidden `git stash` is exactly the tool that would have isolated it.
