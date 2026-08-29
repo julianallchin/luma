@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { FixtureEntry, Mode, PatchedFixture } from "@/bindings/fixtures";
+import type { FixtureEntry, Mode } from "@/bindings/fixtures";
 import { Button } from "@/shared/components/ui/button";
 import {
 	Dialog,
@@ -18,26 +18,6 @@ import {
 import { cn } from "@/shared/lib/utils";
 import { useFixtureStore } from "../stores/use-fixture-store";
 
-function findNextAvailableAddress(
-	patched: PatchedFixture[],
-	numChannels: number,
-): number | null {
-	const ranges = patched
-		.map((f) => ({
-			start: Number(f.address),
-			end: Number(f.address) + Number(f.numChannels) - 1,
-		}))
-		.sort((a, b) => a.start - b.start);
-
-	let candidate = 1;
-	for (const r of ranges) {
-		if (candidate + numChannels - 1 < r.start) return candidate;
-		candidate = Math.max(candidate, r.end + 1);
-	}
-	if (candidate + numChannels - 1 <= 512) return candidate;
-	return null;
-}
-
 export function AddFixtureDialog({
 	open,
 	onOpenChange,
@@ -55,7 +35,7 @@ export function AddFixtureDialog({
 	const selectedDefinition = useFixtureStore((s) => s.selectedDefinition);
 	const isLoadingDefinition = useFixtureStore((s) => s.isLoadingDefinition);
 	const patchFixture = useFixtureStore((s) => s.patchFixture);
-	const patchedFixtures = useFixtureStore((s) => s.patchedFixtures);
+	const nextAddresses = useFixtureStore((s) => s.nextAddresses);
 
 	const [localQuery, setLocalQuery] = useState("");
 	const [selectedMode, setSelectedMode] = useState<string | null>(null);
@@ -106,12 +86,14 @@ export function AddFixtureDialog({
 		const mode = selectedDefinition.Mode.find((m) => m["@Name"] === modeName);
 		const channels = mode?.Channel?.length ?? 0;
 		if (channels <= 0) return;
-		const address = findNextAvailableAddress(patchedFixtures, channels);
-		if (address === null) {
+		// The backend owns the allocator; the dialog only asks it where the
+		// next fixture of this width goes.
+		const [slot] = await nextAddresses(channels, 1);
+		if (!slot) {
 			console.error("No available address for new fixture");
 			return;
 		}
-		await patchFixture(1, address, modeName, channels);
+		await patchFixture(slot.universe, slot.address, modeName, channels);
 		onOpenChange(false);
 	};
 

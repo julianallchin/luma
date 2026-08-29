@@ -794,6 +794,7 @@ mod tests {
             mode_name: "Standard".into(),
             fixture_path: "test.qxf".into(),
             label: None,
+            address_pinned: false,
             pos_x: 0.0,
             pos_y: 0.0,
             pos_z: 0.0,

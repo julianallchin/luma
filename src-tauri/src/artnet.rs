@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager};
 use crate::fixtures::engine;
 use crate::fixtures::parser::parse_definition;
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
+use crate::models::patch::UniverseOutput;
 use crate::models::universe::UniverseState;
 use crate::settings::AppSettings;
 
@@ -37,6 +38,13 @@ struct ArtNetInner {
     last_universe_buffers: HashMap<i64, [u8; 512]>,
     fixtures_root: PathBuf,
     discovered_nodes: HashMap<String, ArtNetNode>,
+    /// Which node each universe goes to, by universe. The table that replaced
+    /// the port-address arithmetic; a universe missing from it falls back to
+    /// that arithmetic, loudly.
+    outputs: HashMap<i64, UniverseOutput>,
+    /// Universes already warned about, so the fallback says its piece once
+    /// rather than forty-four times a second.
+    unbound_warned: std::collections::HashSet<i64>,
     discovery_running: bool,
     // Monotonic epoch used to derive frame_time_secs for time-varying effects
     // (currently the square-wave strobe fallback for fixtures without a shutter).
@@ -57,6 +65,8 @@ impl ArtNetManager {
             last_universe_buffers: HashMap::new(),
             fixtures_root,
             discovered_nodes: HashMap::new(),
+            outputs: HashMap::new(),
+            unbound_warned: std::collections::HashSet::new(),
             discovery_running: false,
             start: Instant::now(),
         }));
@@ -70,6 +80,10 @@ impl ArtNetManager {
                 guard.settings = settings;
                 drop(guard);
                 Self::rebind(&inner_clone);
+            }
+            if let Ok(outputs) = crate::database::local::outputs::list(&pool).await {
+                inner_clone.lock().unwrap().outputs =
+                    outputs.into_iter().map(|o| (o.universe, o)).collect();
             }
         });
 
@@ -148,6 +162,16 @@ impl ArtNetManager {
         }
     }
 
+    /// Replace the universe-to-node table. Called after every bind or unbind,
+    /// so the sender never reads the database on a frame.
+    pub fn set_outputs(&self, outputs: Vec<UniverseOutput>) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.outputs = outputs.into_iter().map(|o| (o.universe, o)).collect();
+        // A universe that has just been unbound deserves to be told about
+        // again; a bound one will never take the fallback branch anyway.
+        guard.unbound_warned.clear();
+    }
+
     pub fn update_patch(&self, fixtures: Vec<PatchedFixture>) {
         let mut guard = self.inner.lock().unwrap();
         guard.patched_fixtures = fixtures;
@@ -201,6 +225,40 @@ impl ArtNetManager {
         let sequence = guard.sequence;
         guard.sequence = guard.sequence.wrapping_add(1);
 
+        // Resolve every universe's destination *before* the socket is
+        // borrowed. A bound universe carries the port address its node
+        // announced and goes straight to that node; an unbound one falls back
+        // to the old `(net << 8) | (subnet << 4) | (universe & 0xF)`
+        // arithmetic, which masks the universe to four bits — so universe 17
+        // lands on universe 1 — and says so once rather than aliasing in
+        // silence.
+        let net = guard.settings.artnet_net;
+        let subnet = guard.settings.artnet_subnet;
+        let routes: Vec<(i64, u16, Option<String>)> = universe_buffers
+            .keys()
+            .copied()
+            .map(|universe| match guard.outputs.get(&universe) {
+                Some(output) => (
+                    universe,
+                    output.port_address as u16,
+                    Some(format!("{}:{}", output.node_ip, output.node_port)),
+                ),
+                None => (
+                    universe,
+                    ((net as u16) << 8) | ((subnet as u16) << 4) | (universe as u16 & 0xF),
+                    None,
+                ),
+            })
+            .collect();
+        for (universe, _, node) in &routes {
+            if node.is_none() && guard.unbound_warned.insert(*universe) {
+                log::warn!(
+                    "[ArtNet] universe {universe} is bound to no node; falling back to \
+                     net/subnet arithmetic, which aliases universes above 15 onto 0-15"
+                );
+            }
+        }
+
         let socket = guard.socket.as_ref().unwrap();
         let broadcast_target = format!("255.255.255.255:{}", ARTNET_PORT);
 
@@ -215,22 +273,27 @@ impl ArtNetManager {
 
         let should_broadcast = guard.settings.artnet_broadcast;
 
-        for (univ_idx, data) in universe_buffers {
-            let net = guard.settings.artnet_net;
-            let subnet = guard.settings.artnet_subnet;
+        for (universe, port_address, node) in &routes {
+            let Some(data) = universe_buffers.get(universe) else {
+                continue;
+            };
+            let packet = build_artdmx_packet(sequence, *port_address, data);
 
-            // Port Address: Bits 14-8 = Net, 7-4 = SubNet, 3-0 = Universe
-            let port_address =
-                ((net as u16) << 8) | ((subnet as u16) << 4) | (univ_idx as u16 & 0xF);
-
-            let packet = build_artdmx_packet(sequence, port_address, &data);
-
-            if let Some(target) = &unicast_target {
-                let _ = socket.send_to(&packet, target);
-            }
-
-            if should_broadcast || unicast_target.is_none() {
-                let _ = socket.send_to(&packet, &broadcast_target);
+            match node {
+                // A binding is a destination, so it neither broadcasts nor
+                // consults the global unicast setting: the whole point of the
+                // table is that two nodes can hold different universes.
+                Some(node) => {
+                    let _ = socket.send_to(&packet, node);
+                }
+                None => {
+                    if let Some(target) = &unicast_target {
+                        let _ = socket.send_to(&packet, target);
+                    }
+                    if should_broadcast || unicast_target.is_none() {
+                        let _ = socket.send_to(&packet, &broadcast_target);
+                    }
+                }
             }
         }
     }

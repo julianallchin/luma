@@ -599,7 +599,11 @@ pub fn run() {
             dispatch::adapter::patch_fixture,
             dispatch::adapter::get_patched_fixtures,
             dispatch::adapter::get_fixture_facings,
-            dispatch::adapter::move_patched_fixture,
+            dispatch::adapter::set_fixture_address,
+            dispatch::adapter::auto_patch,
+            dispatch::adapter::universe_occupancy,
+            dispatch::adapter::universes_in_use,
+            dispatch::adapter::next_addresses,
             dispatch::adapter::remove_patched_fixture,
             dispatch::adapter::rename_patched_fixture,
             // Stage pieces
@@ -638,6 +642,9 @@ pub fn run() {
             dispatch::adapter::start_discovery,
             dispatch::adapter::stop_discovery,
             dispatch::adapter::get_discovered_nodes,
+            dispatch::adapter::list_outputs,
+            dispatch::adapter::bind_output,
+            dispatch::adapter::unbind_output,
             // Auth
             dispatch::adapter::current_account,
             dispatch::adapter::send_login_code,

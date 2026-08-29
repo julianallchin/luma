@@ -1,0 +1,459 @@
+{
+  "crowdedRun": {
+    "notes": [
+      {
+        "offered": 1,
+        "runRolled": "truss",
+        "taken": 2
+      }
+    ],
+    "patch": [
+      {
+        "address": 417,
+        "footprint": [
+          417,
+          512
+        ],
+        "node": "house_dimmer",
+        "pinned": true,
+        "run": null,
+        "universe": 1
+      },
+      {
+        "address": 1,
+        "footprint": [
+          1,
+          18
+        ],
+        "node": "par_00",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 19,
+        "footprint": [
+          19,
+          36
+        ],
+        "node": "par_01",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 37,
+        "footprint": [
+          37,
+          54
+        ],
+        "node": "par_02",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 55,
+        "footprint": [
+          55,
+          72
+        ],
+        "node": "par_03",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 73,
+        "footprint": [
+          73,
+          90
+        ],
+        "node": "par_04",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 91,
+        "footprint": [
+          91,
+          108
+        ],
+        "node": "par_05",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 109,
+        "footprint": [
+          109,
+          126
+        ],
+        "node": "par_06",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 127,
+        "footprint": [
+          127,
+          144
+        ],
+        "node": "par_07",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 145,
+        "footprint": [
+          145,
+          162
+        ],
+        "node": "par_08",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 163,
+        "footprint": [
+          163,
+          180
+        ],
+        "node": "par_09",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 181,
+        "footprint": [
+          181,
+          198
+        ],
+        "node": "par_10",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 199,
+        "footprint": [
+          199,
+          216
+        ],
+        "node": "par_11",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 217,
+        "footprint": [
+          217,
+          234
+        ],
+        "node": "par_12",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 235,
+        "footprint": [
+          235,
+          252
+        ],
+        "node": "par_13",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 253,
+        "footprint": [
+          253,
+          270
+        ],
+        "node": "par_14",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 271,
+        "footprint": [
+          271,
+          288
+        ],
+        "node": "par_15",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 289,
+        "footprint": [
+          289,
+          306
+        ],
+        "node": "par_16",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 307,
+        "footprint": [
+          307,
+          324
+        ],
+        "node": "par_17",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 325,
+        "footprint": [
+          325,
+          342
+        ],
+        "node": "par_18",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 343,
+        "footprint": [
+          343,
+          360
+        ],
+        "node": "par_19",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 361,
+        "footprint": [
+          361,
+          378
+        ],
+        "node": "par_20",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 379,
+        "footprint": [
+          379,
+          396
+        ],
+        "node": "par_21",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 397,
+        "footprint": [
+          397,
+          414
+        ],
+        "node": "par_22",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      },
+      {
+        "address": 415,
+        "footprint": [
+          415,
+          432
+        ],
+        "node": "par_23",
+        "pinned": false,
+        "run": "truss",
+        "universe": 2
+      }
+    ]
+  },
+  "refusals": {
+    "collision": {
+      "address": 113,
+      "refusedBecauseOf": "mover_0",
+      "universe": 1
+    },
+    "pastTheEnd": {
+      "address": 512,
+      "channels": 16,
+      "footprint": null
+    }
+  },
+  "twoRuns": {
+    "notes": [],
+    "patch": [
+      {
+        "address": 300,
+        "footprint": [
+          300,
+          308
+        ],
+        "node": "bar_2",
+        "pinned": true,
+        "run": "upstage",
+        "universe": 2
+      },
+      {
+        "address": 1,
+        "footprint": [
+          1,
+          16
+        ],
+        "node": "mover_7",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 17,
+        "footprint": [
+          17,
+          32
+        ],
+        "node": "mover_1",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 33,
+        "footprint": [
+          33,
+          48
+        ],
+        "node": "mover_5",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 49,
+        "footprint": [
+          49,
+          64
+        ],
+        "node": "mover_3",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 65,
+        "footprint": [
+          65,
+          80
+        ],
+        "node": "mover_6",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 81,
+        "footprint": [
+          81,
+          96
+        ],
+        "node": "mover_2",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 97,
+        "footprint": [
+          97,
+          112
+        ],
+        "node": "mover_4",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 113,
+        "footprint": [
+          113,
+          128
+        ],
+        "node": "mover_0",
+        "pinned": false,
+        "run": "downstage",
+        "universe": 1
+      },
+      {
+        "address": 1,
+        "footprint": [
+          1,
+          9
+        ],
+        "node": "bar_1",
+        "pinned": false,
+        "run": "upstage",
+        "universe": 2
+      },
+      {
+        "address": 10,
+        "footprint": [
+          10,
+          18
+        ],
+        "node": "bar_0",
+        "pinned": false,
+        "run": "upstage",
+        "universe": 2
+      },
+      {
+        "address": 19,
+        "footprint": [
+          19,
+          27
+        ],
+        "node": "bar_3",
+        "pinned": false,
+        "run": "upstage",
+        "universe": 2
+      },
+      {
+        "address": 28,
+        "footprint": [
+          28,
+          36
+        ],
+        "node": "bar_4",
+        "pinned": false,
+        "run": "upstage",
+        "universe": 2
+      },
+      {
+        "address": 37,
+        "footprint": [
+          37,
+          45
+        ],
+        "node": "bar_5",
+        "pinned": false,
+        "run": "upstage",
+        "universe": 2
+      }
+    ]
+  }
+}

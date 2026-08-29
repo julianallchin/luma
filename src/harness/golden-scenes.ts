@@ -188,6 +188,7 @@ function fixture({
 		manufacturer: def.Manufacturer,
 		model: def.Model,
 		modeName: mode,
+		addressPinned: false,
 		fixturePath: path,
 		label: id,
 		posX: pos[0],

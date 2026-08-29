@@ -17,14 +17,15 @@ pub async fn insert_fixture(
     mode_name: &str,
     fixture_path: &str,
     label: Option<&str>,
+    address_pinned: bool,
 ) -> Result<PatchedFixture, String> {
     let id = Uuid::new_v4().to_string();
     let venue_id = access.venue_id().to_owned();
     let uid = access.principal().map(str::to_owned);
 
     sqlx::query(
-        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&uid)
@@ -37,6 +38,7 @@ pub async fn insert_fixture(
     .bind(mode_name)
     .bind(fixture_path)
     .bind(label)
+    .bind(i64::from(address_pinned))
     .bind(0.0_f64)
     .bind(0.0_f64)
     .bind(0.0_f64)
@@ -59,6 +61,7 @@ pub async fn insert_fixture(
         mode_name: mode_name.to_string(),
         fixture_path: fixture_path.to_string(),
         label: label.map(|s| s.to_string()),
+        address_pinned,
         pos_x: 0.0,
         pos_y: 0.0,
         pos_z: 0.0,
@@ -68,19 +71,54 @@ pub async fn insert_fixture(
     })
 }
 
+/// Move one fixture to `universe`/`address`, recording whether the number came
+/// from a human.
+///
+/// The **only** writer of an address after the insert. `pinned` is part of the
+/// same statement because the two are one decision: a hand-set address that did
+/// not mark itself would be re-derived by the next auto-patch, and a pin
+/// without an address would mean nothing.
+///
+/// # Errors
+/// Fails if the write is refused — including by the table's own footprint
+/// check, which is what makes a truncating reader unreachable.
 pub async fn update_fixture_address(
     access: &mut VenueAccess<'_, Write>,
     id: &str,
+    universe: i64,
     address: i64,
+    pinned: bool,
 ) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
-    let result = sqlx::query("UPDATE fixtures SET address = ? WHERE id = ? AND venue_id = ?")
-        .bind(address)
-        .bind(id)
-        .bind(venue_id)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to move patched fixture: {}", e))?;
+    let result = sqlx::query(
+        "UPDATE fixtures SET universe = ?, address = ?, address_pinned = ?
+         WHERE id = ? AND venue_id = ?",
+    )
+    .bind(universe)
+    .bind(address)
+    .bind(i64::from(pinned))
+    .bind(id)
+    .bind(venue_id)
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to address fixture: {e}"))?;
+    Ok(result.rows_affected())
+}
+
+/// Forget every hand-set address in the venue, so the next allocation derives
+/// them all. What the Auto Patch button means.
+///
+/// # Errors
+/// Fails if the write is refused.
+pub async fn clear_address_pins(access: &mut VenueAccess<'_, Write>) -> Result<u64, String> {
+    let venue_id = access.venue_id().to_owned();
+    let result = sqlx::query(
+        "UPDATE fixtures SET address_pinned = 0 WHERE venue_id = ? AND address_pinned <> 0",
+    )
+    .bind(venue_id)
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to clear address pins: {e}"))?;
     Ok(result.rows_affected())
 }
 
@@ -119,8 +157,8 @@ pub async fn get_patched_fixtures(
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures WHERE venue_id = ?",
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+         FROM fixtures WHERE venue_id = ? ORDER BY id ASC",
     )
     .bind(access.venue_id().to_owned())
     .fetch_all(&mut *access.connection())
@@ -134,7 +172,7 @@ pub async fn get_fixture(
     id: &str,
 ) -> Result<PatchedFixture, String> {
     sqlx::query_as::<_, PatchedFixture>(
-        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
+        "SELECT id, uid, venue_id, universe, address, num_channels, manufacturer, model, mode_name, fixture_path, label, address_pinned, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
          FROM fixtures WHERE id = ? AND venue_id = ?",
     )
     .bind(id)

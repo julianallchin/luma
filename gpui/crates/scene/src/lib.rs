@@ -31,6 +31,7 @@ pub mod framing;
 pub mod gesture;
 pub mod gizmo;
 pub mod graph;
+pub mod patch;
 pub mod selection;
 pub mod snap;
 pub mod sockets;

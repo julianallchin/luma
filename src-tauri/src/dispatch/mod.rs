@@ -174,6 +174,7 @@ use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::{
     BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
 };
+use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput};
 use crate::models::patterns::{
     AnnotationPreview, ForkPatternInput, ForkPatternResult, PatternCategory, PatternSummary,
 };
@@ -337,7 +338,21 @@ commands! {
         fixture_path: String,
         label: Option<String>,
     ) -> PatchedFixture;
-    fixtures::move_patched_fixture(venue_id: String, id: String, address: i64) -> ();
+    fixtures::set_fixture_address(
+        venue_id: String,
+        id: String,
+        universe: i64,
+        address: i64,
+    ) -> ();
+    fixtures::auto_patch(venue_id: String) -> AutoPatchReport;
+    fixtures::universe_occupancy(venue_id: String, universe: i64) -> Vec<UniverseCell>;
+    fixtures::universes_in_use(venue_id: String) -> Vec<u16>;
+    fixtures::next_addresses(
+        venue_id: String,
+        run: Option<String>,
+        channels: i64,
+        count: usize,
+    ) -> Vec<PatchAddress>;
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
@@ -386,6 +401,15 @@ commands! {
     artnet::start_discovery() -> ();
     artnet::stop_discovery() -> ();
     artnet::get_discovered_nodes() -> Vec<ArtNetNode>;
+    artnet::list_outputs() -> Vec<UniverseOutput>;
+    artnet::bind_output(
+        universe: i64,
+        node_ip: String,
+        node_port: i64,
+        port_address: i64,
+        node_name: Option<String>,
+    ) -> ();
+    artnet::unbind_output(universe: i64) -> ();
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
     waveforms::get_track_waveform_window(
