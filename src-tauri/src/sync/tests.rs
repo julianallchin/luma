@@ -33,6 +33,8 @@ mod tests {
     struct MockRemoteClient {
         /// Canned responses: key = "{table}:{query_prefix}", value = rows to return.
         select_responses: Mutex<HashMap<String, Vec<Value>>>,
+        /// One-shot pages: served on the first select of that table, then gone.
+        select_pages: Mutex<HashMap<String, Vec<Value>>>,
         /// Tables queried by the pull engine.
         selected_tables: Mutex<Vec<String>>,
         /// All upsert calls recorded here for assertion.
@@ -45,6 +47,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 select_responses: Mutex::new(HashMap::new()),
+                select_pages: Mutex::new(HashMap::new()),
                 selected_tables: Mutex::new(Vec::new()),
                 upserted: Mutex::new(Vec::new()),
                 next_upsert_error: Mutex::new(None),
@@ -54,6 +57,16 @@ mod tests {
         /// Register a canned response for select queries on a table.
         fn on_select(&self, table: &str, rows: Vec<Value>) {
             self.select_responses
+                .lock()
+                .unwrap()
+                .insert(table.to_string(), rows);
+        }
+
+        /// Register one page and then nothing, the way a keyset cursor
+        /// behaves: the pull loop asks again with the advanced cursor and the
+        /// server has no more rows for it.
+        fn on_select_page(&self, table: &str, rows: Vec<Value>) {
+            self.select_pages
                 .lock()
                 .unwrap()
                 .insert(table.to_string(), rows);
@@ -81,6 +94,9 @@ mod tests {
             _token: &str,
         ) -> Result<Vec<Value>, SyncError> {
             self.selected_tables.lock().unwrap().push(table.to_owned());
+            if let Some(page) = self.select_pages.lock().unwrap().remove(table) {
+                return Ok(page);
+            }
             let responses = self.select_responses.lock().unwrap();
             Ok(responses.get(table).cloned().unwrap_or_default())
         }
@@ -701,6 +717,134 @@ mod tests {
             .last_error
             .as_deref()
             .is_some_and(|error| error.contains("not registered"))));
+    }
+
+    /// A remote fixture whose footprint the local trigger would refuse must not
+    /// wedge the table.
+    ///
+    /// Before the repair, the trigger aborted the upsert, `stopped_at_failure`
+    /// broke out of the page loop with the cursor still on the previous row,
+    /// and every table with `fixtures` as a parent was deferred — permanently,
+    /// because the same row came back on every subsequent pull.
+    #[tokio::test]
+    async fn a_fixture_the_local_trigger_would_refuse_is_repaired_rather_than_wedging_the_pull() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, Some("u-1"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('v-1', 'u-1', 'Room')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let fixture = |id: &str, address: i64, channels: i64, seq: i64| {
+            json!({
+                "id": id,
+                "uid": "u-1",
+                "venue_id": "v-1",
+                "universe": 1,
+                "address": address,
+                "num_channels": channels,
+                "manufacturer": "Acme",
+                "model": "Mover",
+                "mode_name": "16ch",
+                "fixture_path": "acme/mover.qxf",
+                "label": null,
+                "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0,
+                "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0,
+                "created_at": "2026-08-01T00:00:00Z",
+                "updated_at": "2026-08-01T00:00:00Z",
+                "sync_seq": seq,
+            })
+        };
+
+        let authored_directory = tempfile::tempdir().unwrap();
+        let authored = crate::services::authored_documents::AuthoredDocuments::new(
+            crate::storage::StorageRoot::from_path(authored_directory.path().join("authored")),
+        );
+        let workspaces = crate::agent_execution::PythonWorkspaceService::new(
+            authored_directory.path().join("python-workspaces"),
+            std::sync::Arc::new(|| Err("python is not used by this sync test".into())),
+        );
+        let graph_runs = crate::agent_execution::GraphRunStore::new();
+        let subagents = crate::agent::subagent::SubagentRegistry::default();
+        let remote = MockRemoteClient::new();
+        // One page: a sound row, then one whose 32 channels run off the end of
+        // the universe, then another sound row *after* it — the one the old
+        // break would never have reached.
+        remote.on_select_page(
+            "fixtures",
+            vec![
+                fixture("ok-1", 1, 16, 1),
+                fixture("broken", 500, 32, 2),
+                fixture("ok-2", 100, 16, 3),
+            ],
+        );
+
+        let stats = pull::pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &subagents,
+            &remote,
+            "token",
+            Some("u-1"),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !stats.errors.iter().any(|error| error.contains("fixtures")),
+            "fixtures did not finish: {:?}",
+            stats.errors
+        );
+        assert!(
+            !stats
+                .errors
+                .iter()
+                .any(|error| error.contains("deferred because dependency fixtures")),
+            "a table downstream of fixtures was deferred: {:?}",
+            stats.errors
+        );
+
+        let rows: Vec<(String, i64, i64, Option<String>)> =
+            sqlx::query_as("SELECT id, address, num_channels, synced_at FROM fixtures ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let by_id = |id: &str| {
+            rows.iter()
+                .find(|row| row.0 == id)
+                .unwrap_or_else(|| panic!("{id} landed"))
+                .clone()
+        };
+
+        // The row after the broken one arrived, which is the wedge this test
+        // is about.
+        assert_eq!(by_id("ok-2").1, 100);
+        // A sound row is untouched and counts as synced.
+        assert_eq!(by_id("ok-1").1, 1);
+        assert!(by_id("ok-1").3.is_some());
+        // The broken one landed, repaired the way the migration repairs local
+        // rows, and is dirty so the repair pushes back.
+        let broken = by_id("broken");
+        assert_eq!(
+            broken.2, 32,
+            "the width is the fixture's, not ours to change"
+        );
+        assert_eq!(broken.1, 1, "an unaddressable footprint moves to channel 1");
+        assert!(
+            broken.3.is_none(),
+            "the repair has to be pushed back, so the row must be dirty"
+        );
+
+        // And the cursor advanced past the whole page, so the next pull does
+        // not replay it.
+        let cursor = state::get_last_pulled_seq(&pool, "u-1", "fixtures")
+            .await
+            .unwrap();
+        assert_eq!(cursor, 3);
     }
 
     #[tokio::test]

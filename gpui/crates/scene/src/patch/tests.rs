@@ -142,7 +142,7 @@ impl Rig {
         self.fixtures.push(Fixture {
             id: id.into(),
             channels,
-            pinned: None,
+            address: Address::Unset,
         });
         self
     }
@@ -152,20 +152,37 @@ impl Rig {
         self.fixtures.push(Fixture {
             id: id.into(),
             channels,
-            pinned: None,
+            address: Address::Unset,
         });
         self
     }
 
     /// Set a fixture's address by hand, as the patch page does.
-    fn pin(mut self, id: &str, universe: u16, address: u16) -> Rig {
+    fn pin(self, id: &str, universe: u16, address: u16) -> Rig {
+        self.address(id, universe, address, Address::Pinned)
+    }
+
+    /// The address the row already carries, nobody having typed it — what an
+    /// earlier auto-patch, or a one-at-a-time add, left behind.
+    fn stored(self, id: &str, universe: u16, address: u16) -> Rig {
+        self.address(id, universe, address, Address::Derived)
+    }
+
+    fn address(
+        mut self,
+        id: &str,
+        universe: u16,
+        address: u16,
+        how: fn(Footprint) -> Address,
+    ) -> Rig {
         let fixture = self
             .fixtures
             .iter_mut()
             .find(|f| f.id == id)
-            .expect("pin names a fixture the rig has");
-        fixture.pinned = Footprint::new(universe, address, fixture.channels);
-        assert!(fixture.pinned.is_some(), "the pin has to be addressable");
+            .expect("the address names a fixture the rig has");
+        let footprint = Footprint::new(universe, address, fixture.channels)
+            .expect("the address has to be addressable");
+        fixture.address = how(footprint);
         self
     }
 
@@ -181,9 +198,55 @@ impl Rig {
         self
     }
 
+    /// A corner block bolted to the end of `parent`, and nothing else. It is a
+    /// piece, not a run: the thing the doc's "one universe per structure" claim
+    /// hangs on.
+    fn corner(mut self, id: &str, parent: &str, along: f64) -> Rig {
+        self.piece(id, NodeKind::Piece, parent, along);
+        self
+    }
+
+    /// A run bolted to a piece rather than to the floor — the far side of a
+    /// corner.
+    fn run_from(mut self, id: &str, parent: &str, along: f64) -> Rig {
+        self.piece(id, NodeKind::Run, parent, along);
+        self
+    }
+
+    fn piece(&mut self, id: &str, kind: NodeKind, parent: &str, along: f64) {
+        let mut params = Params::default();
+        params.set("u", along);
+        self.graph.insert(Node {
+            id: id.into(),
+            kind,
+            catalog_ref: Some("truss".into()),
+            label: None,
+            params,
+        });
+        self.graph.insert_edge(
+            id,
+            Edge {
+                parent: parent.into(),
+                my_socket: "base".into(),
+                their_socket: "under".into(),
+                roll: 0.0,
+            },
+        );
+    }
+
     fn allocate(&self) -> Allocation {
         let sockets = table();
         super::allocate(&resolve(&self.graph, &sockets), &self.fixtures)
+    }
+
+    /// The same rig with its fixture list rotated — a different input order,
+    /// the same venue.
+    fn reordered(&self, by: usize) -> Allocation {
+        let sockets = table();
+        let mut fixtures = self.fixtures.clone();
+        let step = by % fixtures.len().max(1);
+        fixtures.rotate_left(step);
+        super::allocate(&resolve(&self.graph, &sockets), &fixtures)
     }
 
     fn next(&self, run: Option<&str>, channels: u16, count: usize) -> Vec<Footprint> {
@@ -414,6 +477,51 @@ fn a_run_wider_than_a_universe_is_the_only_thing_that_splits() {
 // The tray, and pins
 // ---------------------------------------------------------------------------
 
+/// The limit `on_run` documents, pinned rather than implied.
+///
+/// A fixture on the corner block itself *is* on the run the corner is bolted
+/// to — that is what "nearest run ancestor" buys. But the truss on the far side
+/// of the corner is its own `Run` node, so it is its own run and its own
+/// universe. Change that and this test is the thing that has to change with it.
+#[test]
+fn straight_corner_straight_is_two_runs_and_two_blocks() {
+    let rig = Rig::new()
+        .run("upstage")
+        .corner("elbow", "upstage", 4.0)
+        .run_from("wing", "elbow", 0.2)
+        .fixture("up-1", "upstage", 0.0, 8)
+        .fixture("up-2", "upstage", 2.0, 8)
+        .fixture("hook", "elbow", 0.05, 8)
+        .fixture("wing-1", "wing", 0.5, 8)
+        .fixture("wing-2", "wing", 1.5, 8);
+    let allocation = rig.allocate();
+    assert_disjoint(&allocation);
+
+    let run_of = |id: &str| {
+        allocation
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} was allocated"))
+            .run
+            .clone()
+    };
+    // A fixture on a piece bolted to a run rides that run.
+    assert_eq!(run_of("hook").as_deref(), Some("upstage"));
+    // The far side of the corner does not.
+    assert_eq!(run_of("wing-1").as_deref(), Some("wing"));
+
+    let upstage = at(&allocation, "up-1").universe();
+    let wing = at(&allocation, "wing-1").universe();
+    assert_ne!(
+        upstage, wing,
+        "a corner-connected truss is a second run, so it takes a second universe"
+    );
+    for id in ["up-2", "hook"] {
+        assert_eq!(at(&allocation, id).universe(), upstage);
+    }
+    assert_eq!(at(&allocation, "wing-2").universe(), wing);
+    assert_eq!(order_in(&allocation, wing), ["wing-1", "wing-2"]);
+}
+
 #[test]
 fn unplaced_fixtures_fill_the_gaps_the_runs_left_starting_at_universe_one() {
     let rig = Rig::new()
@@ -542,16 +650,100 @@ fn occupancy_cells_carry_the_footprint_and_report_a_pre_existing_overlap() {
 // Determinism, and what a distribution asks for
 // ---------------------------------------------------------------------------
 
+/// The answer is a function of the *venue*, not of the order the rows came
+/// back in — a `SELECT` with no `ORDER BY`, a `HashMap` iteration, a drag that
+/// renumbered nothing, must all patch the same.
+///
+/// Compared as a table keyed by fixture rather than as the raw `Vec`: pins are
+/// emitted in input order by design (`Allocation::assignments`), so their
+/// *position* in the list legitimately follows the input while their addresses
+/// must not.
 #[test]
-fn two_allocations_of_one_rig_are_identical() {
+fn the_input_order_of_the_fixture_list_does_not_reach_the_answer() {
     let rig = Rig::new()
         .run("a")
         .run("b")
         .fixture("x", "a", 2.0, 12)
         .fixture("y", "a", 0.5, 12)
         .fixture("z", "b", 1.0, 7)
-        .unplaced("tray", 3);
-    assert_eq!(rig.allocate().assignments, rig.allocate().assignments);
+        .fixture("w", "b", 3.0, 7)
+        .unplaced("tray", 3)
+        .pin("w", 4, 100);
+
+    let table = |allocation: &Allocation| {
+        let mut rows: Vec<(String, Footprint, Option<String>, bool)> = allocation
+            .assignments
+            .iter()
+            .map(|a| (a.fixture.clone(), a.footprint, a.run.clone(), a.pinned))
+            .collect();
+        rows.sort();
+        rows
+    };
+
+    let straight = rig.allocate();
+    for shuffle in [1usize, 3, 5] {
+        let reordered = rig.reordered(shuffle);
+        assert_eq!(
+            table(&straight),
+            table(&reordered),
+            "rotating the fixture list by {shuffle} changed the patch"
+        );
+        assert_eq!(straight.notes, reordered.notes);
+        assert_disjoint(&reordered);
+    }
+}
+
+/// The bug two occupancies made possible: an offer that the door refuses.
+///
+/// The rig is what one-at-a-time adds actually write — every fixture packed
+/// into universe 1 in creation order, nobody having auto-patched since — while
+/// the rule would put the second run in universe 2. An offer computed against
+/// the rule alone lands in the hole the rule left in universe 1, which a stored
+/// row is sitting in, and `services::patch::admit` throws it out.
+#[test]
+fn next_addresses_never_offers_a_stored_slot() {
+    let mut rig = Rig::new().run("bar").run("wash");
+    for index in 0..8 {
+        rig = rig.fixture(&format!("bar-{index}"), "bar", f64::from(index), 16);
+    }
+    for index in 0..4 {
+        rig = rig.fixture(&format!("wash-{index}"), "wash", f64::from(index), 16);
+    }
+    // Packed sequentially into universe 1, the way the add dialog writes them.
+    for (index, id) in (0..8)
+        .map(|i| format!("bar-{i}"))
+        .chain((0..4).map(|i| format!("wash-{i}")))
+        .enumerate()
+    {
+        rig = rig.stored(
+            &id,
+            1,
+            u16::try_from(index * 16 + 1).expect("inside a universe"),
+        );
+    }
+
+    let stored = Occupancy::of(
+        rig.fixtures
+            .iter()
+            .filter_map(|f| Some((f.address.footprint()?, f.id.clone()))),
+    );
+    // The rule really does disagree with the rows — otherwise this test would
+    // pass for the wrong reason.
+    assert_ne!(
+        at(&rig.allocate(), "wash-0").universe(),
+        1,
+        "the rule puts the second run in its own universe; the rows do not"
+    );
+
+    for run in [None, Some("bar"), Some("wash")] {
+        for offered in rig.next(run, 16, 3) {
+            assert_eq!(
+                stored.conflict(&offered),
+                None,
+                "offered {offered:?} for run {run:?}, which a stored row already holds"
+            );
+        }
+    }
 }
 
 #[test]
@@ -720,9 +912,4 @@ fn patch_allocation_golden_is_current() {
         same,
         "the patch-allocation golden was stale and has been rewritten — review and commit it"
     );
-}
-
-#[test]
-fn two_allocations_of_the_golden_rig_are_byte_identical() {
-    assert_eq!(golden(), golden());
 }

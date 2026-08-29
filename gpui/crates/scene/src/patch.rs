@@ -112,8 +112,47 @@ impl Footprint {
     }
 }
 
-/// A fixture as the allocator sees it: an identity, a width, and whether a
-/// human already decided where it goes.
+/// What a patch row already says about where a fixture lives, and how firmly.
+///
+/// One field with three states rather than an address beside a flag: a pin
+/// *is* an address, and "pinned but nowhere" is not a patch anybody can write,
+/// so it should not be a value anybody can construct.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Address {
+    /// No row yet — a fixture a distribution or the add dialog is about to
+    /// create, which is why it is asking where it would go.
+    #[default]
+    Unset,
+    /// Where the last allocation left it. Free to be re-derived, but *stored*:
+    /// until the next auto-patch these are the channels the database says are
+    /// taken.
+    Derived(Footprint),
+    /// Where a human put it by hand. Never re-derived; reserved first.
+    Pinned(Footprint),
+}
+
+impl Address {
+    /// The channels the row holds right now, pinned or not — the stored patch.
+    #[must_use]
+    pub fn footprint(self) -> Option<Footprint> {
+        match self {
+            Address::Unset => None,
+            Address::Derived(footprint) | Address::Pinned(footprint) => Some(footprint),
+        }
+    }
+
+    /// The footprint the allocator must leave alone.
+    #[must_use]
+    pub fn pin(self) -> Option<Footprint> {
+        match self {
+            Address::Pinned(footprint) => Some(footprint),
+            Address::Unset | Address::Derived(_) => None,
+        }
+    }
+}
+
+/// A fixture as the allocator sees it: an identity, a width, and the row's own
+/// account of where it currently is.
 #[derive(Clone, Debug)]
 pub struct Fixture {
     /// The patch row id. A fixture's venue node carries the same id
@@ -121,8 +160,10 @@ pub struct Fixture {
     pub id: String,
     /// The mode's channel count.
     pub channels: u16,
-    /// Set by hand, and therefore never re-derived.
-    pub pinned: Option<Footprint>,
+    /// The stored address. [`allocate`] honours only its pins;
+    /// [`next_addresses`] honours all of it, because a stored address is what
+    /// the row *collides with* until something moves it.
+    pub address: Address,
 }
 
 /// One fixture's place in the patch.
@@ -167,8 +208,10 @@ pub const MAX_UNIVERSE: u16 = 32_767;
 /// What one allocation decided.
 #[derive(Clone, Debug, Default)]
 pub struct Allocation {
-    /// Every fixture that got a place, in run order then along-the-run order,
-    /// with the run-less ones last.
+    /// Every fixture that got a place, in the order the rule decided them:
+    /// **pins first**, in input order, because they are reserved before
+    /// anything is derived; then each run in solve order, its fixtures in
+    /// along-the-run order; then the run-less ones, by fixture id.
     pub assignments: Vec<Assignment>,
     pub notes: Vec<Note>,
 }
@@ -318,10 +361,26 @@ struct OnRun {
 
 /// The run a fixture hangs from, and how far along it sits.
 ///
-/// The nearest ancestor of kind `run` or `tower` — a fixture bolted to a piece
-/// bolted to a run is on that run, which is what "one universe per structure"
-/// means when the structure has a corner block in it. A fixture that reaches
-/// the venue root without passing one is not on a run at all.
+/// The **nearest** ancestor of kind `run` or `tower`: a fixture bolted to a
+/// piece — a clamp, a bracket, a corner block — bolted to a run is on that run.
+/// A fixture that reaches the venue root without passing one is not on a run at
+/// all.
+///
+/// # The limit: a run is one straight length
+///
+/// "Nearest" is doing real work here, and it is not the same as "the structure
+/// this fixture is part of". `venue_graph::kind_of` maps *every* truss to
+/// [`NodeKind::Run`], so a straight–corner–straight assembly is two runs, not
+/// one, and it takes two universes. That is deliberate rather than a rounding
+/// error: `along` is `local.w_axis.x`, the fixture's position on its run's own
+/// span axis, and past a corner that axis turns — a single `along` over the
+/// whole assembly would not be monotone, so its "physical order" would be a
+/// lie. One universe per straight run keeps the order true.
+///
+/// A compound run — several lengths a human names as one structure, addressed
+/// as one universe — is B4's job (`docs/specs/venue-builder-gauntlet.md` §6),
+/// and needs a run *node* over the pieces rather than a walk that guesses.
+/// `straight_corner_straight_is_two_runs_and_two_blocks` pins today's answer.
 fn on_run(venue: &ResolvedVenue, fixture: &str) -> Option<OnRun> {
     let pose = venue.pose(fixture)?;
     let mut ancestor = pose.parent.as_deref();
@@ -353,8 +412,8 @@ pub fn allocate(venue: &ResolvedVenue, fixtures: &[Fixture]) -> Allocation {
     // Pins first, so every derived block flows around them rather than through
     // them. They are emitted in the input's order and keep their place in the
     // output by fixture id, not by where the run walk would have put them.
-    for fixture in fixtures.iter().filter(|f| f.pinned.is_some()) {
-        let footprint = fixture.pinned.expect("filtered");
+    for fixture in fixtures.iter().filter(|f| f.address.pin().is_some()) {
+        let footprint = fixture.address.pin().expect("filtered");
         occupancy.claim(footprint, fixture.id.clone());
         allocation.assignments.push(Assignment {
             fixture: fixture.id.clone(),
@@ -369,7 +428,7 @@ pub fn allocate(venue: &ResolvedVenue, fixtures: &[Fixture]) -> Allocation {
     let mut runs: Vec<String> = Vec::new();
     let mut members: BTreeMap<String, Vec<(&Fixture, f64)>> = BTreeMap::new();
     let mut loose: Vec<&Fixture> = Vec::new();
-    for fixture in fixtures.iter().filter(|f| f.pinned.is_none()) {
+    for fixture in fixtures.iter().filter(|f| f.address.pin().is_none()) {
         match on_run(venue, &fixture.id) {
             Some(OnRun { run, along }) => {
                 if !members.contains_key(&run) {
@@ -510,6 +569,22 @@ fn place(occupancy: &mut Occupancy, universe: u16, fixture: &Fixture) -> Option<
 /// next [`allocate`], which is what auto-patch is for.
 ///
 /// `run` of `None` asks for tray addresses — the run-less rule, from universe 1.
+///
+/// # Which occupancy this answers against
+///
+/// **Both**, and that is the whole subtlety. A caller writes the offered
+/// address into a row, and that write is admitted against the *stored* patch
+/// (`services::patch::admit`), which is where the fixtures are **now** — not
+/// where [`allocate`] would put them. The two pictures diverge the moment
+/// anything is added without an auto-patch after it, so an offer that consults
+/// only the derived allocation hands out a slot some stored row already holds
+/// and the write is refused.
+///
+/// So a slot is offered only if it is free in the union: free where the rows
+/// are, *and* free where the rule would put them. Free-in-union implies
+/// free-in-stored, so the write cannot be refused; and it implies the offer
+/// does not sit in a run block the next auto-patch will claim, so the number
+/// the human just read does not move under them for no reason.
 #[must_use]
 pub fn next_addresses(
     venue: &ResolvedVenue,
@@ -523,7 +598,12 @@ pub fn next_addresses(
         existing
             .assignments
             .iter()
-            .map(|a| (a.footprint, a.fixture.clone())),
+            .map(|a| (a.footprint, a.fixture.clone()))
+            .chain(
+                fixtures
+                    .iter()
+                    .filter_map(|f| Some((f.address.footprint()?, f.id.clone()))),
+            ),
     );
 
     let highest = |of_run: Option<&str>| {
@@ -552,7 +632,7 @@ pub fn next_addresses(
         let placeholder = Fixture {
             id: format!("\u{0}pending:{index}"),
             channels,
-            pinned: None,
+            address: Address::Unset,
         };
         match place(&mut occupancy, start, &placeholder) {
             Some(footprint) => out.push(footprint),

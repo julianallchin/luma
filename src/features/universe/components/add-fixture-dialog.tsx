@@ -39,8 +39,15 @@ export function AddFixtureDialog({
 
 	const [localQuery, setLocalQuery] = useState("");
 	const [selectedMode, setSelectedMode] = useState<string | null>(null);
+	/// Why the last Add did not happen, in the backend's own words.
+	const [refusal, setRefusal] = useState<string | null>(null);
+	const [isAdding, setIsAdding] = useState(false);
 	const modeSelectId = useId();
 	const listRef = useRef<HTMLDivElement>(null);
+
+	// A refusal is about one fixture at one width; changing either makes it
+	// stale rather than wrong to act on.
+	useEffect(() => setRefusal(null), [selectedMode, selectedEntry, open]);
 
 	useEffect(() => {
 		if (selectedDefinition && selectedDefinition.Mode.length > 0) {
@@ -80,25 +87,52 @@ export function AddFixtureDialog({
 		return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
 	}, [searchResults]);
 
+	// Why the dialog stays open on a refusal: the two things that can go wrong
+	// — no free block wide enough, and a write the backend threw out — are both
+	// answerable by changing the mode or freeing channels, and neither is
+	// answerable by a closed dialog and a line in the console.
 	const handleAdd = async () => {
 		if (!selectedEntry || !selectedDefinition) return;
+		setRefusal(null);
 		const modeName = selectedMode || selectedDefinition.Mode[0]["@Name"];
 		const mode = selectedDefinition.Mode.find((m) => m["@Name"] === modeName);
 		const channels = mode?.Channel?.length ?? 0;
-		if (channels <= 0) return;
-		// The backend owns the allocator; the dialog only asks it where the
-		// next fixture of this width goes.
-		const [slot] = await nextAddresses(channels, 1);
-		if (!slot) {
-			console.error("No available address for new fixture");
+		if (channels <= 0) {
+			setRefusal(`Mode "${modeName}" has no channels — pick another mode.`);
 			return;
 		}
-		await patchFixture(slot.universe, slot.address, modeName, channels);
-		onOpenChange(false);
+		setIsAdding(true);
+		try {
+			// The backend owns the allocator; the dialog only asks it where the
+			// next fixture of this width goes.
+			const [slot] = await nextAddresses(channels, 1);
+			if (!slot) {
+				setRefusal(
+					`No free block of ${channels} channels anywhere in the patch.`,
+				);
+				return;
+			}
+			const refused = await patchFixture(
+				slot.universe,
+				slot.address,
+				modeName,
+				channels,
+			);
+			if (refused) {
+				setRefusal(refused);
+				return;
+			}
+			onOpenChange(false);
+		} finally {
+			setIsAdding(false);
+		}
 	};
 
 	const canAdd =
-		!!selectedEntry && !!selectedDefinition && !isLoadingDefinition;
+		!!selectedEntry &&
+		!!selectedDefinition &&
+		!isLoadingDefinition &&
+		!isAdding;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -224,10 +258,18 @@ export function AddFixtureDialog({
 								</div>
 							)}
 						</div>
+						{refusal && (
+							<div
+								role="alert"
+								className="px-3 py-2 border-t border-trim text-[10px] text-destructive shrink-0"
+							>
+								{refusal}
+							</div>
+						)}
 						<div className="flex items-center justify-end gap-2 px-3 h-10 border-t border-trim shrink-0">
 							<Button onClick={() => onOpenChange(false)}>Cancel</Button>
 							<Button onClick={handleAdd} disabled={!canAdd}>
-								Add
+								{isAdding ? "Adding" : "Add"}
 							</Button>
 						</div>
 					</div>

@@ -65,12 +65,16 @@ interface FixtureState {
 		universe: number,
 		address: number,
 	) => Promise<void>;
+	/// Returns `null` when the fixture was patched, or the backend's refusal —
+	/// a collision, a footprint past 512 — for the caller to show. The message
+	/// names the fixture in the way, so it is worth reading rather than
+	/// summarising.
 	patchFixture: (
 		universe: number,
 		address: number,
 		modeName: string,
 		numChannels: number,
-	) => Promise<void>;
+	) => Promise<string | null>;
 	removePatchedFixture: (id: string) => Promise<void>;
 	duplicatePatchedFixture: (id: string) => Promise<void>;
 	updatePatchedFixtureLabel: (id: string, label: string) => Promise<void>;
@@ -362,7 +366,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	patchFixture: async (universe, address, modeName, numChannels) => {
 		const { selectedEntry, selectedDefinition, patchedFixtures, venueId } =
 			get();
-		if (!selectedEntry || !selectedDefinition || venueId === null) return;
+		if (!selectedEntry || !selectedDefinition || venueId === null) {
+			return "No fixture selected.";
+		}
 
 		try {
 			const existingCount = patchedFixtures.filter(
@@ -393,8 +399,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			});
 			console.debug("[useFixtureStore] patchFixture success");
 			await get().fetchPatchedFixtures();
+			return null;
 		} catch (error) {
-			console.error("Failed to patch fixture:", error);
+			return String(error);
 		}
 	},
 
@@ -493,35 +500,45 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		);
 		if (toDuplicate.length === 0) return;
 
+		// One allocation call per *width*, not per fixture: `next_addresses`
+		// answers for `count` fixtures of one channel count at a time, and the
+		// slots it returns are already disjoint. Widths are asked for in turn
+		// because each group's rows are written before the next group is
+		// placed, so the backend always sees the real occupancy.
+		const byWidth = new Map<number, PatchedFixture[]>();
+		for (const fixture of toDuplicate) {
+			const width = Number(fixture.numChannels);
+			byWidth.set(width, [...(byWidth.get(width) ?? []), fixture]);
+		}
+
 		const newIds: string[] = [];
 		try {
-			// One allocation call per fixture rather than one for the batch:
-			// each copy is written before the next is placed, so the backend
-			// sees the real occupancy and the copies cannot overlap.
-			for (const fixture of toDuplicate) {
-				const numChannels = Number(fixture.numChannels);
-				const [slot] = await get().nextAddresses(numChannels, 1);
-				if (!slot) {
+			for (const [numChannels, group] of byWidth) {
+				const slots = await get().nextAddresses(numChannels, group.length);
+				if (slots.length < group.length) {
 					console.error("No available address for duplicate fixture");
-					continue;
 				}
+				for (const [index, fixture] of group.entries()) {
+					const slot = slots[index];
+					if (!slot) continue;
 
-				const existingCount =
-					patchedFixtures.filter((f) => f.model === fixture.model).length +
-					newIds.length;
+					const existingCount =
+						patchedFixtures.filter((f) => f.model === fixture.model).length +
+						newIds.length;
 
-				const newFixture = await invoke<PatchedFixture>("patch_fixture", {
-					venueId,
-					universe: slot.universe,
-					address: slot.address,
-					numChannels,
-					manufacturer: fixture.manufacturer,
-					model: fixture.model,
-					modeName: fixture.modeName,
-					fixturePath: fixture.fixturePath,
-					label: `${fixture.model} (${existingCount + 1})`,
-				});
-				newIds.push(newFixture.id);
+					const newFixture = await invoke<PatchedFixture>("patch_fixture", {
+						venueId,
+						universe: slot.universe,
+						address: slot.address,
+						numChannels,
+						manufacturer: fixture.manufacturer,
+						model: fixture.model,
+						modeName: fixture.modeName,
+						fixturePath: fixture.fixturePath,
+						label: `${fixture.model} (${existingCount + 1})`,
+					});
+					newIds.push(newFixture.id);
+				}
 			}
 
 			await get().fetchPatchedFixtures();

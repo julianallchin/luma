@@ -552,6 +552,65 @@ async fn universes_in_use_names_every_universe_the_patch_touches() {
 // What a distribution asks for
 // ---------------------------------------------------------------------------
 
+/// Every slot the allocator offers has to survive the door it will be carried
+/// through.
+///
+/// The rig here is packed sequentially into universe 1 — what one-at-a-time
+/// adds write, and what a venue looks like until somebody presses Auto Patch —
+/// so the stored patch and the derived one genuinely disagree. An offer
+/// computed against the derivation alone lands in a hole the rule left in
+/// universe 1 that a row is sitting in, and [`admit`] refuses it.
+#[tokio::test]
+async fn every_offered_slot_is_one_admit_accepts_even_before_an_auto_patch() {
+    let (_dir, pool) = seeded().await;
+    {
+        // Repack: consecutive in universe 1, in creation order, nothing pinned.
+        let mut address = 1i64;
+        let mut access = write(&pool).await;
+        for row in fixtures_db::get_patched_fixtures(&mut access)
+            .await
+            .expect("patch")
+        {
+            fixtures_db::update_fixture_address(&mut access, &row.id, 1, address, false)
+                .await
+                .expect("repack");
+            address += row.num_channels;
+        }
+        access.commit().await.expect("commit");
+    }
+
+    let mut access = read(&pool).await;
+    let occupancy = occupancy(&mut access).await.expect("occupancy");
+    // The rule and the rows disagree, or this would prove nothing.
+    let derived = plan(&mut access, &fixtures_root()).await.expect("plan");
+    assert!(
+        derived
+            .assignments
+            .iter()
+            .any(|a| a.footprint.universe() != 1),
+        "the rule spreads the runs over universes; the rows are all in one"
+    );
+
+    for run in [None, Some("run-downstage"), Some("run-upstage")] {
+        let slots = next_addresses(&mut access, &fixtures_root(), run, 16, 3)
+            .await
+            .expect("slots");
+        assert_eq!(slots.len(), 3);
+        for slot in &slots {
+            admit(
+                &occupancy,
+                None,
+                slot.universe(),
+                slot.address(),
+                slot.channels(),
+            )
+            .unwrap_or_else(|error| {
+                panic!("{run:?} was offered {slot:?}, which is refused: {error}")
+            });
+        }
+    }
+}
+
 #[tokio::test]
 async fn next_addresses_hands_out_slots_nothing_else_holds() {
     let (_dir, pool) = seeded().await;

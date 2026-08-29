@@ -2,6 +2,9 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] `sync/tests.rs` has two pool helpers with different schemas — `test_pool` hand-rolls a subset of tables, `migrated_pool` runs the real migrations — and the `authenticate` helper only works with the hand-rolled one; on the other it dies with "no such table: auth_session", which reads as a migration bug rather than a wrong-helper bug.
+- [2026-08-29] `MockRemoteClient::on_select` serves the same page on every call, so any test that drives the pull page loop trips the non-advancing-sync_seq guard instead of terminating; a cursor-shaped mock has to be built before you can test a pull at all.
+- [2026-08-29] `cargo test --lib` in `src-tauri` is all-or-nothing in a shared checkout: another owner's half-written struct in an unrelated module made every test in the crate unrunnable for twenty minutes, and there is no way to compile or run just the module you touched.
 - [2026-08-29] Cold `cargo test --lib` in a fresh src-tauri worktree fails on `include_str!("../python/*/requirements.txt")` — every requirements.txt is gitignored, so a clean checkout of any commit is unbuildable until you hand-copy six files out of the working tree.
 - [2026-08-29] "One list read off the schema" fixed sync::pull and silently weakened the wipe audit: dedup of two lists that answer different questions looks identical in the diff to dedup of two that answer the same one.
 - [2026-08-29] Two agents in this shared tree each wrote a migration named `20260830000000_*.sql`. sqlx keys on the numeric prefix, so a duplicate version is a checksum/ordering break on every launch, and nothing warns — no test, no lint, not even a filename collision, because the suffixes differ. Anyone adding a migration in a shared checkout has to `ls migrations` and hope nobody else is mid-edit.
