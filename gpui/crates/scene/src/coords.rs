@@ -81,7 +81,7 @@ pub fn world_from_three(p: Vec3) -> Vec3 {
 
 /// World space (Z-up) back into three space (Y-up), the inverse of
 /// [`world_from_three`]. A live camera orbits in world space, but
-/// [`crate::scene_desc::Scene`] holds its pose in three space because that is
+/// `luma_render::scene_desc::Scene` holds its pose in three space because that is
 /// the space the goldens were captured in — this is the one conversion at that
 /// boundary.
 #[must_use]
@@ -122,7 +122,7 @@ pub fn euler_xyz(x: f32, y: f32, z: f32) -> Mat3 {
 /// read back here round-trips to the *same matrix*, not necessarily the same
 /// triple.
 ///
-/// It exists because [`crate::scene_desc::Piece`] stores a pose as Euler angles
+/// It exists because `luma_render::scene_desc::Piece` stores a pose as Euler angles
 /// while a parent chain composes as matrices: flattening one means going out of
 /// the angles and back. Keeping the pair adjacent is what stops the two
 /// conventions from drifting.

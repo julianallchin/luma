@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use glam::{DMat4, DVec3};
-use luma_render::catalog::{fixture_clamp, VenueSockets, FIXTURE_CLAMP_SOCKET};
+use luma_render::catalog::{fixture_clamp, origin_mount, VenueSockets, FIXTURE_CLAMP_SOCKET};
 use luma_scene::coords::three_pose_from_data_d;
 use luma_scene::sockets::ResolvedSocket;
 use luma_scene::venue::{
@@ -207,27 +207,10 @@ pub async fn migrate(
             Some(found) => (found.parent_id, found.edge, found.placement),
             // Free, or a parent whose sockets no longer explain the pose: land
             // it on the venue floor at the same spot.
-            None => match on_the_floor(&node, *world, sockets) {
-                Some((edge, placement)) => (root_id.clone(), edge, placement),
-                // Nothing on this piece can sit on anything. Keep it in the
-                // tree at the origin rather than dropping it — the label and
-                // the mesh are still what the venue says it owns.
-                None => (
-                    root_id.clone(),
-                    Edge {
-                        parent: root_id.clone(),
-                        my_socket: FLOOR_SOCKET.into(),
-                        their_socket: FLOOR_SOCKET.into(),
-                        roll: 0.0,
-                    },
-                    SurfacePlacement {
-                        u: 0.0,
-                        v: 0.0,
-                        yaw: 0.0,
-                        trim: 0.0,
-                    },
-                ),
-            },
+            None => {
+                let (edge, placement) = on_the_floor(&node, *world, sockets);
+                (root_id.clone(), edge, placement)
+            }
         };
         write_placement(access, &piece.id, &parent_id, &edge, placement).await?;
     }
@@ -367,18 +350,23 @@ fn residual_of(
 }
 
 /// A piece with nowhere to be but the floor.
-fn on_the_floor(
-    node: &Node,
-    world: DMat4,
-    sockets: &VenueSockets,
-) -> Option<(Edge, SurfacePlacement)> {
-    let floor = root_socket(FLOOR_SOCKET)?;
+///
+/// Total, and that is the point: `origin_mount` is the socket a piece has when
+/// nothing else on it can rest on anything — an unrecognised mesh path, or a
+/// catalog entry that has since lost its mount — so a converted venue never
+/// loses a pose for want of a socket to express it with. The resolver reports
+/// the piece as [`luma_scene::venue::Warning::UnknownCatalogRef`] separately;
+/// preserving the pose and admitting the geometry is unknown are two different
+/// jobs.
+fn on_the_floor(node: &Node, world: DMat4, sockets: &VenueSockets) -> (Edge, SurfacePlacement) {
+    let floor = root_socket(FLOOR_SOCKET).expect("the floor is a root socket");
     let held = sockets
         .sockets(node)
         .into_iter()
-        .find(|s| s.socket_type.mates(floor.socket_type))?;
+        .find(|s| s.socket_type.mates(floor.socket_type))
+        .unwrap_or_else(origin_mount);
     let placement = invert_placement(world, DMat4::IDENTITY, &floor, &held, node.kind);
-    Some((
+    (
         Edge {
             parent: String::new(),
             my_socket: held.name.clone(),
@@ -386,7 +374,7 @@ fn on_the_floor(
             roll: placement.yaw,
         },
         placement,
-    ))
+    )
 }
 
 /// Where a patched fixture's old pose puts it: on the floor if its beam points
@@ -404,7 +392,11 @@ fn fixture_placement(world: DMat4) -> (Edge, SurfacePlacement) {
     // `+Y`. Reading `.z` here would be reading the depth axis — which is the
     // exact mistake the design doc's audit found three copies of.
     let beam = world * DVec3::NEG_Y.extend(0.0);
-    let name = if beam.y >= 0.0 { FLOOR_SOCKET } else { RIG_SOCKET };
+    let name = if beam.y >= 0.0 {
+        FLOOR_SOCKET
+    } else {
+        RIG_SOCKET
+    };
     let host = root_socket(name).expect("both root sockets exist");
     let placement = invert_placement(world, DMat4::IDENTITY, &host, &clamp, NodeKind::Fixture);
     (

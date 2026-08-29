@@ -1,5 +1,6 @@
 use fixture_kinematics::{FixtureGeometry, Mount};
 use glam::Vec3;
+use luma_scene::venue::NodePose;
 
 use crate::models::fixtures::FixtureDefinition;
 
@@ -13,21 +14,20 @@ pub struct HeadLayout {
     pub z: f32, // Local offset Z in mm
 }
 
-/// The mount frame of a stored fixture row.
+/// The mount frame of a placed fixture.
 ///
-/// The one place the app turns a `(pos_*, rot_*)` row into a [`Mount`]. It exists
-/// so the `f64`-to-`f32` narrowing and the stored-Euler convention are spelled
-/// once: three call sites used to each carry their own cast, and a fourth used to
-/// carry its own trigonometry.
+/// A fixture owns no pose: it hangs off a socket, and the socket's frame *is*
+/// the mount frame (beam = mount normal). This is the one place the resolver's
+/// `f64` basis narrows to the `f32` the kinematics work in, and the one place
+/// the app turns a resolved node into a [`Mount`].
 ///
-/// At phase 3 of the venue graph a fixture has no pose of its own — it hangs off
-/// a socket — and this function is what gets replaced, not its callers.
+/// A fixture that is patched but not placed has no pose at all — it is in the
+/// tray — so callers get `None` from `ResolvedVenue::pose` and must decide what
+/// absence means rather than mount it at the origin.
 #[must_use]
-pub fn fixture_mount(pos: [f64; 3], rot: [f64; 3]) -> Mount {
-    Mount::from_stored(
-        Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32),
-        [rot[0] as f32, rot[1] as f32, rot[2] as f32],
-    )
+pub fn fixture_mount(pose: &NodePose) -> Mount {
+    let (position, rotation) = pose.data_basis();
+    Mount::from_frame(position.as_vec3(), rotation.as_mat3())
 }
 
 /// A fixture's cells — one per head the mode lays out — in the kinematics frame.
@@ -38,9 +38,9 @@ pub fn fixture_mount(pos: [f64; 3], rot: [f64; 3]) -> Mount {
 /// [`fixture_kinematics::rig_position`] to get a head's world position:
 ///
 /// ```ignore
+/// let venue = venue_graph::resolved(&mut access, fixtures_root).await?;
 /// let geom = head_geometry(&def, &fixture.mode_name);
-/// let mount = fixture_mount([f.pos_x, f.pos_y, f.pos_z], [f.rot_x, f.rot_y, f.rot_z]);
-/// let world = rig_position(&geom, &mount, head_index);
+/// let world = rig_position(&geom, &fixture_mount(venue.pose(&fixture.id)?), head_index);
 /// ```
 ///
 /// Unauthored geometry, so no aperture depth: QLC+ never says where inside the
@@ -179,13 +179,32 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
 mod tests {
     use super::*;
     use fixture_kinematics::rig_position;
+    use luma_scene::coords::three_pose_from_data_d;
+    use luma_scene::venue::{NodeKind, Params};
     use std::f64::consts::FRAC_PI_2;
+
+    /// A resolved fixture node whose frame is the one a stored `(pos, rot)` row
+    /// described. The expectations below are written in that convention because
+    /// it is the convention the rig is measured in, not because a fixture still
+    /// carries a triple.
+    fn pose(pos: [f64; 3], rot: [f64; 3]) -> NodePose {
+        NodePose {
+            node: "fixture".into(),
+            kind: NodeKind::Fixture,
+            catalog_ref: None,
+            label: None,
+            parent: None,
+            world: three_pose_from_data_d(pos, rot),
+            array_index: None,
+            params: Params::default(),
+        }
+    }
 
     /// One head at a millimetre offset, placed by the same pair of helpers every
     /// caller uses.
     fn placed(base: [f64; 3], rot: [f64; 3], offset: [f32; 3]) -> [f32; 3] {
         let geom = FixtureGeometry::unauthored(vec![Vec3::from(offset) / 1000.0]);
-        rig_position(&geom, &fixture_mount(base, rot), 0).to_array()
+        rig_position(&geom, &fixture_mount(&pose(base, rot)), 0).to_array()
     }
 
     fn close(got: [f32; 3], want: [f32; 3]) {
@@ -251,7 +270,7 @@ mod tests {
     /// the beam that leaves it points up (`fixture_kinematics::Mount::normal`).
     #[test]
     fn a_floor_mount_flips_the_layout_with_the_fixture() {
-        let up = fixture_mount([0.0, 0.0, 0.2], [std::f64::consts::PI, 0.0, 0.0]);
+        let up = fixture_mount(&pose([0.0, 0.0, 0.2], [std::f64::consts::PI, 0.0, 0.0]));
         assert!(up.normal().abs_diff_eq(Vec3::Z, 1e-6), "{:?}", up.normal());
         close(
             placed(

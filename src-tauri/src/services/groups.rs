@@ -21,6 +21,7 @@ use crate::models::groups::{
 };
 use crate::models::selection::{Selection, Subset};
 use fixture_kinematics::rig_position;
+use luma_scene::venue::ResolvedVenue;
 
 /// Cached fixture + group data for a venue, shared across concurrent graph executions.
 #[derive(Clone)]
@@ -161,6 +162,9 @@ pub async fn get_grouped_hierarchy_with_path(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<FixtureGroupNode>, String> {
+    // One solve for the whole hierarchy: head positions are the only thing here
+    // that needs the rig, and a group's fixtures are a subset of the venue's.
+    let venue = crate::venue_graph::resolved(access, resource_path).await?;
     let groups = groups_db::list_groups(access).await?;
 
     let mut result = Vec::with_capacity(groups.len());
@@ -198,7 +202,7 @@ pub async fn get_grouped_hierarchy_with_path(
                 group_fixture_type = fixture_type.clone();
             }
 
-            let all_heads = get_fixture_heads_with_path(resource_path, &fixture);
+            let all_heads = get_fixture_heads_with_path(resource_path, &venue, &fixture);
             let head_count = all_heads.len() as i64;
             let heads = match member_heads {
                 None => all_heads,
@@ -257,8 +261,16 @@ pub fn detect_fixture_type_with_path(
 }
 
 /// Get all heads for a fixture with their world positions (PathBuf version).
-/// Empty when the mode defines no heads.
-fn get_fixture_heads_with_path(resource_path: &Path, fixture: &PatchedFixture) -> Vec<HeadNode> {
+///
+/// Empty when the mode defines no heads, and empty when the fixture is patched
+/// but **not placed**: a head node is a point in the room, and a fixture in the
+/// tray is not in the room. The alternative — a head at the origin — is what
+/// piled every unplaced fixture at `(0, 0, 0)`.
+fn get_fixture_heads_with_path(
+    resource_path: &Path,
+    venue: &ResolvedVenue,
+    fixture: &PatchedFixture,
+) -> Vec<HeadNode> {
     let def_path = resource_path.join(&fixture.fixture_path);
 
     let Ok(def) = parser::parse_definition(&def_path) else {
@@ -270,12 +282,12 @@ fn get_fixture_heads_with_path(resource_path: &Path, fixture: &PatchedFixture) -
     if mode.heads.is_empty() {
         return Vec::new();
     }
+    let Some(pose) = venue.pose(&fixture.id) else {
+        return Vec::new();
+    };
 
     let geom = head_geometry(&def, &fixture.mode_name);
-    let mount = fixture_mount(
-        [fixture.pos_x, fixture.pos_y, fixture.pos_z],
-        [fixture.rot_x, fixture.rot_y, fixture.rot_z],
-    );
+    let mount = fixture_mount(pose);
 
     (0..geom.cell_count())
         .map(|i| HeadNode {

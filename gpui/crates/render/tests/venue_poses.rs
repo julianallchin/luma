@@ -193,6 +193,10 @@ fn venue() -> VenueGraph {
 struct Sockets(VenueSockets);
 
 impl luma_scene::venue::NodeSockets for Sockets {
+    fn is_known(&self, node: &Node) -> bool {
+        luma_scene::venue::NodeSockets::is_known(&self.0, node)
+    }
+
     fn sockets(&self, node: &Node) -> Vec<luma_scene::sockets::ResolvedSocket> {
         if node.kind == NodeKind::Fixture {
             return vec![fixture_clamp()];

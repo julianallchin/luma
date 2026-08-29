@@ -79,9 +79,9 @@ use luma_lib::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
 };
 use luma_lib::models::selection::Selection;
-use luma_lib::models::stage::StagePiece;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
+use luma_lib::models::venue_graph::ResolvedVenue;
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
@@ -1967,7 +1967,8 @@ impl Library {
     }
 
     /// Everything the 3D view needs to draw a venue: its patched fixtures, its
-    /// stage pieces, and the definition behind every distinct fixture path.
+    /// venue graph solved, and the definition behind every distinct fixture
+    /// path.
     ///
     /// One method rather than three because they are only meaningful together
     /// — a rig with its definitions missing is not a partial rig, it is fixtures
@@ -1980,7 +1981,8 @@ impl Library {
         let task = self.runtime.spawn(async move {
             let fixtures: Vec<PatchedFixture> =
                 command(&services, "get_patched_fixtures", &venue).await?;
-            let pieces: Vec<StagePiece> = command(&services, "list_stage_pieces", &venue).await?;
+            let venue_graph: ResolvedVenue =
+                command(&services, "get_resolved_venue", &venue).await?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -1997,7 +1999,7 @@ impl Library {
             }
             Ok::<_, LibraryError>(Rig {
                 fixtures,
-                pieces,
+                venue: venue_graph,
                 definitions,
             })
         });
@@ -2105,13 +2107,25 @@ async fn command<T: DeserializeOwned>(
 /// Rebuilt on venue change, never per frame: geometry is what a venue *is*,
 /// and only the light state on top of it moves (spec §2.2).
 pub struct Rig {
-    /// Every patched fixture, in patch order.
+    /// Every patched fixture, in patch order. The **patch**: what exists and
+    /// how it is addressed. Where each one *is* comes from `venue`.
     pub fixtures: Vec<PatchedFixture>,
-    /// Every stage piece, parent links not yet resolved.
-    pub pieces: Vec<StagePiece>,
+    /// The venue graph, solved: every pose in the room, derived. A node's id
+    /// is the thing it stands for, so a fixture node's id is its `fixtures`
+    /// row id and a fixture nobody has placed simply has no node here.
+    pub venue: ResolvedVenue,
     /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
     /// absent rather than an error.
     pub definitions: HashMap<String, FixtureDefinition>,
+}
+
+impl Rig {
+    /// Whether there is anything at all to draw. The root node is the room
+    /// itself, so a venue with only that is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fixtures.is_empty() && self.venue.nodes.len() <= 1
+    }
 }
 
 /// The app config directory: `$APPCONFIG` as the Tauri app resolves it, with

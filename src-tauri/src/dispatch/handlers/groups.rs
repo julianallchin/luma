@@ -131,6 +131,7 @@ pub async fn get_grouped_hierarchy(
     services: &AppServices,
     venue_id: String,
 ) -> Result<Vec<FixtureGroupNode>, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     Ok(

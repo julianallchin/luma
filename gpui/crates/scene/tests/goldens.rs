@@ -1,13 +1,19 @@
-//! Golden-vector parity with the TypeScript stage builder.
+//! Golden-vector parity with the stage builder that used to be in TypeScript.
 //!
 //! These are characterization tests, not specifications: they pin the exact
-//! numeric output of `src/features/stage/lib/{snap,sockets}.ts` so this port
-//! reproduces it rather than something that merely looks right. The two JSON
-//! files are produced on the TS side — see
-//! `src/features/stage/lib/__tests__/snap-goldens.gen.ts` — and are read here
-//! verbatim.
+//! numeric output `src/features/stage/lib/{snap,sockets}.ts` produced, so this
+//! port reproduces it rather than something that merely looks right.
 //!
-//! Serialization conventions, from the generator:
+//! **The generator is gone.** Those modules and
+//! `__tests__/snap-goldens.gen.ts` were deleted when the React builder was
+//! frozen at phase 3 of `docs/design/venue-graph.md` — keeping a second solver
+//! alive only so it could be tested against is the duplication the port existed
+//! to remove. What is left is a *frozen capture*: it can be read, and it can be
+//! deleted if the behaviour it pins is deliberately abandoned, but it cannot be
+//! re-recorded. A change here is therefore a decision, not a refresh — which is
+//! the property a characterization test wants anyway.
+//!
+//! Serialization conventions, from the generator that produced the capture:
 //!   - matrices are 16 numbers in three.js `Matrix4.toArray()` order, i.e.
 //!     **column-major**, which is also glam's `to_cols_array`, so no transpose
 //!     is needed here;

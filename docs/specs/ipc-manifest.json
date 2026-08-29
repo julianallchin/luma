@@ -359,7 +359,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 54
+        "line": 55
       },
       "name": "attach",
       "prose": {
@@ -1135,7 +1135,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 232
+        "line": 233
       },
       "name": "delete_subtree",
       "prose": {
@@ -1228,7 +1228,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 171
+        "line": 172
       },
       "name": "detach",
       "prose": {
@@ -3160,7 +3160,7 @@
       },
       "name": "patch_fixture",
       "prose": {
-        "notes": "No address-overlap validation server-side — the frontend computes the next free address (findNextAvailableAddress) and the auto label `${model} (${n+1})`. Spatial pose is NOT settable here: duplicate flows patch first, then call move_patched_fixture_spatial to copy the pose. universe/address/numChannels are i64 on the wire but bigint in the TS type, so callers must pass plain numbers in and Number()-convert on the way back out (see :688 `universe: Number(fixture.universe)`). One call site ignores the return and refetches; two use the returned fixture's id.",
+        "notes": "No address-overlap validation server-side — the frontend computes the next free address (findNextAvailableAddress) and the auto label `${model} (${n+1})`. Spatial pose is not settable here at all: placement is a `venue_edges` row, not a fixture column. universe/address/numChannels are i64 on the wire but bigint in the TS type, so callers must pass plain numbers in and Number()-convert on the way back out (see :688 `universe: Number(fixture.universe)`). One call site ignores the return and refetches; two use the returned fixture's id.",
         "returns": "PatchedFixture { id, uid: string|null, venueId, universe: bigint, address: bigint, numChannels: bigint, manufacturer, model, modeName, fixturePath, label: string|null, posX..posZ, rotX..rotZ }",
         "sideEffects": [
           "VenueAccess::<Write> on VenueResource::Venue(venue_id); inserts a row and commits",
@@ -3284,7 +3284,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 121
+        "line": 122
       },
       "name": "place_free",
       "prose": {
@@ -3572,7 +3572,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 91
+        "line": 92
       },
       "name": "reattach",
       "prose": {
@@ -4401,7 +4401,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 189
+        "line": 190
       },
       "name": "set_params",
       "prose": {

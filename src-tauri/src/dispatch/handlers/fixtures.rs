@@ -23,31 +23,37 @@ pub async fn get_patched_fixtures(
     Ok(fixtures)
 }
 
-/// Which way every fixture in a venue points.
+/// Which way every **placed** fixture in a venue points.
 ///
-/// A companion to [`get_patched_fixtures`] rather than extra columns on it: the
-/// rows carry a pose, this carries what the pose *means*, and only one of the
-/// two can go stale. Callers that need both fetch both — they are already
-/// fetching several things about a venue in parallel.
+/// A companion to [`get_patched_fixtures`] rather than extra columns on it: a
+/// facing is the outward normal of the socket the fixture hangs from, so it is
+/// what the resolver says and cannot be stored beside the patch without going
+/// stale. Callers that need both fetch both — they are already fetching several
+/// things about a venue in parallel.
+///
+/// A fixture that is patched but not placed is **absent from the result**
+/// rather than carried with a fabricated origin pose: it is in the tray and has
+/// no facing at all. Consumers key by id, so absence is the answer.
 pub async fn get_fixture_facings(
     services: &AppServices,
     venue_id: String,
 ) -> Result<Vec<FixtureFacing>, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    let venue = crate::venue_graph::resolved(&mut access, &services.fixtures_root).await?;
     Ok(fixture_service::get_patched_fixtures(&mut access)
         .await?
         .into_iter()
-        .map(|f| {
-            let direction =
-                fixture_mount([f.pos_x, f.pos_y, f.pos_z], [f.rot_x, f.rot_y, f.rot_z]).normal();
-            FixtureFacing {
+        .filter_map(|f| {
+            let direction = fixture_mount(venue.pose(&f.id)?).normal();
+            Some(FixtureFacing {
                 id: f.id,
                 direction: direction.to_array(),
                 word: fixture_kinematics::StageDirection::of(direction)
                     .label()
                     .to_string(),
-            }
+            })
         })
         .collect())
 }
@@ -122,35 +128,6 @@ pub async fn move_patched_fixture(
 ) -> Result<(), CommandError> {
     let mut access = fixture_write(services, &venue_id, &id).await?;
     require_changed(fixtures_db::update_fixture_address(&mut access, &id, address).await?)?;
-    commit_and_publish(services, access).await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn move_patched_fixture_spatial(
-    services: &AppServices,
-    venue_id: String,
-    id: String,
-    pos_x: f64,
-    pos_y: f64,
-    pos_z: f64,
-    rot_x: f64,
-    rot_y: f64,
-    rot_z: f64,
-) -> Result<(), CommandError> {
-    let mut access = fixture_write(services, &venue_id, &id).await?;
-    require_changed(
-        fixtures_db::update_fixture_spatial(
-            &mut access,
-            &id,
-            pos_x,
-            pos_y,
-            pos_z,
-            rot_x,
-            rot_y,
-            rot_z,
-        )
-        .await?,
-    )?;
     commit_and_publish(services, access).await
 }
 
