@@ -8,19 +8,27 @@ use crate::models::scores::{
 use crate::services::score_mutations;
 use crate::services::track_edits::TrackEditResult;
 
-/// An empty `venue_id` means "every venue the caller can see" — the
-/// pattern editor depends on that overload.
+/// This track's scores in one venue, newest first. A track/venue pair holds
+/// more than one score whenever more than one principal has annotated it.
 pub async fn list_scores_for_track(
     services: &AppServices,
     track_id: String,
     venue_id: String,
 ) -> Result<Vec<ScoreSummary>, CommandError> {
     let pool = &services.db.0;
-    if venue_id.is_empty() {
-        return Ok(db::list_accessible_scores_for_track(pool, &track_id).await?);
-    }
     let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(&venue_id)).await?;
     Ok(db::list_scores_for_track(&mut access, &track_id).await?)
+}
+
+/// Every score for a track that the current admission may see, in any venue.
+/// Filtered by the same admission the per-venue guard applies, in one
+/// statement — so a caller with no venue in hand still cannot read a sealed
+/// row.
+pub async fn list_scores_across_venues(
+    services: &AppServices,
+    track_id: String,
+) -> Result<Vec<ScoreSummary>, CommandError> {
+    Ok(db::list_accessible_scores_for_track(&services.db.0, &track_id).await?)
 }
 
 /// Idempotent on `request_id`: the score id is derived from it, so a replay
