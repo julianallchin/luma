@@ -11,29 +11,28 @@
 //! an agent's offscreen frame describe the same room the same way rather than
 //! twice.
 //!
-//! **Known duplication.** `gpui/crates/app/src/visualizer.rs` still carries its
-//! own `scene`, `flatten_pieces`, `local_matrix`, `definition`, `lookup` and
-//! `meshes_root` — this module is a copy of those, made because the visualizer
-//! is being reworked concurrently and could not be edited. The visualizer
-//! should adopt these and delete its private copies; until it does, a fix to
-//! either one has to be made twice, which is exactly the change amplification
-//! this module exists to remove.
+//! The parent chain is no longer flattened here, or anywhere else in this
+//! crate: [`crate::venue_graph`] solves the venue and this module reads poses
+//! off the result. `gpui/crates/app/src/visualizer.rs` shares
+//! [`VenueGeometry::scene`]'s inputs through the same path, so there is one
+//! answer to "where is the booth" rather than two.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 use luma_render::scene_desc::{self, RenderSettings};
 use luma_render::{assets, build_frame_with, coords, Renderer, DEFAULT_SUBFRAMES};
+use luma_scene::venue::{NodeKind as VenueNodeKind, ResolvedVenue};
 use luma_scene::{Camera, View, Viewfinder};
 
 use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
-use crate::models::stage::StagePiece;
 use crate::models::universe::{PrimitiveState, UniverseState};
+use crate::models::venue_graph::ResolvedNode;
 use crate::services::groups::ResolvedFixture;
 
 /// Vertical field of view every derived camera uses. Matches the desktop
@@ -68,10 +67,12 @@ const BOOTH_KINDS: [&str; 2] = ["cdj", "mixer"];
 /// definitions are not a partial rig, they are positions with no geometry — so
 /// they are loaded and carried as one value.
 pub struct VenueGeometry {
-    /// Every patched fixture, in patch order.
+    /// Every patched fixture, in patch order. The **patch**: what exists, how
+    /// it is addressed, what mode it is in. Where it is comes from `venue`.
     pub fixtures: Vec<PatchedFixture>,
-    /// Every stage piece, parent links not yet resolved.
-    pub pieces: Vec<StagePiece>,
+    /// The venue graph, solved. Every pose in the room, derived — see
+    /// [`crate::venue_graph`].
+    pub venue: ResolvedVenue,
     /// Keyed by `fixture_path`. A path whose bundle no longer resolves is
     /// absent rather than an error: a venue can outlive a fixture bundle.
     pub definitions: HashMap<String, FixtureDefinition>,
@@ -103,7 +104,7 @@ impl VenueGeometry {
         fixtures_root: &Path,
     ) -> Result<Self, String> {
         let fixtures = local::fixtures::get_patched_fixtures(access).await?;
-        let pieces = local::stage::get_stage_pieces(access).await?;
+        let venue = crate::venue_graph::resolved(access, fixtures_root).await?;
         let mut definitions = HashMap::new();
         for path in fixtures
             .iter()
@@ -121,7 +122,7 @@ impl VenueGeometry {
         }
         Ok(Self {
             fixtures,
-            pieces,
+            venue,
             definitions,
         })
     }
@@ -129,7 +130,7 @@ impl VenueGeometry {
     /// Whether there is anything at all to draw.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.fixtures.is_empty() && self.pieces.is_empty()
+        self.fixtures.is_empty() && self.venue.poses().count() <= 1
     }
 
     /// The renderer's description of this room, plus the definition table
@@ -160,20 +161,24 @@ impl VenueGeometry {
             selected_fixture_ids: Vec::new(),
             editor: Default::default(),
             // A fixture whose definition did not resolve has no mesh and no
-            // cone, so it is left out rather than drawn as a guess.
+            // cone, and one nobody has placed has nowhere to be, so both are
+            // left out rather than drawn as a guess at the origin.
             fixtures: self
                 .fixtures
                 .iter()
                 .filter(|f| definitions.contains_key(&f.fixture_path))
-                .map(|f| scene_desc::Fixture {
-                    id: f.id.clone(),
-                    fixture_path: f.fixture_path.clone(),
-                    mode_name: f.mode_name.clone(),
-                    pos: [f.pos_x as f32, f.pos_y as f32, f.pos_z as f32],
-                    rot: [f.rot_x as f32, f.rot_y as f32, f.rot_z as f32],
+                .filter_map(|f| {
+                    let (pos, rot) = self.venue.pose(&f.id)?.data_pose();
+                    Some(scene_desc::Fixture {
+                        id: f.id.clone(),
+                        fixture_path: f.fixture_path.clone(),
+                        mode_name: f.mode_name.clone(),
+                        pos: pos.map(|v| v as f32),
+                        rot: rot.map(|v| v as f32),
+                    })
                 })
                 .collect(),
-            pieces: flatten_pieces(&self.pieces),
+            pieces: self.pieces(),
             state: BTreeMap::new(),
         };
         (scene, definitions)
@@ -186,11 +191,89 @@ impl VenueGeometry {
     /// space (Z-up), which is the space [`Camera::for_view`] works in.
     #[must_use]
     pub fn booth(&self) -> Option<Vec3> {
-        let flat = flatten_pieces(&self.pieces);
         BOOTH_KINDS.iter().find_map(|kind| {
-            let index = self.pieces.iter().position(|piece| piece.kind == *kind)?;
-            Some(coords::world_from_data(Vec3::from(flat[index].pos)))
+            let pose = self
+                .venue
+                .poses()
+                .find(|pose| catalog_kind(pose.catalog_ref.as_deref()) == *kind)?;
+            let (pos, _) = pose.data_pose();
+            Some(coords::world_from_data(Vec3::new(
+                pos[0] as f32,
+                pos[1] as f32,
+                pos[2] as f32,
+            )))
         })
+    }
+
+    /// The renderer's flat piece list, read off the solved venue.
+    #[must_use]
+    pub fn pieces(&self) -> Vec<scene_desc::Piece> {
+        self.venue
+            .poses()
+            .filter_map(|pose| piece_of(&ResolvedNode::from(pose)))
+            .collect()
+    }
+}
+
+/// One solved node as the piece the renderer draws, or `None` when it is not
+/// drawn as one: the root is the room and has no mesh, a fixture is drawn from
+/// [`scene_desc::Scene::fixtures`] instead, and a node with no `catalog_ref`
+/// has no geometry to stand for.
+///
+/// Takes the wire projection rather than a [`luma_scene::venue::NodePose`]
+/// because the desktop viewport only ever sees a venue from the far side of
+/// the dispatch boundary, and "what a solved node looks like to the renderer"
+/// has to have one answer for the viewport and the offscreen path both. The
+/// scene *settings* differ between them; the geometry must not.
+#[must_use]
+pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
+    // A kind the alphabet does not name is dropped rather than guessed at, on
+    // the same grounds `VenueGraphRows::to_graph` drops such a row.
+    match VenueNodeKind::from_name(&node.kind) {
+        Some(VenueNodeKind::Venue | VenueNodeKind::Fixture) | None => return None,
+        Some(_) => {}
+    }
+    let catalog_ref = node.catalog_ref.as_deref()?;
+    let params: luma_scene::venue::Params = node
+        .params
+        .iter()
+        .map(|(key, value)| (key.clone(), *value))
+        .collect();
+    Some(scene_desc::Piece {
+        id: node.id.clone(),
+        geometry: geometry_of(catalog_ref, &params),
+        kind: catalog_kind(Some(catalog_ref)).to_string(),
+        pos: node.position.map(|v| v as f32),
+        rot: node.rotation.map(|v| v as f32),
+        // Uniform, and the catalog has no scaled variant: a piece that is not
+        // its own size is not something the palette can describe.
+        scale: 1.0,
+    })
+}
+
+#[must_use]
+/// The palette taxonomy of a catalog entry — `floor`, `truss`, `cdj`, ... —
+/// which is what `scene_desc` and the booth search key on.
+///
+/// Read off [`luma_scene::catalog`] rather than stored: it was a column on
+/// `stage_pieces` and drifted from the catalog it was copied out of.
+pub fn catalog_kind(catalog_ref: Option<&str>) -> &'static str {
+    catalog_ref
+        .and_then(luma_scene::catalog::piece)
+        .map_or("", |p| p.kind.as_str())
+}
+
+/// A node's geometry: a bundled GLB, or a generator standing at the node's own
+/// parameters.
+fn geometry_of(catalog_ref: &str, params: &luma_scene::venue::Params) -> scene_desc::Geometry {
+    match luma_scene::catalog::piece(catalog_ref).map(|p| p.geometry) {
+        Some(luma_scene::catalog::Geometry::Procedural(family)) => {
+            scene_desc::Geometry::Procedural(luma_render::catalog::node_params(family, params))
+        }
+        // A `catalog_ref` the catalog has dropped still names a mesh on disk,
+        // and drawing it is better than drawing nothing: the four ripped truss
+        // GLBs left the palette but not the venues that already used them.
+        _ => scene_desc::Geometry::mesh(catalog_ref.to_string()),
     }
 }
 
@@ -220,63 +303,6 @@ pub fn primitive_state(
         gobo: 0,
         gobo_rotation: 0.0,
     })
-}
-
-/// Resolve every piece's parent chain into a world pose.
-///
-/// A [`StagePiece`] with a `parent_piece_id` holds its pose in *parent-local*
-/// space, but [`scene_desc::Piece`] has no parent link. Flattening here rather
-/// than teaching the renderer about parents is what keeps its scene flat.
-///
-/// A dangling or cyclic parent leaves the piece at its local pose rather than
-/// dropping it: a deck in the wrong place is debuggable, a deck that vanished
-/// is not. The result is index-aligned with `pieces`.
-#[must_use]
-pub fn flatten_pieces(pieces: &[StagePiece]) -> Vec<scene_desc::Piece> {
-    let by_id: HashMap<&str, &StagePiece> = pieces.iter().map(|p| (p.id.as_str(), p)).collect();
-    pieces
-        .iter()
-        .map(|piece| {
-            let mut model = local_matrix(piece);
-            let mut scale = piece.scale as f32;
-            let mut parent = piece.parent_piece_id.as_deref();
-            // A chain can be no longer than the list; anything more is a cycle.
-            let mut budget = pieces.len();
-            while let Some(id) = parent {
-                let (Some(up), 1..) = (by_id.get(id), budget) else {
-                    break;
-                };
-                budget -= 1;
-                model = local_matrix(up) * model;
-                scale *= up.scale as f32;
-                parent = up.parent_piece_id.as_deref();
-            }
-            let (pos, rot) = coords::data_pose_of(model);
-            scene_desc::Piece {
-                id: piece.id.clone(),
-                geometry: scene_desc::Geometry::mesh(piece.mesh_path.clone()),
-                kind: piece.kind.clone(),
-                pos,
-                rot,
-                scale,
-            }
-        })
-        .collect()
-}
-
-/// One piece's own transform, in its parent's space — or the world's, with no
-/// parent.
-///
-/// Built in **three space**, because that is the space these poses compose in:
-/// three.js nests each piece's group inside its parent's, and the `(x, z, y)`
-/// swap between the two spaces is a mirror. Composing a chain in data space
-/// with the stored Euler triple applied as-is lands each attached piece
-/// reflected across its parent's Y axis.
-fn local_matrix(piece: &StagePiece) -> Mat4 {
-    coords::three_pose_from_data(
-        [piece.pos_x as f32, piece.pos_y as f32, piece.pos_z as f32],
-        [piece.rot_x as f32, piece.rot_y as f32, piece.rot_z as f32],
-    ) * Mat4::from_scale(Vec3::splat(piece.scale as f32))
 }
 
 /// The QLC+ subset the renderer reads, out of the QLC+ model Luma parsed.
@@ -820,47 +846,90 @@ mod tests {
         assert!(primitive_state(Some(&state), "anything", 0).is_none());
     }
 
-    fn piece(id: &str, kind: &str, pos: [f64; 3]) -> StagePiece {
-        StagePiece {
-            id: id.into(),
-            uid: None,
-            venue_id: "venue".into(),
-            mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
-            kind: kind.into(),
+    /// A venue holding one node per `(id, catalog piece, floor position)`,
+    /// solved through the real resolver against the real catalog.
+    ///
+    /// Building it the long way rather than by hand is the point: `booth()`
+    /// reads poses, and a hand-made pose would be testing the test.
+    fn venue(pieces: &[(&str, &str, [f64; 3])]) -> ResolvedVenue {
+        use luma_scene::venue::{Edge, Node, Params, VenueGraph, FLOOR_SOCKET};
+
+        let sockets = crate::venue_graph::sockets(Path::new("resources/fixtures"))
+            .expect("the catalog resolves");
+        let mut graph = VenueGraph::new(Node {
+            id: "venue".into(),
+            kind: VenueNodeKind::Venue,
+            catalog_ref: None,
             label: None,
-            pos_x: pos[0],
-            pos_y: pos[1],
-            pos_z: pos[2],
-            rot_x: 0.0,
-            rot_y: 0.0,
-            rot_z: 0.0,
-            scale: 1.0,
-            parent_piece_id: None,
+            params: Params::default(),
+        });
+        for (id, catalog_ref, pos) in pieces {
+            let mut params = Params::default();
+            // `v` is the floor socket's bitangent, which is data `-Y`.
+            params.set("u", pos[0]);
+            params.set("v", -pos[1]);
+            params.set("trim", pos[2]);
+            graph.insert(Node {
+                id: (*id).into(),
+                kind: VenueNodeKind::Piece,
+                catalog_ref: Some((*catalog_ref).into()),
+                label: None,
+                params,
+            });
+            graph
+                .attach(
+                    id,
+                    Edge {
+                        parent: "venue".into(),
+                        my_socket: "mount".into(),
+                        their_socket: FLOOR_SOCKET.into(),
+                        roll: 0.0,
+                    },
+                    sockets,
+                )
+                .expect("equipment sits on the floor");
+        }
+        luma_scene::venue::resolve(&graph, sockets)
+    }
+
+    fn geometry(venue: ResolvedVenue) -> VenueGeometry {
+        VenueGeometry {
+            fixtures: Vec::new(),
+            venue,
+            definitions: HashMap::new(),
         }
     }
 
     #[test]
     fn booth_prefers_decks_over_the_mixer() {
-        let geometry = VenueGeometry {
-            fixtures: Vec::new(),
-            pieces: vec![
-                piece("m", "mixer", [1.0, 0.0, 0.0]),
-                piece("d", "cdj", [2.0, 3.0, 1.0]),
-            ],
-            definitions: HashMap::new(),
-        };
-        // Data space (x, y, z) into world space is (x, -y, z).
-        assert_eq!(geometry.booth(), Some(Vec3::new(2.0, -3.0, 1.0)));
+        let geometry = geometry(venue(&[
+            ("m", "stage_lab/mixer_djm_a9.glb", [1.0, 0.0, 0.0]),
+            ("d", "stage_lab/cdj_3000x.glb", [2.0, 3.0, 1.0]),
+        ]));
+        // Data space (x, y, z) into world space is (x, -y, z). The pose is the
+        // piece's *origin*, and a GLB's pivot is wherever the modeller left it
+        // — a decimetre or so off its mount socket — so this asserts which
+        // piece won, not a pose the catalog does not promise.
+        let booth = geometry.booth().expect("a cdj is a booth");
+        assert!(booth.distance(Vec3::new(2.0, -3.0, 1.0)) < 0.5, "{booth:?}");
     }
 
     #[test]
     fn booth_is_none_without_decks_or_a_mixer() {
-        let geometry = VenueGeometry {
-            fixtures: Vec::new(),
-            pieces: vec![piece("t", "truss", [0.0, 0.0, 4.0])],
-            definitions: HashMap::new(),
-        };
+        let geometry = geometry(venue(&[(
+            "s",
+            "stage_lab/speaker_dbr15.glb",
+            [0.0, 0.0, 0.0],
+        )]));
         assert_eq!(geometry.booth(), None);
+    }
+
+    /// An empty venue is one node — the room — and nothing to draw.
+    #[test]
+    fn an_empty_venue_has_no_pieces() {
+        let geometry = geometry(venue(&[]));
+        assert!(geometry.is_empty());
+        assert!(geometry.pieces().is_empty());
     }
 
     #[test]
@@ -882,281 +951,5 @@ mod tests {
         );
         assert!(primitive_state(Some(&state), "other", 0).is_none());
         assert!(primitive_state(None, "par", 0).is_none());
-    }
-}
-
-#[cfg(test)]
-mod stage_piece_tests {
-    use super::*;
-    use luma_render::scene_desc;
-    use std::f32::consts::FRAC_PI_2;
-
-    fn piece(id: &str, pos: [f64; 3], rot: [f64; 3], parent: Option<&str>) -> StagePiece {
-        StagePiece {
-            id: id.into(),
-            uid: None,
-            venue_id: "v".into(),
-            mesh_path: "stage_lab/truss_q30_box.glb".into(),
-            kind: "truss".into(),
-            label: None,
-            pos_x: pos[0],
-            pos_y: pos[1],
-            pos_z: pos[2],
-            rot_x: rot[0],
-            rot_y: rot[1],
-            rot_z: rot[2],
-            scale: 1.0,
-            parent_piece_id: parent.map(Into::into),
-        }
-    }
-
-    fn find<'a>(out: &'a [scene_desc::Piece], id: &str) -> &'a scene_desc::Piece {
-        out.iter()
-            .find(|p| p.id == id)
-            .expect("piece should survive flattening")
-    }
-
-    fn close(got: [f32; 3], want: [f32; 3]) {
-        assert!(
-            Vec3::from(got).abs_diff_eq(Vec3::from(want), 1e-5),
-            "got {got:?}, want {want:?}"
-        );
-    }
-
-    #[test]
-    fn an_unattached_piece_keeps_its_stored_pose() {
-        let out = flatten_pieces(&[piece("deck", [1.0, 2.0, 0.5], [0.0, 0.0, 0.7], None)]);
-        close(find(&out, "deck").pos, [1.0, 2.0, 0.5]);
-        close(find(&out, "deck").rot, [0.0, 0.0, 0.7]);
-    }
-
-    #[test]
-    fn an_attached_piece_lands_where_threejs_nesting_puts_it() {
-        // The regression. Parent yawed a quarter turn about stored Z, child one
-        // metre along the parent's local +X.
-        //
-        // three.js builds the parent group as `rotation.set(rotX, rotZ, rotY)`,
-        // so a stored Z of +90 degrees is `Ry(+90)` in three space, which takes
-        // the child's local +X to three `-Z` — data `-Y`. The child therefore
-        // sits one metre *toward the audience* of the parent, at (1, 1, 0).
-        //
-        // Composing the chain in data space instead (the old bug) applies
-        // `Rz(+90)` and sends the child to (1, 3, 0): mirrored across the
-        // parent's Y axis, two metres out. A truss attached to a rotated deck
-        // was landing there.
-        let out = flatten_pieces(&[
-            piece("deck", [1.0, 2.0, 0.0], [0.0, 0.0, FRAC_PI_2 as f64], None),
-            piece("truss", [1.0, 0.0, 0.0], [0.0; 3], Some("deck")),
-        ]);
-        close(find(&out, "truss").pos, [1.0, 1.0, 0.0]);
-    }
-
-    #[test]
-    fn a_parents_rotation_carries_into_the_child() {
-        // Position is not the only half that composes: an unrotated child of a
-        // rotated parent must come out carrying the parent's rotation, or the
-        // truss is in the right place pointing the wrong way.
-        //
-        // Asserted as a *pose* rather than as an Euler triple. A stored Z of 90
-        // degrees is `Ry(90)` in three space, which is exactly `euler_xyz_of`'s
-        // gimbal singularity: the triple it recovers there rebuilds the right
-        // matrix but is only good to about four digits, so comparing triples
-        // would be testing the round-trip's precision, not the composition.
-        // The residual here is ~3e-4 rad (0.02 degrees) — invisible on a truss,
-        // but it is why the tolerance is not tighter.
-        let out = flatten_pieces(&[
-            piece("deck", [0.0; 3], [0.0, 0.0, FRAC_PI_2 as f64], None),
-            piece("truss", [0.0; 3], [0.0; 3], Some("deck")),
-        ]);
-        let truss = find(&out, "truss");
-        let got = coords::three_pose_from_data(truss.pos, truss.rot);
-        let want = coords::three_pose_from_data([0.0; 3], [0.0, 0.0, FRAC_PI_2]);
-        let probe = Vec3::new(1.0, 0.0, 0.0);
-        assert!(
-            got.transform_point3(probe)
-                .abs_diff_eq(want.transform_point3(probe), 1e-3),
-            "child pose {:?} does not carry the parent's rotation",
-            got.transform_point3(probe)
-        );
-    }
-
-    #[test]
-    fn a_parents_scale_scales_the_childs_offset_and_its_own_scale() {
-        let mut deck = piece("deck", [0.0; 3], [0.0; 3], None);
-        deck.scale = 2.0;
-        let out = flatten_pieces(&[
-            deck,
-            piece("truss", [1.0, 0.0, 0.0], [0.0; 3], Some("deck")),
-        ]);
-        close(find(&out, "truss").pos, [2.0, 0.0, 0.0]);
-        assert!((find(&out, "truss").scale - 2.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn a_chain_composes_through_every_ancestor() {
-        // Two quarter turns about stored Z compose to a half turn, so the
-        // grandchild's local +X points back along the root's -X.
-        let out = flatten_pieces(&[
-            piece("a", [0.0; 3], [0.0, 0.0, FRAC_PI_2 as f64], None),
-            piece("b", [0.0; 3], [0.0, 0.0, FRAC_PI_2 as f64], Some("a")),
-            piece("c", [1.0, 0.0, 0.0], [0.0; 3], Some("b")),
-        ]);
-        close(find(&out, "c").pos, [-1.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn a_cyclic_parent_leaves_the_piece_visible_at_its_local_pose() {
-        // Documented behaviour: a deck in the wrong place is debuggable, a deck
-        // that vanished is not.
-        let out = flatten_pieces(&[
-            piece("a", [1.0, 0.0, 0.0], [0.0; 3], Some("b")),
-            piece("b", [0.0, 1.0, 0.0], [0.0; 3], Some("a")),
-        ]);
-        assert_eq!(out.len(), 2);
-    }
-
-    #[test]
-    fn a_dangling_parent_leaves_the_piece_at_its_local_pose() {
-        let out = flatten_pieces(&[piece("truss", [1.0, 2.0, 3.0], [0.0; 3], Some("gone"))]);
-        close(find(&out, "truss").pos, [1.0, 2.0, 3.0]);
-    }
-}
-
-/// Every named view, rendered for real on the GPU.
-///
-/// The check is deliberately weak on *content* and strict on *not nothing*: a
-/// camera that ended up inside a wall, behind the rig, or at the origin
-/// produces a uniform frame, and that is the failure this catches for all six
-/// views at once. Pixel-exact framing is the goldens' job.
-#[cfg(test)]
-mod gpu_view_tests {
-    use super::*;
-    use crate::models::universe::PrimitiveState;
-    use luma_render::Catalogue;
-    use std::time::Instant;
-
-    const WIDTH: u32 = 240;
-    const HEIGHT: u32 = 160;
-
-    fn repo() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("the crate sits one level below the repo root")
-            .to_path_buf()
-    }
-
-    fn catalogue() -> Catalogue {
-        Catalogue::load(&repo().join("gpui/crates/render/goldens/scenes.json"))
-            .expect("the tracked golden catalogue loads")
-    }
-
-    /// The catalogue's pinned per-head state as an evaluated universe, which is
-    /// the shape the production path actually takes.
-    fn universe(scene: &scene_desc::Scene) -> UniverseState {
-        let mut state = UniverseState::default();
-        for (key, pinned) in &scene.state {
-            state.primitives.insert(
-                key.clone(),
-                PrimitiveState {
-                    dimmer: pinned.dimmer,
-                    color: pinned.color,
-                    strobe: pinned.strobe,
-                    position: pinned.position,
-                    speed: 1.0,
-                },
-            );
-        }
-        state
-    }
-
-    fn copy<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
-        serde_json::from_value(serde_json::to_value(value).expect("serializes"))
-            .expect("round trips")
-    }
-
-    #[test]
-    fn gpu_renders_every_named_view_of_a_lit_rig() {
-        let catalogue = catalogue();
-        let source = catalogue
-            .scenes
-            .iter()
-            .find(|scene| scene.id == "dense-venue")
-            .expect("the catalogue keeps a whole-venue scene");
-        let state = universe(source);
-        let meshes = meshes_root(None);
-
-        for view in View::ALL {
-            let mut scene: scene_desc::Scene = copy(source);
-            // The settings the agent path installs, so this is a test of the
-            // frames agents actually get.
-            scene.render = offscreen_render();
-            let started = Instant::now();
-            let (rgba, width, height) = render_rgba(
-                scene,
-                copy(&catalogue.definitions),
-                Shot {
-                    view,
-                    booth: None,
-                    state: Some(state.clone()),
-                    time: 1.37,
-                    size: (WIDTH, HEIGHT),
-                },
-                meshes.clone(),
-            )
-            .unwrap_or_else(|error| panic!("{}: {error}", view.name()));
-            let elapsed = started.elapsed();
-
-            assert_eq!((width, height), (WIDTH, HEIGHT));
-            assert_eq!(rgba.len(), WIDTH as usize * HEIGHT as usize * 4);
-            let brightest = rgba
-                .chunks_exact(4)
-                .flat_map(|pixel| pixel[..3].iter().copied())
-                .max()
-                .expect("the frame has pixels");
-            assert!(
-                brightest > 24,
-                "{} is black: brightest channel {brightest}",
-                view.name()
-            );
-            let first = &rgba[..4];
-            assert!(
-                rgba.chunks_exact(4).any(|pixel| pixel != first),
-                "{} is a single flat colour",
-                view.name()
-            );
-            println!(
-                "{:<14} {WIDTH}x{HEIGHT} {:>7.0} ms",
-                view.name(),
-                elapsed.as_secs_f64() * 1e3
-            );
-        }
-    }
-
-    #[test]
-    fn gpu_render_png_is_a_decodable_png_of_the_requested_size() {
-        let catalogue = catalogue();
-        let source = catalogue
-            .scenes
-            .iter()
-            .find(|scene| scene.id == "dense-venue")
-            .expect("the catalogue keeps a whole-venue scene");
-        let png = render_png(
-            copy(source),
-            copy(&catalogue.definitions),
-            Shot {
-                view: View::Front,
-                booth: None,
-                state: Some(universe(source)),
-                time: 1.37,
-                size: (WIDTH, HEIGHT),
-            },
-            meshes_root(None),
-        )
-        .expect("the front view renders");
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-        // IHDR width/height, big-endian, immediately after the 8-byte signature
-        // and the chunk's own length + type.
-        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), WIDTH);
-        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), HEIGHT);
     }
 }

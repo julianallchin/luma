@@ -14,6 +14,7 @@ pub mod state;
 pub mod track_access;
 pub mod tracks;
 pub mod venue_access;
+pub mod venue_graph;
 pub mod venues;
 pub mod waveforms;
 pub(crate) mod write_admission;
