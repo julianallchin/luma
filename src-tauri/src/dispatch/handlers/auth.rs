@@ -89,6 +89,22 @@ pub async fn verify_login_code(
         })
 }
 
+/// Who this library belongs to: the admitted principal and the address to name
+/// it by, or `None` for the guest namespace.
+///
+/// Offline by construction — see
+/// [`crate::database::local::auth::load_current_account`]. A host reads this at
+/// launch, so it must never be a reason a launch fails.
+///
+/// # Errors
+///
+/// If the stored session and its host proof disagree.
+pub async fn current_account(
+    services: &AppServices,
+) -> Result<Option<crate::database::local::auth::AuthAccount>, CommandError> {
+    Ok(crate::database::local::auth::load_current_account(&services.state_db.0).await?)
+}
+
 /// One POST to a GoTrue endpoint that answers with JSON, returned verbatim.
 ///
 /// Verbatim matters: `/verify`'s body *is* the session blob the host persists,

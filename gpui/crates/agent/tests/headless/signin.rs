@@ -21,23 +21,38 @@ use gpui::{AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode, GPU_LIVENESS_TIMEOUT};
 use serde_json::Value;
 
-async fn seed(dir: &Path, stored: Stored) {
+async fn seed(dir: &Path, stored: Stored, synced: bool) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
         .await
         .expect("failed to open fixture app database");
     // Owned by whoever this launch will admit: `auth_visible_venues` shows the
     // admitted principal's rows, so seeing this venue is itself proof that
     // admission was armed for the right identity.
-    sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Sign-in Venue')")
-        .bind(session::owner(stored))
-        .execute(&db.0)
-        .await
-        .expect("failed to seed venue");
+    //
+    // `synced` decides whether it has reached the cloud. Sign-out flushes the
+    // principal's un-synced rows before it deletes anything, so a row that is
+    // already durable is the only way to reach the far side of that flush
+    // without a network — and a row that is not is how the refusal is
+    // provoked on purpose.
+    sqlx::query(
+        "INSERT INTO venues (id, uid, name, synced_at) VALUES ('venue', ?, 'Sign-in Venue', ?)",
+    )
+    .bind(session::owner(stored))
+    .bind(synced.then_some("2026-01-01T00:00:00Z"))
+    .execute(&db.0)
+    .await
+    .expect("failed to seed venue");
     db.0.close().await;
     session::seed(dir, stored).await;
 }
 
 fn fixture_dir(name: &str, stored: Stored) -> PathBuf {
+    fixture_dir_at(name, stored, false)
+}
+
+/// [`fixture_dir`] saying whether the seeded venue has already reached the
+/// cloud — see [`seed`].
+fn fixture_dir_at(name: &str, stored: Stored, synced: bool) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("luma-gpui-signin-{name}-{}", std::process::id()));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).expect("failed to create fixture directory");
@@ -45,7 +60,7 @@ fn fixture_dir(name: &str, stored: Stored) -> PathBuf {
         .enable_all()
         .build()
         .expect("failed to start fixture runtime")
-        .block_on(seed(&dir, stored));
+        .block_on(seed(&dir, stored, synced));
     dir
 }
 
@@ -140,10 +155,12 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
         // The venue picker will not stand aside until a room is chosen, and
         // a guest's own rows are exactly what is still readable here.
         nav.venue("Sign-in Venue");
-        const shell = until("the shell", (s) =>
-            s.find({ role: "button", label: "Settings" }) !== undefined
+        until("the shell", (s) =>
+            s.find({ role: "button", label: "Account" }) !== undefined
                 && s.find({ role: "card", label: "Venue dialog" }) === undefined);
-        app.click(shell.find({ role: "button", label: "Settings" }));
+        // The foot names the guest namespace before anything is opened.
+        const foot = app.snapshot().find({ role: "text", label: "Working locally" }) !== undefined;
+        nav.settings();
         const settings = until("the settings dialog", (s) =>
             s.find({ role: "toggle", label: "Account" }) !== undefined);
         app.click(settings.find({ role: "toggle", label: "Account" }));
@@ -155,11 +172,16 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
                 // Settings went with the shell rather than lingering under it.
                 && s.find({ role: "toggle", label: "Account" }) === undefined);
         ({
-            identity: shown.find({ role: "input", label: "Signed out — working locally" })
+            foot,
+            identity: shown.find({ role: "input", label: "Working locally" })
                 !== undefined,
             reopened: reopened.find({ role: "button", label: "Continue" }) !== undefined,
         })
     "#,
+    );
+    assert_eq!(
+        account["foot"], true,
+        "the sidebar's foot names the guest namespace"
     );
     assert_eq!(
         account["identity"], true,
@@ -187,4 +209,114 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
     "#,
     );
     assert_eq!(out["gate"], false, "a proven session skips the gate");
+}
+
+/// Sign out from the sidebar foot's account menu — the door a person actually
+/// presses — and land in the guest namespace.
+///
+/// The principal's one row is already durable, so the cloud flush sign-out
+/// begins with has nothing to send and the whole boundary runs offline. That
+/// is the point: what is under test is the *gesture*, from the foot to the end
+/// state, not the sync it fronts.
+#[test]
+fn signing_out_from_the_account_foot_reaches_the_guest_namespace() {
+    let dir = fixture_dir_at("signout", Stored::Proven { expires_in: 3600 }, true);
+    let mut harness = harness(&dir);
+    let out = exec(
+        &mut harness,
+        r#"
+        nav.venue("Sign-in Venue");
+        until("the shell", (s) =>
+            s.find({ role: "button", label: "Account" }) !== undefined
+                && s.find({ role: "card", label: "Venue dialog" }) === undefined);
+        // Signed in, so the foot does not name the guest namespace yet.
+        const before = app.snapshot().find({ role: "text", label: "Working locally" }) === undefined;
+        nav.step("the account foot", "button", "Account");
+        nav.step("the sign-out row", "row", "Sign out");
+        // Either the gesture lands — the foot names the guest namespace — or
+        // it failed, and the failure has to be readable from right here,
+        // because the person who pressed this never opened settings.
+        const settled = until("sign-out to settle", (s) =>
+            s.find({ role: "text", label: "Working locally" }) !== undefined
+                || s.find((n) => n.role === "text"
+                    && n.label.startsWith("Could not sign out")) !== undefined
+                ? s : undefined);
+        ({
+            before,
+            guest: settled.find({ role: "text", label: "Working locally" }) !== undefined,
+            failure: (settled.find((n) => n.role === "text"
+                && n.label.startsWith("Could not sign out")) || {}).label || null,
+            // The menu went with the gesture rather than sitting open over it.
+            menu: settled.find({ role: "row", label: "Sign out" }) !== undefined,
+        })
+    "#,
+    );
+    assert_eq!(out["before"], true, "the fixture launched signed in");
+    assert_eq!(
+        out["failure"],
+        Value::Null,
+        "sign-out reported a failure: {}",
+        out["failure"]
+    );
+    assert_eq!(
+        out["guest"], true,
+        "the foot does not name the guest namespace after signing out"
+    );
+    assert_eq!(out["menu"], false, "the account menu stayed open");
+}
+
+/// A sign-out that cannot land says so at the foot it was pressed from.
+///
+/// The principal owns a venue that has never reached the cloud, and the stored
+/// token cannot flush it — so the host refuses, which is the whole contract of
+/// `wipe_database`: offline is never permission to discard the only copy. What
+/// this pins is the *report*. The failure used to land in a field only the
+/// settings screen renders, so pressing sign-out from the sidebar looked like
+/// pressing nothing at all.
+#[test]
+fn a_sign_out_that_cannot_flush_says_so_at_the_foot() {
+    let dir = fixture_dir("signout-offline", Stored::Proven { expires_in: 3600 });
+    let mut harness = harness(&dir);
+    let out = exec(
+        &mut harness,
+        r#"
+        nav.venue("Sign-in Venue");
+        until("the shell", (s) =>
+            s.find({ role: "button", label: "Account" }) !== undefined
+                && s.find({ role: "card", label: "Venue dialog" }) === undefined);
+        nav.step("the account foot", "button", "Account");
+        nav.step("the sign-out row", "row", "Sign out");
+        const settled = until("the refusal", (s) =>
+            s.find((n) => n.role === "text"
+                && n.label.startsWith("Could not sign out")) !== undefined
+                || s.find({ role: "text", label: "Working locally" }) !== undefined
+                ? s : undefined);
+        ({
+            failure: (settled.find((n) => n.role === "text"
+                && n.label.startsWith("Could not sign out")) || {}).label || null,
+            // Nothing half-happened: the account is still this library's.
+            guest: settled.find({ role: "text", label: "Working locally" }) !== undefined,
+            // …and the gesture is pressable again rather than stuck mid-flight.
+            retry: (() => {
+                app.click(app.snapshot().find({ role: "button", label: "Account" }));
+                return until("the menu, offering the gesture again", (s) => {
+                    const row = s.find({ role: "row", label: "Sign out" });
+                    return row !== undefined && row.enabled !== false ? s : undefined;
+                }) !== undefined;
+            })(),
+        })
+    "#,
+    );
+    assert!(
+        out["failure"]
+            .as_str()
+            .is_some_and(|text| text.contains("Cannot sign out before catalog sync")),
+        "the refusal is not reported at the foot: {}",
+        out["failure"]
+    );
+    assert_eq!(
+        out["guest"], false,
+        "a refused sign-out must not read as signed out"
+    );
+    assert_eq!(out["retry"], true, "the gesture is stuck after a failure");
 }

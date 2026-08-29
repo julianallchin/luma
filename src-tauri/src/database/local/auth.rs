@@ -15,9 +15,14 @@ const MAX_SESSION_JSON_BYTES: usize = 1_048_576;
 const MAX_ACCESS_TOKEN_BYTES: usize = 65_536;
 const REFRESH_WINDOW_SECONDS: i64 = 60;
 
-/// The only identity callers may use for authorization or routing. It is
+/// The only identity callers may use to scope or route local data. It is
 /// reconstructed from a host-only proof bound to the exact persisted token,
 /// never from renderer-owned `session.user` JSON.
+///
+/// It is *identity, not authorization*: a principal may be named from an
+/// expired token, and `expires_at` is a fact about the token rather than a
+/// gate. Anything that presents a token to Supabase must go through
+/// [`get_current_auth`], which refreshes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedPrincipal {
     pub user_id: String,
@@ -58,6 +63,21 @@ struct SessionEnvelope {
 #[derive(Clone, Debug, Deserialize)]
 struct SessionUserHint {
     id: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+}
+
+/// The admitted principal as a *person*: the proven id, and the address the
+/// session was issued to.
+///
+/// The two halves are not interchangeable. `id` comes from the host proof and
+/// is the only thing a row may be stamped with; `email` is a label lifted from
+/// the same validated blob for the one purpose of naming the account on screen,
+/// and Supabase is free to omit it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AuthAccount {
+    pub id: String,
+    pub email: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -985,13 +1005,57 @@ pub(crate) async fn load_renderer_session_for_connection(
     }
 }
 
+/// Who a command stamps its local rows with. Offline, and expiry-tolerant for
+/// the reason [`load_verified_principal_for_connection_at`] gives — a local
+/// write never presents a token, so an expired one cannot be a reason to
+/// refuse to name its owner.
 pub async fn get_current_user_id(pool: &SqlitePool) -> Result<Option<String>, String> {
     Ok(load_verified_principal(pool)
         .await?
         .map(|principal| principal.user_id))
 }
 
-/// Return a token/principal pair from one verified snapshot. Refresh is
+/// [`get_current_user_id`], plus the address to show it under.
+///
+/// Reads the stored snapshot and nothing else: the proof beside the session is
+/// what proves the id, so no token is spent and no request is made. That is the
+/// property the caller depends on — this is read at launch, and a launch that
+/// asked the network who the user is would fail on a plane.
+///
+/// **Expiry is allowed, and has to be.** This reads the same snapshot
+/// [`bootstrap_headless_admission`] admits from and must take the same
+/// latitude it does, or the two disagree: access tokens last an hour, so any
+/// launch later than that would admit a principal and then be unable to say
+/// whose it was. Nothing here is authorization — the id comes from the host
+/// proof and the address from bytes that proof is a hash of — and a token that
+/// expired this morning has not stopped being evidence of *whose* session it
+/// is.
+pub async fn load_current_account(pool: &SqlitePool) -> Result<Option<AuthAccount>, String> {
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|error| format!("Failed to read authenticated session: {error}"))?;
+    Ok(
+        load_verified_snapshot_for_connection(&mut connection, unix_now(), true)
+            .await?
+            .map(|snapshot| AuthAccount {
+                id: snapshot.proof.user_id,
+                email: snapshot
+                    .envelope
+                    .user
+                    .and_then(|user| user.email)
+                    .filter(|email| !email.trim().is_empty()),
+            }),
+    )
+}
+
+/// Return a token/principal pair from one verified snapshot, refreshing first
+/// if the token is expired or about to be. This is the *only* freshness gate
+/// that matters: every path that contacts Supabase (sync push/pull, uploads,
+/// venue access) takes its token from here, so the offline reads above can
+/// tolerate expiry without weakening server authorization.
+///
+/// Refresh is
 /// serialized by StateDb's single connection and the old proof is compared
 /// before the new session can replace it.
 pub async fn get_current_auth(pool: &SqlitePool) -> Result<Option<VerifiedAuth>, String> {
@@ -1206,15 +1270,26 @@ fn validate_user_hint(envelope: &SessionEnvelope, jwt_subject: &str) -> Result<(
     Ok(())
 }
 
+/// The principal of the stored session, expiry included.
+///
+/// An expired access token is still evidence of *whose* session this is: the
+/// id comes from the host proof over the exact stored bytes, not from the
+/// token's remaining lifetime. Refusing here would make the local library
+/// unusable an hour after the app last refreshed, and would put this read at
+/// odds with [`bootstrap_headless_admission`], which arms the write gate from
+/// the same snapshot with the same latitude — a gate armed for a principal
+/// nothing can name is how every local write started failing.
+///
+/// Freshness is a *server* concern and is enforced where the server is
+/// actually contacted: [`get_current_auth`] refreshes or fails before any
+/// token leaves this process, and every sync/upload path goes through it.
 async fn load_verified_principal_for_connection_at(
     connection: &mut SqliteConnection,
     now: i64,
 ) -> Result<Option<VerifiedPrincipal>, String> {
-    Ok(
-        load_verified_snapshot_for_connection(connection, now, false)
-            .await?
-            .map(|snapshot| snapshot.proof.principal()),
-    )
+    Ok(load_verified_snapshot_for_connection(connection, now, true)
+        .await?
+        .map(|snapshot| snapshot.proof.principal()))
 }
 
 async fn load_verified_snapshot_for_connection(
@@ -1703,6 +1778,23 @@ mod tests {
         pool
     }
 
+    /// The real app database, admission triggers included — the only way to
+    /// prove a *write* lands rather than just that a principal was named.
+    async fn migrated_app_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(":memory:")
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
     async fn app_admission_pool(active_uid: &str, accepting: bool) -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -1850,8 +1942,10 @@ mod tests {
         assert!(error.contains("does not match"));
     }
 
+    /// Expiry is not a reason to forget whose session this is. The proof still
+    /// binds the stored bytes to a subject, and no network is touched.
     #[tokio::test]
-    async fn expired_proof_fails_closed_without_network() {
+    async fn expired_proof_still_names_its_principal_offline() {
         let pool = test_pool().await;
         let server = FakeAuthServer::new();
         let token = jwt("real", NOW + 10);
@@ -1860,14 +1954,59 @@ mod tests {
             .await
             .unwrap();
 
-        let error = load_verified_principal_for_connection_at(
-            &mut *pool.acquire().await.unwrap(),
-            NOW + 11,
+        assert_eq!(
+            load_verified_principal_for_connection_at(
+                &mut *pool.acquire().await.unwrap(),
+                NOW + 11,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .user_id,
+            "real"
+        );
+    }
+
+    /// The bug this pairing exists to prevent: headless admission arms the
+    /// write gate from an expired session, so command-time principal
+    /// resolution must name the same person or every local write fails on a
+    /// token nothing local ever presents.
+    #[tokio::test]
+    async fn expired_session_admits_and_writes_locally() {
+        const PAST: i64 = 1_600_000_000;
+        let state_pool = test_pool().await;
+        let app_pool = migrated_app_pool().await;
+        let server = FakeAuthServer::new();
+        let token = jwt("alice", PAST + 600);
+        server.accept(&token, "alice");
+        let validated = validate_session_with(
+            &session("alice", &token, "single-use-refresh"),
+            &server,
+            PAST,
         )
         .await
-        .err()
         .unwrap();
-        assert!(error.contains("expired"));
+        let mut connection = state_pool.acquire().await.unwrap();
+        replace_session_for_connection(&mut connection, &validated)
+            .await
+            .unwrap();
+        drop(connection);
+
+        assert_eq!(
+            bootstrap_headless_admission(&app_pool, &state_pool)
+                .await
+                .unwrap(),
+            Some("alice".to_string())
+        );
+        // Long past `PAST + 600`, and with no server reachable at all.
+        assert_eq!(
+            get_current_user_id(&state_pool).await.unwrap(),
+            Some("alice".to_string())
+        );
+        sqlx::query("INSERT INTO patterns (id, uid, name) VALUES ('p', 'alice', 'p')")
+            .execute(&app_pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
