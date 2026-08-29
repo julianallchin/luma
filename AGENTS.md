@@ -2,6 +2,10 @@
 
 Luma is a Tauri desktop app: a React/TypeScript frontend in `src/` backed by a Rust core in `src-tauri/`. Most features span both halves via Tauri `invoke()` commands and shared TypeScript bindings.
 
+## Shared checkout
+
+Several agents work in this tree at once. Never run `git stash`, `git checkout --`, `git reset`, `git clean`, or tree-wide `cargo fmt` — each reverts or rewrites other agents' uncommitted work. Stage by path, format only files you touched, commit only your own files.
+
 ## Project Structure & Module Organization
 
 - `src/`: React 19 + TypeScript UI, Zustand stores, React Flow-based graph editors, Tailwind styling.
