@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] `git status` RM = rename already staged, so a path-scoped `git add` of an unrelated file still commits it — splitting a tree with pre-staged renames misfiles them, and fixing that needs `reset`.
 
 - [2026-08-29] `render-contract-goldens` writes straight into the tracked `goldens/contracts/`, so the only way to *look* at a scene while iterating on geometry is to overwrite a committed golden — there is no `--out` and no dry-run render
 - [2026-08-29] homebrew python 3.14's `pyexpat` is broken against the system libexpat (`Symbol not found: _XML_SetAllocTrackerActivationThreshold`), which takes `import matplotlib` down with it — any mesh/geometry inspection has to be hand-rolled numpy plus a stdlib PNG writer
