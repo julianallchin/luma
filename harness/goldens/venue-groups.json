@@ -137,7 +137,7 @@
     ],
     "stageCentreX": 0.0
   },
-  "spotWings": {
+  "spotTowers": {
     "groups": [
       {
         "members": [
@@ -172,26 +172,78 @@
       },
       {
         "members": [
-          "Rogue R2 Spot 3",
-          "Rogue R2 Spot 4"
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2"
         ],
-        "name": "spots_left_wing_top",
+        "name": "spots_left_wing_downstage",
         "path": [
           "spots",
           "left wing",
+          "downstage"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 2"
+        ],
+        "name": "spots_left_wing_downstage_top",
+        "path": [
+          "spots",
+          "left wing",
+          "downstage",
           "top"
         ],
         "role": "spot"
       },
       {
         "members": [
-          "Rogue R2 Spot 1",
-          "Rogue R2 Spot 2"
+          "Rogue R2 Spot 1"
         ],
-        "name": "spots_left_wing_bottom",
+        "name": "spots_left_wing_downstage_bottom",
         "path": [
           "spots",
           "left wing",
+          "downstage",
+          "bottom"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4"
+        ],
+        "name": "spots_left_wing_upstage",
+        "path": [
+          "spots",
+          "left wing",
+          "upstage"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 4"
+        ],
+        "name": "spots_left_wing_upstage_top",
+        "path": [
+          "spots",
+          "left wing",
+          "upstage",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 3"
+        ],
+        "name": "spots_left_wing_upstage_bottom",
+        "path": [
+          "spots",
+          "left wing",
+          "upstage",
           "bottom"
         ],
         "role": "spot"
@@ -212,35 +264,87 @@
       },
       {
         "members": [
-          "Rogue R2 Spot 7",
-          "Rogue R2 Spot 8"
+          "Rogue R2 Spot 5",
+          "Rogue R2 Spot 6"
         ],
-        "name": "spots_right_wing_top",
+        "name": "spots_right_wing_downstage",
         "path": [
           "spots",
           "right wing",
+          "downstage"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 6"
+        ],
+        "name": "spots_right_wing_downstage_top",
+        "path": [
+          "spots",
+          "right wing",
+          "downstage",
           "top"
         ],
         "role": "spot"
       },
       {
         "members": [
-          "Rogue R2 Spot 5",
-          "Rogue R2 Spot 6"
+          "Rogue R2 Spot 5"
         ],
-        "name": "spots_right_wing_bottom",
+        "name": "spots_right_wing_downstage_bottom",
         "path": [
           "spots",
           "right wing",
+          "downstage",
           "bottom"
         ],
         "role": "spot"
       },
       {
         "members": [
-          "Rogue R2 Spot 3",
-          "Rogue R2 Spot 4",
           "Rogue R2 Spot 7",
+          "Rogue R2 Spot 8"
+        ],
+        "name": "spots_right_wing_upstage",
+        "path": [
+          "spots",
+          "right wing",
+          "upstage"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 8"
+        ],
+        "name": "spots_right_wing_upstage_top",
+        "path": [
+          "spots",
+          "right wing",
+          "upstage",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 7"
+        ],
+        "name": "spots_right_wing_upstage_bottom",
+        "path": [
+          "spots",
+          "right wing",
+          "upstage",
+          "bottom"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 4",
+          "Rogue R2 Spot 6",
           "Rogue R2 Spot 8"
         ],
         "name": "spots_top",
@@ -253,9 +357,123 @@
       {
         "members": [
           "Rogue R2 Spot 1",
-          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 3",
           "Rogue R2 Spot 5",
-          "Rogue R2 Spot 6"
+          "Rogue R2 Spot 7"
+        ],
+        "name": "spots_bottom",
+        "path": [
+          "spots",
+          "bottom"
+        ],
+        "role": "spot"
+      }
+    ],
+    "stageCentreX": 0.0
+  },
+  "spotWings": {
+    "groups": [
+      {
+        "members": [
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4"
+        ],
+        "name": "spots",
+        "path": [
+          "spots"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2"
+        ],
+        "name": "spots_left_wing",
+        "path": [
+          "spots",
+          "left wing"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 2"
+        ],
+        "name": "spots_left_wing_top",
+        "path": [
+          "spots",
+          "left wing",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 1"
+        ],
+        "name": "spots_left_wing_bottom",
+        "path": [
+          "spots",
+          "left wing",
+          "bottom"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4"
+        ],
+        "name": "spots_right_wing",
+        "path": [
+          "spots",
+          "right wing"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 4"
+        ],
+        "name": "spots_right_wing_top",
+        "path": [
+          "spots",
+          "right wing",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 3"
+        ],
+        "name": "spots_right_wing_bottom",
+        "path": [
+          "spots",
+          "right wing",
+          "bottom"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 4"
+        ],
+        "name": "spots_top",
+        "path": [
+          "spots",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 3"
         ],
         "name": "spots_bottom",
         "path": [

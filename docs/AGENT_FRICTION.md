@@ -2,6 +2,9 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] `bunx vitest run --reporter=basic` does not say "that reporter is gone"; it throws a module-resolution stack out of vitest's internals, which reads like the repo is broken rather than like one flag is wrong.
+- [2026-08-29] A fresh worktree needs three gitignored things hand-copied before anything builds: `node_modules` (symlink), every `src-tauri/python/*/requirements.txt`, and the bindings (regenerate, don't copy). `git ls-files --others --ignored --exclude-standard` finds only four of the six requirements files, because the nested checkouts are invisible to it — use `find`.
+- [2026-08-29] `cargo test --test headless` from `gpui/` fails with "no test target named `headless` in default-run packages" and then *exits 0*, so a script believes it passed. It needs `-p gpui-agent`, which the verification matrix does not say.
 - [2026-08-29] Copying `src/bindings/*.ts` from the main tree into a worktree is a trap: they can be stale vs the commit under test and `bun run build` then fails with a wall of type errors that look like the diff's fault. Regenerate via `cargo test` in src-tauri instead.
 - [2026-08-29] A `git worktree` is not an isolated build: `.cargo/config.toml` points every checkout at the main tree's target dir, so a "standalone" worktree queues behind the main tree's `.cargo-lock` and shares its incremental state — the isolation is source-only, and nothing says so.
 - [2026-08-29] A fresh worktree cannot build src-tauri at all: `python/consonance-ACE` is a nested checkout, so `include_str!("../python/consonance-ACE/requirements.txt")` fails and the whole lib errors before any of your code is compiled.

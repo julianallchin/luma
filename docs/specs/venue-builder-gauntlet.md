@@ -74,28 +74,61 @@ fx, from the QLC+ `Type` plus channels, `src-tauri/src/models/fixtures.rs`) →
 class (`horizontal`/`vertical` for a run standing on its own, `left wing`/`right
 wing` for one bolted to a stage, by the run's *attachment* side against the
 stage's resolved surface centre) → row (one per distribution, never merged,
-named by the structure piece's label or by its position among the class's rows)
-→ cross-cuts (all "top" rows under one role). Names are model plus a running
-number per model (`aura 1`…`aura 8`). Manual rename/move/merge sit on top as
-overrides; **a touched node is never re-derived**. **Out of scope:** groups in
-the pattern editor or scores.
+named by the structure piece's label, else — for a pair — by the axis it
+measurably separates on, else `row n`) → split (the halves a row's fixtures fall
+into where they measurably separate: `top`/`bottom` by height, `left`/`right`
+across, `downstage`/`upstage` by depth) → cross-cuts (one split name unioned
+across the role).
 
-**Evidence.** Two canonical venues captured verbatim in
-`harness/goldens/venue-groups.json`. The critic rebuilds both mirrored and
-confirms equal trees. The `describe()` golden lives in B6, which is where
-`describe()` is built; asking for it here would pin an interface this round does
-not own.
+**Measured, never ranked.** A positional name is claimed only where there is a
+gap to claim it with: the widest gap between neighbours must beat the spacing
+around it, and never counts below a documented absolute — both sides of that
+threshold tested. Two unlabelled rows abreast at one trim are `left` and
+`right`, not a "top" and a "bottom"; rows that separate on nothing are numbered.
+An evenly spaced run does not split at all. A class holding one unlabelled row
+collapses that level, because the class node already *is* that set: its children
+are the row's splits. A cross-cut is emitted only where two or more **leaves**
+carry the name — a row that split contributes its halves, not itself.
+
+Names are model plus a running number per model (`aura 1`…`aura 8`). Manual
+rename/move/merge sit on top as overrides; **a touched node is never
+re-derived**, and no edit may mint a selection name another node in the venue
+already answers to — derived and authored groups share one namespace. **Out of
+scope:** groups in the pattern editor or scores.
+
+**Evidence.** Three canonical venues captured verbatim in
+`harness/goldens/venue-groups.json`. The critic rebuilds each mirrored and
+confirms the same *sets*, path by path and member by member — equal path lists
+prove only that the vocabulary survived. The `describe()` golden lives in B6,
+which is where `describe()` is built; asking for it here would pin an interface
+this round does not own.
 
     (a) led bars / horizontal / {top, bottom}
         led bars / vertical   / {left, right}
     (b) spots / left wing  / {top, bottom}
         spots / right wing / {top, bottom}
         spots / top
-        spots / bottom **Acceptance.** Those trees are produced exactly, node for node, name for name,
-compared as trees not counts. Moving a truss changes the position split with no
-group edit. Renaming a derived node then adding fixtures keeps the name and
-still files the new ones under it. One derivation function, no copy in the page
-or facade. **Applies:** AF1, AF3, AF10.
+        spots / bottom
+    (c) spots / left wing  / {downstage, upstage} / {top, bottom}
+        spots / right wing / {downstage, upstage} / {top, bottom}
+        spots / top
+        spots / bottom
+
+(a) is four evenly spaced runs around a wall: two rows named by the height
+between them, two by the width, and no split inside any of them. (b) is the
+original rig — one tower a side, spots at two heights: each wing holds one
+unlabelled row, so the wing *is* that row and its children are the splits. (c)
+is two towers a side, one behind the other and hung at different heights: depth
+separates them further than trim does, so depth is what names them, and it is
+the halves rather than the rows that the role's cross-cuts gather.
+
+**Acceptance.** Those trees are produced exactly, node for node, name for name,
+compared as trees not counts. Moving a truss changes the split with no group
+edit. Renaming a derived node then adding fixtures keeps the name and still
+files the new ones under it. A name that collides with anything else in the
+venue is refused, in both directions. No graph write leaves a stale derived
+answer behind, including one read between the write and its commit. One
+derivation function, no copy in the page or facade. **Applies:** AF1, AF3, AF10.
 
 ## 5. B3 — the distribute command
 

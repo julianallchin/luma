@@ -2,9 +2,10 @@
 //!
 //! A group is not a bag someone filled in; it is a **set the rig already
 //! describes**, shown as a tree. The rule below is the only one — role from the
-//! fixture definition, rows from the structure fixtures hang on, position
-//! splits within a role — and it is deterministic: the same venue derives the
-//! same tree, with the same ids, every time.
+//! fixture definition, class from where a run sits, one row per distribution,
+//! and inside a row the halves its fixtures measurably fall into — and it is
+//! deterministic: the same venue derives the same tree, with the same ids,
+//! every time.
 //!
 //! Manual work sits *on top* as overrides ([`crate::database::local::
 //! group_overrides`]). A node with an override is never re-derived; deleting the
@@ -15,9 +16,11 @@
 //! ```text
 //! <role>                     every fixture of that role
 //!   <class>                  where its runs sit: a wing, or which way it runs
-//!     <row>                  one run — one structure piece — of that class
-//!   top | bottom             a cross-cut: the same row name across two classes
+//!     <row>                  one distribution — one structure piece
+//!       <split>              the halves that row's fixtures fall into
+//!   top | bottom             a cross-cut: one split name, across the role
 //!   left | right
+//!   downstage | upstage
 //! ```
 //!
 //! # The rule, in full
@@ -28,23 +31,46 @@
 //! **Class** — where a run sits, in the words a human uses for it. A run bolted
 //! to a stage is a **wing**, `left wing` or `right wing` by which side of the
 //! stage's centre it is *attached* to. Anything else is named for the way it
-//! runs: `horizontal` (spread along stage x) or `vertical` (spread up).
-//! Unplaced fixtures are their own class, `unplaced`.
+//! runs: `horizontal` (spread along the stage or into it) or `vertical`
+//! (spread up). Unplaced fixtures are their own class, `unplaced`.
 //!
 //! **Row** — one per distribution: one structure piece, one row, never merged
 //! with the piece beside it. Two towers on the left are two rows of one
 //! `left wing`, because they are two things a human points at separately. A
-//! row is named by the piece's authored label when it has one, and otherwise by
-//! its position among the class's rows: `top`/`bottom` down a horizontal class
-//! or a wing, `left`/`right` across a vertical one, and `row 1`…`row n` when
-//! there are more than two and no labels to tell them apart. A class holding
-//! **one** unlabelled row emits no row node — the class node already is that
-//! set, and two names for one set is the thing this design refuses.
+//! row is named by the piece's authored label when it has one; otherwise a
+//! class of exactly two rows names them for the axis they **measurably**
+//! separate on ([`separation`]) and anything else numbers them `row 1`…`row n`.
+//! A rank is not a name: two towers side by side at one trim are not "top" and
+//! "bottom", they are `left` and `right`, and if nothing separates them they
+//! are `row 1` and `row 2`.
 //!
-//! **Cross-cuts** — under a role, `top`/`bottom`/`left`/`right` unioning rows of
-//! that name across classes. Emitted only when **two or more** rows contribute,
-//! for the same reason: a cross-cut drawing from one row is that row under a
-//! second name.
+//! **Split** — a row cut in two where its fixtures measurably separate: `top`
+//! and `bottom` by height, `left` and `right` across, `downstage` and
+//! `upstage` into the stage. One cut per row, along the axis whose gap is
+//! widest, and none at all when the row is an evenly spaced run — six bars a
+//! metre apart are one distribution, not two halves. A class holding **one**
+//! unlabelled row emits no row node, because the class node already is that
+//! set: its children are that row's splits.
+//!
+//! **Cross-cuts** — under a role, a positional name unioned across the whole
+//! role: every `top` on every wing, in one set. A cross-cut gathers the
+//! *leaves* that carry the name — a row that split contributes its halves
+//! rather than itself — and is emitted only when **two or more** of them do.
+//! One contributor would be that set under a second name, which is the thing
+//! this design refuses.
+//!
+//! # What derivation reads, and what it does not
+//!
+//! Positions are read in data space, resolved. A stage's own yaw is therefore
+//! *not* consulted: `left`, `across` and `into the stage` are the room's axes,
+//! not the deck's, because a rig hung around a deck turned 30° is still hung
+//! left and right of the room. A stage rotated a quarter turn would want the
+//! other reading, and does not get it — recorded here rather than half-solved.
+//!
+//! A structure attached exactly *at* the stage centre is a right wing. The tie
+//! has to go somewhere and a strict `<` is what puts it there; nothing in a rig
+//! sits on the line by accident, and a piece that does is one nudge from either
+//! answer whatever this rule says.
 
 use std::collections::BTreeMap;
 
@@ -286,7 +312,8 @@ pub struct FixtureFact {
     pub model: String,
     pub role: FixtureRole,
     /// `None` for a fixture in the patch tray. Unplaced fixtures still get a
-    /// role and a row (`unplaced`); they cannot get a position split.
+    /// role and a class (`unplaced`); with no position there is nothing to
+    /// measure, so they get no row name and no split.
     pub placement: Option<FixturePlacement>,
 }
 
@@ -396,50 +423,155 @@ pub fn derived_id(venue_id: &str, path: &[String]) -> String {
 // The rule
 // ---------------------------------------------------------------------------
 
-/// Which end of a class's ordering a row sits at.
+/// The three axes a set of fixtures can separate along, and what a human calls
+/// each end of one.
+///
+/// Closed, and in the order a tie is broken: how high first, then which side,
+/// then how far back — which is the order the questions get asked of a rig.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Half {
-    Top,
-    Bottom,
+enum Spread {
+    /// Up: `top` and `bottom`.
+    Height,
+    /// Across the room: `left` and `right`.
+    Across,
+    /// Into the room: `downstage` and `upstage`.
+    Depth,
+}
+
+impl Spread {
+    const ALL: [Spread; 3] = [Spread::Height, Spread::Across, Spread::Depth];
+
+    /// The data-space coordinate this axis reads. Data space is `+X` stage
+    /// right, `+Y` upstage, `+Z` up.
+    fn axis(self) -> usize {
+        match self {
+            Spread::Across => 0,
+            Spread::Depth => 1,
+            Spread::Height => 2,
+        }
+    }
+
+    /// The two ends, in the order the tree lists them.
+    fn ends(self) -> [&'static str; 2] {
+        match self {
+            Spread::Height => ["top", "bottom"],
+            Spread::Across => ["left", "right"],
+            Spread::Depth => ["downstage", "upstage"],
+        }
+    }
+
+    /// Whether the end named first is the *greater* coordinate. Only height
+    /// reads downwards: `top` is the high one, while `left` and `downstage` are
+    /// the low ones.
+    fn first_is_greater(self) -> bool {
+        matches!(self, Spread::Height)
+    }
+}
+
+/// Every end name, in the order cross-cuts are listed under a role.
+const ENDS: [&str; 6] = ["top", "bottom", "left", "right", "downstage", "upstage"];
+
+/// Below this, in metres, nothing in a rig is two things.
+///
+/// It is the floor under the in-cluster spacing rather than a rule beside it,
+/// so [`separation`] stays one predicate: a pair of fixtures with no spacing to
+/// compare against still has to clear half a metre to be a top and a bottom.
+const MIN_SEPARATION: f64 = 0.5;
+
+/// How much wider than the spacing around it a gap must be to be a *gap*.
+///
+/// One and a half, not one: an evenly spaced run measures a little unevenly
+/// once it has been through a solve, and a rule that split on the widest of six
+/// equal gaps would cut every truss in the world in half.
+const SPACING_RATIO: f64 = 1.5;
+
+/// Where a set of points measurably falls into two clusters, and along which
+/// axis — the one measurement the whole rule is built on.
+///
+/// One predicate, used at both levels: it names a class's two rows and it cuts
+/// a row into halves. Sort the coordinates; the widest gap between neighbours
+/// is the candidate cut, and it counts when it is more than
+/// [`SPACING_RATIO`] times the median of the *other* gaps — the spacing inside
+/// the clusters — and never below [`MIN_SEPARATION`]. Evenly spaced points have
+/// no gap that beats their own spacing and so never separate.
+///
+/// Returns the axis and the coordinate the cut sits at: everything above it is
+/// the far cluster. The strongest axis wins, measured in metres and therefore
+/// comparable across the three; ties go to [`Spread::ALL`]'s order.
+fn separation(points: &[[f64; 3]]) -> Option<(Spread, f64)> {
+    Spread::ALL
+        .into_iter()
+        .filter_map(|spread| {
+            let values: Vec<f64> = points.iter().map(|point| point[spread.axis()]).collect();
+            widest_gap(&values).map(|(at, gap)| (spread, at, gap))
+        })
+        .reduce(|best, next| if next.2 > best.2 { next } else { best })
+        .map(|(spread, at, _)| (spread, at))
+}
+
+/// The midpoint of `values`' widest neighbour gap, and its width — when it is
+/// wide enough to mean two clusters. See [`separation`] for the predicate.
+fn widest_gap(values: &[f64]) -> Option<(f64, f64)> {
+    if values.len() < 2 {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let gaps: Vec<f64> = sorted.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    let (index, gap) =
+        gaps.iter()
+            .copied()
+            .enumerate()
+            .reduce(|best, next| if next.1 > best.1 { next } else { best })?;
+    let mut others = gaps.clone();
+    others.remove(index);
+    if gap > (median(&mut others) * SPACING_RATIO).max(MIN_SEPARATION) {
+        Some(((sorted[index] + sorted[index + 1]) / 2.0, gap))
+    } else {
+        None
+    }
+}
+
+/// The median of `values`, `0.0` for an empty slice — which is what makes
+/// [`MIN_SEPARATION`] the whole test for a pair of points with no spacing of
+/// their own to compare against.
+fn median(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    }
+}
+
+/// Which side of the stage a wing is bolted to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wing {
     Left,
     Right,
 }
 
-impl Half {
-    /// The four names a cross-cut can carry, in the order the tree lists them.
-    const ALL: [Half; 4] = [Half::Top, Half::Bottom, Half::Left, Half::Right];
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Half::Top => "top",
-            Half::Bottom => "bottom",
-            Half::Left => "left",
-            Half::Right => "right",
-        }
-    }
-
-    fn as_str_owned(self) -> String {
-        self.as_str().to_string()
-    }
-}
-
-/// The two axes a run can spread along.
+/// The two ways a free-standing run can lie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Axis {
-    /// Up: a tower, a vertical run.
-    Level,
-    /// Across the stage: a truss, a horizontal run.
-    Side,
+enum Lie {
+    /// Up: a tower.
+    Vertical,
+    /// Along the room or into it: a truss, a wall, a floor run.
+    Horizontal,
 }
 
-/// Where a run sits — the tree's second level, and the thing rows are ordered
-/// and named within.
+/// Where a run sits — the tree's second level, and the thing rows are named
+/// within.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Class {
     /// Bolted to a stage, on one side of its centre.
-    Wing(Half),
+    Wing(Wing),
     /// Free-standing, named for the way it runs.
-    Run(Axis),
+    Run(Lie),
     /// Not in the room at all.
     Unplaced,
 }
@@ -447,36 +579,11 @@ enum Class {
 impl Class {
     fn name(self) -> &'static str {
         match self {
-            Class::Wing(Half::Left) => "left wing",
-            Class::Wing(_) => "right wing",
-            Class::Run(Axis::Side) => "horizontal",
-            Class::Run(Axis::Level) => "vertical",
+            Class::Wing(Wing::Left) => "left wing",
+            Class::Wing(Wing::Right) => "right wing",
+            Class::Run(Lie::Horizontal) => "horizontal",
+            Class::Run(Lie::Vertical) => "vertical",
             Class::Unplaced => UNPLACED,
-        }
-    }
-
-    /// The two names this class's rows take when there are exactly two of them,
-    /// in the order [`Class::order_key`] sorts them.
-    ///
-    /// A wing and a horizontal class both stack their rows by height, so the
-    /// question a human asks of them is "which one is the high one"; a vertical
-    /// class stands its rows side by side, so the question is "which side".
-    fn row_names(self) -> Option<[Half; 2]> {
-        match self {
-            Class::Wing(_) | Class::Run(Axis::Side) => Some([Half::Top, Half::Bottom]),
-            Class::Run(Axis::Level) => Some([Half::Left, Half::Right]),
-            Class::Unplaced => None,
-        }
-    }
-
-    /// Where one row sorts among its siblings: descending height for a class
-    /// whose rows stack, ascending stage x for one whose rows stand abreast.
-    /// Negated for the first so both read "first is the one the first name
-    /// belongs to".
-    fn order_key(self, row: &Row<'_>) -> f64 {
-        match self {
-            Class::Run(Axis::Level) => row.mean(0),
-            _ => -row.mean(2),
         }
     }
 }
@@ -539,10 +646,10 @@ pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
             }
         }
 
-        // `row name -> the rows that carried it`, for the cross-cuts below.
+        // `end name -> the leaves that carried it`, for the cross-cuts below.
         let mut cross: BTreeMap<&'static str, (Vec<&FixtureFact>, usize)> = BTreeMap::new();
 
-        for (class, mut rows) in classes {
+        for (class, rows) in classes {
             let mut class_path = role_path.clone();
             class_path.push(class.name().to_string());
             let members: Vec<&FixtureFact> = rows
@@ -558,60 +665,150 @@ pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
                 &members,
             );
 
-            // One unlabelled row is the class itself under a second name.
+            // One unlabelled row *is* the class; naming it again would be two
+            // names for one set. Its splits hang off the class instead.
             if rows.len() == 1 && facts.label_of(&rows[0]).is_none() {
+                split_row(
+                    &mut tree,
+                    facts,
+                    &class_id,
+                    role,
+                    &class_path,
+                    &rows[0],
+                    &mut cross,
+                );
                 continue;
             }
 
-            rows.sort_by(|a, b| {
-                class
-                    .order_key(a)
-                    .partial_cmp(&class.order_key(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (index, row) in rows.iter().enumerate() {
-                // A labelled row carries its label and nothing else — including
-                // into the cross-cut, which unions rows *named* `top` and not
-                // rows that happen to be the higher of two.
-                let half = match (facts.label_of(row), class.row_names()) {
-                    (None, Some(names)) if rows.len() == 2 => Some(names[index]),
-                    _ => None,
-                };
-                let name = match facts.label_of(row) {
-                    Some(label) => label.to_string(),
-                    // More than two rows is a stack rather than a pair, and a
-                    // stack's rungs are numbered: there is no third word for
-                    // "between top and bottom" that means the same thing twice.
-                    None => half.map_or_else(|| format!("row {}", index + 1), Half::as_str_owned),
-                };
+            for (name, end, row) in name_rows(facts, rows) {
                 let mut path = class_path.clone();
                 path.push(name);
-                push(&mut tree, facts, Some(&class_id), role, path, &row.members);
-                if let Some(half) = half {
-                    let entry = cross.entry(half.as_str()).or_default();
+                let row_id = push(
+                    &mut tree,
+                    facts,
+                    Some(&class_id),
+                    role,
+                    path.clone(),
+                    &row.members,
+                );
+                let split = split_row(&mut tree, facts, &row_id, role, &path, &row, &mut cross);
+                // A row that split contributes its halves; contributing itself
+                // as well would count its fixtures twice under one name.
+                if let Some(end) = end.filter(|_| !split) {
+                    let entry = cross.entry(end).or_default();
                     entry.0.extend(row.members.iter().copied());
                     entry.1 += 1;
                 }
             }
         }
 
-        // A cross-cut drawing from a single row *is* that row, under a second
+        // A cross-cut drawing from a single leaf *is* that leaf, under a second
         // name. Two names for one set is the thing this whole design is trying
         // not to do, so it is not emitted.
-        for half in Half::ALL {
-            let Some((side, contributors)) = cross.get(half.as_str()) else {
+        for end in ENDS {
+            let Some((side, contributors)) = cross.get(end) else {
                 continue;
             };
             if *contributors < 2 {
                 continue;
             }
             let mut path = role_path.clone();
-            path.push(half.as_str().to_string());
+            path.push(end.to_string());
             push(&mut tree, facts, Some(&role_id), role, path, side);
         }
     }
 
     tree
+}
+
+/// Name and order a class's rows.
+///
+/// A labelled piece names its own row, always. Exactly two unlabelled rows are
+/// a pair, and a pair is named for the axis it measurably separates on — never
+/// for a rank, so two towers at one trim come out `left` and `right` rather
+/// than "top" and "bottom". Everything else is a stack, and a stack's rungs are
+/// numbered in the order they were built: `row 1` claims a position among
+/// siblings and nothing about where it hangs.
+///
+/// The returned end name is the row's contribution to a cross-cut, `None` for a
+/// label or a number — a cross-cut unions rows *named* `top`, not rows that
+/// happen to be the higher of two.
+fn name_rows<'a>(
+    facts: &VenueFacts,
+    rows: Vec<Row<'a>>,
+) -> Vec<(String, Option<&'static str>, Row<'a>)> {
+    let pair = (rows.len() == 2)
+        .then(|| separation(&[rows[0].centre(), rows[1].centre()]))
+        .flatten();
+    let Some((spread, _)) = pair else {
+        return rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, row)| match facts.label_of(&row) {
+                Some(label) => (label.to_string(), None, row),
+                None => (format!("row {}", index + 1), None, row),
+            })
+            .collect();
+    };
+    let mut rows = rows;
+    let axis = spread.axis();
+    rows.sort_by(|a, b| {
+        let (a, b) = (a.centre()[axis], b.centre()[axis]);
+        let order = a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+        if spread.first_is_greater() {
+            order.reverse()
+        } else {
+            order
+        }
+    });
+    rows.into_iter()
+        .zip(spread.ends())
+        .map(|(row, end)| match facts.label_of(&row) {
+            Some(label) => (label.to_string(), None, row),
+            None => (end.to_string(), Some(end), row),
+        })
+        .collect()
+}
+
+/// Cut one row along the axis its fixtures measurably separate on, if any, and
+/// record the halves as cross-cut contributors. Returns whether it cut.
+///
+/// `parent`/`parent_path` is the row's node — or the class's, when the class
+/// holds one unlabelled row and therefore *is* that row.
+fn split_row<'a>(
+    tree: &mut DerivedTree,
+    facts: &VenueFacts,
+    parent: &str,
+    role: FixtureRole,
+    parent_path: &[String],
+    row: &Row<'a>,
+    cross: &mut BTreeMap<&'static str, (Vec<&'a FixtureFact>, usize)>,
+) -> bool {
+    let points: Vec<[f64; 3]> = row
+        .members
+        .iter()
+        .filter_map(|fixture| Some(fixture.placement.as_ref()?.position))
+        .collect();
+    let Some((spread, at)) = separation(&points) else {
+        return false;
+    };
+    let mut halves: [Vec<&'a FixtureFact>; 2] = [Vec::new(), Vec::new()];
+    for fixture in &row.members {
+        let Some(placement) = fixture.placement.as_ref() else {
+            continue;
+        };
+        let above = placement.position[spread.axis()] > at;
+        halves[usize::from(above != spread.first_is_greater())].push(fixture);
+    }
+    for (end, members) in spread.ends().into_iter().zip(halves) {
+        let mut path = parent_path.to_vec();
+        path.push(end.to_string());
+        push(tree, facts, Some(parent), role, path, &members);
+        let entry = cross.entry(end).or_default();
+        entry.0.extend(members);
+        entry.1 += 1;
+    }
+    true
 }
 
 /// The class name for fixtures nothing in the room holds.
@@ -625,29 +822,40 @@ struct Row<'a> {
 }
 
 impl Row<'_> {
-    /// The mean of one coordinate over the row's placed fixtures, `0.0` when
-    /// none are placed — which only happens for the unplaced row, and that row
-    /// is never ordered against a sibling.
-    fn mean(&self, axis: usize) -> f64 {
-        let values: Vec<f64> = self
-            .members
-            .iter()
-            .filter_map(|fixture| Some(fixture.placement.as_ref()?.position[axis]))
-            .collect();
-        if values.is_empty() {
-            return 0.0;
+    /// The mean of the row's placed fixtures, `[0, 0, 0]` when none are
+    /// placed — which only happens for the unplaced row, and that row is never
+    /// measured against a sibling.
+    fn centre(&self) -> [f64; 3] {
+        let mut sum = [0.0; 3];
+        let mut n = 0.0;
+        for fixture in &self.members {
+            let Some(placement) = fixture.placement.as_ref() else {
+                continue;
+            };
+            for (axis, value) in sum.iter_mut().enumerate() {
+                *value += placement.position[axis];
+            }
+            n += 1.0;
         }
-        values.iter().sum::<f64>() / values.len() as f64
+        if n == 0.0 {
+            return sum;
+        }
+        sum.map(|value| value / n)
     }
 
-    /// Which way the row runs: along the stage, or up it. A run of one fixture
-    /// has no direction and reads as horizontal, the class a lone par on a
-    /// truss belongs to.
+    /// Which way the row lies: up, or along the room. A run of one fixture has
+    /// no direction and reads as horizontal, the class a lone par on a truss
+    /// belongs to.
+    ///
+    /// Height has to beat *both* of the other two, not just the one across the
+    /// stage: a run laid into the room, deep rather than wide, is a horizontal
+    /// run and calling it a tower because it is wider than it is tall in `x` is
+    /// how a floor run came out `vertical`.
     ///
     /// Read off the fixtures rather than the structure's geometry on purpose: a
     /// run's direction is the line the things on it lie along, which is true of
     /// a generated truss, a measured GLB and a wall alike, and needs no catalog.
-    fn axis(&self) -> Axis {
+    fn lie(&self) -> Lie {
         let positions: Vec<[f64; 3]> = self
             .members
             .iter()
@@ -659,10 +867,10 @@ impl Row<'_> {
             });
             max - min
         };
-        if positions.len() > 1 && spread(2) > spread(0) {
-            Axis::Level
+        if positions.len() > 1 && spread(2) > spread(0) && spread(2) > spread(1) {
+            Lie::Vertical
         } else {
-            Axis::Side
+            Lie::Horizontal
         }
     }
 }
@@ -678,19 +886,20 @@ impl VenueFacts {
     }
 }
 
-/// Which class a row belongs to.
+/// Which class a row belongs to. A structure attached exactly at the stage
+/// centre is a right wing — see the module header on that tie.
 fn class_of(facts: &VenueFacts, row: &Row<'_>) -> Class {
     let Some(structure) = facts.structure_of(row) else {
         return Class::Unplaced;
     };
     if structure.on_stage {
         return Class::Wing(if structure.position[0] < facts.stage_centre_x {
-            Half::Left
+            Wing::Left
         } else {
-            Half::Right
+            Wing::Right
         });
     }
-    Class::Run(row.axis())
+    Class::Run(row.lie())
 }
 
 /// Add one node, returning its id.
@@ -1279,8 +1488,10 @@ mod tests {
         }
     }
 
-    /// Two horizontal runs at different heights: one `horizontal` class, two
-    /// rows, named top and bottom by which one is higher.
+    /// Two horizontal runs at different heights, three evenly spaced pars on
+    /// each: one `horizontal` class, two rows named for the height that
+    /// separates them, and no split inside either — an evenly spaced run is one
+    /// distribution, not two halves.
     fn horizontal_facts() -> VenueFacts {
         VenueFacts {
             venue_id: "v".into(),
@@ -1288,9 +1499,11 @@ mod tests {
             structures: vec![structure("high", false, 0.0), structure("low", false, 0.0)],
             fixtures: vec![
                 fixture("a", FixtureRole::Wash, "high", [-2.0, 0.0, 5.0]),
-                fixture("b", FixtureRole::Wash, "high", [2.0, 0.0, 5.0]),
-                fixture("c", FixtureRole::Wash, "low", [-2.0, 0.0, 1.0]),
-                fixture("d", FixtureRole::Wash, "low", [2.0, 0.0, 1.0]),
+                fixture("b", FixtureRole::Wash, "high", [0.0, 0.0, 5.0]),
+                fixture("c", FixtureRole::Wash, "high", [2.0, 0.0, 5.0]),
+                fixture("d", FixtureRole::Wash, "low", [-2.0, 0.0, 1.0]),
+                fixture("e", FixtureRole::Wash, "low", [0.0, 0.0, 1.0]),
+                fixture("f", FixtureRole::Wash, "low", [2.0, 0.0, 1.0]),
             ],
         }
     }
@@ -1327,9 +1540,11 @@ mod tests {
             ],
             fixtures: vec![
                 fixture("a", FixtureRole::Wash, "left", [-4.0, 0.0, 1.0]),
-                fixture("b", FixtureRole::Wash, "left", [-4.0, 0.0, 5.0]),
-                fixture("c", FixtureRole::Wash, "right", [4.0, 0.0, 1.0]),
-                fixture("d", FixtureRole::Wash, "right", [4.0, 0.0, 5.0]),
+                fixture("b", FixtureRole::Wash, "left", [-4.0, 0.0, 3.0]),
+                fixture("c", FixtureRole::Wash, "left", [-4.0, 0.0, 5.0]),
+                fixture("d", FixtureRole::Wash, "right", [4.0, 0.0, 1.0]),
+                fixture("e", FixtureRole::Wash, "right", [4.0, 0.0, 3.0]),
+                fixture("f", FixtureRole::Wash, "right", [4.0, 0.0, 5.0]),
             ],
         };
         assert_eq!(
@@ -1344,7 +1559,8 @@ mod tests {
     }
 
     /// Rows are never merged, however alike two runs look: two trusses at the
-    /// same height are two rows, because they are two things.
+    /// same height are two rows, because they are two things — named here for
+    /// the depth that separates them, since the height no longer does.
     #[test]
     fn two_runs_of_a_class_are_two_rows() {
         let mut facts = horizontal_facts();
@@ -1381,10 +1597,10 @@ mod tests {
         );
     }
 
-    /// One unlabelled row is the class under a second name, so it is not
-    /// emitted twice.
+    /// One unlabelled row is the class under a second name, so the row node is
+    /// not emitted at all: the class's children are that row's splits.
     #[test]
-    fn a_class_of_one_unlabelled_row_is_a_leaf() {
+    fn a_class_of_one_unlabelled_row_hangs_its_splits_on_the_class() {
         let facts = VenueFacts {
             venue_id: "v".into(),
             stage_centre_x: 0.0,
@@ -1396,7 +1612,12 @@ mod tests {
         };
         assert_eq!(
             paths(&derive_groups(&facts)),
-            vec!["spots", "spots/left wing"]
+            vec![
+                "spots",
+                "spots/left wing",
+                "spots/left wing/top",
+                "spots/left wing/bottom",
+            ]
         );
     }
 
@@ -1415,7 +1636,12 @@ mod tests {
         };
         assert_eq!(
             paths(&derive_groups(&facts)),
-            vec!["spots", "spots/left wing"]
+            vec![
+                "spots",
+                "spots/left wing",
+                "spots/left wing/top",
+                "spots/left wing/bottom",
+            ]
         );
     }
 
@@ -1431,14 +1657,12 @@ mod tests {
         for (n, z) in [(0, 1.0), (1, 3.0), (2, 5.0)] {
             let node = format!("run{n}");
             facts.structures.push(structure(&node, false, 0.0));
-            for (id, x) in [("a", -2.0), ("b", 2.0)] {
-                facts.fixtures.push(fixture(
-                    &format!("{id}{n}"),
-                    FixtureRole::Wash,
-                    &node,
-                    [x, 0.0, z],
-                ));
-            }
+            facts.fixtures.push(fixture(
+                &format!("a{n}"),
+                FixtureRole::Wash,
+                &node,
+                [0.0, 0.0, z],
+            ));
         }
         assert_eq!(
             paths(&derive_groups(&facts)),
@@ -1449,6 +1673,194 @@ mod tests {
                 "washes/horizontal/row 2",
                 "washes/horizontal/row 3",
             ]
+        );
+    }
+
+    /// Facts with nothing in them yet, for the tests that build their own rig.
+    fn empty() -> VenueFacts {
+        VenueFacts {
+            venue_id: "v".into(),
+            stage_centre_x: 0.0,
+            structures: Vec::new(),
+            fixtures: Vec::new(),
+        }
+    }
+
+    /// One structure and the spots on it. `at` is the structure's *attachment*
+    /// x, which is all a wing's side is read from; the positions carry
+    /// everything else.
+    fn run(facts: &mut VenueFacts, node: &str, on_stage: bool, at: f64, spots: &[[f64; 3]]) {
+        facts.structures.push(structure(node, on_stage, at));
+        for (n, position) in spots.iter().enumerate() {
+            facts.fixtures.push(fixture(
+                &format!("{node}_{n}"),
+                FixtureRole::Spot,
+                node,
+                *position,
+            ));
+        }
+    }
+
+    /// Three evenly spaced spots up a tower standing at `x`, `y`.
+    fn tower(x: f64, y: f64) -> [[f64; 3]; 3] {
+        [[x, y, 1.0], [x, y, 3.0], [x, y, 5.0]]
+    }
+
+    /// Rank is not a name. Two towers standing side by side at one trim are not
+    /// a top and a bottom — what separates them is which side of the other each
+    /// stands on, and that is what they are called.
+    #[test]
+    fn rows_at_one_height_are_named_across_not_ranked() {
+        let mut facts = empty();
+        run(&mut facts, "inner", true, -4.0, &tower(-1.0, 0.0));
+        run(&mut facts, "outer", true, -4.0, &tower(-4.0, 0.0));
+        assert_eq!(
+            paths(&derive_groups(&facts)),
+            vec![
+                "spots",
+                "spots/left wing",
+                "spots/left wing/left",
+                "spots/left wing/right",
+            ]
+        );
+    }
+
+    /// Two towers one behind the other are named for the depth that separates
+    /// them, in the room's words rather than the rig's build order.
+    #[test]
+    fn rows_that_separate_in_depth_are_downstage_and_upstage() {
+        let mut facts = empty();
+        run(&mut facts, "back", true, -4.0, &tower(-4.0, 3.0));
+        run(&mut facts, "front", true, -4.0, &tower(-4.0, 0.0));
+        assert_eq!(
+            paths(&derive_groups(&facts)),
+            vec![
+                "spots",
+                "spots/left wing",
+                "spots/left wing/downstage",
+                "spots/left wing/upstage",
+            ]
+        );
+    }
+
+    /// Nothing separates them, so nothing is claimed about where they hang:
+    /// they are numbered in the order they were built.
+    #[test]
+    fn rows_that_separate_on_no_axis_are_numbered() {
+        let mut facts = empty();
+        run(&mut facts, "one", true, -4.0, &tower(-4.0, 0.0));
+        run(&mut facts, "two", true, -4.0, &tower(-4.3, 0.2));
+        assert_eq!(
+            paths(&derive_groups(&facts)),
+            vec![
+                "spots",
+                "spots/left wing",
+                "spots/left wing/row 1",
+                "spots/left wing/row 2",
+            ]
+        );
+    }
+
+    /// Both sides of the half-metre floor. A pair of fixtures has no spacing of
+    /// its own to be measured against, so [`MIN_SEPARATION`] is the whole test:
+    /// under it they are one distribution, over it they are two halves.
+    #[test]
+    fn a_split_needs_half_a_metre() {
+        let cut = |apart: f64| {
+            let mut facts = empty();
+            run(
+                &mut facts,
+                "tower",
+                true,
+                -4.0,
+                &[[-4.0, 0.0, 1.0], [-4.0, 0.0, 1.0 + apart]],
+            );
+            paths(&derive_groups(&facts))
+        };
+        assert_eq!(cut(0.4), vec!["spots", "spots/left wing"]);
+        assert_eq!(
+            cut(0.6),
+            vec![
+                "spots",
+                "spots/left wing",
+                "spots/left wing/top",
+                "spots/left wing/bottom",
+            ]
+        );
+    }
+
+    /// Both sides of the spacing ratio. Four pars a metre apart are one run;
+    /// move the last one out and the hole in the middle is what makes two.
+    #[test]
+    fn an_evenly_spaced_run_is_not_two_halves() {
+        let cut = |last: f64| {
+            let mut facts = empty();
+            run(
+                &mut facts,
+                "truss",
+                false,
+                0.0,
+                &[
+                    [0.0, 0.0, 4.0],
+                    [1.0, 0.0, 4.0],
+                    [2.0, 0.0, 4.0],
+                    [last, 0.0, 4.0],
+                ],
+            );
+            paths(&derive_groups(&facts))
+        };
+        assert_eq!(cut(3.0), vec!["spots", "spots/horizontal"]);
+        assert_eq!(
+            cut(4.0),
+            vec![
+                "spots",
+                "spots/horizontal",
+                "spots/horizontal/left",
+                "spots/horizontal/right",
+            ]
+        );
+    }
+
+    /// A cross-cut gathers leaves, and the leaves under a collapsed class are
+    /// its splits: two wings, one tower each, two spots up each, and `top`
+    /// means something no single wing says.
+    #[test]
+    fn a_cross_cut_gathers_the_halves_of_a_row_that_split() {
+        let mut facts = empty();
+        for (node, x) in [("left_tower", -4.0), ("right_tower", 4.0)] {
+            run(&mut facts, node, true, x, &[[x, 0.0, 2.0], [x, 0.0, 4.0]]);
+        }
+        let tree = derive_groups(&facts);
+        let top = tree
+            .groups
+            .iter()
+            .find(|group| group.path == ["spots", "top"])
+            .expect("both wings carry a top");
+        assert_eq!(top.members, ["left_tower_1", "right_tower_1"]);
+    }
+
+    /// A row that split contributes its halves and not itself: counting both
+    /// would file its fixtures under one name twice.
+    #[test]
+    fn a_row_that_split_does_not_also_cross_cut_itself() {
+        let mut facts = empty();
+        for (side, x) in [("left", -4.0), ("right", 4.0)] {
+            for (depth, y) in [("front", 0.0), ("back", 3.0)] {
+                run(
+                    &mut facts,
+                    &format!("{side}_{depth}"),
+                    true,
+                    x,
+                    &[[x, y, 2.0], [x, y, 4.0]],
+                );
+            }
+        }
+        let paths = paths(&derive_groups(&facts));
+        assert!(paths.contains(&"spots/left wing/downstage/top".to_string()));
+        assert!(paths.contains(&"spots/top".to_string()));
+        assert!(
+            !paths.contains(&"spots/downstage".to_string()),
+            "a row that split cross-cut itself as well as its halves: {paths:?}"
         );
     }
 
@@ -1514,6 +1926,7 @@ mod tests {
         assert_eq!(tree.fixture_labels["b"], "Mover 1");
         assert_eq!(tree.fixture_labels["c"], "Bar 2");
         assert_eq!(tree.fixture_labels["d"], "Bar 3");
+        assert_eq!(tree.fixture_labels["f"], "Bar 5");
     }
 
     // -----------------------------------------------------------------------
@@ -1530,10 +1943,12 @@ mod tests {
     fn ids_survive_the_rig_growing() {
         let before = derive_groups(&horizontal_facts());
         let mut facts = horizontal_facts();
-        // One more par on the high run: the sets change, the paths do not.
+        // One more par on the high run, in step with the others so the run is
+        // still one evenly spaced distribution: the sets change, the paths do
+        // not.
         facts
             .fixtures
-            .push(fixture("e", FixtureRole::Wash, "high", [0.0, 0.0, 5.0]));
+            .push(fixture("g", FixtureRole::Wash, "high", [4.0, 0.0, 5.0]));
         let after = derive_groups(&facts);
 
         for group in &before.groups {
@@ -1548,7 +1963,7 @@ mod tests {
             .groups
             .iter()
             .find(|g| g.path == ["washes", "horizontal", "top"])
-            .is_some_and(|g| g.members.len() == 3));
+            .is_some_and(|g| g.members.len() == 4));
     }
 
     #[test]
@@ -1589,7 +2004,7 @@ mod tests {
         let mut grown = horizontal_facts();
         grown
             .fixtures
-            .push(fixture("e", FixtureRole::Wash, "high", [0.0, 0.0, 5.0]));
+            .push(fixture("g", FixtureRole::Wash, "high", [4.0, 0.0, 5.0]));
         let merged = merge_tree(&derive_groups(&grown), std::slice::from_ref(&row), &[]);
 
         let node = merged
@@ -1601,7 +2016,7 @@ mod tests {
         // The rename keeps its namespace, so the name stays unique.
         assert_eq!(node.name, "washes_horizontal_house_left");
         // And the new par filed itself under the name a human gave it.
-        assert!(node.fixtures.contains(&"e".to_string()));
+        assert!(node.fixtures.contains(&"g".to_string()));
 
         // Its untouched sibling is still plain derivation.
         let bottom = merged
@@ -1648,7 +2063,7 @@ mod tests {
             .iter()
             .find(|node| node.id == bottom.id)
             .expect("the target stays");
-        assert_eq!(target.fixtures, ["c", "d", "a", "b"]);
+        assert_eq!(target.fixtures, ["d", "e", "f", "a", "b", "c"]);
     }
 
     #[test]
@@ -1679,8 +2094,8 @@ mod tests {
             }
         }
         let after = derive_groups(&moved);
-        assert_eq!(top_before, ["a", "b"]);
-        assert_eq!(top_of(&after).members, ["c", "d"]);
+        assert_eq!(top_before, ["a", "b", "c"]);
+        assert_eq!(top_of(&after).members, ["d", "e", "f"]);
     }
 
     // -----------------------------------------------------------------------
@@ -1719,7 +2134,7 @@ mod tests {
         let mut grown = facts.clone();
         grown
             .fixtures
-            .push(fixture("e", FixtureRole::Wash, "high", [0.0, 0.0, 5.0]));
+            .push(fixture("g", FixtureRole::Wash, "high", [4.0, 0.0, 5.0]));
         let tree = derive_groups(&grown);
         let (class, top, bottom) = class_and_rows(&tree);
 
@@ -1734,7 +2149,7 @@ mod tests {
             .iter()
             .find(|node| node.id == class)
             .expect("the terminal stays");
-        for fixture in ["a", "b", "c", "d", "e"] {
+        for fixture in ["a", "b", "c", "d", "e", "f", "g"] {
             assert!(
                 target.fixtures.contains(&fixture.to_string()),
                 "{fixture} fell out of the chain"
@@ -1756,7 +2171,7 @@ mod tests {
         assert_eq!(merged.len(), tree.groups.len(), "no node disappeared");
         for id in [&top, &bottom] {
             let node = merged.iter().find(|node| &node.id == id).expect("stays");
-            assert_eq!(node.fixtures.len(), 2, "and neither absorbed the other");
+            assert_eq!(node.fixtures.len(), 3, "and neither absorbed the other");
         }
     }
 
@@ -1776,7 +2191,7 @@ mod tests {
         assert_eq!(sibling.parent_id.as_deref(), Some(top.as_str()));
         // And the target counts everything the class did.
         let target = merged.iter().find(|node| node.id == top).expect("stays");
-        assert_eq!(target.fixtures.len(), 4);
+        assert_eq!(target.fixtures.len(), 6);
     }
 
     /// A node merged into itself is a no-op, not a disappearance.
@@ -1799,7 +2214,7 @@ mod tests {
 /// as nothing at all.
 #[cfg(test)]
 mod goldens {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::{Path, PathBuf};
 
     use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
@@ -1992,6 +2407,21 @@ mod goldens {
                 .map(|group| group.path.join("/"))
                 .collect()
         }
+
+        /// `path -> the fixtures in it`, sorted — the whole answer, not just
+        /// its vocabulary.
+        fn sets(&self) -> BTreeMap<String, Vec<String>> {
+            self.tree()
+                .1
+                .groups
+                .iter()
+                .map(|group| {
+                    let mut members = group.members.clone();
+                    members.sort();
+                    (group.path.join("/"), members)
+                })
+                .collect()
+        }
     }
 
     /// (a) LED bars around a wall: two horizontal runs at different heights and
@@ -2045,10 +2475,11 @@ mod goldens {
         venue
     }
 
-    /// (b) Spot wings: four towers bolted to the stage, two rows of spots up
-    /// each side. Each wing class names its two rows by height, and because
-    /// `top` is then carried by a row on each side it becomes a cross-cut —
-    /// which is exactly when a cross-cut earns its name.
+    /// (b) Spot wings: one tower bolted to each side of the stage, two spots up
+    /// each. A wing holds one unlabelled row, so the wing node *is* that row and
+    /// its children are the row's splits — and because `top` is then carried by
+    /// a half on each side, it becomes a cross-cut, which is exactly when a
+    /// cross-cut earns its name.
     fn spot_wings(mirror: f64) -> Venue {
         let mut venue = Venue::new();
         venue.piece(
@@ -2061,14 +2492,8 @@ mod goldens {
         // right-positive on the venue floor — the two surfaces disagree about
         // the sign of their tangent. Nothing in derivation depends on it (the
         // side reads a resolved x), but it is why these numbers look backwards.
-        let towers = [
-            ("wing_left_far", 6.0, 1.0),
-            ("wing_left_near", 4.0, 4.0),
-            ("wing_right_far", -6.0, 1.0),
-            ("wing_right_near", -4.0, 4.0),
-        ];
         let mut n = 0;
-        for (id, u, base) in towers {
+        for (id, u) in [("wing_left", 5.0), ("wing_right", -5.0)] {
             venue.piece(
                 id,
                 NodeKind::Piece,
@@ -2081,8 +2506,48 @@ mod goldens {
                     &format!("spot_{n}"),
                     MOVER,
                     (id, "top"),
-                    &[("u", 0.0), ("v", 0.0), ("trim", base + f64::from(i) * 1.0)],
+                    &[("u", 0.0), ("v", 0.0), ("trim", 1.0 + f64::from(i) * 1.5)],
                 );
+            }
+        }
+        venue
+    }
+
+    /// (c) Spot towers: two towers a side, one behind the other and hung at
+    /// different heights, two spots up each.
+    ///
+    /// The pair of rows in a wing separates further in depth than in height, so
+    /// depth is what names them — a rule that ranked rows by trim would have
+    /// called the shorter tower "bottom" and meant nothing by it. Each row then
+    /// splits by height, and it is those halves the role's `top` and `bottom`
+    /// gather: a row that split does not also cross-cut itself.
+    fn spot_towers(mirror: f64) -> Venue {
+        let mut venue = Venue::new();
+        venue.piece(
+            "stage",
+            NodeKind::Stage,
+            ("venue", FLOOR_SOCKET),
+            &[("u", 0.0), ("v", 0.0)],
+        );
+        let mut n = 0;
+        for (side, u) in [("left", 5.0), ("right", -5.0)] {
+            for (depth, v, base) in [("front", 0.0, 1.0), ("back", 3.0, 3.0)] {
+                let id = format!("{side}_{depth}");
+                venue.piece(
+                    &id,
+                    NodeKind::Piece,
+                    ("stage", "top"),
+                    &[("u", u * mirror), ("v", v)],
+                );
+                for i in 0..2 {
+                    n += 1;
+                    venue.fixture(
+                        &format!("spot_{n}"),
+                        MOVER,
+                        (&id, "top"),
+                        &[("u", 0.0), ("v", 0.0), ("trim", base + f64::from(i) * 1.5)],
+                    );
+                }
             }
         }
         venue
@@ -2108,6 +2573,26 @@ mod goldens {
         "spots/right wing",
         "spots/right wing/top",
         "spots/right wing/bottom",
+        "spots/top",
+        "spots/bottom",
+    ];
+
+    const SPOT_TOWERS: [&str; 17] = [
+        "spots",
+        "spots/left wing",
+        "spots/left wing/downstage",
+        "spots/left wing/downstage/top",
+        "spots/left wing/downstage/bottom",
+        "spots/left wing/upstage",
+        "spots/left wing/upstage/top",
+        "spots/left wing/upstage/bottom",
+        "spots/right wing",
+        "spots/right wing/downstage",
+        "spots/right wing/downstage/top",
+        "spots/right wing/downstage/bottom",
+        "spots/right wing/upstage",
+        "spots/right wing/upstage/top",
+        "spots/right wing/upstage/bottom",
         "spots/top",
         "spots/bottom",
     ];
@@ -2179,6 +2664,7 @@ mod goldens {
         let mut want = serde_json::to_string_pretty(&json!({
             "ledBarsWall": led_bars_wall(1.0).capture(),
             "spotWings": spot_wings(1.0).capture(),
+            "spotTowers": spot_towers(1.0).capture(),
         }))
         .expect("the capture serializes");
         want.push('\n');
@@ -2217,24 +2703,46 @@ mod goldens {
     fn the_goldens_produce_the_canonical_trees() {
         assert_eq!(led_bars_wall(1.0).paths(), LED_BARS_WALL);
         assert_eq!(spot_wings(1.0).paths(), SPOT_WINGS);
+        assert_eq!(spot_towers(1.0).paths(), SPOT_TOWERS);
     }
 
-    /// Reflect both rigs about stage centre and the trees are the same, node
-    /// for node: `left` and `right` are read off resolved positions, so the
-    /// wing built first is still named for the side it ends up on.
+    /// Reflect a rig about stage centre and the tree reflects with it: the same
+    /// sets, under the names their mirrored positions earn.
     ///
-    /// Compared as a set of paths rather than a sequence, because sibling rows
-    /// appear in the order their first fixture was patched — and mirroring is
-    /// precisely a change to which side got built first.
+    /// Compared as `path -> members`, not as a list of paths. Equal path lists
+    /// only prove the vocabulary survived; which fixtures went where is the
+    /// half of the answer a sign error actually breaks.
     #[test]
     fn a_mirrored_rig_derives_the_same_tree() {
-        let sorted = |mut paths: Vec<String>| {
-            paths.sort();
-            paths
-        };
-        let want = |canonical: &[&str]| sorted(canonical.iter().map(|p| (*p).into()).collect());
-        assert_eq!(sorted(led_bars_wall(-1.0).paths()), want(&LED_BARS_WALL));
-        assert_eq!(sorted(spot_wings(-1.0).paths()), want(&SPOT_WINGS));
+        for (built, mirrored) in [
+            (led_bars_wall(1.0), led_bars_wall(-1.0)),
+            (spot_wings(1.0), spot_wings(-1.0)),
+            (spot_towers(1.0), spot_towers(-1.0)),
+        ] {
+            assert_eq!(mirrored.sets(), reflect(&built.sets()));
+        }
+    }
+
+    /// A tree with `left` and `right` swapped — the whole of what a reflection
+    /// about stage centre does to a name. Height and depth keep their words,
+    /// because the reflection does not touch either axis.
+    fn reflect(sets: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, Vec<String>> {
+        sets.iter()
+            .map(|(path, members)| {
+                let path = path
+                    .split('/')
+                    .map(|segment| match segment {
+                        "left wing" => "right wing",
+                        "right wing" => "left wing",
+                        "left" => "right",
+                        "right" => "left",
+                        other => other,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                (path, members.clone())
+            })
+            .collect()
     }
 
     /// Defect: stage centre averaged the stage nodes' *origins*, and a deck's

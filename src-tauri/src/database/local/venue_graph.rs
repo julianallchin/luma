@@ -12,6 +12,8 @@
 //! moving a truss left every selection expression naming a derived group
 //! answering with the old split. The one place that can promise the cache is
 //! not stale is the place the rows change.
+//!
+//! Twice, though: see [`graph_changed`] and [`graph_committed`].
 
 use std::collections::BTreeMap;
 
@@ -26,7 +28,23 @@ use crate::models::venue_graph::{VenueConstraint, VenueEdge, VenueGraphRows, Ven
 /// commits — because the cache is a pure read cache: dropping it when a write
 /// might still roll back costs one reload, and keeping it when a write lands
 /// costs a wrong answer.
+///
+/// Early is not enough on its own; see [`graph_committed`].
 fn graph_changed() {
+    crate::services::groups::invalidate_venue_fixture_cache();
+}
+
+/// Tell it again, once the rows are visible.
+///
+/// Dropping the cache inside the transaction closes the window *before* the
+/// write and opens one after it: a reader arriving between the last write and
+/// the commit sees the old rows, cannot see the new ones, and repopulates the
+/// cache with an answer that is already wrong by the time it lands. The second
+/// drop is the one that makes "the tree is derived from these rows" true again.
+///
+/// Called by whoever owns the transaction, because that is who knows when it
+/// committed — this module never commits.
+pub fn graph_committed() {
     crate::services::groups::invalidate_venue_fixture_cache();
 }
 
