@@ -6,78 +6,107 @@ are derived by walking the tree through the one snap resolver, on load and after
 every edit. Moving a truss moves what is bolted to it because there is nothing else
 it could do.
 
-Today, `stage_pieces` stores `pos_*`/`rot_*` in parent-local space, `flatten_pieces`
-composes the chain at read time, and the relation that produced the pose — which
-socket met which — is thrown away the moment the drag ends. That is why the agent
-can only be handed flattened metres, and why "put a light on the downstage truss" is
-not expressible.
+Today `stage_pieces` stores `pos_*`/`rot_*` in parent-local space and the relation
+that produced the pose — which socket met which — is discarded the moment the drag
+ends. That is why the agent can only be handed flattened metres, and why "put a light
+on the downstage truss" is not expressible.
 
 ## Decisions
 
 - **Live graph, no baked poses, no hybrid.** `solve_snap` is the only thing that
-  produces a world transform, for the builder, the renderer, eval, and the agent.
-  `stage_pieces.pos_*`/`rot_*` **go away** — not a cache. A cache would be a second
-  source of truth with no way to tell it is stale, and the solve is microseconds
-  (see Performance). The one exception is the root's own placement, which is the
-  venue frame and therefore not a pose at all.
-- **A free-floating piece is not a special case.** It is a child of the venue floor
-  at a grid cell: `parent = venue.floor`, `their_socket = grid(i, j)`, same resolver,
-  same invariants. There is no "unparented" branch to test.
-- **Beam = mount normal.** A fixture's rest direction is the outward normal of the
-  socket it is mounted on. Floor socket → up. Under-truss socket → down. Truss
-  downstage face → toward the house. There is no per-fixture-type rest axis, and
-  pan/tilt are relative to the mount frame. `fixture-kinematics` becomes the single
-  implementation and takes the mount frame as an input; the renderer, eval
-  (`head_world_position`), and the agent bindings all call it.
+  produces a world transform — builder, renderer, eval, agent. `stage_pieces.pos_*`/
+  `rot_*` **go away**, not into a cache: a cache is a second source of truth with no
+  way to tell it is stale, and the solve is microseconds (see Performance). The one
+  exception is the root's own placement, which is the venue frame, not a pose.
+- **The vocabulary is exactly six verbs: attach, extend, array, aim, duplicate
+  (+flip), trim.** No `mirror` — not a node kind, not an op. No `join`. No roof or
+  ceiling. Symmetry is the builder's job: call the same function twice, or duplicate
+  a wing and flip it.
+- **A free piece sits on a surface at `(u, v, yaw, trim)`.** `parent = venue.floor`
+  or a `stage`, same resolver, same invariants — there is no "unparented" branch to
+  test. `(u, v)` is continuous over the surface, `yaw` is its spin, and **`trim` is
+  how high it flies**: `trim = 0` sits on the deck, `trim = 6.0` hangs 6 m up.
+  Flown is a parameter, not a structure. "Lift" edits `trim`; the whole subtree
+  comes along. This `(u, v)` is the **only position-like number in the system**.
+- **Origin = mount point** — bottom-centre for anything sitting or hanging, the
+  joining socket for anything snapped. Trim and yaw act about it.
+- **Beam = mount normal.** A fixture's rest direction is the outward normal of its
+  mount socket — floor → up, under-truss → down, truss downstage face → toward the
+  house. No per-fixture-type rest axis; pan/tilt are relative to the mount frame.
+  `fixture-kinematics` is the single implementation and takes the mount frame as an
+  input; renderer, eval (`head_world_position`), and agent bindings all call it.
 - **Node kinds are a small closed alphabet.** `venue` (root: floor plus audience
   direction, which is what defines downstage/upstage/stage-left/right), `stage`,
-  `run`, `tower`, `piece`, `fixture`, `array`, `mirror`. Nothing else. A new set
-  object is a `piece` with sockets, never a new kind.
-  - `run` — a chain of truss segments with **one `along(t)` parametrization over the
-    run's total length**, so `run.along(0.25)` means the same thing whether the run
-    is one 3 m segment or four. `extend(run, to=12.0)` fits catalog segment lengths
-    with a shape-grammar fit (`[C],[S]*,[C]` — corner, spans, corner, in the manner
-    of Unreal PCG splines), not by scaling a mesh.
-  - `tower` — height in catalog increments, same fit.
-  - `array` — `count`, `span`, along a parent feature; children are **derived**, not
-    stored rows.
-  - `mirror` — an `axis`; the subtree is derived.
-  - Arrays and mirrors are ordinary nodes. There is no "re-solve" step, because
-    solving is the only way poses exist at all.
+  `run`, `tower`, `piece`, `fixture`, `array`. Nothing else. A new set object is a
+  `piece` with sockets, never a new kind.
+  - `run` — truss segments with **one `along(t)` over the run's total length**, so
+    `run.along(0.25)` means the same thing for one 3 m segment or four. `tower` is
+    the same generator, height in 0.5 m steps.
+  - `array` — `count`, `span` along a parent feature; children are **derived**, not
+    stored rows, and expand at solve time. No "re-solve" step exists, because solving
+    is the only way poses exist at all.
+  - Params: `u, v, yaw, trim` on a surface placement; `length` on an extend;
+    `count, span` on an array; `angle` on a hinge; `pan, tilt` on a fixture.
+- **Truss is fully procedural — one generator, one family, everything mates.**
+  Straight (any span in 0.5 m steps — landed in `gpui/crates/render/src/truss.rs`),
+  corner box (2/3/4/5/6-way), hinge (two half-boxes on a pin, 0–180°, where the
+  angle is the socket's roll freedom and is draggable), arc later. Ripped truss GLBs
+  get deleted; ripped **product** GLBs — decks, CDJs, speakers — stay, they are real
+  objects, not parametric structure. Measured: decks are 1×1 m (0.3 m tall) and
+  2×1 m (1.0 m tall); the existing truss GLBs are imperial products (1.22 m / 1.83 m
+  spans, Q30 at 254 mm, an F34-ish Q40) — which is why the catalog goes metric.
+- **Extend casts a ray.** Clicking an open socket — or `extend(socket)` with no
+  length — fires a ray along the socket normal.
+  - Hits another open compatible socket → the ghost truss defaults to that gap and a
+    measurement gizmo runs its length showing the distance. Steps are 0.5 m; feet are
+    display-only.
+  - Length **equal to the gap** → the piece bridges both sockets. Parent is the
+    origin side; the far end is a **constraint** on the other socket, reported
+    satisfied / violated / dangling. No node ever gets a second parent.
+  - **Less** than the gap → a stub parented to the origin side. **Greater** →
+    **refused**, ghost red; that is what stops structure intersecting itself.
+  - Ray hits nothing → ghost at 0.5 m, type a length.
+- **Snapped pieces have no transform gizmo.** A snapped piece moves only in its
+  socket's roll freedom: truss end, none — dragging it drags the whole run; clamp,
+  yaw; hinge, its angle. Detaching is explicit — drag past the snap-out radius, or
+  use the action. Only free pieces, sitting on the floor or a stage, get the gizmo.
 - **Agent API is the same resolver behind a Python facade, in stage vocabulary,
   with no coordinates.** `attach(piece, to=host.feature(...), socket=...)`,
-  `extend`, `place_on(surface, u, v)`, `array`, `mirror`,
-  `aim(fixture, at=point|"audience"|"stage_center")`. Features are named:
-  `stage.corner("downstage_left")`, `truss.face("downstage")`, `run.along(0.25)`.
-  Fractions and counts for positions, never metres; metres are fine for *lengths*.
-  There is no `set_position`.
+  `extend(socket, length=None)`, `place_on(surface, u, v, yaw=0, trim=0)`,
+  `array(...)`, `aim(fixture, at=point|"audience"|"stage_center")`,
+  `duplicate(node, to=socket, flip=False)`, `trim(node, height)`. Features are
+  named: `stage.corner("downstage_left")`, `truss.face("downstage")`,
+  `run.along(0.25)`. Fractions and counts for positions, never metres; metres are
+  fine for *lengths* and for `trim`. There is no `set_position`.
 - **Every mutating call returns a `Placement` report** — `ok`, `parent`, `warnings`,
-  `collisions` (OBB against neighbours), `span_exceeds` (an array or piece past the
-  run's end, carrying a suggested `extend`), dangling sockets, unsupported spans.
-  Reports **suggest fixes, they do not refuse**. The single class of hard error is a
-  type-level socket mismatch, which is a category error and not a judgement call.
-- **Verification channels, ranked:** `describe(node)` (the tree read back in stage
-  words) → `dangling()` and the `Placement` reports → a top-down quantized tile map
-  ("Gauntlet view") → `render(view=fixture.pov)` → `render(view="front")` last. A
-  front render is the *worst* verification signal per token and the most tempting.
-  Humans get the same tools; there is no agent-only diagnostic.
-- **Human UX is Roblox-simple.** The palette plus the snap ladder (socket → surface →
-  grid) is the whole builder; the gizmo is an escape hatch, not the primary verb.
-  Drag a truss near a stage corner: it snaps and stands up. Drag a light near a
-  truss: it sticks to the face and points out of it. Ghost preview while dragging,
-  commit on release, hysteresis (snap-in radius strictly smaller than snap-out) so a
-  held piece does not chatter at the boundary. Copy and mirror operate on subtrees.
-  **No empty game objects** — the parent piece *is* the group.
+  `collisions` (OBB against neighbours), `span_exceeds` (past the run's end, carrying
+  a suggested `extend`), dangling sockets, unsatisfied far-end constraints. Reports
+  **suggest fixes, they do not refuse**. Only two hard errors: a type-level socket
+  mismatch, and an extend longer than a ray-measured gap.
+- **Verification channels, ranked:** `describe(node)` (the tree in stage words) →
+  `dangling()` and the `Placement` reports → a top-down quantized tile map ("Gauntlet
+  view") → `render(view=fixture.pov)` → `render(view="front")` last. A front render is
+  the *worst* signal per token and the most tempting. Humans get the same tools.
+- **Human UX is Roblox-simple.** Palette plus the snap ladder (socket → surface) is
+  the whole builder. Drag a truss near a stage corner: it snaps and stands up. Drag a
+  light near a truss: it sticks to the face and points out of it. Ghost while
+  dragging, commit on release, hysteresis (snap-in radius strictly smaller than
+  snap-out) so a held piece does not chatter. **No empty game objects** — the parent
+  piece *is* the group.
+- **Duplicate is how symmetry happens.** Select a wing's root — the piece attaching
+  to the stage; the subtree comes along — press ⌘D. A ghost follows the cursor, every
+  compatible open socket lights up as a snap gizmo, click one and the copy is placed
+  and selected. **Flip** inverts the subtree's handedness about its root socket, which
+  is what an asymmetric wing needs. Agent: `duplicate(node, to=socket, flip=bool)`.
 - **Sockets keep what is golden-tested and gain polarity.** Bbox-anchor authoring
-  stays. Both orientation guards in `snap.ts` stay: the edge-mode opposing-`outward`
+  stays, as do both orientation guards in `snap.ts` (the edge-mode opposing-`outward`
   test, and the parallel-normal self-mating side test that otherwise ties an
-  upside-down pose with the correct one. The directed `COMPATIBLE` table is
+  upside-down pose with the correct one). The directed `COMPATIBLE` table is
   **replaced by polarity** — `Male` / `Female` / `Neutral` — plus a roll freedom per
-  socket. A thirteen-entry hand-maintained adjacency list is a lookup table
+  socket; a thirteen-entry hand-maintained adjacency list is a lookup table
   pretending to be a rule. The catalog moves to Rust as the single copy with a
-  generated TS binding; it exists twice today
-  (`src/features/stage/lib/sockets.ts`, `gpui/crates/scene/src/sockets.rs`) and the
-  goldens exist precisely because it drifted.
+  generated TS binding: it exists twice today (`src/features/stage/lib/sockets.ts`,
+  `gpui/crates/scene/src/sockets.rs`) and the goldens exist because it drifted.
 
 ## Data model
 
@@ -87,19 +116,24 @@ dropped):
 
     venue_nodes(id, venue_id, kind, catalog_ref, label, created_at, …)
     venue_edges(child_id PK, parent_id, my_socket, their_socket, roll)
-    venue_node_params(node_id, key, value)   -- count, span, axis, length, u, v
+    venue_node_params(node_id, key, value)   -- u, v, yaw, trim, length, count, span, angle
+    venue_constraints(node_id, my_socket, target_node, target_socket)
 
-`venue_edges` is keyed by `child_id`, which makes "exactly one parent" a primary key
-rather than a check. `fixtures.pos_*`/`rot_*` follow the same fate: a fixture is a
+`venue_edges` is keyed by `child_id`, making "exactly one parent" a primary key rather
+than a check. `venue_constraints` is a *separate* table on purpose: a far end is a
+check, never an edge. `fixtures.pos_*`/`rot_*` follow the same fate — a fixture is a
 node with an edge like anything else.
 
 **Invariants**, each enforced where it lives:
 
 1. **Acyclic** — a child's parent must already be reachable from the root; enforced
    in the resolver's insertion order, which is the only writer.
-2. **Every non-root node has a resolvable socket pair** — polarity-compatible, both
+2. **Exactly one parent per node.** A bridging piece has one parent and one far-end
+   constraint; **far-end constraints are checks, not edges** — evaluated after the
+   solve, reported satisfied / violated / dangling, never participating in it.
+3. **Every non-root node has a resolvable socket pair** — polarity-compatible, both
    present on their catalog entries. Checked at edge insert, not at solve.
-3. **Deterministic solve order** — depth-first over children sorted by node id, so
+4. **Deterministic solve order** — depth-first over children sorted by node id, so
    two solves of the same graph produce byte-identical poses. Golden capture depends
    on this.
 
@@ -107,18 +141,17 @@ node with an edge like anything else.
 
 ~500 nodes is the working bound (the largest golden venues are well under 100). One
 solve is a depth-first walk with a socket-frame build and a 4×4 multiply per node —
-tens of microseconds, versus the ~16 ms frame. Solve on **every** edit, no
-incremental invalidation, no dirty flags. Arrays expand at solve time, so a 64-cell
-array is 64 matrix multiplies and zero rows. If this ever stops being free, the fix
-is memoizing subtree transforms by node id — but do not build that first.
+tens of microseconds against a ~16 ms frame. Solve on **every** edit: no incremental
+invalidation, no dirty flags. If it ever stops being free, memoize subtree transforms
+by node id — but do not build that first.
 
 ## Goldens
 
 `harness/goldens/snap*.json` pin `solve_snap` numerically and carry over unchanged —
-the resolver's contract is not what is changing. Two new families: `describe()`
-output per fixture venue (a much tighter diff than a render), and per-node resolved
-world poses, captured at the end of phase 3 as the migration's proof. Render goldens
-recapture once, at phase 0, when beam = mount normal moves every rest direction.
+the resolver's contract is not what is changing. Two new families: `describe()` per
+fixture venue (a much tighter diff than a render), and per-node resolved world poses
+captured at the end of phase 3 as the migration's proof. Render goldens recapture once
+at phase 0, when beam = mount normal moves every rest direction.
 
 ## Audit findings this fixes
 
@@ -126,43 +159,43 @@ recapture once, at phase 0, when beam = mount normal moves every rest direction.
   (`luminaire::beam_direction` uses `Vec3::Z` for procedurals), and
   `ask-venue-tool.ts`'s `facingLabel` assumes `+Y` with the **opposite yaw sign** —
   three rest conventions, three sign conventions. `facingLabel` is deleted outright.
-- 460 fixtures across the golden venues, exactly one with a non-zero rotation. The
-  rest-direction bug is invisible today because nobody has ever successfully aimed a
-  fixture — the symptom, not the mitigation.
-- `visualizer.rs::object_pose` builds the gizmo rotation with
-  `coords::euler_xyz(rot[0], rot[1], rot[2])` — the stored triple applied *without*
-  the `(x, z, y)` swap that `coords::three_pose_from_data` exists to perform. Gizmo
-  edits on a rotated object are therefore made in a mirrored frame and land wrong.
-- `stage_render.rs` says so itself: it is a copy of the visualizer's `scene`,
-  `flatten_pieces`, `local_matrix`, `definition`, `lookup` and `meshes_root`. The
-  graph resolver replaces both copies.
+- 460 fixtures across the golden venues, exactly one with a non-zero rotation — the
+  rest-direction bug is invisible because nobody has ever successfully aimed a
+  fixture. That is the symptom, not the mitigation.
+- `visualizer.rs::object_pose` builds the gizmo rotation with `coords::euler_xyz(...)`
+  — the stored triple *without* the `(x, z, y)` swap `coords::three_pose_from_data`
+  exists to perform, so gizmo edits on a rotated object land in a mirrored frame.
+- `stage_render.rs` says so itself: a copy of the visualizer's `scene`,
+  `flatten_pieces`, `local_matrix`, `definition`, `lookup`, `meshes_root`. The graph
+  resolver replaces both copies.
 
 ## Build order
 
 0. **`fixture-kinematics` consolidation + beam = mount normal.** `Mount` takes a
-   mount frame instead of a stored Euler triple. `head_world_position`,
-   `luminaire::beam_direction`, and the venue bindings all route through it.
-   `facingLabel` deleted. Recapture render goldens. *Nothing downstream is
-   trustworthy until this lands.*
+   mount frame instead of a stored Euler triple; `head_world_position`,
+   `luminaire::beam_direction`, and the venue bindings route through it. `facingLabel`
+   deleted, render goldens recaptured. *Nothing downstream is trustworthy until this
+   lands.*
 1. **Gizmo space fix** — `object_pose` through `coords::three_pose_from_data`; delete
-   the duplicate drawer — `visualizer.rs::install_translation_gizmo` /
+   the duplicate drawer (`visualizer.rs::install_translation_gizmo` /
    `install_rotation_gizmo` strip and replace the correct pivot-aware overlay in
-   `render/src/overlay.rs`; keep overlay.rs, extend it to rotate and stage pieces.
-2. **Socket catalog to Rust**, one copy, generated TS binding; polarity replaces
-   `COMPATIBLE`; roll freedom per socket. Goldens must still pass.
-3. **Graph model + resolver-on-load + persistence** — the three tables, the migration
+   `render/src/overlay.rs`); keep overlay.rs, extend it to rotate and stage pieces.
+2. **Procedural truss + socket catalog to Rust.** Corner box (2–6 way) and hinge join
+   the landed straight generator; truss GLBs deleted, catalog metric. One catalog copy
+   with a generated TS binding; polarity replaces `COMPATIBLE`; roll freedom per
+   socket, hinge angle included. Goldens must still pass.
+3. **Graph model + resolver-on-load + persistence** — the four tables, the migration
    pass, `flatten_pieces` and its copy deleted. This is the load-bearing phase.
-4. **gpui palette / ghost / snap-on-drag**, with hysteresis.
-5. **Python facade** — `attach`/`extend`/`place_on`/`array`/`mirror`/`aim`,
+4. **gpui builder** — palette, ghost, snap-on-drag with hysteresis; click-a-socket
+   extend with the ray, gap default, and measurement gizmo; ⌘D duplicate with socket
+   snap gizmos, plus flip; trim (lift) on floor and stage placements; no gizmo on
+   snapped pieces — roll-freedom drag instead.
+5. **Python facade** — `attach`/`extend`/`place_on`/`array`/`aim`/`duplicate`/`trim`,
    `describe`, `Placement` reports, `dangling()`.
 6. **Tile map + POV render.**
 
 ## Open
 
-- **How is a hand-dragged free piece's grid cell chosen?** Nearest cell to the drop
-  point is obvious but makes a 5 cm nudge a discrete jump. Sub-cell `(u, v)` on the
-  floor socket avoids that but reintroduces a continuous coordinate through the back
-  door.
 - **Does the React app get the new model, or is it frozen?** The gpui builder is the
   one being invested in; keeping `src/features/stage` alive means porting polarity,
   the resolver, and the palette twice. Freezing it means the React visualizer renders
@@ -170,7 +203,3 @@ recapture once, at phase 0, when beam = mount normal moves every rest direction.
 - **`run.along(t)` across a mitred corner.** Arc length through a corner block is not
   the sum of segment lengths, and `along(0.5)` on an L-shaped run should probably
   mean half the *walked* distance. Unresolved.
-- **Does `mirror` mirror fixture aim?** A mirrored mover that keeps its pan sign
-  points the wrong way; one that flips it breaks any pattern authored against pan.
-- **Catalog fit failure.** `extend(run, to=7.3)` with no segment combination summing
-  to 7.3 — nearest-under, nearest-over, or a report with both?
