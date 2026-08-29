@@ -164,7 +164,7 @@ use crate::models::authored_state::{
     FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput, PrepareAuthoredTurnInput,
     PreparedAuthoredTurn, RestoreAuthoredStateInput,
 };
-use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::groups::{FixtureGroup, FixtureGroupNode, MovementConfig};
 use crate::models::midi::{
     ControllerState, ControllerStatus, CreateBindingInput, CreateCueInput, CreateModifierInput,
@@ -322,6 +322,7 @@ commands! {
     agent_execution::cancel_python_cell(thread_id: String) -> bool;
 
     fixtures::get_patched_fixtures(venue_id: String) -> Vec<PatchedFixture>;
+    fixtures::get_fixture_facings(venue_id: String) -> Vec<FixtureFacing>;
     fixtures::initialize_fixtures() -> usize;
     fixtures::search_fixtures(query: String, offset: usize, limit: usize) -> Vec<FixtureEntry>;
     fixtures::get_fixture_definition(path: String) -> FixtureDefinition;

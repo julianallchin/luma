@@ -522,6 +522,15 @@ pub fn build_with(
         let base = to_world * three_pose_from_data(fixture.pos, fixture.rot);
 
         if is_procedural(def) {
+            // A QLC+ housing is authored front-facing: its emitters sit on the
+            // `+depth` face and its pixel grid is `width x height`. A mounted
+            // fixture emits along the mount normal (`-Z` in data space, `-Y`
+            // here). Turning the housing a quarter turn about its own X is what
+            // reconciles the two — once, here, where the bar is drawn, rather
+            // than as a second rest axis in `beam_direction`. Everything below
+            // (body, pixel quads, cone origins) hangs off the turned frame, so
+            // the emitters and the beam cannot disagree.
+            let base = base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
             let head_count = def.head_count(&fixture.mode_name).max(1);
             let pixels = pixel_positions(def, head_count);
             let dims = def.dimensions_m();

@@ -399,6 +399,27 @@ pub struct PatchedFixture {
     pub rot_z: f64,
 }
 
+/// Which way a patched fixture points, derived from its mount.
+///
+/// Orientation is geometry and geometry has one implementation
+/// (`fixture-kinematics`), so this is how a caller *asks* for a fixture's facing
+/// rather than deriving it from `rotX/rotY/rotZ`. The frontend used to derive
+/// it, with the opposite yaw sign and a rest axis no renderer agreed with.
+///
+/// Not a column on [`PatchedFixture`]: that struct is a row, and a derived value
+/// stored beside the thing it is derived from is a value that can be stale.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureFacing {
+    pub id: String,
+    /// Unit vector in stored data space (`+X` stage right, `+Y` upstage, `+Z` up).
+    pub direction: [f32; 3],
+    /// The same direction as a stage word: `house`, `upstage`, `stage-left`,
+    /// `stage-right`, `up`, `down`.
+    pub word: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "camelCase")]

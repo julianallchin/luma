@@ -23,9 +23,18 @@ use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
 use crate::eval::ops::spatial::rig_uv;
+use crate::fixtures::layout::fixture_mount;
 use crate::stage_render::flatten_pieces;
+use fixture_kinematics::StageDirection;
 use luma_scene::View;
 
+/// One patched fixture, with what its pose *means* alongside the pose itself.
+///
+/// `facing` and `facing_word` are derived, never stored: they are
+/// `fixture_kinematics`'s answer for this mount, so an agent asking "which
+/// fixtures point at the house" gets the renderer's answer rather than its own
+/// arithmetic on `rotation`. Every consumer that used to do that arithmetic got
+/// a different result.
 #[derive(Serialize)]
 struct FixtureBinding {
     id: String,
@@ -37,6 +46,13 @@ struct FixtureBinding {
     address: i64,
     num_channels: i64,
     position: [f64; 3],
+    /// Stored Euler triple, radians.
+    rotation: [f64; 3],
+    /// Unit vector, data space, that a parked head emits along.
+    facing: [f32; 3],
+    /// The same direction as a stage word: `house`, `upstage`, `stage-left`,
+    /// `stage-right`, `up`, `down`.
+    facing_word: &'static str,
 }
 
 /// One stage piece in the same world frame as [`FixtureBinding::position`].
@@ -137,16 +153,24 @@ pub async fn provide(
         Ok(fixtures) => {
             let bindings: Vec<FixtureBinding> = fixtures
                 .iter()
-                .map(|f| FixtureBinding {
-                    id: f.id.clone(),
-                    label: f.label.clone(),
-                    manufacturer: f.manufacturer.clone(),
-                    model: f.model.clone(),
-                    mode: f.mode_name.clone(),
-                    universe: f.universe,
-                    address: f.address,
-                    num_channels: f.num_channels,
-                    position: [f.pos_x, f.pos_y, f.pos_z],
+                .map(|f| {
+                    let facing =
+                        fixture_mount([f.pos_x, f.pos_y, f.pos_z], [f.rot_x, f.rot_y, f.rot_z])
+                            .normal();
+                    FixtureBinding {
+                        id: f.id.clone(),
+                        label: f.label.clone(),
+                        manufacturer: f.manufacturer.clone(),
+                        model: f.model.clone(),
+                        mode: f.mode_name.clone(),
+                        universe: f.universe,
+                        address: f.address,
+                        num_channels: f.num_channels,
+                        position: [f.pos_x, f.pos_y, f.pos_z],
+                        rotation: [f.rot_x, f.rot_y, f.rot_z],
+                        facing: facing.to_array(),
+                        facing_word: StageDirection::of(facing).label(),
+                    }
                 })
                 .collect();
             inline(b, "venue.fixtures", &bindings)?;

@@ -13,6 +13,9 @@
 //! a code change makes them fail, the code changed what a beam does.
 
 #![allow(dead_code)]
+// Pinned numbers, written out. A stored Euler term that happens to equal PI is
+// data here, not an approximation of a constant a reader should reach for.
+#![allow(clippy::approx_constant)]
 
 use fixture_kinematics::{
     beam_ray, rig_position, Articulation, FixtureClass, FixtureGeometry, Mount,
@@ -78,7 +81,7 @@ pub fn geometry(v: &ContractVector) -> FixtureGeometry {
 pub fn assert_all() {
     for v in CONTRACT_VECTORS {
         let geom = geometry(v);
-        let mount = Mount::new(Vec3::from(v.mount_position), v.mount_rotation);
+        let mount = Mount::from_stored(Vec3::from(v.mount_position), v.mount_rotation);
         let art = Articulation::from_degrees(v.pan_deg, v.tilt_deg);
         let ray = beam_ray(&geom, &mount, &art, v.cell);
         let checks = [
@@ -101,8 +104,10 @@ pub fn assert_all() {
 }
 
 /// The pinned set. Covers: no articulation; every rotation axis; measured
-/// aperture depths; an offset pivot; a multi-cell bar; and an out-of-range cell
-/// index, which is defined behaviour rather than a panic.
+/// aperture depths; an offset pivot; a multi-cell bar; an out-of-range cell
+/// index, which is defined behaviour rather than a panic; and the three mount
+/// normals the "beam = mount normal" rule turns on — hung, floor-standing, and
+/// clamped to a downstage face.
 pub const CONTRACT_VECTORS: &[ContractVector] = &[
     ContractVector {
         name: "parked par, square to the rig",
@@ -220,5 +225,64 @@ pub const CONTRACT_VECTORS: &[ContractVector] = &[
         rig_position: [-1.9724854, 5.5256863, 3.0962453],
         beam_origin: [-1.9150629, 5.660558, 3.1248753],
         beam_direction: [-0.58141613, 0.7783171, -0.23701887],
+    },
+    ContractVector {
+        name: "hung with no rotation: the mount normal is straight down",
+        class: "unauthored",
+        cells: &[[0.0, 0.0, 0.0]],
+        pivot_offset: [0.0, 0.0, 0.0],
+        mount_position: [1.25, 0.5, 6.4],
+        mount_rotation: [0.0, 0.0, 0.0],
+        cell: 0,
+        pan_deg: 0.0,
+        tilt_deg: 0.0,
+        rig_position: [1.25, 0.5, 6.4],
+        beam_origin: [1.25, 0.5, 6.4],
+        beam_direction: [0.0, 0.0, -1.0],
+    },
+    ContractVector {
+        name: "floor-standing uplighter: the mount normal is up",
+        class: "unauthored",
+        cells: &[[0.0, 0.0, 0.0]],
+        pivot_offset: [0.0, 0.0, 0.0],
+        mount_position: [2.0, -3.0, 0.15],
+        mount_rotation: [3.1415927, 0.0, 0.0],
+        cell: 0,
+        pan_deg: 0.0,
+        tilt_deg: 0.0,
+        rig_position: [2.0, -3.0, 0.15],
+        beam_origin: [2.0, -3.0, 0.15],
+        beam_direction: [0.0, 8.742278e-8, 1.0],
+    },
+    ContractVector {
+        name: "clamped to a truss's downstage face: the mount normal is the house",
+        class: "unauthored",
+        cells: &[[0.0, 0.0, 0.0]],
+        pivot_offset: [0.0, 0.0, 0.0],
+        mount_position: [0.0, 4.0, 3.4],
+        mount_rotation: [1.5707964, 0.0, 0.0],
+        cell: 0,
+        pan_deg: 0.0,
+        tilt_deg: 0.0,
+        rig_position: [0.0, 4.0, 3.4],
+        beam_origin: [0.0, 4.0, 3.4],
+        beam_direction: [0.0, -1.0, 4.371139e-8],
+    },
+    ContractVector {
+        // Sign, not magnitude: a positive stored `rot[2]` swings a cell on +X
+        // toward the house. The mirror between the two spaces is exactly what
+        // makes that read backwards, and an `abs()` in a test cannot see it.
+        name: "positive stored yaw swings a cell toward the house",
+        class: "unauthored",
+        cells: &[[0.5, 0.0, 0.0]],
+        pivot_offset: [0.0, 0.0, 0.0],
+        mount_position: [0.0, 0.0, 3.0],
+        mount_rotation: [0.0, 0.0, 1.5707964],
+        cell: 0,
+        pan_deg: 0.0,
+        tilt_deg: 0.0,
+        rig_position: [-2.1855694e-8, -0.5, 3.0],
+        beam_origin: [-2.1855694e-8, -0.5, 3.0],
+        beam_direction: [0.0, 0.0, -1.0],
     },
 ];

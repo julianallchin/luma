@@ -13,13 +13,14 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
-use crate::fixtures::layout::{compute_head_offsets, head_world_position};
+use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::fixtures::parser;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
     normalize_group_name, FixtureGroupNode, FixtureType, GroupedFixtureNode, HeadNode,
 };
 use crate::models::selection::{Selection, Subset};
+use fixture_kinematics::rig_position;
 
 /// Cached fixture + group data for a venue, shared across concurrent graph executions.
 #[derive(Clone)]
@@ -270,22 +271,18 @@ fn get_fixture_heads_with_path(resource_path: &Path, fixture: &PatchedFixture) -
         return Vec::new();
     }
 
-    let offsets = compute_head_offsets(&def, &fixture.mode_name);
-    let base = [
-        fixture.pos_x as f32,
-        fixture.pos_y as f32,
-        fixture.pos_z as f32,
-    ];
-    let rot = [fixture.rot_x, fixture.rot_y, fixture.rot_z];
+    let geom = head_geometry(&def, &fixture.mode_name);
+    let mount = fixture_mount(
+        [fixture.pos_x, fixture.pos_y, fixture.pos_z],
+        [fixture.rot_x, fixture.rot_y, fixture.rot_z],
+    );
 
-    offsets
-        .iter()
-        .enumerate()
-        .map(|(i, offset)| HeadNode {
+    (0..geom.cell_count())
+        .map(|i| HeadNode {
             id: format!("{}:{}", fixture.id, i),
             label: format!("Head {}", i + 1),
             head_index: i as i64,
-            position: head_world_position(base, rot, *offset),
+            position: rig_position(&geom, &mount, i).to_array(),
         })
         .collect()
 }

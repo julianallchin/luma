@@ -411,13 +411,6 @@ pub fn generate_dmx(
             .and_then(|f| f.tilt_max)
             .unwrap_or(270) as f32;
 
-        // Determine if pan/tilt should be inverted based on fixture orientation.
-        // When a fixture is flipped upside down (rot_x ≈ π), both pan and tilt
-        // axes are effectively mirrored relative to the default ceiling-mount orientation.
-        let is_flipped = (fixture.rot_x - std::f64::consts::PI).abs() < 0.5;
-        let invert_pan = is_flipped;
-        let invert_tilt = is_flipped;
-
         let buffer = buffers.entry(fixture.universe).or_insert([0; 512]);
         let prev = previous_universe_buffers.and_then(|m| m.get(&fixture.universe));
 
@@ -488,8 +481,6 @@ pub fn generate_dmx(
                     max_dimmer,
                     has_master_dimmer,
                     has_color_wheel,
-                    invert_pan,
-                    invert_tilt,
                 );
                 apply_intensity_gate(m, channel, head_idx, &strobe_ctx)
             };
@@ -522,8 +513,6 @@ fn map_value(
     max_dimmer: f32,
     has_master_dimmer: bool,
     has_color_wheel: bool,
-    invert_pan: bool,
-    invert_tilt: bool,
 ) -> MapAction {
     let ch_type = channel.get_type();
 
@@ -613,17 +602,19 @@ fn map_value(
             }
             MapAction::Set(0)
         }
+        // Pan and tilt go out exactly as the evaluator produced them. There used
+        // to be a mirror here for fixtures within 28 degrees of upside-down
+        // (`|rot_x - PI| < 0.5`), and it was wrong twice over: no renderer
+        // applied it, so the console and the visualizer disagreed about where a
+        // flipped head was pointing; and "hung upside down" is a fact about the
+        // mount, which the venue graph makes explicit, not something to sniff
+        // out of a stored angle with a threshold.
         ChannelType::Pan => {
             if state.position[0].is_nan() {
                 MapAction::Hold
             } else {
-                let pan_deg = if invert_pan {
-                    -state.position[0]
-                } else {
-                    state.position[0]
-                };
                 MapAction::Set(map_position_channel(
-                    pan_deg,
+                    state.position[0],
                     pan_max_deg,
                     channel.preset.as_deref().unwrap_or(""),
                 ))
@@ -633,13 +624,8 @@ fn map_value(
             if state.position[1].is_nan() {
                 MapAction::Hold
             } else {
-                let tilt_deg = if invert_tilt {
-                    -state.position[1]
-                } else {
-                    state.position[1]
-                };
                 MapAction::Set(map_position_channel(
-                    tilt_deg,
+                    state.position[1],
                     tilt_max_deg,
                     channel.preset.as_deref().unwrap_or(""),
                 ))
@@ -1026,13 +1012,13 @@ mod tests {
         let state = prim(1.0, 0.95, 0.05, 0.05, 0.0);
         assert_eq!(
             // has_color_wheel = true since this is a color wheel test
-            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true, false, false),
+            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true),
             MapAction::Set(10)
         );
 
         let state = prim(1.0, 0.05, 0.95, 0.05, 0.0);
         assert_eq!(
-            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true, false, false),
+            map_value(&channel, &state, 540.0, 270.0, 1.0, false, true),
             MapAction::Set(20)
         );
     }

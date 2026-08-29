@@ -1,5 +1,11 @@
+use fixture_kinematics::{FixtureGeometry, Mount};
+use glam::Vec3;
+
 use crate::models::fixtures::FixtureDefinition;
 
+/// One head's offset on the fixture housing, in millimetres, in the fixture's own
+/// frame (`+X` across the housing, `+Z` up it). A layout fact, not a world
+/// position: [`head_geometry`] is what turns it into geometry the rig can place.
 #[derive(Debug, Clone, Copy)]
 pub struct HeadLayout {
     pub x: f32, // Local offset X in mm
@@ -7,59 +13,47 @@ pub struct HeadLayout {
     pub z: f32, // Local offset Z in mm
 }
 
-/// World position of one fixture head: rotate its local offset (mm, in the
-/// fixture's local frame) by the fixture orientation and add the fixture's base
-/// position. This is the single source of truth for how a primitive
-/// (`fixture:head`) maps to a 3D point — used to build the eval engine's
-/// `ResidentContext.positions` and (until it's deleted) the legacy selection
-/// items.
+/// The mount frame of a stored fixture row.
 ///
-/// Frames: stored/world data is **Z-up** (+X stage right, +Y back, +Z up) and so
-/// is `HeadLayout` (`compute_head_offsets` lays heads out in the local XZ plane).
-/// The visualizer works in Three's Y-up space and crosses over by swapping Y↔Z on
-/// both the position and the Euler angles (`fixture-object.tsx`:
-/// `position.set(posX, posZ, posY)`, `rotation.set(rotX, rotZ, rotY)`). This
-/// function reproduces that mapping exactly: swap the local offset into Y-up,
-/// apply the same `Rx(rot_x)·Ry(rot_z)·Rz(rot_y)` composition Three builds for
-/// that Euler, then swap the result back to Z-up. A head mounted above the
-/// fixture origin therefore lands above it in **world Z**, matching what you see
-/// on screen — before this, the local vertical offset was (wrongly) added to
-/// world Y, so a vertical pixel bar's heads marched into the depth axis.
+/// The one place the app turns a `(pos_*, rot_*)` row into a [`Mount`]. It exists
+/// so the `f64`-to-`f32` narrowing and the stored-Euler convention are spelled
+/// once: three call sites used to each carry their own cast, and a fourth used to
+/// carry its own trigonometry.
 ///
-/// `base`/result are meters; `rot` is radians `[rot_x, rot_y, rot_z]` as stored.
-pub fn head_world_position(base: [f32; 3], rot: [f64; 3], offset: HeadLayout) -> [f32; 3] {
-    // Local offset (mm → m), swapped from Z-up data space into the Y-up frame
-    // the rotation below is expressed in.
-    let lx = offset.x / 1000.0;
-    let ly = offset.z / 1000.0;
-    let lz = offset.y / 1000.0;
+/// At phase 3 of the venue graph a fixture has no pose of its own — it hangs off
+/// a socket — and this function is what gets replaced, not its callers.
+#[must_use]
+pub fn fixture_mount(pos: [f64; 3], rot: [f64; 3]) -> Mount {
+    Mount::from_stored(
+        Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32),
+        [rot[0] as f32, rot[1] as f32, rot[2] as f32],
+    )
+}
 
-    // The stored Euler under the same Y-up remap.
-    let rx = rot[0];
-    let ry = rot[2];
-    let rz = rot[1];
-
-    // Rotate around Z (yaw).
-    let (lx_z, ly_z) = (
-        lx * rz.cos() as f32 - ly * rz.sin() as f32,
-        lx * rz.sin() as f32 + ly * rz.cos() as f32,
-    );
-    let lz_z = lz;
-    // Rotate around Y (pitch).
-    let (lx_y, lz_y) = (
-        lx_z * ry.cos() as f32 + lz_z * ry.sin() as f32,
-        -lx_z * ry.sin() as f32 + lz_z * ry.cos() as f32,
-    );
-    let ly_y = ly_z;
-    // Rotate around X (roll).
-    let (ly_x, lz_x) = (
-        ly_y * rx.cos() as f32 - lz_y * rx.sin() as f32,
-        ly_y * rx.sin() as f32 + lz_y * rx.cos() as f32,
-    );
-    let lx_x = lx_y;
-
-    // Back to Z-up data space (swap Y↔Z again).
-    [base[0] + lx_x, base[1] + lz_x, base[2] + ly_x]
+/// A fixture's cells — one per head the mode lays out — in the kinematics frame.
+///
+/// [`compute_head_offsets`] reads the QLC+ housing; this converts it to metres in
+/// the fixture frame and hands it to `fixture-kinematics`, which owns everything
+/// that happens to a cell afterwards. Combine with [`fixture_mount`] and
+/// [`fixture_kinematics::rig_position`] to get a head's world position:
+///
+/// ```ignore
+/// let geom = head_geometry(&def, &fixture.mode_name);
+/// let mount = fixture_mount([f.pos_x, f.pos_y, f.pos_z], [f.rot_x, f.rot_y, f.rot_z]);
+/// let world = rig_position(&geom, &mount, head_index);
+/// ```
+///
+/// Unauthored geometry, so no aperture depth: QLC+ never says where inside the
+/// housing the light leaves from, and inventing a depth here would move every
+/// pattern-space position (see `FixtureClass::aperture_depth_m`).
+#[must_use]
+pub fn head_geometry(def: &FixtureDefinition, mode_name: &str) -> FixtureGeometry {
+    FixtureGeometry::unauthored(
+        compute_head_offsets(def, mode_name)
+            .into_iter()
+            .map(|h| Vec3::new(h.x, h.y, h.z) / 1000.0)
+            .collect(),
+    )
 }
 
 pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<HeadLayout> {
@@ -184,10 +178,14 @@ pub fn compute_head_offsets(def: &FixtureDefinition, mode_name: &str) -> Vec<Hea
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fixture_kinematics::rig_position;
     use std::f64::consts::FRAC_PI_2;
 
-    fn head(x: f32, y: f32, z: f32) -> HeadLayout {
-        HeadLayout { x, y, z }
+    /// One head at a millimetre offset, placed by the same pair of helpers every
+    /// caller uses.
+    fn placed(base: [f64; 3], rot: [f64; 3], offset: [f32; 3]) -> [f32; 3] {
+        let geom = FixtureGeometry::unauthored(vec![Vec3::from(offset) / 1000.0]);
+        rig_position(&geom, &fixture_mount(base, rot), 0).to_array()
     }
 
     fn close(got: [f32; 3], want: [f32; 3]) {
@@ -203,17 +201,18 @@ mod tests {
     /// land on world Z, not on world Y (the depth axis).
     #[test]
     fn vertical_offset_lands_on_world_z() {
-        let p = head_world_position([1.0, 2.0, 3.0], [0.0, 0.0, 0.0], head(0.0, 0.0, 500.0));
-        close(p, [1.0, 2.0, 3.5]);
+        close(
+            placed([1.0, 2.0, 3.0], [0.0; 3], [0.0, 0.0, 500.0]),
+            [1.0, 2.0, 3.5],
+        );
     }
 
     /// A vertically stacked pixel bar spreads along world Z.
     #[test]
     fn stacked_heads_spread_along_world_z() {
         let base = [0.0, 0.0, 2.0];
-        let rot = [0.0, 0.0, 0.0];
-        let a = head_world_position(base, rot, head(0.0, 0.0, -300.0));
-        let b = head_world_position(base, rot, head(0.0, 0.0, 300.0));
+        let a = placed(base, [0.0; 3], [0.0, 0.0, -300.0]);
+        let b = placed(base, [0.0; 3], [0.0, 0.0, 300.0]);
         assert!((b[2] - a[2] - 0.6).abs() < 1e-5, "{a:?} {b:?}");
         assert!(
             (b[1] - a[1]).abs() < 1e-6,
@@ -223,23 +222,44 @@ mod tests {
 
     /// `rot_z` is the heading (rotation about the world up axis): it swings a
     /// horizontal offset out of X and into Y, leaving height untouched.
+    ///
+    /// The **sign** is the point. Stored space and the renderer's space are
+    /// mirror images, so a positive heading swings a `+X` offset toward the
+    /// house (`-Y`), not away from it. The test this replaces took `abs()` of
+    /// the result and so passed either way — which is how a yaw could have been
+    /// backwards in the app and nobody would have heard about it from here.
     #[test]
-    fn heading_swings_horizontal_offset_into_y() {
-        let p = head_world_position(
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, FRAC_PI_2],
-            head(1000.0, 0.0, 0.0),
+    fn a_positive_heading_swings_a_stage_right_offset_toward_the_house() {
+        close(
+            placed([0.0; 3], [0.0, 0.0, FRAC_PI_2], [1000.0, 0.0, 0.0]),
+            [0.0, -1.0, 0.0],
         );
-        assert!(p[0].abs() < 1e-5, "{p:?}");
-        assert!((p[1].abs() - 1.0).abs() < 1e-5, "{p:?}");
-        assert!(p[2].abs() < 1e-5, "{p:?}");
     }
 
     /// Height is invariant under heading — spinning a fixture on its base never
     /// moves a head up or down.
     #[test]
     fn height_is_invariant_under_heading() {
-        let p = head_world_position([0.0, 0.0, 0.0], [0.0, 0.0, 0.7], head(0.0, 0.0, 1000.0));
-        close(p, [0.0, 0.0, 1.0]);
+        close(
+            placed([0.0; 3], [0.0, 0.0, 0.7], [0.0, 0.0, 1000.0]),
+            [0.0, 0.0, 1.0],
+        );
+    }
+
+    /// Whatever the housing says, a head's *placement* is the mount's business:
+    /// the same layout under a floor mount lands mirrored about the fixture, and
+    /// the beam that leaves it points up (`fixture_kinematics::Mount::normal`).
+    #[test]
+    fn a_floor_mount_flips_the_layout_with_the_fixture() {
+        let up = fixture_mount([0.0, 0.0, 0.2], [std::f64::consts::PI, 0.0, 0.0]);
+        assert!(up.normal().abs_diff_eq(Vec3::Z, 1e-6), "{:?}", up.normal());
+        close(
+            placed(
+                [0.0, 0.0, 0.2],
+                [std::f64::consts::PI, 0.0, 0.0],
+                [0.0, 0.0, 300.0],
+            ),
+            [0.0, 0.0, -0.1],
+        );
     }
 }

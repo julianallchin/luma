@@ -15,8 +15,20 @@
 //! # Space
 //!
 //! Everything here is the stored data space: **Z-up, right-handed, metres**,
-//! `+X` stage right, `+Y` upstage/back, `+Z` up. A fixture at rest points along
-//! [`Vec3::NEG_Z`] — straight down.
+//! `+X` stage right, `+Y` upstage/back, `+Z` up.
+//!
+//! # Rest is the mount normal
+//!
+//! A fixture at rest emits along the **outward normal of whatever it is mounted
+//! on**, and pan/tilt are measured from there. Hung under a truss it points
+//! down; standing on the floor it points up; clamped to a truss's downstage face
+//! it points at the house. There is no per-fixture-type rest axis — a moving
+//! head, a par and an LED bar with the same mount all rest the same way, and a
+//! fixture that must point elsewhere says so with its mount, not with its class.
+//!
+//! In the mount's own frame that normal is [`REST_AXIS`], `-Z`. The mount frame
+//! comes from [`Mount::from_stored`] today and from the venue graph's socket
+//! frame at phase 3; nothing else in this crate changes when it does.
 //!
 //! The renderer works in a three.js-derived Y-up space that reaches data space
 //! through `S = swap(Y, Z)`, and `det(S) = -1`. That mirror is why the rotation
@@ -43,7 +55,7 @@
 //! use glam::Vec3;
 //!
 //! let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]);
-//! let mount = Mount::new(Vec3::new(0.0, 0.0, 4.0), [0.0; 3]);
+//! let mount = Mount::from_stored(Vec3::new(0.0, 0.0, 4.0), [0.0; 3]);
 //!
 //! // A fixture at rest emits from its rig position, straight down.
 //! let ray = beam_ray(&geom, &mount, &Articulation::REST, 0);
@@ -56,10 +68,13 @@
 
 use glam::{Mat3, Vec3};
 
-/// The emission axis of a fixture with no articulation applied: straight down.
+/// The mount normal, in the mount's own frame — the axis a parked fixture emits
+/// along before the mount is oriented.
 ///
 /// Public because a caller that needs "which way would this fixture point if it
-/// were parked" should read it from here rather than re-deriving a sign.
+/// were parked" should read it from here rather than re-deriving a sign. What it
+/// means in world terms is [`Mount::normal`]; this constant is only ever the
+/// mount-local half.
 pub const REST_AXIS: Vec3 = Vec3::NEG_Z;
 
 /// A fixture's optical class, which is the only thing that sets how far the
@@ -196,14 +211,20 @@ pub struct Mount {
 }
 
 impl Mount {
-    /// Build from a stored fixture row: position in metres, `rot` the stored
-    /// Euler triple in radians.
+    /// Derive the mount frame from a stored fixture row: position in metres,
+    /// `rot` the stored Euler triple in radians.
     ///
     /// The stored triple is interpreted here and nowhere else. Callers pass what
     /// the database holds; the axis remap and sign flips that make it a data
     /// space rotation are this crate's business.
+    ///
+    /// This is the *interim* constructor. A fixture has no independent pose once
+    /// the venue graph lands — it hangs off a socket, and the socket's frame is
+    /// the mount frame. Naming it `from_stored` rather than `new` keeps that
+    /// seam visible: phase 3 adds `Mount::from_socket` and deletes this one, and
+    /// every caller below it is untouched because they only ever see a `Mount`.
     #[must_use]
-    pub fn new(position: Vec3, rot: [f32; 3]) -> Self {
+    pub fn from_stored(position: Vec3, rot: [f32; 3]) -> Self {
         Self {
             position,
             // Conjugating the renderer's `Rx(r0)·Ry(r2)·Rz(r1)` by the Y/Z swap:
@@ -219,6 +240,84 @@ impl Mount {
     #[must_use]
     pub fn position(self) -> Vec3 {
         self.position
+    }
+
+    /// The outward normal of the surface this fixture is mounted on, in data
+    /// space: the direction a parked head emits along.
+    ///
+    /// Equal to `beam_ray(.., Articulation::REST, ..).direction`, and cheaper
+    /// when the question is only "which way is this thing facing" — the agent
+    /// bindings and [`StageDirection::of`] want exactly that and have no cell to
+    /// speak of.
+    #[must_use]
+    pub fn normal(self) -> Vec3 {
+        self.rotation * REST_AXIS
+    }
+}
+
+/// A direction reduced to the one stage word that best describes it.
+///
+/// The vocabulary a lighting designer uses, and the only place a vector becomes
+/// a word: an agent asking "which fixtures point at the house" and a UI badge
+/// must not disagree about where stage left is. Data space is `+X` stage right,
+/// `+Y` upstage, `+Z` up, so the house is `-Y`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StageDirection {
+    /// `-Y`: out over the audience.
+    House,
+    /// `+Y`: into the back wall.
+    Upstage,
+    /// `+X`.
+    StageRight,
+    /// `-X`.
+    StageLeft,
+    /// `+Z`.
+    Up,
+    /// `-Z`.
+    Down,
+}
+
+impl StageDirection {
+    /// The dominant axis of `v`, as a stage word.
+    ///
+    /// Ties break toward the vertical and then toward depth, which is what makes
+    /// this total: a zero vector reads as `Down`, the rest pose, rather than
+    /// forcing every caller to handle an `Option` for a case the geometry cannot
+    /// produce.
+    #[must_use]
+    pub fn of(v: Vec3) -> Self {
+        let (ax, ay, az) = (v.x.abs(), v.y.abs(), v.z.abs());
+        if az >= ax && az >= ay {
+            if v.z > 0.0 {
+                Self::Up
+            } else {
+                Self::Down
+            }
+        } else if ay >= ax {
+            if v.y > 0.0 {
+                Self::Upstage
+            } else {
+                Self::House
+            }
+        } else if v.x > 0.0 {
+            Self::StageRight
+        } else {
+            Self::StageLeft
+        }
+    }
+
+    /// The word itself, hyphenated, for prose handed to a model or a person.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::House => "house",
+            Self::Upstage => "upstage",
+            Self::StageRight => "stage-right",
+            Self::StageLeft => "stage-left",
+            Self::Up => "up",
+            Self::Down => "down",
+        }
     }
 }
 
@@ -298,7 +397,7 @@ pub fn pivot_point(geom: &FixtureGeometry, mount: &Mount) -> Vec3 {
 ///
 /// // A profile hung 6 m up emits 0.31 m below its clamp.
 /// let geom = FixtureGeometry::from_class(FixtureClass::Profile, vec![Vec3::ZERO]);
-/// let mount = Mount::new(Vec3::new(0.0, 0.0, 6.0), [0.0; 3]);
+/// let mount = Mount::from_stored(Vec3::new(0.0, 0.0, 6.0), [0.0; 3]);
 /// assert_eq!(rig_position(&geom, &mount, 0), Vec3::new(0.0, 0.0, 5.69));
 /// ```
 #[must_use]
@@ -318,7 +417,7 @@ pub fn rig_position(geom: &FixtureGeometry, mount: &Mount, cell: usize) -> Vec3 
 ///
 /// // Tilt 90 degrees swings a downward beam out to the horizontal, upstage.
 /// let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]);
-/// let mount = Mount::new(Vec3::new(0.0, 0.0, 5.0), [0.0; 3]);
+/// let mount = Mount::from_stored(Vec3::new(0.0, 0.0, 5.0), [0.0; 3]);
 /// let dir = beam_ray(&geom, &mount, &Articulation::from_degrees(0.0, 90.0), 0).direction;
 /// assert!(dir.abs_diff_eq(Vec3::Y, 1e-6));
 /// ```
@@ -328,8 +427,33 @@ pub fn beam_ray(geom: &FixtureGeometry, mount: &Mount, art: &Articulation, cell:
     let head = articulation * (geom.aperture_offset + geom.cell(cell));
     Ray {
         origin: mount.position + mount.rotation * (geom.pivot_offset + head),
-        direction: (mount.rotation * articulation * REST_AXIS).normalize(),
+        direction: aim(mount, art),
     }
+}
+
+/// Which way a head points, without reference to its geometry.
+///
+/// Every cell of a fixture aims the same way — a bar's pixels are parallel, a
+/// head has one cell — so aim is a property of the mount and the articulation
+/// alone. Callers that only want the direction (a renderer siting a cone, an
+/// agent asking which fixtures face the house) take this rather than building a
+/// [`FixtureGeometry`] to throw away.
+///
+/// `aim(m, &Articulation::REST) == m.normal()`, which is the "rest is the mount
+/// normal" rule written as an equation.
+///
+/// ```
+/// use fixture_kinematics::{aim, Articulation, Mount};
+/// use glam::Vec3;
+///
+/// // Hung square, tilted 90 degrees: the beam swings from down to upstage.
+/// let mount = Mount::from_stored(Vec3::new(0.0, 0.0, 5.0), [0.0; 3]);
+/// assert_eq!(aim(&mount, &Articulation::REST), mount.normal());
+/// assert!(aim(&mount, &Articulation::from_degrees(0.0, 90.0)).abs_diff_eq(Vec3::Y, 1e-6));
+/// ```
+#[must_use]
+pub fn aim(mount: &Mount, art: &Articulation) -> Vec3 {
+    (mount.rotation * art.rotation() * REST_AXIS).normalize()
 }
 
 #[cfg(test)]
@@ -347,7 +471,7 @@ mod tests {
         // point in space when nothing is moving.
         let geom = FixtureGeometry::from_class(FixtureClass::Spot, vec![Vec3::ZERO])
             .with_pivot_offset(Vec3::new(0.0, 0.02, -0.15));
-        let mount = Mount::new(Vec3::new(1.0, -2.0, 5.0), [0.3, -0.7, 1.1]);
+        let mount = Mount::from_stored(Vec3::new(1.0, -2.0, 5.0), [0.3, -0.7, 1.1]);
         for cell in 0..3 {
             assert_eq!(
                 beam_ray(&geom, &mount, &Articulation::REST, cell).origin,
@@ -359,7 +483,7 @@ mod tests {
     #[test]
     fn rig_position_of_an_unrotated_panel_is_base_plus_cell() {
         let geom = FixtureGeometry::unauthored(vec![Vec3::new(0.1, 0.0, 0.2)]);
-        let mount = Mount::new(Vec3::new(1.0, 2.0, 3.0), [0.0; 3]);
+        let mount = Mount::from_stored(Vec3::new(1.0, 2.0, 3.0), [0.0; 3]);
         close(rig_position(&geom, &mount, 0), Vec3::new(1.1, 2.0, 3.2));
     }
 
@@ -367,7 +491,7 @@ mod tests {
     fn stored_roll_rotates_about_data_x_with_a_negated_angle() {
         // rot[0] = +90 deg. Under `Rx(-rot[0])`, a cell on +Y goes to -Z.
         let geom = FixtureGeometry::unauthored(vec![Vec3::Y]);
-        let mount = Mount::new(Vec3::ZERO, [FRAC_PI_2, 0.0, 0.0]);
+        let mount = Mount::from_stored(Vec3::ZERO, [FRAC_PI_2, 0.0, 0.0]);
         close(rig_position(&geom, &mount, 0), Vec3::NEG_Z);
     }
 
@@ -376,7 +500,7 @@ mod tests {
         // rot[1] is the *three.js* Y term; the swap sends it to data Y as well,
         // but negated. A cell on +X goes to +Z under `Ry(-90 deg)`.
         let geom = FixtureGeometry::unauthored(vec![Vec3::X]);
-        let mount = Mount::new(Vec3::ZERO, [0.0, FRAC_PI_2, 0.0]);
+        let mount = Mount::from_stored(Vec3::ZERO, [0.0, FRAC_PI_2, 0.0]);
         close(rig_position(&geom, &mount, 0), Vec3::Z);
     }
 
@@ -384,14 +508,14 @@ mod tests {
     fn stored_third_euler_term_drives_data_z() {
         // rot[2] lands on data Z, negated: +X goes to -Y.
         let geom = FixtureGeometry::unauthored(vec![Vec3::X]);
-        let mount = Mount::new(Vec3::ZERO, [0.0, 0.0, FRAC_PI_2]);
+        let mount = Mount::from_stored(Vec3::ZERO, [0.0, 0.0, FRAC_PI_2]);
         close(rig_position(&geom, &mount, 0), Vec3::NEG_Y);
     }
 
     #[test]
     fn pan_negates_and_tilt_does_not() {
         let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]);
-        let mount = Mount::new(Vec3::ZERO, [0.0; 3]);
+        let mount = Mount::from_stored(Vec3::ZERO, [0.0; 3]);
 
         // Tilt alone: +90 deg about +X sends -Z to +Y (upstage, horizontal).
         let tilted = beam_ray(&geom, &mount, &Articulation::from_degrees(0.0, 90.0), 0);
@@ -407,7 +531,7 @@ mod tests {
         // A single-cell fixture with no aperture depth pivots in place; only the
         // direction may change, and with zero tilt not even that.
         let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]);
-        let mount = Mount::new(Vec3::new(0.0, 0.0, 4.0), [0.0; 3]);
+        let mount = Mount::from_stored(Vec3::new(0.0, 0.0, 4.0), [0.0; 3]);
         let ray = beam_ray(&geom, &mount, &Articulation::from_degrees(137.0, 0.0), 0);
         close(ray.origin, Vec3::new(0.0, 0.0, 4.0));
         close(ray.direction, REST_AXIS);
@@ -419,7 +543,7 @@ mod tests {
         // depth, the emission point *moves* when the head tilts. Pattern space
         // must not see that.
         let geom = FixtureGeometry::from_class(FixtureClass::Beam, vec![Vec3::ZERO]);
-        let mount = Mount::new(Vec3::ZERO, [0.0; 3]);
+        let mount = Mount::from_stored(Vec3::ZERO, [0.0; 3]);
         close(rig_position(&geom, &mount, 0), Vec3::new(0.0, 0.0, -0.2));
         let tilted = beam_ray(&geom, &mount, &Articulation::from_degrees(0.0, 90.0), 0);
         close(tilted.origin, Vec3::new(0.0, 0.2, 0.0));
@@ -428,7 +552,7 @@ mod tests {
     #[test]
     fn cell_index_is_total() {
         let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO, Vec3::X]);
-        let mount = Mount::new(Vec3::ZERO, [0.0; 3]);
+        let mount = Mount::from_stored(Vec3::ZERO, [0.0; 3]);
         assert_eq!(geom.cell_count(), 2);
         assert_eq!(rig_position(&geom, &mount, 99), Vec3::X);
     }
@@ -438,7 +562,7 @@ mod tests {
         let geom = FixtureGeometry::unauthored(Vec::new());
         assert_eq!(geom.cell_count(), 1);
         assert_eq!(
-            rig_position(&geom, &Mount::new(Vec3::ZERO, [0.0; 3]), 0),
+            rig_position(&geom, &Mount::from_stored(Vec3::ZERO, [0.0; 3]), 0),
             Vec3::ZERO
         );
     }
@@ -446,16 +570,68 @@ mod tests {
     #[test]
     fn pivot_point_is_the_rig_position_of_a_bare_pivot() {
         let pivot = Vec3::new(0.0, 0.03, -0.1);
-        let mount = Mount::new(Vec3::new(2.0, 1.0, 4.0), [0.2, 0.4, -0.9]);
+        let mount = Mount::from_stored(Vec3::new(2.0, 1.0, 4.0), [0.2, 0.4, -0.9]);
         let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]).with_pivot_offset(pivot);
         close(pivot_point(&geom, &mount), rig_position(&geom, &mount, 0));
+    }
+
+    #[test]
+    fn the_mount_normal_is_where_a_parked_head_points() {
+        // The rule, stated three ways, because the three mounts are the ones a
+        // rig actually has. No fixture *type* appears in any of them.
+        let hung = Mount::from_stored(Vec3::new(0.0, 0.0, 6.0), [0.0; 3]);
+        close(hung.normal(), Vec3::NEG_Z);
+        assert_eq!(StageDirection::of(hung.normal()), StageDirection::Down);
+
+        let floor = Mount::from_stored(Vec3::new(0.0, -2.0, 0.1), [std::f32::consts::PI, 0.0, 0.0]);
+        close(floor.normal(), Vec3::Z);
+        assert_eq!(StageDirection::of(floor.normal()), StageDirection::Up);
+
+        let downstage_face = Mount::from_stored(Vec3::new(0.0, 4.0, 3.0), [FRAC_PI_2, 0.0, 0.0]);
+        close(downstage_face.normal(), Vec3::NEG_Y);
+        assert_eq!(
+            StageDirection::of(downstage_face.normal()),
+            StageDirection::House
+        );
+    }
+
+    #[test]
+    fn the_mount_normal_is_the_rest_beam() {
+        // `normal` is a shortcut, not a second derivation: it must agree with
+        // the ray for every mount, or "rest = mount normal" is only a slogan.
+        let geom = FixtureGeometry::unauthored(vec![Vec3::ZERO]);
+        for rot in [[0.0; 3], [0.4, -1.3, 0.9], [FRAC_PI_2, 0.0, 0.0]] {
+            let mount = Mount::from_stored(Vec3::new(1.0, -2.0, 3.0), rot);
+            close(
+                beam_ray(&geom, &mount, &Articulation::REST, 0).direction,
+                mount.normal(),
+            );
+        }
+    }
+
+    #[test]
+    fn stage_words_name_the_dominant_axis() {
+        for (v, want) in [
+            (Vec3::NEG_Y, StageDirection::House),
+            (Vec3::Y, StageDirection::Upstage),
+            (Vec3::X, StageDirection::StageRight),
+            (Vec3::NEG_X, StageDirection::StageLeft),
+            (Vec3::Z, StageDirection::Up),
+            (Vec3::NEG_Z, StageDirection::Down),
+            // Mostly at the house, slightly stage left and slightly up.
+            (Vec3::new(-0.2, -0.9, 0.3), StageDirection::House),
+            // Total: a direction that is not a direction still reads.
+            (Vec3::ZERO, StageDirection::Down),
+        ] {
+            assert_eq!(StageDirection::of(v), want, "{v:?}");
+        }
     }
 
     #[test]
     fn mount_rotation_is_a_rotation() {
         // No scale, no mirror: `det = +1` and columns orthonormal. If this ever
         // fails, a sign flip has been written as a reflection by mistake.
-        let m = Mount::new(Vec3::ZERO, [0.3, -1.2, 0.8]);
+        let m = Mount::from_stored(Vec3::ZERO, [0.3, -1.2, 0.8]);
         assert!((m.rotation.determinant() - 1.0).abs() < 1e-5);
         let ray = beam_ray(
             &FixtureGeometry::unauthored(vec![Vec3::ZERO]),
