@@ -100,15 +100,14 @@ impl Rig {
     }
 
     fn run(mut self, id: &str) -> Rig {
-        self.graph.insert(Node {
-            id: id.into(),
-            kind: NodeKind::Run,
-            catalog_ref: Some("truss".into()),
-            label: None,
-            params: Params::default(),
-        });
-        self.graph.insert_edge(
-            id,
+        self.graph.insert_placed(
+            Node {
+                id: id.into(),
+                kind: NodeKind::Run,
+                catalog_ref: Some("truss".into()),
+                label: None,
+                params: Params::default(),
+            },
             Edge {
                 parent: "venue".into(),
                 my_socket: "base".into(),
@@ -123,15 +122,14 @@ impl Rig {
     fn fixture(mut self, id: &str, run: &str, along: f64, channels: u16) -> Rig {
         let mut params = Params::default();
         params.set("u", along);
-        self.graph.insert(Node {
-            id: id.into(),
-            kind: NodeKind::Fixture,
-            catalog_ref: Some("mover".into()),
-            label: None,
-            params,
-        });
-        self.graph.insert_edge(
-            id,
+        self.graph.insert_placed(
+            Node {
+                id: id.into(),
+                kind: NodeKind::Fixture,
+                catalog_ref: Some("mover".into()),
+                label: None,
+                params,
+            },
             Edge {
                 parent: run.into(),
                 my_socket: "clamp".into(),
@@ -216,15 +214,14 @@ impl Rig {
     fn piece(&mut self, id: &str, kind: NodeKind, parent: &str, along: f64) {
         let mut params = Params::default();
         params.set("u", along);
-        self.graph.insert(Node {
-            id: id.into(),
-            kind,
-            catalog_ref: Some("truss".into()),
-            label: None,
-            params,
-        });
-        self.graph.insert_edge(
-            id,
+        self.graph.insert_placed(
+            Node {
+                id: id.into(),
+                kind,
+                catalog_ref: Some("truss".into()),
+                label: None,
+                params,
+            },
             Edge {
                 parent: parent.into(),
                 my_socket: "base".into(),

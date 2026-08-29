@@ -1090,9 +1090,9 @@ async fn ensure_remote_delete_is_safe(
     record_id: &str,
 ) -> Result<(), SyncError> {
     let blocked = match table_name {
-        // Every table the schema says a venue owns, not a list to keep in step
-        // with it: a venue whose only rows were in a table this forgot used to
-        // be cascade-deleted on a remote delete.
+        // Every table the schema says a venue owns, read from the schema, not
+        // a list to keep in step with it: a venue whose only rows are in a
+        // table this list forgot is a venue this guard calls empty.
         "venues" => {
             let tables =
                 crate::database::local::venue_access::venue_owned_tables(&mut **transaction)

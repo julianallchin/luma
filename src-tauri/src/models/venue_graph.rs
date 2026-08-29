@@ -74,9 +74,14 @@ pub struct VenueGraphRows {
 impl VenueGraphRows {
     /// The rows as the model the resolver walks.
     ///
-    /// A row naming an unknown `kind` is dropped rather than guessed at: the
-    /// alphabet is closed, and inventing a kind for it would put a node in the
-    /// tree that no code below knows how to draw.
+    /// A row naming an unknown `kind` becomes no node: the alphabet is closed,
+    /// and inventing a kind for it would put something in the tree that no code
+    /// below knows how to draw. It is reported as a
+    /// [`Warning::UnknownKind`] on the solved venue rather than refused,
+    /// because the rest of the room is still a room — the same reason a piece
+    /// whose catalog entry is gone is drawn at its parent's origin instead of
+    /// failing the load. Its edge is not a relation this graph holds,
+    /// so whatever hung off it is reported unplaced.
     #[must_use]
     pub fn to_graph(&self) -> Option<VenueGraph> {
         use luma_scene::venue::{Constraint, Edge, Node, NodeKind};
@@ -100,28 +105,42 @@ impl VenueGraphRows {
             .iter()
             .find(|n| n.kind == NodeKind::Venue.as_str())
             .and_then(node_of)?;
-        let mut graph = VenueGraph::new(root);
-        for row in &self.nodes {
-            if let Some(node) = node_of(row) {
-                if node.id != graph.root() {
-                    graph.insert(node);
-                }
-            }
-        }
-        // Edges go in with `insert_edge`, not `attach`: these rows were already
+        // The two tables are joined here rather than loaded in sequence: a
+        // node arrives with the edge that places it, so an edge belonging to a
+        // row that became no node is not a relation this graph ever holds.
+        let placements: BTreeMap<&str, Edge> = self
+            .edges
+            .iter()
+            .map(|edge| {
+                (
+                    edge.child_id.as_str(),
+                    Edge {
+                        parent: edge.parent_id.clone(),
+                        my_socket: edge.my_socket.clone(),
+                        their_socket: edge.their_socket.clone(),
+                        roll: edge.roll,
+                    },
+                )
+            })
+            .collect();
+
+        // Rows go in with `insert_placed`, not `attach`: they were already
         // admitted when they were written, and re-checking them here would mean
         // a venue whose catalog entry has since been dropped stops loading at
         // all rather than reporting one dangling piece.
-        for edge in &self.edges {
-            graph.insert_edge(
-                &edge.child_id,
-                Edge {
-                    parent: edge.parent_id.clone(),
-                    my_socket: edge.my_socket.clone(),
-                    their_socket: edge.their_socket.clone(),
-                    roll: edge.roll,
-                },
-            );
+        let mut graph = VenueGraph::new(root);
+        for row in &self.nodes {
+            let Some(node) = node_of(row) else {
+                graph.warn(&row.id, Warning::UnknownKind(row.kind.clone()));
+                continue;
+            };
+            if node.id == graph.root() {
+                continue;
+            }
+            match placements.get(row.id.as_str()) {
+                Some(edge) => graph.insert_placed(node, edge.clone()),
+                None => graph.insert(node),
+            }
         }
         for c in &self.constraints {
             graph.constrain(Constraint {
@@ -162,10 +181,9 @@ pub struct ResolvedNode {
     /// Which member of an array this is.
     pub array_index: Option<u32>,
     /// Whether this pose stands for one physical object the set-piece layer
-    /// draws — [`NodePose::is_set_piece`]. Carried rather than re-derived:
-    /// three consumers used to work it out from `kind`/`arrayIndex`/
-    /// `catalogRef` and one of them forgot the array anchor, drawing N+1
-    /// pieces for an array of N.
+    /// draws — [`NodePose::is_set_piece`]. Carried rather than re-derived, so
+    /// the renderer, the agent binding and the React store cannot disagree
+    /// about what is in the room.
     pub set_piece: bool,
     pub params: BTreeMap<String, f64>,
 }
@@ -308,6 +326,7 @@ impl From<&Solved> for ResolvedVenue {
 
 fn describe(warning: &Warning) -> String {
     match warning {
+        Warning::UnknownKind(kind) => format!("`{kind}` is not a node kind"),
         Warning::UnknownCatalogRef(id) => format!("`{id}` is not in the catalog"),
         Warning::MissingSocket(name) => format!("no socket `{name}`"),
         Warning::RollClamped { requested, applied } => {
@@ -365,5 +384,103 @@ impl PlacementReport {
                 .collect(),
             venue,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use luma_scene::sockets::{ResolvedSocket, SocketType};
+    use luma_scene::venue::{resolve, Node, NodeKind, NodeSockets, FLOOR_SOCKET};
+
+    /// One mount on the underside of everything, which is all a placement
+    /// needs: this is about which rows become nodes, not about geometry.
+    struct Mount;
+
+    impl NodeSockets for Mount {
+        fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
+            if node.kind == NodeKind::Venue {
+                return Vec::new();
+            }
+            vec![
+                ResolvedSocket::from_frame(
+                    "bottom",
+                    SocketType::BottomMount,
+                    glam::DVec3::new(0.0, -0.5, 0.0),
+                    glam::DVec3::NEG_Y,
+                    glam::DVec3::X,
+                ),
+                ResolvedSocket::from_frame(
+                    "top",
+                    SocketType::FloorTop,
+                    glam::DVec3::new(0.0, 0.5, 0.0),
+                    glam::DVec3::Y,
+                    glam::DVec3::X,
+                ),
+            ]
+        }
+    }
+
+    fn row(id: &str, kind: &str) -> VenueNode {
+        VenueNode {
+            id: id.to_string(),
+            venue_id: "v".into(),
+            kind: kind.to_string(),
+            catalog_ref: Some("deck".into()),
+            label: None,
+        }
+    }
+
+    fn edge(child: &str, parent: &str, their_socket: &str) -> VenueEdge {
+        VenueEdge {
+            child_id: child.to_string(),
+            parent_id: parent.to_string(),
+            my_socket: "bottom".into(),
+            their_socket: their_socket.to_string(),
+            roll: 0.0,
+        }
+    }
+
+    /// Defect: a row outside the `kind` alphabet was dropped without a word,
+    /// so a piece standing on it disappeared with no way to ask why. The
+    /// contract is that resolving a venue never loses a row silently.
+    #[test]
+    fn a_row_with_an_unknown_kind_is_warned_about_not_swallowed() {
+        let rows = VenueGraphRows {
+            nodes: vec![
+                row("venue", "venue"),
+                row("blob1", "blob"),
+                row("deck1", "stage"),
+            ],
+            edges: vec![
+                edge("blob1", "venue", FLOOR_SOCKET),
+                edge("deck1", "blob1", "top"),
+            ],
+            params: BTreeMap::new(),
+            constraints: Vec::new(),
+        };
+
+        let graph = rows.to_graph().expect("the venue has a root");
+        let solved = ResolvedVenue::from(&resolve(&graph, &Mount));
+
+        assert_eq!(
+            solved.warnings,
+            ["blob1: `blob` is not a node kind"],
+            "the warning names the row and the kind it claimed"
+        );
+        assert!(
+            !solved.nodes.iter().any(|n| n.id == "blob1"),
+            "an unknown kind is no node"
+        );
+        assert_eq!(
+            solved
+                .unplaced
+                .iter()
+                .map(|u| u.node_id.as_str())
+                .collect::<Vec<_>>(),
+            ["deck1"],
+            "what stood on it is reported, not lost"
+        );
     }
 }

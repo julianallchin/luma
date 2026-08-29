@@ -66,8 +66,11 @@ on the downstage truss" is not expressible.
     `pan, tilt` on a fixture.
   - An **array node is placed at its anchor** — the seat its `span` is centred on,
     where a single member would sit — and its members are derived from it and name
-    it as their parent. Without a pose of its own a successful `array(...)` reported
-    `ok: false, parent: null`, and anything hung off it vanished for want of a frame.
+    it as their parent. The anchor is a pose so the members have a frame to derive
+    from and so `array(...)` reports the row the caller placed; it is not a mount.
+    **An array is never a parent** (invariant 5): the members hold no rows, so an
+    edge could only name the anchor, which would seat one child on every copy
+    through the same socket, at a seat with no geometry.
 - **Truss is fully procedural — one generator, one family, everything mates.**
   Straight (any span in 0.5 m steps — landed in `gpui/crates/render/src/truss.rs`),
   corner box (2/3/4/5/6-way), hinge (two half-boxes on a pin, 0–180°, where the
@@ -206,6 +209,10 @@ node with an edge like anything else.
 4. **Deterministic solve order** — depth-first over children sorted by node id, so
    two solves of the same graph produce byte-identical poses. Golden capture depends
    on this.
+5. **An array is not a host** — its members are derived at solve time and hold no
+   rows, so nothing can be bolted to one. Refused at edge insert, with the anchor
+   named; what the builder means by it is an edge per member, and an array is the
+   statement that there are no members to name.
 
 ## Performance
 

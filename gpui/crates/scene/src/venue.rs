@@ -242,6 +242,9 @@ pub enum EdgeError {
     RootHasNoParent,
     /// The parent is the child, or one of its descendants.
     Cycle { child: String, parent: String },
+    /// The parent is an array. Its members are derived at solve time and have
+    /// no rows, so there is no copy an edge could name.
+    ParentIsArray(String),
     /// The child's catalog entry has no socket by that name.
     MissingSocket { node: String, socket: String },
     /// The parent's catalog entry has no socket by that name.
@@ -257,6 +260,10 @@ impl std::fmt::Display for EdgeError {
             EdgeError::UnknownNode(id) => write!(f, "no node `{id}` in this venue"),
             EdgeError::UnknownParent(id) => write!(f, "no parent `{id}` in this venue"),
             EdgeError::RootHasNoParent => f.write_str("the venue root cannot be attached"),
+            EdgeError::ParentIsArray(id) => write!(
+                f,
+                "`{id}` is an array: its members are derived, so nothing can be bolted to it"
+            ),
             EdgeError::Cycle { child, parent } => {
                 write!(f, "`{parent}` is inside `{child}`, so attaching would loop")
             }
@@ -289,6 +296,7 @@ pub struct VenueGraph {
     nodes: BTreeMap<String, Node>,
     edges: BTreeMap<String, Edge>,
     constraints: Vec<Constraint>,
+    warnings: Vec<NodeWarning>,
 }
 
 impl VenueGraph {
@@ -303,6 +311,7 @@ impl VenueGraph {
             nodes,
             edges: BTreeMap::new(),
             constraints: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -354,8 +363,8 @@ impl VenueGraph {
     /// to repeat.
     ///
     /// # Errors
-    /// Every variant of [`EdgeError`]: an unknown node or parent, the root, a
-    /// cycle, a socket neither catalog entry declares, or a pair whose
+    /// Every variant of [`EdgeError`]: an unknown node or parent, the root, an
+    /// array, a cycle, a socket neither catalog entry declares, or a pair whose
     /// polarity forbids the joint.
     pub fn attach<S: NodeSockets + ?Sized>(
         &mut self,
@@ -368,7 +377,8 @@ impl VenueGraph {
         Ok(())
     }
 
-    /// Install an edge that was already admitted, without re-checking it.
+    /// Add a node together with the edge that places it, both already admitted
+    /// and neither re-checked.
     ///
     /// The loader's entry point. [`Self::attach`] is the writer and enforces
     /// the invariants there; re-enforcing them on read would mean a venue whose
@@ -376,10 +386,42 @@ impl VenueGraph {
     /// reporting one node as [`Warning::UnknownCatalogRef`] and drawing the
     /// rest. Rows outlive catalogs.
     ///
+    /// The node and its edge arrive together because an edge naming a row this
+    /// graph does not hold is a relation to nothing: it would place nothing and
+    /// leave the walk re-checking at every step what the graph can simply not
+    /// contain. Two tables, one call — the join is the loader's, and every id
+    /// an edge names is a node's.
+    ///
     /// The solve is still total: a cycle among loaded rows cannot be reached
     /// from the root, so its members simply get no pose.
-    pub fn insert_edge(&mut self, child: &str, edge: Edge) {
-        self.edges.insert(child.to_string(), edge);
+    pub fn insert_placed(&mut self, node: Node, edge: Edge) {
+        let id = node.id.clone();
+        self.insert(node);
+        self.edges.insert(id, edge);
+    }
+
+    /// Every relation, as the child node it places and the edge that places it,
+    /// in child-id order.
+    ///
+    /// The child is a node by construction: [`Self::attach`] takes one that is
+    /// already here and [`Self::insert_placed`] brings its own.
+    pub fn relations(&self) -> impl Iterator<Item = (&Node, &Edge)> {
+        self.edges
+            .iter()
+            .filter_map(|(child, edge)| Some((self.nodes.get(child)?, edge)))
+    }
+
+    /// Record something the *loader* decided, for [`resolve`] to report
+    /// alongside what the solve decides.
+    ///
+    /// A row can be dropped before the graph exists — a `kind` outside the
+    /// alphabet has no variant to become — and the caller reads one channel for
+    /// "what did this venue have to decide for me", not two.
+    pub fn warn(&mut self, node: impl Into<String>, warning: Warning) {
+        self.warnings.push(NodeWarning {
+            node: node.into(),
+            warning,
+        });
     }
 
     /// Whether [`Self::attach`] would succeed, without performing it.
@@ -403,6 +445,16 @@ impl VenueGraph {
             .nodes
             .get(&edge.parent)
             .ok_or_else(|| EdgeError::UnknownParent(edge.parent.clone()))?;
+
+        // Invariant 5: an array is not a host. Its members are derived at
+        // solve time and hold no rows, so an edge naming the anchor would seat
+        // one child through the same socket on all of them, place it at the
+        // anchor — a seat with no geometry — and close that socket on every
+        // copy. What the builder means is an edge per member, and members are
+        // exactly what the array says it does not have.
+        if parent_node.kind == NodeKind::Array {
+            return Err(EdgeError::ParentIsArray(edge.parent.clone()));
+        }
 
         // Invariant 1: acyclic. The parent must not be the child or inside it.
         // Walking *up* from the parent is the cheap direction: the chain is
@@ -452,6 +504,9 @@ impl VenueGraph {
     }
 
     /// `id` and everything hanging off it, in id order. Includes `id` itself.
+    ///
+    /// Every id is a node's: the walk follows edges, and an edge names a node
+    /// ([`Self::insert_placed`]).
     #[must_use]
     pub fn subtree(&self, id: &str) -> Vec<String> {
         let mut out = BTreeSet::new();
@@ -558,8 +613,8 @@ pub struct NodePose {
 
 impl NodePose {
     /// The stored convention: position in metres and the Euler triple, both in
-    /// data space (Z-up). This is what the database used to hold, what
-    /// `scene_desc` carries, and what `Mount::from_stored` reads.
+    /// data space (Z-up) — what `scene_desc` carries, what `Mount::from_stored`
+    /// reads, and what the pose columns this graph replaced held.
     #[must_use]
     pub fn data_pose(&self) -> ([f64; 3], [f64; 3]) {
         coords::data_pose_of_d(self.world)
@@ -589,8 +644,8 @@ impl NodePose {
     ///
     /// The predicate lives here because every consumer needs the same answer —
     /// the renderer's piece list, the agent binding's `venue.pieces`, and the
-    /// React store's mesh list — and the three of them derived it separately
-    /// until one of them forgot the anchor.
+    /// React store's mesh list — and three copies of it are three chances to
+    /// draw a different room.
     #[must_use]
     pub fn is_set_piece(&self) -> bool {
         self.catalog_ref.is_some()
@@ -637,9 +692,14 @@ pub struct DanglingSocket {
     pub socket_type: SocketType,
 }
 
-/// Something the solve had to decide for the caller.
+/// Something resolving the venue had to decide for the caller — at load, or in
+/// the solve.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Warning {
+    /// The row's `kind` is outside the alphabet, so it became no node at all
+    /// and nothing it was carrying is placed. Held rather than fatal: one
+    /// unreadable row is not a reason to lose the rig around it.
+    UnknownKind(String),
     /// The node's `catalog_ref` resolves to nothing, so it has no geometry and
     /// no sockets. Left at its parent's mate point rather than dropped: a piece
     /// in the wrong place is debuggable, a piece that vanished is not.
@@ -668,10 +728,9 @@ pub struct NodeWarning {
 /// everything hanging off it.
 ///
 /// Two things produce one — a fixture nobody has dragged out of the patch tray,
-/// and `detach`. Both are legitimate; what is not legitimate is silence. A
-/// detached run used to vanish from the solve with no pose, no warning and no
-/// mention, so a builder could delete a wing by dragging it and see only that
-/// it was gone.
+/// and `detach`. Both are legitimate; what is not legitimate is silence: with
+/// no pose and no mention, "unplaced" and "deleted" look identical to whoever
+/// just dragged a wing.
 ///
 /// Only the **root** is listed: the subtree below it is unplaced for exactly
 /// one reason, and repeating that reason per descendant would bury it.
@@ -807,15 +866,20 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
     // Children by parent, each list already in id order because `edges` is a
     // `BTreeMap`. Built once: the alternative is a scan per node, which is the
     // difference between linear and quadratic on a 500-node rig.
-    let mut children: BTreeMap<&str, Vec<(&str, &Edge)>> = BTreeMap::new();
-    for (child, edge) in &graph.edges {
+    let mut children: BTreeMap<&str, Vec<(&Node, &Edge)>> = BTreeMap::new();
+    for (child, edge) in graph.relations() {
         children
             .entry(edge.parent.as_str())
             .or_default()
-            .push((child.as_str(), edge));
+            .push((child, edge));
     }
 
-    let mut out = ResolvedVenue::default();
+    // What the loader decided, first: it happened first, and a row that never
+    // became a node has no other way to be heard.
+    let mut out = ResolvedVenue {
+        warnings: graph.warnings.clone(),
+        ..ResolvedVenue::default()
+    };
     let Some(root) = graph.node(&graph.root) else {
         return out;
     };
@@ -851,14 +915,9 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
     push_children(&mut queue, &children, root, DMat4::IDENTITY);
 
     while let Some(step) = queue.pop() {
-        let (id, edge, parent_node, parent_world) =
-            (step.id, step.edge, step.parent, step.parent_world);
-        // The one lookup that can genuinely fail: `VenueGraphRows::to_graph`
-        // drops a row whose `kind` is outside the alphabet but keeps the edge
-        // that named it, so an edge can point at a child with no node.
-        let Some(node) = graph.node(id) else {
-            continue;
-        };
+        let (node, edge, parent_node, parent_world) =
+            (step.node, step.edge, step.parent, step.parent_world);
+        let id = node.id.as_str();
 
         let host = graph.host_socket(parent_node, &edge.their_socket, sockets);
         let mine = sockets.sockets(node);
@@ -927,7 +986,7 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
 /// One queued step of the walk: a child, the relation that places it, and the
 /// parent frame that relation is measured against.
 struct Walk<'a> {
-    id: &'a str,
+    node: &'a Node,
     edge: &'a Edge,
     parent: &'a Node,
     parent_world: DMat4,
@@ -938,15 +997,15 @@ struct Walk<'a> {
 /// lets the frame travel with the child instead of being looked up.
 fn push_children<'a>(
     queue: &mut Vec<Walk<'a>>,
-    children: &BTreeMap<&'a str, Vec<(&'a str, &'a Edge)>>,
+    children: &BTreeMap<&'a str, Vec<(&'a Node, &'a Edge)>>,
     parent: &'a Node,
     parent_world: DMat4,
 ) {
     let Some(kids) = children.get(parent.id.as_str()) else {
         return;
     };
-    queue.extend(kids.iter().rev().map(|(id, edge)| Walk {
-        id,
+    queue.extend(kids.iter().rev().map(|(node, edge)| Walk {
+        node,
         edge,
         parent,
         parent_world,
@@ -957,12 +1016,12 @@ fn push_children<'a>(
 ///
 /// A node with no pose is unplaced. Its *root* is the one whose parent is not
 /// itself unplaced — a node with no edge at all, or one whose edge names a
-/// parent that is gone. Loaded rows can also hold a cycle ([`insert_edge`] does
-/// not re-check what [`attach`] admitted), and a cycle has no such root; those
-/// nodes are reported individually rather than dropped, which is the whole
-/// point of this list.
+/// parent that is gone. Loaded rows can also hold a cycle ([`insert_placed`]
+/// does not re-check what [`attach`] admitted), and a cycle has no such root;
+/// those nodes are reported individually rather than dropped, which is the
+/// whole point of this list.
 ///
-/// [`insert_edge`]: VenueGraph::insert_edge
+/// [`insert_placed`]: VenueGraph::insert_placed
 /// [`attach`]: VenueGraph::attach
 fn unplaced_subtrees(graph: &VenueGraph, out: &ResolvedVenue) -> Vec<UnplacedNode> {
     let missing: BTreeSet<&str> = graph
@@ -970,7 +1029,7 @@ fn unplaced_subtrees(graph: &VenueGraph, out: &ResolvedVenue) -> Vec<UnplacedNod
         .map(|n| n.id.as_str())
         .filter(|id| !out.index.contains_key(*id))
         .collect();
-    let mut covered: BTreeSet<&str> = BTreeSet::new();
+    let mut covered: BTreeSet<String> = BTreeSet::new();
     let mut roots: Vec<UnplacedNode> = Vec::new();
     for id in &missing {
         let rooted = match graph.edge(id) {
@@ -985,7 +1044,7 @@ fn unplaced_subtrees(graph: &VenueGraph, out: &ResolvedVenue) -> Vec<UnplacedNod
     // like a root above. Each is its own entry — there is no branch point to
     // name, and silence is what this list exists to prevent.
     for id in &missing {
-        if !covered.contains(id) {
+        if !covered.contains(*id) {
             report_unplaced(graph, id, &mut covered, &mut roots);
         }
     }
@@ -994,24 +1053,15 @@ fn unplaced_subtrees(graph: &VenueGraph, out: &ResolvedVenue) -> Vec<UnplacedNod
 }
 
 /// Record one unplaced subtree and mark every node it covers.
-fn report_unplaced<'a>(
-    graph: &'a VenueGraph,
+fn report_unplaced(
+    graph: &VenueGraph,
     id: &str,
-    covered: &mut BTreeSet<&'a str>,
+    covered: &mut BTreeSet<String>,
     roots: &mut Vec<UnplacedNode>,
 ) {
-    let mut descendants = 0;
-    for member in graph.subtree(id) {
-        // An edge can name a child with no node row, and a phantom is not a
-        // piece anyone can go and find.
-        let Some(node) = graph.node(&member) else {
-            continue;
-        };
-        covered.insert(node.id.as_str());
-        if node.id != id {
-            descendants += 1;
-        }
-    }
+    let members = graph.subtree(id);
+    let descendants = members.len().saturating_sub(1);
+    covered.extend(members);
     if let Some(node) = graph.node(id) {
         roots.push(UnplacedNode {
             node: node.id.clone(),
@@ -1061,10 +1111,9 @@ fn place(
 
     // Every node gets its mate point, arrays included. For an array that point
     // is its **anchor**: the seat its `span` is centred on, which is where a
-    // single member would sit. Without it a successful `array(...)` reported
-    // `ok: false, parent: null` — the caller's node had no pose at all — and a
-    // child naming the array as its parent silently vanished for want of a
-    // frame.
+    // single member would sit. It is a pose in its own right because the
+    // members are derived from it and name it as their parent, and because the
+    // row the caller placed is the row the report is about.
     let world = place_on(parent_world, host, held, node.kind, placement);
     push_pose(
         out,
@@ -1261,6 +1310,14 @@ fn array_count(out: &mut ResolvedVenue, node: &Node) -> u32 {
 /// `their_socket` — and a far end claims both of its, because a constraint is
 /// what the builder writes down instead of a second parent. Everything else a
 /// piece offers is open.
+///
+/// Keyed by the row that holds the relation, which for an array is its anchor.
+/// The two relations an array can be named by — its own edge and a far-end
+/// check — are properties of *every* copy: each member mates the same held
+/// socket against the same host, so a claim on the anchor is one claim per
+/// member ([`collect_dangling`] spends it that way). Nothing can claim one
+/// member and not the rest, because a member has no row to name and
+/// [`EdgeError::ParentIsArray`] refuses the only edge that could try.
 fn claimed_sockets(graph: &VenueGraph) -> BTreeSet<(&str, &str)> {
     let mut claimed = BTreeSet::new();
     for (child, edge) in &graph.edges {
@@ -1274,6 +1331,10 @@ fn claimed_sockets(graph: &VenueGraph) -> BTreeSet<(&str, &str)> {
             constraint.target_socket.as_str(),
         ));
     }
+    debug_assert!(
+        claimed.iter().all(|(node, _)| member_of(node).is_none()),
+        "a derived member has no row, so no relation can name one: {claimed:?}"
+    );
     claimed
 }
 
@@ -1282,10 +1343,8 @@ fn claimed_sockets(graph: &VenueGraph) -> BTreeSet<(&str, &str)> {
 /// An array of three trusses has three sets of ends standing in the room, and
 /// the anchor is a seat with no geometry: reporting the anchor once under-counts
 /// by `members - 1` and names a node the builder cannot walk up to. Each member
-/// inherits the anchor's claims — the edge that seats the array seats every copy
-/// through the same socket, and a far end written against the array means the
-/// same socket on each — so the claim set is keyed by the anchor and the report
-/// by the member.
+/// spends the anchor's claims and no others — see [`claimed_sockets`] — so the
+/// claim set is keyed by the anchor and the report by the member.
 fn dangling_of<S: NodeSockets + ?Sized>(
     out: &mut ResolvedVenue,
     node: &Node,
@@ -1368,7 +1427,7 @@ fn evaluate_constraint<S: NodeSockets + ?Sized>(
 }
 
 // ---------------------------------------------------------------------------
-// Placing what used to be a stored pose
+// Inverting a world pose into the placement that reproduces it
 // ---------------------------------------------------------------------------
 
 /// The `(u, v, yaw, trim)` that reproduces a world pose as a free placement on
@@ -2001,46 +2060,95 @@ mod tests {
         assert!(origin("bar#0").x.abs() < 1e-12);
     }
 
-    /// A child hung off an array lands on the generator's anchor rather than
-    /// silently dropping out of the solve for want of a frame.
+    /// An array's members are derived at solve time and hold no rows, so there
+    /// is no copy an edge could name: bolting to the anchor would seat one
+    /// child on all three through the same socket and place it at a seat with
+    /// no geometry.
     #[test]
-    fn a_child_of_an_array_hangs_off_its_anchor() {
+    fn an_array_cannot_be_a_parent() {
         let mut graph = VenueGraph::new(root());
-        let mut deck_node = node("deck1", NodeKind::Stage, "deck");
-        deck_node.params = on_floor(0.0, 0.0, 0.0);
-        graph.insert(deck_node);
-        graph.attach("deck1", floor_edge(0.0), &table()).unwrap();
-        let mut array = node("bar", NodeKind::Array, "deck");
+        let mut array = node("wall", NodeKind::Array, "truss");
+        array.params = on_floor(0.0, 0.0, 0.0);
         array.params.set("count", 3.0);
         array.params.set("span", 4.0);
         graph.insert(array);
         graph
             .attach(
-                "bar",
+                "wall",
                 Edge {
-                    parent: "deck1".into(),
-                    my_socket: "bottom".into(),
-                    their_socket: "top".into(),
+                    parent: "venue".into(),
+                    my_socket: "base".into(),
+                    their_socket: FLOOR_SOCKET.into(),
                     roll: 0.0,
                 },
                 &table(),
             )
             .unwrap();
-        graph.insert(node("hanger", NodeKind::Stage, "deck"));
-        graph
+        graph.insert(node("stick", NodeKind::Run, "truss"));
+
+        let err = graph
             .attach(
-                "hanger",
+                "stick",
                 Edge {
-                    parent: "bar".into(),
-                    my_socket: "edge_left".into(),
-                    their_socket: "edge_right".into(),
+                    parent: "wall".into(),
+                    my_socket: "end_a".into(),
+                    their_socket: "end_b".into(),
                     roll: 0.0,
                 },
                 &table(),
             )
-            .unwrap();
+            .expect_err("a stick was bolted to an array");
+        assert_eq!(err, EdgeError::ParentIsArray("wall".into()));
+        assert!(
+            err.to_string().contains("`wall` is an array"),
+            "the refusal names the array: {err}"
+        );
+        // Refused before any write: the stick is still unplaced, and the
+        // array's ends are still open.
+        assert!(graph.edge("stick").is_none());
+    }
+
+    /// A row whose `kind` is outside the alphabet becomes no node, so the
+    /// relations that named it place nothing — and the caller is told which row
+    /// and which kind, on the same channel the solve's own decisions arrive on.
+    #[test]
+    fn a_load_warning_reaches_the_solved_venue() {
+        let mut graph = VenueGraph::new(root());
+        // The dropped row is not a node, so its edge is not a relation — and
+        // what stood on it has a parent that is not here.
+        graph.warn("blob1", Warning::UnknownKind("blob".into()));
+        graph.insert_placed(
+            node("deck1", NodeKind::Stage, "deck"),
+            Edge {
+                parent: "blob1".into(),
+                my_socket: "bottom".into(),
+                their_socket: "top".into(),
+                roll: 0.0,
+            },
+        );
+
         let resolved = resolve(&graph, &table());
-        assert!(resolved.placement("hanger").ok);
+        assert_eq!(
+            resolved.warnings()[0].node,
+            "blob1",
+            "the warning names the row"
+        );
+        assert_eq!(
+            resolved.warnings()[0].warning,
+            Warning::UnknownKind("blob".into())
+        );
+        assert!(resolved.pose("blob1").is_none(), "no node, no pose");
+        assert_eq!(
+            resolved
+                .unplaced()
+                .iter()
+                .map(|u| u.node.as_str())
+                .collect::<Vec<_>>(),
+            ["deck1"],
+            "what hung off it is reported, not dropped"
+        );
+        // And the report for the dropped row carries its warning.
+        assert_eq!(resolved.placement("blob1").warnings.len(), 1);
     }
 
     /// Beam = mount normal: a fixture on the floor points up, one under a
@@ -2379,6 +2487,21 @@ mod tests {
                 &table(),
             )
             .unwrap();
+        // One edge on the anchor would close one socket on every member, so
+        // there is no such edge to write.
+        graph.insert(node("stick", NodeKind::Run, "truss"));
+        graph
+            .attach(
+                "stick",
+                Edge {
+                    parent: "wall".into(),
+                    my_socket: "end_a".into(),
+                    their_socket: "end_b".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .expect_err("an array is not a host");
 
         let resolved = resolve(&graph, &table());
         let open: Vec<(&str, &str)> = resolved
