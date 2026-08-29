@@ -154,8 +154,8 @@ use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTra
 use crate::host_audio::HostAudioSnapshot;
 use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadDetail, AgentThreadMessage, AppendAgentThreadMessagesInput,
-    CreateAgentThreadInput,
+    AgentThread, AgentThreadDetail, AgentThreadMessage, AgentThreadUsage,
+    AppendAgentThreadMessagesInput, CreateAgentThreadInput,
 };
 use crate::models::authored_state::{
     AuthoredHistoryPage, AuthoredRestoreResult, AuthoredTurnCommit, AuthoredWorkspaceCheck,
@@ -267,6 +267,7 @@ commands! {
     ) -> Vec<AgentThreadMessage>;
     agent_threads::agent_thread_rename(thread_id: String, title: Option<String>) -> AgentThread;
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
+    agent_threads::agent_thread_record_usage(usage: AgentThreadUsage) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();
 
     // Only what a webview needs and a typed caller does not: it cannot hold a
@@ -423,8 +424,7 @@ commands! {
     tracks::get_venue_annotation_counts(venue_id: String) -> HashMap<String, i64>;
 
     compositor::composite_track(
-        track_id: String,
-        venue_id: String,
+        score_id: String,
         annotations: Option<Vec<LiveAnnotation>>,
         skip_cache: Option<bool>,
     ) -> ();
@@ -464,6 +464,7 @@ commands! {
     categories::list_pattern_categories() -> Vec<PatternCategory>;
 
     scores::list_scores_for_track(track_id: String, venue_id: String) -> Vec<ScoreSummary>;
+    scores::list_scores_across_venues(track_id: String) -> Vec<ScoreSummary>;
     scores::create_score(
         request_id: String,
         track_id: String,
@@ -688,6 +689,7 @@ commands! {
     tracks::import_tracks(file_paths: Vec<String>) -> TrackImportResult;
     tracks::reprocess_track(track_id: String) -> ();
 
+    auth::current_account() -> Option<crate::database::local::auth::AuthAccount>;
     auth::send_login_code(email: String) -> ();
     auth::verify_login_code(email: String, code: String) -> String;
     auth::get_session_item(key: String) -> Option<String>;
