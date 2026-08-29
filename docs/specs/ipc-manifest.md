@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**189 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
+**192 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -16,10 +16,10 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | --- | ---: | --- |
 | `agent` | 3 | `src-tauri/src/dispatch/handlers/agent.rs` |
 | `agent_execution` | 2 | `src-tauri/src/dispatch/handlers/agent_execution.rs` |
-| `agent_threads` | 7 | `src-tauri/src/dispatch/handlers/agent_threads.rs` |
+| `agent_threads` | 8 | `src-tauri/src/dispatch/handlers/agent_threads.rs` |
 | `annotation_preview` | 5 | `src-tauri/src/dispatch/handlers/annotation_preview.rs` |
 | `artnet` | 3 | `src-tauri/src/dispatch/handlers/artnet.rs` |
-| `auth` | 6 | `src-tauri/src/dispatch/handlers/auth.rs` |
+| `auth` | 7 | `src-tauri/src/dispatch/handlers/auth.rs` |
 | `authored_state` | 11 | `src-tauri/src/dispatch/handlers/authored_state.rs` |
 | `categories` | 1 | `src-tauri/src/dispatch/handlers/categories.rs` |
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
@@ -37,7 +37,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `rekordbox` | 6 | `src-tauri/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `src-tauri/src/dispatch/handlers/render_engine.rs` |
 | `score_dsl` | 3 | `src-tauri/src/dispatch/handlers/score_dsl.rs` |
-| `scores` | 9 | `src-tauri/src/dispatch/handlers/scores.rs` |
+| `scores` | 10 | `src-tauri/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
 | `skills` | 2 | `src-tauri/src/dispatch/handlers/skills.rs` |
 | `stage` | 5 | `src-tauri/src/dispatch/handlers/stage.rs` |
@@ -46,7 +46,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **189** | |
+| **total** | **192** | |
 
 ## Commands
 
@@ -77,6 +77,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `agent_thread_append_messages` | `threadId: String`<br>`input: AppendAgentThreadMessagesInput` | `Vec<AgentThreadMessage>` |
 | `agent_thread_rename` | `threadId: String`<br>`title: Option<String>` | `AgentThread` |
 | `agent_thread_set_actor` | `threadId: String`<br>`actor: String` | `()` |
+| `agent_thread_record_usage` | `usage: AgentThreadUsage` | `()` |
 | `agent_thread_delete` | `threadId: String` | `()` |
 
 ### `annotation_preview`
@@ -101,6 +102,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
+| `current_account` | — | `Option<crate::database::local::auth::AuthAccount>` |
 | `send_login_code` | `email: String` | `()` |
 | `verify_login_code` | `email: String`<br>`code: String` | `String` |
 | `get_session_item` | `key: String` | `Option<String>` |
@@ -141,7 +143,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `composite_track` | `trackId: String`<br>`venueId: String`<br>`annotations: Option<Vec<LiveAnnotation>>`<br>`skipCache: Option<bool>` | `()` |
+| `composite_track` | `scoreId: String`<br>`annotations: Option<Vec<LiveAnnotation>>`<br>`skipCache: Option<bool>` | `()` |
 | `leave_track` | `scoreId: String` | `()` |
 
 ### `controller`
@@ -317,6 +319,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `list_scores_for_track` | `trackId: String`<br>`venueId: String` | `Vec<ScoreSummary>` |
+| `list_scores_across_venues` | `trackId: String` | `Vec<ScoreSummary>` |
 | `create_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |

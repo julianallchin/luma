@@ -189,6 +189,24 @@
     {
       "args": [
         {
+          "name": "usage",
+          "rust": "AgentThreadUsage"
+        }
+      ],
+      "domain": "agent_threads",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "line": 113
+      },
+      "name": "agent_thread_record_usage",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "threadId",
           "rust": "String"
         },
@@ -200,7 +218,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 121
+        "line": 138
       },
       "name": "agent_thread_rename",
       "prose": {
@@ -227,7 +245,7 @@
       "domain": "agent_threads",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
-        "line": 110
+        "line": 127
       },
       "name": "agent_thread_set_actor",
       "prose": {
@@ -577,7 +595,7 @@
       "domain": "agent_execution",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_execution.rs",
-        "line": 48
+        "line": 49
       },
       "name": "cancel_python_cell",
       "prose": {
@@ -594,11 +612,7 @@
     {
       "args": [
         {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "venueId",
+          "name": "scoreId",
           "rust": "String"
         },
         {
@@ -613,7 +627,7 @@
       "domain": "compositor",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/compositor.rs",
-        "line": 18
+        "line": 22
       },
       "name": "composite_track",
       "prose": {
@@ -910,7 +924,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 28
+        "line": 36
       },
       "name": "create_score",
       "prose": {
@@ -934,7 +948,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 89
+        "line": 97
       },
       "name": "create_track_score",
       "prose": {
@@ -973,6 +987,19 @@
         ]
       },
       "returns": "Venue"
+    },
+    {
+      "args": [],
+      "domain": "auth",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "line": 102
+      },
+      "name": "current_account",
+      "prose": {
+        "returns": "Option<crate::database::local::auth::AuthAccount>"
+      },
+      "returns": "Option<crate::database::local::auth::AuthAccount>"
     },
     {
       "args": [
@@ -1030,7 +1057,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 70
+        "line": 78
       },
       "name": "delete_score",
       "prose": {
@@ -1101,7 +1128,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 103
+        "line": 111
       },
       "name": "delete_track_score",
       "prose": {
@@ -1315,7 +1342,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 49
+        "line": 57
       },
       "name": "ensure_venue_score",
       "prose": {
@@ -1635,7 +1662,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 148
+        "line": 164
       },
       "name": "get_session_item",
       "prose": {
@@ -2189,7 +2216,7 @@
       "domain": "compositor",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/compositor.rs",
-        "line": 43
+        "line": 45
       },
       "name": "leave_track",
       "prose": {
@@ -2287,6 +2314,25 @@
         {
           "name": "trackId",
           "rust": "String"
+        }
+      ],
+      "domain": "scores",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "line": 27
+      },
+      "name": "list_scores_across_venues",
+      "prose": {
+        "notes": "Every score for a track that the current admission may see, in any venue, filtered in one statement by auth_write_admission — it never returns a sealed row from another principal. The gpui track editor's score rail reads this; the pattern editor uses it to find any venue's instance of a track. Replaced the empty-venueId overload on list_scores_for_track.",
+        "returns": "ScoreSummary[] — same shape as list_scores_for_track; `ordinal` is ranked within each (track, venue), so it repeats across venues."
+      },
+      "returns": "Vec<ScoreSummary>"
+    },
+    {
+      "args": [
+        {
+          "name": "trackId",
+          "rust": "String"
         },
         {
           "name": "venueId",
@@ -2300,8 +2346,8 @@
       },
       "name": "list_scores_for_track",
       "prose": {
-        "notes": "venueId is overloaded: empty string switches to the cross-venue `list_accessible_scores_for_track` path (pattern-editor relies on this deliberately, with a comment). `uid` is the owner user id — track-session-store uses `s.uid === userId` for ownership/read-only. `annotationCount` is a joined COUNT, used by generate-dsl-dialog to pick a non-empty exemplar score. Smell: the venue path calls VenueAccess::read TWICE, discarding the first result (scores.rs:27-28) — same pattern in list_track_scores.",
-        "returns": "ScoreSummary[] — { id; uid: string|null; venueId: string|null; name: string|null; annotationCount: number; createdAt; updatedAt }",
+        "notes": "Scoped to one venue. `uid` is the owner user id — track-session-store uses `s.uid === userId` for ownership/read-only. `annotationCount` is a joined COUNT, used by generate-dsl-dialog to pick a non-empty exemplar score. `ordinal` is a read-time ROW_NUMBER() rank by createdAt within (track, venue) — a display handle, never an identity; `venueName` is joined in so a cross-venue picker needs no second lookup.",
+        "returns": "ScoreSummary[] — { id; uid: string|null; venueId: string|null; venueName: string|null; name: string|null; ordinal: number; annotationCount: number; createdAt; updatedAt }",
         "sideEffects": []
       },
       "returns": "Vec<ScoreSummary>"
@@ -2338,7 +2384,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 80
+        "line": 88
       },
       "name": "list_track_scores",
       "prose": {
@@ -3691,7 +3737,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 428
+        "line": 444
       },
       "name": "remove_session_item",
       "prose": {
@@ -3823,7 +3869,7 @@
       "domain": "perform",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/perform.rs",
-        "line": 229
+        "line": 235
       },
       "name": "render_composite_deck",
       "prose": {
@@ -3867,7 +3913,7 @@
       "domain": "perform",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/perform.rs",
-        "line": 256
+        "line": 263
       },
       "name": "render_composite_deck_unmatched",
       "prose": {
@@ -3955,7 +4001,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 113
+        "line": 121
       },
       "name": "replace_track_scores",
       "prose": {
@@ -4077,7 +4123,7 @@
       "domain": "agent_execution",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/agent_execution.rs",
-        "line": 20
+        "line": 21
       },
       "name": "run_python_cell",
       "prose": {
@@ -4367,7 +4413,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 221
+        "line": 237
       },
       "name": "set_session_item",
       "prose": {
@@ -4659,7 +4705,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 96
+        "line": 104
       },
       "name": "update_track_score",
       "prose": {
@@ -4790,7 +4836,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 583
+        "line": 599
       },
       "name": "wipe_database",
       "prose": {
@@ -4820,7 +4866,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/agent_execution.rs"
     },
     {
-      "commandCount": 7,
+      "commandCount": 8,
       "domain": "agent_threads",
       "handlers": "src-tauri/src/dispatch/handlers/agent_threads.rs"
     },
@@ -4835,7 +4881,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/artnet.rs"
     },
     {
-      "commandCount": 6,
+      "commandCount": 7,
       "domain": "auth",
       "handlers": "src-tauri/src/dispatch/handlers/auth.rs"
     },
@@ -4925,7 +4971,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/score_dsl.rs"
     },
     {
-      "commandCount": 9,
+      "commandCount": 10,
       "domain": "scores",
       "handlers": "src-tauri/src/dispatch/handlers/scores.rs"
     },
@@ -5015,8 +5061,8 @@
         "src-tauri/src/host_audio.rs:25"
       ],
       "listeners": [
-        "src/features/patterns/components/pattern-editor.tsx:1389",
-        "src/features/track-editor/components/track-editor.tsx:312"
+        "src/features/patterns/components/pattern-editor.tsx:1386",
+        "src/features/track-editor/components/track-editor.tsx:322"
       ],
       "name": "host-audio://state",
       "orphan": false
@@ -5113,10 +5159,10 @@
         "src-tauri/src/dispatch/handlers/tracks.rs:449",
         "src-tauri/src/dispatch/handlers/tracks.rs:519",
         "src-tauri/src/preprocessing/scheduler.rs:351",
-        "src-tauri/src/preprocessing/scheduler.rs:390",
-        "src-tauri/src/preprocessing/scheduler.rs:454",
-        "src-tauri/src/preprocessing/scheduler.rs:490",
-        "src-tauri/src/preprocessing/scheduler.rs:522"
+        "src-tauri/src/preprocessing/scheduler.rs:399",
+        "src-tauri/src/preprocessing/scheduler.rs:463",
+        "src-tauri/src/preprocessing/scheduler.rs:499",
+        "src-tauri/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
         "gpui/crates/app/src/library.rs:131",
@@ -5129,7 +5175,7 @@
     },
     {
       "emitters": [
-        "src-tauri/src/preprocessing/scheduler.rs:377"
+        "src-tauri/src/preprocessing/scheduler.rs:386"
       ],
       "listeners": [
         "src/features/tracks/components/track-browser.tsx:157"
@@ -5181,7 +5227,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 189,
+    "commandCount": 192,
     "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0

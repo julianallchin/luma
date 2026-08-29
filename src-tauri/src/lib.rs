@@ -579,6 +579,7 @@ pub fn run() {
             dispatch::adapter::host_set_playback_rate,
             dispatch::adapter::host_snapshot,
             dispatch::adapter::list_scores_for_track,
+            dispatch::adapter::list_scores_across_venues,
             dispatch::adapter::create_score,
             dispatch::adapter::ensure_venue_score,
             dispatch::adapter::list_track_scores,
@@ -633,6 +634,7 @@ pub fn run() {
             dispatch::adapter::stop_discovery,
             dispatch::adapter::get_discovered_nodes,
             // Auth
+            dispatch::adapter::current_account,
             dispatch::adapter::send_login_code,
             dispatch::adapter::verify_login_code,
             dispatch::adapter::get_session_item,
@@ -728,6 +730,7 @@ pub fn run() {
             dispatch::adapter::agent_thread_delete,
             dispatch::adapter::agent_thread_rename,
             dispatch::adapter::agent_thread_set_actor,
+            dispatch::adapter::agent_thread_record_usage,
             dispatch::adapter::agent_turn_start,
             dispatch::adapter::agent_turn_cancel,
             dispatch::adapter::agent_steer,
