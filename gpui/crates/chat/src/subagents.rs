@@ -165,6 +165,9 @@ pub fn pill(
     Some(luma_ui::float::anchored_above(
         "chat-subagents-pill",
         0.0,
+        // A pill, not a menu: it is on this layer for its geometry and the
+        // pointer has no say in its life.
+        luma_ui::float::Dismiss::Never,
         div()
             .id("chat-subagents-pill-button")
             .h(px(PILL_HEIGHT))

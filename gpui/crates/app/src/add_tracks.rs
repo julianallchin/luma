@@ -1263,11 +1263,7 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
     state.source_menu.get()?;
     let closing = state.source_menu.closing_since();
     let dismiss = app.clone();
-    let mut card = float::popover_card()
-        .w(px(248.0))
-        .on_mouse_down_out(move |_, _, cx| {
-            dismiss.update(cx, |this, cx| this.toggle_source_menu(cx));
-        });
+    let mut card = float::popover_card().w(px(248.0));
     for choice in ImportChoice::ALL {
         let pick = app.clone();
         card = card.child(
@@ -1300,6 +1296,9 @@ fn source_menu(state: &AddTracks, app: &Entity<Luma>) -> Option<AnyElement> {
     Some(float::anchored_below(
         "add-tracks-source-menu",
         SUBMIT_CHIP_HEIGHT,
+        float::Dismiss::on_press_out(move |_, cx| {
+            dismiss.update(cx, |this, cx| this.toggle_source_menu(cx));
+        }),
         card.into_any_element(),
     ))
 }
