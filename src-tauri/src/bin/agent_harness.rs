@@ -95,7 +95,14 @@ async fn run() -> Result<(), String> {
         tokio::spawn(async move {
             let response = match serde_json::from_str::<Value>(&line) {
                 Err(e) => {
-                    json!({ "id": Value::Null, "err": format!("malformed request JSON: {e}") })
+                    // A null id is unattributable by construction, so say what
+                    // arrived: the only lead the shim can hand a human is the
+                    // bytes that were actually read off the pipe.
+                    let sample: String = line.chars().take(200).collect();
+                    json!({
+                        "id": Value::Null,
+                        "err": format!("malformed request JSON: {e}; line was {sample:?}"),
+                    })
                 }
                 Ok(req) => {
                     let id = req.get("id").cloned().unwrap_or(Value::Null);
