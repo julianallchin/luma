@@ -69,6 +69,10 @@ use crate::AgentChat;
 pub enum RowKind {
     /// A user turn, whole — one bubble, however long the prompt is.
     Prompt,
+    /// The session turn a non-conversational client opened. One line, in the
+    /// recessive tone: it is a marker in the record, not something anyone
+    /// said, so it must not read as a prompt.
+    Session,
     /// One top-level markdown block of one part.
     Block {
         part: usize,
@@ -142,6 +146,14 @@ pub fn rows_for(transcript: &Transcript, entries: &[Entry], live: Option<usize>)
                 ),
             }),
             Role::Assistant => push_assistant_rows(&mut rows, ix, message, turn, streaming),
+            Role::Session => rows.push(RowKey {
+                turn: ix,
+                kind: RowKind::Session,
+                version: version(
+                    fnv1a(FNV_OFFSET, prompt_text(message).as_bytes()),
+                    streaming,
+                ),
+            }),
         }
     }
     rows
@@ -696,6 +708,22 @@ pub fn row(
         RowKind::Prompt => {
             let text = prompt_text(message);
             (user_bubble(&text, &turn.key, theme), text)
+        }
+        // Left-aligned and faint, deliberately unlike the user bubble beside
+        // it: this line is a marker in the record, not something anyone said.
+        RowKind::Session => {
+            let text = prompt_text(message);
+            (
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .text_size(px(MD_TEXT_SIZE))
+                    .line_height(px(MD_LINE_HEIGHT))
+                    .text_color(theme.text_faint)
+                    .child(SharedString::from(text.clone()))
+                    .into_any_element(),
+                text,
+            )
         }
         RowKind::Tools { part, count } => {
             let tools: Vec<&ToolPart> = (part..part + count)

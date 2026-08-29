@@ -33,6 +33,14 @@ use super::{ToolResult, TurnEvent};
 pub enum Role {
     User,
     Assistant,
+    /// The turn a non-conversational client opened — an MCP connection, a
+    /// script, anything that runs cells without speaking.
+    ///
+    /// It is a *turn*, not speech: cells attach to it exactly as they attach
+    /// to a user turn, it anchors their operation namespace, and it is never
+    /// sent to a provider. Who opened it is the thread's `actor`, not this —
+    /// role says what kind of turn, actor says whose.
+    Session,
 }
 
 impl Role {
@@ -42,6 +50,20 @@ impl Role {
         match self {
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::Session => "session",
+        }
+    }
+
+    /// Read the durable column back. The one place the string vocabulary is
+    /// spelled out: every other reader asks here rather than keeping its own
+    /// copy of the match, which is how the two used to drift.
+    #[must_use]
+    pub fn parse(role: &str) -> Option<Self> {
+        match role {
+            "user" => Some(Role::User),
+            "assistant" => Some(Role::Assistant),
+            "session" => Some(Role::Session),
+            _ => None,
         }
     }
 }
@@ -334,18 +356,15 @@ impl Transcript {
     ///
     /// # Errors
     ///
-    /// If a row's `parts` column cannot be read, or its role is neither
-    /// `user` nor `assistant`.
+    /// If a row's `parts` column cannot be read, or its role is outside
+    /// [`Role`]'s vocabulary.
     pub fn from_rows(
         rows: &[crate::models::agent_threads::AgentThreadMessage],
     ) -> Result<Self, String> {
         let mut messages = Vec::with_capacity(rows.len());
         for row in rows {
-            let role = match row.role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                other => return Err(format!("unsupported transcript role '{other}'")),
-            };
+            let role = Role::parse(&row.role)
+                .ok_or_else(|| format!("unsupported transcript role '{}'", row.role))?;
             messages.push(AgentChatMessage {
                 id: row.id.clone(),
                 role,
@@ -679,6 +698,10 @@ pub fn to_model_messages(transcript: &Transcript, registry: &ToolRegistry) -> Ve
                 }
             }
             Role::Assistant => push_assistant_steps(&mut out, message, registry),
+            // A session marker is provenance, not conversation: it stays in
+            // the transcript (it is a real row, and the CAS head may be it)
+            // and never reaches a provider.
+            Role::Session => {}
         }
     }
     out
@@ -1057,5 +1080,44 @@ mod tests {
         // One token over, and it counts.
         let over = stepped(&[(2_000, 0), (1_050, 975)]);
         assert_eq!(over.missed_cache_tokens(), 1_025);
+    }
+
+    /// A session turn is a row like any other — it loads, it can be the CAS
+    /// head — and it reaches no provider.
+    ///
+    /// The regression this pins is the harsh one: `from_rows` used to reject
+    /// every unknown role, so one session row made the whole thread
+    /// unloadable in both hosts.
+    #[test]
+    fn a_session_turn_rides_the_transcript_but_never_the_wire() {
+        let row =
+            |id: &str, role: &str, text: &str| crate::models::agent_threads::AgentThreadMessage {
+                id: id.into(),
+                thread_id: "thread".into(),
+                parent_message_id: None,
+                seq: 0,
+                role: role.into(),
+                parts: json!([{ "type": "text", "text": text }]),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            };
+        let rows = [
+            row("session-1", "session", "Session opened on Aurora."),
+            row("user-1", "user", "hello"),
+        ];
+        let transcript = Transcript::from_rows(&rows).expect("a session row loads");
+        assert_eq!(transcript.messages[0].role, Role::Session);
+        assert_eq!(transcript.head_message_id().as_deref(), Some("user-1"));
+
+        let model = to_model_messages(&transcript, &ToolRegistry::default());
+        assert_eq!(
+            model.len(),
+            1,
+            "only the user turn is conversation: {model:?}"
+        );
+        assert_eq!(model[0].role, ModelRole::User);
+
+        assert_eq!(Role::parse("session"), Some(Role::Session));
+        assert_eq!(Role::Session.as_str(), "session");
+        assert_eq!(Role::parse("mcp"), None);
     }
 }

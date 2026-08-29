@@ -28,6 +28,15 @@
 //! read a track from, so `open` pins one durable agent thread and every later
 //! call addresses it.
 //!
+//! One subcommand sits beside the server, sharing its host and its admission:
+//!
+//! ```text
+//! luma-mcp record-usage --json '<AgentThreadUsage>'
+//! ```
+//!
+//! It exists because a session's *price* is known only after the session ends —
+//! see [`record_usage`].
+//!
 //! stdout is the protocol. Everything diagnostic goes to stderr.
 
 use std::sync::Arc;
@@ -65,11 +74,17 @@ const LISTING_LIMIT: usize = 60;
 #[derive(Clone, Debug)]
 struct Session {
     thread_id: String,
-    /// The durable user message cells are attributed to. `run_python_cell`
-    /// requires one, and an edit-capable cell must be attributable to a real
-    /// turn — here the MCP client is the user, and one message stands for the
-    /// whole connection.
-    turn_message_id: String,
+    /// The durable session turn cells are attributed to — one row standing
+    /// for the whole connection.
+    ///
+    /// A cell with edit authority must belong to a turn some principal opened.
+    /// This client is a principal; it is not a *user*, so the turn it opens
+    /// carries [`Role::Session`] and no speech. Who opened it is the thread's
+    /// actor, stamped just above by `agent_thread_set_actor` — this row
+    /// repeats none of it.
+    ///
+    /// [`Role::Session`]: luma_lib::agent::transcript::Role::Session
+    session_message_id: String,
     track_id: String,
     /// The room `luma.venue` describes. Always present: a session is a track
     /// *in a venue*, and the venue is resolved before the thread is pinned.
@@ -124,7 +139,8 @@ fn tools() -> Value {
              (which matches artist and title); `find` searches for both. `venue_id` picks the \
              room; without it the track's own venue is used, or the library's if there is \
              only one. Opening a venue the track is not in yet adds it, which writes. Opening \
-             again replaces the session.",
+             again replaces the session. `new_score` starts a blank score beside whatever the \
+             track already has in that room instead of continuing the latest one.",
             &json!({
                 "type": "object",
                 "properties": {
@@ -140,6 +156,10 @@ fn tools() -> Value {
                     "model": {
                         "type": "string",
                         "description": "The model driving this session, recorded as the author of every edit it makes.",
+                    },
+                    "new_score": {
+                        "type": "boolean",
+                        "description": "Author a fresh, empty score for this track and venue instead of continuing the one the app would open. Leaves existing scores untouched.",
                     },
                 },
             }),
@@ -218,13 +238,38 @@ async fn open(
     let track_query = arguments.get("track_query").and_then(Value::as_str);
     let venue_id = arguments.get("venue_id").and_then(Value::as_str);
     let model = arguments.get("model").and_then(Value::as_str);
+    let new_score = arguments
+        .get("new_score")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let (tracks, venues) = library(services, venue_id).await?;
     let track = pick_track(&tracks, track_id, track_query)?;
     let track_id = string(&track, "id");
     let label = track_label(&track);
 
-    let (venue_id, score_id) = bind_venue(services, &track_id, &label, venue_id, &venues).await?;
+    // Who this session's revisions belong to. The connection already named the
+    // client; the model refines it, because "Claude Code" is a program and the
+    // thing that actually authored the edit is the model driving it.
+    // Cloned rather than read in place: this holds across an `invoke`, and no
+    // lock this process takes should span one.
+    //
+    // Refined *before* the score is bound, because minting one is itself an
+    // authored revision and it carries the host's session actor — a score this
+    // client created should not read as the operator's, or as a nameless
+    // client's.
+    let connected = client.read().await.clone();
+    if let (Some(connected), Some(model)) = (&connected, model) {
+        set_actor(
+            services,
+            "authored_state_set_session_actor",
+            json!({ "actor": client_actor(connected, Some(model)) }),
+        )
+        .await;
+    }
+
+    let (venue_id, score_id) =
+        bind_venue(services, &track_id, &label, venue_id, &venues, new_score).await?;
 
     let thread = invoke(
         services,
@@ -242,23 +287,13 @@ async fn open(
     .await?;
     let thread_id = string(&thread, "id");
 
-    // Who this session's revisions belong to. The connection already named the
-    // client; the model refines it, because "Claude Code" is a program and the
-    // thing that actually authored the edit is the model driving it.
-    // Cloned rather than read in place: this holds across an `invoke`, and no
-    // lock this process takes should span one.
-    let connected = client.read().await.clone();
-    if let Some(connected) = connected {
-        let actor = client_actor(&connected, model);
-        if let Err(error) = invoke(
+    if let Some(connected) = &connected {
+        set_actor(
             services,
             "agent_thread_set_actor",
-            json!({ "threadId": thread_id, "actor": actor }),
+            json!({ "threadId": thread_id, "actor": client_actor(connected, model) }),
         )
-        .await
-        {
-            eprintln!("[luma-mcp] naming this session's writer: {error}");
-        }
+        .await;
     }
 
     let appended = invoke(
@@ -269,14 +304,14 @@ async fn open(
             "input": {
                 "operationId": uuid(),
                 "expectedHeadMessageId": Value::Null,
-                "messages": [{ "role": "user", "parts": [
-                    { "type": "text", "text": format!("MCP session on {label}.") },
+                "messages": [{ "role": "session", "parts": [
+                    { "type": "text", "text": format!("Session opened on {label}.") },
                 ]}],
             },
         }),
     )
     .await?;
-    let turn_message_id = appended
+    let session_message_id = appended
         .as_array()
         .and_then(|messages| messages.first())
         .map(|message| string(message, "id"))
@@ -284,7 +319,7 @@ async fn open(
 
     let opened = Session {
         thread_id,
-        turn_message_id,
+        session_message_id,
         track_id,
         venue_id,
         score_id,
@@ -312,11 +347,16 @@ async fn open(
     // `open` is this server's system prompt: it is the first call every client
     // makes, and the only place a listing reaches a model that has no Luma
     // prompt of its own.
+    // The thread is named as well as the score because it is the only handle a
+    // caller outside this process has on what the session *cost*: the harness
+    // that spawned the client learns the price after the client hangs up, by
+    // which time this server is gone, and `record-usage` needs an id.
     Ok(format!(
-        "opened {label}\ntrack {}\nvenue {}, score {}\n\n{}\n{}",
+        "opened {label}\ntrack {}\nvenue {}, score {}\nthread {}\n\n{}\n{}",
         opened.track_id,
         opened.venue_id,
         opened.score_id,
+        opened.thread_id,
         catalog.stdout,
         skills::bundled().listing(),
     ))
@@ -335,12 +375,17 @@ async fn open(
 /// operator sees and the one this session gets. Only when the track has no
 /// membership at all does `ensure_venue_score` mint one — it is idempotent, so
 /// opening the same fresh pair twice still binds a single score.
+///
+/// `new_score` is the other intent: not "the score the operator sees" but "a
+/// blank one of my own". A track may hold many scores in a room, so this adds
+/// rather than replaces — nothing already authored is touched.
 async fn bind_venue(
     services: &AppServices,
     track_id: &str,
     label: &str,
     requested: Option<&str>,
     venues: &[Value],
+    new_score: bool,
 ) -> Result<(String, String), String> {
     let venue_id = match requested {
         Some(requested) => {
@@ -354,6 +399,23 @@ async fn bind_venue(
         }
         None => default_venue(services, track_id, label, venues).await?,
     };
+    if new_score {
+        // Named by nobody: a score's title is the operator's to give, and a
+        // run that invented one would be guessing at the show it is about to
+        // author. The app shows an unnamed score by its track.
+        let score = invoke(
+            services,
+            "create_score",
+            json!({
+                "requestId": uuid(),
+                "trackId": track_id,
+                "venueId": venue_id,
+                "name": Value::Null,
+            }),
+        )
+        .await?;
+        return Ok((venue_id, string(&score, "id")));
+    }
     let existing = invoke(
         services,
         "list_scores_for_track",
@@ -385,11 +447,10 @@ async fn default_venue(
     label: &str,
     venues: &[Value],
 ) -> Result<String, String> {
-    // An empty venue id is this command's "every venue I can see" overload.
     let scores = invoke(
         services,
-        "list_scores_for_track",
-        json!({ "trackId": track_id, "venueId": "" }),
+        "list_scores_across_venues",
+        json!({ "trackId": track_id }),
     )
     .await?;
     let mut owning: Vec<String> = scores
@@ -501,7 +562,7 @@ async fn cell(
         "run_python_cell",
         json!({
             "threadId": session.thread_id,
-            "turnMessageId": session.turn_message_id,
+            "turnMessageId": session.session_message_id,
             "code": code,
             "scope": {},
         }),
@@ -718,8 +779,51 @@ async fn main() {
     }
 }
 
+/// `luma-mcp record-usage --json '<AgentThreadUsage>' [host flags]`.
+///
+/// The session that spent the money is over by the time anyone knows what it
+/// cost: `open` retires its thread when the client disconnects, and the harness
+/// only reads the price out of the CLI's final event after that. So the record
+/// arrives through a second, short-lived process against the same library,
+/// through the same dispatcher and the same write admission.
+///
+/// It takes the *record*, not the harness's own result event. Two harnesses now
+/// feed this — Claude Code and Codex — and their result events agree about
+/// nothing; the ledger row is the contract they share, and teaching this binary
+/// to parse each CLI's JSON would put the harness's knowledge in the app.
+async fn record_usage(args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut json: Option<String> = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        if arg == "--json" {
+            json = Some(args.next().ok_or("--json requires a value")?);
+        } else {
+            rest.push(arg);
+        }
+    }
+    let json = json.ok_or("record-usage requires --json '<usage record>'")?;
+    let usage: Value =
+        serde_json::from_str(&json).map_err(|error| format!("--json is not JSON: {error}"))?;
+    let config = HostConfig::parse_args(rest.into_iter())?;
+    let services = boot(&config).await?.into_shared();
+    invoke(
+        &services,
+        "agent_thread_record_usage",
+        json!({ "usage": usage }),
+    )
+    .await?;
+    println!("recorded usage for thread {}", string(&usage, "threadId"));
+    Ok(())
+}
+
 async fn run() -> Result<(), String> {
-    let config = HostConfig::parse_args(std::env::args().skip(1))?;
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "record-usage") {
+        args.next();
+        return record_usage(args).await;
+    }
+    let config = HostConfig::parse_args(args)?;
     // `into_shared`, not a bare `Arc::new`: the turn loop outlives the command
     // that starts it, so it needs the back-reference `into_shared` attaches.
     let services = boot(&config).await?.into_shared();
@@ -808,22 +912,33 @@ fn client_actor(client: &ClientInfo, model: Option<&str>) -> String {
     }
 }
 
-/// Tell the host to attribute its authored revisions to the connected client.
-///
-/// Best effort: a client whose name carries punctuation the actor vocabulary
-/// refuses is not a reason to refuse the connection — the revisions simply stay
-/// labelled as this host's default.
+/// Tell the host to attribute its authored revisions to the connected client,
+/// and remember the client only if that took.
 async fn adopt(services: &AppServices, client: &ClientInfo, label: &ClientCell) {
     let actor = client_actor(client, None);
-    match invoke(
+    if set_actor(
         services,
         "authored_state_set_session_actor",
         json!({ "actor": actor }),
     )
     .await
     {
-        Ok(_) => *label.write().await = Some(client.clone()),
-        Err(error) => eprintln!("[luma-mcp] naming the connected client: {error}"),
+        *label.write().await = Some(client.clone());
+    }
+}
+
+/// Point one of the host's actor commands at a name, and say whether it took.
+///
+/// Best effort by contract: a client whose name carries punctuation the actor
+/// vocabulary refuses is not a reason to refuse the connection or the session —
+/// the revisions simply stay labelled as this host's default.
+async fn set_actor(services: &AppServices, command: &str, arguments: Value) -> bool {
+    match invoke(services, command, arguments).await {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("[luma-mcp] naming the writer: {error}");
+            false
+        }
     }
 }
 

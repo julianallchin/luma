@@ -826,9 +826,8 @@ async fn python_execution_rejects_a_thread_owned_by_another_principal() {
 }
 
 #[tokio::test]
-async fn editable_python_accepts_only_its_own_durable_user_turn() {
-    let Some(f) = Fixture::new("editable_python_accepts_only_its_own_durable_user_turn").await
-    else {
+async fn editable_python_accepts_only_its_own_durable_turn() {
+    let Some(f) = Fixture::new("editable_python_accepts_only_its_own_durable_turn").await else {
         return;
     };
     let thread = f.editable_thread().await;
@@ -934,13 +933,54 @@ async fn editable_python_accepts_only_its_own_durable_user_turn() {
     .await
     .unwrap_err();
     assert!(
-        assistant_error.contains("must be a durable user message"),
+        assistant_error.contains("must be a durable user or session turn"),
         "{assistant_error}"
     );
     assert!(
-        !f.storage.agent_workspaces_dir().join(thread).exists(),
+        !f.storage.agent_workspaces_dir().join(&thread).exists(),
         "an unbound turn must not create or touch the thread workspace"
     );
+
+    // A client that runs cells without speaking opens a *session* turn, and
+    // it is as attributable as a user's: this is what lets the MCP host stop
+    // fabricating a user message just to have something to attach to.
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: "test-session-turn".into(),
+            expected_head_message_id: Some("assistant-turn".into()),
+            messages: vec![NewAgentThreadMessage {
+                id: Some("session-turn".into()),
+                role: "session".into(),
+                parts: json!([{ "type": "text", "text": "Session opened on Aurora." }]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .expect("a session turn appends like any other row — no trigger gates it");
+    let mut session_scope = f.scope();
+    session_scope.score_id = Some(SCORE_ID.into());
+    let outcome = run_python_cell_inner(
+        &f.pool,
+        &f.storage,
+        &f.resource_root,
+        &f.service,
+        &f.graph_runs,
+        &f.authored,
+        thread.clone(),
+        "1 + 1".into(),
+        session_scope,
+        Some("session-turn".into()),
+        Some("owner".into()),
+        None,
+        None,
+    )
+    .await
+    .expect("an editable cell attaches to a session turn");
+    assert_eq!(outcome.status, "ok", "{outcome:?}");
+    assert_eq!(outcome.repr.as_deref(), Some("2"));
 }
 
 // ---------------------------------------------------------------------------

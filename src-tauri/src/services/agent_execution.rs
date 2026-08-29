@@ -19,6 +19,7 @@ use base64::Engine;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
+use crate::agent::transcript::Role;
 use crate::agent_execution::artifacts::{ArtifactEncoding, ArtifactKind};
 use crate::agent_execution::bindings::providers::{
     assemble_bindings, BindingScope, GraphRunContribution,
@@ -288,8 +289,16 @@ pub async fn run_python_cell_inner(
                 .ok_or_else(|| {
                     "Python turn message is not durable in this agent thread".to_string()
                 })?;
-            if message.role != "user" {
-                return Err("Python turn message must be a durable user message".into());
+            // A cell attaches to a turn some principal opened. Which
+            // principal is the thread's `actor`; that the turn is *durable*
+            // is what makes the cell attributable and gives it a stable
+            // operation namespace. A client that runs cells without speaking
+            // opens a session turn and is no less a principal for it.
+            match Role::parse(&message.role) {
+                Some(Role::User | Role::Session) => {}
+                _ => {
+                    return Err("Python turn message must be a durable user or session turn".into())
+                }
             }
             Some(host_operation_scope(
                 &thread_id,
@@ -328,7 +337,7 @@ pub async fn run_python_cell_inner(
         }
     }
     if resolved.track_edit.is_some() && operation_scope.is_none() {
-        return Err("editable Python cells require a durable user turn message".into());
+        return Err("editable Python cells require a durable turn message".into());
     }
     let scope = resolved.bindings;
     let graph_run = graph_runs
