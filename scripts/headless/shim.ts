@@ -99,10 +99,15 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 	let nextId = 1;
 	let exited: Error | null = null;
 
+	/** Fail every waiting caller. A broken pipe cannot be attributed to one. */
+	const rejectAllPending = (error: Error) => {
+		for (const p of pending.values()) p.reject(error);
+		pending.clear();
+	};
+
 	child.on("exit", (code, signal) => {
 		exited = new Error(`agent_harness exited (code=${code} signal=${signal})`);
-		for (const p of pending.values()) p.reject(exited);
-		pending.clear();
+		rejectAllPending(exited);
 	});
 
 	const rl = createInterface({ input: child.stdout as NodeJS.ReadableStream });
@@ -115,10 +120,21 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 			process.stderr.write(`[shim] unparseable harness frame: ${line}\n`);
 			return;
 		}
+		// A null id is the harness saying it could not read a request at all.
+		// The request that was mangled is unknowable, so no single promise can
+		// absorb it — waiting on the rest would be a silent hang.
+		if (frame.id === null || frame.id === undefined) {
+			rejectAllPending(
+				new Error(
+					`agent_harness could not attribute a request frame: ${String(frame.err)}. ` +
+						"The request pipe is corrupt; every in-flight call was failed.",
+				),
+			);
+			return;
+		}
 		const key = String(frame.id);
 		const p = pending.get(key);
 		if (!p) {
-			// id null = a frame the harness could not attribute (bad request JSON).
 			process.stderr.write(`[shim] unmatched harness frame: ${line}\n`);
 			return;
 		}
@@ -127,12 +143,41 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 		else p.resolve(frame.ok);
 	});
 
+	// One request line reaches the pipe at a time.
+	//
+	// `stdin.write` is not atomic across concurrent callers: a chunk can be
+	// flushed partially and another caller's chunk land inside it, so the
+	// harness reads a line spliced out of two requests, answers `{"id": null,
+	// "err": "malformed request JSON"}`, and the real request is lost. Chaining
+	// on the write callback means only one chunk is ever outstanding, which is
+	// also the backpressure the naked `write` ignored.
+	let writes: Promise<void> = Promise.resolve();
+	const writeLine = (payload: string): Promise<void> => {
+		const done = writes.then(
+			() =>
+				new Promise<void>((res, rej) => {
+					const stdin = child.stdin;
+					if (!stdin || stdin.destroyed) {
+						rej(exited ?? new Error("agent_harness stdin is closed"));
+						return;
+					}
+					stdin.write(payload, (error) => (error ? rej(error) : res()));
+				}),
+		);
+		// The queue survives one caller's failure; that caller still sees it.
+		writes = done.catch(() => {});
+		return done;
+	};
+
 	const invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
 		if (exited) return Promise.reject(exited);
 		const id = String(nextId++);
 		return new Promise<T>((res, rej) => {
 			pending.set(id, { resolve: res as (v: unknown) => void, reject: rej, cmd });
-			child.stdin?.write(`${JSON.stringify({ id, cmd, args: args ?? {} })}\n`);
+			writeLine(`${JSON.stringify({ id, cmd, args: args ?? {} })}\n`).catch((error) => {
+				if (!pending.delete(id)) return;
+				rej(error instanceof Error ? error : new Error(String(error)));
+			});
 		});
 	};
 
@@ -145,7 +190,8 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 			new Promise<void>((res) => {
 				if (exited) return res();
 				child.once("exit", () => res());
-				child.stdin?.end();
+				// End behind the queue, or a pending request line is truncated.
+				void writes.then(() => child.stdin?.end());
 				setTimeout(() => child.kill(), 2000).unref?.();
 			}),
 	};
