@@ -4,31 +4,33 @@
 use crate::compositor::{self, LiveAnnotation};
 use crate::dispatch::{AppServices, CommandError};
 
-/// Compile every annotation on `(track_id, venue_id)` into a scene and install
-/// it as the render engine's active scene.
+/// Compile **one score** into a scene and install it as the render engine's
+/// active scene.
 ///
-/// `annotations` is load-bearing: omitted means "use the persisted score rows",
-/// while an empty list is an authoritative empty document that clears the
-/// scene. The editor always sends the live list, whose args run ahead of the
-/// database mid-drag.
+/// Addressed by score, like [`leave_track`]: a `(track, venue)` pair carries
+/// as many scores as there are people who annotated it, and the rig shows the
+/// one that is open, not a blend of all of them.
+///
+/// `annotations` is load-bearing: omitted means "use the score's persisted
+/// rows", while an empty list is an authoritative empty document that clears
+/// the scene. The editor always sends the live list, whose args run ahead of
+/// the database mid-drag.
 ///
 /// `_skip_cache` is dead — the plan cache is keyed by an input signature, so a
 /// changed annotation already recompiles. It stays on the wire until the
 /// frontend stops sending it.
 pub async fn composite_track(
     services: &AppServices,
-    track_id: String,
-    venue_id: String,
+    score_id: String,
     annotations: Option<Vec<LiveAnnotation>>,
     _skip_cache: Option<bool>,
 ) -> Result<(), CommandError> {
-    compositor::install_track_scene(
+    compositor::install_score_scene(
         &services.db.0,
         &services.storage,
         &services.fixtures_root,
         &services.render_engine,
-        &track_id,
-        &venue_id,
+        &score_id,
         annotations,
     )
     .await?;

@@ -744,14 +744,9 @@ async fn score_scope(pool: &SqlitePool, score_id: &str) -> Result<(String, Strin
         .ok_or_else(|| RecordError::NoScore(score_id.to_string()))
 }
 
-/// One score's own clips.
-///
-/// **Smell.** The live compositor's `scores_for_track` takes every clip of
-/// every score on a `(track, venue)` — score identity is not part of what it
-/// composites. A recording of "score X" here is X's clips alone, which is what
-/// the request means and what the venue shows whenever a track has one score.
-/// Where a track has two, the two paths disagree, and the compositor is the
-/// half that should grow a score id.
+/// One score's own clips — the same document the live compositor installs
+/// ([`crate::compositor::install_score_scene`]), so a recording of score X and
+/// the rig showing score X are the same light.
 async fn clips_of(
     pool: &SqlitePool,
     venue_id: &str,

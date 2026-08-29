@@ -360,10 +360,17 @@ pub(crate) struct Visualizer {
     /// and all, rather than rebuilt because the eye moved between two tabs.
     venue_id: String,
     venue_name: String,
-    /// The `(track, venue)` whose score is lighting the rig, when one is.
-    /// Compared alongside [`Self::venue_id`] so switching tracks within one
-    /// room re-composites instead of tearing the stage down.
-    subject: Option<(String, String)>,
+    /// The score lighting the rig, when one is. Compared alongside
+    /// [`Self::venue_id`] so moving between scores — of one track or of two —
+    /// re-composites instead of tearing the stage down.
+    subject: Option<Lit>,
+    /// The score whose composite has actually *landed* on the render engine.
+    ///
+    /// Distinct from [`Self::subject`], which is what this stage has asked
+    /// for: an install is a round trip, and between the ask and the answer the
+    /// rig is still lit by the score before it. The toolbar reads this one, so
+    /// what it names is what is on the light rather than what was intended.
+    lit: Option<Lit>,
     /// Whether this stage may build a renderer at all — see
     /// [`stage_gpu_enabled`]. Captured once, when the stage is built, so the
     /// answer cannot change under a running viewport.
@@ -801,28 +808,31 @@ impl RenderLab {
 impl Visualizer {
     /// Open the view on a venue and start its load.
     ///
-    /// `subject` is the `(track, venue)` whose score should light the rig, when
-    /// the view was opened over a track. Compositing it is a dispatch command
-    /// like any other; what is *not* a command is the per-frame sample that
-    /// follows — see [`Library::sample_universe`].
+    /// `subject` is the score that should light the rig, when the view was
+    /// opened over a track editor. Compositing it is a dispatch command like
+    /// any other; what is *not* a command is the per-frame sample that follows
+    /// — see [`Library::sample_universe`].
     pub(crate) fn open(
         library: &Library,
         venue_id: &str,
         venue_name: String,
-        subject: Option<(String, String)>,
+        subject: Option<Lit>,
         cx: &mut Context<Luma>,
     ) -> Self {
         let rig = library.venue_rig(venue_id);
         let editor_lit = subject.is_none();
         let composite = subject
             .clone()
-            .map(|(track, venue)| library.composite_track(&track, &venue, None));
+            .map(|lit| (library.composite_score(&lit.score, None), lit));
         let venue = venue_id.to_string();
         cx.spawn(async move |this, cx| {
             // The composite first: it is what makes the sample non-empty, and
             // a rig that appeared before its light would flash dark.
-            if let Some(composite) = composite {
-                composite.await.ok();
+            let mut installed = None;
+            if let Some((composite, lit)) = composite {
+                if composite.await.is_ok() {
+                    installed = Some(lit);
+                }
             }
             let loaded = rig.await;
             this.update(cx, |this, cx| {
@@ -832,6 +842,7 @@ impl Visualizer {
                 let Some(state) = this.visualizer.as_mut().filter(|it| it.venue_id == venue) else {
                     return;
                 };
+                state.composite_landed(installed);
                 state.rig_loaded(loaded);
                 cx.notify();
             })
@@ -843,6 +854,7 @@ impl Visualizer {
             venue_id: venue_id.to_string(),
             venue_name,
             subject,
+            lit: None,
             gpu_enabled: stage_gpu_enabled(),
             status: Status::Loading,
             camera: opening_camera(
@@ -865,28 +877,50 @@ impl Visualizer {
 
     /// Light this stage with a different score, without rebuilding it.
     ///
-    /// Switching tracks inside one room changes only *what is composited* —
-    /// the rig, the camera framing and the GPU are all still about the same
+    /// Moving between scores inside one room changes only *what is composited*
+    /// — the rig, the camera framing and the GPU are all still about the same
     /// venue. Tearing the stage down to re-light it would drop the device and
-    /// re-frame the camera, so a glance between two tracks would restart the
+    /// re-frame the camera, so a glance between two documents would restart the
     /// view. Compositing is a dispatch command like any other; the per-frame
     /// sample that follows is not (see [`Library::sample_universe`]).
-    fn relight(
-        &mut self,
-        library: &Library,
-        subject: Option<(String, String)>,
-        cx: &mut Context<Luma>,
-    ) {
+    fn relight(&mut self, library: &Library, subject: Option<Lit>, cx: &mut Context<Luma>) {
         self.subject = subject.clone();
         self.render_lab.set_editor_lit(subject.is_none());
-        let Some((track, venue)) = subject else {
+        let Some(lit) = subject else {
+            // Nothing on screen is about a score any more, so the stage stops
+            // claiming one. What the engine still holds is stale and unread —
+            // the lab has already gone back to editor lighting.
+            self.lit = None;
             return;
         };
-        let composite = library.composite_track(&track, &venue, None);
-        cx.spawn(async move |_, _| {
-            composite.await.ok();
+        let composite = library.composite_score(&lit.score, None);
+        cx.spawn(async move |this, cx| {
+            let landed = composite.await.is_ok().then_some(lit);
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.visualizer.as_mut() {
+                    state.composite_landed(landed);
+                    cx.notify();
+                }
+            })
+            .ok();
         })
         .detach();
+    }
+
+    /// Adopt an install that has come back, unless the eye moved on while it
+    /// was in flight.
+    ///
+    /// Two composites can be outstanding at once — a fast one issued after a
+    /// slow one — and the later *answer* is not necessarily the later *ask*.
+    /// Checking against the current subject is what keeps the readout from
+    /// naming a score the stage has already left.
+    fn composite_landed(&mut self, landed: Option<Lit>) {
+        if landed.is_some() && landed != self.subject {
+            return;
+        }
+        if let Some(landed) = landed {
+            self.lit = Some(landed);
+        }
     }
 
     fn rig_loaded(&mut self, loaded: Result<Rig, LibraryError>) {
@@ -1935,15 +1969,27 @@ fn stage_gpu_enabled() -> bool {
 
 /// What the stage should be showing, resolved from the shell's current subject.
 ///
-/// A named triple rather than a bare tuple: `lit` is itself a `(track, venue)`
-/// pair, and two levels of anonymous tuple is a return type no call site can
-/// read. The two `String`s are also the same type as each other, which is
-/// exactly when positional returns start getting swapped by accident.
+/// A named triple rather than a bare tuple: the two `String`s are the same
+/// type as each other, which is exactly when positional returns start getting
+/// swapped by accident.
 struct StageSubject {
     venue_id: String,
     venue_name: String,
-    /// The `(track, venue)` whose score lights the rig, when one does.
-    lit: Option<(String, String)>,
+    /// The score that lights the rig, when one does.
+    lit: Option<Lit>,
+}
+
+/// The score a stage is lit by.
+///
+/// The id is the answer to *which document*; the ordinal is only how a person
+/// names it, carried alongside so the toolbar can say `SCORE #2` without a
+/// second read. Compared whole rather than by id, so a renumbering — a
+/// sibling score deleted out from under this one — refreshes the readout
+/// instead of leaving it naming a position the sidebar no longer uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Lit {
+    pub(crate) score: String,
+    pub(crate) ordinal: i64,
 }
 
 /// The 3D view's transitions, kept with the screen the way every other one is
@@ -1978,12 +2024,13 @@ impl Luma {
         }
         let scope = self.tab_scope()?;
         let venue_id = scope.venue().to_string();
+        // The *score*, not the pair it sits on. A `(track, venue)` carries as
+        // many scores as there are people who annotated it, and the editor is
+        // the one thing that knows which of them is open — so the stage takes
+        // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
-            Some(Body::TrackEditor(state)) => state
-                .subject()
-                .map(|(track, venue, _)| (track, venue))
-                .filter(|(_, venue)| venue == &venue_id),
-            Some(Body::Graph(_) | Body::Universe(_)) | None => None,
+            Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.lit(),
+            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Universe(_)) | None => None,
         };
         let name = self
             .sidebar
@@ -2151,6 +2198,13 @@ fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
         )
         .child(clock_readout(library))
         .child(renderer_lab_trigger(state, app))
+        // Which document is on the rig — by the handle the sidebar and the
+        // timeline both name it by, so "the editor is showing #2" and "the rig
+        // is lit by #2" are comparable at a glance. Reads what the install
+        // *landed*, not what was asked for.
+        .when_some(state.lit.as_ref(), |el, lit| {
+            el.child(luma_ui::silkscreen(format!("RIG SCORE #{}", lit.ordinal)))
+        })
         .child(luma_ui::silkscreen(readout))
 }
 
@@ -2199,6 +2253,11 @@ fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
         .border_1()
         .border_color(ladder::border())
         .bg(ladder::apex())
+        // An opaque panel over the viewport takes the whole pointer plane it
+        // covers, wheel included: the lab's controls scroll in a column of
+        // their own, and a wheel that also reached the stage dollied the
+        // camera while the list moved. See [`listen`].
+        .occlude()
         .child(luma_ui::silkscreen("RENDERER LAB"))
         .child(lab_controls(state, app))
 }
@@ -2547,6 +2606,10 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     .gap(px(1.))
                     .bg(ladder::trim())
                     .p(px(1.))
+                    // The bar, not the centring row it sits in: an opaque
+                    // surface over the viewport owns the pointer it covers
+                    // (see [`listen`]), and the row is air either side of it.
+                    .occlude()
                     .child(mode("Translate", GizmoMode::Translate))
                     .child(mode("Rotate", GizmoMode::Rotate))
                     .child(zoom("Zoom In", DOLLY_IN))
@@ -2709,6 +2772,10 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     .border_1()
                     .border_color(ladder::border())
                     .bg(ladder::apex())
+                    // The card, not the absolute wrapper it hangs in: opaque
+                    // over the viewport, so the pointer plane it covers is its
+                    // own (see [`listen`]).
+                    .occlude()
                     .when(expanded, |el| el.w(px(224.)))
                     .child(header)
                     .when(expanded, |el| {
@@ -3274,6 +3341,21 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             // The viewport's own node: a script has to be able to say "drag
             // *here*", and there is no control inside it to name instead.
             agent_paint_node(Role::Card, "Stage", bounds, window, cx);
+            // Where the camera is, as a reading. What a gesture did to it is
+            // otherwise only visible in pixels, which makes "this drag must
+            // not move the camera" a screenshot diff of a scene that has its
+            // own reasons to change. The three numbers are the whole orbit:
+            // two angles and a distance.
+            agent_paint_node(
+                Role::Text,
+                format!(
+                    "CAMERA {:.4} {:.4} {:.4}",
+                    camera.azimuth, camera.polar, camera.radius
+                ),
+                bounds,
+                window,
+                cx,
+            );
             (image, window.insert_hitbox(bounds, HitboxBehavior::Normal))
         },
         {
@@ -3334,6 +3416,18 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
 /// not — a camera drag that wanders off the element, or off the window, must
 /// keep tracking and must end wherever the button comes up. The same asymmetry
 /// the graph canvas keeps, and for the same reason.
+///
+/// # What "scoped to the hitbox" leans on
+///
+/// gpui hit-tests in paint order and reports *every* hitbox under the pointer,
+/// so this canvas is hovered even where something is drawn on top of it — the
+/// lab panel, the toolbar, a seam grip. Both guards below therefore mean "no
+/// surface in front of me has claimed this": `is_hovered` is false behind an
+/// occluder, and `should_handle_scroll` is false behind a full one. That holds
+/// only because every surface that floats over this one says so with
+/// `occlude` / `block_mouse_except_scroll`. A new overlay that forgets is not
+/// a bug in *this* function: pressing it would also orbit the camera, and a
+/// wheel over it would also dolly.
 fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gpui::App) {
     let pressed = app.clone();
     let inside = hitbox.clone();
