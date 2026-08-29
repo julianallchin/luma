@@ -280,31 +280,56 @@ fn frame_matrix(position: Vec3, normal: Vec3, up: Vec3) -> glam::Mat4 {
 /// The axis-aligned closed set is the point: a corner block's ways are a
 /// *subset of these six*, not an angle, so [`FaceSet`] can be a bitset and a
 /// mesh key can be a number. Angles between the six are [`Hinge`]'s job.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Face {
     /// Toward `-X`, the upstream end of a straight run.
-    #[serde(rename = "-x")]
     NegX,
     /// Toward `+X`, the downstream end of a straight run.
-    #[serde(rename = "+x")]
     PosX,
     /// Downward.
-    #[serde(rename = "-y")]
     NegY,
     /// Upward.
-    #[serde(rename = "+y")]
     PosY,
     /// Toward `-Z`.
-    #[serde(rename = "-z")]
     NegZ,
     /// Toward `+Z`.
-    #[serde(rename = "+z")]
     PosZ,
 }
 
+/// The wire name of every face, in [`Face::ALL`] order. One copy: serde, the
+/// socket names a venue stores, and any log line all read it.
+const FACE_NAMES: [&str; 6] = ["-x", "+x", "-y", "+y", "-z", "+z"];
+
+impl serde::Serialize for Face {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Face {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = <String as serde::Deserialize>::deserialize(d)?;
+        Self::from_name(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown face {name}")))
+    }
+}
+
 impl Face {
+    /// The wire name: `-x`, `+y`, …
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        FACE_NAMES[self as usize]
+    }
+
+    /// The face with this wire name.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        FACE_NAMES
+            .iter()
+            .position(|n| *n == name)
+            .map(|i| Self::ALL[i])
+    }
+
     /// Every face, in bit order.
     pub const ALL: [Self; 6] = [
         Self::NegX,
@@ -505,8 +530,8 @@ impl Truss {
         format!("procedural/truss/{}", self.panels)
     }
 
-    /// Every tube in the lattice: four chords, then the brace zigzag of each
-    /// face in turn.
+    /// Every tube in the lattice: four chords, an end ring at each end, then
+    /// the brace zigzag of each face in turn.
     ///
     /// The four chords run the full span at the corners of the square. Each
     /// face carries one continuous zigzag between its two chords, alternating
@@ -530,6 +555,10 @@ impl Truss {
             )
         });
 
+        let rings = [-1.0f32, 1.0]
+            .into_iter()
+            .flat_map(move |side| end_ring(Vec3::X * side * (x - CHORD_DIAMETER_M / 2.0), 0));
+
         let nodes = self.panels * 2;
         let braces = FACES.into_iter().flat_map(move |(first, second)| {
             let (a, b) = (corners[first], corners[second]);
@@ -545,7 +574,7 @@ impl Truss {
                 )
             })
         });
-        chords.chain(braces)
+        chords.chain(rings).chain(braces)
     }
 
     /// The lattice as one uploadable triangle list, plated at both ends.
@@ -836,10 +865,10 @@ fn knuckles(height: f32, reach: f32) -> impl Iterator<Item = Member> {
 
 /// One leaf of a [`Hinge`]: half a corner box, open at `-X`.
 ///
-/// Four chords from the knuckle gap out to the open face, a ring of edges at
+/// Four chords from the knuckle gap out to the open face, an [`end_ring`] at
 /// each end of them, and a diagonal across each side face — the near ring is
 /// what keeps the leaf from ending in four cut tubes when the joint is open,
-/// and the far one is the square the plate covers. Every vertex is at `x <= -HINGE_GAP_M`; that clearance is the
+/// and the far one is the rim behind the plate. Every vertex is at `x <= -HINGE_GAP_M`; that clearance is the
 /// whole reason two leaves can turn about a shared edge without meeting.
 fn leaf_members() -> impl Iterator<Item = Member> {
     let near = HINGE_GAP_M;
@@ -852,24 +881,9 @@ fn leaf_members() -> impl Iterator<Item = Member> {
             CHORD_DIAMETER_M / 2.0,
         )
     });
-    // The far ring sits on the chord square, not on the face plane — the same
-    // chord radius inside it that a [`Corner`]'s in-plane edges sit, so the
-    // tube is tangent to the plate instead of bulging through it.
     let rings = [near + CHORD_DIAMETER_M / 2.0, HALF_SQUARE_M]
         .into_iter()
-        .flat_map(|x| {
-            [1usize, 2].into_iter().flat_map(move |axis| {
-                let other = AXES[3 - axis];
-                [-1.0f32, 1.0].into_iter().map(move |sign| {
-                    let off = Vec3::NEG_X * x + other * sign * HALF_SQUARE_M;
-                    Member::tube(
-                        off - AXES[axis] * HALF_SQUARE_M,
-                        off + AXES[axis] * HALF_SQUARE_M,
-                        CHORD_DIAMETER_M / 2.0,
-                    )
-                })
-            })
-        });
+        .flat_map(|x| end_ring(Vec3::NEG_X * x, 0));
     // One diagonal across each of the four side faces, the same treatment a
     // [`Corner`] gives a face nothing bolts to. Without them a leaf is a bare
     // cage, and a hinge that is not braced like a corner does not read as one.
@@ -885,6 +899,44 @@ fn leaf_members() -> impl Iterator<Item = Member> {
         })
     });
     chords.chain(rings).chain(braces)
+}
+
+/// The rim behind one face: four tubes of chord gauge on the chord centre
+/// square, mitred at the corners, lying in the plane through `plane`
+/// perpendicular to `axis`.
+///
+/// Every plated face in the family stands one of these behind its plate, and
+/// it is what makes an end read as an *end* rather than as four tubes stopped
+/// short. The ripped stick has the same thing in square section, running from
+/// its chord centre square (127 mm) out to its cube face (152.4 mm) and reaching
+/// two of those widths back from the plate; stated as a chord-gauge tube on the
+/// chord centres it lands on both numbers at once, because [`OUTER_M`] *is* the
+/// chord square plus a chord radius. Round rather than square section because a
+/// flat facet of mill aluminium turned away from the sun has no diffuse term to
+/// catch and renders as a hole, while a tube carries a highlight along its
+/// length — which is how the rip reads, and how every other member here already
+/// does.
+///
+/// Sitting a chord radius inside the face plane, its outer surface is the face
+/// plane exactly: the ring stands *around* the plate, a shade wider than
+/// [`PLATE_HALF_M`], not proud of it. So the mating plane is still the plate's
+/// own face and two bolted pieces meet plate to plate with their rims clear.
+///
+/// A [`Corner`] does not call this: its twelve cube edges already lay four
+/// tubes on the chord square in every face plane, which is the same ring. One
+/// definition of the rim, in two places it falls out of.
+fn end_ring(plane: Vec3, axis: usize) -> impl Iterator<Item = Member> {
+    let (b, c) = perpendicular(axis);
+    [(b, c), (c, b)].into_iter().flat_map(move |(along, across)| {
+        [-1.0f32, 1.0].into_iter().map(move |sign| {
+            let off = plane + AXES[across] * sign * HALF_SQUARE_M;
+            Member::tube(
+                off - AXES[along] * HALF_SQUARE_M,
+                off + AXES[along] * HALF_SQUARE_M,
+                CHORD_DIAMETER_M / 2.0,
+            )
+        })
+    })
 }
 
 /// A face that bolts to something, in the shape [`bake`] wants.
@@ -1193,9 +1245,10 @@ mod tests {
         for panels in 1..=8u32 {
             let truss = Truss::new(panels as f32 * PANEL_PITCH_M);
             assert_eq!(truss.panels(), panels);
-            // Four chords, plus two braces per panel on each of four faces.
+            // Four chords, an end ring of four at each end, plus two braces
+            // per panel on each of four faces.
             let members = truss.members().count();
-            assert_eq!(members, 4 + 8 * panels as usize);
+            assert_eq!(members, 4 + 8 + 8 * panels as usize);
             let mesh = truss.mesh();
             // Plus eight coupler bosses and two plates, four bosses per end.
             assert_eq!(
@@ -1244,7 +1297,8 @@ mod tests {
     #[test]
     fn brace_zigzag_is_continuous_along_each_face() {
         let truss = Truss::new(2.0);
-        let braces: Vec<_> = truss.members().skip(4).collect();
+        // Four chords and two end rings of four come first.
+        let braces: Vec<_> = truss.members().skip(12).collect();
         // Every brace lies *in* a face plane. A corner list that is not cyclic
         // still passes the continuity check below while zigzagging across the
         // section's diagonals instead, which reads as a lattice with no faces.

@@ -97,6 +97,7 @@ fn socket_def(v: &Value) -> SocketDef {
             .get("mode")
             .map(|m| SocketMode::from_name(m.as_str().expect("mode")).expect("mode"))
             .unwrap_or_default(),
+        roll: None,
     }
 }
 
@@ -184,6 +185,7 @@ fn fixtures() -> HashMap<String, Vec<ResolvedSocket>> {
             tangent,
             mode,
             outward,
+            roll: socket_type.roll(),
         }
     }
     use SocketMode::{Edge, Face};

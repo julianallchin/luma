@@ -1,0 +1,1353 @@
+{
+  "bbox": [
+    [
+      -0.7,
+      -0.1,
+      -0.35
+    ],
+    [
+      1.3,
+      0.9,
+      0.65
+    ]
+  ],
+  "mates": [
+    [
+      "floor_edge",
+      "floor_edge"
+    ],
+    [
+      "floor_edge",
+      "rail_end"
+    ],
+    [
+      "truss_end",
+      "floor_corner"
+    ],
+    [
+      "truss_end",
+      "truss_end"
+    ],
+    [
+      "stand_bottom",
+      "floor_top"
+    ],
+    [
+      "stand_bottom",
+      "stand_top"
+    ],
+    [
+      "stand_bottom",
+      "ground"
+    ],
+    [
+      "speaker_mount",
+      "floor_top"
+    ],
+    [
+      "speaker_mount",
+      "stand_top"
+    ],
+    [
+      "speaker_mount",
+      "ground"
+    ],
+    [
+      "equipment_mount",
+      "floor_top"
+    ],
+    [
+      "equipment_mount",
+      "stand_top"
+    ],
+    [
+      "equipment_mount",
+      "ground"
+    ],
+    [
+      "bottom_mount",
+      "floor_top"
+    ],
+    [
+      "bottom_mount",
+      "stand_top"
+    ],
+    [
+      "bottom_mount",
+      "ground"
+    ],
+    [
+      "rail_end",
+      "floor_edge"
+    ],
+    [
+      "rail_end",
+      "rail_end"
+    ],
+    [
+      "cable_end",
+      "cable_end"
+    ]
+  ],
+  "pieces": [
+    {
+      "id": "stage_lab/stage_praticavel_1x1.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "bottom",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "bottom_mount"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_front",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            0.7071067811865475,
+            0.7071067811865475
+          ],
+          "position": [
+            0.30000000000000004,
+            0.9,
+            0.65
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_back",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            0.7071067811865475,
+            -0.7071067811865475
+          ],
+          "position": [
+            0.30000000000000004,
+            0.9,
+            -0.35
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_left",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            -0.8944271909999159,
+            0.4472135954999579,
+            0.0
+          ],
+          "position": [
+            -0.7,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_right",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.8944271909999159,
+            0.4472135954999579,
+            0.0
+          ],
+          "position": [
+            1.3,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "face",
+          "name": "corner_fl",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            -0.8122914203647442,
+            0.4778184825674966,
+            0.33447293779724757
+          ],
+          "position": [
+            -0.5499999999999999,
+            0.9,
+            0.5
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        },
+        {
+          "mode": "face",
+          "name": "corner_fr",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.8122914203647441,
+            0.4778184825674965,
+            0.3344729377972475
+          ],
+          "position": [
+            1.1500000000000001,
+            0.9,
+            0.5
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        },
+        {
+          "mode": "face",
+          "name": "corner_bl",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            -0.8122914203647442,
+            0.4778184825674966,
+            -0.33447293779724757
+          ],
+          "position": [
+            -0.5499999999999999,
+            0.9,
+            -0.19999999999999998
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        },
+        {
+          "mode": "face",
+          "name": "corner_br",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.8122914203647441,
+            0.4778184825674965,
+            -0.3344729377972475
+          ],
+          "position": [
+            1.1500000000000001,
+            0.9,
+            -0.19999999999999998
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/stage_praticavel_2x1x1.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "bottom",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "bottom_mount"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_front",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            0.7071067811865475,
+            0.7071067811865475
+          ],
+          "position": [
+            0.30000000000000004,
+            0.9,
+            0.65
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_back",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            0.7071067811865475,
+            -0.7071067811865475
+          ],
+          "position": [
+            0.30000000000000004,
+            0.9,
+            -0.35
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_left",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            -0.8944271909999159,
+            0.4472135954999579,
+            0.0
+          ],
+          "position": [
+            -0.7,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "edge",
+          "name": "edge_right",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.8944271909999159,
+            0.4472135954999579,
+            0.0
+          ],
+          "position": [
+            1.3,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "type": "floor_edge"
+        },
+        {
+          "mode": "face",
+          "name": "corner_fl",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            -0.8122914203647442,
+            0.4778184825674966,
+            0.33447293779724757
+          ],
+          "position": [
+            -0.5499999999999999,
+            0.9,
+            0.5
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        },
+        {
+          "mode": "face",
+          "name": "corner_fr",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.8122914203647441,
+            0.4778184825674965,
+            0.3344729377972475
+          ],
+          "position": [
+            1.1500000000000001,
+            0.9,
+            0.5
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        },
+        {
+          "mode": "face",
+          "name": "corner_bl",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            -0.8122914203647442,
+            0.4778184825674966,
+            -0.33447293779724757
+          ],
+          "position": [
+            -0.5499999999999999,
+            0.9,
+            -0.19999999999999998
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        },
+        {
+          "mode": "face",
+          "name": "corner_br",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.8122914203647441,
+            0.4778184825674965,
+            -0.3344729377972475
+          ],
+          "position": [
+            1.1500000000000001,
+            0.9,
+            -0.19999999999999998
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_corner"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/speaker_dbr15.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "speaker_mount"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/speaker_dual18sub.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "speaker_mount"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/speaker_event_212a.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "speaker_mount"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/speaker_jbl_vtx_v20.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "speaker_mount"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/speaker_stand.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "position": [
+            0.4,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "top",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.196116135138184,
+            0.9805806756909201,
+            0.0
+          ],
+          "position": [
+            0.4,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "stand_top"
+        },
+        {
+          "mode": "face",
+          "name": "base",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.196116135138184,
+            -0.9805806756909201,
+            0.0
+          ],
+          "position": [
+            0.4,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "stand_bottom"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/cdj_3000x.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "equipment_mount"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/mixer_djm_a9.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "equipment_mount"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/guardrail.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "bottom",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "bottom_mount"
+        },
+        {
+          "mode": "face",
+          "name": "end_a",
+          "normal": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "outward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "position": [
+            -0.688,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "type": "rail_end"
+        },
+        {
+          "mode": "face",
+          "name": "end_b",
+          "normal": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "outward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "position": [
+            1.288,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "type": "rail_end"
+        }
+      ]
+    },
+    {
+      "id": "stage_lab/cable_cover.glb",
+      "sockets": [
+        {
+          "mode": "face",
+          "name": "grab",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "grab"
+        },
+        {
+          "mode": "face",
+          "name": "mount",
+          "normal": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            -0.09999999999999998,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            -0.0,
+            0.0,
+            1.0
+          ],
+          "type": "equipment_mount"
+        },
+        {
+          "mode": "face",
+          "name": "end_front",
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "outward": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            0.645
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "type": "cable_end"
+        },
+        {
+          "mode": "face",
+          "name": "end_back",
+          "normal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "outward": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.4,
+            -0.345
+          ],
+          "roll": {
+            "kind": "fixed"
+          },
+          "tangent": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "type": "cable_end"
+        }
+      ]
+    }
+  ]
+}

@@ -1,66 +1,86 @@
 /**
  * Socket model for the stage builder.
  *
- * Each mesh declares a set of named anchor points in its **local three.js
- * frame** (Y-up). Sockets carry a type tag and a normal vector; matching
+ * Each piece declares a set of named anchor points in its **local three.js
+ * frame** (Y-up). Sockets carry a type tag and a normal vector; mating
  * sockets magnetize together during placement and drag.
  *
- * Authoring is done relative to the mesh's **bounding box** (measured at
+ * Authoring is done relative to the piece's **bounding box** (measured at
  * load time via `Box3.setFromObject`) rather than raw local coordinates,
  * so socket positions stay correct regardless of where the modeler placed
  * the GLB pivot.
+ *
+ * The vocabulary itself — socket types, their kind and polarity, the anchor
+ * names, the catalog — is generated from `gpui/crates/scene/src/catalog.rs`
+ * into `./catalog.generated.ts`. This file is the *algorithm*: how an
+ * authored def becomes a resolved frame, and when two sockets mate.
  */
 
 import type { Box3, Vector3 as Vec3 } from "three";
 import { Vector3 } from "three";
+import {
+	type BboxAnchor,
+	type Polarity,
+	type RollFreedom,
+	SOCKET_KIND,
+	SOCKET_POLARITY,
+	SOCKET_ROLL,
+	type SocketDef,
+	type SocketMode,
+	type SocketType,
+} from "./catalog.generated";
+
+export type {
+	BboxAnchor,
+	Polarity,
+	RollFreedom,
+	SocketDef,
+	SocketMode,
+	SocketType,
+};
 
 // ---------------------------------------------------------------------------
-// Socket types + compatibility
+// Polarity
 // ---------------------------------------------------------------------------
-
-export type SocketType =
-	| "grab" // placement reference (cursor follows this)
-	| "floor_top" // top surface of a deck (host)
-	| "floor_edge" // mid-edge of deck top
-	| "floor_corner" // corner of deck top, inset by truss radius
-	| "truss_end" // end of any truss
-	| "stand_top" // top of a speaker stand
-	| "stand_bottom" // bottom of a speaker stand
-	| "speaker_mount" // bottom of a speaker
-	| "equipment_mount" // bottom of CDJ / mixer / cable cover
-	| "bottom_mount" // bottom of any "sits on a flat surface" piece (deck, guardrail, ...)
-	| "rail_end" // end of guardrail
-	| "cable_end" // end of a cable cover (chains end-to-end)
-	| "ground"; // implicit Y=0 plane (virtual host)
 
 /**
- * Held-side -> list of host-side socket types it can attach to.
- *
- * Snapping is asymmetric in design (the held piece is moving, the host is
- * stationary). For socket types that snap together symmetrically (truss
- * ends, floor edges, rail ends), both pieces list the other in their
- * compatibility — the solver iterates held-piece sockets and looks for
- * matches on hosts, so the symmetric case still works.
+ * Whether a socket may be the *moving* half of a joint. `male` is a plug,
+ * `neutral` self-mates; `female` is a receptacle and only ever a host.
  */
-export const COMPATIBLE: Record<SocketType, SocketType[]> = {
-	grab: [],
-	floor_top: [],
-	floor_edge: ["floor_edge"],
-	floor_corner: [],
-	truss_end: ["truss_end", "floor_corner"],
-	stand_top: [],
-	stand_bottom: ["floor_top", "ground"],
-	speaker_mount: ["stand_top", "floor_top", "ground"],
-	equipment_mount: ["floor_top", "ground"],
-	bottom_mount: ["floor_top", "ground"],
-	rail_end: ["rail_end", "floor_edge"],
-	cable_end: ["cable_end"],
-	ground: [],
-};
+export function canBeHeld(type: SocketType): boolean {
+	const p: Polarity = SOCKET_POLARITY[type];
+	return p === "male" || p === "neutral";
+}
+
+/** Whether a socket may be the *stationary* half of a joint. */
+export function canHost(type: SocketType): boolean {
+	const p: Polarity = SOCKET_POLARITY[type];
+	return p === "female" || p === "neutral";
+}
+
+/**
+ * Whether a held socket of type `held` mates a host socket of type `host`.
+ *
+ * The whole rule: same kind, the held half may be held, the host half may
+ * host. It replaces a hand-maintained held→host adjacency list — a
+ * thirteen-entry table is a lookup table pretending to be a rule, and it
+ * drifted between its two copies.
+ */
+export function socketsMate(held: SocketType, host: SocketType): boolean {
+	return (
+		SOCKET_KIND[held] === SOCKET_KIND[host] && canBeHeld(held) && canHost(host)
+	);
+}
+
+/** How much a mated piece may still turn about the socket normal. */
+export function socketRoll(def: Pick<SocketDef, "type" | "roll">): RollFreedom {
+	return def.roll ?? SOCKET_ROLL[def.type];
+}
 
 /**
  * Debug colors used by the socket overlay. Keep distinct so different
- * socket types are visually separable when stacked.
+ * socket types are visually separable when stacked. Presentation only —
+ * which is why it stays here and not in the generated catalog.
  */
 export const SOCKET_COLOR: Record<SocketType, string> = {
 	grab: "#facc15", // yellow (debug only)
@@ -81,44 +101,6 @@ export const SOCKET_COLOR: Record<SocketType, string> = {
 // ---------------------------------------------------------------------------
 // Bbox-relative authoring
 // ---------------------------------------------------------------------------
-
-/**
- * 27 named anchor points on an axis-aligned bbox: 1 centroid, 6 face
- * centres, 12 edge midpoints, 8 corners. Convention is three.js Y-up:
- * `top` = +Y, `bottom` = -Y, `front` = +Z, `back` = -Z, `right` = +X,
- * `left` = -X.
- */
-export type BboxAnchor =
-	| "center"
-	// faces (1 axis named)
-	| "top"
-	| "bottom"
-	| "front"
-	| "back"
-	| "left"
-	| "right"
-	// edges (2 axes named)
-	| "top_front"
-	| "top_back"
-	| "top_left"
-	| "top_right"
-	| "bottom_front"
-	| "bottom_back"
-	| "bottom_left"
-	| "bottom_right"
-	| "front_left"
-	| "front_right"
-	| "back_left"
-	| "back_right"
-	// corners (3 axes named — order: top/bottom, front/back, left/right)
-	| "top_front_left"
-	| "top_front_right"
-	| "top_back_left"
-	| "top_back_right"
-	| "bottom_front_left"
-	| "bottom_front_right"
-	| "bottom_back_left"
-	| "bottom_back_right";
 
 function anchorSigns(anchor: BboxAnchor): [number, number, number] {
 	// Returns [x, y, z] in {-1, 0, +1} for each axis.
@@ -172,49 +154,6 @@ export function resolveAnchor(anchor: BboxAnchor, bbox: Box3): Vec3 {
 // Socket definition (authoring shape)
 // ---------------------------------------------------------------------------
 
-/**
- * How two compatible sockets meet:
- *
- *  - `"face"` (default): the two normals **oppose** (face-to-face contact).
- *    Example: a speaker_mount (down-facing) lands on a stand_top (up-facing).
- *    The held piece is rotated 180° around the host socket's tangent.
- *
- *  - `"edge"`: the held piece takes the host's orientation **unchanged** —
- *    only a translation puts the held socket on the host socket. Example:
- *    two stage decks joined edge-to-edge; both tops face up and the shared
- *    edge runs the same way on each deck. Which sides meet is decided by
- *    the `outward` opposition test in the solver, not by a rotation.
- */
-export type SocketMode = "face" | "edge";
-
-export interface SocketDef {
-	name: string;
-	type: SocketType;
-	/** Where on the bbox the socket sits. */
-	anchor: BboxAnchor;
-	/**
-	 * Offset from the anchor in metres, three.js local-space (Y-up).
-	 * Use to inset a corner socket inward, lift a face socket above the
-	 * mesh surface, etc.
-	 */
-	offset?: [number, number, number];
-	/**
-	 * Outward direction (unit vector, three.js Y-up). The piece's "facing"
-	 * at this socket. If absent, derived from the anchor face (e.g. `top`
-	 * implies +Y). Required for corner / edge anchors where the natural
-	 * direction is ambiguous.
-	 */
-	normal?: [number, number, number];
-	/**
-	 * In-plane tangent (perpendicular to normal). Used by edge / rail
-	 * sockets where rotation about the normal matters (two floor_edge
-	 * sockets need to be tangent-aligned for the decks to lie colinearly).
-	 */
-	tangent?: [number, number, number];
-	/** See {@link SocketMode}. Defaults to `"face"`. */
-	mode?: SocketMode;
-}
-
 /** Resolved socket in mesh local space: position + orthonormal frame. */
 export interface ResolvedSocket {
 	name: string;
@@ -230,6 +169,8 @@ export interface ResolvedSocket {
 	 * next to each other, not overlapping).
 	 */
 	outward: Vec3;
+	/** How much the mated piece may still turn about `normal`. */
+	roll: RollFreedom;
 }
 
 /**
@@ -297,5 +238,6 @@ export function resolveSocket(def: SocketDef, bbox: Box3): ResolvedSocket {
 		tangent,
 		mode: def.mode ?? "face",
 		outward,
+		roll: socketRoll(def),
 	};
 }

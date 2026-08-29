@@ -12,7 +12,7 @@ import {
 } from "three";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { registerMeshGeometry } from "../lib/mesh-cache";
-import { getStageMesh } from "../lib/stage-meshes";
+import { meshUrl } from "../lib/stage-meshes";
 
 /** Skip raycasting for decorative / debug overlays so they don't intercept clicks. */
 const NULL_RAYCAST = () => {};
@@ -51,8 +51,12 @@ export function StagePieceObject({
 	inSelectedCluster,
 	inHoveredCluster,
 }: StagePieceObjectProps) {
-	const def = getStageMesh(meshPath);
-	const gltf = useGLTF(def?.url ?? "");
+	// The catalog entry is not needed to *draw* a piece — only its GLB is, and
+	// a venue may still hold a mesh the catalog has dropped (the ripped
+	// trusses). Drawing what is placed is unconditional; the palette is what
+	// the catalog gates.
+	const url = meshUrl(meshPath);
+	const gltf = useGLTF(url ?? "");
 
 	const { meshEntries, bboxSize, bboxCenter } = useMemo(() => {
 		const cloned = clone(gltf.scene) as Group;
@@ -123,9 +127,9 @@ export function StagePieceObject({
 		};
 	}, [gltf.scene, meshPath]);
 
-	useGLTF.preload(def?.url ?? "");
+	useGLTF.preload(url ?? "");
 
-	if (!def) return null;
+	if (!url) return null;
 
 	// Outline priority: primary > cluster member > hover. We only draw at
 	// most one box per piece — the bright primary wins over a softer
