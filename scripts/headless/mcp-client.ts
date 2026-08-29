@@ -135,6 +135,55 @@ export function startMcpServer(options: McpServerOptions = {}): McpServer {
 	};
 }
 
+/**
+ * One agent run's cost, as the ledger stores it: absolute totals for the
+ * thread, `null` for a number the harness did not report.
+ *
+ * The shape is `AgentThreadUsage` on the dispatcher seam, and the seam is
+ * deliberately what the two halves share — a harness knows its own CLI's event
+ * schema and Luma knows the ledger, and neither has to learn the other's.
+ */
+export type ThreadUsage = {
+	threadId: string;
+	model: string | null;
+	turns: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheCreationTokens: number;
+	cacheReadTokens: number;
+	costUsd: number | null;
+	durationMs: number;
+	subagents: number;
+};
+
+/**
+ * Write one run's cost into the library.
+ *
+ * A second, short-lived `luma-mcp` — the server that spent the money has
+ * already exited, taking its thread with it, and the price only arrives in the
+ * harness's final event after that. Same binary, same library, same admission.
+ *
+ * Never throws: a run that authored a score and failed to file its receipt is
+ * a bookkeeping loss, not a failed run, and exiting nonzero here would tell a
+ * scheduler the opposite.
+ */
+export async function recordUsage(
+	options: McpServerOptions,
+	usage: ThreadUsage,
+): Promise<string> {
+	const args = ["record-usage", "--json", JSON.stringify(usage), ...mcpArgs(options)];
+	const child = spawn(mcpBinary(), args, { stdio: ["ignore", "pipe", "pipe"], cwd: REPO_ROOT });
+	let out = "";
+	child.stdout?.on("data", (chunk) => {
+		out += chunk;
+	});
+	child.stderr?.on("data", (chunk) => {
+		out += chunk;
+	});
+	const code = await new Promise<number>((res) => child.on("exit", (c) => res(c ?? 1)));
+	return code === 0 ? out.trim() : `usage not recorded (exit ${code}): ${out.trim()}`;
+}
+
 /** Every text block of a tool result, joined. Images are dropped. */
 export function textOf(result: ToolResult): string {
 	return result.content
