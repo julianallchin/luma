@@ -92,7 +92,13 @@ pub fn gauge(request: &RequestUsage, chat: &Entity<AgentChat>, theme: &Theme) ->
 /// docked to the window's bottom edge, so a card that cannot fit above it has
 /// no room below it either — gpui snaps it rather than switching sides.
 pub fn open_card(request: &RequestUsage, theme: &Theme) -> AnyElement {
-    float::anchored_above("chat-context-card", 0.0, card(request, theme))
+    // Hover discloses it and hover takes it away — see [`float::Dismiss`].
+    float::anchored_above(
+        "chat-context-card",
+        0.0,
+        float::Dismiss::Never,
+        card(request, theme),
+    )
 }
 
 /// The ring itself: a track at full circle, a fill from twelve o'clock.

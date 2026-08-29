@@ -28,7 +28,7 @@
 //! writes a colour or a corner down.
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Div, FontWeight, SharedString};
+use gpui::{div, px, AnyElement, App, Div, FontWeight, SharedString, Window};
 use gpui_component::{Icon, IconName};
 
 use crate::{glass, ladder, motion, radius, select};
@@ -172,6 +172,17 @@ fn row_state_paint(row: Div, state: RowState, fade_key: impl Into<SharedString>)
     }
 }
 
+/// The horizontal inset a row's content sits at inside its own plate.
+///
+/// Named because a caller that aligns an un-plated column with a row of these
+/// has to subtract it from its own gutter — and two gutters written down
+/// separately drift the first time one of them is retuned.
+pub const ROW_INSET: f32 = 8.0;
+
+/// The height of a [`nav_row`]. A menu hanging off one needs it to know how far
+/// to clear the control — see [`anchored_above`].
+pub const NAV_ROW_HEIGHT: f32 = 28.0;
+
 /// One row of a picker's **list** — the thing the query filters and the arrow
 /// keys walk.
 ///
@@ -189,7 +200,7 @@ pub fn menu_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
             .flex_row()
             .items_center()
             .gap(px(10.0))
-            .px(px(8.0))
+            .px(px(ROW_INSET))
             .py(px(6.0))
             .rounded(px(radius::ROW))
             .text_size(px(13.0))
@@ -209,13 +220,13 @@ pub fn menu_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
 pub fn nav_row(state: RowState, fade_key: impl Into<SharedString>) -> Div {
     row_state_paint(
         div()
-            .h(px(28.0))
+            .h(px(NAV_ROW_HEIGHT))
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(8.0))
-            .px(px(8.0))
+            .px(px(ROW_INSET))
             .rounded(px(radius::ROW))
             .text_size(px(12.5))
             .cursor_pointer(),
@@ -647,6 +658,68 @@ pub fn popover_card() -> Div {
         .overflow_hidden()
 }
 
+/// What a press outside a float means.
+///
+/// # Why the whole floating layer owns this and no widget does
+///
+/// A menu that stays up when you press the window behind it is the same bug
+/// however many widgets have it, and it was fixed twice — the account menu and
+/// the import-source menu each hung their own `on_mouse_down_out` off their own
+/// card — while the dropdowns, the colour picker and the tab menu simply did
+/// not have it. Dismissal is a property of *being* a float, so it is stated
+/// once, here, and every [`anchored_below`] / [`anchored_above`] /
+/// [`anchored_at`] call site has to say which of the two it is.
+///
+/// # Who owns the dismissing press
+///
+/// The float does, and the surface underneath never sees it — the same rule
+/// [`crate::pane::resize_handle`] states for a seam grip, applied to a layer
+/// instead of a strip. gpui hit-tests in paint order and reports *every*
+/// hitbox under the pointer, so a press outside an open menu would otherwise
+/// both close the menu and act on whatever it landed on: one gesture, two
+/// effects, and the second one invisible until it has already happened.
+/// [`Self::OnPressOut`] therefore stops propagation before it dismisses.
+///
+/// That is also why a float driven by something *other* than the pointer takes
+/// [`Self::Never`]: a completion menu that lives as long as its field is
+/// focused would, with a swallowing dismissal, eat the first click of every
+/// gesture aimed anywhere else on the screen. Its owner is focus, and focus
+/// does not want the press.
+pub enum Dismiss {
+    /// Nothing to close from out here — a hover-disclosed card, a pill parked
+    /// on this layer for its geometry, a menu whose life is a focus's.
+    Never,
+    /// Close on the first press that lands outside the card, whichever button
+    /// it is: a right-click outside an open menu closes it, and opens nothing.
+    OnPressOut(Dismissal),
+}
+
+/// What a float runs when it is dismissed, or when a row of it is chosen —
+/// the one callback shape on this layer, named because it appears in
+/// [`Dismiss`], in [`crate::menu::ContextMenu`]'s rows, and in every signature
+/// that forwards one.
+pub type Dismissal = Box<dyn Fn(&mut Window, &mut App)>;
+
+impl Dismiss {
+    /// [`Self::OnPressOut`] without the boxing at the call site.
+    #[must_use]
+    pub fn on_press_out(dismiss: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        Self::OnPressOut(Box::new(dismiss))
+    }
+
+    /// Wire this policy onto the card — which must be the occluding element,
+    /// because gpui reads "outside" off that element's own hitbox.
+    fn apply(self, card: Div) -> Div {
+        match self {
+            Self::Never => card,
+            Self::OnPressOut(dismiss) => card.on_mouse_down_out(move |_, window, cx| {
+                cx.stop_propagation();
+                dismiss(window, cx);
+            }),
+        }
+    }
+}
+
 /// Hang `content` off the trigger it is a child of — below it where there is
 /// room, above it where there is not.
 ///
@@ -658,11 +731,11 @@ pub fn popover_card() -> Div {
 ///
 /// **Which way it opens is not a parameter** — gpui's default fit mode
 /// switches the anchor corner when the menu would not fit, so the window edge
-/// decides and no caller can get it wrong. That is what a bottom-docked
-/// consumer like the args strip needs: a menu that opened downward and then
-/// *slid* up to fit (the snap fit mode) lands wherever the window bottom is,
-/// covering everything between, while a switched anchor stays attached to the
-/// control it belongs to.
+/// decides and no caller can get it wrong. That is what a trigger near the
+/// bottom of the window needs: a menu that opened downward and then *slid* up
+/// to fit (the snap fit mode) lands wherever the window bottom is, covering
+/// everything between, while a switched anchor stays attached to the control
+/// it belongs to.
 ///
 /// `trigger` is how tall the control is. gpui switches the anchor about a
 /// *single* point — here the trigger's bottom edge — so a flipped menu would
@@ -679,9 +752,10 @@ pub fn popover_card() -> Div {
 pub fn anchored_below(
     id: impl Into<SharedString>,
     trigger: f32,
+    dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    hang(id, Side::Below, trigger, content)
+    hang(id, Side::Below, trigger, dismiss, content)
 }
 
 /// Hang `content` off the *top* of the trigger it is a child of — the mirror
@@ -702,9 +776,10 @@ pub fn anchored_below(
 pub fn anchored_above(
     id: impl Into<SharedString>,
     trigger: f32,
+    dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    hang(id, Side::Above, trigger, content)
+    hang(id, Side::Above, trigger, dismiss, content)
 }
 
 /// Which edge of the trigger a menu hangs from. The only thing that differs
@@ -717,7 +792,13 @@ enum Side {
     Above,
 }
 
-fn hang(id: impl Into<SharedString>, side: Side, trigger: f32, content: AnyElement) -> AnyElement {
+fn hang(
+    id: impl Into<SharedString>,
+    side: Side,
+    trigger: f32,
+    dismiss: Dismiss,
+    content: AnyElement,
+) -> AnyElement {
     let id = id.into();
     let reserved = px(trigger + MENU_GAP);
     let gap = px(MENU_GAP);
@@ -732,12 +813,14 @@ fn hang(id: impl Into<SharedString>, side: Side, trigger: f32, content: AnyEleme
             (gpui::Anchor::BottomRight, div().pb(gap).pt(reserved))
         }
     };
+    let card = card.child(dismiss.apply(div().occlude().child(content)));
     origin
         .child(
-            gpui::deferred(gpui::anchored().anchor(anchor).child(motion::menu_in(
-                id,
-                card.child(div().occlude().child(content)),
-            )))
+            gpui::deferred(
+                gpui::anchored()
+                    .anchor(anchor)
+                    .child(motion::menu_in(id, card)),
+            )
             .priority(1),
         )
         .into_any_element()
@@ -756,13 +839,17 @@ const MENU_GAP: f32 = 6.0;
 pub fn anchored_at(
     id: impl Into<SharedString>,
     at: gpui::Point<gpui::Pixels>,
+    dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
     gpui::deferred(
         gpui::anchored()
             .position(at)
             .anchor(gpui::Anchor::TopLeft)
-            .child(motion::menu_in(id.into(), div().occlude().child(content))),
+            .child(motion::menu_in(
+                id.into(),
+                dismiss.apply(div().occlude().child(content)),
+            )),
     )
     .priority(1)
     .into_any_element()

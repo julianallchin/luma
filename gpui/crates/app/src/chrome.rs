@@ -298,11 +298,6 @@ fn anchor(left: Pixels, right: Option<Pixels>) -> Div {
         })
 }
 
-/// What [`history_pair`] occupies in a band, gaps included. The shell budgets
-/// a strip against it and used to restate `2 * 24 + 10` to do so — two places
-/// that had to be edited together, one of which did not know the constants.
-pub(crate) const HISTORY_PAIR_WIDTH: f32 = 2.0 * CONTROL + BAND_GAP;
-
 /// Back/forward: comet's chrome carries them always, dimmed when there is
 /// nowhere to go. This shell has no navigation history — nothing is destroyed,
 /// so there is nothing to go back to — and the pair is permanently at rest
@@ -325,19 +320,6 @@ pub(crate) fn history_pair() -> Div {
                 .agent_node(Role::Button, "Forward")
                 .agent_disabled(true),
         )
-}
-
-/// The settings gear, rendered at the trailing edge of the rightmost region's
-/// band — the window's far corner, wherever the regions put it.
-pub(crate) fn settings_button(app: &Entity<Luma>) -> impl IntoElement {
-    icon_button("settings", IconName::Settings)
-        .on_click({
-            let opened = app.clone();
-            move |_, _, cx| {
-                opened.update(cx, |this, cx| this.open_settings(cx));
-            }
-        })
-        .agent_node(Role::Button, "Settings")
 }
 
 /// macOS traffic lights, ours: the native ones are hidden (see
@@ -544,9 +526,17 @@ pub(crate) fn tab_strip(
     // means the menu yields, as it always has.
     if menu_open && app.overlay.get().is_none() {
         let prerequisites = app.new_tab_prerequisites();
+        let dismiss = entity.clone();
         strip = strip.child(float::anchored_at(
             "new-tab-menu",
             point(px(window_x + frame.controls_x), px(HEIGHT - 3.0)),
+            float::Dismiss::on_press_out(move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    if this.tab_chrome.dismiss_menu() {
+                        cx.notify();
+                    }
+                });
+            }),
             div()
                 .w(px(240.0))
                 .child(new_tab_menu(entity, &prerequisites))
