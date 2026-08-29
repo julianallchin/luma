@@ -7,6 +7,13 @@
 //! on, four coupler bosses. One private function bakes both into one triangle
 //! list. Nothing here is a mesh file.
 //!
+//! Behind every plate is an end ring: four tubes on the chord centre square, a
+//! chord radius inside the face plane, so their outer surface is the face and
+//! they read as a raised rim standing round the plate. That is what a truss end
+//! looks like on the ripped stick, and it is the same ring however the piece
+//! arrives at it — a corner's twelve cube edges already lay one in every face
+//! plane.
+//!
 //! **Everything mates.** A piece's open face is an [`EndFrame`], and every end
 //! frame in the family is the same square of chord centres with the same
 //! outward normal, so [`EndFrame::mating`] bolts any piece to any other and the
@@ -35,7 +42,7 @@
 //! cut with a diamond aperture on a square of four bolt holes; the aperture is
 //! modelled here, the bolt holes are below a pixel at rig
 //! distance and are not. It spends 18 144 triangles on that one block; a
-//! six-way [`Corner`] here spends 1 776, a 3 m run 2 704, and a hinge 2 044.
+//! six-way [`Corner`] here spends 1 776, a 3 m run 3 056, and a hinge 2 044.
 
 use glam::Vec3;
 
@@ -927,16 +934,18 @@ fn leaf_members() -> impl Iterator<Item = Member> {
 /// definition of the rim, in two places it falls out of.
 fn end_ring(plane: Vec3, axis: usize) -> impl Iterator<Item = Member> {
     let (b, c) = perpendicular(axis);
-    [(b, c), (c, b)].into_iter().flat_map(move |(along, across)| {
-        [-1.0f32, 1.0].into_iter().map(move |sign| {
-            let off = plane + AXES[across] * sign * HALF_SQUARE_M;
-            Member::tube(
-                off - AXES[along] * HALF_SQUARE_M,
-                off + AXES[along] * HALF_SQUARE_M,
-                CHORD_DIAMETER_M / 2.0,
-            )
+    [(b, c), (c, b)]
+        .into_iter()
+        .flat_map(move |(along, across)| {
+            [-1.0f32, 1.0].into_iter().map(move |sign| {
+                let off = plane + AXES[across] * sign * HALF_SQUARE_M;
+                Member::tube(
+                    off - AXES[along] * HALF_SQUARE_M,
+                    off + AXES[along] * HALF_SQUARE_M,
+                    CHORD_DIAMETER_M / 2.0,
+                )
+            })
         })
-    })
 }
 
 /// A face that bolts to something, in the shape [`bake`] wants.
@@ -1399,6 +1408,71 @@ mod tests {
             let hinge = Hinge::new(degrees);
             for frame in hinge.end_frames() {
                 assert_plated(&hinge.mesh(), frame);
+            }
+        }
+    }
+
+    /// The rim of four chord-gauge tubes standing a chord radius inside
+    /// `frame`, mitred so that their ends meet on the chord centre square.
+    ///
+    /// One shape, three ways of arriving at it: a [`Truss`] and a [`Hinge`]
+    /// leaf build theirs with [`end_ring`], a [`Corner`]'s falls out of its
+    /// twelve cube edges. If one of the three drifts, ends in the same rig
+    /// stop matching each other, which is exactly what this family exists to
+    /// prevent.
+    fn assert_rimmed(members: &[Member], frame: EndFrame) {
+        let radius = CHORD_DIAMETER_M / 2.0;
+        let back = frame.normal * radius;
+        let depth = |p: Vec3| (p - frame.position).dot(frame.normal);
+        let rim: Vec<_> = members
+            .iter()
+            .filter(|m| {
+                (m.max_radius() - radius).abs() < 1e-6
+                    && (depth(m.start) + radius).abs() < 1e-4
+                    && (depth(m.end) + radius).abs() < 1e-4
+            })
+            .collect();
+        assert_eq!(rim.len(), 4, "{frame:?} is backed by {} tubes", rim.len());
+        // Closed at the corners: two of the four reach every chord centre, so
+        // the ring mitres instead of leaving a notch. Reach, not endpoint — a
+        // [`Corner`]'s edges run past their corners into the next face.
+        for corner in chord_centres(frame) {
+            let target = corner - back;
+            let meeting = rim
+                .iter()
+                .filter(|m| {
+                    let axis = m.end - m.start;
+                    let t = (target - m.start).dot(axis) / axis.length_squared();
+                    (-1e-3..=1.001).contains(&t) && (m.start + axis * t - target).length() < 1e-4
+                })
+                .count();
+            assert_eq!(meeting, 2, "{corner} of {frame:?} is met by {meeting}");
+        }
+    }
+
+    #[test]
+    fn every_face_is_backed_by_a_rim_on_the_chord_square() {
+        let truss = Truss::new(1.5);
+        let members: Vec<_> = truss.members().collect();
+        for frame in truss.end_frames() {
+            assert_rimmed(&members, frame);
+        }
+        for faces in [FaceSet::THROUGH, FaceSet::of([Face::PosX, Face::PosZ])] {
+            let corner = Corner::new(faces);
+            let members: Vec<_> = corner.members().collect();
+            // Every face, not just the open ones: a corner's rim is its cube
+            // edges, and those are there whatever the ways.
+            for face in Face::ALL {
+                assert_rimmed(&members, face.frame());
+            }
+        }
+        // Short of 180°, where the joint folds back and the two leaves' rims
+        // land in one plane — eight tubes there, and both rings correct.
+        for degrees in [0.0f32, 45.0, 90.0, 135.0] {
+            let hinge = Hinge::new(degrees);
+            let members: Vec<_> = hinge.members().collect();
+            for frame in hinge.end_frames() {
+                assert_rimmed(&members, frame);
             }
         }
     }

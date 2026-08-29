@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] `resources/meshes/` is at the repo root but every truss doc and golden path says `gpui/...`, so `ls resources/meshes/stage_lab` from `gpui/` lies about the reference meshes existing. Twenty minutes of `find` before the accessor dump could start.
 - [2026-08-29] `AGENTS.md` still says "there is no dedicated JS test suite yet" and tells you to validate by hand; `vitest.config.ts` has run 654 tests for a while, and the stage goldens live in it. The doc that tells a new agent how to check its work was the last thing to learn how.
 - [2026-08-29] The truss contract PNGs under `gpui/crates/render/goldens/contracts/` changed under me mid-task — a concurrent agent recapturing in the same checkout. Nothing warns you; `git status` just quietly grows files you did not touch, and the "commit path-scoped" rule is the only thing between that and a bogus diff.
 - [2026-08-29] Nothing in the truss family rendered a face until now, so `Face::frame()` putting a block's mating plane on the *chord-centre* square went unnoticed for two commits — every corner's in-plane edge tubes bulged a chord radius through every face, and every bolted joint interpenetrated invisibly. A geometry invariant with no picture and no test is not a contract, it is a comment.
