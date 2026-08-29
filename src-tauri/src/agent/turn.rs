@@ -37,7 +37,8 @@ use super::{
 use crate::database::local::agent_threads as db;
 use crate::models::agent_execution::PythonScopeInput;
 use crate::models::agent_threads::{
-    AgentThread, AgentThreadAppendOutcome, AppendAgentThreadMessagesInput, NewAgentThreadMessage,
+    AgentThread, AgentThreadAppendOutcome, AgentThreadUsage, AppendAgentThreadMessagesInput,
+    NewAgentThreadMessage,
 };
 use crate::models::authored_state::{
     AuthoredTurnCommit, FinalizeAuthoredTurnInput, PrepareAuthoredTurnInput,
@@ -62,6 +63,7 @@ pub(super) async fn run(
         transcript: Transcript::default(),
         head: None,
         principal: None,
+        spend: AgentThreadUsage::default(),
     };
     let outcome = match turn.drive(prompt).await {
         Ok(()) => TurnOutcome::Completed,
@@ -82,6 +84,16 @@ struct Turn {
     /// compare-and-swap against it.
     head: Option<String>,
     principal: Option<String>,
+    /// This thread's running cost, seeded from what is already recorded and
+    /// written back at every row boundary. Cumulative rather than per-turn
+    /// because the ledger holds one row per thread — see
+    /// [`AgentThreadUsage`] — and a turn that only knew its own tokens would
+    /// erase the ones spent before it.
+    ///
+    /// `subagents` stays whatever was stored: a child of an in-app turn is a
+    /// thread of its own, so it accounts for itself and its revisions already
+    /// carry its id back to the same score.
+    spend: AgentThreadUsage,
 }
 
 /// What a turn resolves once and every assistant row in it then reuses. Only
@@ -121,6 +133,11 @@ impl Turn {
         let detail = db::get_thread(&pool, &self.thread_id, self.principal.as_deref())
             .await
             .map_err(AgentError::Storage)?;
+        self.spend = db::thread_usage(&pool, &self.thread_id)
+            .await
+            .map_err(AgentError::Storage)?
+            .unwrap_or_default();
+        self.spend.thread_id.clone_from(&self.thread_id);
         let kind = AgentKind::parse(&detail.thread.agent_kind)?;
         self.transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
         self.head = self.transcript.head_message_id();
@@ -169,6 +186,12 @@ impl Turn {
             let (stop_reason, usage, assistant_id) =
                 self.assistant_row(&setup, &turn_message_id).await?;
             self.close_row(&assistant_id, stop_reason, usage).await?;
+            // After the row is durable, so a run's recorded price never
+            // describes work the transcript does not have.
+            self.spend.turns += 1;
+            db::record_thread_usage(&pool, &self.spend)
+                .await
+                .map_err(AgentError::Storage)?;
 
             // Steering is applied here and nowhere else: between one durable
             // assistant row and the next, so each row keeps its own preparation.
@@ -177,6 +200,22 @@ impl Turn {
                 Err(_) => return Ok(()),
             }
         }
+    }
+
+    /// Add one model step to this thread's running cost.
+    ///
+    /// Tokens and wall time only. Nothing here prices them: the loop is told
+    /// token counts by the provider and would have to guess at dollars from a
+    /// rate card kept in the tree, which is a second source of truth that rots
+    /// silently. A harness that is *told* the price fills `cost_usd` in.
+    fn charge(&mut self, model: &str, usage: Usage, elapsed: std::time::Duration) {
+        let count = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+        self.spend.model = Some(model.to_string());
+        self.spend.input_tokens += count(usage.input_tokens);
+        self.spend.output_tokens += count(usage.output_tokens);
+        self.spend.cache_creation_tokens += count(usage.cache_creation_input_tokens);
+        self.spend.cache_read_tokens += count(usage.cache_read_input_tokens);
+        self.spend.duration_ms += i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX);
     }
 
     /// One assistant row: as many model steps as the model asks for, with tool
@@ -205,6 +244,7 @@ impl Turn {
             };
             let started = std::time::Instant::now();
             let (stop_reason, usage, calls) = self.stream_step(setup.client, request).await?;
+            self.charge(setup.model.key(), usage, started.elapsed());
             self.emit(TurnEvent::StepEnded {
                 stop_reason,
                 usage,
