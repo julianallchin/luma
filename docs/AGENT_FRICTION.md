@@ -2,6 +2,8 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] `cargo test --lib` in src-tauri regenerates `docs/specs/ipc-manifest.*` and *then* fails the run that wrote them, so adding one dispatch command costs two full 80-second suites before anything is green.
+- [2026-08-29] A new dispatch command compiles, passes the manifest test, and is still unreachable at runtime until you also add it to the `tauri::generate_handler!` list in `lib.rs`. The only signal is a `function ... is never used` clippy warning buried among pre-existing ones.
 - [2026-08-29] A render-contract golden is only a gate if its id is *also* hand-copied into `CASES` in `crates/render/tests/renderer_contract_goldens.rs`; `render-contract-goldens` happily captures and tracks a PNG that nothing ever compares, and `truss-side-by-side` shipped ungated for exactly that reason.
 - [2026-08-29] `git status` RM = rename already staged, so a path-scoped `git add` of an unrelated file still commits it — splitting a tree with pre-staged renames misfiles them, and fixing that needs `reset`.
 

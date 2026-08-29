@@ -102,6 +102,9 @@ mcp-stdio = { path = "crates/mcp-stdio" }
 # safe because `luma-render` and `luma-scene` depend on nothing here but
 # `fixture-kinematics`.
 luma-render = { path = "../gpui/crates/render" }
+# Where a fixture's light comes from and where it points — the single
+# implementation the renderer, the eval engine and the agent bindings share.
+fixture-kinematics = { path = "crates/fixture-kinematics" }
 # The vector type those two speak. Pinned to their version by definition: a
 # second glam here would be a second, incompatible `Vec3`.
 glam = "0.30"

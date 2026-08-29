@@ -194,7 +194,7 @@ fn fixtures_root() -> Option<PathBuf> {
 
 /// Map primitive id (`fixture-uuid:head`) -> world position, reproducing the
 /// legacy mapping exactly: per-head layout offset rotated by the fixture
-/// orientation and added to the base position (shared `head_world_position`).
+/// orientation and added to the base position (`fixture_kinematics::rig_position`).
 /// This replaces the old base-position shortcut so spatial patterns (chases,
 /// gradients) see the same per-head geometry the legacy engine did.
 async fn fetch_positions(pool: &SqlitePool, venue_id: &str) -> HashMap<String, [f32; 3]> {
@@ -214,31 +214,28 @@ async fn fetch_positions(pool: &SqlitePool, venue_id: &str) -> HashMap<String, [
         let fixture_path: String = r.try_get(1).unwrap_or_default();
         let mode_name: String = r.try_get(2).unwrap_or_default();
         let base = [
-            r.try_get::<f64, _>(3).unwrap_or(0.0) as f32,
-            r.try_get::<f64, _>(4).unwrap_or(0.0) as f32,
-            r.try_get::<f64, _>(5).unwrap_or(0.0) as f32,
+            r.try_get::<f64, _>(3).unwrap_or(0.0),
+            r.try_get::<f64, _>(4).unwrap_or(0.0),
+            r.try_get::<f64, _>(5).unwrap_or(0.0),
         ];
         let rot = [
             r.try_get::<f64, _>(6).unwrap_or(0.0),
             r.try_get::<f64, _>(7).unwrap_or(0.0),
             r.try_get::<f64, _>(8).unwrap_or(0.0),
         ];
-        // Per-head offsets from the definition (single head at origin if missing).
-        let offsets = root
+        // Per-head cells from the definition (single cell at the origin if missing).
+        let geom = root
             .as_ref()
             .map(|root| root.join(&fixture_path))
             .and_then(|p| luma_lib::fixtures::parser::parse_definition(&p).ok())
-            .map(|def| luma_lib::fixtures::layout::compute_head_offsets(&def, &mode_name))
-            .unwrap_or_else(|| {
-                vec![luma_lib::fixtures::layout::HeadLayout {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                }]
-            });
-        for (i, offset) in offsets.iter().enumerate() {
-            let pos = luma_lib::fixtures::layout::head_world_position(base, rot, *offset);
-            out.insert(format!("{id}:{i}"), pos);
+            .map(|def| luma_lib::fixtures::layout::head_geometry(&def, &mode_name))
+            .unwrap_or_else(|| fixture_kinematics::FixtureGeometry::unauthored(Vec::new()));
+        let mount = luma_lib::fixtures::layout::fixture_mount(base, rot);
+        for i in 0..geom.cell_count() {
+            out.insert(
+                format!("{id}:{i}"),
+                fixture_kinematics::rig_position(&geom, &mount, i).to_array(),
+            );
         }
     }
     out

@@ -596,6 +596,7 @@ pub fn run() {
             dispatch::adapter::get_fixture_definition,
             dispatch::adapter::patch_fixture,
             dispatch::adapter::get_patched_fixtures,
+            dispatch::adapter::get_fixture_facings,
             dispatch::adapter::move_patched_fixture,
             dispatch::adapter::move_patched_fixture_spatial,
             dispatch::adapter::remove_patched_fixture,

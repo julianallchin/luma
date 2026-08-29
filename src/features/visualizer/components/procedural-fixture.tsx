@@ -80,8 +80,12 @@ export function ProceduralFixture({
 		_euler.set(fixture.rotX, fixture.rotZ, fixture.rotY);
 		_qFixture.setFromEuler(_euler);
 
-		// Face direction in world space
-		_faceDir.set(0, 0, 1).applyQuaternion(_qFixture).normalize();
+		// Face direction in world space. A parked fixture emits along its mount
+		// normal — straight down when it is hung square — which is the housing's
+		// local -Y after the quarter turn the group below applies. The housing's
+		// own emitting face (+depth) is a QLC+ authoring convention, not a
+		// second rest axis.
+		_faceDir.set(0, -1, 0).applyQuaternion(_qFixture).normalize();
 
 		const fxX = fixture.posX;
 		const fxY = fixture.posZ;
@@ -147,7 +151,9 @@ export function ProceduralFixture({
 	});
 
 	return (
-		<group>
+		// The quarter turn that puts the housing's emitting face on the mount
+		// normal; `frame.rs` does the same thing for the same reason.
+		<group rotation={[Math.PI / 2, 0, 0]}>
 			<mesh castShadow receiveShadow>
 				<boxGeometry args={[width, height, depth]} />
 				<meshStandardMaterial color="#050505" />

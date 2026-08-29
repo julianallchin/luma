@@ -10,7 +10,8 @@
 //! the port lands. It lives here for now because nothing else consumes it yet.
 
 use crate::scene_desc::Definition;
-use glam::{Mat3, Vec3};
+use fixture_kinematics::{aim, Articulation, Mount};
+use glam::Vec3;
 
 /// A fixture's optics, reduced to the two numbers the cone model needs.
 #[derive(Debug, Clone, Copy)]
@@ -193,32 +194,30 @@ impl ModelKind {
 /// renderer does not draw, which is how a pixel bar aimed along its own length
 /// pulled a club's extent six metres sideways.
 ///
-/// `position` is `[pan, tilt]` in degrees, or `None` for a head with no pinned
-/// state — the rest pose the mounting rotation alone describes. Pixel bars
-/// have no pan or tilt: they fire along their mounted `+Z`, and passing one
-/// here is not an error. A definition that is absent from the catalogue, or
-/// one whose type emits haze rather than light, has no direction at all.
+/// Rest is the **mount normal** and nothing else: hung square, every fixture
+/// fires straight down, bar and mover alike. A bar used to be special-cased to
+/// its housing's `+depth` face, which is where the third of this codebase's
+/// three rest conventions lived; the housing's front face is now turned onto the
+/// mount normal once, where the bar is drawn, instead of being re-derived here.
 ///
-/// Composed in three space, because both the mounting Euler triple and the
-/// pan/tilt gimbal are three-space conventions (`static-fixture.tsx`), then
-/// taken to world space once at the end.
+/// `position` is `[pan, tilt]` in degrees, or `None` for a head with no pinned
+/// state. Pixel bars have no pan or tilt, so theirs is ignored rather than
+/// refused. A definition that is absent from the catalogue, or one whose type
+/// emits haze rather than light, has no direction at all.
 #[must_use]
 pub fn beam_direction(def: Option<&Definition>, rot: [f32; 3], position: Option<[f32; 2]>) -> Vec3 {
     let Some(def) = def else {
         return Vec3::ZERO;
     };
-    let local = if is_procedural(def) {
-        Vec3::Z
+    let articulation = if is_procedural(def) {
+        Articulation::REST
     } else if model_kind(def).is_some_and(ModelKind::emits_beam) {
         let [pan, tilt] = position.unwrap_or([0.0, 0.0]);
-        Mat3::from_rotation_y(pan.to_radians())
-            * Mat3::from_rotation_x(-tilt.to_radians())
-            * Vec3::NEG_Y
+        Articulation::from_degrees(pan, tilt)
     } else {
         return Vec3::ZERO;
     };
-    let mount = crate::coords::euler_xyz(rot[0], rot[2], rot[1]);
-    (crate::coords::three_to_world_basis() * (mount * local)).normalize_or_zero()
+    crate::coords::world_from_data(aim(&Mount::from_stored(Vec3::ZERO, rot), &articulation))
 }
 
 /// LED bars and matrices are drawn from their layout rather than from a mesh.

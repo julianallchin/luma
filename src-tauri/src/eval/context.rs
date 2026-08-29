@@ -14,17 +14,18 @@
 //!     loaded only when the graph actually consumes it.
 //!
 //! Geometry mirrors the legacy mapping exactly via `fixtures::layout`
-//! (`compute_head_offsets` + `head_world_position`); audio/stem/onset/chord
+//! (`head_geometry` + `fixture_kinematics::rig_position`); audio/stem/onset/chord
 //! loading prefers the app-side DB + audio helpers over raw sqlx where one exists.
 
 use crate::audio::{load_or_decode_audio_shared, read_pcm_file, stereo_to_mono, write_pcm_file};
 use crate::eval::{ResidentAudio, ResidentContext};
-use crate::fixtures::layout::{compute_head_offsets, head_world_position, HeadLayout};
+use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::fixtures::parser::parse_definition;
 use crate::models::node_graph::{BeatGrid, Edge, NodeInstance};
 use crate::models::selection::Selection;
 use crate::services::tracks::{get_track_beats, TARGET_SAMPLE_RATE};
 use crate::storage::StorageRoot;
+use fixture_kinematics::{rig_position, FixtureGeometry};
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -40,10 +41,10 @@ static AUDIO_CACHE: Lazy<Mutex<HashMap<String, ResidentAudio>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 const AUDIO_CACHE_MAX: usize = 8;
 
-/// Process-wide cache of per-head layout offsets, keyed by `"{fixture_path}|{mode}"`,
-/// so fixture definitions are parsed from disk once per venue rather than once per
-/// (fixture × annotation).
-static OFFSETS_CACHE: Lazy<Mutex<HashMap<String, Vec<HeadLayout>>>> =
+/// Process-wide cache of per-fixture cell geometry, keyed by
+/// `"{fixture_path}|{mode}"`, so fixture definitions are parsed from disk once
+/// per venue rather than once per (fixture × annotation).
+static OFFSETS_CACHE: Lazy<Mutex<HashMap<String, FixtureGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Drop the cached resident data for a track (called when leaving it).
@@ -155,7 +156,7 @@ pub(crate) fn seed_for(instance: Option<&str>, node_id: &str) -> u64 {
 /// Derived from the QLC+ `Physical` block — a housing size and a pixel grid.
 /// QLC+ carries no pivot or aperture geometry, so these are positions on the
 /// housing face and nothing more.
-fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> Vec<HeadLayout> {
+fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> FixtureGeometry {
     let key = format!("{fixture_path}|{mode_name}");
     if let Ok(cache) = OFFSETS_CACHE.lock() {
         if let Some(hit) = cache.get(&key) {
@@ -165,14 +166,8 @@ fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> Ve
     let def_path = resource_root.join(fixture_path);
     let offsets = parse_definition(&def_path)
         .ok()
-        .map(|def| compute_head_offsets(&def, mode_name))
-        .unwrap_or_else(|| {
-            vec![HeadLayout {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            }]
-        });
+        .map(|def| head_geometry(&def, mode_name))
+        .unwrap_or_else(|| FixtureGeometry::unauthored(Vec::new()));
     if let Ok(mut cache) = OFFSETS_CACHE.lock() {
         cache.insert(key, offsets.clone());
     }
@@ -186,8 +181,8 @@ fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> Ve
 /// resolve it to venue fixtures via
 /// `groups::resolve_selection_expression_with_path` (whole venue when there is no
 /// selection node / empty expression — expression `"all"`). Each resolved
-/// fixture expands to its *member* heads via `compute_head_offsets` +
-/// `head_world_position` (all heads for whole-fixture matches).
+/// fixture expands to its *member* heads via `head_geometry` +
+/// `fixture_kinematics::rig_position` (all heads for whole-fixture matches).
 ///
 /// `instance` identifies the *occurrence* of the pattern — the clip or cue id —
 /// and is what makes the same pattern draw a different half of a group each time
@@ -241,24 +236,22 @@ pub async fn resolve_primitive_ids_with_access(
     let mut out = Vec::new();
     for resolved in &fixtures {
         let fixture = &resolved.fixture;
-        let offsets = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name);
-        let base = [
-            fixture.pos_x as f32,
-            fixture.pos_y as f32,
-            fixture.pos_z as f32,
-        ];
-        let rot = [fixture.rot_x, fixture.rot_y, fixture.rot_z];
+        let geom = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name);
+        let mount = fixture_mount(
+            [fixture.pos_x, fixture.pos_y, fixture.pos_z],
+            [fixture.rot_x, fixture.rot_y, fixture.rot_z],
+        );
         let mut push = |i: usize| {
-            let pos = head_world_position(base, rot, offsets[i]);
+            let pos = rig_position(&geom, &mount, i).to_array();
             out.push((format!("{}:{}", fixture.id, i), pos));
         };
         match &resolved.heads {
             // Whole fixture: every head the definition lays out.
-            None => (0..offsets.len()).for_each(&mut push),
+            None => (0..geom.cell_count()).for_each(&mut push),
             // Partial: only member heads (guard against stale indices).
             Some(heads) => heads
                 .iter()
-                .filter(|&&i| i < offsets.len())
+                .filter(|&&i| i < geom.cell_count())
                 .for_each(|&i| push(i)),
         }
     }

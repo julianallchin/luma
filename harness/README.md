@@ -86,6 +86,14 @@ manifest alone — which matters, because once the port lands and three.js is
 deleted these PNGs are the *only* copy of the reference look. They are
 committed on purpose.
 
+> **Stale on purpose, for two scenes.** `led-bar` and `venue-no-haze` were
+> captured while a procedural LED bar fired out of its housing's `+depth` face.
+> A fixture now rests along its **mount normal** (`docs/design/venue-graph.md`,
+> phase 0), so those two scenes changed — `scenes-wgpu/` was recaptured and
+> `src/features/visualizer/components/procedural-fixture.tsx` was turned to
+> match, but re-shooting the three.js reference needs a running app. Compare
+> those two frames against `scenes-wgpu/`, not against these.
+
 The scenes live in `src/harness/golden-scenes.ts` — plain data, no database,
 no eval engine, no IPC. `src/harness/scenes-3d.tsx` mounts the *real*
 `<StageVisualizer>` against them on `/harness-3d.html?scene=<id>`.

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { PatchedFixture } from "@/bindings/fixtures";
+import type { FixtureFacing, PatchedFixture } from "@/bindings/fixtures";
 import type { FixtureGroupNode } from "@/bindings/groups";
 import { VENUE_EXPERT_MODEL } from "@/features/track-editor/agent/openrouter-key";
 import { tool } from "@/shared/lib/agent/agent-tool";
@@ -47,24 +47,26 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			}
 
 			let fixtures: PatchedFixture[];
+			let facings: FixtureFacing[];
 			let groups: FixtureGroupNode[];
 			try {
-				[fixtures, groups] = await Promise.all([
+				[fixtures, facings, groups] = await Promise.all([
 					invoke<PatchedFixture[]>("get_patched_fixtures", { venueId }),
+					invoke<FixtureFacing[]>("get_fixture_facings", { venueId }),
 					invoke<FixtureGroupNode[]>("get_grouped_hierarchy", { venueId }),
 				]);
 			} catch (err) {
 				return { error: `Failed to load venue data: ${String(err)}` };
 			}
 
-			const venueDump = formatVenueContext(fixtures, groups);
+			const venueDump = formatVenueContext(fixtures, facings, groups);
 
 			try {
 				const answer = await completePiText({
 					runtime,
 					systemPrompt: `You are a venue expert for a lighting design tool. You receive a dump of every fixture and every group in a venue, then answer one question from another agent who is composing a lighting score.
 
-Coordinate system: Z-up, meters. +X = stage right, +Y = back of venue, -Y = audience/front, +Z = up. Facing labels (up/down/front/back/left/right) describe the fixture's beam direction after rotation; raw Euler angles in radians are also given for precision.
+Coordinate system: Z-up, meters. +X = stage right, +Y = back of venue, -Y = audience/front, +Z = up. Facing labels (up/down/house/upstage/stage-left/stage-right) name the direction a parked fixture's beam leaves along — the outward normal of whatever it is mounted on. Raw Euler angles in radians are also given for precision.
 
 Fixture types: par_wash (basic wash light), pixel_bar (linear pixel strip), moving_head (motorized beam), scanner, strobe, static, unknown.
 
@@ -85,8 +87,10 @@ Answer in plain prose. Always quote the exact snake_case group names so the call
  */
 export function formatVenueContext(
 	fixtures: PatchedFixture[],
+	facings: FixtureFacing[],
 	groups: FixtureGroupNode[],
 ): string {
+	const facingWord = new Map(facings.map((f) => [f.id, f.word]));
 	const fixtureLabel = new Map<string, string>();
 	for (const f of fixtures) {
 		fixtureLabel.set(f.id, f.label ?? `${f.manufacturer} ${f.model}`);
@@ -96,7 +100,7 @@ export function formatVenueContext(
 		const name = fixtureLabel.get(f.id) ?? "<unnamed>";
 		const pos = `(${fmtN(f.posX)}, ${fmtN(f.posY)}, ${fmtN(f.posZ)})`;
 		const rot = `(${fmtN(f.rotX)}, ${fmtN(f.rotY)}, ${fmtN(f.rotZ)})`;
-		const facing = facingLabel(f.rotX, f.rotY, f.rotZ);
+		const facing = facingWord.get(f.id) ?? "?";
 		const type = inferFixtureTypeFromGroups(f.id, groups);
 		return `${f.id} | "${name}" | ${type} | pos=${pos}m | facing=${facing} | rot=${rot}rad`;
 	});
@@ -154,27 +158,4 @@ function inferFixtureTypeFromGroups(
 		}
 	}
 	return "unknown";
-}
-
-/**
- * Coarse human-readable facing label from Euler angles in radians.
- * Default fixture-local forward is +Y (Z-up, Y-forward). Applies intrinsic
- * X → Y → Z rotations, then picks the dominant axis of the resulting vector.
- */
-function facingLabel(rotX: number, rotY: number, rotZ: number): string {
-	const sx = Math.sin(rotX);
-	const cx = Math.cos(rotX);
-	const sy = Math.sin(rotY);
-	const cy = Math.cos(rotY);
-	const sz = Math.sin(rotZ);
-	const cz = Math.cos(rotZ);
-	const dx = cz * sy * sx - sz * cx;
-	const dy = sz * sy * sx + cz * cx;
-	const dz = cy * sx;
-	const ax = Math.abs(dx);
-	const ay = Math.abs(dy);
-	const az = Math.abs(dz);
-	if (az >= ax && az >= ay) return dz > 0 ? "up" : "down";
-	if (ay >= ax) return dy > 0 ? "back" : "front";
-	return dx > 0 ? "right" : "left";
 }

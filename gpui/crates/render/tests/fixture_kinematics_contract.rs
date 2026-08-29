@@ -83,6 +83,7 @@ fn characterization_frame() -> Frame {
         editing: false,
         render: RenderSettings::dark_stage(48.0, 0.5),
         selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
         fixtures: vec![Fixture {
             id: "mover".into(),
             fixture_path: "mover.qxf".into(),
@@ -142,7 +143,7 @@ fn kinematics_reproduces_todays_beam_direction() {
     let cone = frame.fixture_cones.first().expect("one cone");
 
     let geom = fixture_kinematics::FixtureGeometry::unauthored(vec![Vec3::ZERO]);
-    let mount = fixture_kinematics::Mount::new(Vec3::from(MOUNT_POSITION), MOUNT_ROTATION);
+    let mount = fixture_kinematics::Mount::from_stored(Vec3::from(MOUNT_POSITION), MOUNT_ROTATION);
     let art = fixture_kinematics::Articulation::from_degrees(PAN_DEG, TILT_DEG);
     let ray = fixture_kinematics::beam_ray(&geom, &mount, &art, 0);
 
@@ -163,7 +164,7 @@ fn switching_on_aperture_depth_would_move_the_origin() {
     // The size of the pending change, stated rather than discovered later: a
     // 14-degree mover's beam currently starts 0.2 m behind where its lens is.
     let cells = vec![Vec3::ZERO];
-    let mount = fixture_kinematics::Mount::new(Vec3::from(MOUNT_POSITION), MOUNT_ROTATION);
+    let mount = fixture_kinematics::Mount::from_stored(Vec3::from(MOUNT_POSITION), MOUNT_ROTATION);
     let art = fixture_kinematics::Articulation::from_degrees(PAN_DEG, TILT_DEG);
     let bare = fixture_kinematics::beam_ray(
         &fixture_kinematics::FixtureGeometry::unauthored(cells.clone()),

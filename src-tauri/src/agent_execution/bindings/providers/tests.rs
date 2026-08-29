@@ -540,7 +540,13 @@ async fn full_assembly_covers_every_schema_branch() {
 
     // §10.1 venue
     assert_eq!(at(&v, "venue.name"), "Basement");
-    assert_eq!(at(&v, "venue.fixtures").as_array().unwrap().len(), 2);
+    let fixtures = at(&v, "venue.fixtures");
+    assert_eq!(fixtures.as_array().unwrap().len(), 2);
+    // Facing is derived, not stored: these fixtures are hung square, so the
+    // mount normal is straight down and the word an agent reads is "down".
+    assert_eq!(fixtures[0]["rotation"], json!([0.0, 0.0, 0.0]));
+    assert_eq!(fixtures[0]["facing"], json!([0.0, 0.0, -1.0]));
+    assert_eq!(fixtures[0]["facing_word"], "down");
     assert_eq!(at(&v, "venue.groups")[0]["name"], "front_wash");
     let pieces = at(&v, "venue.pieces");
     assert_eq!(pieces.as_array().unwrap().len(), 2);

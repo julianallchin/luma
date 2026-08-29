@@ -3,7 +3,8 @@ use std::path::{Component, Path};
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
+use crate::fixtures::layout::fixture_mount;
+use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::services::fixtures as fixture_service;
 use crate::services::groups::invalidate_venue_fixture_cache;
 
@@ -20,6 +21,35 @@ pub async fn get_patched_fixtures(
     let fixtures = fixture_service::get_patched_fixtures(&mut access).await?;
     publish_patch(services, fixtures.clone());
     Ok(fixtures)
+}
+
+/// Which way every fixture in a venue points.
+///
+/// A companion to [`get_patched_fixtures`] rather than extra columns on it: the
+/// rows carry a pose, this carries what the pose *means*, and only one of the
+/// two can go stale. Callers that need both fetch both — they are already
+/// fetching several things about a venue in parallel.
+pub async fn get_fixture_facings(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<Vec<FixtureFacing>, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    Ok(fixture_service::get_patched_fixtures(&mut access)
+        .await?
+        .into_iter()
+        .map(|f| {
+            let direction =
+                fixture_mount([f.pos_x, f.pos_y, f.pos_z], [f.rot_x, f.rot_y, f.rot_z]).normal();
+            FixtureFacing {
+                id: f.id,
+                direction: direction.to_array(),
+                word: fixture_kinematics::StageDirection::of(direction)
+                    .label()
+                    .to_string(),
+            }
+        })
+        .collect())
 }
 
 /// Build the in-memory index of the bundled fixture definitions. Returns how
