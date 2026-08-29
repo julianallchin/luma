@@ -150,6 +150,34 @@
           "type": "bottom_mount"
         },
         {
+          "mode": "face",
+          "name": "top",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_top"
+        },
+        {
           "mode": "edge",
           "name": "edge_front",
           "normal": [
@@ -433,6 +461,34 @@
             1.0
           ],
           "type": "bottom_mount"
+        },
+        {
+          "mode": "face",
+          "name": "top",
+          "normal": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "outward": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "position": [
+            0.30000000000000004,
+            0.9,
+            0.15000000000000002
+          ],
+          "roll": {
+            "kind": "free"
+          },
+          "tangent": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "type": "floor_top"
         },
         {
           "mode": "edge",

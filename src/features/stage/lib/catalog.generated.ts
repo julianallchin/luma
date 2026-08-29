@@ -249,6 +249,17 @@ export const CATALOG: CatalogPiece[] = [
 				"type": "bottom_mount"
 			},
 			{
+				"anchor": "top",
+				"mode": "face",
+				"name": "top",
+				"normal": [
+					0.0,
+					1.0,
+					0.0
+				],
+				"type": "floor_top"
+			},
+			{
 				"anchor": "top_front",
 				"mode": "edge",
 				"name": "edge_front",
@@ -384,6 +395,17 @@ export const CATALOG: CatalogPiece[] = [
 					0.0
 				],
 				"type": "bottom_mount"
+			},
+			{
+				"anchor": "top",
+				"mode": "face",
+				"name": "top",
+				"normal": [
+					0.0,
+					1.0,
+					0.0
+				],
+				"type": "floor_top"
 			},
 			{
 				"anchor": "top_front",

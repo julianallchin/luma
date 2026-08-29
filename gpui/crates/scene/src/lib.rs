@@ -26,6 +26,7 @@ pub mod aabb;
 pub mod bvh;
 pub mod camera;
 pub mod catalog;
+pub mod coords;
 pub mod framing;
 pub mod gesture;
 pub mod gizmo;
@@ -33,6 +34,7 @@ pub mod graph;
 pub mod selection;
 pub mod snap;
 pub mod sockets;
+pub mod venue;
 
 pub use aabb::Aabb;
 pub use bvh::{MeshBvh, Ray, RayHit, TriMesh};
@@ -54,3 +56,7 @@ pub use sockets::{
     BboxAnchor, Polarity, ResolvedSocket, RollFreedom, SocketDef, SocketKind, SocketMode,
     SocketType,
 };
+// The venue graph is reached as `luma_scene::venue::*` rather than re-exported:
+// its `Node` is a node of the *relation* tree and `graph::Node` is a node of the
+// *scene* tree, and flattening both into one namespace would make the two
+// indistinguishable at every call site.

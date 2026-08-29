@@ -19,6 +19,7 @@ use luma_scene::aabb::DAabb;
 use luma_scene::catalog::{pieces, Family, Geometry, Piece};
 use luma_scene::snap::SocketLookup;
 use luma_scene::sockets::{resolve_socket, ResolvedSocket, SocketType};
+use luma_scene::venue::{Node, NodeKind, NodeSockets, Params};
 use std::collections::HashMap;
 
 /// Palette default span for the straight truss, in metres. Quantized to whole
@@ -150,6 +151,135 @@ impl SocketLookup for CatalogSockets {
         self.by_id.get(piece_id).map_or(&[], Vec::as_slice)
     }
 }
+
+// ---------------------------------------------------------------------------
+// The venue graph's view of the same geometry
+// ---------------------------------------------------------------------------
+
+/// The parameters a node's generator is standing at.
+///
+/// A placed node overrides the palette default one key at a time, so an absent
+/// `span` means "the default span" rather than zero — which is why this reads
+/// through [`default_params`] rather than constructing a [`Procedural`] from
+/// scratch. `faces` is the generator's own bitmask, stored as a number because
+/// `venue_node_params` is `(key, value)` and a second encoding for one column
+/// would be a second thing to keep true.
+#[must_use]
+pub fn node_params(family: Family, params: &Params) -> Procedural {
+    match (family, default_params(family)) {
+        (Family::Truss, Procedural::Truss { span }) => Procedural::Truss {
+            #[allow(clippy::cast_possible_truncation)]
+            span: params.get("span", f64::from(span)) as f32,
+        },
+        (Family::Hinge, Procedural::Hinge { angle }) => Procedural::Hinge {
+            #[allow(clippy::cast_possible_truncation)]
+            angle: params.get("angle", f64::from(angle)) as f32,
+        },
+        (Family::Corner, Procedural::Corner { faces }) => Procedural::Corner {
+            faces: params.lookup("faces").map_or(faces, face_set_from_bits),
+        },
+        // `default_params` is total over `Family`, so the pairs above are
+        // exhaustive; matching on both halves is what makes that checkable
+        // rather than asserted.
+        (_, other) => other,
+    }
+}
+
+/// A [`FaceSet`] out of the number `venue_node_params` holds, and back.
+///
+/// One bit per [`Face`], in [`Face::ALL`] order. Out-of-range bits are dropped
+/// rather than refused: `Corner::new` widens anything under two ways to a
+/// through-box, so every input names a corner that exists.
+#[must_use]
+pub fn face_set_from_bits(bits: f64) -> FaceSet {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let bits = bits.round().clamp(0.0, 63.0) as u32;
+    FaceSet::of(
+        Face::ALL
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| bits & (1 << i) != 0)
+            .map(|(_, f)| f),
+    )
+}
+
+/// The inverse of [`face_set_from_bits`] — what `set_params` writes.
+#[must_use]
+pub fn face_set_bits(faces: FaceSet) -> f64 {
+    f64::from(
+        Face::ALL
+            .into_iter()
+            .enumerate()
+            .filter(|(_, f)| faces.contains(*f))
+            .fold(0_u32, |bits, (i, _)| bits | (1 << i)),
+    )
+}
+
+/// Sockets for a venue-graph node: authored against a GLB's bbox, or read off
+/// the generator's end frames **at the node's own parameters**.
+///
+/// [`CatalogSockets`] answers the same question for a *catalog* entry, at the
+/// palette default. A placed 6 m truss has its ends 6 m apart, so the resolver
+/// cannot use that answer, and this is the wrapper that supplies the difference.
+pub struct VenueSockets {
+    catalog: CatalogSockets,
+}
+
+impl VenueSockets {
+    /// Resolve the catalog once, against the GLBs under `meshes_root`.
+    ///
+    /// # Errors
+    /// As [`CatalogSockets::load`].
+    pub fn load(meshes_root: impl Into<std::path::PathBuf>) -> anyhow::Result<Self> {
+        Ok(Self {
+            catalog: CatalogSockets::load(meshes_root)?,
+        })
+    }
+
+    /// The catalog view, for the drag-time solver.
+    #[must_use]
+    pub fn catalog(&self) -> &CatalogSockets {
+        &self.catalog
+    }
+}
+
+impl NodeSockets for VenueSockets {
+    fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
+        let Some(catalog_ref) = node.catalog_ref.as_deref() else {
+            return Vec::new();
+        };
+        // A fixture's `catalog_ref` is a `fixtures` row id, not a piece: it
+        // hangs off its host's socket and needs only one of its own to hang by.
+        if node.kind == NodeKind::Fixture {
+            return vec![fixture_clamp()];
+        }
+        match luma_scene::catalog::piece(catalog_ref).map(|p| p.geometry) {
+            Some(Geometry::Procedural(family)) => {
+                procedural_sockets(node_params(family, &node.params))
+            }
+            _ => self.catalog.sockets(catalog_ref).to_vec(),
+        }
+    }
+}
+
+/// The one socket every fixture has: the clamp, on its underside.
+///
+/// A fixture is not a catalog piece — it is a row in the patch — and its
+/// housing geometry is the QLC+ definition's business, not the snap solver's.
+/// One `EquipmentMount` at the origin is the whole of what placing it needs,
+/// and [`luma_scene::venue`] turns the *host* socket's normal into the beam.
+pub fn fixture_clamp() -> ResolvedSocket {
+    ResolvedSocket::from_frame(
+        FIXTURE_CLAMP_SOCKET,
+        SocketType::EquipmentMount,
+        DVec3::ZERO,
+        DVec3::NEG_Y,
+        DVec3::X,
+    )
+}
+
+/// The name of the socket [`fixture_clamp`] declares.
+pub const FIXTURE_CLAMP_SOCKET: &str = "clamp";
 
 #[cfg(test)]
 mod tests {
