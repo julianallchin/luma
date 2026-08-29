@@ -23,9 +23,9 @@ use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
 use crate::eval::ops::spatial::rig_uv;
-use crate::fixtures::layout::fixture_mount;
-use crate::stage_render::flatten_pieces;
 use fixture_kinematics::StageDirection;
+use glam::DVec3;
+use luma_scene::venue::{NodeKind, NodePose, ResolvedVenue};
 use luma_scene::View;
 
 /// One patched fixture, with what its pose *means* alongside the pose itself.
@@ -45,32 +45,40 @@ struct FixtureBinding {
     universe: i64,
     address: i64,
     num_channels: i64,
-    position: [f64; 3],
-    /// Stored Euler triple, radians.
-    rotation: [f64; 3],
+    /// Absent when the fixture is patched but unplaced — it is in the tray.
+    position: Option<[f64; 3]>,
+    /// Euler triple in the stored convention, radians.
+    rotation: Option<[f64; 3]>,
     /// Unit vector, data space, that a parked head emits along.
-    facing: [f32; 3],
+    facing: Option<[f64; 3]>,
     /// The same direction as a stage word: `house`, `upstage`, `stage-left`,
     /// `stage-right`, `up`, `down`.
-    facing_word: &'static str,
+    facing_word: Option<&'static str>,
 }
 
 /// One stage piece in the same world frame as [`FixtureBinding::position`].
 ///
-/// `position`/`rotation` are the *flattened* pose — a piece parented to a truss
-/// stores its pose in the truss's local space, and an agent asked to find the
-/// booth cannot be expected to walk that chain. `parent_id` is kept so the
-/// attachment is still legible.
+/// `position`/`rotation` are the **resolved** pose — poses exist nowhere else,
+/// so there is no chain for an agent asked to find the booth to walk.
+/// `parent_id` and the socket pair are kept so the *relation* is legible too:
+/// "the mover is on the downstage truss" is the sentence the flattened metres
+/// could never say.
 #[derive(Serialize)]
 struct PieceBinding {
     id: String,
-    /// Snap/palette taxonomy: `floor`, `truss`, `speaker`, `cdj`, `mixer`, ...
+    /// The graph's own alphabet: `stage`, `run`, `tower`, `piece`, `array`.
     kind: String,
-    mesh_path: String,
-    position: [f32; 3],
-    rotation: [f32; 3],
-    scale: f32,
+    /// Snap/palette taxonomy: `floor`, `truss`, `speaker`, `cdj`, `mixer`, ...
+    catalog_kind: String,
+    catalog_ref: Option<String>,
+    label: Option<String>,
+    position: [f64; 3],
+    rotation: [f64; 3],
+    /// Unit vector, data space, that this node's mount frame faces.
+    facing: [f64; 3],
     parent_id: Option<String>,
+    my_socket: Option<String>,
+    their_socket: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -114,6 +122,14 @@ pub async fn provide(
         return Ok(());
     };
 
+    // Convert off the old schema first: everything below reads through one
+    // read transaction, and the conversion needs a write one. Cheap and
+    // idempotent after the first time this venue is looked at.
+    if let Err(e) = crate::venue_graph::ensure_migrated(ctx.pool, venue_id, ctx.resource_root).await
+    {
+        log::warn!("[venue] {venue_id} could not be converted to a graph: {e}");
+    }
+
     let mut access = match VenueAccess::<Read>::read(ctx.pool, VenueResource::Venue(venue_id)).await
     {
         Ok(access) => access,
@@ -149,76 +165,105 @@ pub async fn provide(
         }
     }
 
-    match local::fixtures::get_patched_fixtures(&mut access).await {
-        Ok(fixtures) => {
-            let bindings: Vec<FixtureBinding> = fixtures
-                .iter()
-                .map(|f| {
-                    let facing =
-                        fixture_mount([f.pos_x, f.pos_y, f.pos_z], [f.rot_x, f.rot_y, f.rot_z])
-                            .normal();
-                    FixtureBinding {
-                        id: f.id.clone(),
-                        label: f.label.clone(),
-                        manufacturer: f.manufacturer.clone(),
-                        model: f.model.clone(),
-                        mode: f.mode_name.clone(),
-                        universe: f.universe,
-                        address: f.address,
-                        num_channels: f.num_channels,
-                        position: [f.pos_x, f.pos_y, f.pos_z],
-                        rotation: [f.rot_x, f.rot_y, f.rot_z],
-                        facing: facing.to_array(),
-                        facing_word: StageDirection::of(facing).label(),
-                    }
-                })
-                .collect();
-            inline(b, "venue.fixtures", &bindings)?;
+    // One solve, both records. `venue.fixtures` and `venue.pieces` are two
+    // halves of the same walk, and solving twice would be two answers to a
+    // question with one.
+    match crate::venue_graph::resolved(&mut access, ctx.resource_root).await {
+        Ok(venue) => {
+            fixtures(b, &mut access, &venue).await?;
+            pieces(b, &venue)?;
         }
-        Err(e) => unavailable(
-            b,
-            "venue.fixtures",
-            format!("the venue's fixtures could not be loaded: {e}"),
-        )?,
+        Err(e) => {
+            for path in ["venue.fixtures", "venue.pieces"] {
+                unavailable(b, path, format!("the venue could not be resolved: {e}"))?;
+            }
+        }
     }
 
-    pieces(b, &mut access).await?;
     views(b)?;
     groups(b, ctx, &mut access).await?;
     positions(b, ctx, store, &mut access).await
 }
 
-/// The set design: everything in the room that is not a light.
+/// The patch, with where each fixture ended up.
 ///
-/// The world pose comes from [`flatten_pieces`], the same parent-chain
-/// flattening the renderer draws with, so `render(view="dj")` and this record
-/// agree about where the booth is. The taxonomy and the attachment are read off
-/// the rows, which `flatten_pieces` returns one-for-one and in order.
-async fn pieces(b: &mut BindingBuilder, access: &mut VenueAccess<'_, Read>) -> Result<(), String> {
-    let rows = match local::stage::get_stage_pieces(access).await {
+/// `facing` and `facing_word` are derived, never stored: a fixture's rest
+/// direction is the outward normal of the socket it hangs from, so they are
+/// what the resolver says and what the renderer draws. Every consumer that used
+/// to do its own arithmetic on `rotation` got a different answer.
+///
+/// A patched fixture nobody has placed is reported with no pose at all rather
+/// than one at the origin — it is in the tray, and pretending otherwise is how
+/// venues ended up with fixtures piled at `(0, 0, 0)`.
+async fn fixtures(
+    b: &mut BindingBuilder,
+    access: &mut VenueAccess<'_, Read>,
+    venue: &ResolvedVenue,
+) -> Result<(), String> {
+    let rows = match local::fixtures::get_patched_fixtures(access).await {
         Ok(rows) => rows,
         Err(e) => {
             return unavailable(
                 b,
-                "venue.pieces",
-                format!("the venue's stage pieces could not be loaded: {e}"),
+                "venue.fixtures",
+                format!("the venue's fixtures could not be loaded: {e}"),
             )
         }
     };
-    let bindings: Vec<PieceBinding> = flatten_pieces(&rows)
-        .into_iter()
-        .zip(&rows)
-        .map(|(flat, row)| PieceBinding {
-            id: flat.id,
-            kind: row.kind.clone(),
-            // From the row, not the flattened piece: the mesh path is
-            // taxonomy, and the renderer's `Piece` now says *geometry* — which
-            // for a generated piece is not a path at all.
-            mesh_path: row.mesh_path.clone(),
-            position: flat.pos,
-            rotation: flat.rot,
-            scale: flat.scale,
-            parent_id: row.parent_piece_id.clone(),
+    let bindings: Vec<FixtureBinding> = rows
+        .iter()
+        .map(|f| {
+            let placed = venue.pose(&f.id);
+            let (position, rotation) = placed.map(NodePose::data_pose).unzip();
+            let facing = placed.map(|pose| {
+                let (_, basis) = pose.data_basis();
+                basis * DVec3::NEG_Z
+            });
+            FixtureBinding {
+                id: f.id.clone(),
+                label: f.label.clone(),
+                manufacturer: f.manufacturer.clone(),
+                model: f.model.clone(),
+                mode: f.mode_name.clone(),
+                universe: f.universe,
+                address: f.address,
+                num_channels: f.num_channels,
+                position,
+                rotation,
+                facing: facing.map(|v| v.to_array()),
+                facing_word: facing.map(|v| StageDirection::of(v.as_vec3()).label()),
+            }
+        })
+        .collect();
+    inline(b, "venue.fixtures", &bindings)
+}
+
+/// The set design: everything in the room that is not a light.
+///
+/// The pose is the resolver's, the same one `render(view="dj")` draws, so the
+/// two agree about where the booth is by construction rather than by two copies
+/// of the same walk staying in step.
+fn pieces(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
+    let bindings: Vec<PieceBinding> = venue
+        .poses()
+        .filter(|pose| !matches!(pose.kind, NodeKind::Venue | NodeKind::Fixture))
+        .map(|pose| {
+            let (position, rotation) = pose.data_pose();
+            let (_, basis) = pose.data_basis();
+            PieceBinding {
+                id: pose.node.clone(),
+                kind: pose.kind.as_str().to_string(),
+                catalog_kind: crate::stage_render::catalog_kind(pose.catalog_ref.as_deref())
+                    .to_string(),
+                catalog_ref: pose.catalog_ref.clone(),
+                label: pose.label.clone(),
+                position,
+                rotation,
+                facing: (basis * DVec3::NEG_Z).to_array(),
+                parent_id: pose.parent.clone(),
+                my_socket: None,
+                their_socket: None,
+            }
         })
         .collect();
     inline(b, "venue.pieces", &bindings)

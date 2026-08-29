@@ -325,14 +325,15 @@ impl Fixture {
             .await
             .unwrap();
         }
-        // A truss with a light hanging off it — the parent chain is the part
-        // `venue.pieces` has to flatten.
+        // A deck with a CDJ standing on it. Real catalog ids, because what is
+        // under test is the conversion recovering *which socket met which* —
+        // an id the catalog has dropped exercises the fallback instead.
         sqlx::query(
             "INSERT INTO stage_pieces
                 (id, venue_id, mesh_path, kind, label, pos_x, pos_y, pos_z,
                  rot_x, rot_y, rot_z, scale, parent_piece_id)
-             VALUES ('pie-truss', ?, 'stage_lab/truss.glb', 'truss', 'Front truss',
-                     1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, NULL)",
+             VALUES ('pie-truss', ?, 'stage_lab/stage_praticavel_2x1x1.glb', 'floor',
+                     'Front riser', 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, NULL)",
         )
         .bind(&self.venue_id)
         .execute(&self.pool)
@@ -342,8 +343,8 @@ impl Fixture {
             "INSERT INTO stage_pieces
                 (id, venue_id, mesh_path, kind, label, pos_x, pos_y, pos_z,
                  rot_x, rot_y, rot_z, scale, parent_piece_id)
-             VALUES ('pie-cdj', ?, 'stage_lab/cdj.glb', 'cdj', 'Deck',
-                     0.5, 0.0, 0.25, 0.0, 0.0, 0.0, 2.0, 'pie-truss')",
+             VALUES ('pie-cdj', ?, 'stage_lab/cdj_3000x.glb', 'cdj', 'Deck',
+                     0.5, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0, 'pie-truss')",
         )
         .bind(&self.venue_id)
         .execute(&self.pool)
@@ -439,6 +440,18 @@ fn reason(v: &Value, path: &str) -> String {
     let node = at(v, path);
     assert_eq!(node["$kind"], "unavailable", "expected {path} unavailable");
     node["reason"].as_str().unwrap().to_string()
+}
+
+/// A derived three-vector, compared the way a solve's output has to be.
+fn close3(v: &Value, want: [f64; 3]) {
+    let got = v.as_array().unwrap();
+    for (axis, expected) in want.iter().enumerate() {
+        let actual = got[axis].as_f64().unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "axis {axis}: got {actual}, want {expected}"
+        );
+    }
 }
 
 fn shape(v: &Value, path: &str) -> Vec<usize> {
@@ -544,22 +557,48 @@ async fn full_assembly_covers_every_schema_branch() {
     assert_eq!(fixtures.as_array().unwrap().len(), 2);
     // Facing is derived, not stored: these fixtures are hung square, so the
     // mount normal is straight down and the word an agent reads is "down".
-    assert_eq!(fixtures[0]["rotation"], json!([0.0, 0.0, 0.0]));
-    assert_eq!(fixtures[0]["facing"], json!([0.0, 0.0, -1.0]));
+    // Both vectors come out of the solve, so they carry its float noise (a
+    // `cos(PI/2)` lands at 6e-17, not 0) and are compared with a tolerance.
+    close3(&fixtures[0]["rotation"], [0.0, 0.0, 0.0]);
+    close3(&fixtures[0]["facing"], [0.0, 0.0, -1.0]);
     assert_eq!(fixtures[0]["facing_word"], "down");
     assert_eq!(at(&v, "venue.groups")[0]["name"], "front_wash");
+    // Depth-first with children in id order, so the CDJ standing on the riser
+    // comes before the riser's own row would if it had siblings.
     let pieces = at(&v, "venue.pieces");
     assert_eq!(pieces.as_array().unwrap().len(), 2);
-    assert_eq!(pieces[0]["id"], "pie-truss");
-    assert_eq!(pieces[0]["kind"], "truss");
-    assert_eq!(pieces[0]["position"], json!([1.0, 2.0, 3.0]));
-    assert!(pieces[0]["parent_id"].is_null());
-    // The child's stored pose is truss-local; the binding publishes the world
-    // pose the renderer draws, and inherits the parent's scale.
-    assert_eq!(pieces[1]["id"], "pie-cdj");
-    assert_eq!(pieces[1]["parent_id"], "pie-truss");
-    assert_eq!(pieces[1]["position"], json!([1.5, 2.0, 3.25]));
-    assert_eq!(pieces[1]["scale"], 2.0);
+    let riser = pieces
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "pie-truss")
+        .expect("the riser is placed");
+    let cdj = pieces
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "pie-cdj")
+        .expect("the cdj is placed");
+    // Two vocabularies, deliberately: `kind` is the graph's own alphabet and
+    // `catalog_kind` is the palette taxonomy the renderer branches on.
+    assert_eq!(riser["kind"], "stage");
+    assert_eq!(riser["catalog_kind"], "floor");
+    assert_eq!(cdj["catalog_kind"], "cdj");
+    close3(&riser["position"], [1.0, 2.0, 3.0]);
+    // Nothing is "unparented": a piece on the floor hangs off the venue root
+    // like everything else, which is what makes the resolver have one branch
+    // instead of two.
+    assert!(
+        riser["parent_id"]
+            .as_str()
+            .is_some_and(|id| id.ends_with(":venue")),
+        "the riser sits on the venue floor, not on nothing: {}",
+        riser["parent_id"]
+    );
+    // The relation, not just the metres: the conversion recovered which socket
+    // met which, so the CDJ is *on* the riser and comes with it if it moves.
+    assert_eq!(cdj["parent_id"], "pie-truss");
+    close3(&cdj["position"], [1.5, 2.0, 3.25]);
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
     // §10.2 authored timeline + patterns. Persistence vocabulary (`score`)

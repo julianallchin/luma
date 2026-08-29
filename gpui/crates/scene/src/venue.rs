@@ -205,10 +205,23 @@ pub struct Constraint {
 /// implementation lives in `luma_render::catalog`, which is the only module
 /// that knows both the catalog and the geometry.
 pub trait NodeSockets {
-    /// `node`'s sockets in its own local (Y-up) frame. Empty for a node whose
-    /// `catalog_ref` no longer resolves — a venue may outlive a catalog entry,
-    /// and that is a dangling pose, not an error.
+    /// `node`'s sockets in its own local (Y-up) frame.
     fn sockets(&self, node: &Node) -> Vec<ResolvedSocket>;
+
+    /// Whether this node's geometry is the geometry it names.
+    ///
+    /// A venue outlives a catalog: a row naming a piece that has since been
+    /// dropped still has a pose, and [`Self::sockets`] is expected to give it
+    /// something to hang by rather than nothing. Saying so is a *separate*
+    /// question from placing it, and it is the supply's to answer — the
+    /// resolver has no catalog of its own and must not grow one.
+    ///
+    /// Defaults to "yes", so a test table or a fixture supply does not have to
+    /// have an opinion.
+    fn is_known(&self, node: &Node) -> bool {
+        let _ = node;
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -834,6 +847,12 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
         }
 
         collect_dangling(&mut out, node, sockets);
+        if !sockets.is_known(node) {
+            out.warnings.push(NodeWarning {
+                node: node.id.clone(),
+                warning: Warning::UnknownCatalogRef(node.catalog_ref.clone().unwrap_or_default()),
+            });
+        }
 
         // Depth-first: this node's children go on next, in id order.
         if let Some(kids) = children.get(id) {
@@ -947,7 +966,7 @@ fn place(
 /// `parent_world . host_frame . T(u, v) . lift(trim) . Rz(yaw) . mate_suffix`
 ///
 /// `(u, v)` run in the host surface's own plane and `trim` runs along world up
-/// (see [`trim_axis`]), so the offset and the twist sit *between* the two
+/// (see `trim_axis`), so the offset and the twist sit *between* the two
 /// frames — turning about the joint rather than about the piece's own origin.
 /// That is the same arrangement `snap::evaluate_candidate` reaches by a
 /// different road, and the golden snap vectors are what keeps the two honest.
@@ -1131,14 +1150,14 @@ fn evaluate_constraint<S: NodeSockets + ?Sized>(
 /// The `(u, v, yaw, trim)` that reproduces a world pose as a free placement on
 /// a surface.
 ///
-/// The inverse of the surface branch of [`place`], and the whole of what the
+/// The inverse of [`place_on`], and the whole of what the
 /// migration off `pos_*`/`rot_*` needs: an old row's world pose goes in, the
 /// placement that lands the piece in the same spot comes out.
 ///
 /// `held` is the socket on the piece that meets the surface, `host` the surface
 /// socket in its own parent's frame; `parent_world` places that parent, and
 /// `kind` picks which of the two mate conventions the pose is in (see
-/// [`mate_suffix`]).
+/// `mate_suffix`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfacePlacement {
     /// Metres along the host socket's tangent.

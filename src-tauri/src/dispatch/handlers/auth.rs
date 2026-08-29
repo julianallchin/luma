@@ -878,6 +878,10 @@ async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(
         "track_waveforms",
         "tracks",
         "venue_implementation_overrides",
+        // Local-only, exactly like `stage_pieces`: the venue graph has no
+        // remote table yet (`supabase/migrations/…_venue_graph_NOT_DEPLOYED`),
+        // so a wipe loses nothing here it would not already lose there.
+        "venue_nodes",
         "venues",
     ];
     let unknown: Vec<_> = actual

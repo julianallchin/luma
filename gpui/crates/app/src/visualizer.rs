@@ -938,7 +938,7 @@ impl Visualizer {
                 return;
             }
         };
-        if rig.fixtures.is_empty() && rig.pieces.is_empty() {
+        if rig.is_empty() {
             self.status = Status::Empty(format!("{} has nothing patched", self.venue_name));
             return;
         }
@@ -1108,10 +1108,11 @@ impl Visualizer {
                 pick.camera.position() - pivot,
                 self.gizmo_mode,
             ) {
-                let originals = self
+                let originals: Vec<_> = self
                     .selection
                     .selected()
                     .iter()
+                    .filter(|target| target.kind == ObjectKind::Fixture)
                     .filter_map(|target| {
                         let object = pick.object(*target)?.clone();
                         let pose = stage
@@ -1121,13 +1122,18 @@ impl Visualizer {
                         Some((object, pose.position, pose.rotation))
                     })
                     .collect();
-                self.editor_drag = Some(EditorDrag::Gizmo {
-                    handle: hit.handle,
-                    start: at,
-                    pivot,
-                    originals,
-                });
-                return;
+                // Nothing draggable under the widget is an orbit, not a drag
+                // that moves nothing: see [`set_object_pose`] for why a stage
+                // piece is not draggable.
+                if !originals.is_empty() {
+                    self.editor_drag = Some(EditorDrag::Gizmo {
+                        handle: hit.handle,
+                        start: at,
+                        pivot,
+                        originals,
+                    });
+                    return;
+                }
             }
         }
         self.editor_drag = Some(EditorDrag::ClickOrbit {
@@ -1310,28 +1316,35 @@ fn object_pose(scene: &scene_desc::Scene, object: &EditorObject) -> Option<Trans
 
 /// Write a world pose back to the stored triple — the inverse of
 /// [`object_pose`], through the same conversion.
+///
+/// # Fixtures only, for now
+///
+/// A stage piece has no pose to write. Its pose is *derived* from where it is
+/// bolted — `(parent, sockets, u, v, yaw, trim)` — so committing a dragged
+/// world pose means inverting the mate with
+/// [`luma_scene::venue::invert_placement`] and calling `set_params`, and that
+/// inversion needs the parent's world frame and both sockets' geometry, which
+/// live behind the catalog this screen does not load. That, plus the
+/// roll-freedom drag that replaces the gizmo on a *snapped* piece entirely,
+/// is the builder — phase 4 of `docs/design/venue-graph.md`. Until it lands a
+/// piece is selectable and highlightable but the gizmo refuses to grab it,
+/// which is the honest state; a gizmo that accepted the drag and dropped it
+/// would be worse.
 fn set_object_pose(
     scene: &mut scene_desc::Scene,
     object: &EditorObject,
     position: Vec3,
     rotation: Quat,
 ) {
+    let EditorObject::Fixture(id) = object else {
+        return;
+    };
     let (pos, rot) = coords::data_pose_of(
         to_world().inverse() * Mat4::from_rotation_translation(rotation, position),
     );
-    match object {
-        EditorObject::Fixture(id) => {
-            if let Some(object) = scene.fixtures.iter_mut().find(|object| &object.id == id) {
-                object.pos = pos;
-                object.rot = rot;
-            }
-        }
-        EditorObject::StagePiece(id) => {
-            if let Some(object) = scene.pieces.iter_mut().find(|object| &object.id == id) {
-                object.pos = pos;
-                object.rot = rot;
-            }
-        }
+    if let Some(object) = scene.fixtures.iter_mut().find(|object| &object.id == id) {
+        object.pos = pos;
+        object.rot = rot;
     }
 }
 
@@ -1352,10 +1365,23 @@ fn zoom_scale(distance: f32) -> f32 {
 /// One venue as a scene description: geometry in data space, the render dials
 /// the web's dark-stage view pins, and an **empty** state map — head state
 /// arrives per frame through [`luma_render::StateSource`] instead.
+///
+/// Every pose here is read off the solved graph, through the same
+/// [`stage_render::piece_of`] the offscreen path uses: the two differ in
+/// render settings, never in where anything is.
 pub(crate) fn scene(
     rig: &Rig,
     definitions: &BTreeMap<String, scene_desc::Definition>,
 ) -> scene_desc::Scene {
+    // A fixture node's id *is* its `fixtures` row id, which is what makes the
+    // patch and the placement two halves of one fixture without either half
+    // storing the other's key.
+    let placed: HashMap<&str, &_> = rig
+        .venue
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
     scene_desc::Scene {
         id: "live".into(),
         times: Vec::new(),
@@ -1374,20 +1400,29 @@ pub(crate) fn scene(
         selected_fixture_ids: Vec::new(),
         editor: scene_desc::Editor::default(),
         // A fixture whose definition did not resolve has no mesh and no cone,
-        // so it is left out rather than drawn as a guess.
+        // and one nobody has placed has nowhere to be, so both are left out
+        // rather than drawn as a guess at the origin.
         fixtures: rig
             .fixtures
             .iter()
             .filter(|f| definitions.contains_key(&f.fixture_path))
-            .map(|f| scene_desc::Fixture {
-                id: f.id.clone(),
-                fixture_path: f.fixture_path.clone(),
-                mode_name: f.mode_name.clone(),
-                pos: [f.pos_x as f32, f.pos_y as f32, f.pos_z as f32],
-                rot: [f.rot_x as f32, f.rot_y as f32, f.rot_z as f32],
+            .filter_map(|f| {
+                let node = placed.get(f.id.as_str())?;
+                Some(scene_desc::Fixture {
+                    id: f.id.clone(),
+                    fixture_path: f.fixture_path.clone(),
+                    mode_name: f.mode_name.clone(),
+                    pos: node.position.map(|v| v as f32),
+                    rot: node.rotation.map(|v| v as f32),
+                })
             })
             .collect(),
-        pieces: stage_render::flatten_pieces(&rig.pieces),
+        pieces: rig
+            .venue
+            .nodes
+            .iter()
+            .filter_map(stage_render::piece_of)
+            .collect(),
         state: BTreeMap::new(),
     }
 }

@@ -84,33 +84,6 @@ pub async fn update_fixture_address(
     Ok(result.rows_affected())
 }
 
-pub async fn update_fixture_spatial(
-    access: &mut VenueAccess<'_, Write>,
-    id: &str,
-    pos_x: f64,
-    pos_y: f64,
-    pos_z: f64,
-    rot_x: f64,
-    rot_y: f64,
-    rot_z: f64,
-) -> Result<u64, String> {
-    let result = sqlx::query(
-        "UPDATE fixtures SET pos_x = ?, pos_y = ?, pos_z = ?, rot_x = ?, rot_y = ?, rot_z = ? WHERE id = ? AND venue_id = ?",
-    )
-    .bind(pos_x)
-    .bind(pos_y)
-    .bind(pos_z)
-    .bind(rot_x)
-    .bind(rot_y)
-    .bind(rot_z)
-    .bind(id)
-    .bind(access.venue_id().to_owned())
-    .execute(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to update fixture spatial data: {}", e))?;
-    Ok(result.rows_affected())
-}
-
 pub async fn update_fixture_label(
     access: &mut VenueAccess<'_, Write>,
     id: &str,

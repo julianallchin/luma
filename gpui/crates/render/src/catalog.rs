@@ -244,6 +244,15 @@ impl VenueSockets {
 }
 
 impl NodeSockets for VenueSockets {
+    fn is_known(&self, node: &Node) -> bool {
+        // A fixture names a patch row, which was never a catalog entry.
+        node.kind == NodeKind::Fixture
+            || node
+                .catalog_ref
+                .as_deref()
+                .is_some_and(|id| luma_scene::catalog::piece(id).is_some())
+    }
+
     fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
         let Some(catalog_ref) = node.catalog_ref.as_deref() else {
             return Vec::new();
@@ -257,10 +266,35 @@ impl NodeSockets for VenueSockets {
             Some(Geometry::Procedural(family)) => {
                 procedural_sockets(node_params(family, &node.params))
             }
-            _ => self.catalog.sockets(catalog_ref).to_vec(),
+            Some(Geometry::Mesh { .. }) => self.catalog.sockets(catalog_ref).to_vec(),
+            // A venue outlives a catalog: the four ripped truss GLBs left the
+            // palette, and rows naming them did not. Such a piece keeps an
+            // origin to hang by, so its pose survives; the resolver reports it
+            // as `UnknownCatalogRef` so nobody mistakes surviving for fine.
+            None => vec![origin_mount()],
         }
     }
 }
+
+/// The socket every node has whether or not anything authored one: its own
+/// origin, facing down, so it can rest on a surface.
+///
+/// It is what an unrecognised piece is placed by, and it is deliberately
+/// `Male` — it can be held, never hosted, so nothing can be bolted *to* a piece
+/// whose geometry is unknown.
+#[must_use]
+pub fn origin_mount() -> ResolvedSocket {
+    ResolvedSocket::from_frame(
+        ORIGIN_SOCKET,
+        SocketType::BottomMount,
+        DVec3::ZERO,
+        DVec3::NEG_Y,
+        DVec3::X,
+    )
+}
+
+/// The name of the socket [`origin_mount`] declares.
+pub const ORIGIN_SOCKET: &str = "origin";
 
 /// The one socket every fixture has: the clamp, on its underside.
 ///
@@ -268,6 +302,7 @@ impl NodeSockets for VenueSockets {
 /// housing geometry is the QLC+ definition's business, not the snap solver's.
 /// One `EquipmentMount` at the origin is the whole of what placing it needs,
 /// and [`luma_scene::venue`] turns the *host* socket's normal into the beam.
+#[must_use]
 pub fn fixture_clamp() -> ResolvedSocket {
     ResolvedSocket::from_frame(
         FIXTURE_CLAMP_SOCKET,

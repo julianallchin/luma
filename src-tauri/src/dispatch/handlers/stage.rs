@@ -51,6 +51,7 @@ pub async fn get_resolved_venue(
 /// joint, and a parent that would close a cycle. Those are the only two hard
 /// errors the design admits; everything else comes back as a warning on the
 /// report.
+#[allow(clippy::too_many_arguments)]
 pub async fn attach(
     services: &AppServices,
     venue_id: String,
@@ -65,7 +66,7 @@ pub async fn attach(
 ) -> Result<PlacementReport, CommandError> {
     let mut access = write(services, &venue_id).await?;
     require_kind(&kind)?;
-    require_in_venue(&mut access, &[parent_id.clone()]).await?;
+    require_in_venue(&mut access, std::slice::from_ref(&parent_id)).await?;
 
     let node_id =
         venue_graph_db::insert_node(&mut access, &kind, catalog_ref.as_deref(), label.as_deref())
@@ -136,7 +137,7 @@ pub async fn place_free(
     require_kind(&kind)?;
     let parent_id = match surface_node_id {
         Some(id) => {
-            require_in_venue(&mut access, &[id.clone()]).await?;
+            require_in_venue(&mut access, std::slice::from_ref(&id)).await?;
             id
         }
         None => venue_graph_db::root_id(&mut access)
@@ -174,7 +175,7 @@ pub async fn detach(
     node_id: String,
 ) -> Result<PlacementReport, CommandError> {
     let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, &[node_id.clone()]).await?;
+    require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
     venue_graph_db::delete_edge(&mut access, &node_id).await?;
     report(access, services, &node_id).await
 }
@@ -194,7 +195,7 @@ pub async fn set_params(
     label: Option<String>,
 ) -> Result<PlacementReport, CommandError> {
     let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, &[node_id.clone()]).await?;
+    require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
 
     let mut params = params;
     if let Some(yaw) = params.remove("yaw") {
@@ -235,7 +236,7 @@ pub async fn delete_subtree(
     node_id: String,
 ) -> Result<ResolvedVenue, CommandError> {
     let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, &[node_id.clone()]).await?;
+    require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
     let graph = venue_graph::graph(&mut access).await?;
     if node_id == graph.root() {
         return Err(CommandError::Invalid(

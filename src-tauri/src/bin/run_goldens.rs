@@ -192,45 +192,60 @@ fn fixtures_root() -> Option<PathBuf> {
         .find(|p| p.is_dir())
 }
 
-/// Map primitive id (`fixture-uuid:head`) -> world position, reproducing the
-/// legacy mapping exactly: per-head layout offset rotated by the fixture
-/// orientation and added to the base position (`fixture_kinematics::rig_position`).
-/// This replaces the old base-position shortcut so spatial patterns (chases,
-/// gradients) see the same per-head geometry the legacy engine did.
+/// Map primitive id (`fixture-uuid:head`) -> world position, per-head via the
+/// shared `fixtures::layout` mapping: the layout offset placed in the mount
+/// frame the venue graph resolves for the fixture's node
+/// (`fixture_kinematics::rig_position`).
+///
+/// A fixture the graph does not place has no position at all and contributes no
+/// primitives — the same rule the eval pre-pass follows, so a golden and a live
+/// run agree about which primitives exist.
 async fn fetch_positions(pool: &SqlitePool, venue_id: &str) -> HashMap<String, [f32; 3]> {
-    let root = fixtures_root();
-    let rows = sqlx::query(
-        "SELECT id, fixture_path, mode_name, pos_x, pos_y, pos_z, rot_x, rot_y, rot_z
-         FROM fixtures WHERE venue_id = ?",
+    let Some(root) = fixtures_root() else {
+        return HashMap::new();
+    };
+    if let Err(e) = luma_lib::venue_graph::ensure_migrated(pool, venue_id, &root).await {
+        eprintln!("venue {venue_id}: could not be converted to a graph: {e}");
+        return HashMap::new();
+    }
+    let Ok(mut access) = luma_lib::database::local::venue_access::VenueAccess::<
+        luma_lib::database::local::venue_access::Read,
+    >::read(
+        pool,
+        luma_lib::database::local::venue_access::VenueResource::Venue(venue_id),
     )
-    .bind(venue_id)
-    .fetch_all(pool)
     .await
-    .unwrap_or_default();
+    else {
+        return HashMap::new();
+    };
+    let venue = match luma_lib::venue_graph::resolved(&mut access, &root).await {
+        Ok(venue) => venue,
+        Err(e) => {
+            eprintln!("venue {venue_id}: could not be resolved: {e}");
+            return HashMap::new();
+        }
+    };
+
+    let rows = sqlx::query("SELECT id, fixture_path, mode_name FROM fixtures WHERE venue_id = ?")
+        .bind(venue_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
     let mut out = HashMap::new();
     for r in rows {
         let id: String = r.get(0);
+        let Some(pose) = venue.pose(&id) else {
+            continue;
+        };
         let fixture_path: String = r.try_get(1).unwrap_or_default();
         let mode_name: String = r.try_get(2).unwrap_or_default();
-        let base = [
-            r.try_get::<f64, _>(3).unwrap_or(0.0),
-            r.try_get::<f64, _>(4).unwrap_or(0.0),
-            r.try_get::<f64, _>(5).unwrap_or(0.0),
-        ];
-        let rot = [
-            r.try_get::<f64, _>(6).unwrap_or(0.0),
-            r.try_get::<f64, _>(7).unwrap_or(0.0),
-            r.try_get::<f64, _>(8).unwrap_or(0.0),
-        ];
         // Per-head cells from the definition (single cell at the origin if missing).
-        let geom = root
-            .as_ref()
-            .map(|root| root.join(&fixture_path))
-            .and_then(|p| luma_lib::fixtures::parser::parse_definition(&p).ok())
+        let geom = luma_lib::fixtures::parser::parse_definition(&root.join(&fixture_path))
+            .ok()
             .map(|def| luma_lib::fixtures::layout::head_geometry(&def, &mode_name))
             .unwrap_or_else(|| fixture_kinematics::FixtureGeometry::unauthored(Vec::new()));
-        let mount = luma_lib::fixtures::layout::fixture_mount(base, rot);
+        let mount = luma_lib::fixtures::layout::fixture_mount(pose);
         for i in 0..geom.cell_count() {
             out.insert(
                 format!("{id}:{i}"),

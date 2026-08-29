@@ -225,9 +225,7 @@ impl Luma {
             let loaded = rig.await;
             let installed = match loaded {
                 Err(error) => Err(error.to_string()),
-                Ok(rig) if rig.fixtures.is_empty() && rig.pieces.is_empty() => {
-                    Err("this venue has nothing patched".to_string())
-                }
+                Ok(rig) if rig.is_empty() => Err("this venue has nothing patched".to_string()),
                 Ok(rig) => {
                     let definitions: BTreeMap<_, _> = rig
                         .definitions

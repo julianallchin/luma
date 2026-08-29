@@ -198,6 +198,13 @@ pub async fn resolve_primitive_ids(
     args: &HashMap<String, serde_json::Value>,
     instance: Option<&str>,
 ) -> Vec<(String, [f32; 3])> {
+    // The pool-owning form is the only one that can take the write transaction
+    // the old-schema conversion needs; the `_with_access` form is handed a read
+    // transaction and an unconverted venue simply resolves to nothing.
+    if let Err(e) = crate::venue_graph::ensure_migrated(project_pool, venue_id, resource_root).await
+    {
+        log::warn!("[ctx] venue {venue_id} could not be converted to a graph: {e}");
+    }
     let Ok(mut access) = crate::database::local::venue_access::VenueAccess::<
         crate::database::local::venue_access::Read,
     >::read(
@@ -226,6 +233,16 @@ pub async fn resolve_primitive_ids_with_access(
     let (selection, seed) =
         graph_selection(nodes, edges, args, instance).unwrap_or_else(|| (Selection::all(), 0));
 
+    // One solve for the whole pre-pass: a primitive's position is where its
+    // fixture hangs, and every selected fixture is a node of the same venue.
+    let venue = match crate::venue_graph::resolved(access, resource_root).await {
+        Ok(venue) => venue,
+        Err(e) => {
+            log::warn!("[ctx] venue could not be resolved, so it has no primitives: {e}");
+            return Vec::new();
+        }
+    };
+
     let root_buf = resource_root.to_path_buf();
     let fixtures = crate::services::groups::resolve_selection_expression_with_path(
         &root_buf, access, &selection, seed,
@@ -236,11 +253,13 @@ pub async fn resolve_primitive_ids_with_access(
     let mut out = Vec::new();
     for resolved in &fixtures {
         let fixture = &resolved.fixture;
+        // Patched but unplaced: it is in the tray, not in the room, so it emits
+        // no primitives at all rather than a stack of them at the origin.
+        let Some(pose) = venue.pose(&fixture.id) else {
+            continue;
+        };
         let geom = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name);
-        let mount = fixture_mount(
-            [fixture.pos_x, fixture.pos_y, fixture.pos_z],
-            [fixture.rot_x, fixture.rot_y, fixture.rot_z],
-        );
+        let mount = fixture_mount(pose);
         let mut push = |i: usize| {
             let pos = rig_position(&geom, &mount, i).to_array();
             out.push((format!("{}:{}", fixture.id, i), pos));
