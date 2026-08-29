@@ -39,6 +39,11 @@
       "node": "deck_b",
       "socket": "edge_right",
       "type": "floor_edge"
+    },
+    {
+      "node": "post",
+      "socket": "end_b",
+      "type": "truss_end"
     }
   ],
   "nodes": [
@@ -62,7 +67,8 @@
         -0.0,
         -0.0,
         0.0
-      ]
+      ],
+      "setPiece": false
     },
     {
       "arrayIndex": null,
@@ -84,7 +90,8 @@
         -3.141593,
         3.141593,
         1.170796
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": null,
@@ -106,7 +113,31 @@
         -3.141593,
         3.141593,
         1.170796
-      ]
+      ],
+      "setPiece": true
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "truss/straight",
+      "facing": [
+        0.921061,
+        -0.389418,
+        0.0
+      ],
+      "kind": "tower",
+      "node": "post",
+      "parent": "deck_a",
+      "position": [
+        0.580802,
+        2.258634,
+        2.01
+      ],
+      "rotation": [
+        -0.0,
+        1.570796,
+        0.4
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": null,
@@ -128,7 +159,8 @@
         -0.0,
         1.570796,
         0.4
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": null,
@@ -150,7 +182,8 @@
         0.0,
         1.570796,
         0.4
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": null,
@@ -172,7 +205,8 @@
         -1.570796,
         1.970796,
         0.0
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": null,
@@ -194,7 +228,8 @@
         0.0,
         -0.0,
         0.0
-      ]
+      ],
+      "setPiece": false
     },
     {
       "arrayIndex": null,
@@ -216,7 +251,8 @@
         -3.141593,
         0.0,
         -1.1
-      ]
+      ],
+      "setPiece": false
     },
     {
       "arrayIndex": null,
@@ -238,7 +274,8 @@
         -0.0,
         0.0,
         1.570796
-      ]
+      ],
+      "setPiece": false
     },
     {
       "arrayIndex": 0,
@@ -260,7 +297,8 @@
         -0.0,
         0.0,
         1.570796
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": 1,
@@ -282,7 +320,8 @@
         -0.0,
         0.0,
         1.570796
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": 2,
@@ -304,7 +343,8 @@
         -0.0,
         0.0,
         1.570796
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": 3,
@@ -326,7 +366,8 @@
         -0.0,
         0.0,
         1.570796
-      ]
+      ],
+      "setPiece": true
     },
     {
       "arrayIndex": 4,
@@ -348,7 +389,15 @@
         -0.0,
         0.0,
         1.570796
-      ]
+      ],
+      "setPiece": true
+    }
+  ],
+  "unplaced": [
+    {
+      "descendants": 1,
+      "kind": "piece",
+      "node": "tray_speaker"
     }
   ],
   "warnings": 0

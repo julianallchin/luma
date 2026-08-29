@@ -1,10 +1,10 @@
 """`luma.venue` — the room, plus a camera over it.
 
-The binding half of `luma.venue` (id, name, fixtures, groups, positions, uv,
-views) is an ordinary manifest record. This module wraps that record in one
-object that also carries a capability: `render()`, which asks the host for a
-photorealistic frame of the venue at a moment in the track and hands back a
-`StageImage`.
+The binding half of `luma.venue` (id, name, fixtures, pieces, unplaced, groups,
+positions, uv, views) is an ordinary manifest record. This module wraps that
+record in one object that also carries a capability: `render()`, which asks the
+host for a photorealistic frame of the venue at a moment in the track and hands
+back a `StageImage`.
 
     luma.venue.render()                              # front, t=0
     luma.venue.render(view="dj", t=64.0)             # the operator's own view

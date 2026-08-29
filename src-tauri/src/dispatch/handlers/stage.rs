@@ -366,6 +366,9 @@ mod tests {
     /// measured GLB and a stub would pin half the answer.
     const DECK: &str = "stage_lab/stage_praticavel_2x1x1.glb";
     const SPEAKER: &str = "stage_lab/speaker_dbr15.glb";
+    /// The generated stick. Its two `TrussEnd`s are the only self-mating
+    /// sockets in this catalog, so it is what "open end" is measured on.
+    const TRUSS: &str = "truss/straight";
 
     // -----------------------------------------------------------------------
 
@@ -612,6 +615,114 @@ mod tests {
                 assert_eq!(member["parentId"], json!(id));
             }
         }
+    }
+
+    /// A stick bolted to a deck corner at one end has one open end, and the
+    /// bolted one is accounted for.
+    #[tokio::test]
+    async fn an_open_truss_end_is_dangling() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let post = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+
+        let open: Vec<String> = resolved(&services, &venue).await["dangling"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["nodeId"] == json!(post))
+            .map(|d| d["socket"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(open, ["end_b"], "the bolted end is not open: {open:?}");
+    }
+
+    /// Defect: `detach` left a branch with no edge, and the solve dropped it —
+    /// no pose, no warning, no mention. A builder dragging a wing off could not
+    /// tell "unplaced" from "deleted".
+    #[tokio::test]
+    async fn a_detached_subtree_is_reported_unplaced() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let post = attach(
+            &services,
+            &venue,
+            "tower",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .unwrap();
+        let head = attach(
+            &services,
+            &venue,
+            "run",
+            TRUSS,
+            &post,
+            "end_a",
+            "end_b",
+            Some(json!({ "span": 1.5 })),
+        )
+        .await
+        .unwrap();
+        assert!(resolved(&services, &venue).await["unplaced"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let report = dispatch(
+            &services,
+            "detach",
+            &json!({ "venueId": venue, "nodeId": post }),
+        )
+        .await
+        .expect("the detach was refused");
+
+        assert_eq!(report["ok"], json!(false), "a detached node has no pose");
+        let unplaced = report["venue"]["unplaced"].as_array().unwrap();
+        assert_eq!(
+            unplaced
+                .iter()
+                .map(|u| u["nodeId"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [post.as_str()],
+            "the root of the branch, listed once"
+        );
+        assert_eq!(
+            unplaced[0]["descendants"],
+            json!(1),
+            "the speaker on it came along"
+        );
+        // The rows are still there — detach unplaces, it does not delete.
+        let placed: Vec<&str> = report["venue"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(!placed.contains(&post.as_str()));
+        assert!(!placed.contains(&head.as_str()));
+        assert_eq!(
+            node_count(&services, &venue).await,
+            4,
+            "root, deck, post, head: unplacing deletes nothing"
+        );
     }
 
     // -----------------------------------------------------------------------

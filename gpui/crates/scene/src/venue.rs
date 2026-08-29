@@ -571,6 +571,32 @@ impl NodePose {
     pub fn data_basis(&self) -> (DVec3, glam::DMat3) {
         coords::data_basis_from_three(self.world)
     }
+
+    /// Whether this pose stands for one physical object the set-piece layer
+    /// draws — structure and props, one entry per thing in the room.
+    ///
+    /// False for the three poses that are frames rather than objects:
+    /// - the **root**, which is the venue frame and has no geometry;
+    /// - an **array anchor** (`array_index == None` on a [`NodeKind::Array`]),
+    ///   which is the seat its members are spread over — it carries their
+    ///   `catalog_ref`, so a consumer that does not skip it draws N+1 copies
+    ///   with a second one on top of the middle member;
+    /// - a node whose `catalog_ref` is absent, which has no geometry to stand
+    ///   for.
+    ///
+    /// A [`NodeKind::Fixture`] is excluded too: it is a light, drawn from the
+    /// patch with its own definition, not from the set-piece list.
+    ///
+    /// The predicate lives here because every consumer needs the same answer —
+    /// the renderer's piece list, the agent binding's `venue.pieces`, and the
+    /// React store's mesh list — and the three of them derived it separately
+    /// until one of them forgot the anchor.
+    #[must_use]
+    pub fn is_set_piece(&self) -> bool {
+        self.catalog_ref.is_some()
+            && !matches!(self.kind, NodeKind::Venue | NodeKind::Fixture)
+            && !(self.kind == NodeKind::Array && self.array_index.is_none())
+    }
 }
 
 /// Whether a far-end check is met.
@@ -638,6 +664,28 @@ pub struct NodeWarning {
     pub warning: Warning,
 }
 
+/// The root of a subtree the solve never reached: a node with no edge, and
+/// everything hanging off it.
+///
+/// Two things produce one — a fixture nobody has dragged out of the patch tray,
+/// and `detach`. Both are legitimate; what is not legitimate is silence. A
+/// detached run used to vanish from the solve with no pose, no warning and no
+/// mention, so a builder could delete a wing by dragging it and see only that
+/// it was gone.
+///
+/// Only the **root** is listed: the subtree below it is unplaced for exactly
+/// one reason, and repeating that reason per descendant would bury it.
+/// [`Self::descendants`] is how big the branch is, so a caller can say "and 6
+/// more" without walking the graph itself.
+#[derive(Clone, Debug)]
+pub struct UnplacedNode {
+    pub node: String,
+    pub kind: NodeKind,
+    pub label: Option<String>,
+    /// How many nodes hang off it, not counting itself.
+    pub descendants: usize,
+}
+
 /// The whole venue, solved.
 #[derive(Clone, Debug, Default)]
 pub struct ResolvedVenue {
@@ -645,6 +693,7 @@ pub struct ResolvedVenue {
     index: BTreeMap<String, usize>,
     constraints: Vec<ConstraintReport>,
     dangling: Vec<DanglingSocket>,
+    unplaced: Vec<UnplacedNode>,
     warnings: Vec<NodeWarning>,
 }
 
@@ -673,6 +722,12 @@ impl ResolvedVenue {
         &self.dangling
     }
 
+    /// Every subtree the walk never reached, by its root, in node-id order.
+    #[must_use]
+    pub fn unplaced(&self) -> &[UnplacedNode] {
+        &self.unplaced
+    }
+
     /// Everything the solve decided for the caller.
     #[must_use]
     pub fn warnings(&self) -> &[NodeWarning] {
@@ -697,10 +752,12 @@ impl ResolvedVenue {
                 .filter(|w| w.node == node)
                 .map(|w| w.warning.clone())
                 .collect(),
+            // An array's open ends are reported per member, so the report for
+            // the node the caller named has to gather its members' too.
             dangling: self
                 .dangling
                 .iter()
-                .filter(|d| d.node == node)
+                .filter(|d| d.node == node || member_of(&d.node) == Some(node))
                 .cloned()
                 .collect(),
             constraints: self
@@ -711,6 +768,15 @@ impl ResolvedVenue {
                 .collect(),
         }
     }
+}
+
+/// The array a derived id belongs to: `"wall#3"` is `wall`'s.
+///
+/// The `#` spelling is [`NodePose::node`]'s contract, written in exactly one
+/// other place ([`place`]); a member id is otherwise indistinguishable from any
+/// other node id.
+fn member_of(id: &str) -> Option<&str> {
+    id.split_once('#').map(|(anchor, _)| anchor)
 }
 
 /// What one mutating call did, and what it left unresolved.
@@ -741,12 +807,12 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
     // Children by parent, each list already in id order because `edges` is a
     // `BTreeMap`. Built once: the alternative is a scan per node, which is the
     // difference between linear and quadratic on a 500-node rig.
-    let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut children: BTreeMap<&str, Vec<(&str, &Edge)>> = BTreeMap::new();
     for (child, edge) in &graph.edges {
         children
             .entry(edge.parent.as_str())
             .or_default()
-            .push(child.as_str());
+            .push((child.as_str(), edge));
     }
 
     let mut out = ResolvedVenue::default();
@@ -757,10 +823,6 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
     // socket is open or it is not, and that is a property of the relations,
     // not of the order the walk reaches them in.
     let claimed = claimed_sockets(graph);
-    // The root *is* the venue frame, so it starts at the identity; every other
-    // node's frame is written as it is placed, before its children are walked.
-    let mut frames: BTreeMap<String, DMat4> = BTreeMap::new();
-    frames.insert(root.id.clone(), DMat4::IDENTITY);
 
     push_pose(
         &mut out,
@@ -775,29 +837,26 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
             params: root.params.clone(),
         },
     );
-    collect_dangling(&mut out, root, sockets, &claimed);
+    dangling_of(&mut out, root, 0, sockets, &claimed);
 
     // Explicit stack rather than recursion: a corrupted graph must not blow the
     // real one, and the depth bound is the node count.
-    let mut queue: Vec<&str> = children
-        .get(root.id.as_str())
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .rev()
-        .collect();
+    //
+    // Each entry carries what placing it needs — its edge, its parent's node
+    // and its parent's world frame — rather than looking any of them up again.
+    // A child is queued only by the step that placed its parent, so "the parent
+    // is placed and its frame is known" is a property of the queue rather than
+    // three fallible lookups the body has to cope with.
+    let mut queue = Vec::new();
+    push_children(&mut queue, &children, root, DMat4::IDENTITY);
 
-    while let Some(id) = queue.pop() {
+    while let Some(step) = queue.pop() {
+        let (id, edge, parent_node, parent_world) =
+            (step.id, step.edge, step.parent, step.parent_world);
+        // The one lookup that can genuinely fail: `VenueGraphRows::to_graph`
+        // drops a row whose `kind` is outside the alphabet but keeps the edge
+        // that named it, so an edge can point at a child with no node.
         let Some(node) = graph.node(id) else {
-            continue;
-        };
-        let Some(edge) = graph.edge(id) else {
-            continue;
-        };
-        let Some(parent_world) = frames.get(&edge.parent).copied() else {
-            continue;
-        };
-        let Some(parent_node) = graph.node(&edge.parent) else {
             continue;
         };
 
@@ -805,18 +864,8 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
         let mine = sockets.sockets(node);
         let held = find_socket(&mine, &edge.my_socket);
 
-        match (host, held) {
-            (Some(host), Some(held)) => {
-                place(
-                    &mut out,
-                    node,
-                    edge,
-                    parent_world,
-                    &host,
-                    &held,
-                    &mut frames,
-                );
-            }
+        let (world, members) = match (host, held) {
+            (Some(host), Some(held)) => place(&mut out, node, edge, parent_world, &host, &held),
             (host, _) => {
                 // The relation names a socket the geometry does not have: the
                 // catalog dropped an entry, or a generator's parameters moved a
@@ -837,7 +886,6 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
                         _ => Warning::MissingSocket(missing),
                     },
                 });
-                frames.insert(id.to_string(), parent_world);
                 push_pose(
                     &mut out,
                     NodePose {
@@ -851,10 +899,11 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
                         params: node.params.clone(),
                     },
                 );
+                (parent_world, 0)
             }
-        }
+        };
 
-        collect_dangling(&mut out, node, sockets, &claimed);
+        dangling_of(&mut out, node, members, sockets, &claimed);
         if !sockets.is_known(node) {
             out.warnings.push(NodeWarning {
                 node: node.id.clone(),
@@ -863,9 +912,7 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
         }
 
         // Depth-first: this node's children go on next, in id order.
-        if let Some(kids) = children.get(id) {
-            queue.extend(kids.iter().rev().copied());
-        }
+        push_children(&mut queue, &children, node, world);
     }
 
     out.constraints = graph
@@ -873,7 +920,106 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
         .iter()
         .map(|c| evaluate_constraint(c, &out, graph, sockets))
         .collect();
+    out.unplaced = unplaced_subtrees(graph, &out);
     out
+}
+
+/// One queued step of the walk: a child, the relation that places it, and the
+/// parent frame that relation is measured against.
+struct Walk<'a> {
+    id: &'a str,
+    edge: &'a Edge,
+    parent: &'a Node,
+    parent_world: DMat4,
+}
+
+/// Queue `parent`'s children, in reverse id order so the stack pops them
+/// forwards. The parent is placed by the time this is called, which is what
+/// lets the frame travel with the child instead of being looked up.
+fn push_children<'a>(
+    queue: &mut Vec<Walk<'a>>,
+    children: &BTreeMap<&'a str, Vec<(&'a str, &'a Edge)>>,
+    parent: &'a Node,
+    parent_world: DMat4,
+) {
+    let Some(kids) = children.get(parent.id.as_str()) else {
+        return;
+    };
+    queue.extend(kids.iter().rev().map(|(id, edge)| Walk {
+        id,
+        edge,
+        parent,
+        parent_world,
+    }));
+}
+
+/// Every subtree the walk never reached, by its root.
+///
+/// A node with no pose is unplaced. Its *root* is the one whose parent is not
+/// itself unplaced — a node with no edge at all, or one whose edge names a
+/// parent that is gone. Loaded rows can also hold a cycle ([`insert_edge`] does
+/// not re-check what [`attach`] admitted), and a cycle has no such root; those
+/// nodes are reported individually rather than dropped, which is the whole
+/// point of this list.
+///
+/// [`insert_edge`]: VenueGraph::insert_edge
+/// [`attach`]: VenueGraph::attach
+fn unplaced_subtrees(graph: &VenueGraph, out: &ResolvedVenue) -> Vec<UnplacedNode> {
+    let missing: BTreeSet<&str> = graph
+        .nodes()
+        .map(|n| n.id.as_str())
+        .filter(|id| !out.index.contains_key(*id))
+        .collect();
+    let mut covered: BTreeSet<&str> = BTreeSet::new();
+    let mut roots: Vec<UnplacedNode> = Vec::new();
+    for id in &missing {
+        let rooted = match graph.edge(id) {
+            None => true,
+            Some(edge) => !missing.contains(edge.parent.as_str()),
+        };
+        if rooted {
+            report_unplaced(graph, id, &mut covered, &mut roots);
+        }
+    }
+    // A cycle: every member's parent is unplaced too, so none of them looked
+    // like a root above. Each is its own entry — there is no branch point to
+    // name, and silence is what this list exists to prevent.
+    for id in &missing {
+        if !covered.contains(id) {
+            report_unplaced(graph, id, &mut covered, &mut roots);
+        }
+    }
+    roots.sort_by(|a, b| a.node.cmp(&b.node));
+    roots
+}
+
+/// Record one unplaced subtree and mark every node it covers.
+fn report_unplaced<'a>(
+    graph: &'a VenueGraph,
+    id: &str,
+    covered: &mut BTreeSet<&'a str>,
+    roots: &mut Vec<UnplacedNode>,
+) {
+    let mut descendants = 0;
+    for member in graph.subtree(id) {
+        // An edge can name a child with no node row, and a phantom is not a
+        // piece anyone can go and find.
+        let Some(node) = graph.node(&member) else {
+            continue;
+        };
+        covered.insert(node.id.as_str());
+        if node.id != id {
+            descendants += 1;
+        }
+    }
+    if let Some(node) = graph.node(id) {
+        roots.push(UnplacedNode {
+            node: node.id.clone(),
+            kind: node.kind,
+            label: node.label.clone(),
+            descendants,
+        });
+    }
 }
 
 fn push_pose(out: &mut ResolvedVenue, pose: NodePose) {
@@ -884,6 +1030,9 @@ fn push_pose(out: &mut ResolvedVenue, pose: NodePose) {
 /// One node placed: clamp the roll its joint admits, then mate through
 /// [`place_on`]. An array node is placed at its anchor and then produces its
 /// members, which follow it in the walk.
+///
+/// Returns the node's own world frame — what its children mate against — and
+/// how many members it derived (0 for anything but an array).
 fn place(
     out: &mut ResolvedVenue,
     node: &Node,
@@ -891,8 +1040,7 @@ fn place(
     parent_world: DMat4,
     host: &ResolvedSocket,
     held: &ResolvedSocket,
-    frames: &mut BTreeMap<String, DMat4>,
-) {
+) -> (DMat4, u32) {
     let applied_roll = clamp_roll(edge.roll, host.roll);
     if (applied_roll - edge.roll).abs() > f64::EPSILON {
         out.warnings.push(NodeWarning {
@@ -918,7 +1066,6 @@ fn place(
     // child naming the array as its parent silently vanished for want of a
     // frame.
     let world = place_on(parent_world, host, held, node.kind, placement);
-    frames.insert(node.id.clone(), world);
     push_pose(
         out,
         NodePose {
@@ -934,7 +1081,7 @@ fn place(
     );
 
     if node.kind != NodeKind::Array {
-        return;
+        return (world, 0);
     }
     let count = array_count(out, node);
     let span = node.params.get("span", 0.0);
@@ -971,6 +1118,7 @@ fn place(
             },
         );
     }
+    (world, count)
 }
 
 /// The world pose a [`SurfacePlacement`] produces against one host socket.
@@ -1129,13 +1277,40 @@ fn claimed_sockets(graph: &VenueGraph) -> BTreeSet<(&str, &str)> {
     claimed
 }
 
-/// Every self-mating socket on `node` that no edge and no constraint claims.
+/// One node's open sockets — or, for an array, **every member's**.
+///
+/// An array of three trusses has three sets of ends standing in the room, and
+/// the anchor is a seat with no geometry: reporting the anchor once under-counts
+/// by `members - 1` and names a node the builder cannot walk up to. Each member
+/// inherits the anchor's claims — the edge that seats the array seats every copy
+/// through the same socket, and a far end written against the array means the
+/// same socket on each — so the claim set is keyed by the anchor and the report
+/// by the member.
+fn dangling_of<S: NodeSockets + ?Sized>(
+    out: &mut ResolvedVenue,
+    node: &Node,
+    members: u32,
+    sockets: &S,
+    claimed: &BTreeSet<(&str, &str)>,
+) {
+    if node.kind == NodeKind::Array {
+        for i in 0..members {
+            collect_dangling(out, node, &format!("{}#{i}", node.id), sockets, claimed);
+        }
+        return;
+    }
+    collect_dangling(out, node, &node.id, sockets, claimed);
+}
+
+/// Every self-mating socket on `node` that no edge and no constraint claims,
+/// reported against `as_node` (the node itself, or one derived array member).
 ///
 /// Only [`crate::sockets::Polarity::Neutral`] joints count: a deck's four
 /// corners are not open ends for having nothing standing on them.
 fn collect_dangling<S: NodeSockets + ?Sized>(
     out: &mut ResolvedVenue,
     node: &Node,
+    as_node: &str,
     sockets: &S,
     claimed: &BTreeSet<(&str, &str)>,
 ) {
@@ -1147,7 +1322,7 @@ fn collect_dangling<S: NodeSockets + ?Sized>(
             continue;
         }
         out.dangling.push(DanglingSocket {
-            node: node.id.clone(),
+            node: as_node.to_string(),
             socket: socket.name.clone(),
             socket_type: socket.socket_type,
         });
@@ -2116,12 +2291,150 @@ mod tests {
     }
 
     #[test]
-    fn an_unplaced_node_gets_no_pose() {
+    fn an_unplaced_node_gets_no_pose_and_is_named() {
         let mut graph = VenueGraph::new(root());
         graph.insert(node("tray", NodeKind::Fixture, "mover"));
         let resolved = resolve(&graph, &table());
         assert!(resolved.pose("tray").is_none());
         assert!(!resolved.placement("tray").ok);
+        // No pose, but not silence: a fixture in the tray is the legitimate
+        // case, and the caller has to be able to tell it from a lost one.
+        let unplaced = resolved.unplaced();
+        assert_eq!(unplaced.len(), 1);
+        assert_eq!(unplaced[0].node, "tray");
+        assert_eq!(unplaced[0].kind, NodeKind::Fixture);
+        assert_eq!(unplaced[0].descendants, 0);
+    }
+
+    /// `detach` leaves the whole branch without a parent. Only its root is
+    /// listed — one reason, said once — with the branch's size alongside.
+    #[test]
+    fn a_detached_subtree_is_reported_by_its_root() {
+        let mut graph = VenueGraph::new(root());
+        let mut deck_node = node("deck1", NodeKind::Stage, "deck");
+        deck_node.params = on_floor(0.0, 0.0, 0.0);
+        graph.insert(deck_node);
+        graph.attach("deck1", floor_edge(0.0), &table()).unwrap();
+        graph.insert(node("deck2", NodeKind::Stage, "deck"));
+        graph
+            .attach(
+                "deck2",
+                Edge {
+                    parent: "deck1".into(),
+                    my_socket: "edge_left".into(),
+                    their_socket: "edge_right".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        graph.insert(node("head", NodeKind::Fixture, "mover"));
+        graph
+            .attach(
+                "head",
+                Edge {
+                    parent: "deck2".into(),
+                    my_socket: "clamp".into(),
+                    their_socket: "top".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        assert!(resolve(&graph, &table()).unplaced().is_empty());
+
+        graph.detach("deck2");
+        let resolved = resolve(&graph, &table());
+        assert!(resolved.pose("deck2").is_none());
+        assert!(resolved.pose("head").is_none(), "the branch came along");
+        let unplaced = resolved.unplaced();
+        assert_eq!(
+            unplaced.iter().map(|u| u.node.as_str()).collect::<Vec<_>>(),
+            ["deck2"],
+            "the root of the branch, not every node in it"
+        );
+        assert_eq!(unplaced[0].descendants, 1);
+    }
+
+    /// Every member is a real truss standing in the room; the anchor is a seat
+    /// with no geometry. Reporting the anchor once under-counts the open ends
+    /// by `members - 1` and names a node nobody can walk up to.
+    #[test]
+    fn an_array_reports_every_members_open_ends() {
+        let mut graph = VenueGraph::new(root());
+        let mut array = node("wall", NodeKind::Array, "truss");
+        array.params = on_floor(0.0, 0.0, 0.0);
+        array.params.set("count", 3.0);
+        array.params.set("span", 4.0);
+        graph.insert(array);
+        graph
+            .attach(
+                "wall",
+                Edge {
+                    parent: "venue".into(),
+                    my_socket: "base".into(),
+                    their_socket: FLOOR_SOCKET.into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+
+        let resolved = resolve(&graph, &table());
+        let open: Vec<(&str, &str)> = resolved
+            .dangling()
+            .iter()
+            .map(|d| (d.node.as_str(), d.socket.as_str()))
+            .collect();
+        assert_eq!(
+            open,
+            [
+                ("wall#0", "end_a"),
+                ("wall#0", "end_b"),
+                ("wall#1", "end_a"),
+                ("wall#1", "end_b"),
+                ("wall#2", "end_a"),
+                ("wall#2", "end_b"),
+            ],
+            "three trusses have three pairs of ends"
+        );
+        // The report for the call that made them gathers its members'.
+        assert_eq!(resolved.placement("wall").dangling.len(), 6);
+    }
+
+    #[test]
+    fn an_array_anchor_is_not_a_set_piece() {
+        let mut graph = VenueGraph::new(root());
+        let mut array = node("wall", NodeKind::Array, "truss");
+        array.params = on_floor(0.0, 0.0, 0.0);
+        array.params.set("count", 3.0);
+        array.params.set("span", 4.0);
+        graph.insert(array);
+        graph
+            .attach(
+                "wall",
+                Edge {
+                    parent: "venue".into(),
+                    my_socket: "base".into(),
+                    their_socket: FLOOR_SOCKET.into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        graph.insert(node("tray", NodeKind::Fixture, "mover"));
+
+        let resolved = resolve(&graph, &table());
+        let drawn: Vec<&str> = resolved
+            .poses()
+            .filter(|p| p.is_set_piece())
+            .map(|p| p.node.as_str())
+            .collect();
+        assert_eq!(
+            drawn,
+            ["wall#0", "wall#1", "wall#2"],
+            "three trusses, not four; the room and the light are not set pieces"
+        );
     }
 
     #[test]

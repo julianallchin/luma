@@ -108,6 +108,14 @@ on the downstage truss" is not expressible.
     *bounds*, which the socket supply does not carry; shipping them as fields that
     are always empty would be a promise the type does not keep. They arrive with the
     builder that can draw them (phase 4).
+  - **A node with no edge is reported, never dropped.** `resolve` returns
+    `unplaced`: the root of every branch the walk could not reach, with its
+    kind, label and descendant count. The patch tray is the ordinary case;
+    `detach` is the other. Silence was the bug — a detached wing had no pose,
+    no warning and no mention, so "unplaced" and "deleted" looked identical.
+  - An **array's open ends are its members'**, not its anchor's. Three trusses
+    have three pairs of ends standing in the room; the anchor is a seat with no
+    geometry, and reporting it once under-counts by `count - 1`.
   - A **`dangling` socket is one no relation accounts for**: neither half of a joint
     is dangling, and neither is an end a far-end constraint checks — a constraint is
     exactly what the builder writes down instead of a second parent. Only self-mating

@@ -161,6 +161,12 @@ pub struct ResolvedNode {
     pub facing: [f64; 3],
     /// Which member of an array this is.
     pub array_index: Option<u32>,
+    /// Whether this pose stands for one physical object the set-piece layer
+    /// draws — [`NodePose::is_set_piece`]. Carried rather than re-derived:
+    /// three consumers used to work it out from `kind`/`arrayIndex`/
+    /// `catalogRef` and one of them forgot the array anchor, drawing N+1
+    /// pieces for an array of N.
+    pub set_piece: bool,
     pub params: BTreeMap<String, f64>,
 }
 
@@ -179,6 +185,7 @@ impl From<&NodePose> for ResolvedNode {
             // `REST_AXIS` is `-Z`; the basis takes it to the beam.
             facing: (basis * glam::DVec3::NEG_Z).to_array(),
             array_index: pose.array_index,
+            set_piece: pose.is_set_piece(),
             params: pose
                 .params
                 .iter()
@@ -204,6 +211,20 @@ pub struct ResolvedConstraint {
     pub gap_m: Option<f64>,
 }
 
+/// A subtree the solve never reached, by its root — the patch tray, and what
+/// `detach` leaves behind. See [`luma_scene::venue::UnplacedNode`].
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ResolvedUnplaced {
+    pub node_id: String,
+    pub kind: String,
+    pub label: Option<String>,
+    /// How many nodes hang off it, not counting itself.
+    pub descendants: u32,
+}
+
 /// An open structural socket.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -226,6 +247,9 @@ pub struct ResolvedVenue {
     pub nodes: Vec<ResolvedNode>,
     pub constraints: Vec<ResolvedConstraint>,
     pub dangling: Vec<ResolvedDangling>,
+    /// Every node the solve could not reach, by the root of its branch. A
+    /// fixture in the patch tray is here, and so is anything just detached.
+    pub unplaced: Vec<ResolvedUnplaced>,
     /// One line per thing the solve had to decide for the caller.
     pub warnings: Vec<String>,
 }
@@ -261,6 +285,16 @@ impl From<&Solved> for ResolvedVenue {
                     node_id: d.node.clone(),
                     socket: d.socket.clone(),
                     socket_type: d.socket_type.as_str().to_string(),
+                })
+                .collect(),
+            unplaced: solved
+                .unplaced()
+                .iter()
+                .map(|u| ResolvedUnplaced {
+                    node_id: u.node.clone(),
+                    kind: u.kind.as_str().to_string(),
+                    label: u.label.clone(),
+                    descendants: u32::try_from(u.descendants).unwrap_or(u32::MAX),
                 })
                 .collect(),
             warnings: solved
