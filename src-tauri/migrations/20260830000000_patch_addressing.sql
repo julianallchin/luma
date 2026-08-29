@@ -25,6 +25,16 @@ ALTER TABLE fixtures ADD COLUMN address_pinned INTEGER NOT NULL DEFAULT 0;
 -- branch unreachable rather than merely rare — and it belongs here, not in the
 -- handler, because the handler is not the only writer (sync pull is another).
 --
+-- The second writer does not get to be stopped by this trigger. The remote
+-- table has no equivalent, so a row written by an older client can still
+-- arrive; if the trigger aborted that upsert, the pull would stop at it, the
+-- table's cursor would never advance, and every table downstream would be
+-- deferred forever. `sync::pull::repair_incoming` therefore **quarantines at
+-- the boundary**: it applies the same repair as the pass below, lands the row,
+-- and clears `synced_at` so the repair is pushed back and the remote stops
+-- being wrong. Skipping the row instead would advance the cursor but lose the
+-- fixture with nothing to retry.
+--
 -- Existing rows are repaired first: this is data written before anything
 -- validated, and there is no address it could be moved to that is more right
 -- than the start of its universe. Auto-patch is what puts it somewhere real.

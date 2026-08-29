@@ -23,7 +23,7 @@
 
 use std::path::Path;
 
-use luma_scene::patch::{allocate, Allocation, Fixture, Footprint, Occupancy};
+use luma_scene::patch::{allocate, Address, Allocation, Fixture, Footprint, Occupancy};
 use thiserror::Error;
 
 use crate::database::local::fixtures as fixtures_db;
@@ -73,14 +73,24 @@ impl From<String> for PatchError {
 ///
 /// A channel count wider than a universe cannot exist — the table's own check
 /// refuses it — so the clamp here is a total conversion, not a decision.
+///
+/// The row's *stored* footprint is carried across whether or not it is pinned:
+/// it is what a new address has to avoid colliding with, and dropping it here
+/// is what made `next_addresses` and [`admit`] disagree about which channels
+/// are free.
 fn inputs(rows: &[PatchedFixture]) -> Vec<Fixture> {
     rows.iter()
         .map(|row| {
             let channels = u16::try_from(row.num_channels).unwrap_or(u16::MAX);
+            let address = match (footprint_of(row), row.address_pinned) {
+                (Some(footprint), true) => Address::Pinned(footprint),
+                (Some(footprint), false) => Address::Derived(footprint),
+                (None, _) => Address::Unset,
+            };
             Fixture {
                 id: row.id.clone(),
                 channels,
-                pinned: row.address_pinned.then(|| footprint_of(row)).flatten(),
+                address,
             }
         })
         .collect()

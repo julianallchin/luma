@@ -458,8 +458,21 @@ async fn pull_table(
                 }
             }
 
+            // A remote row the local schema would refuse is repaired on the
+            // way in, not left to abort the upsert: an abort stops this
+            // table's cursor forever and defers every table downstream of it,
+            // so one bad row would take the rest of the venue offline.
+            let repaired = repair_incoming(table.name, row);
+            let row = repaired.as_ref().map_or(row, |(repaired, _)| repaired);
+
             match execute_upsert(pool, table, &sql, row, current_uid).await {
                 Ok(()) => {
+                    if let Some((_, what)) = &repaired {
+                        // The repair is a local edit like any other, so it
+                        // pushes back and the remote stops being wrong.
+                        mark_dirty(pool, table, &record_id).await;
+                        eprintln!("[sync] Repaired {}.{record_id}: {what}", table.name);
+                    }
                     if table.name == "authored_head_integrations" {
                         if let (Some(uid), Some(result_revision_id)) = (
                             current_uid,
@@ -517,6 +530,88 @@ async fn pull_table(
 // ============================================================================
 // Dynamic SQL materialization
 // ============================================================================
+
+/// Bring an incoming row inside the invariants the local schema enforces, or
+/// `None` if it is already inside them.
+///
+/// # Why the pull boundary is where this happens
+///
+/// `migrations/20260830000000_patch_addressing.sql` makes a fixture footprint
+/// that leaves its universe unrepresentable *locally*, with a trigger. The
+/// remote `fixtures` table has no such trigger, so a row written by an older
+/// client — or by a client that never had the migration — can still arrive.
+/// The three things that could happen to it:
+///
+/// 1. let the trigger abort the upsert — the loop stops the table's cursor,
+///    every child table is deferred, and nothing about the venue syncs again;
+/// 2. skip the row and advance — the cursor moves, but the fixture silently
+///    never arrives and nothing ever tries again;
+/// 3. repair it and mark it dirty — the row lands, the push loop sends the
+///    repair back, and the remote stops being wrong.
+///
+/// (3), and it applies exactly the repair the migration applied to local rows:
+/// there is no address a broken footprint could be moved to that is more right
+/// than the start of its universe, and auto-patch is what puts it somewhere
+/// real. Returns the repaired row and a one-line account of what changed.
+fn repair_incoming(table: &str, row: &Value) -> Option<(Value, String)> {
+    if table != "fixtures" {
+        return None;
+    }
+    let number = |column: &str| row.get(column).and_then(Value::as_i64);
+    let channels = number("num_channels").unwrap_or(1).max(1);
+    let address = number("address").unwrap_or(1);
+    let sane =
+        address >= 1 && address + channels - 1 <= i64::from(luma_scene::patch::UNIVERSE_SIZE);
+    if sane && number("num_channels") == Some(channels) {
+        return None;
+    }
+
+    let mut repaired = row.clone();
+    let object = repaired.as_object_mut()?;
+    object.insert("num_channels".into(), channels.into());
+    if !sane {
+        object.insert("address".into(), 1.into());
+    }
+    Some((
+        repaired,
+        format!(
+            "footprint {address}+{} does not fit in a universe; moved to address 1",
+            number("num_channels").unwrap_or(0)
+        ),
+    ))
+}
+
+/// Clear a row's `synced_at` so the push loop treats it as a local edit.
+///
+/// Best-effort by design: a table with no `synced_at` is not pushed at all, and
+/// failing to re-dirty a row that did land must not stop the pull.
+async fn mark_dirty(pool: &SqlitePool, table: &TableMeta, record_id: &str) {
+    let pk_cols = table.pk_columns();
+    let where_clause = pk_cols
+        .iter()
+        .enumerate()
+        .map(|(index, column)| format!("{column} = ?{}", index + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let sql = format!(
+        "UPDATE {} SET synced_at = NULL WHERE {where_clause}",
+        table.name
+    );
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(&*sql));
+    if pk_cols.len() == 1 {
+        query = query.bind(record_id);
+    } else {
+        for part in record_id.split(':') {
+            query = query.bind(part);
+        }
+    }
+    if let Err(error) = query.execute(pool).await {
+        eprintln!(
+            "[sync] Could not re-queue repaired {}.{record_id}: {error}",
+            table.name
+        );
+    }
+}
 
 fn build_upsert_sql(table: &TableMeta) -> String {
     let conflict_cols: Vec<&str> = table.pk_columns();
