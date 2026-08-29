@@ -1,9 +1,12 @@
+use crate::database::local::group_overrides as overrides_db;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{normalize_group_name, FixtureGroup, FixtureGroupNode, MovementConfig};
+use crate::models::groups::{
+    normalize_group_name, FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig,
+};
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups as groups_service;
@@ -249,4 +252,123 @@ async fn require_unique_name(
         }
     }
     Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// The derived group tree, and the overrides on top of it
+// -----------------------------------------------------------------------------
+
+/// The venue's group tree: derivation, the manual edits on top, and the
+/// authored groups beside them.
+///
+/// Flat with `parentId`, parents before children — build the tree in one pass.
+pub async fn list_group_tree(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<Vec<GroupTreeNode>, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    Ok(groups_service::group_tree(&services.fixtures_root, &mut access).await?)
+}
+
+/// Rename one node of the tree.
+///
+/// The name stops being derived; the membership does not. Rename a wing's top
+/// half and the movers you hang there tomorrow still land in it.
+pub async fn rename_group_node(
+    services: &AppServices,
+    venue_id: String,
+    group_id: String,
+    label: String,
+) -> Result<Vec<GroupTreeNode>, CommandError> {
+    override_node(services, &venue_id, &group_id, Some(&label), None, None).await
+}
+
+/// Move one node under another. `parent_id` of `None` moves it to the top level.
+pub async fn move_group_node(
+    services: &AppServices,
+    venue_id: String,
+    group_id: String,
+    parent_id: Option<String>,
+) -> Result<Vec<GroupTreeNode>, CommandError> {
+    // The empty string is "the top level" on the wire, because `None` already
+    // means "leave the derived parent alone" in the row.
+    let parent = parent_id.unwrap_or_default();
+    override_node(services, &venue_id, &group_id, None, Some(&parent), None).await
+}
+
+/// Fold one node's fixtures into another. The source stops being shown and the
+/// target counts its members alongside its own — by reference, so both sides go
+/// on tracking the rig and [`reset_group_node`] undoes it.
+pub async fn merge_group_nodes(
+    services: &AppServices,
+    venue_id: String,
+    group_id: String,
+    into_group_id: String,
+) -> Result<Vec<GroupTreeNode>, CommandError> {
+    if group_id == into_group_id {
+        return Err(CommandError::Invalid(
+            "a group cannot be merged into itself".into(),
+        ));
+    }
+    override_node(
+        services,
+        &venue_id,
+        &group_id,
+        None,
+        None,
+        Some(&into_group_id),
+    )
+    .await
+}
+
+/// Drop a node's override, restoring derivation for it.
+pub async fn reset_group_node(
+    services: &AppServices,
+    venue_id: String,
+    group_id: String,
+) -> Result<Vec<GroupTreeNode>, CommandError> {
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    overrides_db::remove(&mut access, &group_id).await?;
+    access.commit().await?;
+    invalidate_venue_fixture_cache();
+    list_group_tree(services, venue_id).await
+}
+
+/// Write one facet of an override, and hand back the whole tree — the caller
+/// that changed one node is about to redraw all of them, and a second round
+/// trip would be a second derivation of the same venue.
+///
+/// The node must be in the tree: an override naming nothing is a patch with
+/// nothing to patch.
+async fn override_node(
+    services: &AppServices,
+    venue_id: &str,
+    group_id: &str,
+    label: Option<&str>,
+    parent_id: Option<&str>,
+    merged_into: Option<&str>,
+) -> Result<Vec<GroupTreeNode>, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, venue_id, &services.fixtures_root).await?;
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(venue_id)).await?;
+    for id in [Some(group_id), merged_into].into_iter().flatten() {
+        if groups_service::group_node(&services.fixtures_root, &mut access, id)
+            .await?
+            .is_none()
+        {
+            return Err(CommandError::NotFound(format!(
+                "no group `{id}` in this venue"
+            )));
+        }
+    }
+    let path = groups_service::derived_path(&services.fixtures_root, &mut access, group_id)
+        .await?
+        .unwrap_or_else(|| group_id.to_string());
+    overrides_db::put(&mut access, group_id, &path, label, parent_id, merged_into).await?;
+    access.commit().await?;
+    invalidate_venue_fixture_cache();
+    list_group_tree(services, venue_id.to_string()).await
 }

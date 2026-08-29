@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::fixtures::{ChannelType, FixtureDefinition, Mode};
+use crate::services::group_derivation::FixtureRole;
 
 /// Movement pyramid configuration for a fixture group.
 /// Defines the base aim direction and angular extents for UV perturbation.
@@ -230,4 +231,44 @@ pub struct HeadNode {
     pub head_index: i64,
     /// World position in meters (Z-up data space), for visualizer bounds.
     pub position: [f32; 3],
+}
+
+/// Where a node of the group tree came from.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS)]
+#[ts(export, export_to = "../../src/bindings/groups.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum GroupOrigin {
+    /// The rule produced it and nobody has touched it. It re-derives on every
+    /// read, so it tracks the rig.
+    Derived,
+    /// The rule produced it and somebody renamed, moved or merged it. Frozen:
+    /// a touched node is never re-derived. Delete the override to get
+    /// [`GroupOrigin::Derived`] back.
+    Edited,
+    /// A `fixture_groups` row someone created outright.
+    Manual,
+}
+
+/// One node of the group tree — the merged answer: derivation, with overrides
+/// on top, plus whatever was authored by hand.
+///
+/// Flat with a `parent_id` rather than a recursive type, for the same reason
+/// [`crate::models::venue_graph::ResolvedVenue`] is: parents come before
+/// children, so a consumer can build the tree in one pass, and `ts-rs` can
+/// name the type.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../src/bindings/groups.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct GroupTreeNode {
+    pub id: String,
+    /// The snake_case name a selection expression uses. Unique in the venue.
+    pub name: String,
+    /// What the tree shows — one path segment, not the whole path.
+    pub label: String,
+    pub parent_id: Option<String>,
+    pub origin: GroupOrigin,
+    /// The role branch this sits under; `None` for an authored group.
+    pub role: Option<FixtureRole>,
+    /// Fixture ids, in creation order.
+    pub fixtures: Vec<String>,
 }

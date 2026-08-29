@@ -10,16 +10,22 @@ use once_cell::sync::Lazy;
 use rand::prelude::*;
 use tokio::sync::Mutex as TokioMutex;
 
+use crate::database::local;
 use crate::database::local::fixtures as fixtures_db;
+use crate::database::local::group_overrides as overrides_db;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::fixtures::parser;
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
-    normalize_group_name, FixtureGroupNode, FixtureType, GroupedFixtureNode, HeadNode,
+    normalize_group_name, FixtureGroupNode, FixtureType, GroupTreeNode, GroupedFixtureNode,
+    HeadNode,
 };
 use crate::models::selection::{Selection, Subset};
+use crate::services::group_derivation::{
+    self, FixtureIdentity, FixtureRole, ManualGroup, VenueFacts,
+};
 use fixture_kinematics::rig_position;
 use luma_scene::venue::ResolvedVenue;
 
@@ -122,6 +128,26 @@ async fn get_cached_venue_fixtures(
                 *entry = HeadMembership::All;
             } else if let HeadMembership::Heads(heads) = entry {
                 heads.insert(head_index as usize);
+            }
+        }
+
+        // Derived groups are selectable by name like anything else: a score
+        // naming `spots_top` has to resolve, and there is one membership
+        // answer rather than a derived one and an authored one. A venue whose
+        // graph has not been built has no structure to derive from, which is an
+        // empty tree rather than an error.
+        if local::venue_graph::root_id(access).await?.is_some() {
+            for node in group_tree(resource_path, access).await? {
+                if node.name.is_empty() {
+                    continue;
+                }
+                for fixture_id in &node.fixtures {
+                    by_fixture
+                        .entry(fixture_id.clone())
+                        .or_default()
+                        .entry(node.name.clone())
+                        .or_insert(HeadMembership::All);
+                }
             }
         }
 
@@ -859,6 +885,127 @@ pub async fn remove_head_from_group(
         return Ok(());
     }
     groups_db::remove_member_from_group(access, fixture_id, group_id, Some(head_index)).await
+}
+
+// =============================================================================
+// The derived group tree
+// =============================================================================
+
+/// The facts [`group_derivation::derive_groups`] reads, out of the database.
+///
+/// One solve. The graph supplies placement and structure, the patch list
+/// supplies identity and role, and `facts_from` is where they meet — see
+/// [`group_derivation`] for why that seam is there.
+///
+/// # Errors
+/// Fails if the rows cannot be read, if the catalog cannot be resolved, or if
+/// the venue has no graph root (`crate::venue_graph::ensure_migrated` has never
+/// run for it).
+pub async fn venue_facts(
+    resource_path: &Path,
+    access: &mut impl AuthorizedVenue,
+) -> Result<VenueFacts, String> {
+    let venue_id = access.venue_id().to_string();
+    let graph = crate::venue_graph::graph(access).await?;
+    let solved = luma_scene::venue::resolve(&graph, crate::venue_graph::sockets(resource_path)?);
+
+    let order = groups_db::fixture_creation_order(access).await?;
+    let fixtures = fixtures_db::get_patched_fixtures(access).await?;
+    let identities: Vec<FixtureIdentity> = order
+        .iter()
+        .filter_map(|id| fixtures.iter().find(|fixture| &fixture.id == id))
+        .map(|fixture| FixtureIdentity {
+            id: fixture.id.clone(),
+            model: fixture.model.clone(),
+            role: role_with_path(resource_path, fixture),
+        })
+        .collect();
+
+    Ok(group_derivation::facts_from(
+        &venue_id,
+        &solved,
+        &graph,
+        &identities,
+    ))
+}
+
+/// The merged group tree: derivation, the overrides on top, and the authored
+/// groups beside them.
+///
+/// # Errors
+/// As [`venue_facts`], plus a failure to read the group tables.
+pub async fn group_tree(
+    resource_path: &Path,
+    access: &mut impl AuthorizedVenue,
+) -> Result<Vec<GroupTreeNode>, String> {
+    let derived = group_derivation::derive_groups(&venue_facts(resource_path, access).await?);
+    let overrides = overrides_db::list(access).await?;
+
+    let mut manual = Vec::new();
+    for group in groups_db::list_groups(access).await? {
+        let Some(name) = group.name.clone() else {
+            continue;
+        };
+        let fixtures = groups_db::group_member_ids(access, &group.id).await?;
+        manual.push(ManualGroup {
+            id: group.id,
+            name,
+            fixtures,
+        });
+    }
+
+    Ok(group_derivation::merge_tree(&derived, &overrides, &manual))
+}
+
+/// One node of the merged tree, by id — what an override command needs before
+/// it can freeze what it is about to change.
+///
+/// # Errors
+/// As [`group_tree`].
+pub async fn group_node(
+    resource_path: &Path,
+    access: &mut impl AuthorizedVenue,
+    group_id: &str,
+) -> Result<Option<GroupTreeNode>, String> {
+    Ok(group_tree(resource_path, access)
+        .await?
+        .into_iter()
+        .find(|node| node.id == group_id))
+}
+
+/// The derivation path of a derived node, `/`-joined — the override row's
+/// record of *which set* was touched.
+///
+/// # Errors
+/// As [`venue_facts`].
+pub async fn derived_path(
+    resource_path: &Path,
+    access: &mut impl AuthorizedVenue,
+    group_id: &str,
+) -> Result<Option<String>, String> {
+    Ok(
+        group_derivation::derive_groups(&venue_facts(resource_path, access).await?)
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map(|group| group.path.join("/")),
+    )
+}
+
+/// A fixture's role, from its definition and the mode it is patched in.
+///
+/// A definition that will not parse is [`FixtureRole::Other`] rather than an
+/// error: one unreadable `.qxf` should cost the venue one branch of its tree,
+/// not the whole tree.
+pub fn role_with_path(resource_path: &Path, fixture: &PatchedFixture) -> FixtureRole {
+    let Ok(def) = parser::parse_definition(&resource_path.join(&fixture.fixture_path)) else {
+        return FixtureRole::Other;
+    };
+    def.modes
+        .iter()
+        .find(|mode| mode.name == fixture.mode_name)
+        .or_else(|| def.modes.first())
+        .map_or(FixtureRole::Other, |mode| FixtureRole::of(&def, mode))
 }
 
 #[cfg(test)]
