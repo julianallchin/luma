@@ -17,7 +17,7 @@ use gpui::{
     IntoElement, LayoutId, Pixels, SharedString, Window,
 };
 
-use crate::motion::{self, RESIZE};
+use crate::motion::{self, SURFACE};
 use crate::node::{Instrument as _, Role};
 use crate::{glass, radius};
 
@@ -739,8 +739,8 @@ impl<K: Clone + Eq> MorphDialog<K> {
                 animating: false,
             };
         };
-        let progress = motion::exit_progress_at(&RESIZE, flight.started, now);
-        let animating = now.saturating_duration_since(flight.started) < motion::span(&RESIZE);
+        let progress = motion::exit_progress_at(&SURFACE, flight.started, now);
+        let animating = now.saturating_duration_since(flight.started) < motion::span(&SURFACE);
         MorphSample {
             size: flight.from_size.interpolate(flight.target.size, progress),
             layers: flight
@@ -803,7 +803,7 @@ mod tests {
     /// How long a flight runs — the same span [`MorphDialog::sample`] reads,
     /// so these tests cannot drift from the reducer.
     fn span() -> Duration {
-        motion::span(&RESIZE)
+        motion::span(&SURFACE)
     }
 
     /// The instant a flight begun at `start` is `fraction` of the way through.

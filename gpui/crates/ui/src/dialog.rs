@@ -10,7 +10,7 @@
 //! scrim vanish between frames while the entrance they just played implied
 //! they were objects with weight. [`Popup`] is the three-phase state that buys
 //! the exit its frames: `open` → [`Popup::begin_close`] (still mounted, now
-//! playing [`motion::DIALOG_OUT`] and taking no input) → [`Popup::tick_close`]
+//! playing [`motion::SURFACE`] and taking no input) → [`Popup::tick_close`]
 //! drops it once the exit has played out. The owner holds the `Popup` and ticks
 //! it each frame; the host is handed only the closing instant and derives
 //! everything else from the wall clock.
@@ -249,7 +249,7 @@ impl Host<'_> {
         // off at unmount instead of thinning out with the card.
         let exit = self
             .closing
-            .map(|since| motion::exit_progress(&motion::DIALOG_OUT, since));
+            .map(|since| motion::exit_progress(&motion::SURFACE, since));
         let live = 1.0 - exit.unwrap_or(0.0);
         // A leaving dialog is a GHOST: visible, untouchable. Every hitbox,
         // occluder, focus trap and tab stop below is gated on this. The moment
@@ -521,8 +521,12 @@ impl<T> Popup<T> {
 }
 
 /// Wall-clock span of the dialog exit, honoring the measurement knob.
+///
+/// [`motion::SURFACE`] is the sidebar's slide: a dialog arriving, leaving and
+/// morphing between routes is the same gesture as a pane opening, so it reads
+/// the one spec instead of keeping a dialog-shaped copy of it.
 fn exit_span() -> Duration {
-    motion::span(&motion::DIALOG_OUT)
+    motion::span(&motion::SURFACE)
 }
 
 #[cfg(test)]
@@ -604,7 +608,7 @@ mod tests {
     fn the_reap_waits_out_the_exit() {
         assert_eq!(
             exit_span(),
-            motion::DIALOG_OUT.total().mul_f32(motion::speed_scale())
+            motion::SURFACE.total().mul_f32(motion::speed_scale())
         );
         let mut popup: Popup<u8> = Popup::default();
         popup.open(1);

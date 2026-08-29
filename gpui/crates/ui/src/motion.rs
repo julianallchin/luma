@@ -318,24 +318,37 @@ pub const MENU_IN: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// keeps: a menu the user has dismissed is already gone as far as they are
 /// concerned, and matching the open would read as lag.
 pub const MENU_OUT: MotionSpec = MotionSpec::new(SNAP, ROOT);
-/// Dialog-in (scale 0.96→1 approximated).
-pub const DIALOG_IN: MotionSpec = MotionSpec::new(BASE, ROOT);
-/// Dialog-out — the same asymmetry [`MENU_OUT`] keeps against [`MENU_IN`]: a
-/// dialog the user has dismissed is already gone as far as they are concerned,
-/// and matching the 200ms entrance on the way out reads as the window lagging
-/// behind the click.
-pub const DIALOG_OUT: MotionSpec = MotionSpec::new(SNAP, ROOT);
 /// Boot splash exit: fade + 6px lift after a hold.
 pub const SPLASH_OUT: MotionSpec = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
-/// Region width/height transitions — the sidebar and the workspace panel
-/// sliding open and shut (see [`crate::pane`]).
+/// A large surface changing shape: arriving, leaving, sliding open, resizing.
 ///
-/// Also the dialog card's route morph ([`crate::dialog::morph`]) and the chat
-/// pane's width settle, which read the same spec rather than keeping their own:
-/// a card resizing and a panel sliding are the same gesture at different
-/// scales, and one of them arriving first is the tell that they are two
-/// systems.
-pub const RESIZE: MotionSpec = MotionSpec::new(SWEEP, ROOT);
+/// Riders: the sidebar and workspace panel sliding open and shut
+/// ([`crate::pane`]), the chat pane's width settle, the dialog card's route
+/// morph ([`crate::dialog::morph`]), and the dialog's own entrance and exit
+/// ([`dialog_in`]/[`dialog_out`]).
+///
+/// One name rather than a per-rider name because these are one gesture at
+/// different scales — a card arriving and a panel sliding are the same weight
+/// of thing moving the same way, and one of them arriving first is the tell
+/// that they are two systems. Retuning this retunes all of them, which is the
+/// point.
+///
+/// The dialog is symmetric here, the one place the ladder's
+/// entrance/exit asymmetry ([`MENU_OUT`]) does *not* apply: a surface that
+/// leaves faster than it arrived is a surface that was never the same object
+/// on the way out, and the sidebar — the reference for this spec — has always
+/// closed over the span it opens.
+pub const SURFACE: MotionSpec = MotionSpec::new(SWEEP, ROOT);
+/// A navigation *push*: one level of a column leaving to the left while the
+/// next arrives from the right, over the column's own width.
+///
+/// [`SWEEP`], the same rung [`SURFACE`] takes, and for the same reason — the
+/// travel is a whole region's width and the eye tracks the moving edge across
+/// it. A rung of its own name rather than reusing `SURFACE` because the two are
+/// different gestures that merely agree on a duration today: a surface changing
+/// shape and a region changing *subject*. Retuning one must not silently retune
+/// the other.
+pub const PUSH: MotionSpec = MotionSpec::new(SWEEP, ROOT);
 /// Tab drag-reorder sliding transforms.
 pub const TAB_SLIDE: MotionSpec = MotionSpec::new(QUICK, ROOT);
 /// Per-row collapse (height).
@@ -404,12 +417,14 @@ where
     })
 }
 
-/// Dialog entrance over [`DIALOG_IN`] (scale approximated with fade + 2px rise).
+/// Dialog entrance over [`SURFACE`] — the sidebar's spec, so a card arriving
+/// and a panel sliding open are one gesture (scale approximated with fade + a
+/// 2px rise, since gpui divs have no scale transform at the pinned rev).
 pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
+    element.with_animation(id, SURFACE.animation(), |el, t| {
         el.relative().opacity(t).top(px(2.0 * (1.0 - t)))
     })
 }
@@ -424,7 +439,7 @@ pub fn dialog_out<E>(id: impl Into<ElementId>, t: f32, element: E) -> AnimationE
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_OUT.animation(), move |el, _| {
+    element.with_animation(id, SURFACE.animation(), move |el, _| {
         el.relative().opacity(1.0 - t).top(px(2.0 * t))
     })
 }
@@ -558,9 +573,9 @@ pub const REVEAL_AT: f32 = 0.6;
 ///
 /// **No curve and no duration of its own, deliberately.** It reads the openness
 /// its caller already has, and that number is a pane's live width over its
-/// target — which is [`RESIZE`]'s tween, on [`ROOT`], for however long `RESIZE`
+/// target — which is [`SURFACE`]'s tween, on [`ROOT`], for however long `SURFACE`
 /// says. So this cannot drift from the slide it belongs to, and a change to
-/// `RESIZE` moves the fade with it without anything here being touched.
+/// `SURFACE` moves the fade with it without anything here being touched.
 ///
 /// Content reaches full strength at [`REVEAL_AT`] rather than at the very end:
 /// the tail of an ease-out is slow, and content still visibly fading while the
@@ -932,10 +947,9 @@ mod tests {
             FADE_QUICK,
             MENU_IN,
             MENU_OUT,
-            DIALOG_IN,
-            DIALOG_OUT,
             SPLASH_OUT,
-            RESIZE,
+            SURFACE,
+            PUSH,
             TAB_SLIDE,
             COLLAPSE,
             CHEVRON,
@@ -958,7 +972,7 @@ mod tests {
         // 200ms: a travelling edge needs longer than a contained one, and every
         // surface that slides or morphs reads this spec so they stay one
         // gesture. Pinned because it is a judgement, not a derivation.
-        assert_eq!(RESIZE.duration_ms, SWEEP);
+        assert_eq!(SURFACE.duration_ms, SWEEP);
         assert_eq!(SWEEP, 270);
         // Strictly increasing, so "a rung below" is a statement about speed and
         // no two rungs are the same number wearing two names.
@@ -969,13 +983,26 @@ mod tests {
         );
     }
 
-    /// Every exit is a rung below its entrance — the asymmetry the ladder
-    /// keeps on purpose (see [`MENU_OUT`]).
+    /// A popover exit lands a rung below its entrance — the asymmetry the
+    /// ladder keeps on purpose (see [`MENU_OUT`]).
     #[test]
     fn exits_land_a_rung_below_their_entrances() {
         assert!(MENU_OUT.duration_ms < MENU_IN.duration_ms);
-        assert!(DIALOG_OUT.duration_ms < DIALOG_IN.duration_ms);
-        assert_eq!(DIALOG_OUT.duration_ms, SNAP);
+        assert_eq!(MENU_OUT.duration_ms, SNAP);
+    }
+
+    /// The dialog and the sidebar are one gesture, not two that happen to
+    /// agree: the card's entrance, its exit, its route morph and the pane
+    /// slide all read [`SURFACE`], so retuning the sidebar retunes the
+    /// dialogs. There is deliberately no second dialog spec to drift from
+    /// this one — [`crate::dialog`] pins the other half of the coupling.
+    #[test]
+    fn the_surface_spec_is_symmetric_and_shared() {
+        // Symmetric on purpose, unlike the popovers above: one spec drives
+        // both directions, so an exit cannot be retimed without the entrance.
+        assert_eq!(SURFACE.curve, ROOT);
+        assert_eq!(SURFACE.duration_ms, SWEEP);
+        assert_eq!(SURFACE.delay_ms, 0);
     }
 
     #[test]
@@ -984,15 +1011,15 @@ mod tests {
         // microseconds between stamping and reading are real, so this is a
         // tolerance rather than an equality)…
         let now = Instant::now();
-        assert!(exit_progress(&DIALOG_OUT, now) < 0.01);
+        assert!(exit_progress(&SURFACE, now) < 0.01);
         // …and once the span has elapsed it is pinned at the end, not past it.
-        let done = now - DIALOG_OUT.total().mul_f32(speed_scale());
-        assert_eq!(exit_progress(&DIALOG_OUT, done), 1.0);
+        let done = now - SURFACE.total().mul_f32(speed_scale());
+        assert_eq!(exit_progress(&SURFACE, done), 1.0);
         let long_gone = now - Duration::from_secs(30);
-        assert_eq!(exit_progress(&DIALOG_OUT, long_gone), 1.0);
+        assert_eq!(exit_progress(&SURFACE, long_gone), 1.0);
         // Mid-flight is strictly inside, and monotonic across the span.
-        let half = now - DIALOG_OUT.total().mul_f32(speed_scale()).mul_f32(0.5);
-        let mid = exit_progress(&DIALOG_OUT, half);
+        let half = now - SURFACE.total().mul_f32(speed_scale()).mul_f32(0.5);
+        let mid = exit_progress(&SURFACE, half);
         assert!(mid > 0.0 && mid < 1.0, "mid-flight exit: {mid}");
     }
 
@@ -1169,7 +1196,7 @@ mod tests {
     }
     /// The reveal is monotone, bounded, and *finished before the slide is* —
     /// the three things a caller reading a live width off a tween is entitled
-    /// to assume, whatever `RESIZE` is retimed to.
+    /// to assume, whatever `SURFACE` is retimed to.
     #[test]
     fn content_fades_in_with_the_region_and_arrives_before_it_does() {
         assert_eq!(reveal_opacity(0.0), 0.0, "a closed region shows nothing");
@@ -1195,11 +1222,11 @@ mod tests {
     }
 
     /// The fade borrows the slide's clock rather than keeping one: its only
-    /// input is how open the region is, so retiming [`RESIZE`] moves the fade
+    /// input is how open the region is, so retiming [`SURFACE`] moves the fade
     /// with it and cannot desynchronise the two. What is left to pin is the
     /// other half of that borrow — the curve the openness arrives on.
     #[test]
     fn the_reveal_has_no_clock_of_its_own() {
-        assert_eq!(RESIZE.curve, ROOT, "the slide it reads must stay on ROOT");
+        assert_eq!(SURFACE.curve, ROOT, "the slide it reads must stay on ROOT");
     }
 }
