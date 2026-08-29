@@ -5,8 +5,10 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Wri
 use crate::dispatch::{AppServices, CommandError};
 use crate::fixtures::layout::fixture_mount;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
+use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell};
 use crate::services::fixtures as fixture_service;
 use crate::services::groups::invalidate_venue_fixture_cache;
+use crate::services::patch as patch_service;
 
 /// Pushing the patch to ArtNet is best-effort: the manager needs an `AppHandle`
 /// to construct, so a headless host has none and the patch simply goes
@@ -104,6 +106,16 @@ pub async fn patch_fixture(
 ) -> Result<PatchedFixture, CommandError> {
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    // The one door a typed address comes through, and it is shut before
+    // anything is written: a refused patch leaves the database untouched.
+    patch_service::admit(
+        &patch_service::occupancy(&mut access).await?,
+        None,
+        narrow(universe)?,
+        narrow(address)?,
+        narrow(num_channels)?,
+    )
+    .map_err(CommandError::from)?;
     let fixture = fixtures_db::insert_fixture(
         &mut access,
         universe,
@@ -114,21 +126,91 @@ pub async fn patch_fixture(
         &mode_name,
         &fixture_path,
         label.as_deref(),
+        // Derived, not typed: the address the dialog offered came from
+        // `next_addresses`, so auto-patch is free to move it.
+        false,
     )
     .await?;
     commit_and_publish(services, access).await?;
     Ok(fixture)
 }
 
-pub async fn move_patched_fixture(
+/// Put one fixture at a hand-chosen address, and pin it there.
+///
+/// Refuses a collision or a footprint past 512 with the conflict named, rather
+/// than truncating it the way `fixtures::engine` used to.
+pub async fn set_fixture_address(
     services: &AppServices,
     venue_id: String,
     id: String,
+    universe: i64,
     address: i64,
 ) -> Result<(), CommandError> {
     let mut access = fixture_write(services, &venue_id, &id).await?;
-    require_changed(fixtures_db::update_fixture_address(&mut access, &id, address).await?)?;
+    patch_service::set_address(&mut access, &id, narrow(universe)?, narrow(address)?).await?;
     commit_and_publish(services, access).await
+}
+
+/// Re-derive every address from where the fixtures hang.
+pub async fn auto_patch(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<AutoPatchReport, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    let report = patch_service::auto_patch(&mut access, &services.fixtures_root).await?;
+    commit_and_publish(services, access).await?;
+    Ok(report)
+}
+
+/// One universe as 512 cells — the single source for a footprint strip.
+pub async fn universe_occupancy(
+    services: &AppServices,
+    venue_id: String,
+    universe: i64,
+) -> Result<Vec<UniverseCell>, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    Ok(patch_service::universe_occupancy(&mut access, narrow(universe)?).await?)
+}
+
+/// Every universe the venue patches into, ascending.
+pub async fn universes_in_use(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<Vec<u16>, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    Ok(patch_service::universes_in_use(&mut access).await?)
+}
+
+/// Where the next `count` fixtures of `channels` channels each would go.
+///
+/// The one place a caller that has no fixture yet — the add dialog, a
+/// duplication, a distribution — asks for an address. There is no other
+/// allocator to ask.
+pub async fn next_addresses(
+    services: &AppServices,
+    venue_id: String,
+    run: Option<String>,
+    channels: i64,
+    count: usize,
+) -> Result<Vec<PatchAddress>, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    Ok(patch_service::next_addresses(
+        &mut access,
+        &services.fixtures_root,
+        run.as_deref(),
+        narrow(channels)?,
+        count,
+    )
+    .await?
+    .into_iter()
+    .map(PatchAddress::from)
+    .collect())
 }
 
 pub async fn remove_patched_fixture(
@@ -188,6 +270,14 @@ fn publish_patch(services: &AppServices, patch: Vec<PatchedFixture>) {
     if let Some(artnet) = services.artnet.as_ref() {
         artnet.update_patch(patch);
     }
+}
+
+/// The wire carries `i64` because that is what a JSON number decodes to; DMX
+/// counts are `u16`. Narrowing is a refusal, not a clamp — a negative universe
+/// is a caller bug, and truncating it would invent a valid one.
+fn narrow(value: i64) -> Result<u16, CommandError> {
+    u16::try_from(value)
+        .map_err(|_| CommandError::Invalid(format!("{value} is not a DMX universe or address")))
 }
 
 /// A write that touched no row means the resource was not in scope.

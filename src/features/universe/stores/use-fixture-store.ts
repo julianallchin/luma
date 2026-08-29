@@ -5,6 +5,7 @@ import type {
 	FixtureEntry,
 	PatchedFixture,
 } from "@/bindings/fixtures";
+import type { PatchAddress } from "@/bindings/patch";
 import { useGroupStore } from "./use-group-store";
 
 interface FixtureState {
@@ -55,7 +56,15 @@ interface FixtureState {
 	fetchPatchedFixtures: () => Promise<void>;
 	setPreviewFixtureIds: (ids: string[]) => void;
 	clearPreviewFixtureIds: () => void;
-	movePatchedFixture: (id: string, address: number) => Promise<void>;
+	/// Ask the backend where the next `count` fixtures of `channels` channels
+	/// each would go. The one allocator lives in Rust; there is no first-fit
+	/// loop on this side of the wire.
+	nextAddresses: (channels: number, count: number) => Promise<PatchAddress[]>;
+	setFixtureAddress: (
+		id: string,
+		universe: number,
+		address: number,
+	) => Promise<void>;
 	patchFixture: (
 		universe: number,
 		address: number,
@@ -321,33 +330,33 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		return get().selectedPatchedIds.has(id);
 	},
 
-	movePatchedFixture: async (id, address) => {
+	nextAddresses: async (channels, count) => {
+		const { venueId } = get();
+		if (venueId === null || count <= 0) return [];
+		try {
+			return await invoke<PatchAddress[]>("next_addresses", {
+				venueId,
+				run: null,
+				channels,
+				count,
+			});
+		} catch (error) {
+			console.error("Failed to allocate addresses:", error);
+			return [];
+		}
+	},
+
+	setFixtureAddress: async (id, universe, address) => {
 		const { venueId } = get();
 		if (venueId === null) return;
-
 		try {
-			// Optimistic update
-			const current = get().patchedFixtures;
-			const idx = current.findIndex((f) => f.id === id);
-			if (idx === -1) return;
-			const optimistic = [...current];
-			optimistic[idx] = { ...optimistic[idx], address: BigInt(address) };
-			set({ patchedFixtures: optimistic });
-			get().selectFixtureById(id);
-
-			console.debug("[useFixtureStore] movePatchedFixture invoke", {
-				venueId,
-				id,
-				address,
-			});
-			await invoke("move_patched_fixture", { venueId, id, address });
-			console.debug("[useFixtureStore] movePatchedFixture success");
-			await get().fetchPatchedFixtures();
+			await invoke("set_fixture_address", { venueId, id, universe, address });
 		} catch (error) {
-			console.error("Failed to move patched fixture:", error);
-			// Reload from DB to avoid drift if optimistic update failed
-			await get().fetchPatchedFixtures();
+			// A refusal — a collision, or a footprint past 512 — leaves the
+			// database untouched, so the reload below restores the real value.
+			console.error("Failed to address fixture:", error);
 		}
+		await get().fetchPatchedFixtures();
 	},
 
 	patchFixture: async (universe, address, modeName, numChannels) => {
@@ -440,65 +449,32 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 
 		const fixture = patchedFixtures.find((f) => f.id === id);
 		if (!fixture) return;
-
 		const numChannels = Number(fixture.numChannels);
 
-		// Find the first available address that can fit the fixture
-		const findNextAvailableAddress = (): number | null => {
-			// Build a sorted list of occupied ranges
-			const occupiedRanges = patchedFixtures
-				.map((f) => ({
-					start: Number(f.address),
-					end: Number(f.address) + Number(f.numChannels) - 1,
-				}))
-				.sort((a, b) => a.start - b.start);
-
-			// Try to find a gap starting from address 1
-			let candidate = 1;
-			for (const range of occupiedRanges) {
-				if (candidate + numChannels - 1 < range.start) {
-					// Found a gap before this range
-					return candidate;
-				}
-				// Move candidate past this range
-				candidate = Math.max(candidate, range.end + 1);
-			}
-
-			// Check if there's space after all fixtures
-			if (candidate + numChannels - 1 <= 512) {
-				return candidate;
-			}
-
-			return null;
-		};
-
-		const address = findNextAvailableAddress();
-		if (address === null) {
+		const [slot] = await get().nextAddresses(numChannels, 1);
+		if (!slot) {
 			console.error("No available address for duplicate fixture");
 			return;
 		}
 
-		// Generate label for the duplicate
 		const existingCount = patchedFixtures.filter(
 			(f) => f.model === fixture.model,
 		).length;
-		const label = `${fixture.model} (${existingCount + 1})`;
 
 		try {
 			const newFixture = await invoke<PatchedFixture>("patch_fixture", {
 				venueId,
-				universe: Number(fixture.universe),
-				address,
+				universe: slot.universe,
+				address: slot.address,
 				numChannels,
 				manufacturer: fixture.manufacturer,
 				model: fixture.model,
 				modeName: fixture.modeName,
 				fixturePath: fixture.fixturePath,
-				label,
+				label: `${fixture.model} (${existingCount + 1})`,
 			});
 
 			await get().fetchPatchedFixtures();
-			// Select the new fixture
 			set({
 				selectedPatchedIds: new Set([newFixture.id]),
 				lastSelectedPatchedId: newFixture.id,
@@ -517,67 +493,38 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		);
 		if (toDuplicate.length === 0) return;
 
-		// Track cumulative occupancy as each new fixture is allocated
-		const allOccupied = patchedFixtures
-			.map((f) => ({
-				start: Number(f.address),
-				end: Number(f.address) + Number(f.numChannels) - 1,
-			}))
-			.sort((a, b) => a.start - b.start);
-
 		const newIds: string[] = [];
-
 		try {
+			// One allocation call per fixture rather than one for the batch:
+			// each copy is written before the next is placed, so the backend
+			// sees the real occupancy and the copies cannot overlap.
 			for (const fixture of toDuplicate) {
 				const numChannels = Number(fixture.numChannels);
-
-				// Find next available address considering cumulative occupancy
-				const sorted = [...allOccupied].sort((a, b) => a.start - b.start);
-				let address: number | null = null;
-				let candidate = 1;
-				for (const range of sorted) {
-					if (candidate + numChannels - 1 < range.start) {
-						address = candidate;
-						break;
-					}
-					candidate = Math.max(candidate, range.end + 1);
-				}
-				if (address === null && candidate + numChannels - 1 <= 512) {
-					address = candidate;
-				}
-				if (address === null) {
+				const [slot] = await get().nextAddresses(numChannels, 1);
+				if (!slot) {
 					console.error("No available address for duplicate fixture");
 					continue;
 				}
 
-				// Add to cumulative occupancy
-				allOccupied.push({
-					start: address,
-					end: address + numChannels - 1,
-				});
-
 				const existingCount =
 					patchedFixtures.filter((f) => f.model === fixture.model).length +
 					newIds.length;
-				const label = `${fixture.model} (${existingCount + 1})`;
 
 				const newFixture = await invoke<PatchedFixture>("patch_fixture", {
 					venueId,
-					universe: Number(fixture.universe),
-					address,
+					universe: slot.universe,
+					address: slot.address,
 					numChannels,
 					manufacturer: fixture.manufacturer,
 					model: fixture.model,
 					modeName: fixture.modeName,
 					fixturePath: fixture.fixturePath,
-					label,
+					label: `${fixture.model} (${existingCount + 1})`,
 				});
-
 				newIds.push(newFixture.id);
 			}
 
 			await get().fetchPatchedFixtures();
-			// Select only the new fixtures
 			if (newIds.length > 0) {
 				set({
 					selectedPatchedIds: new Set(newIds),

@@ -391,6 +391,9 @@ pub struct PatchedFixture {
     pub mode_name: String,
     pub fixture_path: String,
     pub label: Option<String>,
+    /// The address was set by hand, so auto-patch derives around it rather than
+    /// over it. Local-only: see `migrations/20260830000000_patch_addressing.sql`.
+    pub address_pinned: bool,
     pub pos_x: f64,
     pub pos_y: f64,
     pub pos_z: f64,

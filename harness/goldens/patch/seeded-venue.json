@@ -1,0 +1,159 @@
+{
+  "notes": [],
+  "patch": [
+    {
+      "address": 300,
+      "fixture": "bar-2",
+      "footprint": [
+        300,
+        308
+      ],
+      "pinned": true,
+      "run": "run-upstage",
+      "universe": 2
+    },
+    {
+      "address": 1,
+      "fixture": "mover-7",
+      "footprint": [
+        1,
+        16
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 17,
+      "fixture": "mover-1",
+      "footprint": [
+        17,
+        32
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 33,
+      "fixture": "mover-5",
+      "footprint": [
+        33,
+        48
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 49,
+      "fixture": "mover-3",
+      "footprint": [
+        49,
+        64
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 65,
+      "fixture": "mover-6",
+      "footprint": [
+        65,
+        80
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 81,
+      "fixture": "mover-2",
+      "footprint": [
+        81,
+        96
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 97,
+      "fixture": "mover-4",
+      "footprint": [
+        97,
+        112
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 113,
+      "fixture": "mover-0",
+      "footprint": [
+        113,
+        128
+      ],
+      "pinned": false,
+      "run": "run-downstage",
+      "universe": 1
+    },
+    {
+      "address": 1,
+      "fixture": "bar-1",
+      "footprint": [
+        1,
+        9
+      ],
+      "pinned": false,
+      "run": "run-upstage",
+      "universe": 2
+    },
+    {
+      "address": 10,
+      "fixture": "bar-0",
+      "footprint": [
+        10,
+        18
+      ],
+      "pinned": false,
+      "run": "run-upstage",
+      "universe": 2
+    },
+    {
+      "address": 19,
+      "fixture": "bar-3",
+      "footprint": [
+        19,
+        27
+      ],
+      "pinned": false,
+      "run": "run-upstage",
+      "universe": 2
+    },
+    {
+      "address": 28,
+      "fixture": "bar-4",
+      "footprint": [
+        28,
+        36
+      ],
+      "pinned": false,
+      "run": "run-upstage",
+      "universe": 2
+    },
+    {
+      "address": 37,
+      "fixture": "bar-5",
+      "footprint": [
+        37,
+        45
+      ],
+      "pinned": false,
+      "run": "run-upstage",
+      "universe": 2
+    }
+  ]
+}

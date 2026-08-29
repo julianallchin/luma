@@ -427,6 +427,23 @@ pub fn generate_dmx(
         for mode_channel in &mode.channels {
             let channel_number = mode_channel.number as usize;
             let dmx_address = (fixture.address - 1) as usize + channel_number;
+            // Unreachable for an address reason: a patch row's footprint is
+            // checked into existence by `luma_scene::patch::Footprint` on the
+            // way in and again by the `fixtures_address_fits_universe_*`
+            // triggers, so `address + num_channels - 1 <= 512` holds for every
+            // row in the table. What can still exceed it is a *mode* whose
+            // channel numbers run past the `num_channels` the row was patched
+            // with — a definition/patch mismatch, not an address — and the
+            // assertion is where that would surface instead of going dark
+            // silently.
+            debug_assert!(
+                dmx_address < 512,
+                "{} channel {channel_number} lands at {dmx_address}: mode {} declares more \
+                 channels than the patch row's {}",
+                fixture.id,
+                fixture.mode_name,
+                fixture.num_channels
+            );
             if dmx_address >= 512 {
                 continue;
             }
@@ -877,6 +894,7 @@ mod tests {
             mode_name: "TestMode".into(),
             fixture_path: "Test/Test.qxf".into(),
             label: None,
+            address_pinned: false,
             pos_x: 0.0,
             pos_y: 0.0,
             pos_z: 0.0,
@@ -943,6 +961,7 @@ mod tests {
             mode_name: "TestMode".into(),
             fixture_path: "Test/Test.qxf".into(),
             label: None,
+            address_pinned: false,
             pos_x: 0.0,
             pos_y: 0.0,
             pos_z: 0.0,
@@ -1071,6 +1090,7 @@ mod tests {
             mode_name: "TestMode".into(),
             fixture_path: "Test/Test.qxf".into(),
             label: None,
+            address_pinned: false,
             pos_x: 0.0,
             pos_y: 0.0,
             pos_z: 0.0,
@@ -1170,6 +1190,7 @@ mod tests {
             mode_name: "TestMode".into(),
             fixture_path: "Test/Test.qxf".into(),
             label: None,
+            address_pinned: false,
             pos_x: 0.0,
             pos_y: 0.0,
             pos_z: 0.0,
@@ -1301,6 +1322,7 @@ mod tests {
             mode_name: "M".into(),
             fixture_path: "T/T.qxf".into(),
             label: None,
+            address_pinned: false,
             pos_x: 0.0,
             pos_y: 0.0,
             pos_z: 0.0,

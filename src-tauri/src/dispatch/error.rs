@@ -5,6 +5,7 @@ use thiserror::Error;
 use crate::services::authored_documents::AuthoredDocumentsError;
 use crate::services::authored_state::AuthoredStateError;
 use crate::services::graph_documents::GraphDocumentError;
+use crate::services::patch::PatchError;
 use crate::services::track_edits::TrackEditError;
 
 /// Why a command did not produce a result.
@@ -122,6 +123,19 @@ impl From<TrackEditError> for CommandError {
             TrackEditError::Invalid { .. } => Self::Invalid(message),
             TrackEditError::Scope { .. } => Self::Unauthorized(message),
             TrackEditError::Storage { .. } => Self::Internal(message),
+        }
+    }
+}
+
+/// A refused address is a precondition violation, not a failure: the caller
+/// asked for something the patch cannot hold, and the message already names
+/// the conflict.
+impl From<PatchError> for CommandError {
+    fn from(error: PatchError) -> Self {
+        let message = error.to_string();
+        match error {
+            PatchError::OutOfRange { .. } | PatchError::Collision { .. } => Self::Invalid(message),
+            PatchError::Database(_) => Self::Internal(message),
         }
     }
 }
