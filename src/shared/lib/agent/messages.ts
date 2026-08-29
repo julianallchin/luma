@@ -42,9 +42,17 @@ export type AgentChatPart =
 	| PiMetadataPart
 	| StepStartPart;
 
+/** Who a durable transcript row belongs to.
+ *
+ * `session` is the turn a non-conversational client (an MCP connection, a
+ * script) opened so its cells have something durable to attach to. It is a
+ * turn, not speech: it is never replayed to the model, and who opened it is
+ * the thread's actor, not this. Mirrors `Role` in `src-tauri/src/agent/transcript.rs`. */
+export type AgentChatRole = "user" | "assistant" | "session";
+
 export type AgentChatMessage = {
 	id: string;
-	role: "user" | "assistant";
+	role: AgentChatRole;
 	parts: AgentChatPart[];
 };
 
@@ -418,6 +426,11 @@ export async function chatMessagesToAgentMessages(
 			out.push(userAgentMessage(message));
 			continue;
 		}
+		// A session marker is provenance, not conversation — it never reaches
+		// the model. Spelled as its own branch because the fallthrough below
+		// replays anything that is not a user turn *as an assistant one*, and
+		// silently attributing a marker to the model is the worse failure.
+		if (message.role === "session") continue;
 		for (const [stepIndex, parts] of assistantSteps(message).entries()) {
 			if (
 				!parts.some(
@@ -450,7 +463,9 @@ export function isAgentChatMessage(value: unknown): value is AgentChatMessage {
 	const message = value as Record<string, unknown>;
 	return (
 		typeof message.id === "string" &&
-		(message.role === "user" || message.role === "assistant") &&
+		(message.role === "user" ||
+			message.role === "assistant" ||
+			message.role === "session") &&
 		Array.isArray(message.parts) &&
 		message.parts.every(isAgentChatPart)
 	);

@@ -221,10 +221,8 @@ impl History {
             let Some(&at) = index.get(&message.thread_id) else {
                 continue;
             };
-            let role = match message.role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                _ => continue,
+            let Some(role) = Role::parse(&message.role) else {
+                continue;
             };
             let Ok(parts) = AgentChatMessage::parse_parts(&message.parts) else {
                 continue;
@@ -244,6 +242,9 @@ impl History {
                     }
                 }
                 Role::User => {}
+                // A session marker says nothing about the thread; the
+                // summary is what was said in it.
+                Role::Session => {}
             }
             lines.extend(
                 text.lines()

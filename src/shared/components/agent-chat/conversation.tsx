@@ -50,6 +50,8 @@ export function AgentConversation({
 			{rows.map((row, i) =>
 				row.kind === "user" ? (
 					<UserMessage key={row.message.id} message={row.message} />
+				) : row.kind === "session" ? (
+					<SessionMarker key={row.message.id} message={row.message} />
 				) : (
 					<AssistantRun
 						key={row.messages[0]?.id ?? `assistant-${i}`}
@@ -64,6 +66,7 @@ export function AgentConversation({
 
 type ConversationRow =
 	| { kind: "user"; message: AgentChatMessage }
+	| { kind: "session"; message: AgentChatMessage }
 	| { kind: "assistant"; messages: AgentChatMessage[] };
 
 /** Tool results can make one visible assistant response span several Pi
@@ -75,15 +78,35 @@ function groupConversationMessages(
 	const rows: ConversationRow[] = [];
 	for (const message of messages) {
 		const last = rows[rows.length - 1];
-		if (message.role !== "user" && last?.kind === "assistant") {
-			last.messages.push(message);
-		} else if (message.role !== "user") {
-			rows.push({ kind: "assistant", messages: [message] });
-		} else {
+		if (message.role === "user") {
 			rows.push({ kind: "user", message });
+		} else if (message.role === "session") {
+			rows.push({ kind: "session", message });
+		} else if (last?.kind === "assistant") {
+			last.messages.push(message);
+		} else {
+			rows.push({ kind: "assistant", messages: [message] });
 		}
 	}
 	return rows;
+}
+
+/** The turn a non-conversational client opened. One quiet line, never a
+ * bubble: it is a marker in the record, not something anyone said. */
+function SessionMarker({ message }: { message: AgentChatMessage }) {
+	const text = message.parts
+		.map((part) => (part.type === "text" ? part.text : ""))
+		.join("");
+	return (
+		<div
+			className={cn(
+				"text-[9px] uppercase tracking-wider text-muted-foreground",
+				ROW_CLASS,
+			)}
+		>
+			{text}
+		</div>
+	);
 }
 
 function UserMessage({ message }: { message: AgentChatMessage }) {

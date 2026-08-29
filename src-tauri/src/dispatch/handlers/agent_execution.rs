@@ -16,7 +16,8 @@ use crate::models::agent_execution::{PythonCellResult, PythonScopeInput};
 use crate::services::agent_execution::{cancel_python_cell_inner, run_python_cell_inner};
 
 /// Run one cell in the durable thread's kernel. `turn_message_id` is required:
-/// a cell with edit authority must be attributable to a durable user turn.
+/// a cell with edit authority must be attributable to a durable turn — a user
+/// one, or the session turn a non-conversational client opened.
 pub async fn run_python_cell(
     services: &AppServices,
     thread_id: String,
