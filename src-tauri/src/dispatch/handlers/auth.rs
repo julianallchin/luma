@@ -844,6 +844,48 @@ async fn assert_signed_in_catalog_durable(
     Ok(())
 }
 
+/// Every principal-bearing table, each one *read by a human* and given a
+/// durability policy above.
+///
+/// This is deliberately a hand-maintained list and deliberately not derived
+/// from the schema. `venue_owned_tables` answers a different question — "which
+/// rows belong to this venue", for `sync::pull`'s delete guard — and deriving
+/// this one from it turned the audit into a tautology: a new table with a `uid`
+/// and a `venue_id` classified itself, which is exactly the review the audit
+/// exists to force. The cost of the list is one line per new table, paid by
+/// whoever knows what the table is for.
+const CLASSIFIED: &[&str] = &[
+    "cues",
+    "fixture_group_members",
+    "fixture_groups",
+    "fixtures",
+    "implementations",
+    "midi_bindings",
+    "midi_modifiers",
+    "pattern_categories",
+    "patterns",
+    "scores",
+    "stage_pieces",
+    "sync_state",
+    "track_bar_classifications",
+    "track_beats",
+    "track_drum_onsets",
+    "track_genres",
+    "track_roots",
+    "track_scores",
+    "track_stems",
+    "track_waveforms",
+    "tracks",
+    "venue_implementation_overrides",
+    // Local-only, exactly like `stage_pieces`: the venue graph has no remote
+    // table yet (`supabase/migrations/…_venue_graph_NOT_DEPLOYED`), so it is
+    // never dirty-swept — and it is never wiped either. See
+    // `wipe_signed_in_projection`: venue content is a sealed local cache that
+    // survives sign-out, which is what makes "unsynced" survivable here.
+    "venue_nodes",
+    "venues",
+];
+
 async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(), String> {
     let actual: Vec<String> = sqlx::query_scalar(
         "SELECT schema.name
@@ -855,32 +897,9 @@ async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(
     .fetch_all(&mut *connection)
     .await
     .map_err(|error| format!("Failed to audit principal-bearing tables: {error}"))?;
-    // A venue's own tables are not enumerated here: they are the schema's
-    // answer, shared with `sync::pull`'s delete guard, and the two used to
-    // disagree about `venue_nodes`. Everything venue-owned rides on the venue
-    // row's durability, so the policy is one sentence rather than a dozen
-    // names.
-    let venue_owned = crate::database::local::venue_access::venue_owned_tables(connection).await?;
-    let classified = [
-        "fixture_group_members",
-        "implementations",
-        "pattern_categories",
-        "patterns",
-        "sync_state",
-        "track_bar_classifications",
-        "track_beats",
-        "track_drum_onsets",
-        "track_genres",
-        "track_roots",
-        "track_scores",
-        "track_stems",
-        "track_waveforms",
-        "tracks",
-        "venues",
-    ];
     let unknown: Vec<_> = actual
         .iter()
-        .filter(|table| !classified.contains(&table.as_str()) && !venue_owned.contains(table))
+        .filter(|table| !CLASSIFIED.contains(&table.as_str()))
         .collect();
     if !unknown.is_empty() {
         return Err(format!(
@@ -947,9 +966,12 @@ async fn wipe_signed_in_projection(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::storage::StorageRoot;
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    use sqlx::SqlitePool;
 
     #[tokio::test]
     async fn sign_out_wipe_preserves_relational_authored_history_and_projection() {
@@ -1050,6 +1072,106 @@ mod tests {
                 .await
                 .unwrap(),
             1
+        );
+    }
+
+    /// A pool on a freshly migrated schema, with `alice` admitted to write.
+    async fn migrated_pool(directory: &Path) -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(directory.join("audit.db"))
+                    .journal_mode(SqliteJournalMode::Wal)
+                    .create_if_missing(true)
+                    .foreign_keys(false),
+            )
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        pool
+    }
+
+    /// The audit's whole job: a table nobody classified stops the wipe.
+    ///
+    /// It is a hand-maintained list on purpose. Derived from the schema — from
+    /// `venue_owned_tables`, say — a new table would answer for itself and this
+    /// test would pass with nobody having looked at it.
+    #[tokio::test]
+    async fn an_unclassified_principal_bearing_table_fails_the_audit() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = migrated_pool(directory.path()).await;
+        let mut connection = pool.acquire().await.unwrap();
+        audit_uid_bearing_tables(&mut connection)
+            .await
+            .expect("the shipped schema is fully classified");
+
+        sqlx::query(
+            "CREATE TABLE venue_annotations (
+                 id TEXT PRIMARY KEY, uid TEXT, venue_id TEXT NOT NULL, note TEXT)",
+        )
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+        let error = audit_uid_bearing_tables(&mut connection)
+            .await
+            .expect_err("a new principal-bearing table has no durability policy yet");
+        assert!(
+            error.contains("venue_annotations"),
+            "the audit has to name what it does not know about: {error}"
+        );
+    }
+
+    /// The venue graph has no remote table yet, so its rows are permanently
+    /// unsynced. That is survivable only because the wipe does not touch venue
+    /// content — `wipe_signed_in_projection` treats it as a sealed local cache.
+    /// If that ever changes, sign-out starts destroying rigs, and this fails.
+    #[tokio::test]
+    async fn sign_out_keeps_an_unsynced_venue_graph() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = migrated_pool(directory.path()).await;
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('ven', 'alice', 'Basement')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_nodes (id, uid, venue_id, kind, label)
+             VALUES ('ven:venue', 'alice', 'ven', 'venue', 'Room')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // The venue row itself is in the sync registry and is durable; only the
+        // graph hanging off it is not, which is the case no sweep can see.
+        sqlx::query("UPDATE venues SET synced_at = updated_at, version = version + 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM venue_nodes WHERE uid = 'alice' AND synced_at IS NULL"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1,
+            "the graph has never synced, and cannot: there is no remote table"
+        );
+
+        let authored =
+            AuthoredDocuments::new(StorageRoot::from_path(directory.path().join("storage")));
+        wipe_database_pool(&pool, &authored, "alice").await.unwrap();
+
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venue_nodes")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1,
+            "signing out must not destroy a venue graph that has nowhere to sync to"
         );
     }
 

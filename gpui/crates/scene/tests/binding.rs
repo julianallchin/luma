@@ -9,12 +9,9 @@
 //! be committed silently. That diff *is* the TS↔Rust parity check — the data
 //! has exactly one author.
 //!
-//! There is deliberately no resolved-socket golden here any more. One existed
-//! (`harness/goldens/stage-catalog.json`) to pin the TypeScript socket resolver
-//! against this one; that resolver is gone — sockets and snapping belong to the
-//! gpui builder, and React only draws — so the file had no reader and proved
-//! nothing. `harness/goldens/stage-sockets.json` still pins `resolve_socket`
-//! numerically on the Rust side.
+//! Sockets and snapping are the gpui builder's; React only draws, so there is
+//! no resolved-socket golden here. `harness/goldens/stage-sockets.json` pins
+//! `resolve_socket` numerically on the Rust side.
 //!
 //! Run `cargo test -p luma-scene` after editing the catalog.
 

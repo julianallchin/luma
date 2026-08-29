@@ -2,7 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { useMemo } from "react";
 import { create } from "zustand";
 import type { PatchedFixture } from "@/bindings/fixtures";
-import type { ResolvedNode, ResolvedVenue } from "@/bindings/venue-graph";
+import type {
+	ResolvedNode,
+	ResolvedUnplaced,
+	ResolvedVenue,
+} from "@/bindings/venue-graph";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 
 /**
@@ -23,6 +27,12 @@ interface VenueState {
 	byId: Map<string, ResolvedNode>;
 	/** One line per thing the solve had to decide for us. */
 	warnings: string[];
+	/**
+	 * Branches with no pose, by their root: the patch tray, and anything a
+	 * detach left hanging. Nothing draws them — they are what stops a detached
+	 * wing from simply disappearing with no way to ask where it went.
+	 */
+	unplaced: ResolvedUnplaced[];
 
 	initialize: (venueId: string) => Promise<void>;
 	refresh: () => Promise<void>;
@@ -33,6 +43,7 @@ export const useVenueStore = create<VenueState>((set, get) => ({
 	nodes: [],
 	byId: new Map(),
 	warnings: [],
+	unplaced: [],
 
 	initialize: async (venueId) => {
 		set({ venueId });
@@ -50,6 +61,7 @@ export const useVenueStore = create<VenueState>((set, get) => ({
 				nodes: venue.nodes,
 				byId: new Map(venue.nodes.map((n) => [n.id, n])),
 				warnings: venue.warnings,
+				unplaced: venue.unplaced,
 			});
 		} catch (err) {
 			console.error("[venue] get_resolved_venue failed", err);
@@ -58,17 +70,26 @@ export const useVenueStore = create<VenueState>((set, get) => ({
 }));
 
 /**
- * Every node that carries a mesh — the structure and set pieces, not fixtures.
+ * Every node that stands for one physical object — the structure and set
+ * pieces, not fixtures.
+ *
+ * `setPiece` is the resolver's own answer (`NodePose::is_set_piece`), carried
+ * on the wire rather than re-derived here: an array's *anchor* is a seat with
+ * no geometry that carries its members' `catalogRef`, so a filter written from
+ * `kind` and `catalogRef` alone draws N+1 meshes for an array of N, with the
+ * extra one inside the middle member.
  *
  * A fixture's node is drawn by the fixture layer instead (see
  * {@link usePlacedFixtures}), which needs the patch row for its definition.
  */
 export function useStructureNodes(): ResolvedNode[] {
 	const nodes = useVenueStore((s) => s.nodes);
-	return useMemo(
-		() => nodes.filter((n) => n.kind !== "fixture" && n.catalogRef !== null),
-		[nodes],
-	);
+	return useMemo(() => structureNodes(nodes), [nodes]);
+}
+
+/** {@link useStructureNodes} without the hook, so it can be tested. */
+export function structureNodes(nodes: ResolvedNode[]): ResolvedNode[] {
+	return nodes.filter((n) => n.setPiece);
 }
 
 /**

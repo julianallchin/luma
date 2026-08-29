@@ -220,6 +220,9 @@ function piece(
 		rotation: rot,
 		facing: [0, 0, 1],
 		arrayIndex: null,
+		// A golden piece is one object with one mesh; the resolver's own
+		// answer for a plain `piece` carrying a `catalogRef`.
+		setPiece: true,
 		params: {},
 	};
 }

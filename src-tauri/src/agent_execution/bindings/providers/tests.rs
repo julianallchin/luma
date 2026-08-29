@@ -6,7 +6,7 @@
 //! shapes and axes, the bytes behind the artifacts, and the exact unavailable
 //! reasons — the strings the agent reads when data is missing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -973,6 +973,105 @@ async fn a_venue_is_describable_without_a_score() {
     assert!(reason(&v, "track.clips").contains("no authored lighting timeline"));
     assert_eq!(at(&v, "track.editable"), false);
     assert!(v.get("score").is_none());
+}
+
+/// Defect: `venue.pieces` listed an array as `count + 1` rows. The extra one
+/// is the **anchor** — the seat the span is centred on — which carries the
+/// members' `catalog_ref` and would draw a speaker inside the middle one. Which
+/// poses are objects is the resolver's own answer now, not a filter this
+/// provider writes for itself.
+#[tokio::test]
+async fn an_array_is_reported_once_per_member_and_never_as_its_anchor() {
+    use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
+    use crate::database::local::venue_graph as venue_graph_db;
+
+    let f = Fixture::new().await;
+    // The first assembly converts the venue off the old schema, which is what
+    // gives it a graph root to hang an array from.
+    let before = at(&root(&f.assemble(&f.scope()).await.0), "venue.pieces")
+        .as_array()
+        .unwrap()
+        .len();
+
+    let mut access = VenueAccess::<Write>::write(&f.pool, VenueResource::Venue(&f.venue_id))
+        .await
+        .unwrap();
+    let parent = venue_graph_db::root_id(&mut access)
+        .await
+        .unwrap()
+        .expect("the conversion left a root");
+    let array = venue_graph_db::insert_node(
+        &mut access,
+        "array",
+        Some("stage_lab/speaker_dbr15.glb"),
+        Some("PA"),
+    )
+    .await
+    .unwrap();
+    venue_graph_db::set_params(
+        &mut access,
+        &array,
+        &BTreeMap::from([
+            ("count".to_string(), Some(3.0)),
+            ("span".to_string(), Some(2.0)),
+        ]),
+    )
+    .await
+    .unwrap();
+    venue_graph_db::upsert_edge(&mut access, &array, &parent, "mount", "floor", 0.0)
+        .await
+        .unwrap();
+    access.commit().await.unwrap();
+
+    let (manifest, _store) = f.assemble(&f.scope()).await;
+    let v = root(&manifest);
+    let pieces = at(&v, "venue.pieces");
+    let ids: Vec<&str> = pieces
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .filter(|id| id.starts_with(&array))
+        .collect();
+    let members: Vec<String> = (0..3).map(|i| format!("{array}#{i}")).collect();
+    assert_eq!(
+        ids, members,
+        "three speakers, and the anchor is not one of them"
+    );
+    assert_eq!(pieces.as_array().unwrap().len(), before + 3);
+}
+
+/// The tray and anything a detach left hanging: rows with no pose, named
+/// rather than silently absent.
+#[tokio::test]
+async fn an_unplaced_node_is_named_in_the_venue_binding() {
+    use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
+    use crate::database::local::venue_graph as venue_graph_db;
+
+    let f = Fixture::new().await;
+    f.assemble(&f.scope()).await;
+    let mut access = VenueAccess::<Write>::write(&f.pool, VenueResource::Venue(&f.venue_id))
+        .await
+        .unwrap();
+    let stray = venue_graph_db::insert_node(
+        &mut access,
+        "piece",
+        Some("stage_lab/speaker_dbr15.glb"),
+        Some("Spare PA"),
+    )
+    .await
+    .unwrap();
+    access.commit().await.unwrap();
+
+    let (manifest, _store) = f.assemble(&f.scope()).await;
+    let v = root(&manifest);
+    let unplaced = at(&v, "venue.unplaced");
+    let rows = unplaced.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{unplaced}");
+    assert_eq!(rows[0]["id"], json!(stray));
+    assert_eq!(rows[0]["kind"], json!("piece"));
+    assert_eq!(rows[0]["label"], json!("Spare PA"));
+    assert_eq!(rows[0]["descendants"], json!(0));
 }
 
 #[tokio::test]

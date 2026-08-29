@@ -134,6 +134,21 @@ fn venue() -> VenueGraph {
         },
     );
 
+    // A second stick standing on the far corner, bolted at one end and open at
+    // the other. Every other truss end in this room is claimed by a joint or by
+    // the far-end check below, so without it the golden pins no open
+    // `TrussEnd` at all — the one thing `dangling()` exists to report.
+    attach(
+        &mut graph,
+        node("post", NodeKind::Tower, "truss/straight", &[("span", 2.0)]),
+        Edge {
+            parent: "deck_a".into(),
+            my_socket: "end_a".into(),
+            their_socket: "corner_br".into(),
+            roll: 0.0,
+        },
+    );
+
     // A fixture on the grid — flown, beam down — and one on the floor, beam up.
     attach(
         &mut graph,
@@ -172,6 +187,32 @@ fn venue() -> VenueGraph {
         ),
         on_floor("mount", 0.0),
     );
+
+    // A speaker nobody has placed, with a second one stacked on it: rows in the
+    // venue with no path to the root, which the solve reports rather than
+    // drops. The pair is what pins that only the *root* of an unplaced branch
+    // is listed, with the size of the branch alongside.
+    graph.insert(node(
+        "tray_speaker",
+        NodeKind::Piece,
+        "stage_lab/speaker_dbr15.glb",
+        &[],
+    ));
+    graph.insert_edge(
+        "tray_on_tray",
+        Edge {
+            parent: "tray_speaker".into(),
+            my_socket: "mount".into(),
+            their_socket: "mount".into(),
+            roll: 0.0,
+        },
+    );
+    graph.insert(node(
+        "tray_on_tray",
+        NodeKind::Piece,
+        "stage_lab/speaker_dbr15.glb",
+        &[],
+    ));
 
     // A far end: the run's open end checked against the tower it started from.
     // Violated by construction — the run goes nowhere near it — which is the
@@ -237,6 +278,9 @@ fn golden() -> String {
                 "catalogRef": pose.catalog_ref,
                 "parent": pose.parent,
                 "arrayIndex": pose.array_index,
+                // The one answer three consumers draw from: the room, the
+                // lights and the array's anchor are frames, not objects.
+                "setPiece": pose.is_set_piece(),
                 // Data space, Z-up: the convention every consumer reads.
                 "position": position.map(round),
                 "rotation": rotation.map(round),
@@ -273,10 +317,23 @@ fn golden() -> String {
         .map(|d| json!({ "node": d.node, "socket": d.socket, "type": d.socket_type.as_str() }))
         .collect();
 
+    let unplaced: Vec<Value> = solved
+        .unplaced()
+        .iter()
+        .map(|u| {
+            json!({
+                "node": u.node,
+                "kind": u.kind.as_str(),
+                "descendants": u.descendants,
+            })
+        })
+        .collect();
+
     let mut out = serde_json::to_string_pretty(&json!({
         "nodes": nodes,
         "constraints": constraints,
         "dangling": dangling,
+        "unplaced": unplaced,
         "warnings": solved.warnings().len(),
     }))
     .expect("the capture serializes");

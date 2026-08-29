@@ -25,7 +25,7 @@ use std::sync::{mpsc, OnceLock};
 use glam::Vec3;
 use luma_render::scene_desc::{self, RenderSettings};
 use luma_render::{assets, build_frame_with, coords, Renderer, DEFAULT_SUBFRAMES};
-use luma_scene::venue::{NodeKind as VenueNodeKind, ResolvedVenue};
+use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
 
 use crate::database::local;
@@ -215,11 +215,12 @@ impl VenueGeometry {
     }
 }
 
-/// One solved node as the piece the renderer draws, or `None` when it is not
-/// drawn as one: the root is the room and has no mesh, a fixture is drawn from
-/// [`scene_desc::Scene::fixtures`] instead, an array node is the generator's
-/// anchor rather than a copy (its members carry the geometry), and a node with
-/// no `catalog_ref` has no geometry to stand for.
+/// One solved node as the piece the renderer draws, or `None` when the pose is
+/// a frame rather than an object — the room, a fixture (drawn from
+/// [`scene_desc::Scene::fixtures`]), an array anchor, a node with no geometry.
+/// Which of those it is, is [`luma_scene::venue::NodePose::is_set_piece`]'s
+/// answer, carried across the boundary as [`ResolvedNode::set_piece`] so this
+/// path and the agent binding and the React store cannot disagree.
 ///
 /// Takes the wire projection rather than a [`luma_scene::venue::NodePose`]
 /// because the desktop viewport only ever sees a venue from the far side of
@@ -228,15 +229,8 @@ impl VenueGeometry {
 /// scene *settings* differ between them; the geometry must not.
 #[must_use]
 pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
-    // A kind the alphabet does not name is dropped rather than guessed at, on
-    // the same grounds `VenueGraphRows::to_graph` drops such a row.
-    match VenueNodeKind::from_name(&node.kind) {
-        Some(VenueNodeKind::Venue | VenueNodeKind::Fixture) | None => return None,
-        // The array node is the seat its members are spread over — the one
-        // pose in the solve with this kind and no index. Drawing it too would
-        // put a second copy on top of the middle member.
-        Some(VenueNodeKind::Array) if node.array_index.is_none() => return None,
-        Some(_) => {}
+    if !node.set_piece {
+        return None;
     }
     let catalog_ref = node.catalog_ref.as_deref()?;
     let params: luma_scene::venue::Params = node
@@ -785,6 +779,7 @@ fn confined(path: &str) -> Option<&Path> {
 mod tests {
     use super::*;
     use crate::models::universe::PrimitiveState;
+    use luma_scene::venue::NodeKind as VenueNodeKind;
 
     fn patched(id: &str) -> PatchedFixture {
         PatchedFixture {

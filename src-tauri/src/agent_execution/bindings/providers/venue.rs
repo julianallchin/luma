@@ -25,7 +25,7 @@ use crate::eval::context::resolve_primitive_ids_with_access;
 use crate::eval::ops::spatial::rig_uv;
 use fixture_kinematics::StageDirection;
 use glam::DVec3;
-use luma_scene::venue::{NodeKind, NodePose, ResolvedVenue};
+use luma_scene::venue::{NodePose, ResolvedVenue};
 use luma_scene::View;
 
 /// One patched fixture, with what its pose *means* alongside the pose itself.
@@ -81,6 +81,16 @@ struct PieceBinding {
     their_socket: Option<String>,
 }
 
+/// A node with no pose, by the root of its branch.
+#[derive(Serialize)]
+struct UnplacedBinding {
+    id: String,
+    kind: String,
+    label: Option<String>,
+    /// How many nodes hang off it, not counting itself.
+    descendants: usize,
+}
+
 #[derive(Serialize)]
 struct GroupBinding {
     id: String,
@@ -112,6 +122,7 @@ pub async fn provide(
             "venue.name",
             "venue.fixtures",
             "venue.pieces",
+            "venue.unplaced",
             "venue.groups",
             "venue.positions",
             "venue.uv",
@@ -139,6 +150,7 @@ pub async fn provide(
                 "venue.name",
                 "venue.fixtures",
                 "venue.pieces",
+                "venue.unplaced",
                 "venue.groups",
                 "venue.positions",
                 "venue.uv",
@@ -172,9 +184,10 @@ pub async fn provide(
         Ok(venue) => {
             fixtures(b, &mut access, &venue).await?;
             pieces(b, &venue)?;
+            unplaced(b, &venue)?;
         }
         Err(e) => {
-            for path in ["venue.fixtures", "venue.pieces"] {
+            for path in ["venue.fixtures", "venue.pieces", "venue.unplaced"] {
                 unavailable(b, path, format!("the venue could not be resolved: {e}"))?;
             }
         }
@@ -242,11 +255,14 @@ async fn fixtures(
 ///
 /// The pose is the resolver's, the same one `render(view="dj")` draws, so the
 /// two agree about where the booth is by construction rather than by two copies
-/// of the same walk staying in step.
+/// of the same walk staying in step. Which poses are objects at all is
+/// [`NodePose::is_set_piece`] — the renderer's answer, not a second filter:
+/// this one used to spell it out and listed an array of N as N+1 pieces,
+/// because the anchor carries its members' `catalog_ref`.
 fn pieces(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
     let bindings: Vec<PieceBinding> = venue
         .poses()
-        .filter(|pose| !matches!(pose.kind, NodeKind::Venue | NodeKind::Fixture))
+        .filter(|pose| pose.is_set_piece())
         .map(|pose| {
             let (position, rotation) = pose.data_pose();
             let (_, basis) = pose.data_basis();
@@ -267,6 +283,27 @@ fn pieces(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
         })
         .collect();
     inline(b, "venue.pieces", &bindings)
+}
+
+/// Everything the room has but has not placed: the patch tray, and any branch
+/// a `detach` left hanging.
+///
+/// Reported by the root of each branch rather than per node — one reason, said
+/// once — with the branch's size alongside, because "the wing is gone" and "the
+/// wing is unplaced, 6 pieces" are different sentences and only the second is
+/// true.
+fn unplaced(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
+    let bindings: Vec<UnplacedBinding> = venue
+        .unplaced()
+        .iter()
+        .map(|u| UnplacedBinding {
+            id: u.node.clone(),
+            kind: u.kind.as_str().to_string(),
+            label: u.label.clone(),
+            descendants: u.descendants,
+        })
+        .collect();
+    inline(b, "venue.unplaced", &bindings)
 }
 
 /// The camera names `luma.venue.render(view=...)` accepts.

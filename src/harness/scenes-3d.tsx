@@ -131,6 +131,8 @@ function seedStores(s: GoldenScene): void {
 		rotation: [f.rotX, f.rotY, f.rotZ],
 		facing: [0, 0, 1],
 		arrayIndex: null,
+		// A fixture is drawn from the patch, never from the set-piece list.
+		setPiece: false,
 		params: {},
 	}));
 	const nodes = [...fixtureNodes, ...(s.pieces ?? [])];
@@ -141,6 +143,7 @@ function seedStores(s: GoldenScene): void {
 		nodes,
 		byId: new Map(nodes.map((n) => [n.id, n])),
 		warnings: [],
+		unplaced: [],
 	});
 }
 
