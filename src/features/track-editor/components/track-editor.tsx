@@ -131,6 +131,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 	const currentVenueId = useAppViewStore((s) => s.currentVenue?.id ?? null);
 	const currentVenueName = useAppViewStore((s) => s.currentVenue?.name ?? null);
 	const scoreState = useTrackEditorStore((s) => s.scoreState);
+	// The compositor is addressed by score, not by (track, venue): a pair can
+	// carry several scores and the rig shows the open one.
+	const openScoreId = useTrackEditorStore((s) => s.scoreId);
 	const startFreshScore = useTrackEditorStore((s) => s.startFreshScore);
 
 	const resolvedTrackId = trackId ?? null;
@@ -202,7 +205,11 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 
 	// Single effect: composite + previews when annotations change (debounced)
 	useEffect(() => {
-		if (activeTrackId === null || currentVenueId === null) {
+		if (
+			activeTrackId === null ||
+			currentVenueId === null ||
+			openScoreId === null
+		) {
 			lastCompositedRef.current = "";
 			lastCompositeContextRef.current = "";
 			return;
@@ -221,7 +228,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 					`${a.id}:${a.patternId}:${a.startTime}:${a.endTime}:${a.zIndex}:${a.blendMode}:${JSON.stringify(a.args)}`,
 			)
 			.join("|");
-		const context = `${activeTrackId}:${currentVenueId}`;
+		const context = `${openScoreId}`;
 		const key = `${context}|${signature}`;
 
 		if (key === lastCompositedRef.current) return;
@@ -231,6 +238,9 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		lastCompositedRef.current = key;
 		lastCompositeContextRef.current = context;
 
+		const sid = openScoreId;
+		// Previews are still a (track, venue) read — see the smell note on
+		// `generate_annotation_previews`.
 		const tid = activeTrackId;
 		const vid = currentVenueId;
 		const immediate = isInitialLoad || isContextChange;
@@ -244,8 +254,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 			if (immediate) setIsCompositing(true);
 			try {
 				await invoke("composite_track", {
-					trackId: tid,
-					venueId: vid,
+					scoreId: sid,
 					skipCache: immediate,
 					// Send live in-memory annotations so a mid-drag edit composites
 					// against fresh args, not the DB (which persists on a trailing edge).
@@ -301,6 +310,7 @@ export function TrackEditor({ trackId, trackName }: TrackEditorProps) {
 		annotationsLoading,
 		currentVenueId,
 		isDraggingAnnotation,
+		openScoreId,
 		setIsCompositing,
 	]);
 

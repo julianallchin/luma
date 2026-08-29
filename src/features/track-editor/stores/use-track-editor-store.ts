@@ -394,9 +394,9 @@ function acceptTrackProjection(appliedToCurrentProjection: boolean): void {
 
 /** Return trackId & venueId when both are set, or null to bail out. */
 function requireContext(get: () => TrackEditorState) {
-	const { trackId, venueId } = get();
-	if (trackId === null || venueId === null) return null;
-	return { trackId, venueId };
+	const { trackId, venueId, scoreId } = get();
+	if (trackId === null || venueId === null || scoreId === null) return null;
+	return { trackId, venueId, scoreId };
 }
 
 /**
@@ -497,8 +497,7 @@ function scheduleLiveComposite() {
 			_liveArgs.has(a.id) ? { ...a, args: _liveArgs.get(a.id) } : a,
 		);
 		invoke("composite_track", {
-			trackId: ctx.trackId,
-			venueId: ctx.venueId,
+			scoreId: ctx.scoreId,
 			skipCache: false,
 			annotations: merged.map((a) => ({
 				id: a.id,

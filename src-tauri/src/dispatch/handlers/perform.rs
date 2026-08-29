@@ -225,13 +225,20 @@ fn bigram_similarity(a: &str, b: &str) -> f64 {
 ///
 /// Two-step by design: compositing installs into `active_scene`, which is then
 /// promoted to the deck slot — so this transiently clobbers whatever the track
-/// editor had installed. Venue authorization happens inside the composite.
+/// editor had installed.
+///
+/// **Smell.** A deck has matched a *track*, not a score, so this still blends
+/// every score on the `(track, venue)` — the ambiguity the editor's stage no
+/// longer has. Which score a deck should play is a product question nobody has
+/// answered; when it is, this becomes `install_score_scene` like every other
+/// caller.
 pub async fn render_composite_deck(
     services: &AppServices,
     deck_id: u8,
     track_id: String,
     venue_id: String,
 ) -> Result<(), CommandError> {
+    let clips = crate::compositor::scores_for_track(&services.db.0, &venue_id, &track_id).await?;
     crate::compositor::install_track_scene(
         &services.db.0,
         &services.storage,
@@ -239,7 +246,7 @@ pub async fn render_composite_deck(
         &services.render_engine,
         &track_id,
         &venue_id,
-        None,
+        clips,
     )
     .await?;
     services.render_engine.promote_active_scene_to_deck(deck_id);

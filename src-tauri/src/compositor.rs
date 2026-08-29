@@ -79,7 +79,7 @@ pub(crate) async fn leave_track(
     stem_cache: &StemCache,
     score_id: &str,
 ) -> Result<(), String> {
-    let (_access, track_id) = authorize_track_cleanup(pool, score_id).await?;
+    let (_access, track_id) = score_scope(pool, score_id).await?;
     cancel_compositing();
     clear_plan_cache();
     render_engine.set_active_scene(None);
@@ -88,7 +88,12 @@ pub(crate) async fn leave_track(
     Ok(())
 }
 
-async fn authorize_track_cleanup<'a>(
+/// Open a score for reading and say which track it annotates.
+///
+/// The venue comes back inside the access ([`AuthorizedVenue::venue_id`]), so
+/// this is the whole `(track, venue)` scope a score implies — resolved *under*
+/// the score's own authorization rather than taken on trust from a caller.
+async fn score_scope<'a>(
     pool: &'a sqlx::SqlitePool,
     score_id: &str,
 ) -> Result<(VenueAccess<'a, Read>, String), String> {
@@ -97,7 +102,7 @@ async fn authorize_track_cleanup<'a>(
         .bind(score_id)
         .fetch_one(access.connection())
         .await
-        .map_err(|error| format!("Failed to resolve track cleanup scope: {error}"))?;
+        .map_err(|error| format!("Failed to resolve the score's track: {error}"))?;
     Ok((access, track_id))
 }
 
@@ -374,9 +379,53 @@ fn live_track_scores(annotations: Option<Vec<LiveAnnotation>>) -> Option<Vec<Tra
     })
 }
 
-/// Composite all patterns on a track into a [`Scene`] and install it as the
-/// render engine's active scene — unless a concurrent `leave_track` or
-/// composite has already superseded this pass.
+/// Install **one score's** light show as the render engine's active scene.
+///
+/// The score is the subject, not the `(track, venue)` pair it sits on: a pair
+/// carries as many scores as there are people who annotated it, and blending
+/// them would light the rig with a document nobody is looking at. Which one is
+/// on screen is the caller's fact — [`install_track_scene`] then only has to
+/// install what it is handed.
+///
+/// `annotations` is the editor's working copy when it has one (fresh args
+/// mid-drag), and `None` for a caller that is only *watching* the score, which
+/// then reads the score's own persisted rows. `Some([])` is an authoritative
+/// empty document and clears the scene; it is not a request to fall back.
+pub(crate) async fn install_score_scene(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    render_engine: &RenderEngine,
+    score_id: &str,
+    annotations: Option<Vec<LiveAnnotation>>,
+) -> Result<(), String> {
+    let (mut access, track_id) = score_scope(pool, score_id).await?;
+    let venue_id = access.venue_id().to_owned();
+    let clips: Vec<TrackScore> = match live_track_scores(annotations) {
+        Some(live) => live,
+        None => crate::database::local::scores::get_clips_of_score(&mut access, score_id).await?,
+    };
+    drop(access);
+    install_track_scene(
+        pool,
+        storage,
+        resource_root,
+        render_engine,
+        &track_id,
+        &venue_id,
+        clips,
+    )
+    .await
+}
+
+/// Compile `annotations` into a [`Scene`] against `(track_id, venue_id)` and
+/// install it — unless a concurrent `leave_track` or composite has already
+/// superseded this pass.
+///
+/// Takes the clip list rather than resolving one: what a rig is lit by is a
+/// question its callers answer differently (one score for the editor's stage,
+/// every score on the pair for a perform deck that has only matched a track),
+/// and a resolver in here would have to be told which they meant anyway.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn install_track_scene(
     pool: &sqlx::SqlitePool,
@@ -385,21 +434,9 @@ pub(crate) async fn install_track_scene(
     render_engine: &RenderEngine,
     track_id: &str,
     venue_id: &str,
-    annotations: Option<Vec<LiveAnnotation>>,
+    annotations: Vec<TrackScore>,
 ) -> Result<(), String> {
     let generation = COMPOSITING_GENERATION.load(Ordering::SeqCst);
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
-
-    // Prefer the editor's live annotations (fresh args mid-drag); fall back to the
-    // DB for callers that don't pass them.
-    let annotations: Vec<TrackScore> = match live_track_scores(annotations) {
-        // `Some([])` is an authoritative empty live document, not a request to
-        // fall back to persisted rows. This is how deleting the final clip
-        // clears the installed scene immediately.
-        Some(live) => live,
-        None => fetch_scores(&mut access, track_id).await?,
-    };
-    drop(access);
     if annotations.is_empty() {
         clear_plan_cache();
         render_engine.set_active_scene(None);
@@ -508,7 +545,7 @@ async fn resolve_pattern_graph_document(
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_track_cleanup, fetch_pattern_graph, live_track_scores};
+    use super::{fetch_pattern_graph, live_track_scores, score_scope};
     use crate::models::node_graph::{Graph, NodeInstance, PatternArgDef, PatternArgType};
     use serde_json::json;
     use std::collections::HashMap;
@@ -654,7 +691,7 @@ mod tests {
         .await
         .unwrap();
 
-        let (access, track_id) = authorize_track_cleanup(&pool, "score").await.unwrap();
+        let (access, track_id) = score_scope(&pool, "score").await.unwrap();
         assert_eq!(access.venue_id(), "venue");
         assert_eq!(track_id, "track");
         drop(access);
@@ -663,7 +700,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let unauthorized = authorize_track_cleanup(&pool, "score").await.err().unwrap();
+        let unauthorized = score_scope(&pool, "score").await.err().unwrap();
         assert_eq!(unauthorized, "Venue resource not found");
     }
 
