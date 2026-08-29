@@ -17,11 +17,107 @@ use crate::aabb::DAabb;
 use glam::DVec3;
 
 // ---------------------------------------------------------------------------
-// Socket types + compatibility
+// Socket types: kind + polarity
 // ---------------------------------------------------------------------------
 
-/// The closed socket vocabulary. Adding a variant means teaching
-/// [`SocketType::compatible`] what it may attach to.
+/// What a socket *is*, geometrically — the equivalence class two sockets must
+/// share before they can mate at all.
+///
+/// The kind answers "same joint?" and [`Polarity`] answers "which half?".
+/// Together they replace the hand-maintained held→host adjacency list this
+/// module used to carry: a thirteen-entry table is a lookup table pretending
+/// to be a rule, and it drifted between its Rust and TypeScript copies, which
+/// is why the golden vectors exist.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SocketKind {
+    /// A flat plane something rests on: deck tops, stand tops, the ground, and
+    /// the underside of everything that sits on them.
+    Surface,
+    /// The square end face of the truss family, and the point on a deck corner
+    /// where one lands.
+    TrussEnd,
+    /// A mid-edge that butts against another mid-edge — deck to deck, rail to
+    /// rail, rail to deck.
+    Edge,
+    /// A cable cover end, chaining into runs.
+    CableEnd,
+    /// The placement reference. Mates with nothing: it is the only kind with
+    /// no [`Polarity::Male`] or [`Polarity::Neutral`] member, so
+    /// [`SocketType::mates`] rejects every pair involving it without a special
+    /// case.
+    Grab,
+}
+
+impl SocketKind {
+    pub const ALL: [SocketKind; 5] = [
+        SocketKind::Surface,
+        SocketKind::TrussEnd,
+        SocketKind::Edge,
+        SocketKind::CableEnd,
+        SocketKind::Grab,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SocketKind::Surface => "surface",
+            SocketKind::TrussEnd => "truss_end",
+            SocketKind::Edge => "edge",
+            SocketKind::CableEnd => "cable_end",
+            SocketKind::Grab => "grab",
+        }
+    }
+}
+
+/// Which half of a joint a socket is.
+///
+/// `Male` is a plug and is only ever *held*; `Female` is a receptacle and is
+/// only ever a *host*; `Neutral` self-mates and can be either. That is the
+/// whole of the directionality the old adjacency list encoded by hand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Polarity {
+    Male,
+    Female,
+    Neutral,
+}
+
+impl Polarity {
+    /// Whether a socket with this polarity may be the moving half.
+    pub fn can_be_held(self) -> bool {
+        matches!(self, Polarity::Male | Polarity::Neutral)
+    }
+
+    /// Whether a socket with this polarity may be the stationary half.
+    pub fn can_host(self) -> bool {
+        matches!(self, Polarity::Female | Polarity::Neutral)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Polarity::Male => "male",
+            Polarity::Female => "female",
+            Polarity::Neutral => "neutral",
+        }
+    }
+}
+
+/// How much a mated piece may still turn about the socket normal.
+///
+/// This is the *only* freedom a snapped piece has (`docs/design/venue-graph.md`
+/// — snapped pieces get no transform gizmo), so it is a property of the socket
+/// rather than of the editor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RollFreedom {
+    /// Bolted: the mate fully determines the pose.
+    Fixed,
+    /// Quantized: legal rolls are whole multiples of this many degrees.
+    Steps(f64),
+    /// Continuous — a piece sitting on a surface may yaw freely.
+    Free,
+}
+
+/// The closed socket vocabulary. Each variant is a named point on a piece; what
+/// it may attach to is derived from its [`SocketKind`] and [`Polarity`], never
+/// listed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum SocketType {
     /// Placement reference — the cursor follows this socket.
@@ -53,29 +149,84 @@ pub enum SocketType {
 }
 
 impl SocketType {
-    /// Held-side → host-side socket types it can attach to.
-    ///
-    /// Snapping is asymmetric by design (the held piece moves, the host is
-    /// stationary). Types that snap together symmetrically — truss ends, floor
-    /// edges, rail ends — list each other, because the solver only ever
-    /// iterates held sockets looking for hosts.
-    pub fn compatible(self) -> &'static [SocketType] {
+    /// Every variant, in declaration order. The generated TypeScript binding
+    /// and the polarity-equivalence test both sweep this.
+    pub const ALL: [SocketType; 13] = {
+        use SocketType::*;
+        [
+            Grab,
+            FloorTop,
+            FloorEdge,
+            FloorCorner,
+            TrussEnd,
+            StandTop,
+            StandBottom,
+            SpeakerMount,
+            EquipmentMount,
+            BottomMount,
+            RailEnd,
+            CableEnd,
+            Ground,
+        ]
+    };
+
+    /// The joint this socket belongs to. Two sockets of different kinds never
+    /// mate.
+    pub fn kind(self) -> SocketKind {
         use SocketType::*;
         match self {
-            Grab => &[],
-            FloorTop => &[],
-            FloorEdge => &[FloorEdge],
-            FloorCorner => &[],
-            TrussEnd => &[TrussEnd, FloorCorner],
-            StandTop => &[],
-            StandBottom => &[FloorTop, Ground],
-            SpeakerMount => &[StandTop, FloorTop, Ground],
-            EquipmentMount => &[FloorTop, Ground],
-            BottomMount => &[FloorTop, Ground],
-            RailEnd => &[RailEnd, FloorEdge],
-            CableEnd => &[CableEnd],
-            Ground => &[],
+            Grab => SocketKind::Grab,
+            FloorTop | StandTop | Ground | BottomMount | StandBottom | SpeakerMount
+            | EquipmentMount => SocketKind::Surface,
+            TrussEnd | FloorCorner => SocketKind::TrussEnd,
+            FloorEdge | RailEnd => SocketKind::Edge,
+            CableEnd => SocketKind::CableEnd,
         }
+    }
+
+    /// Which half of its joint this socket is. See [`Polarity`].
+    pub fn polarity(self) -> Polarity {
+        use SocketType::*;
+        match self {
+            // Receptacles: things get put *on* them, they are never carried
+            // onto something else. `Grab` is one so that it drops out of the
+            // held set without a name check.
+            Grab | FloorTop | StandTop | Ground | FloorCorner => Polarity::Female,
+            // Plugs: the undersides.
+            BottomMount | StandBottom | SpeakerMount | EquipmentMount => Polarity::Male,
+            // Self-mating.
+            TrussEnd | FloorEdge | RailEnd | CableEnd => Polarity::Neutral,
+        }
+    }
+
+    /// Default roll freedom for a socket of this type, which a [`SocketDef`]
+    /// may override for a piece whose joint differs from its type's.
+    pub fn roll(self) -> RollFreedom {
+        use SocketType::*;
+        match self {
+            // A truss bolts to a plate on a fixed bolt circle. The section is
+            // square, so the geometry would admit `Steps(90.0)`; whether the
+            // builder offers that quarter turn is a phase-4 UX call, and until
+            // it does, claiming the freedom would be a lie about what the
+            // editor can express.
+            TrussEnd | FloorCorner => RollFreedom::Fixed,
+            // Edge joints are tangent-aligned by construction.
+            FloorEdge | RailEnd | CableEnd => RollFreedom::Fixed,
+            // Anything resting on a plane may yaw about its normal.
+            Grab | FloorTop | StandTop | Ground | BottomMount | StandBottom | SpeakerMount
+            | EquipmentMount => RollFreedom::Free,
+        }
+    }
+
+    /// Whether a held socket of type `self` may mate a host socket of type
+    /// `host`.
+    ///
+    /// The whole rule: same kind, the held half may be held, the host half may
+    /// host. Polarities are opposed-or-neutral by construction — the only
+    /// pairs the two `can_*` tests admit are (Male, Female), (Male, Neutral),
+    /// (Neutral, Female) and (Neutral, Neutral).
+    pub fn mates(self, host: SocketType) -> bool {
+        self.kind() == host.kind() && self.polarity().can_be_held() && host.polarity().can_host()
     }
 
     /// The wire name, shared with the TS side and the golden vectors.
@@ -302,6 +453,56 @@ pub struct SocketDef {
     /// decks to lie colinearly).
     pub tangent: Option<DVec3>,
     pub mode: SocketMode,
+    /// Overrides [`SocketType::roll`] for this one socket.
+    pub roll: Option<RollFreedom>,
+}
+
+impl SocketDef {
+    /// A socket at `anchor` with every optional field defaulted: no offset, a
+    /// normal derived from the anchor face, a tangent derived from the normal,
+    /// [`SocketMode::Face`], and the type's own roll freedom.
+    pub fn new(name: &str, socket_type: SocketType, anchor: BboxAnchor) -> Self {
+        Self {
+            name: name.to_string(),
+            socket_type,
+            anchor,
+            offset: None,
+            normal: None,
+            tangent: None,
+            mode: SocketMode::Face,
+            roll: None,
+        }
+    }
+
+    #[must_use]
+    pub fn offset(mut self, offset: DVec3) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    #[must_use]
+    pub fn normal(mut self, normal: DVec3) -> Self {
+        self.normal = Some(normal);
+        self
+    }
+
+    #[must_use]
+    pub fn tangent(mut self, tangent: DVec3) -> Self {
+        self.tangent = Some(tangent);
+        self
+    }
+
+    #[must_use]
+    pub fn mode(mut self, mode: SocketMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn roll(mut self, roll: RollFreedom) -> Self {
+        self.roll = Some(roll);
+        self
+    }
 }
 
 /// Resolved socket in mesh-local space: position plus an orthonormal frame.
@@ -318,6 +519,41 @@ pub struct ResolvedSocket {
     /// sides** of their pieces, so the pieces end up next to each other rather
     /// than overlapping.
     pub outward: DVec3,
+    /// How much the mated piece may still turn about [`Self::normal`].
+    pub roll: RollFreedom,
+}
+
+impl ResolvedSocket {
+    /// A socket straight from an orthonormal frame — position, outward normal,
+    /// and the vector fixing its roll — rather than from a bbox anchor.
+    ///
+    /// This is how the procedural truss family gets its sockets: an open face
+    /// already *is* a frame (`luma_render::truss::EndFrame`), so authoring one
+    /// would be transcribing geometry that the generator already knows. The
+    /// piece's origin is its centre, which is what makes `outward` derivable.
+    pub fn from_frame(
+        name: &str,
+        socket_type: SocketType,
+        position: DVec3,
+        normal: DVec3,
+        up: DVec3,
+    ) -> Self {
+        let normal = normalize(normal);
+        Self {
+            name: name.to_string(),
+            socket_type,
+            position,
+            normal,
+            tangent: normalize(up),
+            mode: SocketMode::Face,
+            outward: if position.length_squared() < OUTWARD_DEGENERATE_LENGTH_SQ {
+                normal
+            } else {
+                normalize(position)
+            },
+            roll: socket_type.roll(),
+        }
+    }
 }
 
 /// three.js `Vector3.normalize()`: divides by the length, or leaves a
@@ -391,6 +627,7 @@ pub fn resolve_socket(def: &SocketDef, bbox: &DAabb) -> ResolvedSocket {
         tangent,
         mode: def.mode,
         outward,
+        roll: def.roll.unwrap_or_else(|| def.socket_type.roll()),
     }
 }
 
@@ -412,22 +649,102 @@ mod tests {
 
     #[test]
     fn socket_type_names_round_trip() {
-        for t in [
-            SocketType::Grab,
-            SocketType::FloorTop,
-            SocketType::FloorEdge,
-            SocketType::FloorCorner,
-            SocketType::TrussEnd,
-            SocketType::StandTop,
-            SocketType::StandBottom,
-            SocketType::SpeakerMount,
-            SocketType::EquipmentMount,
-            SocketType::BottomMount,
-            SocketType::RailEnd,
-            SocketType::CableEnd,
-            SocketType::Ground,
-        ] {
+        for t in SocketType::ALL {
             assert_eq!(SocketType::from_name(t.as_str()), Some(t));
+        }
+    }
+
+    /// The directed `COMPATIBLE` table this module shipped before polarity,
+    /// held-side → host-side. Kept here as the reference the new rule is
+    /// measured against, and nowhere else.
+    fn legacy_compatible(t: SocketType) -> &'static [SocketType] {
+        use SocketType::*;
+        match t {
+            Grab | FloorTop | FloorCorner | StandTop | Ground => &[],
+            FloorEdge => &[FloorEdge],
+            TrussEnd => &[TrussEnd, FloorCorner],
+            StandBottom => &[FloorTop, Ground],
+            SpeakerMount => &[StandTop, FloorTop, Ground],
+            EquipmentMount | BottomMount => &[FloorTop, Ground],
+            RailEnd => &[RailEnd, FloorEdge],
+            CableEnd => &[CableEnd],
+        }
+    }
+
+    /// Every pair the new rule admits that the old table did not, and why.
+    ///
+    /// The new rule is a strict *superset*: it adds nothing but the pairs the
+    /// old table's asymmetry excluded by hand. Each one is a joint that
+    /// physically exists — the old table simply never listed it, because a
+    /// hand-maintained adjacency list only holds the cases someone thought of.
+    const INTENTIONAL_ADDITIONS: [(SocketType, SocketType, &str); 4] = {
+        use SocketType::*;
+        [
+            // "Anything that sits on a flat surface can sit on a stand top."
+            // The old table let only a speaker onto a stand; a deck, a rail or
+            // a CDJ is the same joint.
+            (StandBottom, StandTop, "a stand on a stand top"),
+            (EquipmentMount, StandTop, "a CDJ or mixer on a stand top"),
+            (BottomMount, StandTop, "a deck or rail on a stand top"),
+            // Butting a deck edge against a rail was allowed rail-first and
+            // refused deck-first. Which piece the user happens to be dragging
+            // is not a property of the joint.
+            (FloorEdge, RailEnd, "a deck edge butted to a rail end"),
+        ]
+    };
+
+    #[test]
+    fn polarity_reproduces_the_legacy_table() {
+        for held in SocketType::ALL {
+            for host in SocketType::ALL {
+                let was = legacy_compatible(held).contains(&host);
+                let now = held.mates(host);
+                let added = INTENTIONAL_ADDITIONS
+                    .iter()
+                    .any(|(h, o, _)| *h == held && *o == host);
+                if was {
+                    assert!(
+                        now,
+                        "polarity dropped a pair the table allowed: {} → {}",
+                        held.as_str(),
+                        host.as_str()
+                    );
+                }
+                if now && !was {
+                    assert!(
+                        added,
+                        "polarity admits an undocumented pair: {} → {}",
+                        held.as_str(),
+                        host.as_str()
+                    );
+                }
+            }
+        }
+        // And every documented addition is actually new, so the list cannot
+        // rot into a list of pairs that were always legal.
+        for (held, host, why) in INTENTIONAL_ADDITIONS {
+            assert!(held.mates(host), "{why}: rule refuses it");
+            assert!(
+                !legacy_compatible(held).contains(&host),
+                "{why}: the old table already allowed it"
+            );
+        }
+    }
+
+    /// The set of sockets the solver will *consider* on a held piece. It used
+    /// to be "not a grab, and its compatibility list is non-empty"; it is now
+    /// "its polarity can be held". The two must agree, or the golden snap
+    /// vectors move.
+    #[test]
+    fn held_side_filter_is_unchanged() {
+        for t in SocketType::ALL {
+            let was = t != SocketType::Grab && !legacy_compatible(t).is_empty();
+            assert_eq!(
+                was,
+                t.polarity().can_be_held(),
+                "held-side filter changed for {}",
+                t.as_str()
+            );
         }
     }
 

@@ -16,7 +16,7 @@ import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { getMeshSockets, registerMeshGeometry } from "../lib/mesh-cache";
 import { getPieceGroup } from "../lib/piece-refs";
 import { type SnapSurface, solveSnap } from "../lib/snap";
-import { getStageMesh } from "../lib/stage-meshes";
+import { getStageMesh, meshUrl } from "../lib/stage-meshes";
 import { useStagePieceStore } from "../stores/use-stage-piece-store";
 
 function isDescendantOf(
@@ -185,12 +185,14 @@ export function StageGhost() {
 	});
 
 	if (!armedMeshPath) return null;
-	const def = getStageMesh(armedMeshPath);
-	if (!def) return null;
+	// A procedural piece has no GLB to ghost here — React has no truss
+	// generator, so those are placed in the gpui builder.
+	const url = meshUrl(armedMeshPath);
+	if (!url) return null;
 
 	return (
 		<Suspense fallback={null}>
-			<GhostMesh url={def.url} meshPath={armedMeshPath} groupRef={groupRef} />
+			<GhostMesh url={url} meshPath={armedMeshPath} groupRef={groupRef} />
 		</Suspense>
 	);
 }

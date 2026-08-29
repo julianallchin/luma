@@ -212,6 +212,7 @@ fn ground_socket() -> ResolvedSocket {
         tangent: DVec3::X,
         mode: SocketMode::Face,
         outward: WORLD_UP,
+        roll: SocketType::Ground.roll(),
     }
 }
 
@@ -371,20 +372,18 @@ pub fn solve_snap<L: SocketLookup + ?Sized>(input: &SnapInput<'_, L>) -> SnapRes
 
     let useful_held: Vec<&ResolvedSocket> = held_sockets
         .iter()
-        .filter(|s| s.socket_type != SocketType::Grab && !s.socket_type.compatible().is_empty())
+        .filter(|s| s.socket_type.polarity().can_be_held())
         .collect();
 
     // Pass 1: non-ground hosts. Best within ATTACH_THRESHOLD wins.
     let mut best_piece: Option<Candidate> = None;
     for held_socket in &useful_held {
-        let allowed = held_socket.socket_type.compatible();
-
         for host in input.pieces {
             if Some(host.id.as_str()) == input.exclude_id {
                 continue;
             }
             for host_socket in input.lookup_sockets.sockets(&host.mesh_path) {
-                if !allowed.contains(&host_socket.socket_type) {
+                if !held_socket.socket_type.mates(host_socket.socket_type) {
                     continue;
                 }
                 // Edge mode requires opposing-side sockets, else the pieces
@@ -452,14 +451,11 @@ pub fn solve_snap<L: SocketLookup + ?Sized>(input: &SnapInput<'_, L>) -> SnapRes
             tangent: derive_perpendicular(surface.local_normal),
             mode: SocketMode::Face,
             outward: surface.local_normal,
+            roll: surface.surface_type.roll(),
         };
         let mut best_surf: Option<Candidate> = None;
         for held_socket in &useful_held {
-            if !held_socket
-                .socket_type
-                .compatible()
-                .contains(&surface.surface_type)
-            {
+            if !held_socket.socket_type.mates(surface.surface_type) {
                 continue;
             }
             let cand = evaluate_candidate(
@@ -484,11 +480,7 @@ pub fn solve_snap<L: SocketLookup + ?Sized>(input: &SnapInput<'_, L>) -> SnapRes
     let ground_host = make_ground_piece(input.cursor_world);
     let ground = ground_socket();
     for held_socket in &useful_held {
-        if !held_socket
-            .socket_type
-            .compatible()
-            .contains(&SocketType::Ground)
-        {
+        if !held_socket.socket_type.mates(SocketType::Ground) {
             continue;
         }
         let cand = evaluate_candidate(

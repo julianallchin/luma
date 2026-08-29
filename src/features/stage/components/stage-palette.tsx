@@ -1,8 +1,8 @@
 import { cn } from "@/shared/lib/utils";
 import {
+	type CatalogPiece,
 	listStageMeshes,
 	PALETTE_GROUP_ORDER,
-	type StageMeshDef,
 } from "../lib/stage-meshes";
 import { useStagePieceStore } from "../stores/use-stage-piece-store";
 
@@ -12,7 +12,7 @@ export function StagePalette() {
 	const cancelPlace = useStagePieceStore((s) => s.cancelPlace);
 
 	const meshes = listStageMeshes();
-	const groups: Record<string, StageMeshDef[]> = {};
+	const groups: Record<string, CatalogPiece[]> = {};
 	for (const m of meshes) {
 		const bucket = groups[m.paletteGroup] ?? [];
 		bucket.push(m);
@@ -39,14 +39,12 @@ export function StagePalette() {
 						</div>
 						<ul>
 							{items.map((m) => {
-								const isArmed = armedMeshPath === m.meshPath;
+								const isArmed = armedMeshPath === m.id;
 								return (
-									<li key={m.meshPath}>
+									<li key={m.id}>
 										<button
 											type="button"
-											onClick={() =>
-												isArmed ? cancelPlace() : armPlace(m.meshPath)
-											}
+											onClick={() => (isArmed ? cancelPlace() : armPlace(m.id))}
 											className={cn(
 												"w-full text-left h-7 px-2 flex items-center justify-between gap-2",
 												"text-[10px] text-foreground/80 border-b border-trim/40 last:border-b-0",

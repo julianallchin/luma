@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/shared/lib/utils";
 import {
+	type CatalogPiece,
 	listStageMeshes,
 	type PaletteGroup,
-	type StageMeshDef,
 } from "../lib/stage-meshes";
 import { useStagePieceStore } from "../stores/use-stage-piece-store";
 
@@ -128,7 +128,7 @@ export function PropsOverlay() {
 	const [openGroup, setOpenGroup] = useState<PaletteGroup | null>(null);
 
 	const meshesByGroup = useMemo(() => {
-		const map = new Map<PaletteGroup, StageMeshDef[]>();
+		const map = new Map<PaletteGroup, CatalogPiece[]>();
 		for (const m of listStageMeshes()) {
 			const bucket = map.get(m.paletteGroup) ?? [];
 			bucket.push(m);
@@ -181,12 +181,12 @@ export function PropsOverlay() {
 						</div>
 					)}
 					{currentList.map((m, i) => {
-						const isArmed = armedMeshPath === m.meshPath;
+						const isArmed = armedMeshPath === m.id;
 						return (
 							<button
-								key={m.meshPath}
+								key={m.id}
 								type="button"
-								onClick={() => (isArmed ? cancelPlace() : armPlace(m.meshPath))}
+								onClick={() => (isArmed ? cancelPlace() : armPlace(m.id))}
 								className={cn(
 									"h-7 px-2 flex items-center text-left text-[10px] text-foreground/80 hover:bg-hover hover:text-foreground transition-colors",
 									i > 0 && "border-t border-trim",

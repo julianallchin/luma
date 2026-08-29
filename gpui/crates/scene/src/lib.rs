@@ -25,6 +25,7 @@
 pub mod aabb;
 pub mod bvh;
 pub mod camera;
+pub mod catalog;
 pub mod framing;
 pub mod gesture;
 pub mod gizmo;
@@ -36,6 +37,7 @@ pub mod sockets;
 pub use aabb::Aabb;
 pub use bvh::{MeshBvh, Ray, RayHit, TriMesh};
 pub use camera::{Camera, UnknownView, View, EYE_HEIGHT_M};
+pub use catalog::{piece, pieces, Family, Geometry, PaletteGroup, Piece, PieceKind};
 pub use framing::{Beam, Framing, Insets, Viewfinder};
 pub use gesture::{ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Marquee, ScreenRect};
 pub use gizmo::{
@@ -48,4 +50,7 @@ pub use graph::{
 };
 pub use selection::{ObjectKind, Selection, SelectionTarget};
 pub use snap::{solve_snap, ScenePiece, SnapInput, SnapMatch, SnapResult, SnapSurface};
-pub use sockets::{BboxAnchor, ResolvedSocket, SocketDef, SocketMode, SocketType};
+pub use sockets::{
+    BboxAnchor, Polarity, ResolvedSocket, RollFreedom, SocketDef, SocketKind, SocketMode,
+    SocketType,
+};

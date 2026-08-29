@@ -31,11 +31,13 @@
  */
 
 import { Matrix4, Quaternion, Vector3 } from "three";
+import { SOCKET_ROLL } from "./catalog.generated";
 import {
-	COMPATIBLE,
+	canBeHeld,
 	type ResolvedSocket,
 	type SocketMode,
 	type SocketType,
+	socketsMate,
 } from "./sockets";
 
 /**
@@ -146,6 +148,7 @@ const GROUND_SOCKET: ResolvedSocket = {
 	tangent: new Vector3(1, 0, 0),
 	mode: "face",
 	outward: new Vector3(0, 1, 0),
+	roll: SOCKET_ROLL.ground,
 };
 
 // ---------------------------------------------------------------------------
@@ -304,22 +307,17 @@ export function solveSnap(input: SnapInput): SnapResult {
 		return freePlacement(input, heldGrab);
 	}
 
-	const usefulHeld = heldSockets.filter(
-		(s) => s.type !== "grab" && COMPATIBLE[s.type]?.length > 0,
-	);
+	const usefulHeld = heldSockets.filter((s) => canBeHeld(s.type));
 
 	// Pass 1: non-ground hosts. Pick the best within ATTACH_THRESHOLD.
 	let bestPiece: Candidate | null = null;
 	for (const heldSocket of usefulHeld) {
-		const allowed = new Set(COMPATIBLE[heldSocket.type] ?? []);
-		if (allowed.size === 0) continue;
-
 		for (const host of input.pieces) {
 			if (host.id === input.excludeId) continue;
 			const hostSockets = input.lookupSockets(host.meshPath);
 			if (hostSockets.length === 0) continue;
 			for (const hostSocket of hostSockets) {
-				if (!allowed.has(hostSocket.type)) continue;
+				if (!socketsMate(heldSocket.type, hostSocket.type)) continue;
 				// Edge mode requires opposing-side sockets, else the pieces
 				// stack on top of each other.
 				if (
@@ -392,11 +390,11 @@ export function solveSnap(input: SnapInput): SnapResult {
 			tangent,
 			mode: "face",
 			outward: input.surface.localNormal.clone(),
+			roll: SOCKET_ROLL[input.surface.type],
 		};
 		let bestSurf: Candidate | null = null;
 		for (const heldSocket of usefulHeld) {
-			const allowed = new Set(COMPATIBLE[heldSocket.type] ?? []);
-			if (!allowed.has(input.surface.type)) continue;
+			if (!socketsMate(heldSocket.type, input.surface.type)) continue;
 			const cand = evaluateCandidate(
 				heldSocket,
 				surfSocket,
@@ -427,8 +425,7 @@ export function solveSnap(input: SnapInput): SnapResult {
 	// held piece.
 	const groundHost = makeGroundPiece(input.cursorWorld);
 	for (const heldSocket of usefulHeld) {
-		const allowed = new Set(COMPATIBLE[heldSocket.type] ?? []);
-		if (!allowed.has("ground")) continue;
+		if (!socketsMate(heldSocket.type, "ground")) continue;
 		const cand = evaluateCandidate(
 			heldSocket,
 			GROUND_SOCKET,

@@ -6,6 +6,7 @@
 			"www/src/**/*.{ts,tsx,js,jsx}",
 			"www/*.{ts,js}",
 			"!src/bindings/*.ts",
+			"!src/features/stage/lib/catalog.generated.ts",
 			"!src-tauri/**/*",
 			"!resources/**/*",
 			"!.claude/**/*",

@@ -13,12 +13,21 @@
  */
 
 import { Matrix4, Vector3 } from "three";
+import { SOCKET_ROLL } from "../catalog.generated";
 import type { ScenePiece } from "../snap";
 import type { ResolvedSocket } from "../sockets";
 
+/**
+ * The tables below author the geometry and leave roll freedom to the socket
+ * type, which is where it lives for every real piece too.
+ */
+function withRoll(sockets: Omit<ResolvedSocket, "roll">[]): ResolvedSocket[] {
+	return sockets.map((s) => ({ ...s, roll: SOCKET_ROLL[s.type] }));
+}
+
 /** 1×1×0.6m deck, pivot at the bottom face. Bbox center is at (0, 0.3, 0);
  * `outward` reflects which side of the bbox each socket sits on. */
-export const DECK_SOCKETS: ResolvedSocket[] = [
+export const DECK_SOCKETS: ResolvedSocket[] = withRoll([
 	{
 		name: "grab",
 		type: "grab",
@@ -93,10 +102,10 @@ export const DECK_SOCKETS: ResolvedSocket[] = [
 		mode: "face",
 		outward: new Vector3(Math.SQRT1_2, 0, Math.SQRT1_2),
 	},
-];
+]);
 
 /** 1.22m straight truss, length along the X axis, centered at origin. */
-export const TRUSS_SOCKETS: ResolvedSocket[] = [
+export const TRUSS_SOCKETS: ResolvedSocket[] = withRoll([
 	{
 		name: "grab",
 		type: "grab",
@@ -124,10 +133,10 @@ export const TRUSS_SOCKETS: ResolvedSocket[] = [
 		mode: "face",
 		outward: new Vector3(1, 0, 0),
 	},
-];
+]);
 
 /** A 1m-tall speaker stand. Centroid at origin; top at +0.5, base at -0.5. */
-export const STAND_SOCKETS: ResolvedSocket[] = [
+export const STAND_SOCKETS: ResolvedSocket[] = withRoll([
 	{
 		name: "grab",
 		type: "grab",
@@ -155,10 +164,10 @@ export const STAND_SOCKETS: ResolvedSocket[] = [
 		mode: "face",
 		outward: new Vector3(0, -1, 0),
 	},
-];
+]);
 
 /** A speaker. 0.4m tall; mount on the bottom face. */
-export const SPEAKER_SOCKETS: ResolvedSocket[] = [
+export const SPEAKER_SOCKETS: ResolvedSocket[] = withRoll([
 	{
 		name: "grab",
 		type: "grab",
@@ -177,7 +186,7 @@ export const SPEAKER_SOCKETS: ResolvedSocket[] = [
 		mode: "face",
 		outward: new Vector3(0, -1, 0),
 	},
-];
+]);
 
 export const FIXTURES = {
 	deck: DECK_SOCKETS,
