@@ -218,22 +218,35 @@ impl Mount {
     /// the database holds; the axis remap and sign flips that make it a data
     /// space rotation are this crate's business.
     ///
-    /// This is the *interim* constructor. A fixture has no independent pose once
-    /// the venue graph lands — it hangs off a socket, and the socket's frame is
-    /// the mount frame. Naming it `from_stored` rather than `new` keeps that
-    /// seam visible: phase 3 adds `Mount::from_socket` and deletes this one, and
-    /// every caller below it is untouched because they only ever see a `Mount`.
+    /// The stored triple is a *serialization* of the frame [`Self::from_frame`]
+    /// takes; this constructor is the one place it is read. It survives the
+    /// venue graph because `scene_desc::Fixture` and the golden vectors still
+    /// carry a triple — what went away is the idea that a fixture *owns* one.
     #[must_use]
     pub fn from_stored(position: Vec3, rot: [f32; 3]) -> Self {
-        Self {
+        // Conjugating the renderer's `Rx(r0)·Ry(r2)·Rz(r1)` by the Y/Z swap:
+        // each factor keeps its angle's magnitude, changes sign, and moves to
+        // the swapped axis.
+        Self::from_frame(
             position,
-            // Conjugating the renderer's `Rx(r0)·Ry(r2)·Rz(r1)` by the Y/Z swap:
-            // each factor keeps its angle's magnitude, changes sign, and moves
-            // to the swapped axis.
-            rotation: Mat3::from_rotation_x(-rot[0])
+            Mat3::from_rotation_x(-rot[0])
                 * Mat3::from_rotation_z(-rot[2])
                 * Mat3::from_rotation_y(-rot[1]),
-        }
+        )
+    }
+
+    /// The mount frame directly: `rotation` is a data-space basis whose
+    /// [`REST_AXIS`] column is the direction a parked head emits along.
+    ///
+    /// This is what the venue graph hands over — a fixture has no independent
+    /// pose, it hangs off a socket, and the socket's frame *is* the mount
+    /// frame (`luma_scene::venue::NodePose::data_basis`). Taking the basis
+    /// rather than a triple keeps the pose out of
+    /// `luma_scene::coords::euler_xyz_of`'s gimbal clamp, which a socket
+    /// pointing straight down would otherwise land in.
+    #[must_use]
+    pub fn from_frame(position: Vec3, rotation: Mat3) -> Self {
+        Self { position, rotation }
     }
 
     /// The mounting origin — where the clamp is, not where the light is.

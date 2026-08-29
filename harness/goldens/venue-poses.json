@@ -1,0 +1,373 @@
+{
+  "constraints": [
+    {
+      "gapM": 7.736884,
+      "mySocket": "end_b",
+      "node": "run",
+      "status": "violated",
+      "targetNode": "tower",
+      "targetSocket": "end_a"
+    }
+  ],
+  "dangling": [
+    {
+      "node": "deck_a",
+      "socket": "edge_front",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_a",
+      "socket": "edge_back",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_a",
+      "socket": "edge_left",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_a",
+      "socket": "edge_right",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_b",
+      "socket": "edge_front",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_b",
+      "socket": "edge_back",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_b",
+      "socket": "edge_left",
+      "type": "floor_edge"
+    },
+    {
+      "node": "deck_b",
+      "socket": "edge_right",
+      "type": "floor_edge"
+    },
+    {
+      "node": "tower",
+      "socket": "end_a",
+      "type": "truss_end"
+    },
+    {
+      "node": "tower",
+      "socket": "end_b",
+      "type": "truss_end"
+    },
+    {
+      "node": "corner",
+      "socket": "face_-x",
+      "type": "truss_end"
+    },
+    {
+      "node": "corner",
+      "socket": "face_-z",
+      "type": "truss_end"
+    },
+    {
+      "node": "run",
+      "socket": "end_a",
+      "type": "truss_end"
+    },
+    {
+      "node": "run",
+      "socket": "end_b",
+      "type": "truss_end"
+    }
+  ],
+  "nodes": [
+    {
+      "arrayIndex": null,
+      "catalogRef": null,
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "venue",
+      "node": "venue",
+      "parent": null,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        -0.0,
+        0.0
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "stage_lab/stage_praticavel_2x1x1.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "stage",
+      "node": "deck_a",
+      "parent": "venue",
+      "position": [
+        2.61577,
+        2.321112,
+        0.0
+      ],
+      "rotation": [
+        -3.141593,
+        3.141593,
+        1.170796
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "stage_lab/stage_praticavel_1x1.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "stage",
+      "node": "deck_b",
+      "parent": "deck_a",
+      "position": [
+        1.765821,
+        1.59476,
+        0.71
+      ],
+      "rotation": [
+        -3.141593,
+        3.141593,
+        1.170796
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "truss/straight",
+      "facing": [
+        0.921061,
+        -0.389418,
+        0.0
+      ],
+      "kind": "tower",
+      "node": "tower",
+      "parent": "deck_a",
+      "position": [
+        2.419198,
+        2.241366,
+        3.26
+      ],
+      "rotation": [
+        -0.0,
+        1.570796,
+        0.4
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "truss/corner",
+      "facing": [
+        0.921061,
+        -0.389418,
+        0.0
+      ],
+      "kind": "piece",
+      "node": "corner",
+      "parent": "tower",
+      "position": [
+        2.419198,
+        2.241366,
+        5.67915
+      ],
+      "rotation": [
+        0.0,
+        1.570796,
+        0.4
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "truss/straight",
+      "facing": [
+        0.921061,
+        -0.389418,
+        0.0
+      ],
+      "kind": "run",
+      "node": "run",
+      "parent": "corner",
+      "position": [
+        1.185073,
+        -0.677615,
+        5.67915
+      ],
+      "rotation": [
+        -1.570796,
+        1.970796,
+        0.0
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "fixture:flown",
+      "facing": [
+        0.0,
+        -0.0,
+        -1.0
+      ],
+      "kind": "fixture",
+      "node": "flown",
+      "parent": "venue",
+      "position": [
+        -1.0,
+        3.0,
+        6.5
+      ],
+      "rotation": [
+        0.0,
+        -0.0,
+        0.0
+      ]
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "fixture:uplight",
+      "facing": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "kind": "fixture",
+      "node": "uplight",
+      "parent": "venue",
+      "position": [
+        2.0,
+        -0.5,
+        0.0
+      ],
+      "rotation": [
+        -3.141593,
+        0.0,
+        -1.1
+      ]
+    },
+    {
+      "arrayIndex": 0,
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "array",
+      "node": "wall#0",
+      "parent": "venue",
+      "position": [
+        -1.7964,
+        0.225384,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        0.0,
+        1.570796
+      ]
+    },
+    {
+      "arrayIndex": 1,
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "array",
+      "node": "wall#1",
+      "parent": "venue",
+      "position": [
+        -0.7964,
+        0.225384,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        0.0,
+        1.570796
+      ]
+    },
+    {
+      "arrayIndex": 2,
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "array",
+      "node": "wall#2",
+      "parent": "venue",
+      "position": [
+        0.2036,
+        0.225384,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        0.0,
+        1.570796
+      ]
+    },
+    {
+      "arrayIndex": 3,
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "array",
+      "node": "wall#3",
+      "parent": "venue",
+      "position": [
+        1.2036,
+        0.225384,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        0.0,
+        1.570796
+      ]
+    },
+    {
+      "arrayIndex": 4,
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "array",
+      "node": "wall#4",
+      "parent": "venue",
+      "position": [
+        2.2036,
+        0.225384,
+        0.0
+      ],
+      "rotation": [
+        -0.0,
+        0.0,
+        1.570796
+      ]
+    }
+  ],
+  "warnings": 0
+}

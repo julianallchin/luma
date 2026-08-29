@@ -188,13 +188,15 @@ fn grab() -> SocketDef {
     SocketDef::new("grab", SocketType::Grab, BboxAnchor::Center)
 }
 
-/// A deck: a bottom mount so it rests on the ground rather than half-buried,
-/// four top edges that butt against neighbouring decks, and four inset top
-/// corners for trusses to stand on.
+/// A deck: a bottom mount so it rests on the ground rather than half-buried, a
+/// top surface things stand on, four top edges that butt against neighbouring
+/// decks, and four inset top corners for trusses to stand on.
 ///
-/// There is deliberately **no** `floor_top` socket: equipment lands on a deck
-/// through the cursor-raycast surface fallback, at the actual hit point, so a
-/// single discrete centre socket would fight it.
+/// `top` is a **frame**, not a spot. A piece placed on it carries `(u, v)`
+/// across the deck (`luma_scene::venue`), so the discrete socket and the
+/// cursor's actual hit point are the same answer expressed twice — which is
+/// what lets a CDJ on a riser be a *relation* and move when the riser does.
+/// Before the venue graph the two fought, and the socket was left out.
 fn floor_sockets() -> Vec<SocketDef> {
     let edge = |name, anchor, tangent| {
         SocketDef::new(name, SocketType::FloorEdge, anchor)
@@ -214,6 +216,7 @@ fn floor_sockets() -> Vec<SocketDef> {
     vec![
         grab(),
         SocketDef::new("bottom", SocketType::BottomMount, BboxAnchor::Bottom).normal(DVec3::NEG_Y),
+        SocketDef::new("top", SocketType::FloorTop, BboxAnchor::Top).normal(DVec3::Y),
         edge("edge_front", BboxAnchor::TopFront, DVec3::X),
         edge("edge_back", BboxAnchor::TopBack, DVec3::X),
         edge("edge_left", BboxAnchor::TopLeft, DVec3::Z),
