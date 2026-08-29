@@ -187,7 +187,10 @@ async fn pieces(b: &mut BindingBuilder, access: &mut VenueAccess<'_, Read>) -> R
         .map(|(flat, row)| PieceBinding {
             id: flat.id,
             kind: row.kind.clone(),
-            mesh_path: flat.mesh_path,
+            // From the row, not the flattened piece: the mesh path is
+            // taxonomy, and the renderer's `Piece` now says *geometry* — which
+            // for a generated piece is not a path at all.
+            mesh_path: row.mesh_path.clone(),
             position: flat.pos,
             rotation: flat.rot,
             scale: flat.scale,

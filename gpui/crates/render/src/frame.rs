@@ -16,7 +16,7 @@ use crate::luminaire::{
     beam_direction, cone_from_opening, is_procedural, luminaire_for, model_kind, PIXEL,
 };
 use crate::overlay::Overlay;
-use crate::scene_desc::{Definition, PrimitiveState, Scene};
+use crate::scene_desc::{Definition, Geometry, PrimitiveState, Procedural, Scene};
 
 /// Fixture definitions keyed by `fixturePath`, as the catalogue holds them.
 pub type Definitions = std::collections::BTreeMap<String, Definition>;
@@ -680,25 +680,41 @@ pub fn build_with(
 
     // --- stage pieces ------------------------------------------------------
     for piece in &scene.pieces {
-        let glb = lib.get(&piece.mesh_path)?;
         // Attached pieces arrive already flattened into world poses (see
         // `flatten_pieces` app-side), so a piece's pose here is never relative
         // to another piece's.
         let root = to_world
             * three_pose_from_data(piece.pos, piece.rot)
             * Mat4::from_scale(Vec3::splat(piece.scale));
-        let worlds = glb.world_matrices(root, &HashMap::new());
-        for (node, world) in glb.nodes.iter().zip(&worlds) {
-            for &p in &node.primitives {
-                draws.push(glb_draw(
-                    &mut bank,
-                    &piece.mesh_path,
-                    glb,
-                    p,
-                    *world,
-                    |m| m,
-                    Some(EditorObject::StagePiece(piece.id.clone())),
-                ));
+        let object = Some(EditorObject::StagePiece(piece.id.clone()));
+        match &piece.geometry {
+            Geometry::MeshPath(path) => {
+                let glb = lib.get(path)?;
+                let worlds = glb.world_matrices(root, &HashMap::new());
+                for (node, world) in glb.nodes.iter().zip(&worlds) {
+                    for &p in &node.primitives {
+                        draws.push(glb_draw(
+                            &mut bank,
+                            path,
+                            glb,
+                            p,
+                            *world,
+                            |m| m,
+                            object.clone(),
+                        ));
+                    }
+                }
+            }
+            Geometry::Procedural(Procedural::Truss { span }) => {
+                let truss = crate::truss::Truss::new(*span);
+                let mesh = bank.insert(truss.mesh_key(), || truss.mesh());
+                draws.push(Draw {
+                    mesh,
+                    model: root,
+                    material: crate::truss::ALUMINIUM,
+                    textures: MaterialTextures::default(),
+                    editor_object: object,
+                });
             }
         }
     }

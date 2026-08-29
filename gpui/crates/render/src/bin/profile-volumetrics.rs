@@ -12,7 +12,9 @@ use std::process::{Command, Output};
 use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
-use luma_render::scene_desc::{CameraPose, DebugView, Environment, Piece, RenderSettings, Scene};
+use luma_render::scene_desc::{
+    CameraPose, DebugView, Environment, Geometry, Piece, RenderSettings, Scene,
+};
 use luma_render::{build_frame_with, FrameTimings, MetricSummary, Renderer, LIVE_SUBFRAMES};
 use serde::Serialize;
 
@@ -1058,7 +1060,7 @@ fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
             vec![
                 Piece {
                     id: "deck-l".into(),
-                    mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                    geometry: Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
                     kind: "floor".into(),
                     pos: [-1.0, 0.0, 0.0],
                     rot: [0.0; 3],
@@ -1066,7 +1068,7 @@ fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
                 },
                 Piece {
                     id: "deck-r".into(),
-                    mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                    geometry: Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
                     kind: "floor".into(),
                     pos: [1.0, 0.0, 0.0],
                     rot: [0.0; 3],
@@ -1074,7 +1076,7 @@ fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
                 },
                 Piece {
                     id: "truss".into(),
-                    mesh_path: "stage_lab/truss_q40_1.83m.glb".into(),
+                    geometry: Geometry::mesh("stage_lab/truss_q40_1.83m.glb"),
                     kind: "truss".into(),
                     pos: [0.0, -1.6, 0.0],
                     rot: [0.0; 3],
@@ -1082,7 +1084,7 @@ fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
                 },
                 Piece {
                     id: "speaker".into(),
-                    mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                    geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
                     kind: "speaker".into(),
                     pos: [2.2, 0.0, 0.0],
                     rot: [0.0; 3],

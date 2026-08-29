@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use luma_render::assets::Library;
 use luma_render::frame::FixtureCone;
-use luma_render::scene_desc::{CameraPose, DebugView, Environment, Piece, RenderSettings, Scene};
+use luma_render::scene_desc::{
+    CameraPose, DebugView, Environment, Geometry, Piece, RenderSettings, Scene,
+};
 use luma_render::{
     build_frame_with, AsyncPresentation, AsyncViewport, Frame, Renderer, SubmitOutcome, Viewport,
 };
@@ -75,7 +77,7 @@ fn frame(pieces: Vec<Piece>, lights: Vec<FixtureCone>) -> Frame {
 fn blocker() -> Piece {
     Piece {
         id: "occluder".into(),
-        mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
         kind: "speaker".into(),
         pos: [0.0, 0.0, 0.8],
         rot: [0.0; 3],

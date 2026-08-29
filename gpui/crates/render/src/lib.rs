@@ -44,6 +44,7 @@ pub mod scene_desc;
 #[cfg(target_os = "macos")]
 mod shadow;
 mod share;
+pub mod truss;
 pub mod viewport;
 pub mod warmup;
 

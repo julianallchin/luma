@@ -6,8 +6,8 @@ use glam::{Mat4, Vec3};
 use luma_render::assets::Library;
 use luma_render::build_frame_with;
 use luma_render::scene_desc::{
-    CameraPose, DebugView, DirectionalLight, Environment, EnvironmentProbe, HazeSettings, Piece,
-    RenderSettings, Scene,
+    CameraPose, DebugView, DirectionalLight, Environment, EnvironmentProbe, Geometry, HazeSettings,
+    Piece, RenderSettings, Scene,
 };
 
 fn scene(render: RenderSettings, pieces: Vec<Piece>) -> Scene {
@@ -115,7 +115,7 @@ fn gpu_probes_sun_direction_intensity_and_shadow_toggle() {
     let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
     let piece = || Piece {
         id: "shadow-caster".into(),
-        mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
         kind: "speaker".into(),
         pos: [0.0, 0.0, 0.0],
         rot: [0.0, 0.0, 0.0],
@@ -193,7 +193,7 @@ fn gpu_shadow_softness_is_stable_distinct_bounded_and_sun_independent() {
     let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
     let piece = || Piece {
         id: "softness-caster".into(),
-        mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
         kind: "speaker".into(),
         pos: [0.0, 0.0, 0.0],
         rot: [0.0, 0.0, 0.0],
@@ -292,7 +292,7 @@ fn gpu_far_cascade_keeps_directional_occlusion() {
             fixtures: Vec::new(),
             pieces: vec![Piece {
                 id: "far-shadow-caster".into(),
-                mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
                 kind: "speaker".into(),
                 pos: [0.0, 0.0, 0.0],
                 rot: [0.0, 0.0, 0.0],
@@ -411,7 +411,7 @@ fn textured_pbr_proof_scene_resolves_deterministically() {
     let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
     let proof_piece = || Piece {
         id: "proof-cdj".into(),
-        mesh_path: "stage_lab/cdj_3000x.glb".into(),
+        geometry: Geometry::mesh("stage_lab/cdj_3000x.glb"),
         kind: "speaker".into(),
         pos: [0.0, 0.0, 0.0],
         rot: [0.0, 0.0, 0.0],
@@ -506,7 +506,7 @@ fn material_lab_maps_debug_views_and_uploads_are_deterministic() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("goldens");
     let piece = || Piece {
         id: "material-lab".into(),
-        mesh_path: "material-lab.gltf".into(),
+        geometry: Geometry::mesh("material-lab.gltf"),
         kind: "speaker".into(),
         pos: [0.0, 0.0, 0.75],
         rot: [0.0, 0.0, 0.0],
@@ -677,7 +677,7 @@ fn hdr_ibl_is_resident_deterministic_and_energy_monotonic() {
             settings,
             vec![Piece {
                 id: "material-lab".into(),
-                mesh_path: "material-lab.gltf".into(),
+                geometry: Geometry::mesh("material-lab.gltf"),
                 kind: "speaker".into(),
                 pos: [0.0, 0.0, 0.75],
                 rot: [0.0, 0.0, 0.0],
@@ -771,7 +771,7 @@ fn live_async_presentation_matches_deterministic_capture_without_ui_polling() {
     let meshes = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
     let proof_piece = || Piece {
         id: "async-proof".into(),
-        mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+        geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
         kind: "speaker".into(),
         pos: [0.0, 0.0, 0.0],
         rot: [0.0, 0.0, 0.0],
