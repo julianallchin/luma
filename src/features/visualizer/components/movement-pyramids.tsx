@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import type { PatchedFixture } from "@/bindings/fixtures";
 import type { MovementConfig } from "@/bindings/groups";
-import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import { usePlacedFixtures } from "@/features/stage/stores/use-venue-store";
 import { useGroupStore } from "../../universe/stores/use-group-store";
 
 const PYRAMID_LENGTH = 1.5; // meters
@@ -148,7 +148,7 @@ function FixturePyramid({
 export function MovementPyramids() {
 	const selectedGroupId = useGroupStore((s) => s.selectedGroupId);
 	const groups = useGroupStore((s) => s.groups);
-	const patchedFixtures = useFixtureStore((s) => s.patchedFixtures);
+	const patchedFixtures = usePlacedFixtures();
 
 	const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
 	const config = selectedGroup?.movementConfig;

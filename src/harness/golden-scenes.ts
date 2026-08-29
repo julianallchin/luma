@@ -1,6 +1,6 @@
 import type { FixtureDefinition, PatchedFixture } from "@/bindings/fixtures";
-import type { StagePiece } from "@/bindings/stage";
 import type { PrimitiveState } from "@/bindings/universe";
+import type { ResolvedNode } from "@/bindings/venue-graph";
 import type { RenderSettings } from "@/features/visualizer/stores/use-render-settings-store";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,8 @@ export interface GoldenScene {
 	/** Mounts the editor affordances: gizmo, grid, lit stage. */
 	editing?: boolean;
 	fixtures: PatchedFixture[];
-	pieces?: StagePiece[];
+	/** Structure nodes of the solved venue, already posed in world space. */
+	pieces?: ResolvedNode[];
 	/** Drives the gizmo and the selection outline (scene 5). */
 	selectedFixtureIds?: string[];
 	/** Fixed `PrimitiveState` per `"<fixtureId>:<head>"` key. */
@@ -198,28 +199,27 @@ function fixture({
 	};
 }
 
+/**
+ * One structure node, already solved: a golden scene is a description of a
+ * frame's inputs, and the resolver's output is what the renderer takes.
+ */
 function piece(
 	id: string,
 	meshPath: string,
-	kind: string,
 	pos: Vec3,
 	rot: Vec3 = [0, 0, 0],
-): StagePiece {
+): ResolvedNode {
 	return {
 		id,
-		uid: null,
-		venueId: VENUE_ID,
-		meshPath,
-		kind,
+		kind: "piece",
+		catalogRef: meshPath,
 		label: id,
-		posX: pos[0],
-		posY: pos[1],
-		posZ: pos[2],
-		rotX: rot[0],
-		rotY: rot[1],
-		rotZ: rot[2],
-		scale: 1,
-		parentPieceId: null,
+		parentId: null,
+		position: pos,
+		rotation: rot,
+		facing: [0, 0, 1],
+		arrayIndex: null,
+		params: {},
 	};
 }
 
@@ -294,12 +294,7 @@ function parOcclusion(): GoldenScene {
 		// enough to actually cut the cone: the haze must stop at its
 		// silhouette and the floor pool must be notched.
 		pieces: [
-			piece(
-				"deck",
-				"stage_lab/stage_praticavel_2x1x1.glb",
-				"floor",
-				[-1, -1.2, 1.4],
-			),
+			piece("deck", "stage_lab/stage_praticavel_2x1x1.glb", [-1, -1.2, 1.4]),
 		],
 		state: { "par:0": head(1, WHITE, [0, 0]), "hazer:0": head(1, WHITE) },
 	};
@@ -341,27 +336,17 @@ function stageBuilder(): GoldenScene {
 	];
 	return {
 		id: "stage-builder",
-		isolates: "PBR, shadow map, grid shader, selection outline, gizmo",
+		isolates: "PBR, shadow map, grid shader, fixture selection outline",
 		camera: { position: [5, 3.5, 6], target: [0, 0.8, 0] },
 		// The lit stage has no haze pass at all (`volumetricHaze && darkStage`).
 		render: { darkStage: false },
 		editing: true,
 		fixtures: movers,
 		pieces: [
-			piece(
-				"deck-l",
-				"stage_lab/stage_praticavel_2x1x1.glb",
-				"floor",
-				[-1, 0, 0],
-			),
-			piece(
-				"deck-r",
-				"stage_lab/stage_praticavel_2x1x1.glb",
-				"floor",
-				[1, 0, 0],
-			),
-			piece("truss-a", "stage_lab/truss_q40_1.83m.glb", "truss", [0, -1.6, 0]),
-			piece("speaker", "stage_lab/speaker_dbr15.glb", "speaker", [2.2, 0, 0]),
+			piece("deck-l", "stage_lab/stage_praticavel_2x1x1.glb", [-1, 0, 0]),
+			piece("deck-r", "stage_lab/stage_praticavel_2x1x1.glb", [1, 0, 0]),
+			piece("truss-a", "stage_lab/truss_q40_1.83m.glb", [0, -1.6, 0]),
+			piece("speaker", "stage_lab/speaker_dbr15.glb", [2.2, 0, 0]),
 		],
 		selectedFixtureIds: ["sb-mover-l"],
 		state: {

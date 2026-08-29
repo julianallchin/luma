@@ -2,6 +2,7 @@ import { Line, Text } from "@react-three/drei";
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import type { FixtureDefinition, PatchedFixture } from "@/bindings/fixtures";
+import { usePlacedFixtures } from "@/features/stage/stores/use-venue-store";
 import { useFixtureStore } from "../../universe/stores/use-fixture-store";
 import { useGroupStore } from "../../universe/stores/use-group-store";
 import { FixtureObject } from "./fixture-object";
@@ -160,7 +161,9 @@ export function FixtureGroup({
 	showBounds = false,
 	hideBeams = false,
 }: FixtureGroupProps) {
-	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+	// Only placed fixtures are drawn: a patched fixture with no venue node has
+	// no pose to draw it at.
+	const placedFixtures = usePlacedFixtures();
 	const definitionsCache = useFixtureStore((state) => state.definitionsCache);
 	const getDefinition = useFixtureStore((state) => state.getDefinition);
 	const groups = useGroupStore((state) => state.groups);
@@ -168,19 +171,19 @@ export function FixtureGroup({
 	// Preload definitions for all patched fixtures (for bounding box calculation)
 	useEffect(() => {
 		if (!showBounds) return;
-		for (const fixture of patchedFixtures) {
+		for (const fixture of placedFixtures) {
 			if (!definitionsCache.has(fixture.fixturePath)) {
 				getDefinition(fixture.fixturePath);
 			}
 		}
-	}, [showBounds, patchedFixtures, definitionsCache, getDefinition]);
+	}, [showBounds, placedFixtures, definitionsCache, getDefinition]);
 
 	// Compute bounding boxes for each group
 	const boundingBoxes = useMemo(() => {
 		if (!showBounds) return [];
 
 		const boxes: BoundingBox[] = [];
-		const fixtureMap = new Map(patchedFixtures.map((f) => [f.id, f]));
+		const fixtureMap = new Map(placedFixtures.map((f) => [f.id, f]));
 
 		for (let i = 0; i < groups.length; i++) {
 			const group = groups[i];
@@ -238,11 +241,11 @@ export function FixtureGroup({
 		}
 
 		return boxes;
-	}, [showBounds, groups, patchedFixtures, definitionsCache]);
+	}, [showBounds, groups, placedFixtures, definitionsCache]);
 
 	return (
 		<group>
-			{patchedFixtures.map((fixture) => (
+			{placedFixtures.map((fixture) => (
 				<FixtureObject
 					key={fixture.id}
 					fixture={fixture}

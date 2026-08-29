@@ -7,22 +7,11 @@
  * palette groups, socket definitions) is read from the generated file, so
  * there is no second copy to drift.
  *
- * If a snap doesn't land where you expect, tune the socket's anchor / offset
- * in the Rust catalog and rerun `cargo test -p luma-scene`. The geometry is
- * the source of truth; the catalog is the adapter that tells the snap solver
- * where the meaningful points are.
+ * This app only draws: sockets, snapping and the palette belong to the gpui
+ * builder, which owns the graph these meshes are placed by.
  */
 
-import {
-	CATALOG,
-	type CatalogPiece,
-	PALETTE_GROUP_ORDER,
-	type PaletteGroup,
-	type PieceKind,
-} from "./catalog.generated";
-
-export type { CatalogPiece, PaletteGroup, PieceKind };
-export { PALETTE_GROUP_ORDER };
+import { CATALOG, type CatalogPiece } from "./catalog.generated";
 
 /**
  * Every bundled stage GLB, by path relative to `resources/meshes/`.
@@ -46,7 +35,7 @@ const MESH_URLS: Record<string, string> = Object.fromEntries(
 );
 
 /** The bundled URL for a mesh path, or `null` if no such GLB ships. */
-export function meshUrl(meshPath: string): string | null {
+function meshUrl(meshPath: string): string | null {
 	return MESH_URLS[meshPath] ?? null;
 }
 
@@ -61,15 +50,21 @@ export function getStageMesh(id: string): CatalogPiece | null {
 	return BY_ID.get(id) ?? null;
 }
 
-export function listStageMeshes(): CatalogPiece[] {
-	return CATALOG;
-}
-
 /**
- * Whether a piece is drawable by this app. React has no truss generator, so a
- * procedural piece has no geometry here — it is placed and rendered by the
- * gpui builder.
+ * The GLB for a node's `catalogRef`, or `null` if there is nothing to draw.
+ *
+ * `null` has two causes and neither is an error: the catalog entry is
+ * procedural (React has no truss generator, so generated truss is drawn by the
+ * gpui builder), or the venue holds a mesh the catalog has since dropped and no
+ * GLB ships for it.
  */
-export function stageMeshUrl(piece: CatalogPiece): string | null {
-	return piece.geometry.kind === "mesh" ? meshUrl(piece.geometry.path) : null;
+export function catalogMeshUrl(catalogRef: string): string | null {
+	const piece = getStageMesh(catalogRef);
+	if (piece) {
+		return piece.geometry.kind === "mesh" ? meshUrl(piece.geometry.path) : null;
+	}
+	// A dropped catalog entry whose GLB still ships: drawing what is placed is
+	// unconditional, and a venue that cannot draw its own trusses is worse than
+	// one that cannot add more.
+	return meshUrl(catalogRef);
 }

@@ -1,9 +1,7 @@
-import { Trash2 } from "lucide-react";
 import { useMemo } from "react";
-import { cn } from "@/shared/lib/utils";
+import type { ResolvedNode } from "@/bindings/venue-graph";
 import { getStageMesh } from "../lib/stage-meshes";
-import { buildTree, type StagePieceNode } from "../lib/tree";
-import { useStagePieceStore } from "../stores/use-stage-piece-store";
+import { useVenueStore } from "../stores/use-venue-store";
 
 interface FlatRow {
 	id: string;
@@ -11,92 +9,84 @@ interface FlatRow {
 	depth: number;
 }
 
-function flattenTree(roots: StagePieceNode[]): FlatRow[] {
-	const out: FlatRow[] = [];
-	const walk = (node: StagePieceNode, depth: number) => {
-		const def = getStageMesh(node.piece.meshPath);
-		out.push({
-			id: node.piece.id,
-			label: node.piece.label ?? def?.displayName ?? node.piece.meshPath,
-			depth,
-		});
-		for (const child of node.children) walk(child, depth + 1);
-	};
-	for (const root of roots) walk(root, 0);
-	return out;
+function labelOf(node: ResolvedNode): string {
+	if (node.label) return node.label;
+	const piece = node.catalogRef ? getStageMesh(node.catalogRef) : null;
+	return piece?.displayName ?? node.catalogRef ?? node.kind;
 }
 
+/**
+ * The venue's structure, as the solver returns it.
+ *
+ * Read-only: the venue graph is edited in the gpui builder, and this app has
+ * no write verbs for it. Nodes come back depth-first from the root already, so
+ * indentation is a walk up `parentId` rather than a rebuilt tree.
+ */
 export function StageHierarchy() {
-	const pieces = useStagePieceStore((s) => s.pieces);
-	const selectedId = useStagePieceStore((s) => s.selectedId);
-	const hoveredId = useStagePieceStore((s) => s.hoveredId);
-	const selectPiece = useStagePieceStore((s) => s.selectPiece);
-	const setHoveredId = useStagePieceStore((s) => s.setHoveredId);
-	const deletePiece = useStagePieceStore((s) => s.deletePiece);
+	const nodes = useVenueStore((s) => s.nodes);
+	const warnings = useVenueStore((s) => s.warnings);
 
-	const rows = useMemo(() => flattenTree(buildTree(pieces)), [pieces]);
+	const rows = useMemo<FlatRow[]>(() => {
+		const byId = new Map(nodes.map((n) => [n.id, n]));
+		const depthOf = (node: ResolvedNode): number => {
+			let depth = 0;
+			let parent = node.parentId ? byId.get(node.parentId) : undefined;
+			while (parent) {
+				depth++;
+				parent = parent.parentId ? byId.get(parent.parentId) : undefined;
+			}
+			// The venue root is the frame, not a piece, and is not listed.
+			return Math.max(0, depth - 1);
+		};
+		return nodes
+			.filter((n) => n.kind !== "venue" && n.kind !== "fixture")
+			.map((n) => ({ id: n.id, label: labelOf(n), depth: depthOf(n) }));
+	}, [nodes]);
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: hover preview for 3D scene; not a primary interaction surface
-		<div
-			className="flex flex-col h-full min-h-0 overflow-y-auto"
-			onMouseLeave={() => setHoveredId(null)}
-		>
-			<div className="h-7 px-2 flex items-center bg-trim text-[9px] uppercase tracking-wider font-bold text-foreground/70 sticky top-0 z-10">
-				Scene ({pieces.length})
+		<div className="flex flex-col h-full min-h-0 overflow-y-auto">
+			<div className="h-7 px-2 flex items-center justify-between gap-2 bg-trim text-[9px] uppercase tracking-wider font-bold text-foreground/70 sticky top-0 z-10">
+				<span>Scene ({rows.length})</span>
+				<span className="text-foreground/40">Read only</span>
 			</div>
-			{pieces.length === 0 && (
+			<div className="px-2 py-1.5 text-[9px] uppercase tracking-wider font-bold text-foreground/50 bg-stripe border-b border-trim">
+				Built in the stage builder
+			</div>
+			{rows.length === 0 && (
 				<div className="px-2 py-3 text-[10px] text-foreground/40 italic">
-					Empty stage. Add pieces from the library above.
+					Empty stage.
 				</div>
 			)}
 			<ul>
-				{rows.map((row) => {
-					const isSelected = selectedId === row.id;
-					const isHovered = hoveredId === row.id;
-					return (
-						<li key={row.id}>
-							{/* biome-ignore lint/a11y/noStaticElementInteractions: hover preview for 3D scene; selection happens via the inner button */}
-							<div
-								className={cn(
-									"group w-full h-7 pr-1 flex items-center justify-between gap-2",
-									"text-[10px] text-foreground/80 border-b border-trim/40 last:border-b-0",
-									"hover:bg-hover transition-colors",
-									isSelected &&
-										"bg-hover text-foreground ring-1 ring-inset ring-foreground/40",
-									!isSelected && isHovered && "bg-hover/60",
-								)}
-								onMouseEnter={() => setHoveredId(row.id)}
-							>
-								<button
-									type="button"
-									onClick={() => selectPiece(isSelected ? null : row.id)}
-									className="flex-1 min-w-0 h-full text-left truncate flex items-center"
-									style={{ paddingLeft: 8 + row.depth * 12 }}
-								>
-									{row.depth > 0 && (
-										<span className="text-foreground/30 mr-1 select-none">
-											└
-										</span>
-									)}
-									<span className="truncate">{row.label}</span>
-								</button>
-								<button
-									type="button"
-									aria-label="Delete piece"
-									className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity shrink-0"
-									onClick={(e) => {
-										e.stopPropagation();
-										deletePiece(row.id);
-									}}
-								>
-									<Trash2 className="h-3 w-3" />
-								</button>
-							</div>
-						</li>
-					);
-				})}
+				{rows.map((row) => (
+					<li key={row.id}>
+						<div
+							className="w-full h-7 pr-1 flex items-center text-[10px] text-foreground/80 border-b border-trim/40 last:border-b-0"
+							style={{ paddingLeft: 8 + row.depth * 12 }}
+						>
+							{row.depth > 0 && (
+								<span className="text-foreground/30 mr-1 select-none">└</span>
+							)}
+							<span className="truncate">{row.label}</span>
+						</div>
+					</li>
+				))}
 			</ul>
+			{warnings.length > 0 && (
+				<div className="mt-auto border-t border-trim">
+					<div className="h-6 px-2 flex items-center bg-gutter text-[9px] uppercase tracking-wider font-bold text-foreground/50">
+						Solver ({warnings.length})
+					</div>
+					{warnings.map((warning) => (
+						<div
+							key={warning}
+							className="px-2 py-1 text-[10px] text-yellow-200/80 border-b border-trim/40 last:border-b-0"
+						>
+							{warning}
+						</div>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }

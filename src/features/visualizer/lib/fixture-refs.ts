@@ -1,7 +1,7 @@
 /**
- * Map of `fixtureId -> three.js Group`. Mirrors `piece-refs.ts` from the
- * stage feature so the unified transform gizmo can read live world poses
- * for both fixtures and stage pieces from a single API.
+ * Map of `fixtureId -> three.js Group`, so a caller can read a drawn
+ * fixture's live world pose without threading refs through props. The stage
+ * feature's `node-refs.ts` is the same map for venue nodes.
  *
  * `FixtureObject` registers / unregisters its group on mount / unmount.
  */
