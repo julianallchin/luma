@@ -31,7 +31,7 @@ const SCRIPT: &str = r#"
     nav.venue("Test Venue");
 
     function openSettings(model) {
-		nav.step("the settings button", "button", "Settings");
+		nav.settings();
 		nav.step("the AI settings section", "toggle", "AI");
 		return until("the loaded AI settings", (s) =>
 			s.find({ role: "select", label: model }) !== undefined ? s : undefined);

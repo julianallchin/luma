@@ -65,6 +65,8 @@ pub(crate) mod context {
     pub const SUBAGENTS: &str = "Subagents";
     /// Picking a clip's fixtures off the room.
     pub const FIXTURE_PICKER: &str = "FixturePicker";
+    /// The one confirmation dialog — see [`crate::confirm`].
+    pub const CONFIRM: &str = "Confirm";
     /// The full-screen sign-in state. Not in [`DIALOGS`]: it is not a plane
     /// over the shell, it *is* the app while it is up, so the shell's bindings
     /// are absent because the shell is — not because a predicate excluded them.
@@ -77,7 +79,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 7] = [
+    pub const DIALOGS: [&str; 8] = [
         VENUES,
         PATTERNS,
         SETTINGS,
@@ -85,6 +87,7 @@ pub(crate) mod context {
         CHAT_HISTORY,
         SUBAGENTS,
         FIXTURE_PICKER,
+        CONFIRM,
     ];
     /// Declared by a focused field that is taking typed text. Any binding on
     /// a key that field could be typing excludes it. Defined in `luma-ui`
@@ -122,6 +125,11 @@ actions!(
         SelectTab7,
         SelectTab8,
         SelectTab9,
+        /// Walk the sidebar's two levels: into the picked track's scores, and
+        /// back out. Scoped to the sidebar, so they mean nothing while the
+        /// keyboard is in a tab — where the same arrows are the timeline's.
+        EnterScores,
+        LeaveScores,
         /// Open the pattern picker overlay.
         OpenPatterns,
         /// Open settings over the whole shell.
@@ -191,6 +199,9 @@ pub(crate) fn init(cx: &mut App) {
     // reason: a promoted param widget (phase 3) is a text field, and `delete`
     // is a correction there, not a command.
     let graphing = format!("{} && !{}", context::GRAPH, context::TEXT_INPUT);
+    // The sidebar's own arrows, and the same exclusion for the same reason:
+    // the search field is a text field, and there the arrows are the caret's.
+    let browsing = format!("{} && !{}", context::SIDEBAR, context::TEXT_INPUT);
     let mut bindings = vec![
         KeyBinding::new("space", PlayPause, Some(&editing)),
         KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
@@ -208,6 +219,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("backspace", DeleteClips, Some(&editing)),
         KeyBinding::new("alt-up", MoveClipsUp, Some(&editing)),
         KeyBinding::new("alt-down", MoveClipsDown, Some(&editing)),
+        KeyBinding::new("right", EnterScores, Some(&browsing)),
+        KeyBinding::new("left", LeaveScores, Some(&browsing)),
         KeyBinding::new("escape", DismissOverlay, Some(&escape)),
         KeyBinding::new("escape", DismissOverlay, Some(&dialog)),
         KeyBinding::new("secondary-b", ToggleSidebar, Some(&shell)),

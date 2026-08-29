@@ -257,6 +257,14 @@ impl<B> Tabs<B> {
         self.open.is_empty()
     }
 
+    /// The body showing `target`, whether or not it is the visible tab.
+    pub(crate) fn body(&self, target: &Target) -> Option<&B> {
+        self.open
+            .iter()
+            .find(|tab| &tab.target == target)
+            .map(|tab| &tab.body)
+    }
+
     /// The body showing `target`, whether or not it is the visible tab — the
     /// agent's targeted opens address a tab by what it is about.
     pub(crate) fn body_mut(&mut self, target: &Target) -> Option<&mut B> {

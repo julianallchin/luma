@@ -61,29 +61,32 @@ pub struct Settings {
     /// the key is enough of an identity because no two selects on this screen
     /// write the same setting.
     open_menu: Option<&'static str>,
-    /// The principal admitted when this screen opened, and after any sign-out
-    /// it performs. A snapshot rather than a live read for the same reason
-    /// `values` is one: the screen shows what the host said, so a transition
-    /// that failed shows as the row not changing.
-    account: Option<String>,
-    /// A sign-out is in flight. It is a multi-command durability boundary —
-    /// flush, wipe, release — and pressing it twice would race its own journal.
-    signing_out: bool,
-    account_error: Option<String>,
 }
 
 impl Settings {
-    fn new(account: Option<String>) -> Self {
+    fn new() -> Self {
         Self {
             tab: Tab::General,
             values: None,
             error: None,
             open_menu: None,
-            account,
-            signing_out: false,
-            account_error: None,
         }
     }
+}
+
+/// The account, as the app is currently able to speak about it.
+///
+/// Who is admitted is not kept here — [`crate::library::Library::account`] is
+/// the cache of that and is written through at every transition, so a second
+/// copy would only be able to name the previous account. What lives here is
+/// the part of the gesture that is not durable: whether the one multi-command
+/// sign-out is mid-flight, and what it said if it failed.
+#[derive(Default)]
+pub(crate) struct AccountAction {
+    /// A sign-out is in flight. It is a multi-command durability boundary —
+    /// flush, wipe, release — and pressing it twice would race its own journal.
+    pub(crate) signing_out: bool,
+    pub(crate) error: Option<String>,
 }
 
 // -- navigation and writes ----------------------------------------------------
@@ -102,9 +105,8 @@ impl Luma {
         ) {
             return;
         }
-        let account = self.library.user_id();
         self.overlay
-            .open(crate::shell::Overlay::Settings(Settings::new(account)));
+            .open(crate::shell::Overlay::Settings(Settings::new()));
         cx.notify();
         self.reload_settings(cx);
     }
@@ -138,49 +140,41 @@ impl Luma {
         });
     }
 
-    /// Write one setting, then read every setting back.
-    /// Leave settings for the sign-in screen. The screen takes the whole
-    /// window and [`Luma::show_sign_in`] takes this dialog down with it — no
-    /// exit to play, because there is no shell left for it to play over.
-    fn sign_in_from_settings(&mut self, cx: &mut Context<Self>) {
-        self.show_sign_in(cx);
-    }
-
-    /// Sign out, and show the result where it was asked for. The screen is not
-    /// dismissed on success: sign-out is a long durability boundary and the row
-    /// changing to "Signed out" is the only honest proof it landed.
-    fn sign_out(&mut self, cx: &mut Context<Self>) {
-        let Some(crate::shell::Overlay::Settings(state)) = self.overlay.open_mut() else {
-            return;
-        };
-        if state.signing_out {
+    /// Sign out. Nothing is dismissed on success: sign-out is a long
+    /// durability boundary, and the account reading "Working locally" is the
+    /// only honest proof it landed.
+    ///
+    /// Hangs off the app rather than the settings screen because both doors to
+    /// it — the sidebar's account menu and the settings row — press the same
+    /// three commands, and a guard living on one screen could not stop the
+    /// other from pressing them again mid-flight.
+    pub(crate) fn sign_out(&mut self, cx: &mut Context<Self>) {
+        if self.account_action.signing_out {
             return;
         }
-        state.signing_out = true;
-        state.account_error = None;
+        self.account_action = AccountAction {
+            signing_out: true,
+            error: None,
+        };
         let pending = self.library.sign_out();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
-                this.with_settings(cx, |state| {
-                    state.signing_out = false;
-                    match result {
-                        Ok(()) => {
-                            state.account = None;
-                            state.account_error = None;
-                        }
-                        Err(error) => {
-                            state.account_error = Some(format!("Could not sign out: {error}"));
-                        }
-                    }
-                });
+                this.account_action = AccountAction {
+                    signing_out: false,
+                    error: result
+                        .err()
+                        .map(|error| format!("Could not sign out: {error}")),
+                };
+                cx.notify();
             })
             .ok();
         })
         .detach();
     }
 
+    /// Write one setting, then read every setting back.
     fn write_setting(&mut self, key: &str, value: String, cx: &mut Context<Self>) {
         self.with_settings(cx, |state| state.open_menu = None);
         let pending = self.library.set_setting(key, &value);
@@ -216,6 +210,39 @@ impl Luma {
         .detach();
     }
 
+    /// Open or dismiss the account menu that hangs off the sidebar's foot.
+    ///
+    /// A [`luma_ui::dialog::Popup`] like every other menu in the app, so it
+    /// leaves with the same motion — see [`crate::tracks::account_menu`].
+    pub(crate) fn toggle_account_menu(&mut self, cx: &mut Context<Self>) {
+        if self.account_menu.is_open() {
+            self.account_menu.begin_close(cx);
+        } else {
+            self.account_menu.open(());
+        }
+        cx.notify();
+    }
+
+    /// Begin the account menu's exit. Both of its rows do this first: the
+    /// gesture is over the moment one is pressed, and the menu plays out from
+    /// under whatever it opened.
+    pub(crate) fn close_account_menu(&mut self, cx: &mut Context<Self>) {
+        self.account_menu.begin_close(cx);
+        cx.notify();
+    }
+
+    /// The one gesture that changes who this library belongs to, in whichever
+    /// direction it currently points. The account menu's second row, and the
+    /// settings screen's account button — one path, so the in-flight guard
+    /// cannot be walked around by pressing the other door.
+    pub(crate) fn switch_identity(&mut self, cx: &mut Context<Self>) {
+        if self.library.user_id().is_some() {
+            self.sign_out(cx);
+        } else {
+            self.show_sign_in(cx);
+        }
+    }
+
     /// Run `edit` against the settings overlay's state, if it is still up. A
     /// load that lands after it was dismissed is a no-op, not an overlay that
     /// snaps back.
@@ -233,8 +260,9 @@ const PAD: f32 = 16.;
 /// Gap between one labelled control and the next.
 const SECTION_GAP: f32 = 20.;
 
-/// Render the screen. `app` is the root entity every control writes through.
-pub fn settings(state: &Settings, app: &Entity<Luma>) -> Div {
+/// Render the screen. `app` is the root entity every control writes through;
+/// `shell` is the app state the account section reads its identity from.
+pub fn settings(shell: &Luma, state: &Settings, app: &Entity<Luma>) -> Div {
     div()
         .size_full()
         .flex()
@@ -249,7 +277,9 @@ pub fn settings(state: &Settings, app: &Entity<Luma>) -> Div {
                 format!("Failed to load settings: {error}"),
                 ladder::danger(),
             ),
-            (Some(values), error) => body(state, values, error.as_deref(), app).into_any_element(),
+            (Some(values), error) => {
+                body(shell, state, values, error.as_deref(), app).into_any_element()
+            }
         })
 }
 
@@ -289,7 +319,13 @@ fn tabs(state: &Settings, app: &Entity<Luma>) -> Div {
         }))
 }
 
-fn body(state: &Settings, values: &AppSettings, error: Option<&str>, app: &Entity<Luma>) -> Div {
+fn body(
+    shell: &Luma,
+    state: &Settings,
+    values: &AppSettings,
+    error: Option<&str>,
+    app: &Entity<Luma>,
+) -> Div {
     div()
         .flex_1()
         .flex()
@@ -307,7 +343,7 @@ fn body(state: &Settings, values: &AppSettings, error: Option<&str>, app: &Entit
         })
         .children(match state.tab {
             Tab::General => general(values, app),
-            Tab::Account => account(state, app),
+            Tab::Account => account(shell, app),
             Tab::Ai => ai(state, values, app),
             Tab::ArtNet => artnet(values, app),
             Tab::About => about(),
@@ -435,20 +471,23 @@ fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 /// The web app hangs sign-out off a titlebar dropdown; there is no titlebar
 /// here (see `crate::chrome`), and the gear that opens this screen sits in the
 /// same corner that dropdown did. So this *is* the account menu.
-fn account(state: &Settings, app: &Entity<Luma>) -> Vec<Div> {
-    let signed_in = state.account.is_some();
-    let identity = state
-        .account
-        .clone()
-        .unwrap_or_else(|| "Signed out — working locally".to_string());
-    let label = if state.signing_out {
+fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
+    let account = shell.library.account();
+    let signed_in = account.is_some();
+    // The address where the session carries one, the principal where it does
+    // not — one spelling of "who this is", shared with the sidebar's foot.
+    let identity = account.as_ref().map_or_else(
+        || crate::tracks::GUEST_ACCOUNT.to_string(),
+        |account| account.label().to_string(),
+    );
+    let label = if shell.account_action.signing_out {
         "Signing out…"
     } else if signed_in {
         "Sign out"
     } else {
         "Sign in"
     };
-    let pressable = !state.signing_out;
+    let pressable = !shell.account_action.signing_out;
     let act = app.clone();
     let mut rows = vec![
         field(Some("Signed in as"), readonly_value(&identity, ""), None),
@@ -458,13 +497,7 @@ fn account(state: &Settings, app: &Entity<Luma>) -> Vec<Div> {
                 .id("settings-account-action")
                 .when(pressable, |button| {
                     button.on_click(move |_, _, cx| {
-                        act.update(cx, |this, cx| {
-                            if signed_in {
-                                this.sign_out(cx);
-                            } else {
-                                this.sign_in_from_settings(cx);
-                            }
-                        });
+                        act.update(cx, |this, cx| this.switch_identity(cx));
                     })
                 })
                 .agent_node(Role::Button, label)
@@ -477,7 +510,7 @@ fn account(state: &Settings, app: &Entity<Luma>) -> Vec<Div> {
             }),
         ),
     ];
-    if let Some(error) = &state.account_error {
+    if let Some(error) = &shell.account_action.error {
         rows.push(field(
             None,
             div()

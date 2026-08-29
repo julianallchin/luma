@@ -9,8 +9,8 @@
 // The shell's vocabulary, as the walks see it:
 // - the venue picker overlay auto-opens while no venue is selected, and its
 //   cards are the old welcome grid's;
-// - a sidebar row click opens (or reveals — opening is idempotent) that
-//   track's editor tab;
+// - a sidebar row click pushes the column to that track's scores; opening a
+//   timeline is choosing one of them (`nav.track` walks both halves);
 // - the pattern picker is an overlay on `luma::OpenPatterns`, and picking a
 //   row opens that pattern's graph tab;
 // - `luma::CloseTab` closes the visible tab, dropping its state — the
@@ -54,9 +54,48 @@ globalThis.nav = {
 			s.find({ role: "card", label: "Venue dialog" }) === undefined ? s : undefined);
 	},
 
-	// A track, from the sidebar: its row opens (or reveals) the editor tab.
+	// The sidebar's second level: one track's scores.
+	//
+	// The row itself — a track has as many scores as there are people who
+	// annotated it, so the row is the door to the *list* and nothing in the
+	// sidebar guesses which one you meant. Waits for the push to finish,
+	// because a level still in flight occludes every gesture aimed at it.
+	scores(track) {
+		nav.step(`the track ${track}`, "row", track);
+		// The level having *arrived* is the track list being gone: while the
+		// push plays both levels are mounted, and a row on the one still
+		// flying is clipped out of the column — a click on it throws.
+		until("the scores level", (s) =>
+			s.find({ role: "card", label: "Scores level" }) !== undefined
+				&& s.find({ role: "button", label: "New score" }) !== undefined
+				&& s.find({ role: "input", label: "Search tracks…" }) === undefined);
+	},
+
+	// A track's timeline, which is now two gestures: into the track's scores,
+	// then onto one of them. The level leads with the most recently written
+	// score, which is the one the row used to open by itself.
+	//
+	// Pops back to the track list afterwards, so this still means what it
+	// meant to every caller: the editor is up and the sidebar is at rest on
+	// the list. A test that wants to *stay* on the scores level says
+	// `nav.scores`.
 	track(name) {
-		nav.step(`the track ${name}`, "row", name);
+		nav.scores(name);
+		const level = app.snapshot();
+		const score = level.findAll({ role: "row" }).find((n) => n.label.startsWith("#"));
+		// No score in this venue yet — minting one is the same door, and it
+		// opens what it mints.
+		app.click(score ?? level.find({ role: "button", label: "New score" }));
+		// The timeline being up is what "opened the track" means, and waiting
+		// for it here rather than in every caller keeps the walk's failure on
+		// the gesture that missed instead of on the assertion three lines on.
+		until("the timeline", (s) =>
+			s.findAll({ role: "text" }).find((n) => n.label.startsWith("SCORE #")) !== undefined);
+		nav.step("the way back to the track list", "button", "Back to tracks");
+		until("the track list again", (s) =>
+			s.find({ role: "card", label: "Scores level" }) === undefined
+				&& s.find({ role: "input", label: "Search tracks…" }) !== undefined
+				&& s.find({ role: "row", label: name }) !== undefined);
 	},
 
 	// Both halves of the commonest walk in the suite. Named so a test that
@@ -64,6 +103,17 @@ globalThis.nav = {
 	trackEditor(venue, track) {
 		nav.venue(venue);
 		nav.track(track);
+	},
+
+	// The settings screen, through the sidebar's account foot.
+	//
+	// Two steps rather than one button in a corner: settings is an account
+	// gesture now, so the foot opens a menu and "Settings" is a row in it.
+	// ⌘, is the other door and does not need the sidebar — this walk is the
+	// one that proves the door a person can see.
+	settings() {
+		nav.step("the account foot", "button", "Account");
+		nav.step("the settings row", "row", "Settings");
 	},
 
 	// The pattern picker overlay. An action rather than a button: the picker

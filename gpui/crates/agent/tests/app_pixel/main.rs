@@ -11,6 +11,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod account_foot_pixels;
 mod add_tracks_pixels;
 mod chat_context_pixels;
 mod chrome_anchors_pixels;
@@ -19,13 +20,14 @@ mod fixture_picker_pixels;
 mod gauntlet;
 mod gauntlet_chat;
 mod graph_budget;
+mod sidebar_scores_pixels;
 mod sidebar_toggle_budget;
 mod signin_pixels;
 mod subagents_pixels;
 mod tab_chrome_pixels;
 mod track_editor_budget;
 mod track_editor_preview_pixels;
-mod track_editor_strip_pixels;
+mod track_editor_sheet_pixels;
 mod track_editor_waveform_pixels;
 mod venues_pixels;
 mod visualizer;
@@ -34,5 +36,6 @@ mod visualizer_capture;
 mod visualizer_live;
 mod visualizer_playback_budget;
 mod visualizer_playback_soak;
+mod visualizer_pointer;
 mod visualizer_present_budget;
 mod visualizer_zoom_budget;

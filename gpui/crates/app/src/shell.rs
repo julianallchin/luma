@@ -36,8 +36,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, fixture_picker, graph, keymap, patterns, settings, subagents,
-    tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patterns, settings,
+    subagents, tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -86,6 +86,10 @@ pub(crate) enum Overlay {
     /// rest: it carries the venue's group list, a parked render sequence and
     /// the frame on screen.
     FixturePicker(Box<fixture_picker::FixturePicker>),
+    /// "Are you sure": one question, two answers, one closed list of acts —
+    /// see [`crate::confirm`]. Unboxed because it is a few strings and an
+    /// enum, and it is the *smallest* variant here rather than the largest.
+    Confirm(confirm::Confirm),
 }
 
 impl Overlay {
@@ -100,6 +104,7 @@ impl Overlay {
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
+            Self::Confirm(_) => keymap::context::CONFIRM,
         }
     }
 }
@@ -297,6 +302,15 @@ impl Luma {
             cx.notify();
             return;
         }
+        if self.account_menu.is_open() {
+            self.close_account_menu(cx);
+            return;
+        }
+        // The sidebar's score menu is on the same rung as the other two: a
+        // float over the shell, closed before anything under it is.
+        if self.close_score_menu(cx) {
+            return;
+        }
         // Innermost first: a dialog showing a child's transcript steps back to
         // its list before the list itself closes.
         if self.subagents_to_list(cx) {
@@ -305,7 +319,24 @@ impl Luma {
         match self.overlay.as_open() {
             Some(Overlay::Venues(_)) if self.sidebar.is_none() => {}
             Some(_) => self.close_overlay(cx),
-            None => {}
+            // Nothing floating: keep stepping back out, innermost first — a
+            // menu inside the args sheet, then the selection the sheet *is*,
+            // then the sidebar's second level. All routed through the one
+            // dismissal ladder rather than given `escape` bindings of their
+            // own, which would have to out-scope the shell's and would then be
+            // the only Escapes in the app that do not mean "close what is over
+            // me". The sheet's rungs sit here, below the overlay arm, so a
+            // dialog open over the timeline still answers Escape first.
+            None => {
+                if self.dismiss_sheet_menu() {
+                    cx.notify();
+                    return;
+                }
+                if self.clear_clip_selection(cx) {
+                    return;
+                }
+                self.leave_scores(cx);
+            }
         }
     }
 }
@@ -328,6 +359,11 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // toggle only flips a flag and `retarget` — a no-op while the destination
     // is unchanged — turns that into a slide.
     app.sidebar_width.retarget(app.sidebar_slot(), cx);
+    // The sidebar's level change is stepped in the same place and for the same
+    // reason as its width: a hand-driven tween has nothing else asking for the
+    // next frame, and both have to be settled before the column is rendered
+    // out of an immutable borrow of the shell.
+    app.tick_sidebar_push(window);
     let sidebar_w = app.sidebar_width.eval(window);
     let viewport = f32::from(window.viewport_size().width);
     // What the thread and the panel share, and how they divide it. Stored as a
@@ -381,12 +417,21 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     } else {
         f32::from(workspace_w)
     };
-    let (workspace_strip_width, workspace_show_settings) =
-        workspace_band_tab_strip(chrome::BandSpan {
+    // The strip is the band's only child, so it gets everything the band's
+    // anchors leave. It used to share the band with the settings gear and
+    // yield to it; the account moved to the sidebar's foot, and with it the
+    // one reason a narrow window had to choose between reaching a tab and
+    // reaching an account.
+    let workspace_strip_width = chrome::band_room(
+        chrome::BandSpan {
             x: viewport - workspace_panel_width,
             width: workspace_panel_width,
             viewport,
-        });
+        },
+        0.0,
+        0.0,
+        0,
+    );
     // The `+` menu hangs off the strip, and the strip is the panel's: put the
     // panel away or empty it and the menu has nothing to hang off, so it goes
     // too rather than waiting armed for whatever brings the strip back.
@@ -398,6 +443,12 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // happens to be sampled.
     if app.workspace_hidden || app.workspace.is_empty() {
         app.tab_chrome.dismiss_menu();
+    }
+    // Same rule for the account menu: it hangs off the sidebar's foot, so a
+    // sidebar that is away has nothing for it to hang from. Dropped rather
+    // than closed — an exit needs a surface to play over.
+    if app.sidebar.is_none() || app.sidebar_hidden {
+        app.account_menu = luma_ui::dialog::Popup::default();
     }
 
     // The one surface the desktop shows through. Everything above paints on
@@ -435,12 +486,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 // inside the clipping pane rather than between the regions.
                 .bg(glass::tone_column())
                 .key_context(keymap::context::SIDEBAR)
-                .child(tracks::sidebar(
-                    browser,
-                    app.selected_track.as_deref(),
-                    &entity,
-                    window,
-                ))
+                .child(tracks::sidebar(app, browser, &entity, window))
                 .into_any_element();
             // Laid out at its full width for the whole slide, so a sidebar
             // easing open reveals its rows rather than re-wrapping them.
@@ -474,16 +520,11 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             viewport,
         };
         // Back/forward, then empty band. The thread carries no tabs — they are
-        // the panel's — so its only trailing control is the gear, and only
-        // while the thread is the region that ends at the window's edge.
-        let mut head = chrome::band(span)
+        // the panel's — and nothing else: the account, which is what used to
+        // end this band, lives at the foot of the sidebar now.
+        let head = chrome::band(span)
             .child(chrome::history_pair())
             .child(div().flex_1());
-        if !show_workspace
-            && chrome::band_room(span, chrome::HISTORY_PAIR_WIDTH, 0.0, 1) >= chrome::CONTROL
-        {
-            head = head.child(chrome::settings_button(&entity));
-        }
         row = row.child(
             column(head)
                 .flex_1()
@@ -512,7 +553,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             width: workspace_panel_width,
             viewport,
         };
-        let mut head = chrome::band(span).child(chrome::tab_strip(
+        let head = chrome::band(span).child(chrome::tab_strip(
             app,
             &entity,
             workspace_strip_width,
@@ -520,15 +561,11 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
             window,
             cx,
         ));
-        if workspace_show_settings {
-            head = head
-                .child(div().flex_1())
-                .child(chrome::settings_button(&entity));
-        }
         if show_thread {
             // Both sides are lit surfaces whose own value step already divides
-            // them, so this rule is a hint — and it is what the pointer grabs.
-            row = row.child(workspace_seam(cx));
+            // them, so this rule is a hint. The grip that pulls it is mounted
+            // after the panel, not here — see [`workspace_grip`].
+            row = row.child(seam(ladder::seam_hint()));
         }
         // The same ground the thread column is — which is why the rule between
         // them is [`ladder::seam_hint`] and not the bright one. Opaque, where
@@ -546,6 +583,16 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         } else {
             pane::pane(workspace_w, px(workspace_open_w), panel)
         });
+        if show_thread {
+            // After both panes it divides, so the strip it overhangs is its
+            // own — and before the layers below, which must keep the pointer
+            // they cover. The rule is a hair to the panel's left, and the
+            // panel ends at the window, so that is where the grip centres.
+            row = row.child(workspace_grip(
+                viewport - f32::from(workspace_w) - SEAM_WIDTH / 2.0,
+                cx,
+            ));
+        }
     }
 
     // Window-space tab exits and their stable close target sit above both pane
@@ -572,6 +619,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // frames coming until it has. Frame-driven rather than timer-driven —
     // see `Popup::tick_close`.
     if app.overlay.tick_close() {
+        window.request_animation_frame();
+    }
+    if app.account_menu.tick_close() {
         window.request_animation_frame();
     }
     // `open_mut`, not `get_mut`: every tick here takes the keyboard, and a
@@ -650,45 +700,27 @@ fn shared_room(viewport: f32, sidebar: f32) -> f32 {
     (viewport - sidebar - sidebar_seam - SEAM_WIDTH).max(0.0)
 }
 
-/// Allocate the workspace band from its live width: what the strip gets, and
-/// whether the gear still fits beside it.
+/// The grip that pulls the workspace panel's seam: a wider invisible strip
+/// over the hint-toned rule at `at`, so the pointer can hit the boundary
+/// without the boundary having to be thick enough to aim at. Double-click
+/// restores the default split — the gesture comet's seams answer to.
 ///
-/// The gear yields first: ⌘, opens settings from anywhere, while the strip is
-/// the only way to reach a tab. A band too narrow for both keeps the tabs.
-fn workspace_band_tab_strip(span: chrome::BandSpan) -> (f32, bool) {
-    let room_with_settings = chrome::band_room(span, 0.0, chrome::CONTROL, 2);
-    let show_settings = room_with_settings >= chrome::CONTROL;
-    let strip_width = if show_settings {
-        room_with_settings
-    } else {
-        chrome::band_room(span, 0.0, 0.0, 0)
-    };
-    (strip_width, show_settings)
-}
-
-/// The workspace panel's seam, which is also its drag handle: a hint-toned
-/// rule with a wider invisible grip floating over it, so the pointer can hit
-/// the boundary without the boundary having to be thick enough to aim at.
-/// Double-click restores the default split — the gesture comet's seams answer
-/// to.
-fn workspace_seam(cx: &mut Context<Luma>) -> Div {
-    let grip = pane::resize_handle(
+/// A child of the row rather than of the rule, because a grip owns the strip
+/// it overhangs only if it is painted after both panes — see
+/// [`pane::resize_handle`].
+fn workspace_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
+    pane::resize_handle(
         "workspace-seam",
         pane::Seam::Vertical,
+        at,
         || WorkspaceResize,
         |app: &mut Luma, _| app.workspace_split.reset(),
         glass::glass_hover(),
         cx,
-    );
-    seam(ladder::seam_hint()).relative().child(
-        grip.absolute()
-            .top_0()
-            .left(px((SEAM_WIDTH - pane::HANDLE_WIDTH) / 2.0))
-            // A slider is the closest thing in the closed role vocabulary to a
-            // grip whose position along an axis is the value — which is what
-            // the seam is.
-            .agent_node(Role::Slider, "Workspace width"),
     )
+    // A slider is the closest thing in the closed role vocabulary to a grip
+    // whose position along an axis is the value — which is what the seam is.
+    .agent_node(Role::Slider, "Workspace width")
 }
 
 /// The workspace panel's left seam, under the pointer. gpui routes a drag by
@@ -766,7 +798,7 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     }
     let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
     let (stage_height, _) = app.visualizer_split.resolve(available);
-    let seam = visualizer_seam(cx);
+    let grip = visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx);
     // Split the borrow the way `active_tab` does: the stage's element mutates
     // its own state and reads the library synchronously, and the two fields
     // are disjoint.
@@ -783,6 +815,8 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
         .min_h_0()
         .flex()
         .flex_col()
+        // The grip below is placed against this column's own top edge.
+        .relative()
         .children(stage.map(|stage| {
             div()
                 .h(px(stage_height))
@@ -791,8 +825,9 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
                 .key_context(keymap::context::VISUALIZER)
                 .child(stage)
         }))
-        .child(seam)
+        .child(visualizer_seam())
         .child(active_tab(app, window, cx))
+        .child(grip)
         .into_any_element()
 }
 
@@ -880,29 +915,29 @@ pub(crate) fn visualizer_split() -> luma_ui::split::SplitFraction {
     luma_ui::split::SplitFraction::new(0.4, 140.0, 200.0)
 }
 
-/// The seam between the stage and the editor below it: the same hint-toned
-/// rule the workspace's own seam is, turned across the other axis.
-fn visualizer_seam(cx: &mut Context<Luma>) -> Div {
-    let grip = pane::resize_handle(
-        "visualizer-seam",
-        pane::Seam::Horizontal,
-        || VisualizerResize,
-        |app: &mut Luma, _| app.visualizer_split.reset(),
-        glass::glass_hover(),
-        cx,
-    );
+/// The rule between the stage and the editor below it: the same hint-toned
+/// hairline the workspace's own seam is, turned across the other axis.
+fn visualizer_seam() -> Div {
     div()
         .w_full()
         .flex_none()
         .h(px(SEAM_WIDTH))
         .bg(ladder::seam_hint())
-        .relative()
-        .child(
-            grip.absolute()
-                .left_0()
-                .top(px((SEAM_WIDTH - pane::HANDLE_WIDTH) / 2.0))
-                .agent_node(Role::Slider, "Stage height"),
-        )
+}
+
+/// The grip that pulls it, centred on the rule at `at`. Mounted after the
+/// stage *and* the editor for the reason [`workspace_grip`] is.
+fn visualizer_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
+    pane::resize_handle(
+        "visualizer-seam",
+        pane::Seam::Horizontal,
+        at,
+        || VisualizerResize,
+        |app: &mut Luma, _| app.visualizer_split.reset(),
+        glass::glass_hover(),
+        cx,
+    )
+    .agent_node(Role::Slider, "Stage height")
 }
 
 /// The stage/editor seam, under the pointer. gpui routes a drag by the type it
@@ -1006,7 +1041,7 @@ fn overlay_layer(
             morph::fixed_card(
                 "Settings dialog",
                 MorphSize::new(900.0, 680.0),
-                settings::settings(state, entity).into_any_element(),
+                settings::settings(app, state, entity).into_any_element(),
             ),
             "Settings dialog",
         ),
@@ -1025,6 +1060,17 @@ fn overlay_layer(
         Overlay::FixturePicker(state) => (
             fixture_picker::render(state, entity, window, cx),
             "Fixture picker dialog",
+        ),
+        Overlay::Confirm(state) => (
+            confirm::render(
+                state,
+                entity,
+                &app.dialog_first_focus,
+                app.dialog_first_focus.is_focused(window),
+                &app.dialog_last_focus,
+                app.dialog_last_focus.is_focused(window),
+            ),
+            "Confirm dialog",
         ),
     };
     let scrim_dismiss = if matches!(overlay, Overlay::Venues(_)) && app.sidebar.is_none() {
@@ -1100,27 +1146,6 @@ mod tests {
             width,
             viewport: 1280.0,
         }
-    }
-
-    /// The gear yields to the strip, and it yields *whole*: a band wide enough
-    /// for both keeps both, and one pixel narrower drops the gear and hands
-    /// the strip everything rather than shaving a half-drawn control off it.
-    #[test]
-    fn the_gear_yields_the_whole_band_to_the_strip_when_it_cannot_fit() {
-        // The panel band ends at the window's edge, so it owes the toggle a
-        // slot (24 + 10) on top of its own 12px inset: a strip's first pixel
-        // is 46px in.
-        let (narrow, narrow_gear) = workspace_band_tab_strip(panel(120.0));
-        assert!(!narrow_gear);
-        assert_eq!(narrow, chrome::band_room(panel(120.0), 0.0, 0.0, 0));
-
-        let (wide, wide_gear) = workspace_band_tab_strip(panel(520.0));
-        assert!(wide_gear);
-        assert_eq!(
-            wide,
-            chrome::band_room(panel(520.0), 0.0, chrome::CONTROL, 2)
-        );
-        assert!(wide < chrome::band_room(panel(520.0), 0.0, 0.0, 0));
     }
 
     /// The anchors' room is stated once, and both the band and the strip

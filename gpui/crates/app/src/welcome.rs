@@ -950,7 +950,7 @@ fn create(state: &VenuePicker) -> AnyElement {
 /// "now", "5m", "2h", "3d", "2w", "4mo", "1y". One unit, no "ago" — a column
 /// of these reads at a glance where a column of dates has to be parsed.
 pub(crate) fn relative_age(timestamp: &str) -> String {
-    let Ok(then) = chrono::DateTime::parse_from_rfc3339(timestamp) else {
+    let Some(then) = parse_utc(timestamp) else {
         return local_date(timestamp);
     };
     let elapsed = chrono::Utc::now().signed_duration_since(then);
@@ -972,6 +972,21 @@ pub(crate) fn relative_age(timestamp: &str) -> String {
     } else {
         format!("{}y", days / 365)
     }
+}
+
+/// The two shapes the seam's timestamps come in.
+///
+/// Rows written by the app carry RFC 3339; rows whose column took SQLite's
+/// `CURRENT_TIMESTAMP` default carry `YYYY-MM-DD HH:MM:SS`, which is UTC with
+/// the offset left off. Reading only the first spells every score's age as a
+/// date — which is how this was found.
+fn parse_utc(timestamp: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone as _;
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+        return Some(parsed.with_timezone(&chrono::Utc));
+    }
+    let naive = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S").ok()?;
+    chrono::Utc.from_local_datetime(&naive).single()
 }
 
 pub(crate) fn local_date(timestamp: &str) -> String {
