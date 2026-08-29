@@ -204,9 +204,9 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `remove_fixture_from_group` | `fixtureId: String`<br>`groupId: String`<br>`headIndex: Option<i64>` | `()` |
 | `get_grouped_hierarchy` | `venueId: String` | `Vec<FixtureGroupNode>` |
 | `list_group_tree` | `venueId: String` | `Vec<GroupTreeNode>` |
-| `rename_group_node` | `venueId: String`<br>`groupId: String`<br>`label: String` | `Vec<GroupTreeNode>` |
+| `rename_group_node` | `venueId: String`<br>`groupId: String`<br>`label: Option<String>` | `Vec<GroupTreeNode>` |
 | `move_group_node` | `venueId: String`<br>`groupId: String`<br>`parentId: Option<String>` | `Vec<GroupTreeNode>` |
-| `merge_group_nodes` | `venueId: String`<br>`groupId: String`<br>`intoGroupId: String` | `Vec<GroupTreeNode>` |
+| `merge_group_nodes` | `venueId: String`<br>`groupId: String`<br>`intoGroupId: Option<String>` | `Vec<GroupTreeNode>` |
 | `reset_group_node` | `venueId: String`<br>`groupId: String` | `Vec<GroupTreeNode>` |
 | `get_ungrouped_fixtures` | `venueId: String` | `Vec<PatchedFixture>` |
 | `update_movement_config` | `groupId: String`<br>`config: Option<MovementConfig>` | `FixtureGroup` |

@@ -110,7 +110,7 @@ export function formatVenueContext(
 		const name = fixtureLabel.get(f.id) ?? "<unnamed>";
 		const node = poses.get(f.id);
 		const facing = facingWord.get(f.id) ?? "?";
-		const type = inferFixtureTypeFromGroups(f.id, groups);
+		const type = inferRoleFromGroups(f.id, groups);
 		if (!node) {
 			return `${f.id} | "${name}" | ${type} | unplaced (patched, not yet on the stage)`;
 		}
@@ -136,7 +136,7 @@ export function formatVenueContext(
 		if (g.axisFb !== null) axes.push(`FB=${fmtN(g.axisFb)}`);
 		if (g.axisAb !== null) axes.push(`AB=${fmtN(g.axisAb)}`);
 		const axesStr = axes.length > 0 ? `  [${axes.join(" ")}]` : "";
-		return `${name} (${g.fixtureType}, ${g.fixtures.length} fixtures)${axesStr}\n    ${members || "<empty>"}`;
+		return `${name} (${g.role ?? "empty"}, ${g.fixtures.length} fixtures)${axesStr}\n    ${members || "<empty>"}`;
 	});
 
 	return `# Venue context
@@ -159,17 +159,17 @@ function fmtN(n: number): string {
 }
 
 /**
- * Find which group a fixture belongs to to infer its type, since
- * PatchedFixture doesn't carry the auto-detected FixtureType directly.
+ * Find which group a fixture belongs to to read its role, since
+ * PatchedFixture doesn't carry the derived FixtureRole directly.
  */
-function inferFixtureTypeFromGroups(
+function inferRoleFromGroups(
 	fixtureId: string,
 	groups: FixtureGroupNode[],
 ): string {
 	for (const g of groups) {
 		for (const f of g.fixtures) {
-			if (f.id === fixtureId) return f.fixtureType;
+			if (f.id === fixtureId) return f.role;
 		}
 	}
-	return "unknown";
+	return "other";
 }

@@ -71,16 +71,20 @@ AF10.
 **Scope.** Groups are **derived sets shown as a tree**; a fixture may be in
 several. One derivation: role (wash / spot / beam / strobe / blinder / pixel /
 fx, from the QLC+ `Type` plus channels, `src-tauri/src/models/fixtures.rs`) →
-structure row (one per distribution) → position split (left/right, top/bottom
-from the *resolved* stage position, never authoring order) → cross-cuts (all
-"top" rows under one role). Names are model plus a running number per model
-(`aura 1`…`aura 8`). Manual rename/move/merge sit on top as overrides; **a
-touched node is never re-derived**. **Out of scope:** groups in the pattern
-editor or scores.
+class (`horizontal`/`vertical` for a run standing on its own, `left wing`/`right
+wing` for one bolted to a stage, by the run's *attachment* side against the
+stage's resolved surface centre) → row (one per distribution, never merged,
+named by the structure piece's label or by its position among the class's rows)
+→ cross-cuts (all "top" rows under one role). Names are model plus a running
+number per model (`aura 1`…`aura 8`). Manual rename/move/merge sit on top as
+overrides; **a touched node is never re-derived**. **Out of scope:** groups in
+the pattern editor or scores.
 
 **Evidence.** Two canonical venues captured verbatim in
-`harness/goldens/venue-groups.json`, plus a `describe()` golden each. The critic
-rebuilds both mirrored and confirms equal trees.
+`harness/goldens/venue-groups.json`. The critic rebuilds both mirrored and
+confirms equal trees. The `describe()` golden lives in B6, which is where
+`describe()` is built; asking for it here would pin an interface this round does
+not own.
 
     (a) led bars / horizontal / {top, bottom}
         led bars / vertical   / {left, right}

@@ -14,10 +14,9 @@
 //!
 //! ```text
 //! <role>                     every fixture of that role
-//!   <row>                    the fixtures sharing one structure name
-//!     top | bottom           the row's position split, when it separates
-//!     left | right
-//!   top | bottom             a cross-cut: the same split across two or more rows
+//!   <class>                  where its runs sit: a wing, or which way it runs
+//!     <row>                  one run — one structure piece — of that class
+//!   top | bottom             a cross-cut: the same row name across two classes
 //!   left | right
 //! ```
 //!
@@ -26,31 +25,26 @@
 //! **Role** — [`FixtureRole::of`], from the QLC+ `Type` plus the mode's channel
 //! set. One table, documented there, no name heuristics.
 //!
-//! **Rows** — a placed fixture's row is named after the structure it is bolted
-//! to; rows deriving the *same name* are one row, because "the horizontal ones"
-//! is one thing a human points at even when it is two trusses. An unplaced
-//! fixture's row is `unplaced`. Naming, in order:
+//! **Class** — where a run sits, in the words a human uses for it. A run bolted
+//! to a stage is a **wing**, `left wing` or `right wing` by which side of the
+//! stage's centre it is *attached* to. Anything else is named for the way it
+//! runs: `horizontal` (spread along stage x) or `vertical` (spread up).
+//! Unplaced fixtures are their own class, `unplaced`.
 //!
-//! 1. A run hanging off a stage is a **wing**: `left wing` / `right wing` by
-//!    which side of stage centre its fixtures sit on.
-//! 2. Otherwise the run is named for the axis its fixtures spread along:
-//!    `horizontal` (stage x) or `vertical` (up).
-//! 3. Anything else — a deck, a piece, the venue floor — is its label, or its
-//!    kind when it has none.
+//! **Row** — one per distribution: one structure piece, one row, never merged
+//! with the piece beside it. Two towers on the left are two rows of one
+//! `left wing`, because they are two things a human points at separately. A
+//! row is named by the piece's authored label when it has one, and otherwise by
+//! its position among the class's rows: `top`/`bottom` down a horizontal class
+//! or a wing, `left`/`right` across a vertical one, and `row 1`…`row n` when
+//! there are more than two and no labels to tell them apart. A class holding
+//! **one** unlabelled row emits no row node — the class node already is that
+//! set, and two names for one set is the thing this design refuses.
 //!
-//! **Splits** — role-wide classification, per-row emission. A fixture is `left`
-//! or `right` by the sign of its resolved stage x against stage centre, and
-//! `top` or `bottom` by its resolved z against the *role's* median z. A row
-//! emits **one** split: the one across its own run — a horizontal run splits
-//! top/bottom, a vertical one left/right — because splitting a run along itself
-//! cuts one continuous line rather than separating things anyone points at. If
-//! that split puts everything on one side the other axis is tried, and if that
-//! is degenerate too the row has no children.
-//!
-//! **Cross-cuts** — under a role, `top`/`bottom`/`left`/`right` unioning the
-//! same split across rows. Emitted only when **two or more** rows contribute: a
-//! cross-cut drawing from one row is that row's child under a second name, and
-//! there is one canonical way to name a set.
+//! **Cross-cuts** — under a role, `top`/`bottom`/`left`/`right` unioning rows of
+//! that name across classes. Emitted only when **two or more** rows contribute,
+//! for the same reason: a cross-cut drawing from one row is that row under a
+//! second name.
 
 use std::collections::BTreeMap;
 
@@ -58,10 +52,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
-use luma_scene::venue::{NodeKind, ResolvedVenue, VenueGraph};
+use glam::{DMat4, DVec3};
+use luma_scene::coords::data_pose_of_d;
+use luma_scene::venue::{NodeKind, NodeSockets, ResolvedVenue, VenueGraph};
 
 use crate::database::local::group_overrides::GroupOverride;
-use crate::models::fixtures::{ChannelColour, ChannelType, FixtureDefinition, Mode};
+use crate::models::fixtures::{ChannelType, FixtureDefinition, Mode};
 use crate::models::groups::{normalize_group_name, GroupOrigin, GroupTreeNode};
 
 // ---------------------------------------------------------------------------
@@ -148,17 +144,22 @@ impl FixtureRole {
     /// | `Type` is `Smoke`, `Hazer`, `Fan`, `Laser`, `Flower` or `Effect` | [`Fx`](FixtureRole::Fx) |
     /// | `Type` is `Strobe` | [`Strobe`](FixtureRole::Strobe) |
     /// | `Type` is `LED Bar (Beams)` | [`Beam`](FixtureRole::Beam) |
-    /// | a physical layout of more than one cell, `LED Bar (Pixels)`, or a mode with more than two heads | [`Pixel`](FixtureRole::Pixel) |
     /// | has a `Pan` or `Tilt` channel, and a `Gobo` channel | [`Spot`](FixtureRole::Spot) |
     /// | has a `Pan` or `Tilt` channel, and a `Prism` channel | [`Beam`](FixtureRole::Beam) |
     /// | has a `Pan` or `Tilt` channel | [`Wash`](FixtureRole::Wash) |
-    /// | has any colour — a `Colour` channel, or an intensity channel carrying a colour | [`Wash`](FixtureRole::Wash) |
+    /// | a physical layout of more than one cell, `LED Bar (Pixels)`, or a mode with more than two heads | [`Pixel`](FixtureRole::Pixel) |
+    /// | has any colour — a `Colour` channel, or one that [carries a colour](crate::models::fixtures::Channel::carries_colour) | [`Wash`](FixtureRole::Wash) |
     /// | has an `Intensity` channel | [`Blinder`](FixtureRole::Blinder) |
     /// | otherwise | [`Other`](FixtureRole::Other) |
     ///
     /// Only channels the *mode* patches are read: a definition's 30-channel
     /// extended mode does not make a fixture patched in 4-channel dimmer mode a
     /// spot.
+    ///
+    /// **Movement outranks cells.** A moving head is a moving head whether or
+    /// not its mode addresses four LED rings, and a wash mover in a 56-channel
+    /// mode has plenty of heads; reading the cells first called sixty of the
+    /// shipped movers pixel bars.
     ///
     /// Two honest approximations, recorded rather than hidden. A mover with
     /// neither gobo nor prism is called a wash, which is what a wash mover is
@@ -181,6 +182,17 @@ impl FixtureRole {
             return FixtureRole::Beam;
         }
 
+        let patched = Patched::of(definition, mode);
+        if patched.moves {
+            return if patched.gobo {
+                FixtureRole::Spot
+            } else if patched.prism {
+                FixtureRole::Beam
+            } else {
+                FixtureRole::Wash
+            };
+        }
+
         let cells = definition
             .physical
             .as_ref()
@@ -190,39 +202,64 @@ impl FixtureRole {
             return FixtureRole::Pixel;
         }
 
-        let mut moves = false;
-        let mut gobo = false;
-        let mut prism = false;
-        let mut colour = false;
-        let mut intensity = false;
-        for patched in &mode.channels {
-            let Some(channel) = definition.channels.iter().find(|c| c.name == patched.name) else {
+        match (patched.colour, patched.intensity) {
+            (true, _) => FixtureRole::Wash,
+            (false, true) => FixtureRole::Blinder,
+            (false, false) => FixtureRole::Other,
+        }
+    }
+}
+
+/// Whether a fixture *aims*: a pan or a tilt channel in the mode it is patched
+/// in.
+///
+/// Beside [`FixtureRole`] rather than inside it because it is a different
+/// question and the answers cross: a wash mover and a par are both
+/// [`FixtureRole::Wash`], and only one of them has anything to point.
+#[must_use]
+pub fn aims(definition: &FixtureDefinition, mode: &Mode) -> bool {
+    Patched::of(definition, mode).moves
+}
+
+/// What the channels a mode actually patches add up to. The one pass over them;
+/// everything the definition can tell a classifier is read here.
+struct Patched {
+    moves: bool,
+    gobo: bool,
+    prism: bool,
+    colour: bool,
+    intensity: bool,
+}
+
+impl Patched {
+    fn of(definition: &FixtureDefinition, mode: &Mode) -> Self {
+        let mut patched = Patched {
+            moves: false,
+            gobo: false,
+            prism: false,
+            colour: false,
+            intensity: false,
+        };
+        for in_mode in &mode.channels {
+            let Some(channel) = definition.channels.iter().find(|c| c.name == in_mode.name) else {
                 continue;
             };
             match channel.get_type() {
-                ChannelType::Pan | ChannelType::Tilt => moves = true,
-                ChannelType::Gobo => gobo = true,
-                ChannelType::Prism => prism = true,
-                ChannelType::Colour => colour = true,
+                ChannelType::Pan | ChannelType::Tilt => patched.moves = true,
+                ChannelType::Gobo => patched.gobo = true,
+                ChannelType::Prism => patched.prism = true,
+                ChannelType::Colour => patched.colour = true,
                 ChannelType::Intensity => {
-                    if channel.get_colour() == ChannelColour::None {
-                        intensity = true;
+                    if channel.carries_colour() {
+                        patched.colour = true;
                     } else {
-                        colour = true;
+                        patched.intensity = true;
                     }
                 }
                 _ => {}
             }
         }
-
-        match (moves, gobo, prism, colour, intensity) {
-            (true, true, _, _, _) => FixtureRole::Spot,
-            (true, false, true, _, _) => FixtureRole::Beam,
-            (true, false, false, _, _) => FixtureRole::Wash,
-            (false, _, _, true, _) => FixtureRole::Wash,
-            (false, _, _, false, true) => FixtureRole::Blinder,
-            _ => FixtureRole::Other,
-        }
+        patched
     }
 }
 
@@ -253,18 +290,24 @@ pub struct FixtureFact {
     pub placement: Option<FixturePlacement>,
 }
 
-/// One structure node fixtures hang on.
+/// One structure node fixtures hang on — one row of the tree.
 #[derive(Debug, Clone)]
 pub struct StructureFact {
     /// The venue-graph node id, as a placement names it.
     pub node: String,
-    /// Whether this node's parent chain reaches a stage. A run bolted to the
-    /// deck is a wing; one hanging off the house structure is not.
+    /// Whether this node *hangs off* a stage. A run bolted to the deck is a
+    /// wing; the deck itself is not, and one hanging off the house structure is
+    /// not either.
     pub on_stage: bool,
-    /// The node's own label, which names the row when it is not a run.
+    /// The node's own label, which names its row when it has one.
     pub label: Option<String>,
-    /// The node's kind, the fallback name.
+    /// The node's kind, kept for the diagnostics a caller may want; the rule
+    /// itself never reads it.
     pub kind: String,
+    /// Where the run is bolted, data space. A wing's side is read off *this*
+    /// and not off its fixtures: which side of the stage a tower stands on is a
+    /// fact about the tower.
+    pub position: [f64; 3],
 }
 
 /// Everything the rule reads. Assembled from the venue graph and the patch list
@@ -279,7 +322,8 @@ pub struct VenueFacts {
     /// order rows appear in.
     pub fixtures: Vec<FixtureFact>,
     pub structures: Vec<StructureFact>,
-    /// Stage x that `left` and `right` are measured against.
+    /// Stage x that `left` and `right` are measured against — the middle of the
+    /// deck's surface, not the origin of its mesh.
     pub stage_centre_x: f64,
 }
 
@@ -352,7 +396,7 @@ pub fn derived_id(venue_id: &str, path: &[String]) -> String {
 // The rule
 // ---------------------------------------------------------------------------
 
-/// Which half of a split a fixture is in.
+/// Which end of a class's ordering a row sits at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Half {
     Top,
@@ -362,6 +406,9 @@ enum Half {
 }
 
 impl Half {
+    /// The four names a cross-cut can carry, in the order the tree lists them.
+    const ALL: [Half; 4] = [Half::Top, Half::Bottom, Half::Left, Half::Right];
+
     fn as_str(self) -> &'static str {
         match self {
             Half::Top => "top",
@@ -370,29 +417,66 @@ impl Half {
             Half::Right => "right",
         }
     }
+
+    fn as_str_owned(self) -> String {
+        self.as_str().to_string()
+    }
 }
 
-/// The two axes a set of fixtures can be cut along.
+/// The two axes a run can spread along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Axis {
-    /// `top` / `bottom`, against the role's median z.
+    /// Up: a tower, a vertical run.
     Level,
-    /// `left` / `right`, against stage centre.
+    /// Across the stage: a truss, a horizontal run.
     Side,
 }
 
-impl Axis {
-    fn halves(self) -> [Half; 2] {
+/// Where a run sits — the tree's second level, and the thing rows are ordered
+/// and named within.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    /// Bolted to a stage, on one side of its centre.
+    Wing(Half),
+    /// Free-standing, named for the way it runs.
+    Run(Axis),
+    /// Not in the room at all.
+    Unplaced,
+}
+
+impl Class {
+    fn name(self) -> &'static str {
         match self {
-            Axis::Level => [Half::Top, Half::Bottom],
-            Axis::Side => [Half::Left, Half::Right],
+            Class::Wing(Half::Left) => "left wing",
+            Class::Wing(_) => "right wing",
+            Class::Run(Axis::Side) => "horizontal",
+            Class::Run(Axis::Level) => "vertical",
+            Class::Unplaced => UNPLACED,
         }
     }
 
-    fn other(self) -> Axis {
+    /// The two names this class's rows take when there are exactly two of them,
+    /// in the order [`Class::order_key`] sorts them.
+    ///
+    /// A wing and a horizontal class both stack their rows by height, so the
+    /// question a human asks of them is "which one is the high one"; a vertical
+    /// class stands its rows side by side, so the question is "which side".
+    fn row_names(self) -> Option<[Half; 2]> {
         match self {
-            Axis::Level => Axis::Side,
-            Axis::Side => Axis::Level,
+            Class::Wing(_) | Class::Run(Axis::Side) => Some([Half::Top, Half::Bottom]),
+            Class::Run(Axis::Level) => Some([Half::Left, Half::Right]),
+            Class::Unplaced => None,
+        }
+    }
+
+    /// Where one row sorts among its siblings: descending height for a class
+    /// whose rows stack, ascending stage x for one whose rows stand abreast.
+    /// Negated for the first so both read "first is the one the first name
+    /// belongs to".
+    fn order_key(self, row: &Row<'_>) -> f64 {
+        match self {
+            Class::Run(Axis::Level) => row.mean(0),
+            _ => -row.mean(2),
         }
     }
 }
@@ -423,119 +507,106 @@ pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
         let role_path = vec![role.display_name().to_string()];
         let role_id = push(&mut tree, facts, None, role, role_path.clone(), &members);
 
-        // The classification is role-wide: one median z and one stage centre for
-        // every fixture of the role, so `top` means the same height whichever
-        // row it is read under.
-        let median_z = median_z(&members);
-        let half = |fixture: &FixtureFact, axis: Axis| -> Option<Half> {
-            let position = fixture.placement.as_ref()?.position;
-            Some(match axis {
-                Axis::Level => {
-                    if position[2] >= median_z? {
-                        Half::Top
-                    } else {
-                        Half::Bottom
-                    }
-                }
-                Axis::Side => {
-                    if position[0] < facts.stage_centre_x {
-                        Half::Left
-                    } else {
-                        Half::Right
-                    }
-                }
-            })
-        };
-
-        // Rows, keyed by name so two trusses a human calls "the horizontal ones"
-        // are one row, in the order their first fixture was patched.
+        // One row per structure, in the order their first fixture was patched.
+        // Rows are never merged: two trusses are two things, whatever they are
+        // called.
         let mut rows: Vec<Row<'_>> = Vec::new();
         for fixture in &members {
-            let (name, structure) = match &fixture.placement {
-                Some(placement) => (
-                    row_name(facts, &members, &placement.parent),
-                    Some(placement.parent.clone()),
-                ),
-                None => (UNPLACED.to_string(), None),
-            };
-            let index = match rows.iter().position(|row| row.name == name) {
+            let structure = fixture
+                .placement
+                .as_ref()
+                .map(|placement| placement.parent.clone());
+            let index = match rows.iter().position(|row| row.structure == structure) {
                 Some(index) => index,
                 None => {
                     rows.push(Row {
-                        name,
+                        structure,
                         members: Vec::new(),
-                        structures: Vec::new(),
                     });
                     rows.len() - 1
                 }
             };
-            let row = &mut rows[index];
-            row.members.push(fixture);
-            if let Some(structure) = structure {
-                if !row.structures.contains(&structure) {
-                    row.structures.push(structure);
-                }
+            rows[index].members.push(fixture);
+        }
+
+        // Classes, also in the order their first row was patched.
+        let mut classes: Vec<(Class, Vec<Row<'_>>)> = Vec::new();
+        for row in rows {
+            let class = class_of(facts, &row);
+            match classes.iter_mut().find(|(seen, _)| *seen == class) {
+                Some((_, rows)) => rows.push(row),
+                None => classes.push((class, vec![row])),
             }
         }
 
-        // `half name -> rows that emitted it`, for the cross-cuts below.
+        // `row name -> the rows that carried it`, for the cross-cuts below.
         let mut cross: BTreeMap<&'static str, (Vec<&FixtureFact>, usize)> = BTreeMap::new();
 
-        for row in &rows {
-            let mut row_path = role_path.clone();
-            row_path.push(row.name.clone());
-            let row_id = push(
+        for (class, mut rows) in classes {
+            let mut class_path = role_path.clone();
+            class_path.push(class.name().to_string());
+            let members: Vec<&FixtureFact> = rows
+                .iter()
+                .flat_map(|row| row.members.iter().copied())
+                .collect();
+            let class_id = push(
                 &mut tree,
                 facts,
                 Some(&role_id),
                 role,
-                row_path.clone(),
-                &row.members,
+                class_path.clone(),
+                &members,
             );
 
-            // A row splits across its own run: the axis its fixtures do *not*
-            // spread along. When that puts everything on one side — a wing is
-            // all on one side of the stage by definition — the other axis is
-            // tried, and when that is degenerate too the row has no children.
-            let across = row_axis(&row.structures, &members).other();
-            for axis in [across, across.other()] {
-                let halves = axis.halves().map(|which| {
-                    (
-                        which,
-                        row.members
-                            .iter()
-                            .copied()
-                            .filter(|fixture| half(fixture, axis) == Some(which))
-                            .collect::<Vec<_>>(),
-                    )
-                });
-                if halves.iter().any(|(_, side)| side.is_empty()) {
-                    continue;
-                }
-                for (which, side) in &halves {
-                    let mut path = row_path.clone();
-                    path.push(which.as_str().to_string());
-                    push(&mut tree, facts, Some(&row_id), role, path, side);
-                    let entry = cross.entry(which.as_str()).or_default();
-                    entry.0.extend(side.iter().copied());
+            // One unlabelled row is the class itself under a second name.
+            if rows.len() == 1 && facts.label_of(&rows[0]).is_none() {
+                continue;
+            }
+
+            rows.sort_by(|a, b| {
+                class
+                    .order_key(a)
+                    .partial_cmp(&class.order_key(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (index, row) in rows.iter().enumerate() {
+                // A labelled row carries its label and nothing else — including
+                // into the cross-cut, which unions rows *named* `top` and not
+                // rows that happen to be the higher of two.
+                let half = match (facts.label_of(row), class.row_names()) {
+                    (None, Some(names)) if rows.len() == 2 => Some(names[index]),
+                    _ => None,
+                };
+                let name = match facts.label_of(row) {
+                    Some(label) => label.to_string(),
+                    // More than two rows is a stack rather than a pair, and a
+                    // stack's rungs are numbered: there is no third word for
+                    // "between top and bottom" that means the same thing twice.
+                    None => half.map_or_else(|| format!("row {}", index + 1), Half::as_str_owned),
+                };
+                let mut path = class_path.clone();
+                path.push(name);
+                push(&mut tree, facts, Some(&class_id), role, path, &row.members);
+                if let Some(half) = half {
+                    let entry = cross.entry(half.as_str()).or_default();
+                    entry.0.extend(row.members.iter().copied());
                     entry.1 += 1;
                 }
-                break;
             }
         }
 
-        // A cross-cut drawing from a single row *is* that row's child, under a
-        // second name. Two names for one set is the thing this whole design is
-        // trying not to do, so it is not emitted.
-        for which in [Half::Top, Half::Bottom, Half::Left, Half::Right] {
-            let Some((side, rows_contributing)) = cross.get(which.as_str()) else {
+        // A cross-cut drawing from a single row *is* that row, under a second
+        // name. Two names for one set is the thing this whole design is trying
+        // not to do, so it is not emitted.
+        for half in Half::ALL {
+            let Some((side, contributors)) = cross.get(half.as_str()) else {
                 continue;
             };
-            if *rows_contributing < 2 {
+            if *contributors < 2 {
                 continue;
             }
             let mut path = role_path.clone();
-            path.push(which.as_str().to_string());
+            path.push(half.as_str().to_string());
             push(&mut tree, facts, Some(&role_id), role, path, side);
         }
     }
@@ -543,14 +614,83 @@ pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
     tree
 }
 
-/// The row name for a placement with no structure behind it.
+/// The class name for fixtures nothing in the room holds.
 const UNPLACED: &str = "unplaced";
 
+/// One distribution: the fixtures of one role on one structure.
 struct Row<'a> {
-    name: String,
+    /// The structure they hang on, `None` for the patch tray.
+    structure: Option<String>,
     members: Vec<&'a FixtureFact>,
-    /// The structure nodes that produced this name, in first-seen order.
-    structures: Vec<String>,
+}
+
+impl Row<'_> {
+    /// The mean of one coordinate over the row's placed fixtures, `0.0` when
+    /// none are placed — which only happens for the unplaced row, and that row
+    /// is never ordered against a sibling.
+    fn mean(&self, axis: usize) -> f64 {
+        let values: Vec<f64> = self
+            .members
+            .iter()
+            .filter_map(|fixture| Some(fixture.placement.as_ref()?.position[axis]))
+            .collect();
+        if values.is_empty() {
+            return 0.0;
+        }
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+
+    /// Which way the row runs: along the stage, or up it. A run of one fixture
+    /// has no direction and reads as horizontal, the class a lone par on a
+    /// truss belongs to.
+    ///
+    /// Read off the fixtures rather than the structure's geometry on purpose: a
+    /// run's direction is the line the things on it lie along, which is true of
+    /// a generated truss, a measured GLB and a wall alike, and needs no catalog.
+    fn axis(&self) -> Axis {
+        let positions: Vec<[f64; 3]> = self
+            .members
+            .iter()
+            .filter_map(|fixture| Some(fixture.placement.as_ref()?.position))
+            .collect();
+        let spread = |axis: usize| {
+            let (min, max) = positions.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+                (lo.min(p[axis]), hi.max(p[axis]))
+            });
+            max - min
+        };
+        if positions.len() > 1 && spread(2) > spread(0) {
+            Axis::Level
+        } else {
+            Axis::Side
+        }
+    }
+}
+
+impl VenueFacts {
+    fn structure_of(&self, row: &Row<'_>) -> Option<&StructureFact> {
+        let node = row.structure.as_deref()?;
+        self.structures.iter().find(|s| s.node == node)
+    }
+
+    fn label_of(&self, row: &Row<'_>) -> Option<&str> {
+        self.structure_of(row)?.label.as_deref()
+    }
+}
+
+/// Which class a row belongs to.
+fn class_of(facts: &VenueFacts, row: &Row<'_>) -> Class {
+    let Some(structure) = facts.structure_of(row) else {
+        return Class::Unplaced;
+    };
+    if structure.on_stage {
+        return Class::Wing(if structure.position[0] < facts.stage_centre_x {
+            Half::Left
+        } else {
+            Half::Right
+        });
+    }
+    Class::Run(row.axis())
 }
 
 /// Add one node, returning its id.
@@ -587,111 +727,6 @@ fn fixture_labels(fixtures: &[FixtureFact]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The role's median height, `None` when nothing in it is placed.
-///
-/// The lower median on an even count, so a role of two splits one and one
-/// rather than two and none.
-fn median_z(members: &[&FixtureFact]) -> Option<f64> {
-    let mut heights: Vec<f64> = members
-        .iter()
-        .filter_map(|fixture| Some(fixture.placement.as_ref()?.position[2]))
-        .collect();
-    if heights.is_empty() {
-        return None;
-    }
-    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some(heights[heights.len() / 2])
-}
-
-/// Which way one structure's fixtures run.
-///
-/// Read off the fixtures rather than the structure's geometry on purpose: a
-/// run's direction is the line the things on it lie along, which is true of a
-/// generated truss, a measured GLB and a wall alike, and needs no catalog.
-fn structure_axis(structure: &str, members: &[&FixtureFact]) -> Option<Axis> {
-    let positions: Vec<[f64; 3]> = members
-        .iter()
-        .filter_map(|fixture| {
-            let placement = fixture.placement.as_ref()?;
-            (placement.parent == structure).then_some(placement.position)
-        })
-        .collect();
-    if positions.len() < 2 {
-        return None;
-    }
-    let spread = |axis: usize| {
-        let (min, max) = positions.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
-            (lo.min(p[axis]), hi.max(p[axis]))
-        });
-        max - min
-    };
-    // x spread against z spread: the run is horizontal or it is vertical.
-    Some(if spread(0) >= spread(2) {
-        Axis::Side
-    } else {
-        Axis::Level
-    })
-}
-
-/// A merged row's axis: what most of its structures agree on. Ties, and a row
-/// whose structures have no axis at all, read as horizontal — the default a
-/// single fixture on a truss gets, and the one that splits it by height.
-fn row_axis(structures: &[String], members: &[&FixtureFact]) -> Axis {
-    let (mut side, mut level) = (0, 0);
-    for structure in structures {
-        match structure_axis(structure, members) {
-            Some(Axis::Side) => side += 1,
-            Some(Axis::Level) => level += 1,
-            None => {}
-        }
-    }
-    if level > side {
-        Axis::Level
-    } else {
-        Axis::Side
-    }
-}
-
-/// What the row containing `structure` is called.
-fn row_name(facts: &VenueFacts, members: &[&FixtureFact], structure: &str) -> String {
-    let fact = facts.structures.iter().find(|s| s.node == structure);
-    let axis = structure_axis(structure, members);
-
-    // A run bolted to a stage is a wing, and a wing is named by its side —
-    // which is the fixtures' side, not the truss's, because that is the answer
-    // the tree is asked for.
-    if fact.is_some_and(|fact| fact.on_stage) {
-        let mean_x = mean_x(structure, members);
-        if let Some(mean_x) = mean_x {
-            return if mean_x < facts.stage_centre_x {
-                "left wing".to_string()
-            } else {
-                "right wing".to_string()
-            };
-        }
-    }
-
-    match axis {
-        Some(Axis::Side) => "horizontal".to_string(),
-        Some(Axis::Level) => "vertical".to_string(),
-        None => fact
-            .and_then(|fact| fact.label.clone())
-            .or_else(|| fact.map(|fact| fact.kind.clone()))
-            .unwrap_or_else(|| UNPLACED.to_string()),
-    }
-}
-
-fn mean_x(structure: &str, members: &[&FixtureFact]) -> Option<f64> {
-    let xs: Vec<f64> = members
-        .iter()
-        .filter_map(|fixture| {
-            let placement = fixture.placement.as_ref()?;
-            (placement.parent == structure).then_some(placement.position[0])
-        })
-        .collect();
-    (!xs.is_empty()).then(|| xs.iter().sum::<f64>() / xs.len() as f64)
-}
-
 // ---------------------------------------------------------------------------
 // Reading the facts out of a solved venue
 // ---------------------------------------------------------------------------
@@ -713,16 +748,21 @@ pub struct FixtureIdentity {
 ///
 /// `fixtures` is in creation order and that order is carried through: it is
 /// what `<model> <n>` counts in and what orders the rows.
+///
+/// The socket supply is here for one reason: a stage's *centre* is a fact about
+/// its geometry, and geometry in this codebase is sockets — a deck's origin is a
+/// corner of its mesh, and its sockets are what say where its middle is.
 #[must_use]
-pub fn facts_from(
+pub fn facts_from<S: NodeSockets + ?Sized>(
     venue_id: &str,
     solved: &ResolvedVenue,
     graph: &VenueGraph,
+    sockets: &S,
     fixtures: &[FixtureIdentity],
 ) -> VenueFacts {
     let mut facts = VenueFacts {
         venue_id: venue_id.to_string(),
-        stage_centre_x: stage_centre_x(solved),
+        stage_centre_x: stage_centre_x(solved, graph, sockets),
         ..VenueFacts::default()
     };
 
@@ -743,9 +783,10 @@ pub fn facts_from(
                 let pose = solved.pose(&placement.parent);
                 facts.structures.push(StructureFact {
                     node: placement.parent.clone(),
-                    on_stage: on_stage(graph, &placement.parent),
+                    on_stage: hangs_off_a_stage(graph, &placement.parent),
                     label: pose.and_then(|pose| pose.label.clone()),
                     kind: pose.map_or("piece", |pose| pose.kind.as_str()).to_string(),
+                    position: pose.map_or([0.0; 3], |pose| attachment_point(graph, sockets, pose)),
                 });
             }
         }
@@ -762,11 +803,33 @@ pub fn facts_from(
 
 /// The x that `left` and `right` are measured against: the middle of the
 /// stages, or the venue frame's own origin when the room has none.
-fn stage_centre_x(solved: &ResolvedVenue) -> f64 {
+///
+/// The middle, not the origin. A deck is a measured GLB whose origin is a
+/// corner of its mesh, so averaging origins puts "centre" half a deck to one
+/// side and files every fixture on the deck under the same wing. A piece's
+/// sockets sit on its faces — `bottom` and `top` in the middle of them, the
+/// four edges opposite each other — so their centroid *is* the piece's centre,
+/// with no bounds accessor to invent and no socket name to hard-code.
+fn stage_centre_x<S: NodeSockets + ?Sized>(
+    solved: &ResolvedVenue,
+    graph: &VenueGraph,
+    sockets: &S,
+) -> f64 {
     let xs: Vec<f64> = solved
         .poses()
         .filter(|pose| pose.kind == NodeKind::Stage)
-        .map(|pose| pose.data_pose().0[0])
+        .map(|pose| {
+            let local = graph
+                .node(&pose.node)
+                .map(|node| sockets.sockets(node))
+                .unwrap_or_default();
+            if local.is_empty() {
+                return pose.data_pose().0[0];
+            }
+            let centroid: DVec3 =
+                local.iter().map(|socket| socket.position).sum::<DVec3>() / local.len() as f64;
+            data_pose_of_d(pose.world * DMat4::from_translation(centroid)).0[0]
+        })
         .collect();
     if xs.is_empty() {
         0.0
@@ -775,10 +838,43 @@ fn stage_centre_x(solved: &ResolvedVenue) -> f64 {
     }
 }
 
-/// Whether `node`'s parent chain reaches a stage — what makes a run a wing
-/// rather than house structure.
-fn on_stage(graph: &VenueGraph, node: &str) -> bool {
-    let mut at = node.to_string();
+/// Where a run is bolted: the world position of the socket it mates with, or
+/// its pose origin when the graph does not say. The point a wing's side is read
+/// from — which side of the stage a tower stands on is a fact about the joint,
+/// not about where its heads happen to point.
+fn attachment_point<S: NodeSockets + ?Sized>(
+    graph: &VenueGraph,
+    sockets: &S,
+    pose: &luma_scene::venue::NodePose,
+) -> [f64; 3] {
+    let local = graph
+        .edge(&pose.node)
+        .zip(graph.node(&pose.node))
+        .and_then(|(edge, node)| {
+            sockets
+                .sockets(node)
+                .into_iter()
+                .find(|socket| socket.name == edge.my_socket)
+                .map(|socket| socket.position)
+        });
+    match local {
+        Some(local) => data_pose_of_d(pose.world * DMat4::from_translation(local)).0,
+        None => pose.data_pose().0,
+    }
+}
+
+/// Whether `node` *hangs off* a stage — what makes a run a wing rather than
+/// house structure.
+///
+/// The walk starts at the parent, so a stage is not its own wing: fixtures
+/// clamped straight to the deck are a run on the deck, and calling that
+/// "the right wing" because the deck's origin sits right of its own centre is
+/// how a symmetric rig came out lopsided.
+fn hangs_off_a_stage(graph: &VenueGraph, node: &str) -> bool {
+    let mut at = match graph.edge(node) {
+        Some(edge) => edge.parent.clone(),
+        None => return false,
+    };
     // The chain is acyclic by the graph's insertion invariant; the bound is
     // belt and braces against a row set that arrived some other way.
     for _ in 0..64 {
@@ -821,6 +917,15 @@ pub struct ManualGroup {
 /// the target counts the source's members alongside its own, both still
 /// derived, and deleting the row undoes it.
 ///
+/// Merge is also **total here**, whatever the rows say. A chain — a merged into
+/// b, b into c — lands every fixture in c, because a set that was folded away
+/// cannot be somewhere the tree does not show. A cycle folds nothing, because
+/// there is no terminal set to fold into. And the children of a node that was
+/// merged away re-parent onto its target rather than vanishing with it. The
+/// write path refuses to *create* a cycle ([`merged_terminal`] is what it asks);
+/// this reader still has to survive one, because rows outlive the code that
+/// wrote them.
+///
 /// Parents come before children.
 #[must_use]
 pub fn merge_tree(
@@ -829,24 +934,38 @@ pub fn merge_tree(
     manual: &[ManualGroup],
 ) -> Vec<GroupTreeNode> {
     let lookup = |id: &str| overrides.iter().find(|row| row.group_id == id);
-    // Whatever was merged into each node, by target id. Read once: a merge is
-    // rare and a scan per node would be quadratic in the tree.
+    // Where each merged node's fixtures actually end up, and what each surviving
+    // node therefore absorbs. Read once: a merge is rare and a scan per node
+    // would be quadratic in the tree.
     let mut folded: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut absorbed: BTreeMap<&str, &str> = BTreeMap::new();
     for row in overrides {
-        if let Some(target) = row.merged_into.as_deref() {
-            folded.entry(target).or_default().push(&row.group_id);
+        if row.merged_into.is_none() {
+            continue;
         }
+        let Some(target) = merged_terminal(overrides, &row.group_id) else {
+            continue;
+        };
+        folded.entry(target).or_default().push(&row.group_id);
+        absorbed.insert(&row.group_id, target);
     }
+    let own_members = |id: &str| -> &[String] {
+        tree.groups
+            .iter()
+            .find(|group| group.id == id)
+            .map(|group| group.members.as_slice())
+            .or_else(|| {
+                manual
+                    .iter()
+                    .find(|group| group.id == id)
+                    .map(|group| group.fixtures.as_slice())
+            })
+            .unwrap_or_default()
+    };
     let members_of = |id: &str, own: &[String]| -> Vec<String> {
         let mut members = own.to_vec();
         for source in folded.get(id).into_iter().flatten() {
-            let from = tree
-                .groups
-                .iter()
-                .find(|group| &group.id == source)
-                .map(|group| group.members.as_slice())
-                .unwrap_or_default();
-            for fixture in from {
+            for fixture in own_members(source) {
                 if !members.contains(fixture) {
                     members.push(fixture.clone());
                 }
@@ -854,13 +973,23 @@ pub fn merge_tree(
         }
         members
     };
+    // A parent that was merged away is not a place to hang from; the set that
+    // absorbed it is.
+    let parent_of = |parent: Option<String>| -> Option<String> {
+        let parent = parent?;
+        Some(
+            absorbed
+                .get(parent.as_str())
+                .map_or(parent, |target| (*target).to_string()),
+        )
+    };
 
     let mut nodes = Vec::with_capacity(tree.groups.len() + manual.len());
     for group in &tree.groups {
         let row = lookup(&group.id);
         // Merged away: its fixtures are counted under the target, and showing
         // the husk would count them twice.
-        if row.is_some_and(|row| row.merged_into.is_some()) {
+        if absorbed.contains_key(group.id.as_str()) {
             continue;
         }
         let label = row
@@ -875,11 +1004,11 @@ pub fn merge_tree(
             id: group.id.clone(),
             name: normalize_group_name(&path.join(" ")),
             label,
-            parent_id: match row.and_then(|row| row.parent_id.as_deref()) {
+            parent_id: parent_of(match row.and_then(|row| row.parent_id.as_deref()) {
                 None => group.parent.clone(),
                 Some("") => None,
                 Some(parent) => Some(parent.to_string()),
-            },
+            }),
             origin: if row.is_some() {
                 GroupOrigin::Edited
             } else {
@@ -895,7 +1024,7 @@ pub fn merge_tree(
     // still whoever is in it.
     for group in manual {
         let row = lookup(&group.id);
-        if row.is_some_and(|row| row.merged_into.is_some()) {
+        if absorbed.contains_key(group.id.as_str()) {
             continue;
         }
         let label = row
@@ -905,10 +1034,11 @@ pub fn merge_tree(
             id: group.id.clone(),
             name: normalize_group_name(&label),
             label,
-            parent_id: row
-                .and_then(|row| row.parent_id.as_deref())
-                .filter(|parent| !parent.is_empty())
-                .map(str::to_string),
+            parent_id: parent_of(
+                row.and_then(|row| row.parent_id.as_deref())
+                    .filter(|parent| !parent.is_empty())
+                    .map(str::to_string),
+            ),
             origin: if row.is_some() {
                 GroupOrigin::Edited
             } else {
@@ -920,6 +1050,36 @@ pub fn merge_tree(
     }
 
     nodes
+}
+
+/// Where `group_id`'s fixtures end up once every merge in `overrides` is
+/// followed: the first node in the chain that is not itself merged away.
+///
+/// `None` when `group_id` is not merged at all, and `None` when the chain
+/// closes on itself — a cycle has no terminal set, so a cycle folds nothing.
+/// The write path uses this to refuse the row that would close one; the reader
+/// uses it to stay total when a row already did.
+#[must_use]
+pub fn merged_terminal<'a>(overrides: &'a [GroupOverride], group_id: &str) -> Option<&'a str> {
+    let target = |id: &str| {
+        overrides
+            .iter()
+            .find(|row| row.group_id == id)
+            .and_then(|row| row.merged_into.as_deref())
+    };
+    let mut seen: Vec<&str> = vec![];
+    let mut at = target(group_id)?;
+    if at == group_id {
+        return None;
+    }
+    while let Some(next) = target(at) {
+        if next == group_id || seen.contains(&next) {
+            return None;
+        }
+        seen.push(at);
+        at = next;
+    }
+    Some(at)
 }
 
 #[cfg(test)]
@@ -1108,22 +1268,24 @@ mod tests {
         }
     }
 
-    fn structure(node: &str, on_stage: bool) -> StructureFact {
+    /// A structure standing at `x`, which is where its wing side is read from.
+    fn structure(node: &str, on_stage: bool, x: f64) -> StructureFact {
         StructureFact {
             node: node.into(),
             on_stage,
             label: None,
             kind: "run".into(),
+            position: [x, 0.0, 0.0],
         }
     }
 
-    /// Two horizontal runs at different heights: one merged `horizontal` row,
-    /// split top/bottom — across the run, not along it.
+    /// Two horizontal runs at different heights: one `horizontal` class, two
+    /// rows, named top and bottom by which one is higher.
     fn horizontal_facts() -> VenueFacts {
         VenueFacts {
             venue_id: "v".into(),
             stage_centre_x: 0.0,
-            structures: vec![structure("high", false), structure("low", false)],
+            structures: vec![structure("high", false, 0.0), structure("low", false, 0.0)],
             fixtures: vec![
                 fixture("a", FixtureRole::Wash, "high", [-2.0, 0.0, 5.0]),
                 fixture("b", FixtureRole::Wash, "high", [2.0, 0.0, 5.0]),
@@ -1141,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn a_horizontal_row_splits_by_height() {
+    fn a_horizontal_class_names_its_rows_by_height() {
         let tree = derive_groups(&horizontal_facts());
         assert_eq!(
             paths(&tree),
@@ -1155,11 +1317,14 @@ mod tests {
     }
 
     #[test]
-    fn a_vertical_row_splits_by_side() {
+    fn a_vertical_class_names_its_rows_by_side() {
         let facts = VenueFacts {
             venue_id: "v".into(),
             stage_centre_x: 0.0,
-            structures: vec![structure("left", false), structure("right", false)],
+            structures: vec![
+                structure("left", false, -4.0),
+                structure("right", false, 4.0),
+            ],
             fixtures: vec![
                 fixture("a", FixtureRole::Wash, "left", [-4.0, 0.0, 1.0]),
                 fixture("b", FixtureRole::Wash, "left", [-4.0, 0.0, 5.0]),
@@ -1167,9 +1332,6 @@ mod tests {
                 fixture("d", FixtureRole::Wash, "right", [4.0, 0.0, 5.0]),
             ],
         };
-        // Both runs are vertical, so the row is one `vertical` and the split is
-        // the one across it. Height would also have separated these, which is
-        // exactly the ambiguity the "across the run" rule settles.
         assert_eq!(
             paths(&derive_groups(&facts)),
             vec![
@@ -1181,15 +1343,52 @@ mod tests {
         );
     }
 
+    /// Rows are never merged, however alike two runs look: two trusses at the
+    /// same height are two rows, because they are two things.
     #[test]
-    fn a_degenerate_split_falls_back_to_the_other_axis() {
-        // Two vertical towers, both stage left. The split across them is
-        // side, and every fixture is on the same side of centre — so height
-        // is used instead, and no row is left childless for want of a rule.
+    fn two_runs_of_a_class_are_two_rows() {
+        let mut facts = horizontal_facts();
+        for fact in &mut facts.fixtures {
+            if let Some(placement) = fact.placement.as_mut() {
+                if placement.parent == "low" {
+                    placement.position[2] = 5.0;
+                    placement.position[1] = 4.0;
+                }
+            }
+        }
+        assert_eq!(
+            paths(&derive_groups(&facts)).len(),
+            4,
+            "one class, two rows, and no merge by name"
+        );
+    }
+
+    /// A labelled piece names its own row, whatever its position says — and it
+    /// does so with a full run on it, which the old rule only managed for a
+    /// structure carrying fewer than two fixtures.
+    #[test]
+    fn a_labelled_piece_names_its_row() {
+        let mut facts = horizontal_facts();
+        facts.structures[0].label = Some("front truss".into());
+        assert_eq!(
+            paths(&derive_groups(&facts)),
+            vec![
+                "washes",
+                "washes/horizontal",
+                "washes/horizontal/front truss",
+                "washes/horizontal/bottom",
+            ]
+        );
+    }
+
+    /// One unlabelled row is the class under a second name, so it is not
+    /// emitted twice.
+    #[test]
+    fn a_class_of_one_unlabelled_row_is_a_leaf() {
         let facts = VenueFacts {
             venue_id: "v".into(),
             stage_centre_x: 0.0,
-            structures: vec![structure("tower", true)],
+            structures: vec![structure("tower", true, -4.0)],
             fixtures: vec![
                 fixture("a", FixtureRole::Spot, "tower", [-4.0, 0.0, 1.0]),
                 fixture("b", FixtureRole::Spot, "tower", [-4.0, 0.0, 5.0]),
@@ -1197,36 +1396,85 @@ mod tests {
         };
         assert_eq!(
             paths(&derive_groups(&facts)),
+            vec!["spots", "spots/left wing"]
+        );
+    }
+
+    /// A wing's side is the *structure's*, not its fixtures'. A tower bolted
+    /// stage left whose heads happen to hang past centre is still stage left.
+    #[test]
+    fn a_wing_takes_its_side_from_the_structure() {
+        let facts = VenueFacts {
+            venue_id: "v".into(),
+            stage_centre_x: 0.0,
+            structures: vec![structure("tower", true, -4.0)],
+            fixtures: vec![
+                fixture("a", FixtureRole::Spot, "tower", [3.0, 0.0, 1.0]),
+                fixture("b", FixtureRole::Spot, "tower", [3.0, 0.0, 5.0]),
+            ],
+        };
+        assert_eq!(
+            paths(&derive_groups(&facts)),
+            vec!["spots", "spots/left wing"]
+        );
+    }
+
+    /// More than two rows is a stack, and a stack's rungs are numbered.
+    #[test]
+    fn three_rows_are_numbered_not_halved() {
+        let mut facts = VenueFacts {
+            venue_id: "v".into(),
+            stage_centre_x: 0.0,
+            structures: Vec::new(),
+            fixtures: Vec::new(),
+        };
+        for (n, z) in [(0, 1.0), (1, 3.0), (2, 5.0)] {
+            let node = format!("run{n}");
+            facts.structures.push(structure(&node, false, 0.0));
+            for (id, x) in [("a", -2.0), ("b", 2.0)] {
+                facts.fixtures.push(fixture(
+                    &format!("{id}{n}"),
+                    FixtureRole::Wash,
+                    &node,
+                    [x, 0.0, z],
+                ));
+            }
+        }
+        assert_eq!(
+            paths(&derive_groups(&facts)),
             vec![
-                "spots",
-                "spots/left wing",
-                "spots/left wing/top",
-                "spots/left wing/bottom",
+                "washes",
+                "washes/horizontal",
+                "washes/horizontal/row 1",
+                "washes/horizontal/row 2",
+                "washes/horizontal/row 3",
             ]
         );
     }
 
     #[test]
-    fn a_cross_cut_needs_two_rows() {
-        // One row's `top` is that row's child; naming it twice is what the
+    fn a_cross_cut_needs_two_classes() {
+        // One class's `top` is that class's child; naming it twice is what the
         // cross-cut rule refuses.
         let one = derive_groups(&horizontal_facts());
         assert!(!paths(&one).contains(&"washes/top".to_string()));
 
-        // Two wings, each split by height — now `top` means something no single
-        // row says.
+        // Two wings, two rows up each — now `top` means something no single
+        // class says.
         let mut facts = VenueFacts {
             venue_id: "v".into(),
             stage_centre_x: 0.0,
-            structures: vec![structure("left", true), structure("right", true)],
+            structures: Vec::new(),
             fixtures: Vec::new(),
         };
-        for (id, parent, x) in [("a", "left", -4.0), ("b", "right", 4.0)] {
+        for (side, x) in [("l", -4.0), ("r", 4.0)] {
             for (n, z) in [(0, 1.0), (1, 5.0)] {
+                let node = format!("{side}{n}");
+                facts.structures.push(structure(&node, true, x));
                 facts.fixtures.push(fixture(
-                    &format!("{id}{n}"),
+                    &format!("{side}{n}"),
                     FixtureRole::Spot,
-                    parent,
+                    &node,
                     [x, 0.0, z],
                 ));
             }
@@ -1234,12 +1482,12 @@ mod tests {
         let paths = paths(&derive_groups(&facts));
         assert!(paths.contains(&"spots/top".to_string()));
         assert!(paths.contains(&"spots/bottom".to_string()));
-        // No row emitted a side split, so there is no side cross-cut.
+        // No class named its rows by side, so there is no side cross-cut.
         assert!(!paths.contains(&"spots/left".to_string()));
     }
 
     #[test]
-    fn unplaced_fixtures_get_a_row_and_no_split() {
+    fn unplaced_fixtures_get_a_class_and_no_rows() {
         let facts = VenueFacts {
             venue_id: "v".into(),
             stage_centre_x: 0.0,
@@ -1434,24 +1682,131 @@ mod tests {
         assert_eq!(top_before, ["a", "b"]);
         assert_eq!(top_of(&after).members, ["c", "d"]);
     }
+
+    // -----------------------------------------------------------------------
+    // Merge, as a total operation
+    // -----------------------------------------------------------------------
+
+    /// The three nodes of `horizontal_facts`'s wash class: the class and its
+    /// two rows.
+    fn class_and_rows(tree: &DerivedTree) -> (String, String, String) {
+        let id = |path: &[&str]| {
+            tree.groups
+                .iter()
+                .find(|group| group.path == path)
+                .expect("derives")
+                .id
+                .clone()
+        };
+        (
+            id(&["washes", "horizontal"]),
+            id(&["washes", "horizontal", "top"]),
+            id(&["washes", "horizontal", "bottom"]),
+        )
+    }
+
+    fn merged_row(from: &str, into: &str) -> GroupOverride {
+        let mut row = override_row(from, "");
+        row.merged_into = Some(into.into());
+        row
+    }
+
+    /// A into B into C lands everything in C. Following one hop and stopping
+    /// left A's fixtures in a node the tree does not show.
+    #[test]
+    fn a_merge_chain_resolves_to_its_terminal() {
+        let facts = horizontal_facts();
+        let mut grown = facts.clone();
+        grown
+            .fixtures
+            .push(fixture("e", FixtureRole::Wash, "high", [0.0, 0.0, 5.0]));
+        let tree = derive_groups(&grown);
+        let (class, top, bottom) = class_and_rows(&tree);
+
+        let merged = merge_tree(
+            &tree,
+            &[merged_row(&top, &bottom), merged_row(&bottom, &class)],
+            &[],
+        );
+        assert!(!merged.iter().any(|node| node.id == top));
+        assert!(!merged.iter().any(|node| node.id == bottom));
+        let target = merged
+            .iter()
+            .find(|node| node.id == class)
+            .expect("the terminal stays");
+        for fixture in ["a", "b", "c", "d", "e"] {
+            assert!(
+                target.fixtures.contains(&fixture.to_string()),
+                "{fixture} fell out of the chain"
+            );
+        }
+    }
+
+    /// A cycle has no terminal set, so it folds nothing — rather than deleting
+    /// both nodes and every fixture in them.
+    #[test]
+    fn a_merge_cycle_folds_nothing() {
+        let tree = derive_groups(&horizontal_facts());
+        let (_, top, bottom) = class_and_rows(&tree);
+        let merged = merge_tree(
+            &tree,
+            &[merged_row(&top, &bottom), merged_row(&bottom, &top)],
+            &[],
+        );
+        assert_eq!(merged.len(), tree.groups.len(), "no node disappeared");
+        for id in [&top, &bottom] {
+            let node = merged.iter().find(|node| &node.id == id).expect("stays");
+            assert_eq!(node.fixtures.len(), 2, "and neither absorbed the other");
+        }
+    }
+
+    /// Merging a parent into its own child cannot orphan the child: whatever
+    /// hung off the husk hangs off the target instead.
+    #[test]
+    fn children_of_a_merged_parent_reparent_onto_the_target() {
+        let tree = derive_groups(&horizontal_facts());
+        let (class, top, bottom) = class_and_rows(&tree);
+        let merged = merge_tree(&tree, &[merged_row(&class, &top)], &[]);
+
+        assert!(!merged.iter().any(|node| node.id == class));
+        let sibling = merged
+            .iter()
+            .find(|node| node.id == bottom)
+            .expect("the other row is still in the tree");
+        assert_eq!(sibling.parent_id.as_deref(), Some(top.as_str()));
+        // And the target counts everything the class did.
+        let target = merged.iter().find(|node| node.id == top).expect("stays");
+        assert_eq!(target.fixtures.len(), 4);
+    }
+
+    /// A node merged into itself is a no-op, not a disappearance.
+    #[test]
+    fn merging_a_node_into_itself_folds_nothing() {
+        let tree = derive_groups(&horizontal_facts());
+        let (_, top, _) = class_and_rows(&tree);
+        let merged = merge_tree(&tree, &[merged_row(&top, &top)], &[]);
+        assert_eq!(merged.len(), tree.groups.len());
+    }
 }
 
 /// The two canonical group goldens.
 ///
 /// Both are **seeded venues built through the graph API** — real nodes, real
-/// sockets, a real solve — rather than hand-written positions, so a change to
-/// the resolver that moves a fixture across a split shows up here as a group
-/// moving rather than as nothing at all.
-///
-/// Each rewrites its golden and then fails if it changed, so a stale capture
-/// cannot be committed silently.
+/// sockets, a real solve, and real `.qxf` definitions whose roles come out of
+/// [`FixtureRole::of`] rather than being handed in — so a change to the
+/// resolver that moves a fixture across a class, or to the role table that
+/// moves a bar out of `led bars`, shows up here as a group moving rather than
+/// as nothing at all.
 #[cfg(test)]
 mod goldens {
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
     use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
     use luma_scene::venue::{resolve, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET};
     use serde_json::{json, Value};
+
+    use crate::fixtures::parser::parse_definition;
 
     use super::{derive_groups, facts_from, FixtureIdentity, FixtureRole};
 
@@ -1459,6 +1814,14 @@ mod goldens {
     /// `bottom` that sits on the floor and a `top` a fixture can clamp to,
     /// which is the whole of what these goldens need from geometry.
     const DECK: &str = "stage_lab/stage_praticavel_1x1.glb";
+    /// A deck twice as wide, for the one thing a square one cannot show: that
+    /// the centre `left` and `right` are measured against is the middle of the
+    /// surface and not the corner its mesh is modelled from.
+    const WIDE_DECK: &str = "stage_lab/stage_praticavel_2x1x1.glb";
+
+    /// A real bar and a real mover, so the goldens pin the role table too.
+    const BAR: (&str, &str) = ("Chauvet/Chauvet-COLORband-T3-BT.qxf", "13 Channel");
+    const MOVER: (&str, &str) = ("Chauvet/Chauvet-Rogue-R2-Spot.qxf", "18 Channel");
 
     fn repo_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -1470,6 +1833,32 @@ mod goldens {
             VenueSockets::load(repo_root().join("resources/meshes"))
                 .expect("the catalog resolves against the shipped meshes")
         })
+    }
+
+    /// `(model, role)` for one shipped definition in one of its modes, read off
+    /// the file. A golden that hand-passed the role would pass with the role
+    /// table broken.
+    fn shipped(definition: (&str, &str)) -> (String, FixtureRole) {
+        /// Keyed on the definition's path and the mode read from it.
+        type Roles = HashMap<(String, String), (String, FixtureRole)>;
+        static CACHE: std::sync::OnceLock<std::sync::Mutex<Roles>> = std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        let key = (definition.0.to_string(), definition.1.to_string());
+        if let Some(hit) = cache.lock().unwrap().get(&key) {
+            return hit.clone();
+        }
+        let path = repo_root()
+            .join("resources/fixtures/2511260420")
+            .join(definition.0);
+        let def = parse_definition(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mode = def
+            .modes
+            .iter()
+            .find(|mode| mode.name == definition.1)
+            .unwrap_or_else(|| panic!("{} has no `{}` mode", definition.0, definition.1));
+        let answer = (def.model.clone(), FixtureRole::of(&def, mode));
+        cache.lock().unwrap().insert(key, answer.clone());
+        answer
     }
 
     struct Venue {
@@ -1501,25 +1890,37 @@ mod goldens {
 
         /// A piece resting on a host surface at `(u, v, trim)`.
         fn piece(&mut self, id: &str, kind: NodeKind, host: (&str, &str), at: &[(&str, f64)]) {
+            self.piece_of(id, kind, DECK, host, at);
+        }
+
+        fn piece_of(
+            &mut self,
+            id: &str,
+            kind: NodeKind,
+            catalog_ref: &str,
+            host: (&str, &str),
+            at: &[(&str, f64)],
+        ) {
             self.graph.insert(Node {
                 id: id.into(),
                 kind,
-                catalog_ref: Some(DECK.into()),
+                catalog_ref: Some(catalog_ref.into()),
                 label: None,
                 params: Self::params(at),
             });
             self.attach(id, "bottom", host);
         }
 
-        /// A patched fixture clamped to a host surface at `(u, v, trim)`.
+        /// A fixture patched from a shipped definition and clamped to a host
+        /// surface at `(u, v, trim)`.
         fn fixture(
             &mut self,
             id: &str,
-            model: &str,
-            role: FixtureRole,
+            definition: (&str, &str),
             host: (&str, &str),
             at: &[(&str, f64)],
         ) {
+            let (model, role) = shipped(definition);
             self.graph.insert(Node {
                 id: id.into(),
                 kind: NodeKind::Fixture,
@@ -1530,7 +1931,7 @@ mod goldens {
             self.attach(id, FIXTURE_CLAMP_SOCKET, host);
             self.fixtures.push(FixtureIdentity {
                 id: id.into(),
-                model: model.into(),
+                model,
                 role,
             });
         }
@@ -1552,7 +1953,7 @@ mod goldens {
 
         fn tree(&self) -> (super::VenueFacts, super::DerivedTree) {
             let solved = resolve(&self.graph, catalog());
-            let facts = facts_from("golden", &solved, &self.graph, &self.fixtures);
+            let facts = facts_from("golden", &solved, &self.graph, catalog(), &self.fixtures);
             let tree = derive_groups(&facts);
             (facts, tree)
         }
@@ -1575,7 +1976,12 @@ mod goldens {
                     })
                 })
                 .collect();
-            json!({ "stageCentreX": facts.stage_centre_x, "groups": groups })
+            // Rounded: the centre is a solved quantity and lands on 5e-17
+            // rather than zero, which is float noise a golden should not pin.
+            json!({
+                "stageCentreX": (facts.stage_centre_x * 1e6).round() / 1e6,
+                "groups": groups,
+            })
         }
 
         fn paths(&self) -> Vec<String> {
@@ -1589,9 +1995,9 @@ mod goldens {
     }
 
     /// (a) LED bars around a wall: two horizontal runs at different heights and
-    /// two vertical ones down the sides. The horizontal row splits by height,
-    /// the vertical row by side, and neither cross-cut is emitted because each
-    /// draws from exactly one row.
+    /// two vertical ones down the sides. The horizontal class names its two
+    /// rows by height, the vertical one names its two by side, and neither
+    /// cross-cut is emitted because each name is carried by exactly one row.
     ///
     /// `mirror` is `+1.0` or `-1.0` — the same rig reflected about stage
     /// centre. A mirrored venue must derive the same tree, because the rule
@@ -1620,8 +2026,7 @@ mod goldens {
             n += 1;
             venue.fixture(
                 &format!("bar_{n}"),
-                "LED Bar",
-                FixtureRole::Pixel,
+                BAR,
                 (host, "top"),
                 &[("u", u * mirror), ("v", 0.0), ("trim", trim)],
             );
@@ -1640,10 +2045,10 @@ mod goldens {
         venue
     }
 
-    /// (b) Spot wings: two towers bolted to the stage, four spots up each. Both
-    /// wings split by height — the split across them is side, and a wing is all
-    /// on one side by definition — so `top` and `bottom` are cross-cuts drawn
-    /// from two rows, which is exactly when a cross-cut earns its name.
+    /// (b) Spot wings: four towers bolted to the stage, two rows of spots up
+    /// each side. Each wing class names its two rows by height, and because
+    /// `top` is then carried by a row on each side it becomes a cross-cut —
+    /// which is exactly when a cross-cut earns its name.
     fn spot_wings(mirror: f64) -> Venue {
         let mut venue = Venue::new();
         venue.piece(
@@ -1655,26 +2060,28 @@ mod goldens {
         // `u` runs stage *left*-positive on a deck's `top` socket and stage
         // right-positive on the venue floor — the two surfaces disagree about
         // the sign of their tangent. Nothing in derivation depends on it (the
-        // split reads resolved x), but it is why these two numbers look
-        // backwards; see the report's smells.
-        for (id, u) in [("wing_left", 4.0), ("wing_right", -4.0)] {
+        // side reads a resolved x), but it is why these numbers look backwards.
+        let towers = [
+            ("wing_left_far", 6.0, 1.0),
+            ("wing_left_near", 4.0, 4.0),
+            ("wing_right_far", -6.0, 1.0),
+            ("wing_right_near", -4.0, 4.0),
+        ];
+        let mut n = 0;
+        for (id, u, base) in towers {
             venue.piece(
                 id,
                 NodeKind::Piece,
                 ("stage", "top"),
                 &[("u", u * mirror), ("v", 0.0)],
             );
-        }
-        let mut n = 0;
-        for wing in ["wing_left", "wing_right"] {
-            for i in 0..4 {
+            for i in 0..2 {
                 n += 1;
                 venue.fixture(
                     &format!("spot_{n}"),
-                    "Mover",
-                    FixtureRole::Spot,
-                    (wing, "top"),
-                    &[("u", 0.0), ("v", 0.0), ("trim", 2.0 + f64::from(i) * 1.5)],
+                    MOVER,
+                    (id, "top"),
+                    &[("u", 0.0), ("v", 0.0), ("trim", base + f64::from(i) * 1.0)],
                 );
             }
         }
@@ -1705,24 +2112,105 @@ mod goldens {
         "spots/bottom",
     ];
 
+    /// What the role table makes of the whole shipped catalogue, printed rather
+    /// than asserted: the counts move whenever a definition is added, and a
+    /// test that pinned them would fail on a library update rather than on a
+    /// rule that broke. Run it when the table changes.
+    ///
+    /// ```sh
+    /// cargo test --lib the_shipped_catalogue_survey -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "a survey, not an assertion"]
+    fn the_shipped_catalogue_survey() {
+        let mut counts: std::collections::BTreeMap<FixtureRole, usize> = Default::default();
+        let mut by_type: std::collections::BTreeMap<(String, FixtureRole), usize> =
+            Default::default();
+        let mut unreadable = 0usize;
+        let mut total = 0usize;
+        let mut stack = vec![repo_root().join("resources/fixtures")];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "qxf") {
+                    continue;
+                }
+                total += 1;
+                let Ok(def) = parse_definition(&path) else {
+                    unreadable += 1;
+                    continue;
+                };
+                let Some(mode) = def.modes.first() else {
+                    continue;
+                };
+                let role = FixtureRole::of(&def, mode);
+                *counts.entry(role).or_default() += 1;
+                *by_type.entry((def.type_.clone(), role)).or_default() += 1;
+            }
+        }
+        println!("{total} definitions, {unreadable} unreadable");
+        for (role, n) in &counts {
+            println!("{:>8}  {n}", role.as_str());
+        }
+        println!("--- Type -> role");
+        for ((type_, role), n) in &by_type {
+            println!("{type_:>20} -> {:<8} {n}", role.as_str());
+        }
+    }
+
+    /// Set this to rewrite the capture instead of checking it — the same split
+    /// `render-goldens` draws between `--check` and a capture run, except that
+    /// checking is what a plain `cargo test` does. A test that rewrote a shared
+    /// checkout's golden and then failed left the next agent unable to tell a
+    /// stale capture from a fresh one.
+    const REGENERATE: &str = "LUMA_UPDATE_GOLDENS";
+
     #[test]
     fn the_venue_groups_golden_is_current() {
         let path = repo_root().join("harness/goldens/venue-groups.json");
-        let mut contents = serde_json::to_string_pretty(&json!({
+        let mut want = serde_json::to_string_pretty(&json!({
             "ledBarsWall": led_bars_wall(1.0).capture(),
             "spotWings": spot_wings(1.0).capture(),
         }))
         .expect("the capture serializes");
-        contents.push('\n');
+        want.push('\n');
 
-        let same = std::fs::read_to_string(&path).is_ok_and(|old| old == contents);
-        if !same {
-            std::fs::write(&path, &contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if std::env::var_os(REGENERATE).is_some() {
+            std::fs::write(&path, &want).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            return;
         }
+        let have = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(
-            same,
-            "the venue-groups golden was stale and has been rewritten — review and commit it"
+            have == want,
+            "{} is stale.\n{}\nRerun with {REGENERATE}=1 to recapture.",
+            path.display(),
+            first_difference(&have, &want),
         );
+    }
+
+    /// The first line that differs, with its neighbours — enough to name the
+    /// rule that moved without printing two hundred lines of JSON.
+    fn first_difference(have: &str, want: &str) -> String {
+        let (have, want): (Vec<&str>, Vec<&str>) = (have.lines().collect(), want.lines().collect());
+        let at = (0..have.len().max(want.len()))
+            .find(|i| have.get(*i) != want.get(*i))
+            .unwrap_or(0);
+        let line =
+            |lines: &[&str], i: usize| lines.get(i).copied().unwrap_or("<end of file>").to_string();
+        format!(
+            "line {}:\n  on disk: {}\n  derived: {}",
+            at + 1,
+            line(&have, at),
+            line(&want, at),
+        )
     }
 
     #[test]
@@ -1747,5 +2235,49 @@ mod goldens {
         let want = |canonical: &[&str]| sorted(canonical.iter().map(|p| (*p).into()).collect());
         assert_eq!(sorted(led_bars_wall(-1.0).paths()), want(&LED_BARS_WALL));
         assert_eq!(sorted(spot_wings(-1.0).paths()), want(&SPOT_WINGS));
+    }
+
+    /// Defect: stage centre averaged the stage nodes' *origins*, and a deck's
+    /// origin is a corner of its mesh — half a deck off the middle. A rig hung
+    /// symmetrically about the real centre of a 2 m deck therefore came out
+    /// entirely on one side of it.
+    ///
+    /// Built on the wide deck because a square one hides the bug: half of 1 m
+    /// is inside the spacing here, and half of 2 m is not.
+    #[test]
+    fn a_rig_symmetric_about_the_stage_derives_a_symmetric_tree() {
+        let mut venue = Venue::new();
+        venue.piece_of(
+            "stage",
+            NodeKind::Stage,
+            WIDE_DECK,
+            ("venue", FLOOR_SOCKET),
+            &[("u", 0.0), ("v", 0.0)],
+        );
+        let mut n = 0;
+        for u in [-0.75, 0.75] {
+            let tower = format!("tower_{}", if u < 0.0 { "a" } else { "b" });
+            venue.piece(
+                &tower,
+                NodeKind::Piece,
+                ("stage", "top"),
+                &[("u", u), ("v", 0.0)],
+            );
+            for i in 0..2 {
+                n += 1;
+                venue.fixture(
+                    &format!("spot_{n}"),
+                    MOVER,
+                    (&tower, "top"),
+                    &[("u", 0.0), ("v", 0.0), ("trim", 1.0 + f64::from(i))],
+                );
+            }
+        }
+        let paths = venue.paths();
+        assert!(
+            paths.contains(&"spots/left wing".to_string())
+                && paths.contains(&"spots/right wing".to_string()),
+            "both sides of the deck's middle, not both on one: {paths:?}"
+        );
     }
 }

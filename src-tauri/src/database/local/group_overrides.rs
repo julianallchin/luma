@@ -41,21 +41,20 @@ pub async fn list(access: &mut impl AuthorizedVenue) -> Result<Vec<GroupOverride
     .map_err(|e| format!("Failed to read group overrides: {e}"))
 }
 
-/// Write one override, replacing whatever was there.
+/// Write one override, replacing whatever was there **column for column**.
 ///
-/// Upsert rather than insert-or-update at the call site: "touched" is one bit
-/// and a caller should not have to ask whether it was already set.
+/// A total write, not a patch: every column is set to what the row says, so
+/// `None` means "this node has no rename / no move / no merge" and not "leave
+/// whatever was there". The three verbs are independent facets of one node's
+/// identity, and a caller that could only ever *add* facets could never clear
+/// a label without also undoing a move — which is what `COALESCE` in the
+/// conflict clause used to make impossible. Composing the new row from the old
+/// one is [`crate::services::groups::GroupSources`]'s job; it has already read
+/// the old one.
 ///
 /// # Errors
 /// Fails if the write is refused — most often by write admission.
-pub async fn put(
-    access: &mut VenueAccess<'_, Write>,
-    group_id: &str,
-    path: &str,
-    label: Option<&str>,
-    parent_id: Option<&str>,
-    merged_into: Option<&str>,
-) -> Result<(), String> {
+pub async fn put(access: &mut VenueAccess<'_, Write>, row: &GroupOverride) -> Result<(), String> {
     let venue_id = access.venue_id().to_string();
     sqlx::query(
         "INSERT INTO fixture_group_overrides
@@ -63,17 +62,17 @@ pub async fn put(
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(group_id) DO UPDATE SET
              path = excluded.path,
-             label = COALESCE(excluded.label, fixture_group_overrides.label),
-             parent_id = COALESCE(excluded.parent_id, fixture_group_overrides.parent_id),
-             merged_into = COALESCE(excluded.merged_into, fixture_group_overrides.merged_into),
+             label = excluded.label,
+             parent_id = excluded.parent_id,
+             merged_into = excluded.merged_into,
              version = fixture_group_overrides.version",
     )
-    .bind(group_id)
+    .bind(&row.group_id)
     .bind(venue_id)
-    .bind(path)
-    .bind(label)
-    .bind(parent_id)
-    .bind(merged_into)
+    .bind(&row.path)
+    .bind(&row.label)
+    .bind(&row.parent_id)
+    .bind(&row.merged_into)
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to write the group override: {e}"))?;

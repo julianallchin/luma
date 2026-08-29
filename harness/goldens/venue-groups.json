@@ -3,26 +3,26 @@
     "groups": [
       {
         "members": [
-          "LED Bar 1",
-          "LED Bar 2",
-          "LED Bar 3",
-          "LED Bar 4",
-          "LED Bar 5",
-          "LED Bar 6",
-          "LED Bar 7",
-          "LED Bar 8",
-          "LED Bar 9",
-          "LED Bar 10",
-          "LED Bar 11",
-          "LED Bar 12",
-          "LED Bar 13",
-          "LED Bar 14",
-          "LED Bar 15",
-          "LED Bar 16",
-          "LED Bar 17",
-          "LED Bar 18",
-          "LED Bar 19",
-          "LED Bar 20"
+          "COLORband T3 BT 1",
+          "COLORband T3 BT 2",
+          "COLORband T3 BT 3",
+          "COLORband T3 BT 4",
+          "COLORband T3 BT 5",
+          "COLORband T3 BT 6",
+          "COLORband T3 BT 7",
+          "COLORband T3 BT 8",
+          "COLORband T3 BT 9",
+          "COLORband T3 BT 10",
+          "COLORband T3 BT 11",
+          "COLORband T3 BT 12",
+          "COLORband T3 BT 13",
+          "COLORband T3 BT 14",
+          "COLORband T3 BT 15",
+          "COLORband T3 BT 16",
+          "COLORband T3 BT 17",
+          "COLORband T3 BT 18",
+          "COLORband T3 BT 19",
+          "COLORband T3 BT 20"
         ],
         "name": "led_bars",
         "path": [
@@ -32,18 +32,18 @@
       },
       {
         "members": [
-          "LED Bar 1",
-          "LED Bar 2",
-          "LED Bar 3",
-          "LED Bar 4",
-          "LED Bar 5",
-          "LED Bar 6",
-          "LED Bar 7",
-          "LED Bar 8",
-          "LED Bar 9",
-          "LED Bar 10",
-          "LED Bar 11",
-          "LED Bar 12"
+          "COLORband T3 BT 1",
+          "COLORband T3 BT 2",
+          "COLORband T3 BT 3",
+          "COLORband T3 BT 4",
+          "COLORband T3 BT 5",
+          "COLORband T3 BT 6",
+          "COLORband T3 BT 7",
+          "COLORband T3 BT 8",
+          "COLORband T3 BT 9",
+          "COLORband T3 BT 10",
+          "COLORband T3 BT 11",
+          "COLORband T3 BT 12"
         ],
         "name": "led_bars_horizontal",
         "path": [
@@ -54,12 +54,12 @@
       },
       {
         "members": [
-          "LED Bar 1",
-          "LED Bar 2",
-          "LED Bar 3",
-          "LED Bar 4",
-          "LED Bar 5",
-          "LED Bar 6"
+          "COLORband T3 BT 1",
+          "COLORband T3 BT 2",
+          "COLORband T3 BT 3",
+          "COLORband T3 BT 4",
+          "COLORband T3 BT 5",
+          "COLORband T3 BT 6"
         ],
         "name": "led_bars_horizontal_top",
         "path": [
@@ -71,12 +71,12 @@
       },
       {
         "members": [
-          "LED Bar 7",
-          "LED Bar 8",
-          "LED Bar 9",
-          "LED Bar 10",
-          "LED Bar 11",
-          "LED Bar 12"
+          "COLORband T3 BT 7",
+          "COLORband T3 BT 8",
+          "COLORband T3 BT 9",
+          "COLORband T3 BT 10",
+          "COLORband T3 BT 11",
+          "COLORband T3 BT 12"
         ],
         "name": "led_bars_horizontal_bottom",
         "path": [
@@ -88,14 +88,14 @@
       },
       {
         "members": [
-          "LED Bar 13",
-          "LED Bar 14",
-          "LED Bar 15",
-          "LED Bar 16",
-          "LED Bar 17",
-          "LED Bar 18",
-          "LED Bar 19",
-          "LED Bar 20"
+          "COLORband T3 BT 13",
+          "COLORband T3 BT 14",
+          "COLORband T3 BT 15",
+          "COLORband T3 BT 16",
+          "COLORband T3 BT 17",
+          "COLORband T3 BT 18",
+          "COLORband T3 BT 19",
+          "COLORband T3 BT 20"
         ],
         "name": "led_bars_vertical",
         "path": [
@@ -106,10 +106,10 @@
       },
       {
         "members": [
-          "LED Bar 13",
-          "LED Bar 14",
-          "LED Bar 15",
-          "LED Bar 16"
+          "COLORband T3 BT 13",
+          "COLORband T3 BT 14",
+          "COLORband T3 BT 15",
+          "COLORband T3 BT 16"
         ],
         "name": "led_bars_vertical_left",
         "path": [
@@ -121,10 +121,10 @@
       },
       {
         "members": [
-          "LED Bar 17",
-          "LED Bar 18",
-          "LED Bar 19",
-          "LED Bar 20"
+          "COLORband T3 BT 17",
+          "COLORband T3 BT 18",
+          "COLORband T3 BT 19",
+          "COLORband T3 BT 20"
         ],
         "name": "led_bars_vertical_right",
         "path": [
@@ -141,14 +141,14 @@
     "groups": [
       {
         "members": [
-          "Mover 1",
-          "Mover 2",
-          "Mover 3",
-          "Mover 4",
-          "Mover 5",
-          "Mover 6",
-          "Mover 7",
-          "Mover 8"
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4",
+          "Rogue R2 Spot 5",
+          "Rogue R2 Spot 6",
+          "Rogue R2 Spot 7",
+          "Rogue R2 Spot 8"
         ],
         "name": "spots",
         "path": [
@@ -158,10 +158,10 @@
       },
       {
         "members": [
-          "Mover 1",
-          "Mover 2",
-          "Mover 3",
-          "Mover 4"
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4"
         ],
         "name": "spots_left_wing",
         "path": [
@@ -172,8 +172,8 @@
       },
       {
         "members": [
-          "Mover 3",
-          "Mover 4"
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4"
         ],
         "name": "spots_left_wing_top",
         "path": [
@@ -185,8 +185,8 @@
       },
       {
         "members": [
-          "Mover 1",
-          "Mover 2"
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2"
         ],
         "name": "spots_left_wing_bottom",
         "path": [
@@ -198,10 +198,10 @@
       },
       {
         "members": [
-          "Mover 5",
-          "Mover 6",
-          "Mover 7",
-          "Mover 8"
+          "Rogue R2 Spot 5",
+          "Rogue R2 Spot 6",
+          "Rogue R2 Spot 7",
+          "Rogue R2 Spot 8"
         ],
         "name": "spots_right_wing",
         "path": [
@@ -212,8 +212,8 @@
       },
       {
         "members": [
-          "Mover 7",
-          "Mover 8"
+          "Rogue R2 Spot 7",
+          "Rogue R2 Spot 8"
         ],
         "name": "spots_right_wing_top",
         "path": [
@@ -225,8 +225,8 @@
       },
       {
         "members": [
-          "Mover 5",
-          "Mover 6"
+          "Rogue R2 Spot 5",
+          "Rogue R2 Spot 6"
         ],
         "name": "spots_right_wing_bottom",
         "path": [
@@ -238,10 +238,10 @@
       },
       {
         "members": [
-          "Mover 3",
-          "Mover 4",
-          "Mover 7",
-          "Mover 8"
+          "Rogue R2 Spot 3",
+          "Rogue R2 Spot 4",
+          "Rogue R2 Spot 7",
+          "Rogue R2 Spot 8"
         ],
         "name": "spots_top",
         "path": [
@@ -252,10 +252,10 @@
       },
       {
         "members": [
-          "Mover 1",
-          "Mover 2",
-          "Mover 5",
-          "Mover 6"
+          "Rogue R2 Spot 1",
+          "Rogue R2 Spot 2",
+          "Rogue R2 Spot 5",
+          "Rogue R2 Spot 6"
         ],
         "name": "spots_bottom",
         "path": [
@@ -265,6 +265,6 @@
         "role": "spot"
       }
     ],
-    "stageCentreX": 0.5
+    "stageCentreX": 0.0
   }
 }
