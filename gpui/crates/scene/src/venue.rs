@@ -600,6 +600,10 @@ pub struct ConstraintReport {
 /// Only self-mating joints ([`crate::sockets::Polarity::Neutral`]) count: a
 /// deck's four corners are not "dangling" for having nothing standing on them,
 /// but the open end of a run is what a builder needs told about.
+///
+/// "Open" means no relation names it: neither half of a joint is dangling, and
+/// neither is an end a [`Constraint`] checks — a far end is exactly the case
+/// where the builder has already said what the socket is for.
 #[derive(Clone, Debug)]
 pub struct DanglingSocket {
     pub node: String,
@@ -645,8 +649,8 @@ pub struct ResolvedVenue {
 }
 
 impl ResolvedVenue {
-    /// Every placed node, depth-first with children in id order. Array members
-    /// appear in place of their array node.
+    /// Every placed node, depth-first with children in id order. An array
+    /// node is followed by its derived members, which name it as their parent.
     pub fn poses(&self) -> impl Iterator<Item = &NodePose> {
         self.poses.iter()
     }
@@ -749,6 +753,10 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
     let Some(root) = graph.node(&graph.root) else {
         return out;
     };
+    // Which sockets are spoken for, computed once over the whole graph: a
+    // socket is open or it is not, and that is a property of the relations,
+    // not of the order the walk reaches them in.
+    let claimed = claimed_sockets(graph);
     // The root *is* the venue frame, so it starts at the identity; every other
     // node's frame is written as it is placed, before its children are walked.
     let mut frames: BTreeMap<String, DMat4> = BTreeMap::new();
@@ -767,7 +775,7 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
             params: root.params.clone(),
         },
     );
-    collect_dangling(&mut out, root, sockets);
+    collect_dangling(&mut out, root, sockets, &claimed);
 
     // Explicit stack rather than recursion: a corrupted graph must not blow the
     // real one, and the depth bound is the node count.
@@ -846,7 +854,7 @@ pub fn resolve<S: NodeSockets + ?Sized>(graph: &VenueGraph, sockets: &S) -> Reso
             }
         }
 
-        collect_dangling(&mut out, node, sockets);
+        collect_dangling(&mut out, node, sockets, &claimed);
         if !sockets.is_known(node) {
             out.warnings.push(NodeWarning {
                 node: node.id.clone(),
@@ -874,8 +882,8 @@ fn push_pose(out: &mut ResolvedVenue, pose: NodePose) {
 }
 
 /// One node placed: clamp the roll its joint admits, then mate through
-/// [`place_on`]. An array node produces its members here and no pose of its
-/// own.
+/// [`place_on`]. An array node is placed at its anchor and then produces its
+/// members, which follow it in the walk.
 fn place(
     out: &mut ResolvedVenue,
     node: &Node,
@@ -903,44 +911,12 @@ fn place(
         trim: node.params.get("trim", 0.0),
     };
 
-    if node.kind == NodeKind::Array {
-        let count = array_count(out, node);
-        let span = node.params.get("span", 0.0);
-        for i in 0..count {
-            let offset = if count <= 1 {
-                0.0
-            } else {
-                -span / 2.0 + span * f64::from(i) / f64::from(count - 1)
-            };
-            let world = place_on(
-                parent_world,
-                host,
-                held,
-                node.kind,
-                SurfacePlacement {
-                    u: placement.u + offset,
-                    ..placement
-                },
-            );
-            push_pose(
-                out,
-                NodePose {
-                    node: format!("{}#{i}", node.id),
-                    kind: node.kind,
-                    catalog_ref: node.catalog_ref.clone(),
-                    label: node.label.clone(),
-                    parent: Some(edge.parent.clone()),
-                    world,
-                    array_index: Some(i),
-                    params: node.params.clone(),
-                },
-            );
-        }
-        // An array is a generator, not a place: nothing attaches to it, so it
-        // contributes no frame for a child to hang off.
-        return;
-    }
-
+    // Every node gets its mate point, arrays included. For an array that point
+    // is its **anchor**: the seat its `span` is centred on, which is where a
+    // single member would sit. Without it a successful `array(...)` reported
+    // `ok: false, parent: null` — the caller's node had no pose at all — and a
+    // child naming the array as its parent silently vanished for want of a
+    // frame.
     let world = place_on(parent_world, host, held, node.kind, placement);
     frames.insert(node.id.clone(), world);
     push_pose(
@@ -956,6 +932,45 @@ fn place(
             params: node.params.clone(),
         },
     );
+
+    if node.kind != NodeKind::Array {
+        return;
+    }
+    let count = array_count(out, node);
+    let span = node.params.get("span", 0.0);
+    for i in 0..count {
+        let offset = if count <= 1 {
+            0.0
+        } else {
+            -span / 2.0 + span * f64::from(i) / f64::from(count - 1)
+        };
+        let member = place_on(
+            parent_world,
+            host,
+            held,
+            node.kind,
+            SurfacePlacement {
+                u: placement.u + offset,
+                ..placement
+            },
+        );
+        push_pose(
+            out,
+            NodePose {
+                node: format!("{}#{i}", node.id),
+                kind: node.kind,
+                catalog_ref: node.catalog_ref.clone(),
+                label: node.label.clone(),
+                // The array node, not the array's own parent: a member is
+                // derived from the generator, and the generator now has a
+                // pose to be derived from.
+                parent: Some(node.id.clone()),
+                world: member,
+                array_index: Some(i),
+                params: node.params.clone(),
+            },
+        );
+    }
 }
 
 /// The world pose a [`SurfacePlacement`] produces against one host socket.
@@ -968,8 +983,9 @@ fn place(
 /// `(u, v)` run in the host surface's own plane and `trim` runs along world up
 /// (see `trim_axis`), so the offset and the twist sit *between* the two
 /// frames — turning about the joint rather than about the piece's own origin.
-/// That is the same arrangement `snap::evaluate_candidate` reaches by a
-/// different road, and the golden snap vectors are what keeps the two honest.
+/// [`crate::snap`] calls this with [`SurfacePlacement::FLUSH`] for the bare
+/// mate it scores candidates over, so there is one copy of the arithmetic and
+/// the golden snap vectors pin it.
 #[must_use]
 pub fn place_on(
     parent_world: DMat4,
@@ -989,8 +1005,8 @@ pub fn place_on(
 /// Half a turn about the host socket's tangent, or nothing.
 ///
 /// [`SocketMode::Face`] opposes the two normals (face-to-face contact);
-/// [`SocketMode::Edge`] keeps the host's orientation and only translates. Same
-/// rule as `snap::flip_for`, and the same reason.
+/// [`SocketMode::Edge`] keeps the host's orientation and only translates —
+/// two decks butted along an edge both stay upright.
 fn flip_for(mode: SocketMode) -> DMat4 {
     match mode {
         SocketMode::Edge => DMat4::IDENTITY,
@@ -1091,10 +1107,43 @@ fn array_count(out: &mut ResolvedVenue, node: &Node) -> u32 {
     applied
 }
 
+/// Every socket some relation already accounts for, as `(node, socket)`.
+///
+/// A joint claims **both** its halves — the child's `my_socket` and the host's
+/// `their_socket` — and a far end claims both of its, because a constraint is
+/// what the builder writes down instead of a second parent. Everything else a
+/// piece offers is open.
+fn claimed_sockets(graph: &VenueGraph) -> BTreeSet<(&str, &str)> {
+    let mut claimed = BTreeSet::new();
+    for (child, edge) in &graph.edges {
+        claimed.insert((child.as_str(), edge.my_socket.as_str()));
+        claimed.insert((edge.parent.as_str(), edge.their_socket.as_str()));
+    }
+    for constraint in &graph.constraints {
+        claimed.insert((constraint.node.as_str(), constraint.my_socket.as_str()));
+        claimed.insert((
+            constraint.target_node.as_str(),
+            constraint.target_socket.as_str(),
+        ));
+    }
+    claimed
+}
+
 /// Every self-mating socket on `node` that no edge and no constraint claims.
-fn collect_dangling<S: NodeSockets + ?Sized>(out: &mut ResolvedVenue, node: &Node, sockets: &S) {
+///
+/// Only [`crate::sockets::Polarity::Neutral`] joints count: a deck's four
+/// corners are not open ends for having nothing standing on them.
+fn collect_dangling<S: NodeSockets + ?Sized>(
+    out: &mut ResolvedVenue,
+    node: &Node,
+    sockets: &S,
+    claimed: &BTreeSet<(&str, &str)>,
+) {
     for socket in sockets.sockets(node) {
         if socket.socket_type.polarity() != crate::sockets::Polarity::Neutral {
+            continue;
+        }
+        if claimed.contains(&(node.id.as_str(), socket.name.as_str())) {
             continue;
         }
         out.dangling.push(DanglingSocket {
@@ -1166,8 +1215,22 @@ pub struct SurfacePlacement {
     pub v: f64,
     /// Radians about the host socket's normal — the edge's `roll`.
     pub yaw: f64,
-    /// Metres along the host socket's normal. `0` sits on the deck.
+    /// Metres along **world up**, wherever the host surface faces (see
+    /// `trim_axis`). `0` sits on the deck, `6.0` flies six metres above it,
+    /// from the floor and from a down-facing grid alike.
     pub trim: f64,
+}
+
+impl SurfacePlacement {
+    /// The two sockets seated on each other: no offset in the surface, no
+    /// twist, no lift. [`place_on`] with this is the bare mate — the primitive
+    /// [`crate::snap::solve_snap`] scores candidates over.
+    pub const FLUSH: SurfacePlacement = SurfacePlacement {
+        u: 0.0,
+        v: 0.0,
+        yaw: 0.0,
+        trim: 0.0,
+    };
 }
 
 /// Solve-and-invert: the placement whose [`resolve`] output is `world`.
@@ -1714,8 +1777,16 @@ mod tests {
             let want = -2.0 + i as f64;
             assert!((x - want).abs() < 1e-12, "{i}: {x} wanted {want}");
         }
-        // The array node itself is not a pose, and nothing hangs off it.
-        assert!(resolved.pose("bar").is_none());
+        // The array node itself is placed at its anchor — the seat the span
+        // is centred on — so a successful array reports `ok` with a parent.
+        let anchor = resolved.pose("bar").expect("the array node is placed");
+        assert_eq!(anchor.array_index, None);
+        assert!(anchor.world.transform_point3(DVec3::ZERO).x.abs() < 1e-12);
+        let placement = resolved.placement("bar");
+        assert!(placement.ok);
+        assert_eq!(placement.parent.as_deref(), Some("deck1"));
+        // Members are derived from the generator, so they name it as parent.
+        assert!(members.iter().all(|m| m.parent.as_deref() == Some("bar")));
     }
 
     #[test]
@@ -1742,13 +1813,59 @@ mod tests {
             )
             .unwrap();
         let resolved = resolve(&graph, &table());
-        let x = resolved
-            .pose("bar#0")
-            .unwrap()
-            .world
-            .transform_point3(DVec3::ZERO)
-            .x;
-        assert!(x.abs() < 1e-12);
+        let origin = |id: &str| {
+            resolved
+                .pose(id)
+                .unwrap_or_else(|| panic!("{id} is placed"))
+                .world
+                .transform_point3(DVec3::ZERO)
+        };
+        // The lone member sits on the anchor, which is the whole meaning of
+        // "centred on the mate point".
+        assert!(origin("bar#0").abs_diff_eq(origin("bar"), 1e-12));
+        assert!(origin("bar#0").x.abs() < 1e-12);
+    }
+
+    /// A child hung off an array lands on the generator's anchor rather than
+    /// silently dropping out of the solve for want of a frame.
+    #[test]
+    fn a_child_of_an_array_hangs_off_its_anchor() {
+        let mut graph = VenueGraph::new(root());
+        let mut deck_node = node("deck1", NodeKind::Stage, "deck");
+        deck_node.params = on_floor(0.0, 0.0, 0.0);
+        graph.insert(deck_node);
+        graph.attach("deck1", floor_edge(0.0), &table()).unwrap();
+        let mut array = node("bar", NodeKind::Array, "deck");
+        array.params.set("count", 3.0);
+        array.params.set("span", 4.0);
+        graph.insert(array);
+        graph
+            .attach(
+                "bar",
+                Edge {
+                    parent: "deck1".into(),
+                    my_socket: "bottom".into(),
+                    their_socket: "top".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        graph.insert(node("hanger", NodeKind::Stage, "deck"));
+        graph
+            .attach(
+                "hanger",
+                Edge {
+                    parent: "bar".into(),
+                    my_socket: "edge_left".into(),
+                    their_socket: "edge_right".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        let resolved = resolve(&graph, &table());
+        assert!(resolved.placement("hanger").ok);
     }
 
     /// Beam = mount normal: a fixture on the floor points up, one under a
@@ -1873,6 +1990,98 @@ mod tests {
         assert_eq!(statuses[0], ConstraintStatus::Satisfied);
         assert!(matches!(statuses[1], ConstraintStatus::Violated { .. }));
         assert_eq!(statuses[2], ConstraintStatus::Dangling);
+    }
+
+    #[test]
+    fn edge_mode_is_identity_not_a_flip() {
+        // The TS docstrings claimed a 180° rotation about the host normal;
+        // `flipFor()` returned identity. The code is what shipped.
+        assert_eq!(flip_for(SocketMode::Edge), DMat4::IDENTITY);
+        let face = flip_for(SocketMode::Face);
+        assert!((face.y_axis.y + 1.0).abs() < 1e-12);
+        assert!((face.z_axis.z + 1.0).abs() < 1e-12);
+    }
+
+    /// Both halves of a joint are spoken for. Two decks butted edge to edge
+    /// leave four open edges between them, not six.
+    #[test]
+    fn neither_half_of_a_mated_edge_is_dangling() {
+        let mut graph = VenueGraph::new(root());
+        let mut deck_a = node("deck_a", NodeKind::Stage, "deck");
+        deck_a.params = on_floor(0.0, 0.0, 0.0);
+        graph.insert(deck_a);
+        graph.attach("deck_a", floor_edge(0.0), &table()).unwrap();
+        graph.insert(node("deck_b", NodeKind::Stage, "deck"));
+        graph
+            .attach(
+                "deck_b",
+                Edge {
+                    parent: "deck_a".into(),
+                    my_socket: "edge_left".into(),
+                    their_socket: "edge_right".into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+
+        let resolved = resolve(&graph, &table());
+        let open: Vec<(&str, &str)> = resolved
+            .dangling()
+            .iter()
+            .map(|d| (d.node.as_str(), d.socket.as_str()))
+            .collect();
+        assert_eq!(
+            open,
+            [("deck_a", "edge_left"), ("deck_b", "edge_right")],
+            "a bolted edge is not an open one"
+        );
+    }
+
+    /// A far end is what the builder writes down instead of a second parent,
+    /// so the socket it checks is not open either.
+    #[test]
+    fn a_constrained_far_end_is_not_dangling() {
+        let mut graph = VenueGraph::new(root());
+        let mut a = node("a", NodeKind::Run, "truss");
+        a.params = on_floor(0.0, 0.0, 0.0);
+        graph.insert(a);
+        graph
+            .attach(
+                "a",
+                Edge {
+                    parent: "venue".into(),
+                    my_socket: "base".into(),
+                    their_socket: FLOOR_SOCKET.into(),
+                    roll: 0.0,
+                },
+                &table(),
+            )
+            .unwrap();
+        assert_eq!(
+            resolve(&graph, &table())
+                .dangling()
+                .iter()
+                .filter(|d| d.node == "a")
+                .count(),
+            2,
+            "both ends start open"
+        );
+
+        graph.constrain(Constraint {
+            node: "a".into(),
+            my_socket: "end_b".into(),
+            target_node: "ghost".into(),
+            target_socket: "end_a".into(),
+        });
+        let resolved = resolve(&graph, &table());
+        let open: Vec<&str> = resolved
+            .dangling()
+            .iter()
+            .filter(|d| d.node == "a")
+            .map(|d| d.socket.as_str())
+            .collect();
+        assert_eq!(open, ["end_a"], "the checked end is accounted for");
     }
 
     #[test]

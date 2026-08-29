@@ -855,18 +855,17 @@ async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(
     .fetch_all(&mut *connection)
     .await
     .map_err(|error| format!("Failed to audit principal-bearing tables: {error}"))?;
+    // A venue's own tables are not enumerated here: they are the schema's
+    // answer, shared with `sync::pull`'s delete guard, and the two used to
+    // disagree about `venue_nodes`. Everything venue-owned rides on the venue
+    // row's durability, so the policy is one sentence rather than a dozen
+    // names.
+    let venue_owned = crate::database::local::venue_access::venue_owned_tables(connection).await?;
     let classified = [
-        "cues",
         "fixture_group_members",
-        "fixture_groups",
-        "fixtures",
         "implementations",
-        "midi_bindings",
-        "midi_modifiers",
         "pattern_categories",
         "patterns",
-        "scores",
-        "stage_pieces",
         "sync_state",
         "track_bar_classifications",
         "track_beats",
@@ -877,16 +876,11 @@ async fn audit_uid_bearing_tables(connection: &mut SqliteConnection) -> Result<(
         "track_stems",
         "track_waveforms",
         "tracks",
-        "venue_implementation_overrides",
-        // Local-only, exactly like `stage_pieces`: the venue graph has no
-        // remote table yet (`supabase/migrations/…_venue_graph_NOT_DEPLOYED`),
-        // so a wipe loses nothing here it would not already lose there.
-        "venue_nodes",
         "venues",
     ];
     let unknown: Vec<_> = actual
         .iter()
-        .filter(|table| !classified.contains(&table.as_str()))
+        .filter(|table| !classified.contains(&table.as_str()) && !venue_owned.contains(table))
         .collect();
     if !unknown.is_empty() {
         return Err(format!(

@@ -445,9 +445,15 @@ mod tests {
 
     const FIXTURES_ROOT: &str = "resources/fixtures";
 
-    /// One old-schema venue: a deck on the floor, a truss standing on the
-    /// deck's corner, a piece of equipment sitting on the deck top, and two
-    /// fixtures — one aimed down, one aimed up.
+    /// One old-schema venue: two decks on the floor — one square to the room,
+    /// one yawed off-axis — a free CDJ, a mixer parented to the *yawed* deck,
+    /// and two fixtures, one aimed down and one aimed up.
+    ///
+    /// The yaw is the point. A room where every rotation is zero cannot tell an
+    /// inverse from an identity, and the whole pass is an inverse: `rot = 0`
+    /// round-trips through a dropped `yaw`, a mirrored sign and a swapped axis
+    /// alike. The child on the yawed deck adds the other half — a parent-local
+    /// pose recovered through a frame that is itself turned.
     ///
     /// Every pose here is one the old builder could actually produce, which is
     /// the population the pass has to reproduce exactly. A piece rolled off its
@@ -460,6 +466,10 @@ mod tests {
         VALUES
             ('deck', 'alice', 'v', 'stage_lab/stage_praticavel_2x1x1.glb', 'floor', 'Deck',
              2.0, -3.0, 0.5, 0.0, 0.0, 0.0, NULL),
+            ('yawed', 'alice', 'v', 'stage_lab/stage_praticavel_2x1x1.glb', 'floor', 'Yawed deck',
+             -4.0, 1.5, 0.5, 0.0, 0.0, 0.7, NULL),
+            ('mixer', 'alice', 'v', 'stage_lab/mixer_djm_a9.glb', 'mixer', 'Mixer',
+             -0.3, 0.2, 0.62, 0.0, 0.0, -0.45, 'yawed'),
             ('cdj', 'alice', 'v', 'stage_lab/cdj_3000x.glb', 'cdj', 'Left deck',
              0.25, 0.1, 0.65, 0.0, 0.0, 0.0, NULL);
         INSERT INTO fixtures
@@ -534,6 +544,23 @@ mod tests {
     async fn migration_round_trips_old_poses() {
         let (_dir, pool) = seeded().await;
         let before = old_poses(&pool).await;
+        // The seed has to actually be off-axis, or this test passes on a room
+        // where an inverse and an identity are the same function.
+        let turned = |id: &str| {
+            before
+                .iter()
+                .find(|(node, _, _)| node == id)
+                .map(|(_, _, rotation)| rotation[2].abs())
+                .unwrap_or_default()
+        };
+        assert!(
+            turned("yawed") > 0.1,
+            "the yawed deck is square to the room"
+        );
+        assert!(
+            turned("mixer") > 0.1,
+            "the child on the yawed deck is not turned"
+        );
 
         let mut access = VenueAccess::<Write>::write(&pool, VenueResource::Venue("v"))
             .await
@@ -622,8 +649,8 @@ mod tests {
         let venue = resolved(&mut access, Path::new(FIXTURES_ROOT))
             .await
             .unwrap();
-        // The room, two pieces, two fixtures.
-        assert_eq!(venue.poses().count(), 5);
+        // The room, four pieces, two fixtures.
+        assert_eq!(venue.poses().count(), 7);
     }
 
     /// The relation, not just the pose: a piece that was parented comes out

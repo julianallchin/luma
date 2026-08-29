@@ -980,24 +980,25 @@ async fn ensure_remote_delete_is_safe(
     record_id: &str,
 ) -> Result<(), SyncError> {
     let blocked = match table_name {
+        // Every table the schema says a venue owns, not a list to keep in step
+        // with it: a venue whose only rows were in a table this forgot used to
+        // be cascade-deleted on a remote delete.
         "venues" => {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT
-                    EXISTS(SELECT 1 FROM fixtures WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM fixture_groups WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM venue_implementation_overrides WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM scores WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM cues WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM midi_modifiers WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM midi_bindings WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM stage_pieces WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM agent_threads WHERE venue_id = ?1)
-                    OR EXISTS(SELECT 1 FROM authored_documents WHERE venue_id = ?1)",
-            )
-            .bind(record_id)
-            .fetch_one(&mut **transaction)
-            .await?
-                != 0
+            let tables =
+                crate::database::local::venue_access::venue_owned_tables(&mut **transaction)
+                    .await
+                    .map_err(SyncError::Local)?;
+            let exists = tables
+                .iter()
+                .map(|table| format!("EXISTS(SELECT 1 FROM \"{table}\" WHERE venue_id = ?1)"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            !exists.is_empty()
+                && sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!("SELECT {exists}")))
+                    .bind(record_id)
+                    .fetch_one(&mut **transaction)
+                    .await?
+                    != 0
         }
         "tracks" => {
             let (track_hash, file_path, album_art_path): (String, String, Option<String>) =
@@ -2588,6 +2589,70 @@ mod remote_deletion_tests {
         .await
         .unwrap();
         assert_eq!(cursor, 0);
+    }
+
+    /// A venue whose only content is graph rows is a venue with something in
+    /// it. The guard used to name `stage_pieces` and never learned about
+    /// `venue_nodes`, so a venue built entirely as a graph — which is every
+    /// venue after phase 3 — was cascade-deleted by a remote tombstone.
+    #[tokio::test]
+    async fn a_remote_tombstone_cannot_delete_a_venue_that_only_has_graph_rows() {
+        let (_directory, pool, authored) = test_pool().await;
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Venue')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_nodes (id, uid, venue_id, kind)
+             VALUES ('venue:venue', 'alice', 'venue', 'venue')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        delete_local(
+            &pool,
+            &authored,
+            Some("alice"),
+            registry::get_table("venues").unwrap(),
+            "venue",
+        )
+        .await
+        .expect_err("a venue holding graph rows was deleted from under the builder");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venue_nodes")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM venues WHERE id = 'venue'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    /// An empty venue still deletes: the guard is "does anything live here",
+    /// not "is this a venue".
+    #[tokio::test]
+    async fn a_remote_tombstone_deletes_an_empty_venue() {
+        let (_directory, pool, authored) = test_pool().await;
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Venue')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(delete_local(
+            &pool,
+            &authored,
+            Some("alice"),
+            registry::get_table("venues").unwrap(),
+            "venue",
+        )
+        .await
+        .unwrap());
     }
 
     #[tokio::test]

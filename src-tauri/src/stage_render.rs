@@ -217,8 +217,9 @@ impl VenueGeometry {
 
 /// One solved node as the piece the renderer draws, or `None` when it is not
 /// drawn as one: the root is the room and has no mesh, a fixture is drawn from
-/// [`scene_desc::Scene::fixtures`] instead, and a node with no `catalog_ref`
-/// has no geometry to stand for.
+/// [`scene_desc::Scene::fixtures`] instead, an array node is the generator's
+/// anchor rather than a copy (its members carry the geometry), and a node with
+/// no `catalog_ref` has no geometry to stand for.
 ///
 /// Takes the wire projection rather than a [`luma_scene::venue::NodePose`]
 /// because the desktop viewport only ever sees a venue from the far side of
@@ -231,6 +232,10 @@ pub fn piece_of(node: &ResolvedNode) -> Option<scene_desc::Piece> {
     // the same grounds `VenueGraphRows::to_graph` drops such a row.
     match VenueNodeKind::from_name(&node.kind) {
         Some(VenueNodeKind::Venue | VenueNodeKind::Fixture) | None => return None,
+        // The array node is the seat its members are spread over — the one
+        // pose in the solve with this kind and no index. Drawing it too would
+        // put a second copy on top of the middle member.
+        Some(VenueNodeKind::Array) if node.array_index.is_none() => return None,
         Some(_) => {}
     }
     let catalog_ref = node.catalog_ref.as_deref()?;
@@ -845,6 +850,56 @@ mod tests {
         let state = highlight_state(&[]);
         assert!(state.primitives.is_empty());
         assert!(primitive_state(Some(&state), "anything", 0).is_none());
+    }
+
+    /// An array node is the seat, not a copy. The solve gives it a pose so a
+    /// successful `array(...)` has a placement to report and a frame for a
+    /// child to hang off; the renderer must still draw only the members, or
+    /// there is a speaker standing inside the middle one.
+    #[test]
+    fn an_array_anchor_is_not_drawn_but_its_members_are() {
+        use luma_scene::venue::{Edge, Node, Params, VenueGraph, FLOOR_SOCKET};
+
+        let sockets = crate::venue_graph::sockets(Path::new("resources/fixtures"))
+            .expect("the catalog resolves");
+        let mut graph = VenueGraph::new(Node {
+            id: "venue".into(),
+            kind: VenueNodeKind::Venue,
+            catalog_ref: None,
+            label: None,
+            params: Params::default(),
+        });
+        let mut params = Params::default();
+        params.set("count", 3.0);
+        params.set("span", 4.0);
+        graph.insert(Node {
+            id: "wall".into(),
+            kind: VenueNodeKind::Array,
+            catalog_ref: Some("stage_lab/speaker_dbr15.glb".into()),
+            label: None,
+            params,
+        });
+        graph
+            .attach(
+                "wall",
+                Edge {
+                    parent: "venue".into(),
+                    my_socket: "mount".into(),
+                    their_socket: FLOOR_SOCKET.into(),
+                    roll: 0.0,
+                },
+                sockets,
+            )
+            .expect("speakers stand on the floor");
+        let solved = luma_scene::venue::resolve(&graph, sockets);
+
+        assert!(solved.pose("wall").is_some(), "the anchor is placed");
+        let drawn: Vec<String> = solved
+            .poses()
+            .filter_map(|pose| piece_of(&ResolvedNode::from(pose)))
+            .map(|piece| piece.id)
+            .collect();
+        assert_eq!(drawn, ["wall#0", "wall#1", "wall#2"]);
     }
 
     /// A venue holding one node per `(id, catalog piece, floor position)`,

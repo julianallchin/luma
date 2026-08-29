@@ -243,11 +243,83 @@ fn not_found() -> String {
     "Venue resource not found".into()
 }
 
+// -----------------------------------------------------------------------------
+// What a venue owns
+// -----------------------------------------------------------------------------
+
+/// Tables that carry a `venue_id` and are still not a venue's *content*.
+///
+/// The only thing about venue ownership that has to be written down. Everything
+/// else is derived — see [`venue_owned_tables`].
+const NOT_VENUE_CONTENT: &[&str] = &[
+    // Who may open the venue, not what is in it. A membership is the venue's
+    // access-control row, and it goes when the venue goes.
+    "venue_memberships",
+];
+
+/// Every table whose rows are one venue's content, read off the live schema.
+///
+/// A `venue_id` column is what makes a row belong to a venue, so the schema
+/// already holds this list; a second hand-maintained copy is a list that
+/// drifts, and it did — `sync::pull` guarded a remote venue delete on
+/// `stage_pieces` and never learned about `venue_nodes`, so a venue built
+/// entirely as a graph was cascade-deleted. Adding a venue-scoped table now
+/// costs nothing here, and forgetting one is no longer possible.
+///
+/// In table-name order, so callers that build SQL from it build the same SQL
+/// every time.
+///
+/// # Errors
+/// Fails if the schema cannot be read.
+pub async fn venue_owned_tables(connection: &mut SqliteConnection) -> Result<Vec<String>, String> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT schema.name
+         FROM sqlite_schema schema
+         JOIN pragma_table_info(schema.name) column ON column.name = 'venue_id'
+         WHERE schema.type = 'table'
+         ORDER BY schema.name",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error| format!("Failed to read venue-owned tables: {error}"))?;
+    Ok(tables
+        .into_iter()
+        .filter(|table| !NOT_VENUE_CONTENT.contains(&table.as_str()))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
     use super::*;
+
+    /// The registry is the schema's answer, so a new venue-scoped table is in
+    /// it the day it is created and nobody has to remember a second list.
+    #[tokio::test]
+    async fn venue_owned_tables_are_read_off_the_schema() {
+        let (_directory, pool) = test_pool().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let tables = venue_owned_tables(&mut connection).await.unwrap();
+
+        for owned in ["fixtures", "stage_pieces", "venue_nodes", "scores", "cues"] {
+            assert!(
+                tables.iter().any(|t| t == owned),
+                "{owned} carries a venue_id and is venue content: {tables:?}"
+            );
+        }
+        // The venue row itself is not its own content, and a membership is who
+        // may open the venue rather than what is in it.
+        for excluded in ["venues", "venue_memberships"] {
+            assert!(
+                !tables.iter().any(|t| t == excluded),
+                "{excluded} is not venue content: {tables:?}"
+            );
+        }
+        let mut sorted = tables.clone();
+        sorted.sort();
+        assert_eq!(tables, sorted, "callers build SQL from this order");
+    }
 
     async fn test_pool() -> (tempfile::TempDir, SqlitePool) {
         let directory = tempfile::tempdir().unwrap();
