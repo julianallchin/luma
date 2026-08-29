@@ -4,6 +4,14 @@
 //! ends up — that is [`crate::venue_graph`]'s business, and the split is what
 //! keeps the resolver testable without a database and this module testable
 //! without a GLB.
+//!
+//! One exception, deliberate: every write here tells the derived-group cache
+//! that the rig moved. The group tree is *derived from this graph*, and the
+//! cache that holds it is a read cache over these rows. Making each of the
+//! eight callers remember to invalidate is how six of them came to forget —
+//! moving a truss left every selection expression naming a derived group
+//! answering with the old split. The one place that can promise the cache is
+//! not stale is the place the rows change.
 
 use std::collections::BTreeMap;
 
@@ -11,6 +19,16 @@ use uuid::Uuid;
 
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{VenueConstraint, VenueEdge, VenueGraphRows, VenueNode};
+
+/// Tell the derived-group cache the rig moved.
+///
+/// Called from every write in this module. Early — before the transaction
+/// commits — because the cache is a pure read cache: dropping it when a write
+/// might still roll back costs one reload, and keeping it when a write lands
+/// costs a wrong answer.
+fn graph_changed() {
+    crate::services::groups::invalidate_venue_fixture_cache();
+}
 
 // -----------------------------------------------------------------------------
 // Reads
@@ -142,6 +160,7 @@ pub async fn insert_node_with_id(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to insert venue node: {e}"))?;
+    graph_changed();
     Ok(())
 }
 
@@ -176,6 +195,7 @@ pub async fn upsert_edge(
     .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to attach venue node: {e}"))?;
+    graph_changed();
     Ok(())
 }
 
@@ -192,6 +212,7 @@ pub async fn delete_edge(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to detach venue node: {e}"))?;
+    graph_changed();
     Ok(())
 }
 
@@ -231,6 +252,7 @@ pub async fn set_params(
             }
         }
     }
+    graph_changed();
     Ok(())
 }
 
@@ -249,6 +271,7 @@ pub async fn set_label(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to rename venue node: {e}"))?;
+    graph_changed();
     Ok(())
 }
 
@@ -269,6 +292,7 @@ pub async fn delete_nodes(
             .await
             .map_err(|e| format!("Failed to delete venue node: {e}"))?;
     }
+    graph_changed();
     Ok(())
 }
 

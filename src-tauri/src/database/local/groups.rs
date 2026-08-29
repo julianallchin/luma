@@ -519,11 +519,17 @@ pub async fn update_movement_config(
 pub async fn fixture_creation_order(
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<String>, String> {
-    sqlx::query_scalar("SELECT id FROM fixtures WHERE venue_id = ? ORDER BY created_at ASC, id ASC")
-        .bind(access.venue_id().to_owned())
-        .fetch_all(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to read the fixture creation order: {e}"))
+    // `rowid`, not `id`, as the tie-break: `created_at` is second-resolution,
+    // so four fixtures patched in one go all carry the same stamp and ordering
+    // them by uuid puts "creation order" in a random order that changes per
+    // run. `rowid` is the order they were inserted in.
+    sqlx::query_scalar(
+        "SELECT id FROM fixtures WHERE venue_id = ? ORDER BY created_at ASC, rowid ASC",
+    )
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to read the fixture creation order: {e}"))
 }
 
 /// The fixture ids in one group, in membership order, deduplicated across

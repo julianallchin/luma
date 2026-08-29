@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::fixtures::{ChannelType, FixtureDefinition, Mode};
 use crate::services::group_derivation::FixtureRole;
 
 /// Movement pyramid configuration for a fixture group.
@@ -31,79 +30,6 @@ impl Default for MovementConfig {
             extent_u: 30.0,
             extent_v: 30.0,
             uv_rotation: 0.0,
-        }
-    }
-}
-
-/// Auto-detected fixture type based on fixture definition capabilities
-#[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq, Eq, Hash)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
-#[serde(rename_all = "snake_case")]
-pub enum FixtureType {
-    MovingHead,
-    PixelBar,
-    ParWash,
-    Scanner,
-    Strobe,
-    Static,
-    Unknown,
-}
-
-impl FixtureType {
-    /// Detect fixture type from its definition and selected mode
-    pub fn detect(definition: &FixtureDefinition, mode: &Mode) -> Self {
-        let mut has_pan = false;
-        let mut has_tilt = false;
-        let mut has_rgb = false;
-        let mut has_dimmer = false;
-        let mut has_pixels = false;
-
-        // Check mode channels against definition channels
-        for mode_channel in &mode.channels {
-            if let Some(channel) = definition
-                .channels
-                .iter()
-                .find(|c| c.name == mode_channel.name)
-            {
-                let ch_type = channel.get_type();
-                match ch_type {
-                    ChannelType::Pan => has_pan = true,
-                    ChannelType::Tilt => has_tilt = true,
-                    ChannelType::Intensity => {
-                        let colour = channel.get_colour();
-                        if colour == super::fixtures::ChannelColour::None {
-                            has_dimmer = true;
-                        } else {
-                            has_rgb = true;
-                        }
-                    }
-                    ChannelType::Colour => has_rgb = true,
-                    _ => {}
-                }
-            }
-        }
-
-        // Check for pixel bar (multiple heads in layout)
-        if let Some(physical) = &definition.physical {
-            if let Some(layout) = &physical.layout {
-                if layout.width > 1 || layout.height > 1 {
-                    has_pixels = true;
-                }
-            }
-        }
-        // Also check if mode has multiple heads
-        if mode.heads.len() > 2 {
-            has_pixels = true;
-        }
-
-        // Determine type based on capabilities
-        match (has_pan, has_tilt, has_rgb, has_pixels, has_dimmer) {
-            (true, true, _, _, _) => FixtureType::MovingHead,
-            (_, _, _, true, _) => FixtureType::PixelBar,
-            (true, false, _, _, _) | (false, true, _, _, _) => FixtureType::Scanner,
-            (false, false, true, false, _) => FixtureType::ParWash,
-            (false, false, false, false, true) => FixtureType::Static,
-            _ => FixtureType::Unknown,
         }
     }
 }
@@ -196,7 +122,15 @@ pub struct FixtureGroup {
 pub struct FixtureGroupNode {
     pub group_id: String,
     pub group_name: Option<String>,
-    pub fixture_type: FixtureType,
+    /// The role of the group's first member — what the set is mostly for.
+    /// `None` for an empty group.
+    pub role: Option<FixtureRole>,
+    /// Whether anything in the group aims: a pan or a tilt channel somewhere.
+    ///
+    /// Not derivable from [`Self::role`] and deliberately beside it: a wash
+    /// mover and a par are both [`FixtureRole::Wash`], and only one of them has
+    /// a movement pyramid to configure.
+    pub moves: bool,
     pub axis_lr: Option<f64>,
     pub axis_fb: Option<f64>,
     pub axis_ab: Option<f64>,
@@ -211,7 +145,9 @@ pub struct FixtureGroupNode {
 pub struct GroupedFixtureNode {
     pub id: String,
     pub label: String,
-    pub fixture_type: FixtureType,
+    pub role: FixtureRole,
+    /// Whether this fixture aims — see [`FixtureGroupNode::moves`].
+    pub moves: bool,
     /// Heads of this fixture that belong to the group — all of them for
     /// whole-fixture membership. Empty for fixtures whose mode defines no heads.
     pub heads: Vec<HeadNode>,

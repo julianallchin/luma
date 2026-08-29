@@ -58,10 +58,8 @@ export function GroupedFixtureTree() {
 
 	const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
 
-	// Movement config — show for MovingHead/Scanner groups
-	const isMovingGroup =
-		selectedGroup?.fixtureType === "moving_head" ||
-		selectedGroup?.fixtureType === "scanner";
+	// Movement config — only a group with something to aim has a pyramid.
+	const isMovingGroup = selectedGroup?.moves ?? false;
 	const storeConfig = selectedGroup?.movementConfig ?? null;
 
 	// Local state for immediate slider feedback; synced from store when selection changes

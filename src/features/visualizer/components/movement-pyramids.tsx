@@ -160,13 +160,8 @@ export function MovementPyramids() {
 
 	if (!selectedGroup || !config) return null;
 
-	// Only show for mover types
-	if (
-		selectedGroup.fixtureType !== "moving_head" &&
-		selectedGroup.fixtureType !== "scanner"
-	) {
-		return null;
-	}
+	// Only a group with something to aim has a pyramid.
+	if (!selectedGroup.moves) return null;
 
 	return (
 		<group>

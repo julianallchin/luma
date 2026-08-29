@@ -3,8 +3,9 @@
 //! Handles group hierarchy building, fixture type detection, and tag expression resolution.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use once_cell::sync::Lazy;
 use rand::prelude::*;
@@ -13,18 +14,18 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::database::local;
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::group_overrides as overrides_db;
+use crate::database::local::group_overrides::GroupOverride;
 use crate::database::local::groups as groups_db;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::fixtures::layout::{fixture_mount, head_geometry};
 use crate::fixtures::parser;
-use crate::models::fixtures::PatchedFixture;
+use crate::models::fixtures::{FixtureDefinition, Mode, PatchedFixture};
 use crate::models::groups::{
-    normalize_group_name, FixtureGroupNode, FixtureType, GroupTreeNode, GroupedFixtureNode,
-    HeadNode,
+    normalize_group_name, FixtureGroupNode, GroupTreeNode, GroupedFixtureNode, HeadNode,
 };
 use crate::models::selection::{Selection, Subset};
 use crate::services::group_derivation::{
-    self, FixtureIdentity, FixtureRole, ManualGroup, VenueFacts,
+    self, DerivedTree, FixtureIdentity, FixtureRole, ManualGroup, VenueFacts,
 };
 use fixture_kinematics::rig_position;
 use luma_scene::venue::ResolvedVenue;
@@ -217,16 +218,16 @@ pub async fn get_grouped_hierarchy_with_path(
         }
 
         let mut grouped_fixtures = Vec::with_capacity(order.len());
-        let mut group_fixture_type = FixtureType::Unknown;
+        // What the set is mostly for is its first member's role; whether it has
+        // anything to aim is true of the group if it is true of anything in it.
+        let mut group_role = None;
+        let mut group_moves = false;
 
         for fixture_id in order {
             let (fixture, member_heads) = folded.remove(&fixture_id).unwrap();
-            let fixture_type = detect_fixture_type_with_path(resource_path, &fixture)?;
-
-            // Track the dominant type for the group
-            if group_fixture_type == FixtureType::Unknown {
-                group_fixture_type = fixture_type.clone();
-            }
+            let (role, moves) = role_and_aim(resource_path, &fixture);
+            group_role = group_role.or(Some(role));
+            group_moves |= moves;
 
             let all_heads = get_fixture_heads_with_path(resource_path, &venue, &fixture);
             let head_count = all_heads.len() as i64;
@@ -244,7 +245,8 @@ pub async fn get_grouped_hierarchy_with_path(
                     .label
                     .clone()
                     .unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
-                fixture_type,
+                role,
+                moves,
                 heads,
                 head_count,
             });
@@ -253,7 +255,8 @@ pub async fn get_grouped_hierarchy_with_path(
         result.push(FixtureGroupNode {
             group_id: group.id,
             group_name: group.name.clone(),
-            fixture_type: group_fixture_type,
+            role: group_role,
+            moves: group_moves,
             axis_lr: group.axis_lr,
             axis_fb: group.axis_fb,
             axis_ab: group.axis_ab,
@@ -265,25 +268,58 @@ pub async fn get_grouped_hierarchy_with_path(
     Ok(result)
 }
 
-/// Detect fixture type from its definition (PathBuf version)
-pub fn detect_fixture_type_with_path(
-    resource_path: &Path,
-    fixture: &PatchedFixture,
-) -> Result<FixtureType, String> {
-    let def_path = resource_path.join(&fixture.fixture_path);
+/// One fixture's definition, parsed at most once per file per process.
+///
+/// Deriving the group tree asks every fixture for its role, and a venue's
+/// fixtures share a handful of definitions; re-reading and re-parsing a `.qxf`
+/// per fixture per derivation was most of the cost of renaming a group. Keyed
+/// on the path *and* its modification time, so an imported definition that is
+/// replaced on disk is re-read rather than remembered.
+///
+/// `None` when the file will not parse: one unreadable `.qxf` should cost the
+/// venue one fixture's classification, not the whole tree.
+fn definition(resource_path: &Path, fixture: &PatchedFixture) -> Option<Arc<FixtureDefinition>> {
+    /// Keyed on the file and when it last changed.
+    type Parsed = HashMap<(PathBuf, Option<SystemTime>), Arc<FixtureDefinition>>;
+    static CACHE: Lazy<std::sync::Mutex<Parsed>> = Lazy::new(Default::default);
 
-    let def = match parser::parse_definition(&def_path) {
-        Ok(d) => d,
-        Err(_) => return Ok(FixtureType::Unknown),
-    };
-
-    if let Some(mode) = def.modes.iter().find(|m| m.name == fixture.mode_name) {
-        Ok(FixtureType::detect(&def, mode))
-    } else if let Some(mode) = def.modes.first() {
-        Ok(FixtureType::detect(&def, mode))
-    } else {
-        Ok(FixtureType::Unknown)
+    let path = resource_path.join(&fixture.fixture_path);
+    let key = (path.clone(), std::fs::metadata(&path).ok()?.modified().ok());
+    if let Some(hit) = CACHE.lock().ok()?.get(&key) {
+        return Some(hit.clone());
     }
+    let parsed = Arc::new(parser::parse_definition(&path).ok()?);
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(key, parsed.clone());
+    }
+    Some(parsed)
+}
+
+/// The mode a fixture is patched in, falling back to the definition's first —
+/// a patch naming a mode the definition no longer has still describes a light.
+fn patched_mode<'a>(def: &'a FixtureDefinition, fixture: &PatchedFixture) -> Option<&'a Mode> {
+    def.modes
+        .iter()
+        .find(|mode| mode.name == fixture.mode_name)
+        .or_else(|| def.modes.first())
+}
+
+/// A fixture's role and whether it aims — the two questions the group tree and
+/// the movement pyramid ask, answered from one parse.
+///
+/// A definition that will not parse is [`FixtureRole::Other`] and does not aim,
+/// rather than an error.
+fn role_and_aim(resource_path: &Path, fixture: &PatchedFixture) -> (FixtureRole, bool) {
+    let Some(def) = definition(resource_path, fixture) else {
+        return (FixtureRole::Other, false);
+    };
+    let Some(mode) = patched_mode(&def, fixture) else {
+        return (FixtureRole::Other, false);
+    };
+    (
+        FixtureRole::of(&def, mode),
+        group_derivation::aims(&def, mode),
+    )
 }
 
 /// Get all heads for a fixture with their world positions (PathBuf version).
@@ -297,9 +333,7 @@ fn get_fixture_heads_with_path(
     venue: &ResolvedVenue,
     fixture: &PatchedFixture,
 ) -> Vec<HeadNode> {
-    let def_path = resource_path.join(&fixture.fixture_path);
-
-    let Ok(def) = parser::parse_definition(&def_path) else {
+    let Some(def) = definition(resource_path, fixture) else {
         return Vec::new();
     };
     let Some(mode) = def.modes.iter().find(|m| m.name == fixture.mode_name) else {
@@ -328,9 +362,7 @@ fn get_fixture_heads_with_path(
 /// Number of heads a fixture's mode defines, floored at 1 — the eval engine
 /// always emits at least one primitive ("{id}:0") per fixture.
 fn head_count_with_path(resource_path: &Path, fixture: &PatchedFixture) -> usize {
-    let def_path = resource_path.join(&fixture.fixture_path);
-    parser::parse_definition(&def_path)
-        .ok()
+    definition(resource_path, fixture)
         .and_then(|def| {
             def.modes
                 .iter()
@@ -891,6 +923,101 @@ pub async fn remove_head_from_group(
 // The derived group tree
 // =============================================================================
 
+/// Everything the group tree is made of, read once.
+///
+/// One derivation per command. The tree, a node in it, the derivation path an
+/// override row records and the tree the command hands back afterwards are all
+/// questions about the same solve — asking each of them separately re-solved
+/// the venue and re-parsed every `.qxf` in it, four times over for a rename.
+pub struct GroupSources {
+    derived: DerivedTree,
+    overrides: Vec<GroupOverride>,
+    manual: Vec<ManualGroup>,
+}
+
+impl GroupSources {
+    /// Solve the venue, derive, and read the two group tables beside it.
+    ///
+    /// # Errors
+    /// Fails if the rows cannot be read, if the catalog cannot be resolved, or
+    /// if the venue has no graph root (`crate::venue_graph::ensure_migrated`
+    /// has never run for it).
+    pub async fn read(
+        resource_path: &Path,
+        access: &mut impl AuthorizedVenue,
+    ) -> Result<Self, String> {
+        let derived = group_derivation::derive_groups(&venue_facts(resource_path, access).await?);
+        let overrides = overrides_db::list(access).await?;
+
+        let mut manual = Vec::new();
+        for group in groups_db::list_groups(access).await? {
+            let Some(name) = group.name.clone() else {
+                continue;
+            };
+            let fixtures = groups_db::group_member_ids(access, &group.id).await?;
+            manual.push(ManualGroup {
+                id: group.id,
+                name,
+                fixtures,
+            });
+        }
+        Ok(GroupSources {
+            derived,
+            overrides,
+            manual,
+        })
+    }
+
+    /// The merged group tree: derivation, the overrides on top, and the
+    /// authored groups beside them. Parents before children.
+    #[must_use]
+    pub fn tree(&self) -> Vec<GroupTreeNode> {
+        group_derivation::merge_tree(&self.derived, &self.overrides, &self.manual)
+    }
+
+    /// Whether `group_id` names a node of this venue's tree at all.
+    #[must_use]
+    pub fn contains(&self, group_id: &str) -> bool {
+        self.derived.groups.iter().any(|g| g.id == group_id)
+            || self.manual.iter().any(|g| g.id == group_id)
+    }
+
+    /// The derivation path of a derived node, `/`-joined — the override row's
+    /// record of *which set* was touched. Empty for an authored group, which
+    /// has no derivation to record.
+    #[must_use]
+    pub fn derived_path(&self, group_id: &str) -> String {
+        self.derived
+            .groups
+            .iter()
+            .find(|group| group.id == group_id)
+            .map_or_else(String::new, |group| group.path.join("/"))
+    }
+
+    /// The override row already standing for `group_id`, if any.
+    #[must_use]
+    pub fn override_of(&self, group_id: &str) -> Option<&GroupOverride> {
+        self.overrides.iter().find(|row| row.group_id == group_id)
+    }
+
+    /// Every override in the venue — what [`group_derivation::merged_terminal`]
+    /// reads to follow a merge chain.
+    #[must_use]
+    pub fn overrides(&self) -> &[GroupOverride] {
+        &self.overrides
+    }
+
+    /// Apply a row locally, so the caller that just wrote it can hand back the
+    /// resulting tree without re-deriving the venue it derived a moment ago.
+    pub fn apply(&mut self, row: Option<GroupOverride>, group_id: &str) {
+        self.overrides
+            .retain(|existing| existing.group_id != group_id);
+        if let Some(row) = row {
+            self.overrides.push(row);
+        }
+    }
+}
+
 /// The facts [`group_derivation::derive_groups`] reads, out of the database.
 ///
 /// One solve. The graph supplies placement and structure, the patch list
@@ -898,9 +1025,7 @@ pub async fn remove_head_from_group(
 /// [`group_derivation`] for why that seam is there.
 ///
 /// # Errors
-/// Fails if the rows cannot be read, if the catalog cannot be resolved, or if
-/// the venue has no graph root (`crate::venue_graph::ensure_migrated` has never
-/// run for it).
+/// As [`GroupSources::read`].
 pub async fn venue_facts(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
@@ -925,87 +1050,25 @@ pub async fn venue_facts(
         &venue_id,
         &solved,
         &graph,
+        crate::venue_graph::sockets(resource_path)?,
         &identities,
     ))
 }
 
-/// The merged group tree: derivation, the overrides on top, and the authored
-/// groups beside them.
+/// The merged group tree, for a caller that wants nothing else from the solve.
 ///
 /// # Errors
-/// As [`venue_facts`], plus a failure to read the group tables.
+/// As [`GroupSources::read`].
 pub async fn group_tree(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
 ) -> Result<Vec<GroupTreeNode>, String> {
-    let derived = group_derivation::derive_groups(&venue_facts(resource_path, access).await?);
-    let overrides = overrides_db::list(access).await?;
-
-    let mut manual = Vec::new();
-    for group in groups_db::list_groups(access).await? {
-        let Some(name) = group.name.clone() else {
-            continue;
-        };
-        let fixtures = groups_db::group_member_ids(access, &group.id).await?;
-        manual.push(ManualGroup {
-            id: group.id,
-            name,
-            fixtures,
-        });
-    }
-
-    Ok(group_derivation::merge_tree(&derived, &overrides, &manual))
-}
-
-/// One node of the merged tree, by id — what an override command needs before
-/// it can freeze what it is about to change.
-///
-/// # Errors
-/// As [`group_tree`].
-pub async fn group_node(
-    resource_path: &Path,
-    access: &mut impl AuthorizedVenue,
-    group_id: &str,
-) -> Result<Option<GroupTreeNode>, String> {
-    Ok(group_tree(resource_path, access)
-        .await?
-        .into_iter()
-        .find(|node| node.id == group_id))
-}
-
-/// The derivation path of a derived node, `/`-joined — the override row's
-/// record of *which set* was touched.
-///
-/// # Errors
-/// As [`venue_facts`].
-pub async fn derived_path(
-    resource_path: &Path,
-    access: &mut impl AuthorizedVenue,
-    group_id: &str,
-) -> Result<Option<String>, String> {
-    Ok(
-        group_derivation::derive_groups(&venue_facts(resource_path, access).await?)
-            .groups
-            .iter()
-            .find(|group| group.id == group_id)
-            .map(|group| group.path.join("/")),
-    )
+    Ok(GroupSources::read(resource_path, access).await?.tree())
 }
 
 /// A fixture's role, from its definition and the mode it is patched in.
-///
-/// A definition that will not parse is [`FixtureRole::Other`] rather than an
-/// error: one unreadable `.qxf` should cost the venue one branch of its tree,
-/// not the whole tree.
 pub fn role_with_path(resource_path: &Path, fixture: &PatchedFixture) -> FixtureRole {
-    let Ok(def) = parser::parse_definition(&resource_path.join(&fixture.fixture_path)) else {
-        return FixtureRole::Other;
-    };
-    def.modes
-        .iter()
-        .find(|mode| mode.name == fixture.mode_name)
-        .or_else(|| def.modes.first())
-        .map_or(FixtureRole::Other, |mode| FixtureRole::of(&def, mode))
+    role_and_aim(resource_path, fixture).0
 }
 
 #[cfg(test)]

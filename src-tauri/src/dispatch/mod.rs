@@ -387,7 +387,7 @@ commands! {
     groups::rename_group_node(
         venue_id: String,
         group_id: String,
-        label: String,
+        label: Option<String>,
     ) -> Vec<GroupTreeNode>;
     groups::move_group_node(
         venue_id: String,
@@ -397,7 +397,7 @@ commands! {
     groups::merge_group_nodes(
         venue_id: String,
         group_id: String,
-        into_group_id: String,
+        into_group_id: Option<String>,
     ) -> Vec<GroupTreeNode>;
     groups::reset_group_node(venue_id: String, group_id: String) -> Vec<GroupTreeNode>;
     groups::get_ungrouped_fixtures(venue_id: String) -> Vec<PatchedFixture>;

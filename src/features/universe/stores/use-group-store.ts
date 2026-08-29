@@ -97,7 +97,8 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 					{
 						groupId: group.id,
 						groupName: group.name,
-						fixtureType: "unknown",
+						role: null,
+						moves: false,
 						movementConfig: null,
 						axisLr: group.axisLr,
 						axisFb: group.axisFb,
@@ -181,7 +182,8 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 											...g.fixtures,
 											{
 												...fixture,
-												fixtureType: "unknown" as const,
+												role: "other" as const,
+												moves: false,
 												heads: [],
 												headCount: 0n,
 											},

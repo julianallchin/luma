@@ -170,6 +170,29 @@ impl Channel {
         }
     }
 
+    /// Whether this channel changes the light's *colour* at all.
+    ///
+    /// A different question from [`Channel::get_colour`], which answers "which
+    /// of the primaries this codebase mixes does it drive" and so has to return
+    /// one of a closed set the DMX path can act on. QLC+ files carry colour
+    /// controls that answer the first question and not the second — an HSV par
+    /// is `IntensityHue` / `IntensitySaturation`, a six-colour engine adds
+    /// `IntensityLime` and `IntensityIndigo` — and a classifier that only asked
+    /// the mixer's question called every full-colour par patched in HSV mode a
+    /// colourless dimmer.
+    #[must_use]
+    pub fn carries_colour(&self) -> bool {
+        if self.get_colour() != ChannelColour::None {
+            return true;
+        }
+        self.preset.as_deref().is_some_and(|preset| {
+            matches!(
+                preset,
+                "IntensityHue" | "IntensitySaturation" | "IntensityLime" | "IntensityIndigo"
+            )
+        })
+    }
+
     pub fn get_colour(&self) -> ChannelColour {
         if let Some(preset) = &self.preset {
             match preset.as_str() {
