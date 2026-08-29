@@ -57,8 +57,8 @@ pub struct Scene {
     /// Live editor state: what the app's selection and gizmo are doing right
     /// now. Never captured — the catalogue describes a picture, and this is
     /// what a *running* editor draws over one. `selected_fixture_ids` predates
-    /// it and stays where the goldens write it, so [`Scene::selected`] is the
-    /// one place that knows the selection is spelled in two fields.
+    /// it and stays where the goldens write it, so the selection is spelled in
+    /// two fields and `overlay::pivot` is the one reader of both.
     #[serde(skip)]
     pub editor: Editor,
     /// Patched fixtures, in submission order.
@@ -870,7 +870,7 @@ mod tests {
             editing: false,
             render: RenderSettings::dark_stage(50.0, 1.0),
             selected_fixture_ids: Vec::new(),
-            editor: Default::default(),
+            editor: Editor::default(),
             fixtures: (0..4)
                 .map(|i| Fixture {
                     id: format!("fixture-{i}"),

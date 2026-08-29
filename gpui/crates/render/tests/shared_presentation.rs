@@ -51,6 +51,7 @@ fn frame() -> Frame {
         editing: false,
         render,
         selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
         fixtures: Vec::new(),
         pieces: Vec::<Piece>::new(),
         state: BTreeMap::new(),

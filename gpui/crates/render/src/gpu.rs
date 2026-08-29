@@ -4050,6 +4050,7 @@ mod tests {
                 editor_object: None,
             }],
             grid_draws: 0,
+            gizmo_pivot: None,
             overlays: Vec::new(),
             point_lights: Vec::new(),
             fixture_cones,
@@ -4135,6 +4136,7 @@ mod tests {
             images: Vec::new(),
             draws,
             grid_draws: 0,
+            gizmo_pivot: None,
             overlays: vec![Overlay {
                 mesh: 0,
                 model: Mat4::from_translation(Vec3::Y * overlay_y),

@@ -70,6 +70,7 @@ fn scene() -> Scene {
         editing: false,
         render,
         selected_fixture_ids: Vec::new(),
+        editor: Default::default(),
         pieces: Vec::new(),
         fixtures: Vec::new(),
         state: BTreeMap::new(),

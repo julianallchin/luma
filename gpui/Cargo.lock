@@ -3533,6 +3533,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
+ "glam",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
@@ -3541,6 +3542,7 @@ dependencies = [
  "luma",
  "luma-app",
  "luma-chat",
+ "luma-scene",
  "luma-ui",
  "mcp-stdio",
  "rquickjs",

@@ -158,6 +158,7 @@ impl VenueGeometry {
             editing: false,
             render,
             selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
             // A fixture whose definition did not resolve has no mesh and no
             // cone, so it is left out rather than drawn as a guess.
             fixtures: self
