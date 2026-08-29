@@ -359,7 +359,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 55
+        "line": 56
       },
       "name": "attach",
       "prose": {
@@ -1187,7 +1187,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 233
+        "line": 234
       },
       "name": "delete_subtree",
       "prose": {
@@ -1280,7 +1280,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 172
+        "line": 173
       },
       "name": "detach",
       "prose": {
@@ -3417,7 +3417,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 122
+        "line": 123
       },
       "name": "place_free",
       "prose": {
@@ -3705,7 +3705,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 92
+        "line": 93
       },
       "name": "reattach",
       "prose": {
@@ -4612,7 +4612,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 190
+        "line": 191
       },
       "name": "set_params",
       "prose": {

@@ -48,9 +48,10 @@ pub async fn get_resolved_venue(
 ///
 /// # Errors
 /// Refuses a socket pair that does not exist or whose polarity forbids the
-/// joint, and a parent that would close a cycle. Those are the only two hard
-/// errors the design admits; everything else comes back as a warning on the
-/// report.
+/// joint, and a parent that cannot host: one that would close a cycle, or an
+/// array, whose members are derived and have no row to bolt to. Those are the
+/// hard errors the design admits; everything else comes back as a warning on
+/// the report.
 #[allow(clippy::too_many_arguments)]
 pub async fn attach(
     services: &AppServices,
@@ -615,6 +616,73 @@ mod tests {
                 assert_eq!(member["parentId"], json!(id));
             }
         }
+    }
+
+    /// An array's members are derived at solve time, so the anchor is the only
+    /// row an edge could name — and one edge on it would seat the child on
+    /// every copy at once, through a seat with no geometry.
+    #[tokio::test]
+    async fn an_array_cannot_be_a_parent() {
+        let (_dir, services, venue) = room().await;
+        let deck = place(&services, &venue, "stage", DECK, "bottom", 0.0, 0.0)
+            .await
+            .unwrap();
+        let array = attach(
+            &services,
+            &venue,
+            "array",
+            TRUSS,
+            &deck,
+            "end_a",
+            "corner_fl",
+            Some(json!({ "count": 3.0, "span": 4.0 })),
+        )
+        .await
+        .unwrap();
+
+        let before = node_count(&services, &venue).await;
+        let error = attach(
+            &services,
+            &venue,
+            "run",
+            TRUSS,
+            &array,
+            "end_a",
+            "end_b",
+            Some(json!({ "span": 2.0 })),
+        )
+        .await
+        .expect_err("a stick was bolted to an array");
+        assert_invalid(&error, "is an array");
+        assert_eq!(
+            before,
+            node_count(&services, &venue).await,
+            "a refused placement writes no rows"
+        );
+
+        // Every member's every end is still open: one edge on the anchor would
+        // have closed one on all three.
+        let open: Vec<(String, String)> = resolved(&services, &venue).await["dangling"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d["nodeId"].as_str().unwrap().to_string(),
+                    d["socket"].as_str().unwrap().to_string(),
+                )
+            })
+            .filter(|(node, _)| node.starts_with(&array))
+            .collect();
+        assert_eq!(
+            open,
+            [
+                (format!("{array}#0"), "end_b".to_string()),
+                (format!("{array}#1"), "end_b".to_string()),
+                (format!("{array}#2"), "end_b".to_string()),
+            ],
+            "three sticks, three free ends; the bolted end is spent on each"
+        );
     }
 
     /// A stick bolted to a deck corner at one end has one open end, and the

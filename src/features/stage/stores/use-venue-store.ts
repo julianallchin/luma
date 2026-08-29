@@ -74,10 +74,10 @@ export const useVenueStore = create<VenueState>((set, get) => ({
  * pieces, not fixtures.
  *
  * `setPiece` is the resolver's own answer (`NodePose::is_set_piece`), carried
- * on the wire rather than re-derived here: an array's *anchor* is a seat with
- * no geometry that carries its members' `catalogRef`, so a filter written from
- * `kind` and `catalogRef` alone draws N+1 meshes for an array of N, with the
- * extra one inside the middle member.
+ * on the wire rather than re-derived here. An array's *anchor* is a seat with
+ * no geometry that carries its members' `catalogRef`, so `kind` and
+ * `catalogRef` are not enough to tell a mesh from a frame — and a second
+ * predicate is a second room.
  *
  * A fixture's node is drawn by the fixture layer instead (see
  * {@link usePlacedFixtures}), which needs the patch row for its definition.

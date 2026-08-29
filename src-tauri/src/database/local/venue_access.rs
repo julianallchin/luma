@@ -260,11 +260,11 @@ const NOT_VENUE_CONTENT: &[&str] = &[
 /// Every table whose rows are one venue's content, read off the live schema.
 ///
 /// A `venue_id` column is what makes a row belong to a venue, so the schema
-/// already holds this list; a second hand-maintained copy is a list that
-/// drifts, and it did — `sync::pull` guarded a remote venue delete on
-/// `stage_pieces` and never learned about `venue_nodes`, so a venue built
-/// entirely as a graph was cascade-deleted. Adding a venue-scoped table now
-/// costs nothing here, and forgetting one is no longer possible.
+/// already holds this list; a hand-maintained copy is a list that drifts, and a
+/// guard reading a stale one — `sync::pull`'s remote-delete check — deletes
+/// venues whose only content is in the table it never learned about. Reading
+/// the schema makes adding a venue-scoped table cost nothing here, and leaving
+/// one out impossible.
 ///
 /// In table-name order, so callers that build SQL from it build the same SQL
 /// every time.

@@ -32,9 +32,8 @@ use luma_scene::View;
 ///
 /// `facing` and `facing_word` are derived, never stored: they are
 /// `fixture_kinematics`'s answer for this mount, so an agent asking "which
-/// fixtures point at the house" gets the renderer's answer rather than its own
-/// arithmetic on `rotation`. Every consumer that used to do that arithmetic got
-/// a different result.
+/// fixtures point at the house" gets the renderer's answer rather than doing
+/// its own arithmetic on `rotation` and reaching a different one.
 #[derive(Serialize)]
 struct FixtureBinding {
     id: String,
@@ -256,9 +255,9 @@ async fn fixtures(
 /// The pose is the resolver's, the same one `render(view="dj")` draws, so the
 /// two agree about where the booth is by construction rather than by two copies
 /// of the same walk staying in step. Which poses are objects at all is
-/// [`NodePose::is_set_piece`] — the renderer's answer, not a second filter:
-/// this one used to spell it out and listed an array of N as N+1 pieces,
-/// because the anchor carries its members' `catalog_ref`.
+/// [`NodePose::is_set_piece`] — the renderer's answer, not a second filter, so
+/// an array anchor, which carries its members' `catalog_ref` and has no
+/// geometry of its own, is not listed as an N+1th piece.
 fn pieces(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
     let bindings: Vec<PieceBinding> = venue
         .poses()

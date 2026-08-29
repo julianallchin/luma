@@ -198,8 +198,13 @@ fn venue() -> VenueGraph {
         "stage_lab/speaker_dbr15.glb",
         &[],
     ));
-    graph.insert_edge(
-        "tray_on_tray",
+    graph.insert_placed(
+        node(
+            "tray_on_tray",
+            NodeKind::Piece,
+            "stage_lab/speaker_dbr15.glb",
+            &[],
+        ),
         Edge {
             parent: "tray_speaker".into(),
             my_socket: "mount".into(),
@@ -207,12 +212,6 @@ fn venue() -> VenueGraph {
             roll: 0.0,
         },
     );
-    graph.insert(node(
-        "tray_on_tray",
-        NodeKind::Piece,
-        "stage_lab/speaker_dbr15.glb",
-        &[],
-    ));
 
     // A far end: the run's open end checked against the tower it started from.
     // Violated by construction — the run goes nowhere near it — which is the
