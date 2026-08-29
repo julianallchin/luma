@@ -3,7 +3,7 @@ import { AlertTriangle, Plus, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { StageHierarchy } from "@/features/stage/components/stage-hierarchy";
-import { useStagePieceStore } from "@/features/stage/stores/use-stage-piece-store";
+import { useVenueStore } from "@/features/stage/stores/use-venue-store";
 import { dmxStore } from "@/features/visualizer/stores/dmx-store";
 import { universeStore } from "@/features/visualizer/stores/universe-state-store";
 import { Button } from "@/shared/components/ui/button";
@@ -57,10 +57,10 @@ export function UniverseDesigner({ venueId }: UniverseDesignerProps) {
 	const [panelHeight, setPanelHeight] = useState<number>(readPanelHeight);
 	const panelRef = useRef<HTMLDivElement>(null);
 
-	const initializeStagePieces = useStagePieceStore((s) => s.initialize);
+	const initializeVenue = useVenueStore((s) => s.initialize);
 	useEffect(() => {
-		if (venueId) initializeStagePieces(venueId);
-	}, [venueId, initializeStagePieces]);
+		if (venueId) initializeVenue(venueId);
+	}, [venueId, initializeVenue]);
 
 	// Clear render engine + frontend caches so fixtures show as off
 	useEffect(() => {

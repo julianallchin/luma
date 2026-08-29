@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Euler, Quaternion, Vector3 } from "three";
 import { create } from "zustand";
 import type {
 	FixtureDefinition,
@@ -57,11 +56,6 @@ interface FixtureState {
 	setPreviewFixtureIds: (ids: string[]) => void;
 	clearPreviewFixtureIds: () => void;
 	movePatchedFixture: (id: string, address: number) => Promise<void>;
-	moveFixtureSpatial: (
-		id: string,
-		pos: { x: number; y: number; z: number },
-		rot: { x: number; y: number; z: number },
-	) => Promise<void>;
 	patchFixture: (
 		universe: number,
 		address: number,
@@ -84,15 +78,6 @@ interface FixtureState {
 	isFixtureSelected: (id: string) => boolean;
 	duplicateSelectedFixtures: () => Promise<void>;
 	removeSelectedFixtures: () => Promise<void>;
-	moveSelectedFixturesSpatialDelta: (
-		deltaPos: { x: number; y: number; z: number },
-		deltaRot: { x: number; y: number; z: number },
-	) => Promise<void>;
-	rotateSelectedAroundCenter: (deltaRot: {
-		x: number;
-		y: number;
-		z: number;
-	}) => Promise<void>;
 
 	// Backward compat
 	selectedPatchedId: string | null;
@@ -336,191 +321,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		return get().selectedPatchedIds.has(id);
 	},
 
-	// --- Spatial ---
-
-	moveFixtureSpatial: async (id, pos, rot) => {
-		const { venueId } = get();
-		if (venueId === null) return;
-
-		try {
-			// Optimistic update
-			const current = get().patchedFixtures;
-			const idx = current.findIndex((f) => f.id === id);
-			if (idx === -1) return;
-			const optimistic = [...current];
-			optimistic[idx] = {
-				...optimistic[idx],
-				posX: pos.x,
-				posY: pos.y,
-				posZ: pos.z,
-				rotX: rot.x,
-				rotY: rot.y,
-				rotZ: rot.z,
-			};
-			set({ patchedFixtures: optimistic });
-
-			await invoke("move_patched_fixture_spatial", {
-				venueId,
-				id,
-				posX: pos.x,
-				posY: pos.y,
-				posZ: pos.z,
-				rotX: rot.x,
-				rotY: rot.y,
-				rotZ: rot.z,
-			});
-		} catch (error) {
-			console.error("Failed to move fixture spatially:", error);
-			await get().fetchPatchedFixtures();
-		}
-	},
-
-	moveSelectedFixturesSpatialDelta: async (deltaPos, deltaRot) => {
-		const {
-			venueId,
-			selectedPatchedIds,
-			lastSelectedPatchedId,
-			patchedFixtures,
-		} = get();
-		if (venueId === null) return;
-
-		// Skip the primary fixture — it's already moved by TransformControls + moveFixtureSpatial
-		const toMove = patchedFixtures.filter(
-			(f) => selectedPatchedIds.has(f.id) && f.id !== lastSelectedPatchedId,
-		);
-		if (toMove.length === 0) return;
-
-		// Optimistic update all at once
-		const optimistic = [...patchedFixtures];
-		for (const fixture of toMove) {
-			const idx = optimistic.findIndex((f) => f.id === fixture.id);
-			if (idx === -1) continue;
-			optimistic[idx] = {
-				...optimistic[idx],
-				posX: fixture.posX + deltaPos.x,
-				posY: fixture.posY + deltaPos.y,
-				posZ: fixture.posZ + deltaPos.z,
-				rotX: fixture.rotX + deltaRot.x,
-				rotY: fixture.rotY + deltaRot.y,
-				rotZ: fixture.rotZ + deltaRot.z,
-			};
-		}
-		set({ patchedFixtures: optimistic });
-
-		// Persist each
-		try {
-			await Promise.all(
-				toMove.map((f) =>
-					invoke("move_patched_fixture_spatial", {
-						venueId,
-						id: f.id,
-						posX: f.posX + deltaPos.x,
-						posY: f.posY + deltaPos.y,
-						posZ: f.posZ + deltaPos.z,
-						rotX: f.rotX + deltaRot.x,
-						rotY: f.rotY + deltaRot.y,
-						rotZ: f.rotZ + deltaRot.z,
-					}),
-				),
-			);
-		} catch (error) {
-			console.error("Failed to move fixtures spatially:", error);
-			await get().fetchPatchedFixtures();
-		}
-	},
-
-	rotateSelectedAroundCenter: async (deltaRot) => {
-		const {
-			venueId,
-			selectedPatchedIds,
-			lastSelectedPatchedId,
-			patchedFixtures,
-		} = get();
-		if (venueId === null || selectedPatchedIds.size < 2) return;
-
-		const selected = patchedFixtures.filter((f) =>
-			selectedPatchedIds.has(f.id),
-		);
-		if (selected.length < 2) return;
-
-		// Compute centroid of all selected fixtures (data coords, Z-up)
-		const centroid = { x: 0, y: 0, z: 0 };
-		for (const f of selected) {
-			centroid.x += f.posX;
-			centroid.y += f.posY;
-			centroid.z += f.posZ;
-		}
-		centroid.x /= selected.length;
-		centroid.y /= selected.length;
-		centroid.z /= selected.length;
-
-		// Build quaternion from delta rotation (data coords)
-		const q = new Quaternion().setFromEuler(
-			new Euler(deltaRot.x, deltaRot.y, deltaRot.z),
-		);
-
-		// Skip the primary — it's already moved by TransformControls + moveFixtureSpatial
-		const toRotate = selected.filter((f) => f.id !== lastSelectedPatchedId);
-
-		// Compute new positions/rotations
-		const updates: Array<{
-			id: string;
-			posX: number;
-			posY: number;
-			posZ: number;
-			rotX: number;
-			rotY: number;
-			rotZ: number;
-		}> = [];
-		for (const f of toRotate) {
-			const offset = new Vector3(
-				f.posX - centroid.x,
-				f.posY - centroid.y,
-				f.posZ - centroid.z,
-			);
-			offset.applyQuaternion(q);
-			updates.push({
-				id: f.id,
-				posX: centroid.x + offset.x,
-				posY: centroid.y + offset.y,
-				posZ: centroid.z + offset.z,
-				rotX: f.rotX - deltaRot.x,
-				rotY: f.rotY - deltaRot.y,
-				rotZ: f.rotZ - deltaRot.z,
-			});
-		}
-
-		// Optimistic update
-		const optimistic = [...patchedFixtures];
-		for (const u of updates) {
-			const idx = optimistic.findIndex((f) => f.id === u.id);
-			if (idx === -1) continue;
-			optimistic[idx] = { ...optimistic[idx], ...u };
-		}
-		set({ patchedFixtures: optimistic });
-
-		// Persist
-		try {
-			await Promise.all(
-				updates.map((u) =>
-					invoke("move_patched_fixture_spatial", {
-						venueId,
-						id: u.id,
-						posX: u.posX,
-						posY: u.posY,
-						posZ: u.posZ,
-						rotX: u.rotX,
-						rotY: u.rotY,
-						rotZ: u.rotZ,
-					}),
-				),
-			);
-		} catch (error) {
-			console.error("Failed to rotate fixtures around center:", error);
-			await get().fetchPatchedFixtures();
-		}
-	},
-
 	movePatchedFixture: async (id, address) => {
 		const { venueId } = get();
 		if (venueId === null) return;
@@ -697,18 +497,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				label,
 			});
 
-			// Copy spatial position from original fixture
-			await invoke("move_patched_fixture_spatial", {
-				venueId,
-				id: newFixture.id,
-				posX: fixture.posX,
-				posY: fixture.posY,
-				posZ: fixture.posZ,
-				rotX: fixture.rotX,
-				rotY: fixture.rotY,
-				rotZ: fixture.rotZ,
-			});
-
 			await get().fetchPatchedFixtures();
 			// Select the new fixture
 			set({
@@ -783,18 +571,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 					modeName: fixture.modeName,
 					fixturePath: fixture.fixturePath,
 					label,
-				});
-
-				// Copy spatial position with small X offset so duplicates are visible
-				await invoke("move_patched_fixture_spatial", {
-					venueId,
-					id: newFixture.id,
-					posX: fixture.posX + 0.3,
-					posY: fixture.posY,
-					posZ: fixture.posZ,
-					rotX: fixture.rotX,
-					rotY: fixture.rotY,
-					rotZ: fixture.rotZ,
 				});
 
 				newIds.push(newFixture.id);

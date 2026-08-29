@@ -1,7 +1,7 @@
 import { Html, Line } from "@react-three/drei";
 import { useMemo } from "react";
 import { Vector3 } from "three";
-import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import { usePlacedFixtures } from "@/features/stage/stores/use-venue-store";
 
 interface MirrorPairResult {
 	centerX: number;
@@ -105,7 +105,7 @@ function errorColor(error: number): string {
  * Debug visualization for mirror pairs across the X axis.
  */
 export function MirrorDebug() {
-	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+	const patchedFixtures = usePlacedFixtures();
 
 	const result = useMemo(() => {
 		if (patchedFixtures.length < 2) return null;

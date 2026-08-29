@@ -4,8 +4,9 @@ import type { BoxGeometry, Mesh } from "three";
 
 import "@/App.css";
 import type { PrimitiveState } from "@/bindings/universe";
-import { getPieceGroup } from "@/features/stage/lib/piece-refs";
-import { useStagePieceStore } from "@/features/stage/stores/use-stage-piece-store";
+import type { ResolvedNode } from "@/bindings/venue-graph";
+import { getNodeGroup } from "@/features/stage/lib/node-refs";
+import { useVenueStore } from "@/features/stage/stores/use-venue-store";
 import { useFixtureStore } from "@/features/universe/stores/use-fixture-store";
 import { StageVisualizer } from "@/features/visualizer/components/stage-visualizer";
 import { PrimitiveOverrideContext } from "@/features/visualizer/hooks/use-primitive-state";
@@ -96,7 +97,7 @@ function sceneReady(s: GoldenScene): boolean {
 		if (!group || hasFallbackCube(group)) return false;
 	}
 	for (const p of s.pieces ?? []) {
-		if (!getPieceGroup(p.id)) return false;
+		if (!getNodeGroup(p.id)) return false;
 	}
 	return true;
 }
@@ -117,15 +118,29 @@ function seedStores(s: GoldenScene): void {
 		// `initialize`, which would try to load pieces over IPC.
 		venueId: null,
 	});
-	useStagePieceStore.setState({
+	// Fixtures get a venue node each, from the same pose the patch row was
+	// authored with: a fixture is drawn only where the solve places it, and the
+	// harness is the solver here.
+	const fixtureNodes: ResolvedNode[] = s.fixtures.map((f) => ({
+		id: f.id,
+		kind: "fixture",
+		catalogRef: f.id,
+		label: f.label,
+		parentId: null,
+		position: [f.posX, f.posY, f.posZ],
+		rotation: [f.rotX, f.rotY, f.rotZ],
+		facing: [0, 0, 1],
+		arrayIndex: null,
+		params: {},
+	}));
+	const nodes = [...fixtureNodes, ...(s.pieces ?? [])];
+	useVenueStore.setState({
+		// Left null so the visualizer's venue effect never calls `initialize`,
+		// which would try to solve the venue over IPC.
 		venueId: null,
-		pieces: s.pieces ?? [],
-		selectedIds: new Set(),
-		lastSelectedId: null,
-		selectedId: null,
-		hoveredId: null,
-		armedMeshPath: null,
-		ghost: null,
+		nodes,
+		byId: new Map(nodes.map((n) => [n.id, n])),
+		warnings: [],
 	});
 }
 
@@ -183,9 +198,9 @@ window.__GOLDEN__ = {
 			})),
 			pieces: (scene.pieces ?? []).map((p) => ({
 				id: p.id,
-				meshPath: p.meshPath,
-				pos: [p.posX, p.posY, p.posZ],
-				rot: [p.rotX, p.rotY, p.rotZ],
+				meshPath: p.catalogRef,
+				pos: p.position,
+				rot: p.rotation,
 			})),
 			selectedFixtureIds: scene.selectedFixtureIds ?? [],
 			state: scene.state,

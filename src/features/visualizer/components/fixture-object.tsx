@@ -8,7 +8,6 @@ import {
 	useState,
 } from "react";
 import type { Group } from "three";
-import { useStagePieceStore } from "@/features/stage/stores/use-stage-piece-store";
 import type {
 	FixtureDefinition,
 	PatchedFixture,
@@ -144,10 +143,6 @@ export function FixtureObject({
 				e.stopPropagation();
 				const shift = (e.nativeEvent as PointerEvent).shiftKey;
 				selectFixtureById(fixture.id, { shift });
-				// Cross-type clear: a non-shift click on a fixture also
-				// drops any stage-piece selection (and vice versa in
-				// stage-piece-node.tsx). Shift-click preserves both.
-				if (!shift) useStagePieceStore.getState().clearSelection();
 			}}
 		>
 			{visual}

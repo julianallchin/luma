@@ -1,7 +1,7 @@
 import { Html, Line } from "@react-three/drei";
 import { useMemo } from "react";
 import { Vector3 } from "three";
-import { useFixtureStore } from "../../universe/stores/use-fixture-store";
+import { usePlacedFixtures } from "@/features/stage/stores/use-venue-store";
 
 interface CircleFitResult {
 	// Fitted circle in 3D space
@@ -503,7 +503,7 @@ function generateCirclePoints(fit: CircleFitResult, segments = 64): Vector3[] {
  * Debug visualization component - add inside the Canvas
  */
 export function CircleFitDebug() {
-	const patchedFixtures = useFixtureStore((state) => state.patchedFixtures);
+	const patchedFixtures = usePlacedFixtures();
 
 	const fit = useMemo(() => {
 		if (patchedFixtures.length < 3) return null;

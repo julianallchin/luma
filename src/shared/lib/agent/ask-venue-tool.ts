@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { FixtureFacing, PatchedFixture } from "@/bindings/fixtures";
 import type { FixtureGroupNode } from "@/bindings/groups";
+import type { ResolvedNode, ResolvedVenue } from "@/bindings/venue-graph";
 import { VENUE_EXPERT_MODEL } from "@/features/track-editor/agent/openrouter-key";
 import { tool } from "@/shared/lib/agent/agent-tool";
 import { lumaPiModel } from "@/shared/lib/agent/openrouter";
@@ -49,17 +50,24 @@ The expert returns plain prose. Quote the exact snake_case group names from the 
 			let fixtures: PatchedFixture[];
 			let facings: FixtureFacing[];
 			let groups: FixtureGroupNode[];
+			let venue: ResolvedVenue;
 			try {
-				[fixtures, facings, groups] = await Promise.all([
+				[fixtures, facings, groups, venue] = await Promise.all([
 					invoke<PatchedFixture[]>("get_patched_fixtures", { venueId }),
 					invoke<FixtureFacing[]>("get_fixture_facings", { venueId }),
 					invoke<FixtureGroupNode[]>("get_grouped_hierarchy", { venueId }),
+					invoke<ResolvedVenue>("get_resolved_venue", { venueId }),
 				]);
 			} catch (err) {
 				return { error: `Failed to load venue data: ${String(err)}` };
 			}
 
-			const venueDump = formatVenueContext(fixtures, facings, groups);
+			const venueDump = formatVenueContext(
+				fixtures,
+				facings,
+				groups,
+				new Map(venue.nodes.map((n) => [n.id, n])),
+			);
 
 			try {
 				const answer = await completePiText({
@@ -89,6 +97,8 @@ export function formatVenueContext(
 	fixtures: PatchedFixture[],
 	facings: FixtureFacing[],
 	groups: FixtureGroupNode[],
+	/** Solved poses by fixture id. A fixture absent here is patched but unplaced. */
+	poses: Map<string, ResolvedNode>,
 ): string {
 	const facingWord = new Map(facings.map((f) => [f.id, f.word]));
 	const fixtureLabel = new Map<string, string>();
@@ -98,10 +108,14 @@ export function formatVenueContext(
 
 	const fixtureLines = fixtures.map((f) => {
 		const name = fixtureLabel.get(f.id) ?? "<unnamed>";
-		const pos = `(${fmtN(f.posX)}, ${fmtN(f.posY)}, ${fmtN(f.posZ)})`;
-		const rot = `(${fmtN(f.rotX)}, ${fmtN(f.rotY)}, ${fmtN(f.rotZ)})`;
+		const node = poses.get(f.id);
 		const facing = facingWord.get(f.id) ?? "?";
 		const type = inferFixtureTypeFromGroups(f.id, groups);
+		if (!node) {
+			return `${f.id} | "${name}" | ${type} | unplaced (patched, not yet on the stage)`;
+		}
+		const pos = `(${node.position.map(fmtN).join(", ")})`;
+		const rot = `(${node.rotation.map(fmtN).join(", ")})`;
 		return `${f.id} | "${name}" | ${type} | pos=${pos}m | facing=${facing} | rot=${rot}rad`;
 	});
 
@@ -128,7 +142,7 @@ export function formatVenueContext(
 	return `# Venue context
 
 ## Fixtures (${fixtures.length})
-Format: id | name | type | position (x,y,z meters) | facing | rotation (x,y,z radians)
+Format: id | name | type | position (x,y,z meters) | facing | rotation (x,y,z radians). A fixture with no position is patched but not yet placed on the stage.
 ${fixtureLines.join("\n")}
 
 ## Groups (${groups.length})
