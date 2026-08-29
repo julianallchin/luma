@@ -41,6 +41,8 @@ mod stem_worker;
 pub mod storage;
 mod sync;
 mod topo;
+/// The venue graph: loading it, solving it, and converting what came before.
+pub mod venue_graph;
 
 /// The app's version, from `Cargo.toml`. The Tauri host reads it through
 /// `@tauri-apps/api/app`'s `getVersion()`; a non-Tauri host has no such plugin,
@@ -598,15 +600,17 @@ pub fn run() {
             dispatch::adapter::get_patched_fixtures,
             dispatch::adapter::get_fixture_facings,
             dispatch::adapter::move_patched_fixture,
-            dispatch::adapter::move_patched_fixture_spatial,
             dispatch::adapter::remove_patched_fixture,
             dispatch::adapter::rename_patched_fixture,
             // Stage pieces
-            dispatch::adapter::list_stage_pieces,
-            dispatch::adapter::place_stage_piece,
-            dispatch::adapter::move_stage_piece,
-            dispatch::adapter::rename_stage_piece,
-            dispatch::adapter::delete_stage_piece,
+            dispatch::adapter::get_venue_graph,
+            dispatch::adapter::get_resolved_venue,
+            dispatch::adapter::attach,
+            dispatch::adapter::reattach,
+            dispatch::adapter::place_free,
+            dispatch::adapter::detach,
+            dispatch::adapter::set_params,
+            dispatch::adapter::delete_subtree,
             // Groups
             dispatch::adapter::create_group,
             dispatch::adapter::list_groups,

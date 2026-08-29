@@ -320,6 +320,56 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "kind",
+          "rust": "String"
+        },
+        {
+          "name": "catalogRef",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "label",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "parentId",
+          "rust": "String"
+        },
+        {
+          "name": "mySocket",
+          "rust": "String"
+        },
+        {
+          "name": "theirSocket",
+          "rust": "String"
+        },
+        {
+          "name": "yaw",
+          "rust": "Option<f64>"
+        },
+        {
+          "name": "params",
+          "rust": "Option<BTreeMap<String, f64>>"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 54
+      },
+      "name": "attach",
+      "prose": {
+        "returns": "PlacementReport"
+      },
+      "returns": "PlacementReport"
+    },
+    {
+      "args": [
+        {
           "name": "input",
           "rust": "AuthoredWorkspaceInput"
         }
@@ -1074,25 +1124,24 @@
     {
       "args": [
         {
-          "name": "id",
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "nodeId",
           "rust": "String"
         }
       ],
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 108
+        "line": 232
       },
-      "name": "delete_stage_piece",
+      "name": "delete_subtree",
       "prose": {
-        "notes": "The cascade is the contract a port must preserve: TS computes descendantIdsOf(id) locally and filters the whole subtree out of state after one invoke. Bulk delete (:345) only invokes for the selected roots but filters the full closure locally. Note the write scope is the deleted piece, not its descendants — descendants are removed by the FK, bypassing per-resource authorization.",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on the piece; delete + commit",
-          "FK `parent_piece_id ON DELETE CASCADE` removes the entire descendant subtree in one call"
-        ]
+        "returns": "ResolvedVenue"
       },
-      "returns": "()"
+      "returns": "ResolvedVenue"
     },
     {
       "args": [
@@ -1164,6 +1213,28 @@
         ]
       },
       "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "nodeId",
+          "rust": "String"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 171
+      },
+      "name": "detach",
+      "prose": {
+        "returns": "PlacementReport"
+      },
+      "returns": "PlacementReport"
     },
     {
       "args": [],
@@ -1483,7 +1554,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 78
+        "line": 81
       },
       "name": "get_fixture_definition",
       "prose": {
@@ -1505,7 +1576,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 32
+        "line": 37
       },
       "name": "get_fixture_facings",
       "prose": {
@@ -1669,6 +1740,24 @@
         "sideEffects": []
       },
       "returns": "GraphDocument"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 38
+      },
+      "name": "get_resolved_venue",
+      "prose": {
+        "returns": "ResolvedVenue"
+      },
+      "returns": "ResolvedVenue"
     },
     {
       "args": [
@@ -1881,7 +1970,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 191
+        "line": 192
       },
       "name": "get_ungrouped_fixtures",
       "prose": {
@@ -1942,6 +2031,24 @@
         {
           "name": "venueId",
           "rust": "String"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 26
+      },
+      "name": "get_venue_graph",
+      "prose": {
+        "returns": "VenueGraphRows"
+      },
+      "returns": "VenueGraphRows"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
         },
         {
           "name": "selection",
@@ -1951,7 +2058,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 172
+        "line": 173
       },
       "name": "highlight_selection",
       "prose": {
@@ -2187,7 +2294,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 60
+        "line": 63
       },
       "name": "initialize_fixtures",
       "prose": {
@@ -2369,28 +2476,6 @@
         "sideEffects": []
       },
       "returns": "Vec<ScoreSummary>"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 13
-      },
-      "name": "list_stage_pieces",
-      "prose": {
-        "notes": "Flat list, not a tree — parent/child is reconstructed in TS via parentPieceId (descendantIdsOf). Pose fields are parent-local when parentPieceId is set, world otherwise. Store prunes selection/hover to surviving ids on every refresh; failures are logged and swallowed (stale list stays).",
-        "returns": "Vec<StagePiece> { id, uid: string|null, venueId, meshPath, kind, label: string|null, posX..posZ, rotX..rotZ, scale, parentPieceId: string|null }",
-        "sideEffects": [
-          "VenueAccess::<Read> only"
-        ]
-      },
-      "returns": "Vec<StagePiece>"
     },
     {
       "args": [
@@ -3015,7 +3100,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 120
+        "line": 123
       },
       "name": "move_patched_fixture",
       "prose": {
@@ -3025,107 +3110,6 @@
           "VenueAccess::<Write> on VenueResource::Fixture(id) + access.require_venue(venue_id)",
           "require_changed: errors 'Venue resource not found' unless exactly 1 row updated",
           "Re-pushes the whole patch to ArtNet; invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "posX",
-          "rust": "f64"
-        },
-        {
-          "name": "posY",
-          "rust": "f64"
-        },
-        {
-          "name": "posZ",
-          "rust": "f64"
-        },
-        {
-          "name": "rotX",
-          "rust": "f64"
-        },
-        {
-          "name": "rotY",
-          "rust": "f64"
-        },
-        {
-          "name": "rotZ",
-          "rust": "f64"
-        }
-      ],
-      "domain": "fixtures",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 132
-      },
-      "name": "move_patched_fixture_spatial",
-      "prose": {
-        "notes": "Absolute pose, not a delta — multi-select drag/rotate computes each fixture's new absolute pos/rot in TS and fires one invoke per fixture via Promise.all (no batch command). Each of those calls re-reads the full patch and re-pushes ArtNet: O(n) full-patch reads for an n-fixture drag. Rotation is Euler XYZ radians in the app's Z-up-ish convention (same fields as StagePiece). Callers update state optimistically and refetch on error.",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on the fixture + require_venue; require_changed (1 row or error)",
-          "Re-reads the patch and pushes it to ArtNet on every call; invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "parentPieceId",
-          "rust": "Option<String>"
-        },
-        {
-          "name": "posX",
-          "rust": "f64"
-        },
-        {
-          "name": "posY",
-          "rust": "f64"
-        },
-        {
-          "name": "posZ",
-          "rust": "f64"
-        },
-        {
-          "name": "rotX",
-          "rust": "f64"
-        },
-        {
-          "name": "rotY",
-          "rust": "f64"
-        },
-        {
-          "name": "rotZ",
-          "rust": "f64"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 65
-      },
-      "name": "move_stage_piece",
-      "prose": {
-        "notes": "Move and reparent are deliberately one command so a drag onto a new parent is atomic; parentPieceId=null detaches to world space. No venue_id arg (unlike the fixture commands) — scope comes from the piece. No require_changed guard here, so moving a nonexistent id silently succeeds (asymmetric with the fixture commands). Caller mirrors the same local pose into state after the await, no optimistic update.",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::StagePiece(id); one atomic pose+reparent update, then commit"
         ]
       },
       "returns": "()"
@@ -3172,7 +3156,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 90
+        "line": 93
       },
       "name": "patch_fixture",
       "prose": {
@@ -3257,64 +3241,56 @@
           "rust": "String"
         },
         {
-          "name": "meshPath",
-          "rust": "String"
-        },
-        {
           "name": "kind",
           "rust": "String"
         },
         {
-          "name": "parentPieceId",
+          "name": "catalogRef",
           "rust": "Option<String>"
-        },
-        {
-          "name": "posX",
-          "rust": "f64"
-        },
-        {
-          "name": "posY",
-          "rust": "f64"
-        },
-        {
-          "name": "posZ",
-          "rust": "f64"
-        },
-        {
-          "name": "rotX",
-          "rust": "f64"
-        },
-        {
-          "name": "rotY",
-          "rust": "f64"
-        },
-        {
-          "name": "rotZ",
-          "rust": "f64"
-        },
-        {
-          "name": "scale",
-          "rust": "Option<f64>"
         },
         {
           "name": "label",
           "rust": "Option<String>"
+        },
+        {
+          "name": "surfaceNodeId",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "surfaceSocket",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "mySocket",
+          "rust": "String"
+        },
+        {
+          "name": "u",
+          "rust": "f64"
+        },
+        {
+          "name": "v",
+          "rust": "f64"
+        },
+        {
+          "name": "yaw",
+          "rust": "Option<f64>"
+        },
+        {
+          "name": "trim",
+          "rust": "Option<f64>"
         }
       ],
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 25
+        "line": 121
       },
-      "name": "place_stage_piece",
+      "name": "place_free",
       "prose": {
-        "notes": "`kind` is an open String server-side but a closed taxonomy in practice (floor, truss, speaker, cdj, mixer, guardrail, stand, cable_cover) and is derived in TS from the mesh registry (getStageMesh(meshPath).kind) — the vocabulary lives only on the frontend, which is a drift risk. meshPath is relative to resources/meshes/. The ghost is stored in world space and converted to parent-local by dataPoseFromWorld before the call. Caller appends the returned piece to local state and keeps the armed mesh so repeat placement works.",
-        "returns": "StagePiece (the inserted row)",
-        "sideEffects": [
-          "VenueAccess::<Write> on the venue; inserts and commits. No ArtNet/event side effects."
-        ]
+        "returns": "PlacementReport"
       },
-      "returns": "StagePiece"
+      "returns": "PlacementReport"
     },
     {
       "args": [
@@ -3495,7 +3471,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 142
+        "line": 143
       },
       "name": "preview_selection_query",
       "prose": {
@@ -3565,6 +3541,44 @@
         ]
       },
       "returns": "Vec<DiscoveredDevice>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "nodeId",
+          "rust": "String"
+        },
+        {
+          "name": "parentId",
+          "rust": "String"
+        },
+        {
+          "name": "mySocket",
+          "rust": "String"
+        },
+        {
+          "name": "theirSocket",
+          "rust": "String"
+        },
+        {
+          "name": "yaw",
+          "rust": "Option<f64>"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 91
+      },
+      "name": "reattach",
+      "prose": {
+        "returns": "PlacementReport"
+      },
+      "returns": "PlacementReport"
     },
     {
       "args": [
@@ -3732,7 +3746,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 160
+        "line": 134
       },
       "name": "remove_patched_fixture",
       "prose": {
@@ -3786,7 +3800,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 170
+        "line": 144
       },
       "name": "rename_patched_fixture",
       "prose": {
@@ -3795,32 +3809,6 @@
         "sideEffects": [
           "VenueAccess::<Write> on the fixture + require_venue; require_changed",
           "Re-pushes patch to ArtNet; invalidate_venue_fixture_cache()"
-        ]
-      },
-      "returns": "()"
-    },
-    {
-      "args": [
-        {
-          "name": "id",
-          "rust": "String"
-        },
-        {
-          "name": "label",
-          "rust": "String"
-        }
-      ],
-      "domain": "stage",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 94
-      },
-      "name": "rename_stage_piece",
-      "prose": {
-        "notes": "Same non-nullable-label limitation as rename_patched_fixture — no way to clear back to null. No rows-affected check. Caller patches local state after the await (throws propagate to the UI).",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on the piece; update + commit"
         ]
       },
       "returns": "()"
@@ -4326,7 +4314,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 64
+        "line": 67
       },
       "name": "search_fixtures",
       "prose": {
@@ -4390,6 +4378,36 @@
         "returns": "()"
       },
       "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "nodeId",
+          "rust": "String"
+        },
+        {
+          "name": "params",
+          "rust": "BTreeMap<String, f64>"
+        },
+        {
+          "name": "label",
+          "rust": "Option<String>"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 189
+      },
+      "name": "set_params",
+      "prose": {
+        "returns": "PlacementReport"
+      },
+      "returns": "PlacementReport"
     },
     {
       "args": [
@@ -4635,7 +4653,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 206
+        "line": 207
       },
       "name": "update_movement_config",
       "prose": {
@@ -4934,7 +4952,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/engine_dj.rs"
     },
     {
-      "commandCount": 10,
+      "commandCount": 9,
       "domain": "fixtures",
       "handlers": "src-tauri/src/dispatch/handlers/fixtures.rs"
     },
@@ -5004,7 +5022,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/skills.rs"
     },
     {
-      "commandCount": 5,
+      "commandCount": 8,
       "domain": "stage",
       "handlers": "src-tauri/src/dispatch/handlers/stage.rs"
     },
@@ -5138,7 +5156,7 @@
     },
     {
       "emitters": [
-        "src-tauri/src/lib.rs:162"
+        "src-tauri/src/lib.rs:164"
       ],
       "listeners": [
         "src/App.tsx:640"
@@ -5245,7 +5263,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 193,
+    "commandCount": 195,
     "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0

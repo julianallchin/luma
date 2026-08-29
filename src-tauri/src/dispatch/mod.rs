@@ -144,7 +144,7 @@ macro_rules! commands {
     };
 }
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::annotation_preview::LivePreviewInput;
 use crate::artnet::ArtNetNode;
@@ -183,9 +183,9 @@ use crate::models::scores::{
     UpdateTrackScoreInput,
 };
 use crate::models::selection::Selection;
-use crate::models::stage::StagePiece;
 use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
 use crate::models::universe::UniverseState;
+use crate::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
 use crate::models::venues::Venue;
 use crate::models::waveforms::{TrackWaveform, WaveformWindow};
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
@@ -338,16 +338,6 @@ commands! {
         label: Option<String>,
     ) -> PatchedFixture;
     fixtures::move_patched_fixture(venue_id: String, id: String, address: i64) -> ();
-    fixtures::move_patched_fixture_spatial(
-        venue_id: String,
-        id: String,
-        pos_x: f64,
-        pos_y: f64,
-        pos_z: f64,
-        rot_x: f64,
-        rot_y: f64,
-        rot_z: f64,
-    ) -> ();
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
@@ -520,33 +510,48 @@ commands! {
     ) -> Vec<SearchPatternRow>;
     cloud_sync::get_display_names(uids: Vec<String>) -> HashMap<String, String>;
 
-    stage::list_stage_pieces(venue_id: String) -> Vec<StagePiece>;
-    stage::place_stage_piece(
+    stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
+    stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
+    stage::attach(
         venue_id: String,
-        mesh_path: String,
         kind: String,
-        parent_piece_id: Option<String>,
-        pos_x: f64,
-        pos_y: f64,
-        pos_z: f64,
-        rot_x: f64,
-        rot_y: f64,
-        rot_z: f64,
-        scale: Option<f64>,
+        catalog_ref: Option<String>,
         label: Option<String>,
-    ) -> StagePiece;
-    stage::move_stage_piece(
-        id: String,
-        parent_piece_id: Option<String>,
-        pos_x: f64,
-        pos_y: f64,
-        pos_z: f64,
-        rot_x: f64,
-        rot_y: f64,
-        rot_z: f64,
-    ) -> ();
-    stage::rename_stage_piece(id: String, label: String) -> ();
-    stage::delete_stage_piece(id: String) -> ();
+        parent_id: String,
+        my_socket: String,
+        their_socket: String,
+        yaw: Option<f64>,
+        params: Option<BTreeMap<String, f64>>,
+    ) -> PlacementReport;
+    stage::reattach(
+        venue_id: String,
+        node_id: String,
+        parent_id: String,
+        my_socket: String,
+        their_socket: String,
+        yaw: Option<f64>,
+    ) -> PlacementReport;
+    stage::place_free(
+        venue_id: String,
+        kind: String,
+        catalog_ref: Option<String>,
+        label: Option<String>,
+        surface_node_id: Option<String>,
+        surface_socket: Option<String>,
+        my_socket: String,
+        u: f64,
+        v: f64,
+        yaw: Option<f64>,
+        trim: Option<f64>,
+    ) -> PlacementReport;
+    stage::detach(venue_id: String, node_id: String) -> PlacementReport;
+    stage::set_params(
+        venue_id: String,
+        node_id: String,
+        params: BTreeMap<String, f64>,
+        label: Option<String>,
+    ) -> PlacementReport;
+    stage::delete_subtree(venue_id: String, node_id: String) -> ResolvedVenue;
 
     settings::get_settings() -> AppSettings;
     settings::set_setting(key: String, value: String) -> ();
