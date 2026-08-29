@@ -1,0 +1,270 @@
+{
+  "ledBarsWall": {
+    "groups": [
+      {
+        "members": [
+          "LED Bar 1",
+          "LED Bar 2",
+          "LED Bar 3",
+          "LED Bar 4",
+          "LED Bar 5",
+          "LED Bar 6",
+          "LED Bar 7",
+          "LED Bar 8",
+          "LED Bar 9",
+          "LED Bar 10",
+          "LED Bar 11",
+          "LED Bar 12",
+          "LED Bar 13",
+          "LED Bar 14",
+          "LED Bar 15",
+          "LED Bar 16",
+          "LED Bar 17",
+          "LED Bar 18",
+          "LED Bar 19",
+          "LED Bar 20"
+        ],
+        "name": "led_bars",
+        "path": [
+          "led bars"
+        ],
+        "role": "pixel"
+      },
+      {
+        "members": [
+          "LED Bar 1",
+          "LED Bar 2",
+          "LED Bar 3",
+          "LED Bar 4",
+          "LED Bar 5",
+          "LED Bar 6",
+          "LED Bar 7",
+          "LED Bar 8",
+          "LED Bar 9",
+          "LED Bar 10",
+          "LED Bar 11",
+          "LED Bar 12"
+        ],
+        "name": "led_bars_horizontal",
+        "path": [
+          "led bars",
+          "horizontal"
+        ],
+        "role": "pixel"
+      },
+      {
+        "members": [
+          "LED Bar 1",
+          "LED Bar 2",
+          "LED Bar 3",
+          "LED Bar 4",
+          "LED Bar 5",
+          "LED Bar 6"
+        ],
+        "name": "led_bars_horizontal_top",
+        "path": [
+          "led bars",
+          "horizontal",
+          "top"
+        ],
+        "role": "pixel"
+      },
+      {
+        "members": [
+          "LED Bar 7",
+          "LED Bar 8",
+          "LED Bar 9",
+          "LED Bar 10",
+          "LED Bar 11",
+          "LED Bar 12"
+        ],
+        "name": "led_bars_horizontal_bottom",
+        "path": [
+          "led bars",
+          "horizontal",
+          "bottom"
+        ],
+        "role": "pixel"
+      },
+      {
+        "members": [
+          "LED Bar 13",
+          "LED Bar 14",
+          "LED Bar 15",
+          "LED Bar 16",
+          "LED Bar 17",
+          "LED Bar 18",
+          "LED Bar 19",
+          "LED Bar 20"
+        ],
+        "name": "led_bars_vertical",
+        "path": [
+          "led bars",
+          "vertical"
+        ],
+        "role": "pixel"
+      },
+      {
+        "members": [
+          "LED Bar 13",
+          "LED Bar 14",
+          "LED Bar 15",
+          "LED Bar 16"
+        ],
+        "name": "led_bars_vertical_left",
+        "path": [
+          "led bars",
+          "vertical",
+          "left"
+        ],
+        "role": "pixel"
+      },
+      {
+        "members": [
+          "LED Bar 17",
+          "LED Bar 18",
+          "LED Bar 19",
+          "LED Bar 20"
+        ],
+        "name": "led_bars_vertical_right",
+        "path": [
+          "led bars",
+          "vertical",
+          "right"
+        ],
+        "role": "pixel"
+      }
+    ],
+    "stageCentreX": 0.0
+  },
+  "spotWings": {
+    "groups": [
+      {
+        "members": [
+          "Mover 1",
+          "Mover 2",
+          "Mover 3",
+          "Mover 4",
+          "Mover 5",
+          "Mover 6",
+          "Mover 7",
+          "Mover 8"
+        ],
+        "name": "spots",
+        "path": [
+          "spots"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 1",
+          "Mover 2",
+          "Mover 3",
+          "Mover 4"
+        ],
+        "name": "spots_left_wing",
+        "path": [
+          "spots",
+          "left wing"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 3",
+          "Mover 4"
+        ],
+        "name": "spots_left_wing_top",
+        "path": [
+          "spots",
+          "left wing",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 1",
+          "Mover 2"
+        ],
+        "name": "spots_left_wing_bottom",
+        "path": [
+          "spots",
+          "left wing",
+          "bottom"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 5",
+          "Mover 6",
+          "Mover 7",
+          "Mover 8"
+        ],
+        "name": "spots_right_wing",
+        "path": [
+          "spots",
+          "right wing"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 7",
+          "Mover 8"
+        ],
+        "name": "spots_right_wing_top",
+        "path": [
+          "spots",
+          "right wing",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 5",
+          "Mover 6"
+        ],
+        "name": "spots_right_wing_bottom",
+        "path": [
+          "spots",
+          "right wing",
+          "bottom"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 3",
+          "Mover 4",
+          "Mover 7",
+          "Mover 8"
+        ],
+        "name": "spots_top",
+        "path": [
+          "spots",
+          "top"
+        ],
+        "role": "spot"
+      },
+      {
+        "members": [
+          "Mover 1",
+          "Mover 2",
+          "Mover 5",
+          "Mover 6"
+        ],
+        "name": "spots_bottom",
+        "path": [
+          "spots",
+          "bottom"
+        ],
+        "role": "spot"
+      }
+    ],
+    "stageCentreX": 0.5
+  }
+}

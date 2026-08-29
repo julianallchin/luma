@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**195 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
+**207 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -18,7 +18,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `agent_execution` | 2 | `src-tauri/src/dispatch/handlers/agent_execution.rs` |
 | `agent_threads` | 8 | `src-tauri/src/dispatch/handlers/agent_threads.rs` |
 | `annotation_preview` | 5 | `src-tauri/src/dispatch/handlers/annotation_preview.rs` |
-| `artnet` | 3 | `src-tauri/src/dispatch/handlers/artnet.rs` |
+| `artnet` | 6 | `src-tauri/src/dispatch/handlers/artnet.rs` |
 | `auth` | 7 | `src-tauri/src/dispatch/handlers/auth.rs` |
 | `authored_state` | 11 | `src-tauri/src/dispatch/handlers/authored_state.rs` |
 | `categories` | 1 | `src-tauri/src/dispatch/handlers/categories.rs` |
@@ -26,8 +26,8 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `compositor` | 2 | `src-tauri/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `src-tauri/src/dispatch/handlers/controller.rs` |
 | `engine_dj` | 7 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
-| `fixtures` | 9 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
-| `groups` | 11 | `src-tauri/src/dispatch/handlers/groups.rs` |
+| `fixtures` | 13 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
+| `groups` | 16 | `src-tauri/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `src-tauri/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `src-tauri/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `src-tauri/src/dispatch/handlers/mixer.rs` |
@@ -46,7 +46,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **195** | |
+| **total** | **207** | |
 
 ## Commands
 
@@ -97,6 +97,9 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `start_discovery` | — | `()` |
 | `stop_discovery` | — | `()` |
 | `get_discovered_nodes` | — | `Vec<ArtNetNode>` |
+| `list_outputs` | — | `Vec<UniverseOutput>` |
+| `bind_output` | `universe: i64`<br>`nodeIp: String`<br>`nodePort: i64`<br>`portAddress: i64`<br>`nodeName: Option<String>` | `()` |
+| `unbind_output` | `universe: i64` | `()` |
 
 ### `auth`
 
@@ -181,7 +184,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `search_fixtures` | `query: String`<br>`offset: usize`<br>`limit: usize` | `Vec<FixtureEntry>` |
 | `get_fixture_definition` | `path: String` | `FixtureDefinition` |
 | `patch_fixture` | `venueId: String`<br>`universe: i64`<br>`address: i64`<br>`numChannels: i64`<br>`manufacturer: String`<br>`model: String`<br>`modeName: String`<br>`fixturePath: String`<br>`label: Option<String>` | `PatchedFixture` |
-| `move_patched_fixture` | `venueId: String`<br>`id: String`<br>`address: i64` | `()` |
+| `set_fixture_address` | `venueId: String`<br>`id: String`<br>`universe: i64`<br>`address: i64` | `()` |
+| `auto_patch` | `venueId: String` | `AutoPatchReport` |
+| `universe_occupancy` | `venueId: String`<br>`universe: i64` | `Vec<UniverseCell>` |
+| `universes_in_use` | `venueId: String` | `Vec<u16>` |
+| `next_addresses` | `venueId: String`<br>`run: Option<String>`<br>`channels: i64`<br>`count: usize` | `Vec<PatchAddress>` |
 | `remove_patched_fixture` | `venueId: String`<br>`id: String` | `()` |
 | `rename_patched_fixture` | `venueId: String`<br>`id: String`<br>`label: String` | `()` |
 
@@ -196,6 +203,11 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `add_fixture_to_group` | `fixtureId: String`<br>`groupId: String`<br>`headIndex: Option<i64>` | `()` |
 | `remove_fixture_from_group` | `fixtureId: String`<br>`groupId: String`<br>`headIndex: Option<i64>` | `()` |
 | `get_grouped_hierarchy` | `venueId: String` | `Vec<FixtureGroupNode>` |
+| `list_group_tree` | `venueId: String` | `Vec<GroupTreeNode>` |
+| `rename_group_node` | `venueId: String`<br>`groupId: String`<br>`label: String` | `Vec<GroupTreeNode>` |
+| `move_group_node` | `venueId: String`<br>`groupId: String`<br>`parentId: Option<String>` | `Vec<GroupTreeNode>` |
+| `merge_group_nodes` | `venueId: String`<br>`groupId: String`<br>`intoGroupId: String` | `Vec<GroupTreeNode>` |
+| `reset_group_node` | `venueId: String`<br>`groupId: String` | `Vec<GroupTreeNode>` |
 | `get_ungrouped_fixtures` | `venueId: String` | `Vec<PatchedFixture>` |
 | `update_movement_config` | `groupId: String`<br>`config: Option<MovementConfig>` | `FixtureGroup` |
 | `preview_selection_query` | `venueId: String`<br>`query: String`<br>`seed: Option<u64>` | `Vec<PatchedFixture>` |

@@ -19,7 +19,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 80
+        "line": 83
       },
       "name": "add_fixture_to_group",
       "prose": {
@@ -638,6 +638,58 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "fixtures",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
+        "line": 155
+      },
+      "name": "auto_patch",
+      "prose": {
+        "returns": "AutoPatchReport"
+      },
+      "returns": "AutoPatchReport"
+    },
+    {
+      "args": [
+        {
+          "name": "universe",
+          "rust": "i64"
+        },
+        {
+          "name": "nodeIp",
+          "rust": "String"
+        },
+        {
+          "name": "nodePort",
+          "rust": "i64"
+        },
+        {
+          "name": "portAddress",
+          "rust": "i64"
+        },
+        {
+          "name": "nodeName",
+          "rust": "Option<String>"
+        }
+      ],
+      "domain": "artnet",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
+        "line": 49
+      },
+      "name": "bind_output",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
           "name": "threadId",
           "rust": "String"
         }
@@ -907,7 +959,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 22
+        "line": 25
       },
       "name": "create_group",
       "prose": {
@@ -1061,7 +1113,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 67
+        "line": 70
       },
       "name": "delete_group",
       "prose": {
@@ -1509,7 +1561,7 @@
       "domain": "artnet",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 29
+        "line": 30
       },
       "name": "get_discovered_nodes",
       "prose": {
@@ -1554,7 +1606,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 81
+        "line": 83
       },
       "name": "get_fixture_definition",
       "prose": {
@@ -1576,7 +1628,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 37
+        "line": 39
       },
       "name": "get_fixture_facings",
       "prose": {
@@ -1594,7 +1646,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 130
+        "line": 133
       },
       "name": "get_grouped_hierarchy",
       "prose": {
@@ -1656,7 +1708,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 15
+        "line": 17
       },
       "name": "get_patched_fixtures",
       "prose": {
@@ -1970,7 +2022,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 192
+        "line": 195
       },
       "name": "get_ungrouped_fixtures",
       "prose": {
@@ -2058,7 +2110,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 173
+        "line": 176
       },
       "name": "highlight_selection",
       "prose": {
@@ -2294,7 +2346,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 63
+        "line": 65
       },
       "name": "initialize_fixtures",
       "prose": {
@@ -2392,7 +2444,25 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 40
+        "line": 265
+      },
+      "name": "list_group_tree",
+      "prose": {
+        "returns": "Vec<GroupTreeNode>"
+      },
+      "returns": "Vec<GroupTreeNode>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 43
       },
       "name": "list_groups",
       "prose": {
@@ -2403,6 +2473,19 @@
         ]
       },
       "returns": "Vec<FixtureGroup>"
+    },
+    {
+      "args": [],
+      "domain": "artnet",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
+        "line": 40
+      },
+      "name": "list_outputs",
+      "prose": {
+        "returns": "Vec<UniverseOutput>"
+      },
+      "returns": "Vec<UniverseOutput>"
     },
     {
       "args": [],
@@ -2550,6 +2633,32 @@
         ]
       },
       "returns": "Vec<Venue>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "groupId",
+          "rust": "String"
+        },
+        {
+          "name": "intoGroupId",
+          "rust": "String"
+        }
+      ],
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 304
+      },
+      "name": "merge_group_nodes",
+      "prose": {
+        "returns": "Vec<GroupTreeNode>"
+      },
+      "returns": "Vec<GroupTreeNode>"
     },
     {
       "args": [
@@ -3089,30 +3198,54 @@
           "rust": "String"
         },
         {
-          "name": "id",
+          "name": "groupId",
           "rust": "String"
         },
         {
-          "name": "address",
+          "name": "parentId",
+          "rust": "Option<String>"
+        }
+      ],
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 289
+      },
+      "name": "move_group_node",
+      "prose": {
+        "returns": "Vec<GroupTreeNode>"
+      },
+      "returns": "Vec<GroupTreeNode>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "run",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "channels",
           "rust": "i64"
+        },
+        {
+          "name": "count",
+          "rust": "usize"
         }
       ],
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 123
+        "line": 193
       },
-      "name": "move_patched_fixture",
+      "name": "next_addresses",
       "prose": {
-        "notes": "DMX address move only, despite the generic name (spatial move is the separate _spatial command). venue_id is a redundant authorization cross-check — the write scope is the fixture. Caller optimistically sets `address: BigInt(address)` then refetches on both success and failure.",
-        "returns": "void",
-        "sideEffects": [
-          "VenueAccess::<Write> on VenueResource::Fixture(id) + access.require_venue(venue_id)",
-          "require_changed: errors 'Venue resource not found' unless exactly 1 row updated",
-          "Re-pushes the whole patch to ArtNet; invalidate_venue_fixture_cache()"
-        ]
+        "returns": "Vec<PatchAddress>"
       },
-      "returns": "()"
+      "returns": "Vec<PatchAddress>"
     },
     {
       "args": [
@@ -3156,7 +3289,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 93
+        "line": 95
       },
       "name": "patch_fixture",
       "prose": {
@@ -3471,7 +3604,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 143
+        "line": 146
       },
       "name": "preview_selection_query",
       "prose": {
@@ -3717,7 +3850,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 98
+        "line": 101
       },
       "name": "remove_fixture_from_group",
       "prose": {
@@ -3746,7 +3879,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 134
+        "line": 216
       },
       "name": "remove_patched_fixture",
       "prose": {
@@ -3789,6 +3922,32 @@
           "rust": "String"
         },
         {
+          "name": "groupId",
+          "rust": "String"
+        },
+        {
+          "name": "label",
+          "rust": "String"
+        }
+      ],
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 279
+      },
+      "name": "rename_group_node",
+      "prose": {
+        "returns": "Vec<GroupTreeNode>"
+      },
+      "returns": "Vec<GroupTreeNode>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
           "name": "id",
           "rust": "String"
         },
@@ -3800,7 +3959,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 144
+        "line": 226
       },
       "name": "rename_patched_fixture",
       "prose": {
@@ -4066,6 +4225,28 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "groupId",
+          "rust": "String"
+        }
+      ],
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 327
+      },
+      "name": "reset_group_node",
+      "prose": {
+        "returns": "Vec<GroupTreeNode>"
+      },
+      "returns": "Vec<GroupTreeNode>"
+    },
+    {
+      "args": [
+        {
           "name": "graph",
           "rust": "Graph"
         },
@@ -4314,7 +4495,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 67
+        "line": 69
       },
       "name": "search_fixtures",
       "prose": {
@@ -4374,6 +4555,36 @@
         "line": 37
       },
       "name": "send_login_code",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "id",
+          "rust": "String"
+        },
+        {
+          "name": "universe",
+          "rust": "i64"
+        },
+        {
+          "name": "address",
+          "rust": "i64"
+        }
+      ],
+      "domain": "fixtures",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
+        "line": 142
+      },
+      "name": "set_fixture_address",
       "prose": {
         "returns": "()"
       },
@@ -4545,7 +4756,7 @@
       "domain": "artnet",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 19
+        "line": 20
       },
       "name": "start_discovery",
       "prose": {
@@ -4566,7 +4777,7 @@
       "domain": "artnet",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 24
+        "line": 25
       },
       "name": "stop_discovery",
       "prose": {
@@ -4602,6 +4813,64 @@
     {
       "args": [
         {
+          "name": "universe",
+          "rust": "i64"
+        }
+      ],
+      "domain": "artnet",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
+        "line": 69
+      },
+      "name": "unbind_output",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "universe",
+          "rust": "i64"
+        }
+      ],
+      "domain": "fixtures",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
+        "line": 168
+      },
+      "name": "universe_occupancy",
+      "prose": {
+        "returns": "Vec<UniverseCell>"
+      },
+      "returns": "Vec<UniverseCell>"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "domain": "fixtures",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
+        "line": 179
+      },
+      "name": "universes_in_use",
+      "prose": {
+        "returns": "Vec<u16>"
+      },
+      "returns": "Vec<u16>"
+    },
+    {
+      "args": [
+        {
           "name": "id",
           "rust": "String"
         },
@@ -4625,7 +4894,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 49
+        "line": 52
       },
       "name": "update_group",
       "prose": {
@@ -4653,7 +4922,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 207
+        "line": 210
       },
       "name": "update_movement_config",
       "prose": {
@@ -4912,7 +5181,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/annotation_preview.rs"
     },
     {
-      "commandCount": 3,
+      "commandCount": 6,
       "domain": "artnet",
       "handlers": "src-tauri/src/dispatch/handlers/artnet.rs"
     },
@@ -4952,12 +5221,12 @@
       "handlers": "src-tauri/src/dispatch/handlers/engine_dj.rs"
     },
     {
-      "commandCount": 9,
+      "commandCount": 13,
       "domain": "fixtures",
       "handlers": "src-tauri/src/dispatch/handlers/fixtures.rs"
     },
     {
-      "commandCount": 11,
+      "commandCount": 16,
       "domain": "groups",
       "handlers": "src-tauri/src/dispatch/handlers/groups.rs"
     },
@@ -5263,7 +5532,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 195,
+    "commandCount": 207,
     "domainCount": 32,
     "eventCount": 18,
     "unportedCount": 0

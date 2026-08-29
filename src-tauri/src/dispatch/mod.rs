@@ -165,7 +165,7 @@ use crate::models::authored_state::{
     PreparedAuthoredTurn, RestoreAuthoredStateInput,
 };
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
-use crate::models::groups::{FixtureGroup, FixtureGroupNode, MovementConfig};
+use crate::models::groups::{FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig};
 use crate::models::midi::{
     ControllerState, ControllerStatus, CreateBindingInput, CreateCueInput, CreateModifierInput,
     Cue, MidiBinding, ModifierDef, Target, UpdateBindingInput, UpdateCueInput,
@@ -383,6 +383,23 @@ commands! {
         head_index: Option<i64>,
     ) -> ();
     groups::get_grouped_hierarchy(venue_id: String) -> Vec<FixtureGroupNode>;
+    groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
+    groups::rename_group_node(
+        venue_id: String,
+        group_id: String,
+        label: String,
+    ) -> Vec<GroupTreeNode>;
+    groups::move_group_node(
+        venue_id: String,
+        group_id: String,
+        parent_id: Option<String>,
+    ) -> Vec<GroupTreeNode>;
+    groups::merge_group_nodes(
+        venue_id: String,
+        group_id: String,
+        into_group_id: String,
+    ) -> Vec<GroupTreeNode>;
+    groups::reset_group_node(venue_id: String, group_id: String) -> Vec<GroupTreeNode>;
     groups::get_ungrouped_fixtures(venue_id: String) -> Vec<PatchedFixture>;
     groups::update_movement_config(
         group_id: String,

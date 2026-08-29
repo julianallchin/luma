@@ -618,6 +618,11 @@ pub fn run() {
             // Groups
             dispatch::adapter::create_group,
             dispatch::adapter::list_groups,
+            dispatch::adapter::list_group_tree,
+            dispatch::adapter::rename_group_node,
+            dispatch::adapter::move_group_node,
+            dispatch::adapter::merge_group_nodes,
+            dispatch::adapter::reset_group_node,
             dispatch::adapter::update_group,
             dispatch::adapter::delete_group,
             dispatch::adapter::add_fixture_to_group,

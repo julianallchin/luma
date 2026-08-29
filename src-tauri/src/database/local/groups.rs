@@ -415,6 +415,7 @@ pub async fn get_members_in_group(
     }
     let rows = sqlx::query_as::<_, Row>(
         "SELECT f.id, f.uid, f.venue_id, f.universe, f.address, f.num_channels,
+                f.address_pinned,
                 f.manufacturer, f.model, f.mode_name, f.fixture_path, f.label,
                 f.pos_x, f.pos_y, f.pos_z, f.rot_x, f.rot_y, f.rot_z,
                 m.head_index
@@ -470,6 +471,7 @@ pub async fn get_ungrouped_fixtures(
 ) -> Result<Vec<PatchedFixture>, String> {
     sqlx::query_as::<_, PatchedFixture>(
         "SELECT f.id, f.uid, f.venue_id, f.universe, f.address, f.num_channels,
+                f.address_pinned,
                 f.manufacturer, f.model, f.mode_name, f.fixture_path, f.label,
                 f.pos_x, f.pos_y, f.pos_z, f.rot_x, f.rot_y, f.rot_z
          FROM fixtures f
@@ -503,4 +505,59 @@ pub async fn update_movement_config(
         .map_err(|e| format!("Failed to update movement config: {}", e))?;
 
     get_group(access, group_id).await
+}
+
+/// The venue's fixture ids in creation order.
+///
+/// Derivation counts `<model> <n>` and orders its rows by when a fixture was
+/// patched, and [`crate::database::local::fixtures::get_patched_fixtures`] has
+/// no `ORDER BY` at all — it returns rowid order, which is insertion order
+/// right up until the first `VACUUM`. This is that order, said out loud.
+///
+/// # Errors
+/// Fails if `fixtures` cannot be read.
+pub async fn fixture_creation_order(
+    access: &mut impl AuthorizedVenue,
+) -> Result<Vec<String>, String> {
+    sqlx::query_scalar("SELECT id FROM fixtures WHERE venue_id = ? ORDER BY created_at ASC, id ASC")
+        .bind(access.venue_id().to_owned())
+        .fetch_all(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to read the fixture creation order: {e}"))
+}
+
+/// The fixture ids in one group, in membership order, deduplicated across
+/// per-head rows.
+///
+/// [`get_members_in_group`] answers the same question with whole
+/// [`PatchedFixture`] rows because the hierarchy draws them; the group tree
+/// holds ids and nothing else, and reading twenty columns to throw nineteen
+/// away is how a tree of forty groups becomes a table scan of eight hundred.
+///
+/// # Errors
+/// Fails if `fixture_group_members` cannot be read.
+pub async fn group_member_ids(
+    access: &mut impl AuthorizedVenue,
+    group_id: &str,
+) -> Result<Vec<String>, String> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT m.fixture_id
+         FROM fixture_group_members m
+         JOIN fixtures f ON f.id = m.fixture_id
+         WHERE m.group_id = ? AND f.venue_id = ?
+         ORDER BY m.display_order, m.head_index",
+    )
+    .bind(group_id)
+    .bind(access.venue_id().to_owned())
+    .fetch_all(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to read group membership: {e}"))?;
+
+    let mut ids: Vec<String> = Vec::with_capacity(rows.len());
+    for id in rows {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
