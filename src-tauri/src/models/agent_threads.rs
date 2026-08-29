@@ -154,6 +154,44 @@ pub struct AppendAgentThreadMessagesInput {
     pub messages: Vec<NewAgentThreadMessage>,
 }
 
+/// What one agent run against a thread cost.
+///
+/// Absolute, not incremental: every writer reports the thread's totals so far,
+/// and recording the same run twice leaves the same row. A writer that
+/// accumulates (the in-app turn loop, one turn at a time) seeds itself from
+/// what is already stored rather than asking the database to add.
+///
+/// The token counts follow [`crate::agent::model::Usage`]'s convention — the
+/// four do not overlap, so their sum is the whole spend. `cost_usd` is `None`
+/// unless somebody *told* the writer the price: nothing derives it from a rate
+/// card, because a rate card in the tree is a second source of truth.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, Default, FromRow)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/schema.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct AgentThreadUsage {
+    pub thread_id: String,
+    /// The model that ran, in the writer's own vocabulary: a `ModelId` key
+    /// from the in-app loop, the CLI's reported model from a harness.
+    pub model: Option<String>,
+    #[ts(type = "number")]
+    pub turns: i64,
+    #[ts(type = "number")]
+    pub input_tokens: i64,
+    #[ts(type = "number")]
+    pub output_tokens: i64,
+    #[ts(type = "number")]
+    pub cache_creation_tokens: i64,
+    #[ts(type = "number")]
+    pub cache_read_tokens: i64,
+    pub cost_usd: Option<f64>,
+    #[ts(type = "number")]
+    pub duration_ms: i64,
+    /// Children the run fanned out to. Zero is "none", not "unknown".
+    #[ts(type = "number")]
+    pub subagents: i64,
+}
+
 /// Current immutable-node tip of one conversation transcript.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]

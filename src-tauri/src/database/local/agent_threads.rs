@@ -14,7 +14,8 @@ use crate::database::local::auth::principal_key;
 use crate::models::agent_threads::NewAgentThreadMessage;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadDetail, AgentThreadMessage,
-    AgentThreadTranscriptHead, AppendAgentThreadMessagesInput, CreateAgentThreadInput,
+    AgentThreadTranscriptHead, AgentThreadUsage, AppendAgentThreadMessagesInput,
+    CreateAgentThreadInput,
 };
 use crate::sync::pending;
 
@@ -1497,6 +1498,77 @@ async fn delete_thread(
     if result.rows_affected() == 0 {
         return Err(thread_not_found(thread_id));
     }
+    Ok(())
+}
+
+/// What this thread has cost so far, or `None` if nobody has recorded it.
+///
+/// The one reader an accumulating writer needs: the in-app loop seeds its
+/// running total from here at the top of a turn, so the row it later writes is
+/// the thread's whole spend and not just this turn's.
+///
+/// # Errors
+///
+/// If the query fails.
+pub async fn thread_usage(
+    pool: &SqlitePool,
+    thread_id: &str,
+) -> Result<Option<AgentThreadUsage>, String> {
+    sqlx::query_as::<_, AgentThreadUsage>(concat!(
+        "SELECT thread_id, model, turns, input_tokens, output_tokens, cache_creation_tokens, ",
+        "cache_read_tokens, cost_usd, duration_ms, subagents ",
+        "FROM agent_thread_usage WHERE thread_id = ?"
+    ))
+    .bind(thread_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("Failed to read agent thread usage: {error}"))
+}
+
+/// Store what a run cost. Absolute — the record replaces whatever was there.
+///
+/// Not gated on the thread being alive, and deliberately: the out-of-process
+/// MCP host deletes its thread when its client hangs up, and the harness that
+/// spawned it only learns the price afterwards. The ledger outlives the thread
+/// the same way `authored_revisions` does.
+///
+/// # Errors
+///
+/// If the upsert fails.
+pub async fn record_thread_usage(
+    pool: &SqlitePool,
+    usage: &AgentThreadUsage,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO agent_thread_usage
+             (thread_id, model, turns, input_tokens, output_tokens,
+              cache_creation_tokens, cache_read_tokens, cost_usd, duration_ms, subagents)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(thread_id) DO UPDATE SET
+             model = excluded.model,
+             turns = excluded.turns,
+             input_tokens = excluded.input_tokens,
+             output_tokens = excluded.output_tokens,
+             cache_creation_tokens = excluded.cache_creation_tokens,
+             cache_read_tokens = excluded.cache_read_tokens,
+             cost_usd = excluded.cost_usd,
+             duration_ms = excluded.duration_ms,
+             subagents = excluded.subagents,
+             recorded_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+    )
+    .bind(&usage.thread_id)
+    .bind(usage.model.as_deref())
+    .bind(usage.turns)
+    .bind(usage.input_tokens)
+    .bind(usage.output_tokens)
+    .bind(usage.cache_creation_tokens)
+    .bind(usage.cache_read_tokens)
+    .bind(usage.cost_usd)
+    .bind(usage.duration_ms)
+    .bind(usage.subagents)
+    .execute(pool)
+    .await
+    .map_err(|error| format!("Failed to record agent thread usage: {error}"))?;
     Ok(())
 }
 
