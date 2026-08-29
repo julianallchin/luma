@@ -142,7 +142,7 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
-    for scene in [truss_scene(), corner_scene(), joint_scene()] {
+    for scene in [truss_scene(), corner_scene(), joint_scene(), hinge_scene()] {
         if requested.is_empty() || requested.contains(&scene.id) {
             render_case(
                 &mut renderer,
@@ -458,6 +458,34 @@ fn joint_scene() -> Scene {
         CameraPose {
             position: [0.0, 3.0, 3.5],
             target: [0.0, 0.75, 0.0],
+        },
+        pieces,
+    )
+}
+
+/// The same hinge at four deflections, from above.
+///
+/// A hinge is the one piece in the family whose geometry is a continuum, so
+/// one angle proves nothing: the leaves have to clear each other, stay on the
+/// pin, and read as hardware at every one of them. Seen from above because the
+/// deflection is a yaw, and a yaw seen edge-on is two foreshortened stubs.
+fn hinge_scene() -> Scene {
+    let pieces = [0.0f32, 45.0, 90.0, 135.0]
+        .into_iter()
+        .enumerate()
+        .map(|(nth, angle)| {
+            generated(
+                &format!("hinge-{angle:.0}"),
+                Procedural::Hinge { angle },
+                glam::Mat4::from_translation(glam::Vec3::new(nth as f32 * 0.86 - 1.29, 0.9, 0.0)),
+            )
+        })
+        .collect();
+    truss_bench(
+        "truss-hinge-angles",
+        CameraPose {
+            position: [0.0, 1.68, 1.95],
+            target: [0.0, 0.9, 0.0],
         },
         pieces,
     )

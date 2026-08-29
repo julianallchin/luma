@@ -3,8 +3,9 @@
 //! Three shapes — a straight [`Truss`] of any span, a [`Corner`] box with any
 //! two to six of its faces open, and a [`Hinge`] of two half-boxes on a pin —
 //! and they are all the same thing underneath: a list of [`Member`] tubes and a
-//! list of [`EndFrame`] open faces, baked by one private function into one
-//! triangle list. Nothing here is a mesh file.
+//! list of faces, each carrying a connection plate and, where something bolts
+//! on, four coupler bosses. One private function bakes both into one triangle
+//! list. Nothing here is a mesh file.
 //!
 //! **Everything mates.** A piece's open face is an [`EndFrame`], and every end
 //! frame in the family is the same square of chord centres with the same
@@ -30,9 +31,11 @@
 //! same product. `truss_q30_box.glb`, the ripped corner, measures the same
 //! 254 mm square in Ø44.4 mm tube on a 304.8 mm (12") cube, its chords cut
 //! 6.4 mm short at each end to leave room for a connection plate flush with the
-//! cube face — which is where [`CONNECTOR_DEPTH_M`] comes from. It spends
-//! 18 144 triangles on that one block; a six-way [`Corner`] here spends 1 584,
-//! and a 3 m run 2 640.
+//! cube face — which is where [`PLATE_THICKNESS_M`] comes from. Its plates are
+//! cut with a diamond aperture on a square of four bolt holes; the aperture is
+//! modelled here, the bolt holes are below a pixel at rig
+//! distance and are not. It spends 18 144 triangles on that one block; a
+//! six-way [`Corner`] here spends 1 776, a 3 m run 2 704, and a hinge 2 044.
 
 use glam::Vec3;
 
@@ -53,27 +56,62 @@ pub const BRACE_DIAMETER_M: f32 = 0.020;
 /// per face: down at the panel start, back up at its midpoint.
 pub const PANEL_PITCH_M: f32 = 0.5;
 
-/// How far a connector collar stands back into the piece from its open face.
+/// Thickness of a connection plate, and therefore how far short of its own
+/// face plane every chord in the family is cut.
 ///
-/// The ripped Q30 block cuts its chords this far short at each end to leave
-/// room for a connection plate flush with the cube face; a collar occupies the
-/// same slot, on its own side of the face plane, so two bolted pieces' collars
-/// meet rather than interpenetrate.
-pub const CONNECTOR_DEPTH_M: f32 = 0.0064;
+/// The ripped Q30 block cuts its chords exactly this far short at each end so
+/// its plate sits flush with the cube face. A plate lives entirely on its own
+/// side of the face plane, so two bolted pieces' plates meet rather than
+/// interpenetrate — which is what makes the plane [`EndFrame`] names the
+/// mating plane and not a plane through solid metal.
+pub const PLATE_THICKNESS_M: f32 = 0.0064;
 
-/// How much wider than its chord a connector collar is. A spigot block's
-/// couplers are a visible step up in diameter, and that step is the only thing
-/// that says "this face bolts to something" at rig distance.
-const CONNECTOR_FLARE: f32 = 1.35;
+/// How far a coupler boss reaches back into the piece from the plate it sits
+/// behind.
+const COUPLER_DEPTH_M: f32 = 0.024;
+
+/// How far a coupler boss narrows over [`COUPLER_DEPTH_M`], as a fraction of
+/// chord gauge.
+///
+/// It tapers *inward* rather than flaring out: a boss wider than its chord
+/// would stand past the plate corners, and the ripped block has nothing
+/// sticking out of its plate. The cone is what shows through the aperture.
+const COUPLER_TAPER: f32 = 0.72;
 
 /// Chord centre offset from the axis: half the square, and the half-width of
 /// every box in the family.
 pub const HALF_SQUARE_M: f32 = SQUARE_M / 2.0;
 
-/// Half-width of the piece's outside surface — the chord centre square plus a
-/// chord radius. What a bounding box is; a flared collar stands slightly proud
-/// of it.
+/// Half-width of the piece's outside surface: the chord centre square plus a
+/// chord radius.
+///
+/// One number doing three jobs, because on a real block they *are* one number.
+/// It is the half-width of a connection plate; it is where a box's face planes
+/// sit, a chord radius outside the chord square, so the four edge tubes lying
+/// in a face clear its plate instead of bulging through it; and it is
+/// therefore what a bounding box is. The ripped block is built the same way —
+/// 254 mm chord centres on a 304.8 mm cube — and it is why a block is bigger
+/// than the stick it bolts to. Only a coupler boss stands proud of it.
 pub const OUTER_M: f32 = HALF_SQUARE_M + CHORD_DIAMETER_M / 2.0;
+
+/// Half-width of a connection plate: a shade inside [`OUTER_M`], so the round
+/// edge of every tube it lies between shows around it.
+///
+/// A plate cut flush with the tubes swallows them, and a block whose tubes are
+/// invisible reads as a folded sheet-metal box rather than as a weldment. The
+/// ripped block shows a raised bead of tube around every one of its plates,
+/// and this is what puts it back.
+pub const PLATE_HALF_M: f32 = HALF_SQUARE_M + CHORD_DIAMETER_M / 2.0 * 0.62;
+
+/// Half-diagonal of the diamond a plate is cut out with.
+///
+/// A plate over an open face has to be see-through or a six-way block reads as
+/// a sealed crate; the ripped block solves that with a diamond aperture whose
+/// tips reach 52% of the way to the plate edge, and this is that fraction on
+/// the F34 plate, opened out a little because the F34 plate is the smaller of
+/// the two next to its chords. Tips lie on the plate's own axes, flats on its diagonals —
+/// so the four corners the chords land in are the solid part.
+const APERTURE_M: f32 = PLATE_HALF_M * 0.62;
 
 /// The straightest and the sharpest a [`Hinge`] opens. Beyond 180° the two
 /// leaves are back through each other, which is not a joint.
@@ -119,22 +157,40 @@ pub const ALUMINIUM: Material = Material {
 
 /// One straight tube of the lattice, in truss-local space.
 ///
-/// Members are the whole shape: chords and braces differ only in their
-/// endpoints and radius, which is what makes the family generatable at all.
+/// Members are the whole shape: chords, braces, pins and coupler bosses differ
+/// only in their endpoints and their two radii, which is what makes the family
+/// generatable at all. A cylinder is the case where the radii agree, so there
+/// is no second primitive for the tapered spigots.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Member {
     /// One end of the tube's axis.
     pub start: Vec3,
     /// The other end of the tube's axis.
     pub end: Vec3,
-    /// Outside radius.
-    pub radius: f32,
+    /// Outside radius at [`Self::start`] and at [`Self::end`].
+    pub radii: [f32; 2],
 }
 
 impl Member {
-    /// The same tube carried through a rigid transform. Radius is untouched:
-    /// the family has no scale parameter, so a transform that would change it
-    /// is a caller bug rather than a case to handle.
+    /// A plain cylinder of constant `radius`.
+    #[must_use]
+    pub const fn tube(start: Vec3, end: Vec3, radius: f32) -> Self {
+        Self {
+            start,
+            end,
+            radii: [radius, radius],
+        }
+    }
+
+    /// A truncated cone, `radii` read in the same order as the endpoints.
+    #[must_use]
+    pub const fn cone(start: Vec3, end: Vec3, radii: [f32; 2]) -> Self {
+        Self { start, end, radii }
+    }
+
+    /// The same tube carried through a rigid transform. Radii are untouched:
+    /// the family has no scale parameter, so a transform that would change
+    /// them is a caller bug rather than a case to handle.
     #[must_use]
     pub fn transformed(self, m: glam::Mat4) -> Self {
         Self {
@@ -142,6 +198,12 @@ impl Member {
             end: m.transform_point3(self.end),
             ..self
         }
+    }
+
+    /// The widest the tube gets — what a bounding box has to allow for.
+    #[must_use]
+    pub fn max_radius(self) -> f32 {
+        self.radii[0].max(self.radii[1])
     }
 }
 
@@ -287,7 +349,7 @@ impl Face {
         AXES[self.axis()] * sign
     }
 
-    /// The face's open frame on a box of half-width [`HALF_SQUARE_M`].
+    /// The face's frame on a box of half-width [`OUTER_M`].
     ///
     /// `up` is `+Y` except on the two faces `+Y` is the normal of, where it is
     /// `+Z`. Any perpendicular choice mates — the section is square, so roll is
@@ -297,7 +359,7 @@ impl Face {
     pub fn frame(self) -> EndFrame {
         let normal = self.normal();
         EndFrame {
-            position: normal * HALF_SQUARE_M,
+            position: normal * OUTER_M,
             normal,
             up: if self.axis() == 1 { Vec3::Z } else { Vec3::Y },
         }
@@ -458,10 +520,14 @@ impl Truss {
         let corners = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
             .map(|(y, z)| Vec3::new(0.0, y, z) * HALF_SQUARE_M);
         let x = self.span_m() / 2.0;
-        let chords = corners.into_iter().map(move |c| Member {
-            start: c - Vec3::X * x,
-            end: c + Vec3::X * x,
-            radius: CHORD_DIAMETER_M / 2.0,
+        // Cut short of the end plane at each end so the plates sit flush, the
+        // same way the ripped block cuts its cube edges.
+        let chords = corners.into_iter().map(move |c| {
+            Member::tube(
+                c - Vec3::X * (x - PLATE_THICKNESS_M),
+                c + Vec3::X * (x - PLATE_THICKNESS_M),
+                CHORD_DIAMETER_M / 2.0,
+            )
         });
 
         let nodes = self.panels * 2;
@@ -472,17 +538,17 @@ impl Truss {
                 // Even nodes sit on the face's first chord, odd on its second;
                 // one brace bridges each consecutive pair.
                 let (from, to) = if k % 2 == 0 { (a, b) } else { (b, a) };
-                Member {
-                    start: from + Vec3::X * at(k),
-                    end: to + Vec3::X * at(k + 1),
-                    radius: BRACE_DIAMETER_M / 2.0,
-                }
+                Member::tube(
+                    from + Vec3::X * at(k),
+                    to + Vec3::X * at(k + 1),
+                    BRACE_DIAMETER_M / 2.0,
+                )
             })
         });
         chords.chain(braces)
     }
 
-    /// The lattice as one uploadable triangle list.
+    /// The lattice as one uploadable triangle list, plated at both ends.
     ///
     /// Baked rather than instanced per member: the frame's draw list is one
     /// draw per `(mesh, transform)` pair, so a per-member draw would put two
@@ -491,7 +557,7 @@ impl Truss {
     /// [`Self::mesh_key`].
     #[must_use]
     pub fn mesh(self) -> MeshData {
-        bake(self.members(), self.end_frames())
+        bake(self.members(), self.end_frames().map(open))
     }
 }
 
@@ -501,10 +567,11 @@ impl Truss {
 /// Always the twelve edges of a [`SQUARE_M`] cube, whatever the ways — that is
 /// how a real box corner is welded, and it is why every face of every block is
 /// the same square of chord centres and therefore mates. What [`FaceSet`]
-/// changes is the *treatment*: an open face is left open, carrying coupler
-/// collars and an [`EndFrame`]; a closed face is braced across its diagonal and
-/// bolts to nothing. That is also what makes the way count legible at a glance
-/// — you see straight through a six-way and through only two faces of an L.
+/// changes is the *treatment*: every face carries a plate, and an open one adds
+/// four coupler bosses and an [`EndFrame`], while a closed one is braced across
+/// its diagonal and bolts to nothing. The way count stays legible through the
+/// plates' apertures — a closed face shows its diagonal, an open one shows the
+/// inside of the block.
 ///
 /// Way count is `faces.ways()` and is not stored beside it. Two fields that can
 /// disagree about the same fact are a bug waiting for the one caller that sets
@@ -564,37 +631,54 @@ impl Corner {
     /// The twelve cube edges in chord tube, then one brace across each closed
     /// face's diagonal.
     pub fn members(self) -> impl Iterator<Item = Member> {
-        let edges = (0..3).flat_map(|axis| {
+        // Every edge stops [`PLATE_THICKNESS_M`] short of both faces it runs
+        // between, so all six plates sit flush — the ripped block's own
+        // construction, and the reason its plates read as plates.
+        let reach = OUTER_M - PLATE_THICKNESS_M;
+        let edges = (0..3).flat_map(move |axis| {
             let (b, c) = perpendicular(axis);
             SIGN_PAIRS.into_iter().map(move |(sb, sc)| {
                 let off = AXES[b] * sb * HALF_SQUARE_M + AXES[c] * sc * HALF_SQUARE_M;
-                Member {
-                    start: off - AXES[axis] * HALF_SQUARE_M,
-                    end: off + AXES[axis] * HALF_SQUARE_M,
-                    radius: CHORD_DIAMETER_M / 2.0,
-                }
+                Member::tube(
+                    off - AXES[axis] * reach,
+                    off + AXES[axis] * reach,
+                    CHORD_DIAMETER_M / 2.0,
+                )
             })
         });
         let braces = Face::ALL
             .into_iter()
             .filter(move |&f| !self.faces.contains(f))
-            .map(|face| {
+            .map(move |face| {
                 let (b, c) = perpendicular(face.axis());
-                let plane = face.normal() * HALF_SQUARE_M;
+                // Tangent to the plate's inner face, so it shows through the
+                // aperture instead of straddling the plate like a strap.
+                let plane = face.normal() * (reach - BRACE_DIAMETER_M / 2.0);
                 let diagonal = (AXES[b] + AXES[c]) * HALF_SQUARE_M;
-                Member {
-                    start: plane - diagonal,
-                    end: plane + diagonal,
-                    radius: BRACE_DIAMETER_M / 2.0,
-                }
+                Member::tube(plane - diagonal, plane + diagonal, BRACE_DIAMETER_M / 2.0)
             });
         edges.chain(braces)
     }
 
-    /// The block as one uploadable triangle list, plated on its open faces.
+    /// Every face and how it is finished: all six plated, the open ones
+    /// coupled.
+    fn plating(self) -> impl Iterator<Item = (EndFrame, Plating)> {
+        Face::ALL.into_iter().map(move |face| {
+            (
+                face.frame(),
+                if self.faces.contains(face) {
+                    Plating::Open
+                } else {
+                    Plating::Blind
+                },
+            )
+        })
+    }
+
+    /// The block as one uploadable triangle list, plated on every face.
     #[must_use]
     pub fn mesh(self) -> MeshData {
-        bake(self.members(), self.end_frames())
+        bake(self.members(), self.plating())
     }
 }
 
@@ -603,9 +687,18 @@ impl Corner {
 ///
 /// The only piece in the family with a continuous parameter besides span, and
 /// like span it is quantized on the way in — see [`Hinge::new`]. Each leaf is
-/// half a [`Corner`]: four chords out to its open face, the four edges that
-/// ring that face, and a plate over it. The pin runs vertically through the
-/// centre, and is the axis the second leaf swings about.
+/// half a [`Corner`] built the same way a corner is: four chords out to its
+/// open face, a ring of edges at each end of them, coupler bosses, and a plate
+/// over the open face. Set the angle to zero and the two of them are a
+/// straight-through block with a barrel down one side.
+///
+/// **The pin is on the inside of the bend, not through the centre.** A run
+/// bending toward `-Z` closes up on its `-Z` side and opens a wedge on its
+/// `+Z` side, so the axis the swinging leaf turns about is the `-Z` edge of the
+/// plane the leaves share. Pinning the centre instead is what drives two solid
+/// leaves through each other the moment the angle leaves zero; pinning an edge
+/// is what a book hinge is. The leaves stand [`HINGE_GAP_M`] back from that
+/// plane on either side, which is the knuckle gap the lugs live in.
 ///
 /// At 0° the leaves are back to back and the joint is straight through; at 90°
 /// a run entering at `-X` leaves at `-Z`. So the angle is the *deflection*, not
@@ -644,11 +737,27 @@ impl Hinge {
     /// The transform carrying the fixed leaf's geometry onto the swinging one.
     ///
     /// A half turn puts the second leaf's open face at `+X` — straight through
-    /// — and the deflection is added to that. Composing rather than mirroring
-    /// matters: a reflection would flip every triangle's winding and light the
-    /// leaf from inside.
+    /// — and the deflection is turned about [`Self::pin`] on top of that.
+    /// Composing rather than mirroring matters: a reflection would flip every
+    /// triangle's winding and light the leaf from inside.
     fn swing(self) -> glam::Mat4 {
-        glam::Mat4::from_rotation_y(std::f32::consts::PI + self.angle_deg().to_radians())
+        self.turn() * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+    }
+
+    /// The deflection alone: a turn of `angle` about the pin axis.
+    fn turn(self) -> glam::Mat4 {
+        let pin = Self::pin();
+        glam::Mat4::from_translation(pin)
+            * glam::Mat4::from_rotation_y(self.angle_deg().to_radians())
+            * glam::Mat4::from_translation(-pin)
+    }
+
+    /// A point on the pin axis: the `-Z` edge of the plane the leaves share.
+    ///
+    /// The axis itself is vertical, so any point on it will do and this is the
+    /// one at mid-height.
+    fn pin() -> Vec3 {
+        Vec3::new(0.0, 0.0, -OUTER_M)
     }
 
     /// Both open faces, fixed leaf first.
@@ -668,53 +777,119 @@ impl Hinge {
         format!("procedural/truss/hinge/{}", self.degrees)
     }
 
-    /// Both leaves' tubes, then the pin.
+    /// Both leaves' tubes and knuckle lugs, then the pin.
     pub fn members(self) -> impl Iterator<Item = Member> {
         let swing = self.swing();
-        let fixed = leaf_members();
-        let swinging = leaf_members().map(move |m| m.transformed(swing));
-        let pin = std::iter::once(Member {
-            start: Vec3::NEG_Y * HALF_SQUARE_M,
-            end: Vec3::Y * HALF_SQUARE_M,
-            radius: CHORD_DIAMETER_M / 2.0,
-        });
+        let turn = self.turn();
+        let reach = HINGE_GAP_M + CHORD_DIAMETER_M / 2.0;
+        // Lugs are written in hinge space, not leaf space: they reach *across*
+        // the knuckle gap to the pin, so the half turn that reverses a leaf
+        // would point its lugs at the far corner instead.
+        let fixed = leaf_members().chain(knuckles(FIXED_KNUCKLE_M, -reach));
+        let swinging = leaf_members()
+            .map(move |m| m.transformed(swing))
+            .chain(knuckles(SWINGING_KNUCKLE_M, reach).map(move |m| m.transformed(turn)));
+        let axis = Self::pin();
+        // The pin runs past the leaves top and bottom, the way a hinge pin
+        // stands proud of its knuckles — at this scale that overhang is the
+        // only thing that reads as a pin rather than as another chord.
+        let overhang = Vec3::Y * (OUTER_M + CHORD_DIAMETER_M);
+        let pin = std::iter::once(Member::tube(axis - overhang, axis + overhang, PIN_RADIUS_M));
         fixed.chain(swinging).chain(pin)
     }
 
     /// The joint as one uploadable triangle list, plated on both open faces.
     #[must_use]
     pub fn mesh(self) -> MeshData {
-        bake(self.members(), self.end_frames())
+        bake(self.members(), self.end_frames().map(open))
     }
+}
+
+/// Radius of the hinge pin and of the knuckle lugs that ride on it.
+const PIN_RADIUS_M: f32 = CHORD_DIAMETER_M / 2.0 * 0.75;
+
+/// How far back from the plane it shares with the other leaf each leaf stops.
+///
+/// Two solids that touch cannot hinge: rotating one about an axis in their
+/// shared plane drives it straight into the other. The gap is what the
+/// knuckles occupy on a real book hinge, and half of it is the clearance that
+/// makes every angle in `0..=180` buildable.
+pub const HINGE_GAP_M: f32 = CHORD_DIAMETER_M / 2.0;
+
+/// Heights the fixed leaf's two knuckle lugs sit at, as a fraction of the
+/// half-square. The swinging leaf's are elsewhere on the pin so the two leaves'
+/// knuckles interleave instead of colliding at 0°.
+const FIXED_KNUCKLE_M: f32 = HALF_SQUARE_M * 0.88;
+const SWINGING_KNUCKLE_M: f32 = HALF_SQUARE_M * 0.42;
+
+/// The two lugs tying one leaf's `-Z` corner to the pin, at `±height`, reaching
+/// from `reach` on the leaf's own side of the knuckle gap.
+fn knuckles(height: f32, reach: f32) -> impl Iterator<Item = Member> {
+    [-1.0f32, 1.0].into_iter().map(move |sign| {
+        Member::tube(
+            Vec3::new(reach, sign * height, -OUTER_M),
+            Vec3::new(0.0, sign * height, -OUTER_M),
+            PIN_RADIUS_M,
+        )
+    })
 }
 
 /// One leaf of a [`Hinge`]: half a corner box, open at `-X`.
 ///
-/// Four chords from the hinge plane out to the open face, then the four edges
-/// that ring that face. Nothing closes the leaf at `x = 0`; that is where the
-/// other leaf and the pin are, and a ring there would read as a bulge through
-/// the middle of a straight joint.
+/// Four chords from the knuckle gap out to the open face, a ring of edges at
+/// each end of them, and a diagonal across each side face — the near ring is
+/// what keeps the leaf from ending in four cut tubes when the joint is open,
+/// and the far one is the square the plate covers. Every vertex is at `x <= -HINGE_GAP_M`; that clearance is the
+/// whole reason two leaves can turn about a shared edge without meeting.
 fn leaf_members() -> impl Iterator<Item = Member> {
-    let chords = SIGN_PAIRS.into_iter().map(|(sy, sz)| {
+    let near = HINGE_GAP_M;
+    let far = OUTER_M - PLATE_THICKNESS_M;
+    let chords = SIGN_PAIRS.into_iter().map(move |(sy, sz)| {
         let off = Vec3::new(0.0, sy, sz) * HALF_SQUARE_M;
-        Member {
-            start: off,
-            end: off + Vec3::NEG_X * HALF_SQUARE_M,
-            radius: CHORD_DIAMETER_M / 2.0,
-        }
+        Member::tube(
+            off - Vec3::X * near,
+            off - Vec3::X * far,
+            CHORD_DIAMETER_M / 2.0,
+        )
     });
-    let ring = [1usize, 2].into_iter().flat_map(|axis| {
+    // The far ring sits on the chord square, not on the face plane — the same
+    // chord radius inside it that a [`Corner`]'s in-plane edges sit, so the
+    // tube is tangent to the plate instead of bulging through it.
+    let rings = [near + CHORD_DIAMETER_M / 2.0, HALF_SQUARE_M]
+        .into_iter()
+        .flat_map(|x| {
+            [1usize, 2].into_iter().flat_map(move |axis| {
+                let other = AXES[3 - axis];
+                [-1.0f32, 1.0].into_iter().map(move |sign| {
+                    let off = Vec3::NEG_X * x + other * sign * HALF_SQUARE_M;
+                    Member::tube(
+                        off - AXES[axis] * HALF_SQUARE_M,
+                        off + AXES[axis] * HALF_SQUARE_M,
+                        CHORD_DIAMETER_M / 2.0,
+                    )
+                })
+            })
+        });
+    // One diagonal across each of the four side faces, the same treatment a
+    // [`Corner`] gives a face nothing bolts to. Without them a leaf is a bare
+    // cage, and a hinge that is not braced like a corner does not read as one.
+    let braces = [1usize, 2].into_iter().flat_map(move |axis| {
         let other = AXES[3 - axis];
         [-1.0f32, 1.0].into_iter().map(move |sign| {
-            let off = Vec3::NEG_X * HALF_SQUARE_M + other * sign * HALF_SQUARE_M;
-            Member {
-                start: off - AXES[axis] * HALF_SQUARE_M,
-                end: off + AXES[axis] * HALF_SQUARE_M,
-                radius: CHORD_DIAMETER_M / 2.0,
-            }
+            let face = AXES[axis] * sign * HALF_SQUARE_M;
+            Member::tube(
+                face - Vec3::X * (near + CHORD_DIAMETER_M / 2.0) + other * HALF_SQUARE_M,
+                face - Vec3::X * HALF_SQUARE_M - other * HALF_SQUARE_M,
+                BRACE_DIAMETER_M / 2.0,
+            )
         })
     });
-    chords.chain(ring)
+    chords.chain(rings).chain(braces)
+}
+
+/// A face that bolts to something, in the shape [`bake`] wants.
+fn open(frame: EndFrame) -> (EndFrame, Plating) {
+    (frame, Plating::Open)
 }
 
 /// The two axes a face's own axis is not.
@@ -740,40 +915,139 @@ pub fn chord_centres(frame: EndFrame) -> [Vec3; 4] {
     SIGN_PAIRS.map(|(a, b)| frame.position + (frame.up * a + right * b) * HALF_SQUARE_M)
 }
 
-/// The coupler collars standing back from one open face.
+/// The coupler bosses standing back from one open face.
 ///
-/// An open face is *open* — you see through a corner block, which is the whole
-/// difference between a two-way and a six-way at a glance. What marks it as a
-/// joint is a short flared collar on each chord end, set back into the piece by
-/// [`CONNECTOR_DEPTH_M`] so two bolted pieces' collars meet at the face plane
-/// instead of interpenetrating. This replaces plating the aperture: a solid
-/// plate over an open face draws exactly the wrong picture.
-fn connectors(frame: EndFrame) -> impl Iterator<Item = Member> {
-    chord_centres(frame).into_iter().map(move |centre| Member {
-        start: centre,
-        end: centre - frame.normal * CONNECTOR_DEPTH_M,
-        radius: CHORD_DIAMETER_M / 2.0 * CONNECTOR_FLARE,
+/// A short cone on each chord end, widest where it meets the plate and tapering
+/// back to chord gauge. It lives entirely behind the plate, on its own side of
+/// the mating plane, so two bolted pieces' couplers never meet in the same
+/// millimetre of space — and it is the step in diameter, seen past the plate
+/// corners, that says "this face bolts to something" at rig distance.
+fn couplers(frame: EndFrame) -> impl Iterator<Item = Member> {
+    let back = frame.normal * PLATE_THICKNESS_M;
+    chord_centres(frame).into_iter().map(move |centre| {
+        Member::cone(
+            centre - back,
+            centre - back - frame.normal * COUPLER_DEPTH_M,
+            [
+                CHORD_DIAMETER_M / 2.0,
+                CHORD_DIAMETER_M / 2.0 * COUPLER_TAPER,
+            ],
+        )
     })
 }
 
-/// Tubes and open faces into one uploadable triangle list.
+/// How one face of a piece is finished.
 ///
-/// The single bake for the whole family: every piece is `members` plus the
-/// faces it opens, so a new shape is a new pair of iterators and no new mesh
-/// code. Baked rather than instanced per member because the frame's draw list
-/// is one draw per `(mesh, transform)` pair — a per-member draw would put two
-/// hundred draw calls behind a single truss.
+/// Every face of every piece carries a plate — that is what a truss end looks
+/// like, and leaving one off to signal "open" made a block read as a wire
+/// sculpture. What an open face adds is the four coupler bosses; what a blind
+/// one has instead is the diagonal brace its owner already put in `members`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Plating {
+    /// Bolts to another piece: plate plus coupler bosses.
+    Open,
+    /// Plate only.
+    Blind,
+}
+
+/// Vertices and indices one plate contributes.
+const PLATE_VERTICES: usize = 48;
+const PLATE_INDICES: usize = 96;
+
+/// Append one connection plate: a square slab with a diamond aperture, its
+/// outer face lying on `frame`'s plane and its body entirely behind it.
+///
+/// Modelled as a ring rather than a slab with a hole punched through it —
+/// eight triangles a face, four quads of wall inside and out — because the
+/// aperture is the point. A truss block you cannot see through is a crate.
+fn push_plate(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, frame: EndFrame) {
+    let right = frame.normal.cross(frame.up);
+    // `(up, right, normal)` is right-handed, so listing a triangle in
+    // increasing angle about the normal winds it counter-clockwise from
+    // outside — which is what the back face then reverses.
+    let at = |a: f32, b: f32, r: f32| frame.position + (frame.up * a + right * b) * r;
+    // Interleaved around the ring: aperture tip, plate corner, tip, corner…
+    let tips =
+        [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)].map(|(a, b)| at(a, b, APERTURE_M));
+    let corners =
+        [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)].map(|(a, b)| at(a, b, PLATE_HALF_M));
+
+    let back = frame.normal * PLATE_THICKNESS_M;
+    for (offset, normal) in [(Vec3::ZERO, frame.normal), (-back, -frame.normal)] {
+        let base = vertices.len() as u32;
+        for point in tips.into_iter().chain(corners) {
+            vertices.push(Vertex {
+                position: (point + offset).to_array(),
+                normal: normal.to_array(),
+                uv: [0.0, 0.0],
+                tangent: frame.up.extend(1.0).to_array(),
+            });
+        }
+        // Tips are 0..4 and corners 4..8; tip `k` sits between corner `k-1`
+        // and corner `k` going round.
+        let (tip, corner) = (|k: u32| base + k % 4, |k: u32| base + 4 + k % 4);
+        for k in 0..4 {
+            let ring = [
+                [tip(k), corner(k), tip(k + 1)],
+                [corner(k), corner(k + 1), tip(k + 1)],
+            ];
+            for face in ring {
+                if normal.dot(frame.normal) > 0.0 {
+                    indices.extend(face);
+                } else {
+                    indices.extend([face[0], face[2], face[1]]);
+                }
+            }
+        }
+    }
+
+    // Walls: the plate edge outside, the aperture edge inside. Each quad gets
+    // its own four vertices because its normal is neither face's.
+    for (ring, outward) in [(tips, -1.0f32), (corners, 1.0)] {
+        for k in 0..4 {
+            let (a, b) = (ring[k], ring[(k + 1) % 4]);
+            let edge = (b - a).normalize();
+            let normal = edge.cross(frame.normal) * outward;
+            let base = vertices.len() as u32;
+            for point in [a, b, b - back, a - back] {
+                vertices.push(Vertex {
+                    position: point.to_array(),
+                    normal: normal.to_array(),
+                    uv: [0.0, 0.0],
+                    tangent: edge.extend(1.0).to_array(),
+                });
+            }
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+}
+
+/// Tubes and finished faces into one uploadable triangle list.
+///
+/// The single bake for the whole family: every piece is `members` plus the way
+/// each of its faces is finished, so a new shape is a new pair of iterators and
+/// no new mesh code. Baked rather than instanced per member because the frame's
+/// draw list is one draw per `(mesh, transform)` pair — a per-member draw would
+/// put two hundred draw calls behind a single truss.
 #[must_use]
 fn bake(
     members: impl IntoIterator<Item = Member>,
-    faces: impl IntoIterator<Item = EndFrame>,
+    faces: impl IntoIterator<Item = (EndFrame, Plating)>,
 ) -> MeshData {
     let members = members.into_iter();
     let (lower, _) = members.size_hint();
-    let mut vertices = Vec::with_capacity(lower * TUBE_VERTICES);
-    let mut indices = Vec::with_capacity(lower * TUBE_INDICES);
-    for member in members.chain(faces.into_iter().flat_map(connectors)) {
+    let mut vertices = Vec::with_capacity(lower * TUBE_VERTICES + 6 * PLATE_VERTICES);
+    let mut indices = Vec::with_capacity(lower * TUBE_INDICES + 6 * PLATE_INDICES);
+    let faces: Vec<_> = faces.into_iter().collect();
+    let bosses = faces
+        .iter()
+        .filter(|(_, plating)| *plating == Plating::Open)
+        .flat_map(|(frame, _)| couplers(*frame));
+    for member in members.chain(bosses) {
         push_tube(&mut vertices, &mut indices, member);
+    }
+    for (frame, _) in &faces {
+        push_plate(&mut vertices, &mut indices, *frame);
     }
     MeshData {
         key: String::new(),
@@ -782,11 +1056,11 @@ fn bake(
     }
 }
 
-/// Append one closed capped tube along `member`'s axis.
+/// Append one closed capped tube — or cone — along `member`'s axis.
 fn push_tube(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, member: Member) {
     let axis = member.end - member.start;
     let length = axis.length();
-    if length < f32::EPSILON || member.radius <= 0.0 {
+    if length < f32::EPSILON || member.max_radius() <= 0.0 {
         return;
     }
     let along = axis / length;
@@ -808,14 +1082,20 @@ fn push_tube(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, member: Member)
         across * turn.cos() + up * turn.sin()
     };
 
-    // Sides: two rings sharing radial normals, so the tube shades smooth.
+    // Sides: two rings sharing radial normals, so the tube shades smooth. A
+    // taper tilts that normal off radial by the cone's own slope — without it
+    // a coupler boss lights like a cylinder and its step reads as a seam.
+    let slope = (member.radii[0] - member.radii[1]) / length;
     let side = vertices.len() as u32;
-    for (end, origin) in [(0u32, member.start), (1, member.end)] {
+    for (end, origin, radius) in [
+        (0u32, member.start, member.radii[0]),
+        (1, member.end, member.radii[1]),
+    ] {
         for i in 0..TUBE_SIDES {
             let n = ring(i);
             vertices.push(Vertex {
-                position: (origin + n * member.radius).to_array(),
-                normal: n.to_array(),
+                position: (origin + n * radius).to_array(),
+                normal: (n + along * slope).normalize().to_array(),
                 uv: [i as f32 / TUBE_SIDES as f32, end as f32],
                 tangent: along.extend(1.0).to_array(),
             });
@@ -829,12 +1109,15 @@ fn push_tube(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, member: Member)
 
     // Caps: their own vertices, because a cap normal is the axis and a side
     // normal is radial.
-    for (origin, normal) in [(member.start, -along), (member.end, along)] {
+    for (origin, normal, radius) in [
+        (member.start, -along, member.radii[0]),
+        (member.end, along, member.radii[1]),
+    ] {
         let base = vertices.len() as u32;
         for i in 0..TUBE_SIDES {
             let n = ring(i);
             vertices.push(Vertex {
-                position: (origin + n * member.radius).to_array(),
+                position: (origin + n * radius).to_array(),
                 normal: normal.to_array(),
                 uv: [0.0, 0.0],
                 tangent: across.extend(1.0).to_array(),
@@ -853,6 +1136,23 @@ fn push_tube(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, member: Member)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn triangle_counts_stay_a_fraction_of_the_ripped_meshes() {
+        let counts = [
+            ("3 m run", Truss::new(3.0).mesh().indices.len() / 3),
+            (
+                "six-way",
+                Corner::new(FaceSet::ALL).mesh().indices.len() / 3,
+            ),
+            ("hinge", Hinge::new(45.0).mesh().indices.len() / 3),
+        ];
+        for (what, triangles) in counts {
+            // The ripped 12" block spends 18 144 on itself alone.
+            assert!(triangles < 5_000, "{what} spends {triangles}");
+            println!("{what}: {triangles} triangles");
+        }
+    }
 
     #[test]
     fn span_snaps_to_whole_panels_with_a_one_panel_floor() {
@@ -897,8 +1197,11 @@ mod tests {
             let members = truss.members().count();
             assert_eq!(members, 4 + 8 * panels as usize);
             let mesh = truss.mesh();
-            // Plus eight coupler collars, four on each end.
-            assert_eq!(mesh.vertices.len(), (members + 8) * TUBE_VERTICES);
+            // Plus eight coupler bosses and two plates, four bosses per end.
+            assert_eq!(
+                mesh.vertices.len(),
+                (members + 8) * TUBE_VERTICES + 2 * PLATE_VERTICES
+            );
             if let Some((prev_panels, prev_verts)) = previous {
                 let step: usize = mesh.vertices.len() - prev_verts;
                 assert_eq!(step, 8 * TUBE_VERTICES, "panel {prev_panels}->{panels}");
@@ -916,12 +1219,13 @@ mod tests {
             lo = lo.min(Vec3::from(v.position));
             hi = hi.max(Vec3::from(v.position));
         }
-        // The coupler collars stand proud of [`OUTER_M`], so they, not the
-        // chords, are the cross-section's outermost surface.
-        let outer = HALF_SQUARE_M + CHORD_DIAMETER_M / 2.0 * CONNECTOR_FLARE;
-        // The chords stop exactly on the end plane; the outermost brace meets
-        // its chord there at an angle, so its end cap leans a few millimetres
-        // past it. Under a brace radius, and invisible against a 48 mm chord.
+        // Nothing stands proud of [`OUTER_M`]: the chords are the section's
+        // outermost surface, the plates sit inside them, and a coupler boss is
+        // chord gauge at its widest.
+        let outer = OUTER_M;
+        // The end plate's outer face is the end plane exactly; the outermost
+        // brace meets its chord there at an angle, so its end cap leans a few
+        // millimetres past. Under a brace radius, invisible against a plate.
         let overhang = hi.x - 1.5;
         assert!(
             (0.0..BRACE_DIAMETER_M / 2.0).contains(&overhang) && (lo.x + hi.x).abs() < 1e-5,
@@ -979,14 +1283,70 @@ mod tests {
     }
 
     #[test]
-    fn both_ends_are_couplered_and_the_key_is_the_span() {
+    fn both_ends_are_plated_and_the_key_is_the_span() {
         let truss = Truss::new(2.0);
         assert_eq!(truss.mesh_key(), "procedural/truss/4");
-        // Four collars per end, on top of the lattice's own tubes.
+        // Four bosses and one plate per end, on top of the lattice's tubes.
         assert_eq!(
             truss.mesh().vertices.len(),
-            (truss.members().count() + 8) * TUBE_VERTICES
+            (truss.members().count() + 8) * TUBE_VERTICES + 2 * PLATE_VERTICES
         );
+    }
+
+    /// A plate's outer face lies exactly on the plane its end frame names, and
+    /// its body is entirely behind it. That is what makes the frame a *mating*
+    /// plane: bolt two pieces together and their plates meet rather than
+    /// occupy the same millimetre.
+    fn assert_plated(mesh: &MeshData, frame: EndFrame) {
+        let depth = |v: &Vertex| (Vec3::from(v.position) - frame.position).dot(frame.normal);
+        for v in mesh.vertices.iter() {
+            // The only thing allowed past the plane is the end cap of the
+            // outermost brace, which meets its chord at an angle and leans a
+            // few millimetres over. Nothing structural may.
+            assert!(
+                depth(v) < BRACE_DIAMETER_M / 2.0,
+                "{v:?} stands {} m proud of {frame:?}",
+                depth(v)
+            );
+        }
+        // Every corner of the plate and every tip of its aperture lies *in*
+        // the plane, so a plate that had shrunk, drifted off-axis or been laid
+        // a millimetre back fails here rather than in a golden nobody re-reads.
+        let right = frame.normal.cross(frame.up);
+        let outline = [(1.0f32, 1.0f32), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+            .map(|(a, b)| (frame.up * a + right * b) * PLATE_HALF_M)
+            .into_iter()
+            .chain(
+                [(1.0f32, 0.0f32), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)]
+                    .map(|(a, b)| (frame.up * a + right * b) * APERTURE_M),
+            );
+        for point in outline {
+            let want = frame.position + point;
+            assert!(
+                mesh.vertices
+                    .iter()
+                    .any(|v| (Vec3::from(v.position) - want).length() < 1e-5),
+                "{want} is not on the plate of {frame:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_open_face_carries_a_plate_on_its_own_plane() {
+        let truss = Truss::new(1.5);
+        for frame in truss.end_frames() {
+            assert_plated(&truss.mesh(), frame);
+        }
+        let corner = Corner::new(FaceSet::ALL);
+        for frame in corner.end_frames() {
+            assert_plated(&corner.mesh(), frame);
+        }
+        for degrees in [0.0f32, 45.0, 90.0, 135.0, 180.0] {
+            let hinge = Hinge::new(degrees);
+            for frame in hinge.end_frames() {
+                assert_plated(&hinge.mesh(), frame);
+            }
+        }
     }
 
     /// Two faces are bolted together when their chord squares coincide and
@@ -1055,7 +1415,7 @@ mod tests {
         let edges = |faces| {
             Corner::new(faces)
                 .members()
-                .filter(|m| m.radius > BRACE_DIAMETER_M)
+                .filter(|m| m.max_radius() > BRACE_DIAMETER_M)
                 .count()
         };
         assert_eq!(edges(FaceSet::THROUGH), 12);
@@ -1096,9 +1456,10 @@ mod tests {
             ));
             keys.insert(corner.mesh_key());
             let mesh = corner.mesh();
-            // Twelve edges, at most four diagonals, four collars per way.
+            // Twelve edges, at most four diagonals, four bosses per way, and
+            // six plates whatever the ways.
             assert!(
-                mesh.vertices.len() <= (16 + 6 * 4) * TUBE_VERTICES,
+                mesh.vertices.len() <= (16 + 6 * 4) * TUBE_VERTICES + 6 * PLATE_VERTICES,
                 "{bits} {}",
                 mesh.vertices.len()
             );
@@ -1167,18 +1528,92 @@ mod tests {
     }
 
     #[test]
-    fn a_hinge_is_two_leaves_and_a_pin() {
+    fn a_hinge_is_two_leaves_four_knuckles_and_a_pin() {
         let hinge = Hinge::new(90.0);
-        assert_eq!(hinge.members().count(), 8 + 8 + 1);
+        // Twelve tubes, four braces and two lugs a leaf, then the pin.
+        assert_eq!(hinge.members().count(), 18 + 18 + 1);
         let mesh = hinge.mesh();
-        // Seventeen tubes, plus four coupler collars on each of two faces.
-        assert_eq!(mesh.vertices.len(), (17 + 8) * TUBE_VERTICES);
+        assert_eq!(
+            mesh.vertices.len(),
+            (37 + 8) * TUBE_VERTICES + 2 * PLATE_VERTICES
+        );
         assert!(mesh
             .indices
             .iter()
             .all(|&i| (i as usize) < mesh.vertices.len()));
         for v in mesh.vertices.iter() {
             assert!((Vec3::from(v.normal).length() - 1.0).abs() < 1e-4, "{v:?}");
+        }
+    }
+
+    /// How much overlap the sampled clearance below is allowed to report.
+    ///
+    /// Its measure is capsule clearance, and a capsule is fatter at the ends
+    /// than the flat-capped tube it stands for — so two chords whose end caps
+    /// meet across the knuckle gap read as a hair overlapped when they are
+    /// touching. Two millimetres of that is contact; more is a joint drawn
+    /// through itself.
+    const TOUCH_M: f32 = 0.002;
+
+    /// Closest approach between two tube axes, sampled. Exact enough for a
+    /// clearance guard and a great deal shorter than the analytic case split.
+    fn clearance(a: Member, b: Member) -> f32 {
+        let sample = |m: Member| (0..=24).map(move |i| m.start.lerp(m.end, i as f32 / 24.0));
+        let mut worst = f32::MAX;
+        for p in sample(a) {
+            for q in sample(b) {
+                worst = worst.min((p - q).length() - a.max_radius() - b.max_radius());
+            }
+        }
+        worst
+    }
+
+    /// The two leaves turn about the pin without ever meeting.
+    ///
+    /// This is the property a centre pin cannot have: rotating one half-box
+    /// about an axis through the middle drives it straight through the other
+    /// the moment the angle leaves zero. The knuckle gap plus an edge pin is
+    /// what buys it, so if either changes this is what says so.
+    #[test]
+    fn hinge_leaves_clear_each_other_at_every_angle() {
+        let leaf: Vec<_> = leaf_members().collect();
+        for degrees in (0..=180).step_by(5) {
+            let hinge = Hinge::new(degrees as f32);
+            let swing = hinge.swing();
+            for fixed in &leaf {
+                for other in &leaf {
+                    let moved = other.transformed(swing);
+                    // Zero is two chords meeting cap to cap across the
+                    // knuckle gap at 0°, which is contact, not overlap.
+                    assert!(
+                        clearance(*fixed, moved) > -TOUCH_M,
+                        "{degrees}°: {fixed:?} meets {moved:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both leaves stay attached to the pin: a knuckle that only reaches its
+    /// axis at zero is a lug drawn floating in space at every other angle.
+    #[test]
+    fn hinge_knuckles_stay_on_the_pin() {
+        for degrees in [0.0f32, 45.0, 90.0, 135.0, 180.0] {
+            let hinge = Hinge::new(degrees);
+            let axis = Hinge::pin();
+            let lugs: Vec<_> = hinge
+                .members()
+                .filter(|m| (m.max_radius() - PIN_RADIUS_M).abs() < 1e-6)
+                .collect();
+            // Four lugs and the pin itself.
+            assert_eq!(lugs.len(), 5, "{degrees}");
+            let on_axis = |p: Vec3| (p.x - axis.x).hypot(p.z - axis.z) < 1e-4;
+            for lug in lugs {
+                assert!(
+                    on_axis(lug.start) || on_axis(lug.end),
+                    "{degrees}°: {lug:?} is off the pin"
+                );
+            }
         }
     }
 

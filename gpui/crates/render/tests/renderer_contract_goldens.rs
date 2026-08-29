@@ -27,6 +27,7 @@ const CASES: &[&str] = &[
     "truss-side-by-side",
     "truss-corner-vs-ripped",
     "truss-joints",
+    "truss-hinge-angles",
 ];
 
 #[derive(Deserialize)]
