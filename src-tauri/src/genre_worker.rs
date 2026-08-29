@@ -14,7 +14,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -126,18 +126,13 @@ pub fn analyze_genres(
     let models_dir = storage.models_dir();
     ensure_model(&models_dir)?;
 
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let boundaries_json = serde_json::to_vec(bar_boundaries)
         .map_err(|e| format!("Failed to encode bar boundaries: {e}"))?;
 
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let mut child = cmd
-        .env("PYTHONUNBUFFERED", "1")
         .env("LUMA_MODELS_DIR", &models_dir)
         .env("LUMA_FFMPEG", crate::ffmpeg_env::ffmpeg_path())
-        .arg(&script_path)
         .arg(audio_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

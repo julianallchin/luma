@@ -9,7 +9,6 @@
 use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const WORKER_SOURCE: &str = include_str!("../python/mert_worker.py");
 const WORKER_SCRIPT_NAME: &str = "mert_worker.py";
@@ -47,16 +46,10 @@ pub fn compute_mert_cache(
     out_fullmix: &Path,
     out_drum: &Path,
 ) -> Result<MertCache, String> {
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     // The worker imports `n2n.infer.compute_mert_features` so it shares the
     // exact chunking parameters the training pipeline uses; ensure the n2n
-    // resource dir is unpacked alongside the script and run with workdir =
-    // script's parent so the import resolves.
+    // resource dir is unpacked alongside the script.
     let _ = env.deploy_resource("n2n")?;
-    let workdir = script_path
-        .parent()
-        .ok_or_else(|| "Worker script missing parent directory".to_string())?;
 
     for out in [out_fullmix, out_drum] {
         if let Some(parent) = out.parent() {
@@ -66,11 +59,8 @@ pub fn compute_mert_cache(
         }
     }
 
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let output = cmd
-        .env("PYTHONUNBUFFERED", "1")
-        .arg(&script_path)
         .arg("--fullmix")
         .arg(fullmix_path)
         .arg("--drum")
@@ -79,7 +69,6 @@ pub fn compute_mert_cache(
         .arg(out_fullmix)
         .arg("--out-drum")
         .arg(out_drum)
-        .current_dir(workdir)
         .output()
         .map_err(|e| format!("Failed to launch MERT worker: {e}"))?;
 

@@ -1,7 +1,6 @@
 use crate::preprocessing::WorkerEnvironment;
 use serde::Deserialize;
 use std::path::Path;
-use std::process::Command;
 
 const WORKER_SOURCE: &str = include_str!("../python/beat_worker.py");
 const WORKER_SCRIPT_NAME: &str = "beat_worker.py";
@@ -25,13 +24,8 @@ struct WorkerResponse {
 }
 
 pub fn compute_beats(env: &WorkerEnvironment, audio_path: &Path) -> Result<BeatAnalysis, String> {
-    let python_path = env.python()?;
-    let script_path = env.deploy_script(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
-    let mut cmd = Command::new(&python_path);
-    crate::cmd_util::no_window(&mut cmd);
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
     let output = cmd
-        .env("PYTHONUNBUFFERED", "1")
-        .arg(&script_path)
         .arg(audio_path)
         .output()
         .map_err(|e| format!("Failed to launch python worker: {}", e))?;
