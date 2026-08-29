@@ -386,14 +386,51 @@ pub struct Fixture {
     pub rot: [f32; 3],
 }
 
+/// Where a piece's geometry comes from.
+///
+/// One field, not a path plus an optional override: a piece is authored art or
+/// it is generated, and a schema that can say both at once needs a precedence
+/// rule nobody can see. Serialized flat into [`Piece`], so an authored piece is
+/// still `{"meshPath": "..."}` and every existing scene file reads unchanged.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Geometry {
+    /// Path under `resources/meshes/`.
+    MeshPath(String),
+    /// A generated family and its parameters.
+    Procedural(Procedural),
+}
+
+impl Geometry {
+    /// An authored mesh at a path under `resources/meshes/`.
+    pub fn mesh(path: impl Into<String>) -> Self {
+        Self::MeshPath(path.into())
+    }
+}
+
+/// The generated piece families. A closed vocabulary: a new set object is an
+/// authored mesh unless its shape is genuinely parametric.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Procedural {
+    /// A continuous F34 lattice. `span` is metres and is quantized by
+    /// [`crate::truss::Truss::new`], so an unbuildable length is not an error —
+    /// it is the nearest buildable one.
+    Truss {
+        /// Requested span in metres, before snapping.
+        span: f32,
+    },
+}
+
 /// A stage piece, in the same Z-up data space as [`Fixture`].
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Piece {
     /// Venue-unique id.
     pub id: String,
-    /// Path under `resources/meshes/`.
-    pub mesh_path: String,
+    /// Authored mesh or generated family.
+    #[serde(flatten)]
+    pub geometry: Geometry,
     /// The venue's own vocabulary for what this is: `truss`, `stand`, `floor`,
     /// `guardrail`, `speaker`, `cdj`, `mixer`. Read only by
     /// [`Piece::is_rig_bearing`]; the renderer draws every piece the same way.
@@ -423,6 +460,23 @@ impl Piece {
     #[must_use]
     pub fn is_rig_bearing(&self) -> bool {
         matches!(self.kind.as_str(), "truss" | "stand")
+    }
+
+    /// Half-width of the box [`Scene::framing`] stands on this piece's origin.
+    ///
+    /// An authored piece's real size is in its mesh, which is loaded
+    /// asynchronously and is not part of a scene description, so its uniform
+    /// scale stands in. A generated one has no such excuse — its span *is* the
+    /// parameter — and a twelve-metre truss framed as a one-metre box is the
+    /// whole rig off-screen.
+    #[must_use]
+    pub fn framing_half_extent(&self) -> f32 {
+        match &self.geometry {
+            Geometry::MeshPath(_) => self.scale.abs().max(0.25),
+            Geometry::Procedural(Procedural::Truss { span }) => {
+                self.scale.abs() * crate::truss::Truss::new(*span).span_m() / 2.0
+            }
+        }
     }
 }
 
@@ -623,14 +677,13 @@ impl Scene {
     /// metres wider than its rig. Only *rig-bearing* pieces contribute a box;
     /// see [`Piece::is_rig_bearing`].
     ///
-    /// A piece's real size is in its mesh, which is loaded asynchronously and
-    /// is not part of a scene description — so its uniform `scale` stands in,
-    /// as a box that many metres wide *standing on* its origin. Standing on,
-    /// not centred: a piece's stored position is where it meets the floor, and
-    /// a box centred there would sink the framed floor below the room and pull
-    /// every camera back by the difference. It is the one approximation in
-    /// this function; threading measured mesh bounds through is a change to
-    /// these three lines and nothing else.
+    /// A piece contributes a box *standing on* its origin — standing on, not
+    /// centred: a piece's stored position is where it meets the floor, and a
+    /// box centred there would sink the framed floor below the room and pull
+    /// every camera back by the difference. Its half-width comes from
+    /// [`Piece::framing_half_extent`], exact for a generated piece and an
+    /// approximation for an authored one, whose real size is in a mesh that is
+    /// loaded asynchronously and is not part of a scene description.
     #[must_use]
     pub fn framing(&self, definitions: &BTreeMap<String, Definition>) -> luma_scene::Framing {
         luma_scene::Framing::of(
@@ -644,7 +697,7 @@ impl Scene {
             }),
             self.pieces.iter().filter(|p| p.is_rig_bearing()).map(|p| {
                 let base = crate::coords::world_from_data(glam::Vec3::from(p.pos));
-                let half = p.scale.abs().max(0.25);
+                let half = p.framing_half_extent();
                 luma_scene::Aabb::new(
                     base - glam::Vec3::new(half, half, 0.0),
                     base + glam::Vec3::splat(half),
@@ -732,7 +785,7 @@ mod tests {
             pieces: vec![
                 Piece {
                     id: "deck".into(),
-                    mesh_path: "stage_lab/deck.glb".into(),
+                    geometry: Geometry::mesh("stage_lab/deck.glb"),
                     kind: "floor".into(),
                     pos: [0.0; 3],
                     rot: [0.0; 3],
@@ -742,7 +795,7 @@ mod tests {
                 // real venue's guardrails and speakers have.
                 Piece {
                     id: "rail".into(),
-                    mesh_path: "stage_lab/guardrail.glb".into(),
+                    geometry: Geometry::mesh("stage_lab/guardrail.glb"),
                     kind: "guardrail".into(),
                     pos: [6.0, 6.0, 0.0],
                     rot: [0.0; 3],
@@ -763,6 +816,54 @@ mod tests {
         assert!((framing.bounds().min.z).abs() < 1e-5);
         let top = 3.0 + luma_scene::Framing::HEAD_RADIUS;
         assert!((framing.bounds().max.z - top).abs() < 1e-5, "{framing:?}");
+    }
+
+    /// `meshPath` is flattened, not nested: every scene file written before
+    /// [`Geometry`] existed still reads, and a procedural piece is the same
+    /// object with a different key.
+    #[test]
+    fn geometry_is_flat_on_the_wire() {
+        let authored: Piece = serde_json::from_str(
+            r#"{"id":"t","meshPath":"stage_lab/x.glb","kind":"truss",
+                "pos":[0,0,3],"rot":[0,0,0],"scale":1}"#,
+        )
+        .expect("legacy piece still parses");
+        assert!(matches!(&authored.geometry, Geometry::MeshPath(p) if p == "stage_lab/x.glb"));
+        let json = serde_json::to_value(&authored).expect("piece serializes");
+        assert_eq!(json["meshPath"], "stage_lab/x.glb");
+        assert!(json.get("geometry").is_none());
+
+        let generated: Piece = serde_json::from_str(
+            r#"{"id":"t","procedural":{"truss":{"span":3.0}},"kind":"truss",
+                "pos":[0,0,3],"rot":[0,0,0],"scale":1}"#,
+        )
+        .expect("procedural piece parses");
+        assert!(matches!(
+            generated.geometry,
+            Geometry::Procedural(Procedural::Truss { span }) if (span - 3.0).abs() < 1e-6
+        ));
+        assert_eq!(
+            serde_json::to_value(&generated).expect("piece serializes")["procedural"]["truss"]
+                ["span"],
+            3.0
+        );
+    }
+
+    /// A generated piece knows its own size, so the camera does not have to
+    /// guess it from a uniform scale that means nothing to it.
+    #[test]
+    fn a_procedural_truss_is_framed_at_its_own_span() {
+        let piece = |geometry| Piece {
+            id: "t".into(),
+            geometry,
+            kind: "truss".into(),
+            pos: [0.0, 0.0, 3.0],
+            rot: [0.0; 3],
+            scale: 1.0,
+        };
+        assert!((piece(Geometry::mesh("x.glb")).framing_half_extent() - 1.0).abs() < 1e-6);
+        let generated = piece(Geometry::Procedural(Procedural::Truss { span: 12.3 }));
+        assert!((generated.framing_half_extent() - 6.25).abs() < 1e-6);
     }
 
     /// The room is drawn but not framed: a guardrail six metres out must not

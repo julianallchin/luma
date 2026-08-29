@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use luma_render::scene_desc::{
-    CameraPose, DirectionalLight, Environment, Piece, RenderSettings, Scene,
+    CameraPose, DirectionalLight, Environment, Geometry, Piece, Procedural, RenderSettings, Scene,
 };
 use luma_render::{assets, build_frame, Catalogue, Renderer, DEFAULT_SUBFRAMES};
 
@@ -140,6 +140,27 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
+    for scene in [truss_scene()] {
+        if requested.is_empty() || requested.contains(&scene.id) {
+            render_case(
+                &mut renderer,
+                &mut library,
+                &Catalogue {
+                    warmup_frames: DEFAULT_SUBFRAMES,
+                    viewport: luma_render::scene_desc::Viewport {
+                        width: 1100,
+                        height: 480,
+                    },
+                    device_scale_factor: 1.0,
+                    definitions: BTreeMap::new(),
+                    scenes: Vec::new(),
+                },
+                &scene,
+                &output,
+            )?;
+        }
+    }
+
     let mut performance = copy_scene(find_scene(&source, "dense-venue")?);
     performance.id = "volumetric-performance-smooth".into();
     performance.times = vec![TIME];
@@ -197,7 +218,7 @@ fn material_scenes() -> Vec<Scene> {
             fixtures: Vec::new(),
             pieces: vec![Piece {
                 id: "lab".into(),
-                mesh_path: format!("../../gpui/crates/render/goldens/{mesh_path}"),
+                geometry: Geometry::mesh(format!("../../gpui/crates/render/goldens/{mesh_path}")),
                 kind: "floor".into(),
                 pos: [0.0; 3],
                 rot: [0.0; 3],
@@ -231,6 +252,70 @@ fn material_scenes() -> Vec<Scene> {
     ]
 }
 
+/// The ripped SketchUp F33 stick over the procedural F34 lattice, same span,
+/// same camera. The picture the procedural generator is read against.
+fn truss_scene() -> Scene {
+    let mut render = RenderSettings::dark_stage(38.0, 1.0);
+    render.environment = Environment {
+        background: [0.004, 0.006, 0.01],
+        ambient_color: [0.35, 0.45, 0.65],
+        ambient_intensity: 0.10,
+        probe: None,
+    };
+    render.haze.enabled = false;
+    render.show_grid = false;
+    render.sun = Some(DirectionalLight {
+        direction: [2.0, -2.5, 6.0],
+        color: [1.0, 0.95, 0.88],
+        intensity: 2.6,
+        shadows: false,
+        shadow_softness: 1.0,
+    });
+    Scene {
+        id: "truss-side-by-side".into(),
+        times: vec![TIME],
+        camera: CameraPose {
+            position: [0.0, 0.95, 2.7],
+            target: [0.0, 0.95, 0.0],
+        },
+        editing: false,
+        render,
+        selected_fixture_ids: Vec::new(),
+        fixtures: Vec::new(),
+        pieces: vec![
+            Piece {
+                id: "reference".into(),
+                geometry: Geometry::mesh("stage_lab/truss_q30_1.22m.glb"),
+                kind: "truss".into(),
+                pos: [0.0, 0.0, 1.4],
+                rot: [0.0; 3],
+                scale: 1.0,
+            },
+            // The same stick asked for, snapped to 1.0 m: the pair that pins
+            // chord gauge and brace pitch against a measured reference.
+            Piece {
+                id: "procedural-stick".into(),
+                geometry: Geometry::Procedural(Procedural::Truss { span: 1.2192 }),
+                kind: "truss".into(),
+                pos: [0.0, 0.0, 0.95],
+                rot: [0.0; 3],
+                scale: 1.0,
+            },
+            // A real run, which is the point of generating rather than
+            // importing: one continuous lattice, not three sticks in a row.
+            Piece {
+                id: "procedural-run".into(),
+                geometry: Geometry::Procedural(Procedural::Truss { span: 3.0 }),
+                kind: "truss".into(),
+                pos: [0.0, 0.0, 0.4],
+                rot: [0.0; 3],
+                scale: 1.0,
+            },
+        ],
+        state: BTreeMap::new(),
+    }
+}
+
 fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
     let mut render = RenderSettings::dark_stage(42.0, 1.0);
     render.environment = Environment {
@@ -262,7 +347,7 @@ fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
         pieces: vec![
             Piece {
                 id: "receiver".into(),
-                mesh_path: "stage_lab/stage_praticavel_2x1x1.glb".into(),
+                geometry: Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
                 kind: "floor".into(),
                 pos: [0.0, 0.0, 0.0],
                 rot: [0.0; 3],
@@ -270,7 +355,7 @@ fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
             },
             Piece {
                 id: "caster".into(),
-                mesh_path: "stage_lab/speaker_dbr15.glb".into(),
+                geometry: Geometry::mesh("stage_lab/speaker_dbr15.glb"),
                 kind: "speaker".into(),
                 pos: [0.0, 1.1, 0.0],
                 rot: [0.0, 0.35, 0.0],

@@ -253,7 +253,7 @@ pub fn flatten_pieces(pieces: &[StagePiece]) -> Vec<scene_desc::Piece> {
             let (pos, rot) = coords::data_pose_of(model);
             scene_desc::Piece {
                 id: piece.id.clone(),
-                mesh_path: piece.mesh_path.clone(),
+                geometry: scene_desc::Geometry::mesh(piece.mesh_path.clone()),
                 kind: piece.kind.clone(),
                 pos,
                 rot,
