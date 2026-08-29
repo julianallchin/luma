@@ -28,7 +28,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::drag::DragGhost;
-use crate::motion::{self, RESIZE};
+use crate::motion::{self, SURFACE};
 
 /// A width that is on its way from one value to another.
 ///
@@ -119,7 +119,7 @@ impl PaneWidth {
         let Some(Tween { from, started }) = self.moving else {
             return self.target;
         };
-        motion::lerp(from, self.target, motion::exit_progress(&RESIZE, started))
+        motion::lerp(from, self.target, motion::exit_progress(&SURFACE, started))
     }
 
     /// This frame's width, asking for the next frame while still moving.
@@ -178,7 +178,9 @@ pub enum Seam {
     Horizontal,
 }
 
-/// A seam the mouse can pull, floating over the boundary at zero layout size.
+/// A seam the mouse can pull, floating over the boundary at zero layout size,
+/// centred on the rule at `at` — an offset along the seam's own axis, in the
+/// coordinates of the region the seam divides.
 ///
 /// gpui's drag-and-drop rather than a mouse-move listener: the drag survives
 /// the pointer leaving the 5px strip, which a hover-scoped listener would not.
@@ -188,21 +190,62 @@ pub enum Seam {
 /// Double-click resets — `reset` is a plain fn pointer because there is exactly
 /// one behaviour per seam and a closure would only be a place to capture state
 /// this element must not hold.
+///
+/// # Who owns the pointer
+///
+/// A grip has to be thicker than the rule it pulls — a 1px target is not
+/// aimable — so it overhangs both neighbours. gpui hit-tests in **paint order
+/// only**: every hitbox under the pointer is hovered at once unless one of
+/// them says otherwise, so an overhanging grip and the surface beneath it both
+/// took the same press. That is one bug, not two: pressing the stage/editor
+/// seam orbited the stage *and* the same press on the workspace seam reached
+/// the panel behind it.
+///
+/// Two halves make the grip the sole owner of its strip, and both are
+/// necessary:
+///
+/// - [`InteractiveElement::block_mouse_except_scroll`] takes the pointer from
+///   everything painted *behind* it. Scroll is deliberately still let through:
+///   a 5px strip is not a scrollable thing, and a wheel that died on the seam
+///   would be a dead band across whatever it divides.
+/// - The caller mounts this as the **last child of the region it divides**,
+///   absolutely positioned at `at`, which is what makes "behind it" mean both
+///   neighbours rather than only the one that happened to paint first. Mounted
+///   inside the rule instead, the grip would own the pane above it and share
+///   the pane below it.
+///
+/// Last within its *region*, not deferred to the top of the window: an overlay
+/// (a dialog, a menu) is painted after the shell and must keep the pointer it
+/// covers, seam included.
 pub fn resize_handle<M: 'static, V: Render>(
     id: &'static str,
     seam: Seam,
+    at: f32,
     marker: fn() -> M,
     reset: fn(&mut V, &mut Context<V>),
     hover: Hsla,
     cx: &mut Context<V>,
 ) -> Stateful<Div> {
+    let lead = px(at - HANDLE_WIDTH / 2.0);
     div()
         .id(id)
         .flex_none()
+        .absolute()
         .map(|handle| match seam {
-            Seam::Vertical => handle.w(px(HANDLE_WIDTH)).h_full().cursor_col_resize(),
-            Seam::Horizontal => handle.h(px(HANDLE_WIDTH)).w_full().cursor_row_resize(),
+            Seam::Vertical => handle
+                .w(px(HANDLE_WIDTH))
+                .h_full()
+                .top_0()
+                .left(lead)
+                .cursor_col_resize(),
+            Seam::Horizontal => handle
+                .h(px(HANDLE_WIDTH))
+                .w_full()
+                .left_0()
+                .top(lead)
+                .cursor_row_resize(),
         })
+        .block_mouse_except_scroll()
         .hover(move |s| s.bg(hover))
         .on_drag(marker(), |_, _: Point<Pixels>, _, cx| {
             cx.stop_propagation();
