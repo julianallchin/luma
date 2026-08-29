@@ -79,6 +79,14 @@ pub fn runtime(config_dir: impl Into<PathBuf>) -> Runtime {
     }
 }
 
+/// What the `index`th seeded conversation asked. Distinct per score, so "which
+/// conversation is on screen" is a question a snapshot can answer — see
+/// [`Fixture::with_seeded_threads`].
+#[must_use]
+pub fn seeded_prompt(index: usize) -> String {
+    format!("Seeded question about score {index}")
+}
+
 pub const VENUE: &str = "venue-main";
 pub const VENUE_NAME: &str = "Test Venue";
 pub const TRACK: &str = "track-aurora";
@@ -156,6 +164,8 @@ pub struct Fixture {
     motion_scale: Option<f32>,
     extra_tracks: usize,
     album_art: Option<usize>,
+    extra_scores: usize,
+    seeded_threads: bool,
 }
 
 impl Fixture {
@@ -177,7 +187,36 @@ impl Fixture {
             motion_scale: None,
             extra_tracks: 0,
             album_art: None,
+            extra_scores: 0,
+            seeded_threads: false,
         }
+    }
+
+    /// Mint `count` further scores on the seeded `(track, venue)`, after the
+    /// one the clips are authored on.
+    ///
+    /// A track/venue pair holds one score per principal in production, and a
+    /// headless fixture has exactly one principal — so the extra scores are
+    /// minted through the same `create_score` seam with distinct request ids,
+    /// which is the only thing that decides identity there. What they give a
+    /// test is the *shape* the rail exists for: more than one score to choose
+    /// between, in ordinal order.
+    #[allow(dead_code)]
+    pub fn with_extra_scores(mut self, count: usize) -> Self {
+        self.extra_scores = count;
+        self
+    }
+
+    /// Give every score on the seeded pair a track-agent conversation with a
+    /// message already in it.
+    ///
+    /// What it buys a test is a thread whose *arrival* is observable: an empty
+    /// conversation looks the same before and after its read lands, so nothing
+    /// about loading can be asserted over one.
+    #[allow(dead_code)]
+    pub fn with_seeded_threads(mut self) -> Self {
+        self.seeded_threads = true;
+        self
     }
 
     /// Open the window at `width` × `height` instead of the default 1200×800.
@@ -546,6 +585,33 @@ impl Fixture {
             None
         };
 
+        let mut scores: Vec<String> = score_id.iter().cloned().collect();
+        for extra in 0..self.extra_scores {
+            let score = call(
+                &services,
+                "create_score",
+                json!({
+                    "requestId": request_id(900 + extra),
+                    "trackId": TRACK,
+                    "venueId": VENUE,
+                    "name": null,
+                }),
+            )
+            .await;
+            scores.push(
+                score["id"]
+                    .as_str()
+                    .expect("a created score has an id")
+                    .to_string(),
+            );
+        }
+
+        if self.seeded_threads {
+            for (index, score) in scores.iter().enumerate() {
+                self.seed_thread(&services, score, index).await;
+            }
+        }
+
         // Lit patterns are minted once per `clip.pattern` key, so two clips
         // that name the same key share one pattern — which is what a test
         // about same-pattern multi-selection needs to exist at all.
@@ -593,6 +659,58 @@ impl Fixture {
             )
             .await;
         }
+    }
+
+    /// One track-agent conversation about `score`, with a prompt and a reply
+    /// in it.
+    ///
+    /// Written through the same seam the app resolves it by, so the scope the
+    /// editor derives from the screen finds this thread rather than minting an
+    /// empty one beside it.
+    async fn seed_thread(
+        &self,
+        services: &luma_lib::dispatch::AppServices,
+        score: &str,
+        index: usize,
+    ) {
+        let thread = call(
+            services,
+            "agent_thread_create",
+            json!({ "input": {
+                "requestId": request_id(700 + index),
+                "agentKind": "track_copilot",
+                "subjectKind": "track",
+                "subjectId": TRACK,
+                "implementationId": null,
+                "venueId": VENUE,
+                "scoreId": score,
+                "title": null,
+                "parentThreadId": null,
+                "parentCallId": null,
+            }}),
+        )
+        .await;
+        let thread_id = thread["id"].as_str().expect("a created thread has an id");
+        let part = |text: String| json!([{ "type": "text", "text": text }]);
+        call(
+            services,
+            "agent_thread_append_messages",
+            json!({
+                "threadId": thread_id,
+                "input": {
+                    "operationId": request_id(750 + index),
+                    "expectedHeadMessageId": null,
+                    // The prompt alone: an assistant row needs a prepared
+                    // authored turn beside it (trigger 1811), and what a test
+                    // wants from a seeded conversation is that it *has* words,
+                    // not who said them.
+                    "messages": [
+                        { "id": null, "role": "user", "parts": part(seeded_prompt(index)) },
+                    ],
+                },
+            }),
+        )
+        .await;
     }
 
     /// Author `pattern`'s graph as "every selected fixture, red, pulsing once
@@ -650,7 +768,7 @@ impl Fixture {
                         edge("mix", "out", "apply", "signal"),
                         edge("pattern_args", "selection", "apply", "selection"),
                     ],
-                    // One arg of each editable family the args strip must
+                    // One arg of each editable family the args sheet must
                     // host. Only `selection` is wired into the graph; the
                     // rest are schema for the strip to render and write.
                     "args": [{

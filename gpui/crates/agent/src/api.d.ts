@@ -136,8 +136,16 @@ interface Timings {
 }
 
 interface App {
-  /** Settle the app, draw a frame, and describe every control in it. */
-  snapshot(): Snapshot;
+  /**
+   * Settle the app, draw a frame, and describe every control in it.
+   *
+   * `settle: false` describes the frame **already drawn** instead of making a
+   * new one. That is how you read the frame an acting call produced: `click`
+   * settles, so whatever its own handlers drew is gone by the time a plain
+   * `snapshot()` has settled again — and a one-frame flash lives exactly
+   * there. Use it for that; a poll wants the settling default.
+   */
+  snapshot(options?: { settle?: boolean }): Snapshot;
 
   /**
    * Press and release at the centre of `node`.
@@ -175,6 +183,18 @@ interface App {
 
   /** Click `node` to focus it, then type `text` into it. */
   type(node: Node, text: string, options?: ActOptions): { frame: number };
+
+  /**
+   * Every frame drawn recently, oldest first, the one currently on screen
+   * last. Does not settle and does not draw.
+   *
+   * A settled command draws more than once — an async answer landing between
+   * two draws is an ordinary frame nobody asked for — and `snapshot()` only
+   * ever describes the last of them. So a claim about what was *never* on
+   * screen ("this list never showed its empty state while loading") is checked
+   * here: act, then sweep the frames the act drew.
+   */
+  painted(): Snapshot[];
 
   /** A space-separated keystroke sequence, e.g. `"cmd-p escape"`. */
   key(keys: string): { frame: number };

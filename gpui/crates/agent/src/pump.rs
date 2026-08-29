@@ -268,8 +268,12 @@ fn handle(backend: &mut Backend, cmd: Cmd) -> Result<Value, HarnessError> {
 
         Cmd::Timings => Ok(backend.timings()),
 
-        Cmd::Snapshot => {
-            backend.settle();
+        Cmd::Painted => Ok(painted(backend)),
+
+        Cmd::Snapshot { settle } => {
+            if settle {
+                backend.settle();
+            }
             Ok(snapshot(backend))
         }
 
@@ -462,6 +466,15 @@ fn drag(
     backend.settle();
 }
 
+/// Every frame still held, oldest first, the one on screen last.
+///
+/// Unsettled on purpose: asking what was drawn must not draw.
+fn painted(backend: &Backend) -> Value {
+    let mut frames = backend.past();
+    frames.push(snapshot(backend));
+    Value::Array(frames)
+}
+
 fn snapshot(backend: &Backend) -> Value {
     let (frame, nodes) = backend.registry();
     Value::Object(
@@ -635,6 +648,12 @@ struct FrameTiming {
 /// Frames kept. At 60Hz this is roughly the last eight seconds of drawing.
 const TIMING_HISTORY: usize = 512;
 
+/// How many finished frames the node registry holds for `app.painted()`.
+/// A whole gesture's worth of draws and no more — this retains every described
+/// node in each of them, and a driver reads them between commands rather than
+/// hours later.
+const PAINTED_HISTORY: usize = 64;
+
 impl Backend {
     fn open(config: &Config, root: &RootFactory) -> Self {
         let root = root.clone();
@@ -658,6 +677,10 @@ impl Backend {
             host,
             timings: VecDeque::new(),
         };
+        // Every frame a command draws, not just the one it leaves behind: a
+        // settled command draws more than once, and a one-frame flash lives in
+        // the ones the registry would otherwise drop. See `Cmd::Painted`.
+        backend.in_window(|_, cx| luma_ui::node::NodeRegistry::keep(cx, PAINTED_HISTORY));
         backend.settle();
         backend
     }
@@ -745,6 +768,32 @@ impl Backend {
 
     fn frame(&self) -> u64 {
         self.registry().0
+    }
+
+    /// The finished frames the registry is holding, oldest first, already
+    /// described. Empty until [`NodeRegistry::keep`] has been asked for.
+    fn past(&self) -> Vec<Value> {
+        let read = |app: &App| {
+            app.try_global::<luma_ui::node::NodeRegistry>()
+                .map(|registry| {
+                    registry
+                        .past()
+                        .map(|(frame, nodes)| {
+                            json!({
+                                "frame": frame,
+                                "nodes": nodes.iter().map(|node| describe(frame, node))
+                                    .collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        match &self.host {
+            Host::Headless { cx, .. } => cx.read(read),
+            #[cfg(feature = "pixel")]
+            Host::Pixel { cx, .. } => read(&cx.app.borrow()),
+        }
     }
 
     fn registry(&self) -> (u64, Vec<Node>) {
