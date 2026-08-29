@@ -272,25 +272,33 @@ pub async fn get_grouped_hierarchy_with_path(
 ///
 /// Deriving the group tree asks every fixture for its role, and a venue's
 /// fixtures share a handful of definitions; re-reading and re-parsing a `.qxf`
-/// per fixture per derivation was most of the cost of renaming a group. Keyed
-/// on the path *and* its modification time, so an imported definition that is
-/// replaced on disk is re-read rather than remembered.
+/// per fixture per derivation was most of the cost of renaming a group. The
+/// modification time is stored *beside* the entry rather than in its key, so a
+/// definition replaced on disk is re-read and the superseded parse is dropped:
+/// keying on `(path, mtime)` bounded the memo by how many times the library had
+/// ever been edited, which is not a bound.
 ///
 /// `None` when the file will not parse: one unreadable `.qxf` should cost the
 /// venue one fixture's classification, not the whole tree.
 fn definition(resource_path: &Path, fixture: &PatchedFixture) -> Option<Arc<FixtureDefinition>> {
-    /// Keyed on the file and when it last changed.
-    type Parsed = HashMap<(PathBuf, Option<SystemTime>), Arc<FixtureDefinition>>;
+    /// One entry per file: when it was last read, and what it parsed to.
+    type Parsed = HashMap<PathBuf, (Option<SystemTime>, Arc<FixtureDefinition>)>;
     static CACHE: Lazy<std::sync::Mutex<Parsed>> = Lazy::new(Default::default);
 
     let path = resource_path.join(&fixture.fixture_path);
-    let key = (path.clone(), std::fs::metadata(&path).ok()?.modified().ok());
-    if let Some(hit) = CACHE.lock().ok()?.get(&key) {
-        return Some(hit.clone());
+    let changed = std::fs::metadata(&path).ok()?.modified().ok();
+    if let Some(hit) = CACHE
+        .lock()
+        .ok()?
+        .get(&path)
+        .filter(|(seen, _)| *seen == changed)
+        .map(|(_, parsed)| parsed.clone())
+    {
+        return Some(hit);
     }
     let parsed = Arc::new(parser::parse_definition(&path).ok()?);
     if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(key, parsed.clone());
+        cache.insert(path, (changed, parsed.clone()));
     }
     Some(parsed)
 }
@@ -1016,6 +1024,25 @@ impl GroupSources {
             self.overrides.push(row);
         }
     }
+}
+
+/// The node already answering to `name`, if any — the one check that keeps the
+/// selection namespace a namespace.
+///
+/// Derived nodes and authored groups share it: a `fixture_groups` row called
+/// `spots_right_wing` and the wing of that name are two sets an expression
+/// cannot tell apart, so it would quietly union them. `except` is the node
+/// being renamed, which is allowed to keep its own name.
+///
+/// Names that normalize to empty are not names and never collide.
+#[must_use]
+pub fn node_answering_to<'a>(
+    tree: &'a [GroupTreeNode],
+    name: &str,
+    except: &str,
+) -> Option<&'a GroupTreeNode> {
+    tree.iter()
+        .find(|node| node.id != except && !node.name.is_empty() && node.name == name)
 }
 
 /// The facts [`group_derivation::derive_groups`] reads, out of the database.

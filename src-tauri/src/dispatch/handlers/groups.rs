@@ -32,9 +32,10 @@ pub async fn create_group(
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    require_unique_name(&mut access, name.as_deref(), None).await?;
+    require_unique_name(services, &mut access, name.as_deref(), None).await?;
     let result =
         groups_db::create_group(&mut access, name.as_deref(), axis_lr, axis_fb, axis_ab).await?;
     access.commit().await?;
@@ -59,8 +60,15 @@ pub async fn update_group(
     axis_fb: Option<f64>,
     axis_ab: Option<f64>,
 ) -> Result<FixtureGroup, CommandError> {
+    // The venue first, because the graph conversion needs a write of its own
+    // and the namespace this rename joins is derived from that graph.
+    let venue_id = VenueAccess::<Read>::read(&services.db.0, VenueResource::Group(&id))
+        .await?
+        .venue_id()
+        .to_string();
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&id)).await?;
-    require_unique_name(&mut access, name.as_deref(), Some(&id)).await?;
+    require_unique_name(services, &mut access, name.as_deref(), Some(&id)).await?;
     let result =
         groups_db::update_group(&mut access, &id, name.as_deref(), axis_lr, axis_fb, axis_ab)
             .await?;
@@ -226,10 +234,14 @@ pub async fn update_movement_config(
 // Helpers
 // -----------------------------------------------------------------------------
 
-/// Group names are unique per venue under [`normalize_group_name`]. A name that
-/// normalizes to empty is exempt, which is why this is a scan rather than a DB
-/// constraint. `exclude` is the group being renamed, if any.
+/// Group names are unique per venue under [`normalize_group_name`], across the
+/// **whole** namespace: the derived tree and the authored groups share it, so
+/// an authored `spots_right_wing` is refused rather than left for a selection
+/// expression to union with the wing of that name. A name that normalizes to
+/// empty is exempt, which is why this is a scan rather than a DB constraint.
+/// `exclude` is the group being renamed, if any.
 async fn require_unique_name(
+    services: &AppServices,
     access: &mut VenueAccess<'_, Write>,
     name: Option<&str>,
     exclude: Option<&str>,
@@ -237,23 +249,22 @@ async fn require_unique_name(
     let Some(normalized) = name.map(normalize_group_name).filter(|n| !n.is_empty()) else {
         return Ok(());
     };
-    for group in groups_db::list_groups(access).await? {
-        if Some(group.id.as_str()) == exclude {
-            continue;
-        }
-        if group
-            .name
-            .as_deref()
-            .is_some_and(|existing| normalize_group_name(existing) == normalized)
-        {
-            return Err(CommandError::Conflict {
-                expected: None,
-                found: Some(normalized.clone()),
-                message: format!("A group with name '{normalized}' already exists"),
-            });
-        }
+    let tree = GroupSources::read(&services.fixtures_root, access)
+        .await?
+        .tree();
+    match groups_service::node_answering_to(&tree, &normalized, exclude.unwrap_or_default()) {
+        Some(clash) => Err(name_taken(&normalized, clash)),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// The refusal, in the words a human can act on: the name, and what already
+/// answers to it.
+fn name_taken(name: &str, clash: &GroupTreeNode) -> CommandError {
+    CommandError::Invalid(format!(
+        "`{name}` is already what `{}` is called in this venue",
+        clash.label
+    ))
 }
 
 // -----------------------------------------------------------------------------
@@ -442,16 +453,16 @@ async fn override_node(
         }
     }
 
-    let tree = sources.tree();
+    let before = sources.tree();
     if let Some(Some(parent)) = edit.parent_id.as_ref() {
-        if !parent.is_empty() && is_inside(&tree, parent, group_id) {
+        if !parent.is_empty() && is_inside(&before, parent, group_id) {
             return Err(CommandError::Invalid(
                 "a group cannot be moved under itself or under one of its own children".into(),
             ));
         }
     }
     if let Some(Some(target)) = edit.merged_into.as_ref() {
-        if is_inside(&tree, target, group_id) {
+        if is_inside(&before, target, group_id) {
             return Err(CommandError::Invalid(
                 "a group cannot be merged into itself or into one of its own children".into(),
             ));
@@ -481,6 +492,18 @@ async fn override_node(
         }
     }
 
+    // The tree this edit *would* leave behind, derived before anything is
+    // written — it is both the uniqueness check's subject and the answer handed
+    // back, so the caller cannot be told one thing while the venue holds
+    // another.
+    sources.apply(row.clone(), group_id);
+    let after = sources.tree();
+    if let Some(node) = after.iter().find(|node| node.id == group_id) {
+        if let Some(clash) = groups_service::node_answering_to(&after, &node.name, group_id) {
+            return Err(name_taken(&node.name, clash));
+        }
+    }
+
     match &row {
         Some(row) => overrides_db::put(&mut access, row).await?,
         None => {
@@ -489,8 +512,7 @@ async fn override_node(
     }
     access.commit().await?;
     invalidate_venue_fixture_cache();
-    sources.apply(row, group_id);
-    Ok(sources.tree())
+    Ok(after)
 }
 
 /// Whether `node` is `ancestor` or hangs under it, in the tree as it stands.
@@ -538,8 +560,10 @@ mod tests {
     // The tree, out of the seam a command comes through
     // -----------------------------------------------------------------------
 
-    /// Two towers on the stage, two movers up each: the canonical wing tree,
-    /// derived end to end through `dispatch` rather than from hand-built facts.
+    /// Four towers on the stage, one mover up each: two rows a wing, named for
+    /// the height that separates them, and a `top` on each side to make the
+    /// role's cross-cut. Derived end to end through `dispatch` rather than from
+    /// hand-built facts.
     #[tokio::test]
     async fn the_tree_derives_through_dispatch() {
         let (_dir, services, venue) = rig().await;
@@ -757,9 +781,106 @@ mod tests {
         assert_eq!(selection(&services, &venue, "spots_right_wing").await, 3);
     }
 
+    /// Defect: the derived tree and the authored groups share one selection
+    /// namespace, and only the authored half was checked — so an authored
+    /// `spots_right_wing` could be minted beside the wing of that name, and an
+    /// expression naming it silently unioned the two.
+    #[tokio::test]
+    async fn an_authored_group_cannot_take_a_derived_name() {
+        let (_dir, services, venue) = rig().await;
+        let error = create(&services, &venue, "Spots Right Wing")
+            .await
+            .expect_err("an authored group took a wing's name");
+        assert_invalid(&error, "spots_right_wing");
+    }
+
+    /// And the other way round: a rename is a name too, and it lands in the
+    /// same namespace the authored groups live in.
+    #[tokio::test]
+    async fn a_derived_node_cannot_be_renamed_onto_an_authored_group() {
+        let (_dir, services, venue) = rig().await;
+        create(&services, &venue, "spots house left")
+            .await
+            .expect("an authored group nothing derives");
+        let node = find(&tree(&services, &venue).await, "left wing");
+
+        let error = rename(&services, &venue, &node, Some("house left"))
+            .await
+            .expect_err("a wing took the authored group's name");
+        assert_invalid(&error, "spots_house_left");
+        assert_eq!(
+            at(&tree(&services, &venue).await, &node)["label"],
+            json!("left wing"),
+            "the refused rename was written anyway"
+        );
+    }
+
+    /// Defect: the cache was dropped *inside* the write transaction, so a read
+    /// arriving between the last write and the commit refilled it from the rows
+    /// the commit was about to replace — and the stale answer outlived the verb
+    /// that caused it.
+    #[tokio::test]
+    async fn a_read_between_the_write_and_the_commit_leaves_no_stale_answer() {
+        use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
+        use crate::database::local::venue_graph as venue_graph_db;
+
+        let (_dir, services, venue) = rig().await;
+        assert_eq!(selection(&services, &venue, "spots_left_wing").await, 2);
+
+        let towers = towers(&services, &venue).await;
+        let left = tower_at(&services, &venue, &towers, 6.0).await;
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+            .await
+            .expect("the venue would not open for writing");
+        venue_graph_db::set_params(
+            &mut access,
+            &left,
+            &[("u".to_string(), Some(-8.0))].into_iter().collect(),
+        )
+        .await
+        .expect("the tower did not move");
+
+        // The racing reader. It cannot see the move, and it refills the cache
+        // with the answer that is about to be wrong.
+        let racing = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            selection(&services, &venue, "spots_left_wing"),
+        )
+        .await
+        .expect("the reader could not get in beside the open write");
+        assert_eq!(racing, 2);
+
+        access.commit().await.expect("the move did not commit");
+        venue_graph_db::graph_committed();
+        assert_eq!(
+            selection(&services, &venue, "spots_left_wing").await,
+            1,
+            "the cache still answers from before the commit"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Plumbing
     // -----------------------------------------------------------------------
+
+    async fn create(
+        services: &AppServices,
+        venue: &str,
+        name: &str,
+    ) -> Result<Value, CommandError> {
+        dispatch(
+            services,
+            "create_group",
+            &json!({
+                "venueId": venue,
+                "name": name,
+                "axisLr": null,
+                "axisFb": null,
+                "axisAb": null,
+            }),
+        )
+        .await
+    }
 
     fn assert_invalid(error: &CommandError, needle: &str) {
         let CommandError::Invalid(message) = error else {
@@ -956,8 +1077,10 @@ mod tests {
             0.0,
         )
         .await;
-        // Two towers a side, unlabelled, so the rows are named by height —
-        // a labelled piece names its own row, which is a different test.
+        // Two towers a side, unlabelled, so the rows are named for the axis
+        // that separates them — the movers' 3 m of trim, which beats the 2 m
+        // between the towers. A labelled piece names its own row, which is a
+        // different test.
         //
         // `u` on a deck's `top` socket runs stage *left*-positive, the opposite
         // of the venue floor's, so these read backwards: `u = 6` stands at
@@ -1003,7 +1126,7 @@ mod tests {
                 &json!({
                     "venueId": venue,
                     "nodeId": fixture,
-                    "params": { "u": 0.0, "v": 0.0, "trim": 2.0 + (n % 2) as f64 * 2.0 },
+                    "params": { "u": 0.0, "v": 0.0, "trim": 2.0 + (n % 2) as f64 * 3.0 },
                     "label": null,
                 }),
             )

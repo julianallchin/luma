@@ -249,6 +249,7 @@ pub async fn delete_subtree(
     let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
     let out = ResolvedVenue::from(&solved);
     access.commit().await?;
+    venue_graph_db::graph_committed();
     Ok(out)
 }
 
@@ -317,6 +318,7 @@ async fn report(
     let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
     let report = PlacementReport::of(node_id, &solved);
     access.commit().await?;
+    venue_graph_db::graph_committed();
     Ok(report)
 }
 
