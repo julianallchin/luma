@@ -8,6 +8,26 @@ import type {
 import type { PatchAddress } from "@/bindings/patch";
 import { useGroupStore } from "./use-group-store";
 
+/// The one naming rule for a new patch row, and the only place it lives on
+/// this side of the wire: `<model> (<n>)`, where `n` counts the fixtures of
+/// *that model* — a venue with four movers and one par numbers the next par
+/// `(2)`, not `(6)`.
+///
+/// A counter rather than a function because a batch writes several rows before
+/// any of them are read back: each call consumes its number, so ten duplicates
+/// of two models number 1..n per model instead of sharing one running total.
+function modelNumbering(existing: PatchedFixture[]): (model: string) => string {
+	const counts = new Map<string, number>();
+	for (const fixture of existing) {
+		counts.set(fixture.model, (counts.get(fixture.model) ?? 0) + 1);
+	}
+	return (model) => {
+		const n = (counts.get(model) ?? 0) + 1;
+		counts.set(model, n);
+		return `${model} (${n})`;
+	};
+}
+
 interface FixtureState {
 	// Venue context
 	venueId: string | null;
@@ -60,11 +80,15 @@ interface FixtureState {
 	/// each would go. The one allocator lives in Rust; there is no first-fit
 	/// loop on this side of the wire.
 	nextAddresses: (channels: number, count: number) => Promise<PatchAddress[]>;
+	/// Returns `null` when the fixture moved, or the backend's refusal — the
+	/// same contract as `patchFixture`, because it is the same door: a
+	/// collision or a footprint past 512 leaves the row untouched and names
+	/// what is in the way.
 	setFixtureAddress: (
 		id: string,
 		universe: number,
 		address: number,
-	) => Promise<void>;
+	) => Promise<string | null>;
 	/// Returns `null` when the fixture was patched, or the backend's refusal —
 	/// a collision, a footprint past 512 — for the caller to show. The message
 	/// names the fixture in the way, so it is worth reading rather than
@@ -352,15 +376,18 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 
 	setFixtureAddress: async (id, universe, address) => {
 		const { venueId } = get();
-		if (venueId === null) return;
+		if (venueId === null) return "No venue is open.";
+		let refusal: string | null = null;
 		try {
 			await invoke("set_fixture_address", { venueId, id, universe, address });
 		} catch (error) {
-			// A refusal — a collision, or a footprint past 512 — leaves the
-			// database untouched, so the reload below restores the real value.
-			console.error("Failed to address fixture:", error);
+			// A refusal leaves the database untouched, so the reload below is
+			// what restores the real value in the table; the message names the
+			// fixture in the way and belongs on screen, not in the console.
+			refusal = String(error);
 		}
 		await get().fetchPatchedFixtures();
+		return refusal;
 	},
 
 	patchFixture: async (universe, address, modeName, numChannels) => {
@@ -371,10 +398,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 		}
 
 		try {
-			const existingCount = patchedFixtures.filter(
-				(f) => f.model === selectedEntry.model,
-			).length;
-			const label = `${selectedEntry.model} (${existingCount + 1})`;
+			const label = modelNumbering(patchedFixtures)(selectedEntry.model);
 			console.debug("[useFixtureStore] patchFixture invoke", {
 				venueId,
 				universe,
@@ -464,10 +488,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			return;
 		}
 
-		const existingCount = patchedFixtures.filter(
-			(f) => f.model === fixture.model,
-		).length;
-
 		try {
 			const newFixture = await invoke<PatchedFixture>("patch_fixture", {
 				venueId,
@@ -478,7 +498,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				model: fixture.model,
 				modeName: fixture.modeName,
 				fixturePath: fixture.fixturePath,
-				label: `${fixture.model} (${existingCount + 1})`,
+				label: modelNumbering(patchedFixtures)(fixture.model),
 			});
 
 			await get().fetchPatchedFixtures();
@@ -511,6 +531,10 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			byWidth.set(width, [...(byWidth.get(width) ?? []), fixture]);
 		}
 
+		// Seeded once for the whole batch: the rows written in this loop are
+		// not read back until it finishes, so the counter is the only thing
+		// that knows a second mover has been created.
+		const nextLabel = modelNumbering(patchedFixtures);
 		const newIds: string[] = [];
 		try {
 			for (const [numChannels, group] of byWidth) {
@@ -522,10 +546,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 					const slot = slots[index];
 					if (!slot) continue;
 
-					const existingCount =
-						patchedFixtures.filter((f) => f.model === fixture.model).length +
-						newIds.length;
-
 					const newFixture = await invoke<PatchedFixture>("patch_fixture", {
 						venueId,
 						universe: slot.universe,
@@ -535,7 +555,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 						model: fixture.model,
 						modeName: fixture.modeName,
 						fixturePath: fixture.fixturePath,
-						label: `${fixture.model} (${existingCount + 1})`,
+						label: nextLabel(fixture.model),
 					});
 					newIds.push(newFixture.id);
 				}

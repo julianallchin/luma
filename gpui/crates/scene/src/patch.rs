@@ -581,10 +581,23 @@ fn place(occupancy: &mut Occupancy, universe: u16, fixture: &Fixture) -> Option<
 /// and the write is refused.
 ///
 /// So a slot is offered only if it is free in the union: free where the rows
-/// are, *and* free where the rule would put them. Free-in-union implies
-/// free-in-stored, so the write cannot be refused; and it implies the offer
-/// does not sit in a run block the next auto-patch will claim, so the number
-/// the human just read does not move under them for no reason.
+/// are, *and* free where the rule would put them. What that buys is
+/// **admissibility** — free-in-union implies free-in-stored, so the write
+/// cannot be refused — and nothing more. It does not buy stability: the next
+/// [`allocate`] re-derives every unpinned address from physical order, so an
+/// offered address is a place to land, not a promise. Consulting the derived
+/// picture as well only keeps the offer out of a block auto-patch is already
+/// about to claim, which is one avoidable way for the number to move.
+///
+/// # The offer can leave the run's universe
+///
+/// The block is appended at the end of the run's, and [`place`] rolls to the
+/// next universe when what is left there will not hold the fixture. So `count`
+/// fixtures added to a nearly full run can be addressed *outside* the universe
+/// the rest of the run sits in — legal, admissible, and not what the run will
+/// look like afterwards, because a run that no longer fits rolls **whole** to
+/// the next universe at the next auto-patch. Until then the venue holds a run
+/// split across two universes.
 #[must_use]
 pub fn next_addresses(
     venue: &ResolvedVenue,

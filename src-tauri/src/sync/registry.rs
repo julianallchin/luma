@@ -296,6 +296,11 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &["file_path", "album_art_path"],
     },
+    // `address_pinned` is deliberately not listed: the remote `fixtures` table
+    // has no such column yet. Until it does, `address` syncs and the pin does
+    // not, so somebody else's auto-patch can relocate a local pin — see
+    // `supabase/migrations/20260831000000_fixtures_address_pinned_NOT_DEPLOYED.sql`
+    // for the column and the order the two changes have to land in.
     TableMeta {
         name: "fixtures",
         conflict_key: "id",

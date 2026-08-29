@@ -635,3 +635,80 @@ async fn next_addresses_hands_out_slots_nothing_else_holds() {
         assert!(!pair[0].overlaps(&pair[1]));
     }
 }
+
+/// A row written before anything validated, 600 channels wide, has to come out
+/// of the migrations *writable*.
+///
+/// `20260830000000` clamped `num_channels` up to 1 and moved a bad `address`
+/// to 1, but never clamped a width down — and its triggers fire on
+/// `address + num_channels - 1 > 512`, which no address satisfies once the
+/// width alone is over 512. So such a row survived that migration and then
+/// refused every UPDATE, taking `auto_patch` (one transaction over the whole
+/// venue) down with it for that venue, forever. `20260831000000` is the repair.
+#[tokio::test]
+async fn a_fixture_wider_than_a_universe_is_repaired_into_something_writable() {
+    use sqlx::migrate::Migrate;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("wide.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .journal_mode(SqliteJournalMode::Wal)
+                .create_if_missing(true)
+                .foreign_keys(false),
+        )
+        .await
+        .expect("pool");
+
+    // Applied one at a time so the row can be seeded at the one moment it was
+    // ever writable: after `fixtures` exists, before the triggers do.
+    let migrator = sqlx::migrate!("./migrations");
+    let mut connection = pool.acquire().await.expect("connection");
+    connection
+        .ensure_migrations_table(&migrator.table_name)
+        .await
+        .expect("migrations table");
+    for migration in migrator.iter() {
+        if migration.migration_type.is_down_migration() {
+            continue;
+        }
+        if migration.version == 20_260_830_000_000 {
+            sqlx::query(
+                "INSERT INTO venues (id, uid, name) VALUES ('v-wide', 'u-1', 'Room');
+                 INSERT INTO fixtures
+                   (id, uid, venue_id, universe, address, num_channels,
+                    manufacturer, model, mode_name, fixture_path)
+                 VALUES ('too-wide', 'u-1', 'v-wide', 1, 500, 600,
+                    'Acme', 'Mover', '600ch', 'acme/mover.qxf')",
+            )
+            .execute(&mut *connection)
+            .await
+            .expect("seed the row the triggers would later refuse");
+        }
+        connection
+            .apply(&migrator.table_name, migration)
+            .await
+            .expect("apply");
+    }
+
+    let (address, channels): (i64, i64) =
+        sqlx::query_as("SELECT address, num_channels FROM fixtures WHERE id = 'too-wide'")
+            .fetch_one(&mut *connection)
+            .await
+            .expect("the row is still there");
+    assert_eq!(channels, 512, "a width no universe can hold is clamped");
+    assert_eq!(
+        address, 1,
+        "and the footprint is moved somewhere addressable"
+    );
+
+    // The point of the clamp: the row can be written again. Before it, this
+    // UPDATE aborted, and so did every auto-patch of the venue.
+    sqlx::query("UPDATE fixtures SET address = 1, num_channels = 16 WHERE id = 'too-wide'")
+        .execute(&mut *connection)
+        .await
+        .expect("the repaired row is updatable");
+}
