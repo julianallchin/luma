@@ -3,7 +3,12 @@ use sqlx::SqlitePool;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::scores::{Score, ScoreSummary, TrackScore};
 
-/// List all track_scores for a (track, venue) pair
+/// Every clip of every score on a `(track, venue)` pair, blended together.
+///
+/// Rarely what a caller means: a pair carries as many scores as there are
+/// people who annotated it. [`get_clips_of_score`] is the one that names a
+/// document; this one is for callers that have matched a *track* and have no
+/// score to name.
 pub async fn get_scores_for_track(
     access: &mut impl AuthorizedVenue,
     track_id: &str,
@@ -24,9 +29,12 @@ pub async fn get_scores_for_track(
 
 /// One score's own clips, in timeline order.
 ///
-/// [`get_scores_for_track`] deliberately spans every score on a
-/// `(track, venue)` — that is what the live compositor blends. This is the
-/// other question: what does *this score* contain.
+/// What the compositor installs ([`crate::compositor::install_score_scene`])
+/// and what a recording captures: one document, not the pair's union.
+///
+/// [`get_scores_for_track`] is the other question — every clip on a
+/// `(track, venue)`, which now only a perform deck asks, having matched a
+/// track and no score.
 pub async fn get_clips_of_score(
     access: &mut impl AuthorizedVenue,
     score_id: &str,
@@ -45,19 +53,61 @@ pub async fn get_clips_of_score(
     .map_err(|e| format!("Failed to list this score's clips: {}", e))
 }
 
-/// Return the venue_id of the most-recently-updated score for a track that has
+/// The one order a score listing takes: newest-created first.
+///
+/// `datetime()` rather than the raw column because the two ways a score row is
+/// born spell the same instant differently — a local insert takes SQLite's
+/// `CURRENT_TIMESTAMP` (`2026-08-29 12:00:00`) while a pulled one carries the
+/// remote's RFC 3339 (`2026-08-29T12:00:00Z`) — and `'T' > ' '` in text order,
+/// so raw comparison files every synced row above every locally made one
+/// whatever the clock says. Parsing both to one canonical form is what makes
+/// the comparison mean what it reads as.
+///
+/// The tie-break is `rowid`, because `CURRENT_TIMESTAMP` only resolves to the
+/// second and two scores minted in one are otherwise unordered. `rowid` is
+/// this database's insert order — the one thing that still says which of the
+/// two it learned about last — where the uuid `id` would sort at random. It
+/// is the same key [`score_ordinal`] ranks by, so the list is exactly the
+/// ordinal ladder read upside down: `#3` can never appear below `#2`.
+///
+/// Ordering lives here and nowhere else: a client that re-sorts a listing is a
+/// second definition of "newest", and the two drift the moment one of them is
+/// tuned.
+macro_rules! newest_first {
+    () => {
+        "ORDER BY datetime(score.created_at) DESC, score.rowid DESC"
+    };
+}
+
+/// The seam's display handle within its venue — `#1` is the oldest score.
+///
+/// Shares [`newest_first`]'s parse of `created_at` for the same reason, and
+/// its `rowid` tie-break so the two rankings are reverses of one another
+/// rather than two nearly-equal opinions.
+macro_rules! score_ordinal {
+    () => {
+        "ROW_NUMBER() OVER (
+                    PARTITION BY score.venue_id
+                    ORDER BY datetime(score.created_at), score.rowid
+                ) AS ordinal"
+    };
+}
+
+/// Return the venue_id of the newest score for a track that has
 /// at least one annotation, if any. Used by previews that only receive a track_id.
 pub async fn get_accessible_venue_for_track(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Option<String>, String> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT s.venue_id
-         FROM scores s
-         JOIN track_scores ts ON ts.score_id = s.id
-         JOIN venues venue ON venue.id = s.venue_id
+    // Aliased `score` so the tie-break below is the listings' `newest_first!`
+    // and not a second opinion about which score is the newest.
+    let row: Option<(String,)> = sqlx::query_as(concat!(
+        "SELECT score.venue_id
+         FROM scores score
+         JOIN track_scores clip ON clip.score_id = score.id
+         JOIN venues venue ON venue.id = score.venue_id
          CROSS JOIN auth_write_admission admission
-         WHERE s.track_id = ?
+         WHERE score.track_id = ?
            AND admission.singleton = 1
            AND admission.armed = 1
            AND admission.accepting = 1
@@ -76,10 +126,11 @@ pub async fn get_accessible_venue_for_track(
                     )
                 ))
            )
-         GROUP BY s.id
-         ORDER BY s.updated_at DESC
-         LIMIT 1",
-    )
+         GROUP BY score.id
+         ",
+        newest_first!(),
+        " LIMIT 1"
+    ))
     .bind(track_id)
     .fetch_optional(pool)
     .await
@@ -87,19 +138,100 @@ pub async fn get_accessible_venue_for_track(
     Ok(row.map(|r| r.0))
 }
 
+/// The provenance columns every score listing carries: who wrote the newest
+/// revision of the score's authored document, when, and how many there are.
+///
+/// Correlated subqueries rather than a join, because both listings already
+/// group by score to count clips and a second one-to-many join would multiply
+/// that count. The join key is `authored_documents.score_id`: the document id
+/// is a hash of its scope, so nothing outside the authored-state service ever
+/// has to re-derive one to find a score's history.
+///
+/// Assumes the listing's score is aliased `score`. A macro rather than a
+/// `const` so each listing stays one `concat!`-ed literal: the statements
+/// carry no runtime input, and keeping them `&'static str` is what lets sqlx
+/// take them without an assertion that they are safe to run.
+macro_rules! provenance {
+    () => {
+        concat!(
+            "(SELECT revision.actor
+                  FROM authored_revisions revision
+                  JOIN authored_documents document
+                    ON document.document_id = revision.document_id
+                 WHERE document.score_id = score.id
+                 ORDER BY revision.authored_at DESC, revision.revision_id DESC
+                 LIMIT 1) AS last_actor,
+                (SELECT revision.authored_at
+                  FROM authored_revisions revision
+                  JOIN authored_documents document
+                    ON document.document_id = revision.document_id
+                 WHERE document.score_id = score.id
+                 ORDER BY revision.authored_at DESC, revision.revision_id DESC
+                 LIMIT 1) AS last_authored_at,
+                (SELECT COUNT(*)
+                  FROM authored_revisions revision
+                  JOIN authored_documents document
+                    ON document.document_id = revision.document_id
+                 WHERE document.score_id = score.id) AS revision_count,
+                (SELECT SUM(usage.cost_usd) FROM agent_thread_usage usage
+                 WHERE usage.thread_id IN (",
+            authoring_threads!(),
+            ")) AS cost_usd,
+                (SELECT COALESCE(SUM(usage.input_tokens + usage.output_tokens
+                                     + usage.cache_creation_tokens
+                                     + usage.cache_read_tokens), 0)
+                   FROM agent_thread_usage usage
+                 WHERE usage.thread_id IN (",
+            authoring_threads!(),
+            ")) AS total_tokens"
+        )
+    };
+}
+
+/// Every agent thread that wrote a revision of this score's authored document,
+/// once each.
+///
+/// The `DISTINCT` is the whole point: a run writes many revisions and its cost
+/// is recorded once, so joining revisions to costs directly would multiply one
+/// run's price by how much it wrote. Spelled apart from [`provenance`] because
+/// both of that macro's cost columns need it and a second copy would be a
+/// second chance to forget the `DISTINCT`.
+macro_rules! authoring_threads {
+    () => {
+        "SELECT DISTINCT revision.thread_id
+                    FROM authored_revisions revision
+                    JOIN authored_documents document
+                      ON document.document_id = revision.document_id
+                   WHERE document.score_id = score.id
+                     AND revision.thread_id IS NOT NULL"
+    };
+}
+
 /// List scores for a track inside the guard's one admitted venue.
 pub async fn list_scores_for_track(
     access: &mut impl AuthorizedVenue,
     track_id: &str,
 ) -> Result<Vec<ScoreSummary>, String> {
-    const ONE_VENUE: &str = "SELECT s.id, s.uid, s.venue_id, s.name,
-                COUNT(ts.id) AS annotation_count,
-                s.created_at, s.updated_at
-         FROM scores s
-         LEFT JOIN track_scores ts ON ts.score_id = s.id
-         WHERE s.track_id = ? AND s.venue_id = ?
-         GROUP BY s.id
-         ORDER BY s.updated_at DESC";
+    // The venue join is LEFT so it decorates without filtering: this query's
+    // result set is settled by the guard above it, not by the name lookup.
+    const ONE_VENUE: &str = concat!(
+        "SELECT score.id, score.uid, score.venue_id, venue.name AS venue_name, score.name,
+                ",
+        score_ordinal!(),
+        ",
+                COUNT(clip.id) AS annotation_count,
+                ",
+        provenance!(),
+        ",
+                score.created_at, score.updated_at
+         FROM scores score
+         LEFT JOIN venues venue ON venue.id = score.venue_id
+         LEFT JOIN track_scores clip ON clip.score_id = score.id
+         WHERE score.track_id = ? AND score.venue_id = ?
+         GROUP BY score.id
+         ",
+        newest_first!()
+    );
     sqlx::query_as::<_, ScoreSummary>(ONE_VENUE)
         .bind(track_id)
         .bind(access.venue_id().to_owned())
@@ -114,9 +246,15 @@ pub async fn list_accessible_scores_for_track(
     pool: &SqlitePool,
     track_id: &str,
 ) -> Result<Vec<ScoreSummary>, String> {
-    sqlx::query_as::<_, ScoreSummary>(
-        "SELECT score.id, score.uid, score.venue_id, score.name,
+    const ACCESSIBLE: &str = concat!(
+        "SELECT score.id, score.uid, score.venue_id, venue.name AS venue_name, score.name,
+                ",
+        score_ordinal!(),
+        ",
                 COUNT(clip.id) AS annotation_count,
+                ",
+        provenance!(),
+        ",
                 score.created_at, score.updated_at
          FROM scores score
          JOIN venues venue ON venue.id = score.venue_id
@@ -142,12 +280,14 @@ pub async fn list_accessible_scores_for_track(
                 ))
            )
          GROUP BY score.id
-         ORDER BY score.updated_at DESC",
-    )
-    .bind(track_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|error| format!("Failed to list accessible scores for track: {error}"))
+         ",
+        newest_first!()
+    );
+    sqlx::query_as::<_, ScoreSummary>(ACCESSIBLE)
+        .bind(track_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("Failed to list accessible scores for track: {error}"))
 }
 
 /// Fetch a score by ID
@@ -308,5 +448,69 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    /// Newest-created leads, and it is the *instant* that decides — not the
+    /// text.
+    ///
+    /// The regression: `updated_at` used to be the key, and the two ways a
+    /// timestamp is written disagree lexically. A local insert takes
+    /// SQLite's `CURRENT_TIMESTAMP` (`2026-01-01 00:00:00`); the trigger that
+    /// bumps `updated_at`, and a row pulled from the remote, both use
+    /// RFC 3339 (`2026-01-01T00:00:00Z`). `'T' > ' '`, so *any* edited or
+    /// synced score sorted above *every* freshly made one and a new score
+    /// never appeared at the top of the sidebar.
+    #[tokio::test]
+    async fn a_new_score_leads_the_listing_however_its_timestamp_is_spelled() {
+        let (_directory, pool) = test_pool().await;
+        sqlx::query("INSERT INTO tracks (id, uid, file_path, title, track_hash) VALUES ('track', 'alice', '/t.wav', 'T', 'hash')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', 'alice', 'Venue')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // `oldest` is written the remote's way and later *edited*, so under
+        // the old ordering it held the top slot for good; `newest` is a plain
+        // local insert, the shape every score made in the app has. `tie` is
+        // minted in the same second as `newest` — the double-click case, which
+        // only `rowid` can order.
+        for (id, name, created) in [
+            ("oldest", "Oldest", "2026-01-01T00:00:00Z"),
+            ("middle", "Middle", "2026-01-02 00:00:00"),
+            ("newest", "Newest", "2026-01-03 00:00:00"),
+            ("tie", "Tie", "2026-01-03 00:00:00"),
+        ] {
+            sqlx::query(
+                "INSERT INTO scores (id, uid, track_id, venue_id, name, created_at, updated_at)
+                 VALUES (?, 'alice', 'track', 'venue', ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(created)
+            .bind(created)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE scores SET updated_at = '2026-06-01T00:00:00Z' WHERE id = 'oldest'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::database::local::auth::arm_write_admission(&pool, Some("alice"))
+            .await
+            .unwrap();
+        let listed = list_accessible_scores_for_track(&pool, "track")
+            .await
+            .expect("the listing");
+
+        let order: Vec<&str> = listed.iter().map(|score| score.id.as_str()).collect();
+        assert_eq!(order, ["tie", "newest", "middle", "oldest"]);
+        // The list is the ordinal ladder upside down — `#3` can never sit
+        // below `#2`, whichever way the two rows spell their timestamps.
+        let ordinals: Vec<i64> = listed.iter().map(|score| score.ordinal).collect();
+        assert_eq!(ordinals, [4, 3, 2, 1]);
     }
 }

@@ -1186,11 +1186,8 @@ export function PatternEditor({ patternId, nodeTypes }: PatternEditorProps) {
 					// active — filtering by currentVenue would hide instances that
 					// only exist in other venues, leaving nothing to preview.
 					const scores = await invoke<{ id: string; venueId: string | null }[]>(
-						"list_scores_for_track",
-						{
-							trackId: track.id,
-							venueId: "",
-						},
+						"list_scores_across_venues",
+						{ trackId: track.id },
 					);
 					for (const score of scores) {
 						scoreVenues.set(score.id, score.venueId ?? null);
