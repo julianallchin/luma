@@ -104,7 +104,7 @@ behind, including a read between write and commit. **Applies:** AF1, AF3, AF10.
 spacing|span)` places, names, groups and patches — the only fixture constructor
 besides the patch page's non-placed add. Fit failure reports the *needed* length
 ("needs 4.0 m, run is 3.0 m — extend?") and places nothing; never silently
-drops, clips or overlaps. **Out of scope:** the popup calling it, the tray.
+drops, clips or overlaps. **Out of scope:** the popover calling it.
 
 **Evidence and acceptance.** `cargo test -p luma-scene`: exact fit, `span` and
 `spacing × count` longer than the run, count 1, count 0; a golden of the
@@ -116,29 +116,29 @@ in physical, not creation, order. **Applies:** AF1, AF3, AF5, AF9.
 
 ## 6. B4 — stage page
 
-**Scope.** Palette; placement with ghost and the snap ladder socket → surface →
-grid, hysteresis on snap-out; click an open socket → ray → ghost defaulting to
-the measured gap with a live measurement gizmo, shorter is a stub, longer
-refused in red; ⌘D duplicate with every compatible open socket lit as a snap
-gizmo, plus flip; trim (lift) on floor and stage placements; slide-along-face
-and drag-off-to-detach for a placed fixture; **no transform gizmo on snapped
-pieces** — roll freedom only; a truss-face, stage-edge or floor click opens the
-distribution popup (fixture, count, spacing or span) calling B3; a tray of
-unplaced fixtures. **Out of scope:** addresses, universes.
+**Scope.** The design doc's "stage page is the picture": an empty venue draws its grid and is
+buildable, no toolbar; `+` → add-element dialog in the existing gpui picker pattern (preview
+left, searchable list right, unplaced fixtures a section) → **place mode**, ghost down the snap
+ladder socket → surface → grid with hysteresis, click places, configure inline, the mode
+persists with params inherited, Esc out one level; the face popover (count, layout, fixture) as
+`distribute`'s only caller (B3); open-socket extend at the ray-measured gap, longer refused; a
+dismissible inspector sheet on selection, Duplicate / Flip / Detach in its context menu; **no
+gizmo on snapped pieces**; controls may live in the 3D picture (`scene_desc::Editor`,
+`render/src/overlay.rs` extended). **Out of scope:** addresses, universes.
 
-**Evidence and acceptance.** `tests/headless/venue_builder.rs` (`mod` line into
-`tests/headless/main.rs`) drives palette → drag → snap → extend → duplicate →
-distribute through the tree and `app.painted()`; the `CAMERA` readout pins that
-build gestures never move the camera; pixels in
-`app_pixel/venue_builder_pixels.rs` cover both ghosts, the measurement gizmo,
-the duplicate snap gizmos and the popup. A snapped piece exposes no
-translate/rotate gizmo in the node tree, and a drag on it moves the run —
-asserted on the resolved parent pose. Extend past the gap never commits: the
-refusal shows in `painted()`, no node added; extend equal to the gap creates one
-edge plus one far-end constraint `dangling()` reports satisfied. ⌘D + flip on an
-asymmetric wing yields a subtree whose `describe()` matches the hand-built
-opposite wing. Trim moves the subtree; the tray empties on place and refills on
-drag-off; reduced motion snaps ghosts. **Applies:** AF1–AF6, AF8, AF9.
+**Evidence and acceptance.** `tests/headless/venue_builder.rs` (`mod` into `main.rs`) drives `+`
+→ place → snap → extend → duplicate → distribute through the tree and `app.painted()`, `CAMERA`
+pinning that build gestures never move the camera; `app_pixel/venue_builder_pixels.rs` covers
+the ghosts, gizmos and popover. An empty venue paints the grid and the first piece lands from
+`+` alone. Two placements happen without reopening the dialog, the second's params equalling the
+first's untouched ones. The popover anchors within **32 px** of the projected face point; a
+value change moves its ghosts in `painted()` before Apply; Esc leaves zero new nodes. No painted
+node is a state label ("Hand:", socket lists, "distribute onto"), swept while a piece is held. A
+snapped piece exposes no gizmo; a drag moves the run (resolved parent pose). Extend past the gap
+refuses in `painted()` and adds no node; equal to it makes one edge plus a far-end constraint
+`dangling()` reports satisfied. Duplicate + flip on an asymmetric wing `describe()`s identically
+to the hand-built opposite. Placing empties the fixture from the list, detaching returns it,
+trim moves the subtree, reduced motion snaps ghosts. **Applies:** AF1–AF6, AF8, AF9.
 
 ## 7. B5 — patch page
 
@@ -156,7 +156,7 @@ table. A colliding address edit is refused, shows red, and leaves the stored
 value unchanged. Auto Patch after a stage-page move re-derives that address and
 changes nothing about placement. Universes 17 and 1 resolve to different output
 rows — asserted on the resolution, not the formula. Adding N unplaced fixtures
-puts N tray rows and no nodes. No path here writes `venue_edges` or a param.
+adds N unplaced fixtures and no nodes. No path here writes `venue_edges` or a param.
 **Applies:** AF1, AF3, AF5, AF8, AF9, AF10.
 
 ## 8. B6 — Python facade

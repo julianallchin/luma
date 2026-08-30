@@ -113,9 +113,10 @@ on the downstage truss" is not expressible.
     builder that can draw them (phase 4).
   - **A node with no edge is reported, never dropped.** `resolve` returns
     `unplaced`: the root of every branch the walk could not reach, with its
-    kind, label and descendant count. The patch tray is the ordinary case;
-    `detach` is the other. Silence was the bug — a detached wing had no pose,
-    no warning and no mention, so "unplaced" and "deleted" looked identical.
+    kind, label and descendant count. A patched, unplaced fixture is the
+    ordinary case; `detach` is the other. Silence was the bug — a detached wing
+    had no pose, no warning and no mention, so "unplaced" and "deleted" looked
+    identical.
   - An **array's open ends are its members'**, not its anchor's. Three trusses
     have three pairs of ends standing in the room; the anchor is a seat with no
     geometry, and reporting it once under-counts by `count - 1`.
@@ -132,17 +133,44 @@ on the downstage truss" is not expressible.
   `dangling()` and the `Placement` reports → a top-down quantized tile map ("Gauntlet
   view") → `render(view=fixture.pov)` → `render(view="front")` last. A front render is
   the *worst* signal per token and the most tempting. Humans get the same tools.
-- **Human UX is Roblox-simple.** Palette plus the snap ladder (socket → surface) is
-  the whole builder. Drag a truss near a stage corner: it snaps and stands up. Drag a
-  light near a truss: it sticks to the face and points out of it. Ghost while
-  dragging, commit on release, hysteresis (snap-in radius strictly smaller than
-  snap-out) so a held piece does not chatter. **No empty game objects** — the parent
-  piece *is* the group.
+- **The stage page is the picture.** An empty venue draws the grid and is already
+  buildable — there is no empty-state wall to click through, and no persistent
+  toolbar. One `+` opens the add-element dialog in the gpui picker pattern
+  (`gpui/crates/app/src/fixture_picker.rs`): element preview on the left, a
+  searchable, keyboard-navigable list on the right, catalog pieces and
+  patched-but-unplaced fixtures as sections of the one list. Enter enters **place
+  mode**.
+- **Place mode is the whole builder.** A ghost follows the cursor down the snap
+  ladder — socket → surface → grid, hysteresis (snap-in radius strictly smaller than
+  snap-out) so a held piece does not chatter. Click places; configure it inline
+  where it stands; place mode *stays*, and the next ghost inherits the last piece's
+  params, so a row of the same thing is a row of clicks. Esc backs out one level —
+  inline edit, then place mode, then nothing held. **No empty game objects** — the
+  parent piece *is* the group.
+- **Nothing on screen is a label for state.** No "Hand:", no socket list, no
+  "distribute onto …". The host is whatever the cursor is over; beads, the
+  measurement gizmo and the ghost are the indicators, and they are drawn *in the
+  picture*. Controls may live in the 3D view — `scene_desc::Editor` and
+  `render/src/overlay.rs` are extended to carry them rather than a chrome panel
+  growing a mirror of the scene. The standard is clean, elegant, minimal: if the
+  picture can show it, no label also says it, and a control that does not apply to
+  the current state is not drawn at all.
+- **Holding a fixture, click a truss face, deck edge or floor** and a popover
+  anchors in the viewport at that face: count, layout, fixture. Ghost fixtures
+  re-solve live as the values change, so the answer is visible before it is
+  committed. Apply places them — that is the `distribute` verb (B3); Esc cancels and
+  leaves nothing. A fit failure states the needed length inline, with the extend
+  action next to it.
+- **Selection opens a dismissible inspector sheet** — nudges within the socket's
+  roll freedom, trim, warnings and dangling ends. Duplicate, Flip and Detach are
+  context-menu actions on the selection, not buttons parked on screen waiting for
+  one.
 - **Duplicate is how symmetry happens.** Select a wing's root — the piece attaching
-  to the stage; the subtree comes along — press ⌘D. A ghost follows the cursor, every
-  compatible open socket lights up as a snap gizmo, click one and the copy is placed
-  and selected. **Flip** inverts the subtree's handedness about its root socket, which
-  is what an asymmetric wing needs. Agent: `duplicate(node, to=socket, flip=bool)`.
+  to the stage; the subtree comes along — press ⌘D, or Duplicate from its context
+  menu. That puts you in place mode holding the copy: every compatible open socket
+  lights up as a snap gizmo, click one and the copy is placed and selected.
+  **Flip** inverts the subtree's handedness about its root socket, which is what
+  an asymmetric wing needs. Agent: `duplicate(node, to=socket, flip=bool)`.
 - **Sockets keep what is golden-tested and gain polarity.** Bbox-anchor authoring
   stays, as do both orientation guards in `snap.ts` (the edge-mode opposing-`outward`
   test, and the parallel-normal self-mating side test that otherwise ties an
@@ -169,11 +197,11 @@ what exists, and where it is.
 - **Outputs live on the patch page.** Discovered Art-Net nodes bind to universes as
   a **table**, not the `(net<<8)|(sub<<4)|(u&0xF)` arithmetic in `artnet.rs:218`
   that aliases universe 17 onto 1. sACN later.
-- **Stage page = the builder** — the venue graph above, plus a **tray of unplaced
-  fixtures** drawn from the patch list. Drag from the tray onto a truss: snapped,
-  placed, label defaulting from location ("Truss L · mover 3"). Array is N from the
-  tray onto a run. A fixture may be patched but unplaced, and **the tray is the only
-  place that is allowed** — no more fixtures piled at the origin.
+- **Stage page = the builder** — the venue graph above. A fixture may be patched but
+  unplaced; those fixtures are a section of the add-element list, and **that is the
+  only place an unplaced fixture is allowed to be** — no more fixtures piled at the
+  origin. Placing one snaps it and defaults its label from the location ("Truss L ·
+  mover 3"); N of them onto a run is `distribute`.
 - **The fixture row splits in two: patch and placement.** Patch is
   `(universe, address, mode, definition)`; placement is a `venue_edges` row like any
   other node. Re-addressing never touches placement, moving never touches the
@@ -268,10 +296,11 @@ at phase 0, when beam = mount normal moves every rest direction.
    socket, hinge angle included. Goldens must still pass.
 3. **Graph model + resolver-on-load + persistence** — the four tables, the migration
    pass, `flatten_pieces` and its copy deleted. This is the load-bearing phase.
-4. **gpui builder** — palette, ghost, snap-on-drag with hysteresis; click-a-socket
-   extend with the ray, gap default, and measurement gizmo; ⌘D duplicate with socket
-   snap gizmos, plus flip; trim (lift) on floor and stage placements; no gizmo on
-   snapped pieces — roll-freedom drag instead.
+4. **gpui builder** — `+` → picker → place mode, ghost down the snap ladder with
+   hysteresis and inherited params; the face popover with live-re-solving ghosts;
+   click-a-socket extend with the ray, gap default, and measurement gizmo; duplicate
+   and flip from the selection's context menu; trim (lift) on floor and stage
+   placements; no gizmo on snapped pieces — roll-freedom drag instead.
 5. **Python facade** — `attach`/`extend`/`place_on`/`array`/`aim`/`duplicate`/`trim`,
    `describe`, `Placement` reports, `dangling()`.
 6. **Tile map + POV render.**
@@ -280,7 +309,7 @@ at phase 0, when beam = mount normal moves every rest direction.
 
 - **Does the React app get the new model, or is it frozen?** The gpui builder is the
   one being invested in; keeping `src/features/stage` alive means porting polarity,
-  the resolver, and the palette twice. Freezing it means the React visualizer renders
+  the resolver, and the builder twice. Freezing it means the React visualizer renders
   venues it cannot edit.
 - **`run.along(t)` across a mitred corner.** Arc length through a corner block is not
   the sum of segment lengths, and `along(0.5)` on an L-shaped run should probably
