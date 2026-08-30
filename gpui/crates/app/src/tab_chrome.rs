@@ -437,18 +437,18 @@ fn progress(started: Instant, now: Instant) -> f32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewTabChoice {
-    Universe,
+    Patch,
     Stage,
     Pattern,
     Track,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 4] = [Self::Universe, Self::Stage, Self::Pattern, Self::Track];
+    pub(crate) const ALL: [Self; 4] = [Self::Patch, Self::Stage, Self::Pattern, Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Universe => "Universe setup",
+            Self::Patch => "Patch",
             Self::Stage => "Stage builder",
             Self::Pattern => "Pattern editor",
             Self::Track => "Track editor",
@@ -482,7 +482,7 @@ impl ChoiceAvailability {
 pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 4] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
-            NewTabChoice::Universe | NewTabChoice::Stage if prerequisites.venue.is_none() => {
+            NewTabChoice::Patch | NewTabChoice::Stage if prerequisites.venue.is_none() => {
                 Some("Select a venue first")
             }
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
@@ -577,7 +577,7 @@ impl Luma {
     ) {
         self.tab_chrome.menu_open = false;
         match choice {
-            NewTabChoice::Universe => self.open_universe(cx),
+            NewTabChoice::Patch => self.open_patch(cx),
             NewTabChoice::Stage => self.open_stage(cx),
             NewTabChoice::Pattern => {
                 if let Some(pattern) = self.selected_pattern.clone() {

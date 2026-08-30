@@ -140,7 +140,7 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             const menuState = until("new tab menu", (s) =>
                 s.find({ role: "card", label: "New tab menu" }) ? s : undefined);
             const menu = menuState.find({ role: "card", label: "New tab menu" });
-            const menuRows = ["Universe setup", "Pattern editor", "Track editor"]
+            const menuRows = ["Patch", "Pattern editor", "Track editor"]
                 .map((label) => menuState.find({ role: "button", label }));
             const reason = menuState.find({ role: "text", label: "Select a pattern first" });
             const menuAnimatedFull = app.screenshot().path;
@@ -159,10 +159,10 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
             until("the pattern tab", (s) => s.find({ role: "button", label: "Strobe" }));
             app.click(app.snapshot().find({ role: "button", label: "new-tab" }));
             const universeMenu = until("the animated Universe menu choice", (s) =>
-                s.find({ role: "button", label: "Universe setup" }) ? s : undefined);
-            app.click(universeMenu.find({ role: "button", label: "Universe setup" }));
+                s.find({ role: "button", label: "Patch" }) ? s : undefined);
+            app.click(universeMenu.find({ role: "button", label: "Patch" }));
             until("the universe tab", (s) =>
-                s.find({ role: "card", label: "Test Venue Universe setup" }));
+                s.find({ role: "card", label: "Test Venue Patch" }));
             app.frames(2, { waitMs: 1100 });
 
             // Select the middle tab, then close through its real pointer
@@ -368,8 +368,8 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
                 s.find({ role: "button", label: "new-tab" }) ? s : undefined);
             app.click(initialPlusState.find({ role: "button", label: "new-tab" }));
             const universeMenu = until("compact Universe choice", (s) =>
-                s.find({ role: "button", label: "Universe setup" }) ? s : undefined);
-            app.click(universeMenu.find({ role: "button", label: "Universe setup" }));
+                s.find({ role: "button", label: "Patch" }) ? s : undefined);
+            app.click(universeMenu.find({ role: "button", label: "Patch" }));
             until("compact Universe tab", (s) =>
                 s.find({ role: "button", label: "Test Venue" }) ? s : undefined);
             // With the sidebar still consuming 257px, the 420px shell has no
@@ -391,14 +391,14 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
                 s.find({ role: "input", label: "Search tracks…" }) === undefined &&
                 s.find({ role: "row", label: "Aurora" }) === undefined ? s : undefined);
             until("compact universe", (s) =>
-                s.find({ role: "card", label: "Test Venue Universe setup" }));
+                s.find({ role: "card", label: "Test Venue Patch" }));
             const compactPlusState = until("compact add-tab control", (s) =>
                 s.find({ role: "button", label: "new-tab" }) ? s : undefined);
             const compactPlus = compactPlusState.find({ role: "button", label: "new-tab" });
             app.click(compactPlus);
             const shot = until("compact menu", (s) =>
                 s.find({ role: "card", label: "New tab menu" }) ? s : undefined);
-            const rows = ["Universe setup", "Pattern editor", "Track editor"]
+            const rows = ["Patch", "Pattern editor", "Track editor"]
                 .map((label) => shot.find({ role: "button", label }));
             const labels = new Set([
                 "Aurora", "Strobe", "Test Venue", "Close Aurora", "Close Strobe",

@@ -36,8 +36,8 @@ use luma_ui::{glass, ladder};
 
 use crate::tabs::Target;
 use crate::{
-    add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patterns, settings,
-    stage, subagents, tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
+    add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patch, patterns,
+    settings, stage, subagents, tab_chrome, track_editor, tracks, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -55,7 +55,7 @@ const CENTER_MIN: f32 = 360.0;
 const SEAM_WIDTH: f32 = 1.0;
 /// The empty panel's three buttons: one width for all of them so the stack
 /// reads as a column rather than three sizes, wide enough for the longest
-/// label ("Universe setup") at 13px without wrapping.
+/// label ("Patch") at 13px without wrapping.
 const EMPTY_PANEL_BUTTON_WIDTH: f32 = 168.0;
 /// Between those buttons, and between one and the reason it cannot act.
 const EMPTY_PANEL_GAP: f32 = 8.0;
@@ -86,6 +86,9 @@ pub(crate) enum Overlay {
     /// rest: it carries the venue's group list, a parked render sequence and
     /// the frame on screen.
     FixturePicker(Box<fixture_picker::FixturePicker>),
+    /// Picking a definition, a mode and a count for the patch page. Boxed like
+    /// the rest: it carries a morph, a search field and a number field.
+    AddFixtures(Box<patch::AddFixtures>),
     /// "Are you sure": one question, two answers, one closed list of acts —
     /// see [`crate::confirm`]. Unboxed because it is a few strings and an
     /// enum, and it is the *smallest* variant here rather than the largest.
@@ -104,6 +107,7 @@ impl Overlay {
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
+            Self::AddFixtures(_) => keymap::context::ADD_FIXTURES,
             Self::Confirm(_) => keymap::context::CONFIRM,
         }
     }
@@ -116,7 +120,7 @@ impl Overlay {
 pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
     Graph(Box<graph::Editor>),
-    Universe(Box<universe::Universe>),
+    Patch(Box<patch::Patch>),
     Stage(Box<stage::StagePage>),
 }
 
@@ -126,7 +130,7 @@ impl Body {
         match self {
             Self::TrackEditor(state) => state.track_name().to_string().into(),
             Self::Graph(state) => state.pattern_name().to_string().into(),
-            Self::Universe(state) => state.venue_name().to_string().into(),
+            Self::Patch(state) => state.venue_name().to_string().into(),
             Self::Stage(state) => state.venue_name.clone().into(),
         }
     }
@@ -275,7 +279,7 @@ impl Luma {
                     .detach();
                 }
             }
-            Body::Graph(_) | Body::Universe(_) | Body::Stage(_) => {}
+            Body::Graph(_) | Body::Patch(_) | Body::Stage(_) => {}
         }
     }
 
@@ -316,6 +320,11 @@ impl Luma {
         // Innermost first: a dialog showing a child's transcript steps back to
         // its list before the list itself closes.
         if self.subagents_to_list(cx) {
+            return;
+        }
+        // Same rung, same reason: the add-fixtures card steps back to the
+        // bundle before the card itself closes.
+        if self.add_fixtures_back(cx) {
             return;
         }
         match self.overlay.as_open() {
@@ -645,6 +654,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     if matches!(app.overlay.as_open(), Some(Overlay::FixturePicker(_))) {
         fixture_picker::tick(app, window, cx);
     }
+    if matches!(app.overlay.as_open(), Some(Overlay::AddFixtures(_))) {
+        patch::tick_add_fixtures(app, window, cx);
+    }
     if matches!(app.overlay.as_open(), Some(Overlay::Subagents(_))) {
         // Read out of the chat before the overlay is borrowed: both live on
         // `app`, and the dialog cannot reach back through the entity for them.
@@ -855,9 +867,9 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
         let choice = availability.choice;
         let enabled = availability.enabled();
         let label = choice.label();
-        // One primary per card (see `float::btn_primary`): the universe is the
+        // One primary per card (see `float::btn_primary`): the patch page is the
         // room itself, and the other two open something inside it.
-        let button = if matches!(choice, tab_chrome::NewTabChoice::Universe) {
+        let button = if matches!(choice, tab_chrome::NewTabChoice::Patch) {
             luma_ui::float::btn_primary(label)
         } else {
             luma_ui::float::btn(label, format!("empty-panel-{label}"))
@@ -991,7 +1003,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Graph(state) => graph::graph(state, &entity).into_any_element(),
-        Body::Universe(state) => universe::universe(state).into_any_element(),
+        Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
         Body::Stage(state) => {
             stage::stage_page(state, &entity, stage_view.as_ref()).into_any_element()
         }
@@ -1068,6 +1080,10 @@ fn overlay_layer(
         Overlay::FixturePicker(state) => (
             fixture_picker::render(state, entity, window, cx),
             "Fixture picker dialog",
+        ),
+        Overlay::AddFixtures(state) => (
+            patch::add_fixtures_dialog(state, entity, window, cx),
+            "Add fixtures dialog",
         ),
         Overlay::Confirm(state) => (
             confirm::render(

@@ -8,8 +8,8 @@
 //!
 //! - opening a target that already has a tab *reveals* that tab rather than
 //!   minting a second view of one thing ([`Tabs::open`] is idempotent),
-//! - the universe is a singleton per venue for free, since there is only one
-//!   `Universe { venue }` value per venue,
+//! - the patch page is a singleton per venue for free, since there is only one
+//!   `Patch { venue }` value per venue,
 //! - "the graph agent edited a pattern, surface its tab" is a call with no
 //!   question attached — whether the tab already existed is not the caller's
 //!   problem.
@@ -59,7 +59,7 @@ pub(crate) enum Target {
     /// One pattern's node graph.
     Graph { pattern: String },
     /// One venue's DMX patch. Singleton per venue.
-    Universe { venue: String },
+    Patch { venue: String },
     /// One venue's builder — the room, and everything that puts things in it.
     /// Singleton per venue, like the patch: a venue has one shape.
     Stage { venue: String },
@@ -74,7 +74,7 @@ impl Target {
         match self {
             Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
             Self::Graph { .. } => crate::keymap::context::GRAPH,
-            Self::Universe { .. } => crate::keymap::context::UNIVERSE,
+            Self::Patch { .. } => crate::keymap::context::PATCH,
             Self::Stage { .. } => crate::keymap::context::STAGE,
         }
     }
@@ -88,7 +88,7 @@ impl Target {
         match self {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
             Self::Graph { pattern } => format!("graph:{pattern}"),
-            Self::Universe { venue } => format!("universe:{venue}"),
+            Self::Patch { venue } => format!("patch:{venue}"),
             Self::Stage { venue } => format!("stage:{venue}"),
         }
     }
@@ -103,7 +103,7 @@ impl Target {
     /// the call site that asks.
     pub(crate) fn venue(&self) -> Option<&str> {
         match self {
-            Self::Universe { venue } | Self::Stage { venue } => Some(venue),
+            Self::Patch { venue } | Self::Stage { venue } => Some(venue),
             Self::TrackEditor { .. } | Self::Graph { .. } => None,
         }
     }
@@ -331,9 +331,9 @@ mod tests {
     }
 
     #[test]
-    fn a_venue_has_exactly_one_universe() {
+    fn a_venue_has_exactly_one_patch_page() {
         let mut tabs: Tabs<&str> = Tabs::default();
-        let target = Target::Universe {
+        let target = Target::Patch {
             venue: "aurora".to_string(),
         };
         tabs.open(target.clone(), || "one");
@@ -430,13 +430,13 @@ mod tests {
         let mut tabs: Tabs<&str> = Tabs::default();
         tabs.open(track("a"), || "editor");
         tabs.open(
-            Target::Universe {
+            Target::Patch {
                 venue: "aurora".to_string(),
             },
             || "aurora patch",
         );
         tabs.open(
-            Target::Universe {
+            Target::Patch {
                 venue: "glasshouse".to_string(),
             },
             || "glasshouse patch",
@@ -457,7 +457,7 @@ mod tests {
             track("a").element_key(),
             track("b").element_key(),
             graph("p").element_key(),
-            Target::Universe {
+            Target::Patch {
                 venue: "v".to_string(),
             }
             .element_key(),
@@ -471,7 +471,7 @@ mod tests {
         let contexts = [
             track("a").key_context(),
             graph("p").key_context(),
-            Target::Universe {
+            Target::Patch {
                 venue: "v".to_string(),
             }
             .key_context(),

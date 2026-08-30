@@ -143,15 +143,15 @@ globalThis.nav = {
 	// The venue's patch tab, via the `+` menu. The one tab that names a room
 	// without naming a score, which is what a test wants when it needs the
 	// stage pane up over an *unlit* rig — a track editor would composite one.
-	universe(venue) {
+	patch(venue) {
 		nav.venue(venue);
 		// The `+` lives only in the workspace panel's band now, so it is not on
 		// screen until something is open there. `luma::NewTab` is the path
 		// chrome.rs documents as surviving a closed panel.
 		app.action("luma::NewTab");
-		nav.step("the universe choice", "button", "Universe setup");
-		until("the universe tab", (s) =>
-			s.find({ role: "card", label: `${venue} Universe setup` }) !== undefined,
+		nav.step("the patch choice", "button", "Patch");
+		until("the patch tab", (s) =>
+			s.find({ role: "card", label: `${venue} Patch` }) !== undefined,
 		);
 	},
 

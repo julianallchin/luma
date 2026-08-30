@@ -279,6 +279,105 @@ pub async fn set_address(
     Ok(())
 }
 
+/// Pin or unpin one fixture's address where it already stands.
+///
+/// # Errors
+/// Fails if the fixture is not in this venue.
+pub async fn set_pinned(
+    access: &mut VenueAccess<'_, Write>,
+    id: &str,
+    pinned: bool,
+) -> Result<(), PatchError> {
+    match fixtures_db::update_fixture_pin(access, id, pinned).await? {
+        1 => Ok(()),
+        _ => Err(PatchError::Database(format!(
+            "no fixture {id} in this venue"
+        ))),
+    }
+}
+
+/// Repatch one fixture into another of its definition's modes.
+///
+/// A mode is a **width**, so changing it is an addressing decision: the fixture
+/// keeps its address when the new footprint is admitted there, and otherwise
+/// the allocator is asked for the next free slot. `allow_move` is what makes
+/// that second case a question rather than a surprise — the page calls with it
+/// off, shows the refusal, and calls again with it on if the human says yes.
+/// There is no separate dry run, because a refusal *is* the dry run's answer
+/// and a second entry point would be a second chance to disagree with this one.
+///
+/// # Errors
+/// [`PatchError::Collision`] or [`PatchError::OutOfRange`] when the wider mode
+/// does not fit where the fixture stands and `allow_move` is off;
+/// [`PatchError::Database`] if the fixture, its definition or the named mode
+/// cannot be read.
+pub async fn set_mode(
+    access: &mut VenueAccess<'_, Write>,
+    fixtures_root: &Path,
+    id: &str,
+    mode_name: &str,
+    allow_move: bool,
+) -> Result<PatchedFixture, PatchError> {
+    let rows = fixtures_db::get_patched_fixtures(access).await?;
+    let row = rows
+        .iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| PatchError::Database(format!("no fixture {id} in this venue")))?;
+
+    let definition = crate::services::fixtures::get_fixture_definition(
+        fixtures_root,
+        Path::new(&row.fixture_path),
+    )
+    .map_err(PatchError::Database)?;
+    let mode = definition
+        .modes
+        .iter()
+        .find(|mode| mode.name == mode_name)
+        .ok_or_else(|| {
+            PatchError::Database(format!(
+                "{} {} has no mode {mode_name}",
+                row.manufacturer, row.model
+            ))
+        })?;
+    let channels = u16::try_from(mode.channels.len()).unwrap_or(u16::MAX);
+
+    let occupancy = Occupancy::of(
+        rows.iter()
+            .filter_map(|row| footprint_of(row).map(|f| (f, row.id.clone()))),
+    );
+    let universe = u16::try_from(row.universe).unwrap_or(u16::MAX);
+    let address = u16::try_from(row.address).unwrap_or(u16::MAX);
+    let footprint = match admit(&occupancy, Some(id), universe, address, channels) {
+        Ok(footprint) => footprint,
+        Err(refusal) if !allow_move => return Err(refusal),
+        // The allocator, not a local scan: `next_addresses` is the one place
+        // that answers "where is there room".
+        Err(_) => *next_addresses(access, fixtures_root, None, channels, 1)
+            .await?
+            .first()
+            .ok_or_else(|| PatchError::OutOfRange {
+                universe,
+                address,
+                channels,
+            })?,
+    };
+
+    fixtures_db::update_fixture_mode(
+        access,
+        id,
+        mode_name,
+        i64::from(channels),
+        i64::from(footprint.universe()),
+        i64::from(footprint.address()),
+    )
+    .await?;
+    fixtures_db::get_patched_fixtures(access)
+        .await?
+        .into_iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| PatchError::Database(format!("no fixture {id} in this venue")))
+}
+
 // ---------------------------------------------------------------------------
 // Reporting
 // ---------------------------------------------------------------------------

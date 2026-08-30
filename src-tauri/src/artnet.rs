@@ -8,21 +8,12 @@ use tauri::{AppHandle, Manager};
 use crate::fixtures::engine;
 use crate::fixtures::parser::parse_definition;
 use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
-use crate::models::patch::UniverseOutput;
+use crate::models::patch::{ArtNetNode, UniverseOutput};
 use crate::models::universe::UniverseState;
 use crate::settings::AppSettings;
 
 const ARTNET_PORT: u16 = 6454;
 const HEADER: &[u8] = b"Art-Net\0";
-
-#[derive(Clone, serde::Serialize)]
-pub struct ArtNetNode {
-    pub ip: String,
-    pub name: String,
-    pub long_name: String,
-    pub port_address: u16, // Net/Subnet
-    pub last_seen: u64,
-}
 
 pub struct ArtNetManager {
     inner: Arc<Mutex<ArtNetInner>>,

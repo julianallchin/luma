@@ -32,6 +32,20 @@ use crate::Luma;
 /// module docs for why this is a closed list.
 #[derive(Clone)]
 pub(crate) enum Action {
+    /// Unpatch fixtures that are standing in the room. Both rows go — the
+    /// paperwork and the node — so the question is worth asking.
+    UnpatchFixtures {
+        venue_id: SharedString,
+        fixture_ids: Vec<String>,
+    },
+    /// Re-derive every address in a venue, discarding the hand-set ones.
+    AutoPatch { venue_id: SharedString },
+    /// Let the allocator move a fixture so a wider mode fits.
+    RepatchMode {
+        venue_id: SharedString,
+        fixture_id: SharedString,
+        mode_name: SharedString,
+    },
     /// Archive a score, and take the editor off it if it was the open one.
     DeleteScore {
         score_id: SharedString,
@@ -78,6 +92,22 @@ impl Luma {
         let action = confirm.action.clone();
         self.close_overlay(cx);
         match action {
+            Action::UnpatchFixtures {
+                venue_id,
+                fixture_ids,
+            } => self.run_unpatch(venue_id.to_string(), fixture_ids, cx),
+            Action::AutoPatch { venue_id } => self.run_auto_patch(venue_id.to_string(), cx),
+            Action::RepatchMode {
+                venue_id,
+                fixture_id,
+                mode_name,
+            } => self.set_patch_mode(
+                venue_id.to_string(),
+                fixture_id.to_string(),
+                mode_name.to_string(),
+                true,
+                cx,
+            ),
             Action::DeleteScore {
                 score_id,
                 track_id,
