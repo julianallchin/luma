@@ -1,7 +1,7 @@
 -- Remote counterpart of `fixtures.address_pinned`
 -- (`src-tauri/migrations/20260830000000_patch_addressing.sql`, part 1).
 --
--- ***NOT DEPLOYED.*** The column is absent from the `fixtures` entry in
+-- Deployed 2026-08-30. The column is absent from the `fixtures` entry in
 -- `src-tauri/src/sync/registry.rs`, so nothing pushes it and nothing pulls it.
 -- The filename says so on purpose: rename it to
 -- `20260831000000_fixtures_address_pinned.sql` only when it is actually
