@@ -52,6 +52,11 @@
 //! unlabelled row emits no row node, because the class node already is that
 //! set: its children are that row's splits.
 //!
+//! **Name** — the path in snake_case, and *distinct*: two paths can spell one
+//! name (`Truss 1` and `Truss-1` are both `truss_1`), and a name is what an
+//! expression selects by, so the second claimant is suffixed — see
+//! [`make_distinct`].
+//!
 //! **Cross-cuts** — under a role, a positional name unioned across the whole
 //! role: every `top` on every wing, in one set. A cross-cut gathers the
 //! *leaves* that carry the name — a row that split contributes its halves
@@ -72,7 +77,7 @@
 //! sits on the line by accident, and a piece that does is one nudge from either
 //! answer whatever this rule says.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -328,9 +333,6 @@ pub struct StructureFact {
     pub on_stage: bool,
     /// The node's own label, which names its row when it has one.
     pub label: Option<String>,
-    /// The node's kind, kept for the diagnostics a caller may want; the rule
-    /// itself never reads it.
-    pub kind: String,
     /// Where the run is bolted, data space. A wing's side is read off *this*
     /// and not off its fixtures: which side of the stage a tower stands on is a
     /// fact about the tower.
@@ -366,7 +368,8 @@ pub struct DerivedGroup {
     /// The display path from the role down, e.g. `["spots", "left wing", "top"]`.
     pub path: Vec<String>,
     /// The selection name: the path in snake_case, e.g. `spots_left_wing_top`.
-    /// Unique within the venue because the path is.
+    /// Unique within the tree — two paths that spell one name are separated by
+    /// [`make_distinct`], because the path is not enough on its own.
     pub name: String,
     /// The parent node's id, `None` for a role.
     pub parent: Option<String>,
@@ -718,6 +721,7 @@ pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
         }
     }
 
+    make_distinct(tree.groups.iter_mut().map(|group| &mut group.name));
     tree
 }
 
@@ -936,6 +940,43 @@ fn fixture_labels(fixtures: &[FixtureFact]) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Make a run of selection names distinct, in place.
+///
+/// A name is what an expression selects by, and two nodes can normalize to one
+/// name — a piece labelled `Truss 1` and one labelled `Truss-1` are both
+/// `truss_1`, and an expression naming it would union two rows into one set
+/// without saying so. The first claimant in iteration order keeps the plain
+/// name; every later one takes the lowest free `_2`, `_3`, … suffix.
+///
+/// Every plain name is reserved before any suffix is minted, so a minted
+/// `truss_1_2` can never shadow a node that spells `truss_1_2` itself.
+/// Deterministic in the order it is handed, which is the tree's own order, so
+/// the same rig derives the same names every time.
+///
+/// Ids are untouched: they are path-based ([`derived_id`]), so a set that
+/// ended up suffixed keeps its identity, and relabelling the piece — which
+/// changes the path, not the id — is what gives it its own word back.
+///
+/// An empty name is left empty: it names nothing, and everything downstream
+/// skips it. Suffixing it would mint `_2`, a name no expression can spell.
+fn make_distinct<'a>(names: impl IntoIterator<Item = &'a mut String>) {
+    let names: Vec<&'a mut String> = names.into_iter().collect();
+    let mut taken: BTreeSet<String> = names.iter().map(|name| (**name).clone()).collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for name in names {
+        if name.is_empty() || seen.insert(name.clone()) {
+            continue;
+        }
+        for n in 2.. {
+            let candidate = format!("{name}_{n}");
+            if taken.insert(candidate.clone()) {
+                *name = candidate;
+                break;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reading the facts out of a solved venue
 // ---------------------------------------------------------------------------
@@ -994,7 +1035,6 @@ pub fn facts_from<S: NodeSockets + ?Sized>(
                     node: placement.parent.clone(),
                     on_stage: hangs_off_a_stage(graph, &placement.parent),
                     label: pose.and_then(|pose| pose.label.clone()),
-                    kind: pose.map_or("piece", |pose| pose.kind.as_str()).to_string(),
                     position: pose.map_or([0.0; 3], |pose| attachment_point(graph, sockets, pose)),
                 });
             }
@@ -1135,7 +1175,9 @@ pub struct ManualGroup {
 /// this reader still has to survive one, because rows outlive the code that
 /// wrote them.
 ///
-/// Parents come before children.
+/// Parents come before children, and the authored groups come last — which is
+/// what [`make_names_distinct`], the step after this one, reads to decide who
+/// keeps a name two nodes spelled the same way.
 #[must_use]
 pub fn merge_tree(
     tree: &DerivedTree,
@@ -1259,6 +1301,31 @@ pub fn merge_tree(
     }
 
     nodes
+}
+
+/// Separate the names of a merged tree that two rules spelled the same way.
+///
+/// The second half of [`merge_tree`], and a step of its own because the tree
+/// *before* it is the one a typed name is checked against: after this there is
+/// no collision left to find, which is the whole point of it. A name someone
+/// typed is refused ([`super::groups::GroupSources::clash_for`]); a name nobody
+/// typed — a piece labelled `Truss-1` beside one labelled `Truss 1` — is
+/// suffixed here.
+///
+/// Authored groups claim first. A score holds those words, and they are the
+/// tail of a merged tree, which is what `role: None` marks.
+pub fn make_names_distinct(nodes: &mut [GroupTreeNode]) {
+    let boundary = nodes
+        .iter()
+        .position(|node| node.role.is_none())
+        .unwrap_or(nodes.len());
+    let (derived, authored) = nodes.split_at_mut(boundary);
+    make_distinct(
+        authored
+            .iter_mut()
+            .chain(derived.iter_mut())
+            .map(|node| &mut node.name),
+    );
 }
 
 /// Where `group_id`'s fixtures end up once every merge in `overrides` is
@@ -1483,7 +1550,6 @@ mod tests {
             node: node.into(),
             on_stage,
             label: None,
-            kind: "run".into(),
             position: [x, 0.0, 0.0],
         }
     }
@@ -1970,6 +2036,111 @@ mod tests {
     fn ids_are_namespaced_by_venue() {
         let path = vec!["washes".to_string()];
         assert_ne!(derived_id("a", &path), derived_id("b", &path));
+    }
+
+    // -----------------------------------------------------------------------
+    // Names
+    // -----------------------------------------------------------------------
+
+    fn names(tree: &DerivedTree) -> Vec<String> {
+        tree.groups.iter().map(|group| group.name.clone()).collect()
+    }
+
+    /// The two labels a class carries, in patch order.
+    fn labelled(first: &str, second: &str) -> VenueFacts {
+        let mut facts = horizontal_facts();
+        facts.structures[0].label = Some(first.into());
+        facts.structures[1].label = Some(second.into());
+        facts
+    }
+
+    /// Defect: a name was minted from the path and never checked against the
+    /// rest of the tree, so a piece labelled `Truss 1` beside one labelled
+    /// `Truss-1` derived one `washes_horizontal_truss_1` twice — and an
+    /// expression naming it selected both runs as one set.
+    #[test]
+    fn two_labels_that_spell_one_name_do_not_share_it() {
+        let tree = derive_groups(&labelled("Truss 1", "Truss-1"));
+        assert_eq!(
+            names(&tree),
+            [
+                "washes",
+                "washes_horizontal",
+                "washes_horizontal_truss_1",
+                "washes_horizontal_truss_1_2",
+            ]
+        );
+        for group in &tree.groups[2..] {
+            assert_eq!(group.members.len(), 3, "{} is not one run", group.name);
+        }
+    }
+
+    /// The suffix is minted around the names already spoken for, not on top of
+    /// them: a third piece *labelled* `Truss 1 2` keeps that name and the
+    /// duplicate goes to `_3`.
+    #[test]
+    fn a_minted_suffix_never_shadows_a_name_the_rig_spells_itself() {
+        let mut facts = labelled("Truss 1", "Truss-1");
+        facts.structures.push(StructureFact {
+            node: "third".into(),
+            on_stage: false,
+            label: Some("Truss 1 2".into()),
+            position: [0.0, 0.0, 0.0],
+        });
+        for (n, at) in [-2.0f64, 0.0, 2.0].into_iter().enumerate() {
+            facts.fixtures.push(fixture(
+                &format!("g{n}"),
+                FixtureRole::Wash,
+                "third",
+                [at, 0.0, 9.0],
+            ));
+        }
+        assert_eq!(
+            names(&derive_groups(&facts))[2..],
+            [
+                "washes_horizontal_truss_1",
+                "washes_horizontal_truss_1_3",
+                "washes_horizontal_truss_1_2",
+            ]
+        );
+    }
+
+    /// Relabelling is the way out: the path changes, so the name does, and the
+    /// id does not — whoever holds the suffixed set still holds it.
+    #[test]
+    fn a_relabel_gives_the_suffixed_set_its_own_word_back() {
+        let before = derive_groups(&labelled("Truss 1", "Truss-1"));
+        let after = derive_groups(&labelled("Truss 1", "Truss 2"));
+        assert_eq!(
+            names(&after)[3],
+            "washes_horizontal_truss_2",
+            "the second row is still borrowing the first's name"
+        );
+        assert_eq!(before.groups[2].id, after.groups[2].id);
+    }
+
+    /// An authored group's name is a word a score holds. A derived path that
+    /// comes to spell it yields, rather than the other way round.
+    #[test]
+    fn an_authored_name_outranks_a_derived_path_that_grew_into_it() {
+        let tree = derive_groups(&labelled("Truss 1", "Truss 2"));
+        let manual = ManualGroup {
+            id: "authored".into(),
+            name: "washes_horizontal_truss_1".into(),
+            fixtures: vec!["a".into()],
+        };
+        let mut merged = merge_tree(&tree, &[], &[manual]);
+        make_names_distinct(&mut merged);
+        let named = |id: &str| {
+            merged
+                .iter()
+                .find(|node| node.id == id)
+                .expect("in the tree")
+                .name
+                .clone()
+        };
+        assert_eq!(named("authored"), "washes_horizontal_truss_1");
+        assert_eq!(named(&tree.groups[2].id), "washes_horizontal_truss_1_2");
     }
 
     // -----------------------------------------------------------------------

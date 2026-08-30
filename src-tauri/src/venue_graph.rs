@@ -88,8 +88,24 @@ pub async fn ensure_migrated(
     }
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
     if migrate(&mut access, fixtures_root).await? {
-        access.commit().await?;
+        commit_graph(access).await?;
     }
+    Ok(())
+}
+
+/// Commit a transaction that changed the graph.
+///
+/// One call rather than two, because the second half is what gets forgotten:
+/// writing the rows tells the derived-group cache the rig moved, and only the
+/// commit can tell it the rows are *visible* — a reader that got in between
+/// the two refilled it from the graph the commit was about to replace. See
+/// [`crate::database::local::venue_graph`] for why it takes both.
+///
+/// # Errors
+/// Fails if the transaction cannot be committed.
+pub async fn commit_graph(access: VenueAccess<'_, Write>) -> Result<(), String> {
+    access.commit().await?;
+    local::venue_graph::graph_committed();
     Ok(())
 }
 

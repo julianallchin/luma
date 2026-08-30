@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] A filtered `cargo test --lib <name>` is not a cheap way to check one test: it relinks the whole 1000-test binary (~20-30 s in a fresh worktree), and per AGENTS.md it also rewrites `src/bindings/schema.ts` down to the types those tests touched — so every filtered run has to be paid for again with a full one before `bun run build` will typecheck.
 - [2026-08-29] `ipc_manifest_matches_the_command_table` regenerates `docs/specs/ipc-manifest.{json,md}` and then fails, so adding one dispatch verb costs two full 100s `cargo test` runs before green — and the second run failed too, so it was really three. The panic says "commit the new files" without saying it already wrote them.
 - [2026-08-29] `bunx vitest run --reporter=basic` does not say "that reporter is gone"; it throws a module-resolution stack out of vitest's internals, which reads like the repo is broken rather than like one flag is wrong.
 - [2026-08-29] A fresh worktree needs three gitignored things hand-copied before anything builds: `node_modules` (symlink), every `src-tauri/python/*/requirements.txt`, and the bindings (regenerate, don't copy). `git ls-files --others --ignored --exclude-standard` finds only four of the six requirements files, because the nested checkouts are invisible to it — use `find`.
