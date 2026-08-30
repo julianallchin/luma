@@ -308,6 +308,25 @@ class BuildHost:
             raise LumaHostCallError("refused", self.refuse)
         if method == "venue.catalog":
             return {"catalog": CATALOG}
+        if method == "venue.fixtures":
+            return {
+                "fixtures": [
+                    {
+                        "path": "Robe/Robe-Spiider.qxf",
+                        "manufacturer": "Robe",
+                        "model": "Spiider",
+                        "kind": "Moving Head",
+                        "moves": True,
+                        "beamDeg": [4.0, 50.0],
+                        "modes": [
+                            {"name": "Mode 1", "channels": 39,
+                             "moves": True, "role": "wash"},
+                            {"name": "Basic", "channels": 12,
+                             "moves": False, "role": "wash"},
+                        ],
+                    }
+                ]
+            }
         if method == "venue.describe":
             return {"text": "root  venue\n"}
         if method == "venue.open":
@@ -333,7 +352,24 @@ class BuildHost:
                 "report": {
                     "hostNodeId": "run-1",
                     "hostSocket": "face_-y",
-                    "fixtures": [{"id": "fix-1"}, {"id": "fix-2"}],
+                    "fixtures": [
+                        {
+                            "id": "fix-1",
+                            "label": "Aura 1",
+                            "universe": 1,
+                            "address": 1,
+                            "alongM": -0.5,
+                            "groupPath": ["wash", "left wing"],
+                        },
+                        {
+                            "id": "fix-2",
+                            "label": "Aura 2",
+                            "universe": 1,
+                            "address": 17,
+                            "alongM": 0.5,
+                            "groupPath": ["wash", "left wing"],
+                        },
+                    ],
                     "refusal": None,
                     "warnings": [],
                     "dangling": [],
@@ -470,6 +506,58 @@ class BuildTests(unittest.TestCase):
             self.host.last("venue.distribute")["layout"],
             {"kind": "span", "from": 0.1, "to": 0.9},
         )
+
+    def test_a_distributed_row_hands_back_nodes_the_next_verb_takes(self) -> None:
+        """The row a `distribute` reports is aimable without a dictionary
+        lookup: every verb that names a node takes what another verb returned."""
+        row = self.venue.distribute("run-1", "face_-y", "a.qxf", 2, mode="8-Channel")
+        head = row.fixtures[0]
+        self.assertEqual(head.node_id, "fix-1")
+        self.assertEqual((head.universe, head.address), (1, 1))
+        self.assertEqual(head.group_path, ("wash", "left wing"))
+        self.venue.aim(head, tilt=30)
+        self.assertEqual(self.host.last("venue.params")["nodeId"], "fix-1")
+
+    # -- the library -----------------------------------------------------
+
+    def test_the_library_page_carries_what_distribute_is_named_out_of(self) -> None:
+        found = self.venue.fixtures("robe spiider")
+        self.assertEqual(self.host.last("venue.fixtures")["query"], "robe spiider")
+        self.assertEqual(found[0].path, "Robe/Robe-Spiider.qxf")
+        self.assertEqual(found[0].beam_deg, (4.0, 50.0))
+        self.assertEqual(found[0].mode(12), "Basic")
+        # Printing the page is the whole of reading it.
+        self.assertIn("Robe/Robe-Spiider.qxf", str(found))
+        self.assertIn("39 ch", str(found))
+
+    def test_a_mode_that_is_not_there_names_the_ones_that_are(self) -> None:
+        head = self.venue.fixtures()[0]
+        with self.assertRaises(LumaHostCallError) as caught:
+            head.mode(7)
+        self.assertIn("Mode 1 (39)", str(caught.exception))
+        self.assertIn("Basic (12)", str(caught.exception))
+
+    # -- aim -------------------------------------------------------------
+
+    def test_aim_is_degrees_here_and_radians_on_the_wire(self) -> None:
+        self.venue.aim("fix-1", pan=-90.0, tilt=45.0)
+        params = self.host.last("venue.params")["params"]
+        self.assertAlmostEqual(params["pan"], -math.pi / 2)
+        self.assertAlmostEqual(params["tilt"], math.pi / 4)
+
+    def test_aim_leaves_the_angle_it_was_not_given(self) -> None:
+        """Half an aim is not a reset: tilting a panned head keeps the pan."""
+        self.venue.aim("fix-1", tilt=20.0)
+        self.assertEqual(list(self.host.last("venue.params")["params"]), ["tilt"])
+        with self.assertRaises(LumaHostCallError):
+            self.venue.aim("fix-1")
+
+    def test_trim_and_aim_agree_about_which_parameters_are_angles(self) -> None:
+        self.venue.trim("fix-1", pan=90.0, tilt=90.0, yaw=90.0, u=1.0)
+        params = self.host.last("venue.params")["params"]
+        for key in ("pan", "tilt", "yaw"):
+            self.assertAlmostEqual(params[key], math.pi / 2, msg=key)
+        self.assertEqual(params["u"], 1.0)
 
     def test_a_layout_that_needs_a_number_refuses_before_the_host_sees_it(self) -> None:
         for kwargs in ({"layout": "spacing"}, {"layout": "span"}, {"layout": "wat"}):

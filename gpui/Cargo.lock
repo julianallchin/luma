@@ -5371,6 +5371,7 @@ dependencies = [
 name = "luma-scene"
 version = "0.1.0"
 dependencies = [
+ "fixture-kinematics",
  "glam",
  "serde_json",
 ]

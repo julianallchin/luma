@@ -1290,6 +1290,238 @@ rows = [
     f.service.shutdown_all();
 }
 
+/// `describe()` says which way each light points, and the word tracks the way
+/// its host is hung — which is the half of a patch a tree of relations cannot
+/// say and the reason "hang it on the underside" is not advice a caller can act
+/// on without checking.
+///
+/// The same face name on the same piece means the same side of it whether the
+/// piece stands on the floor or hangs from the rig — a stick flown from the
+/// grid keeps the underside it had on the ground — and an aim turns the word
+/// again. Measured through the facade, not restated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn describe_says_which_way_each_light_points() {
+    let Some(f) = Fixture::new("venue beam words").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            &r#"
+head = luma.venue.fixtures("rogue r2 spot")[0]
+
+def beam(node_id, tree):
+    line = [l for l in tree.splitlines() if node_id in l][0]
+    return line.rsplit("beam=", 1)[1].split()[0]
+
+# The same face of the same stick, once standing on the floor and once hung
+# from the rig plane. A piece hangs under a down-facing surface rather than
+# turning over, so `face_-y` is its underside either way and both rows of
+# heads point at the floor.
+standing = luma.venue.place(TRUSS, at=(-4.0, 0.0), span=2.0, trim=3.0)
+# No `socket=`: the catalog picks the footing, which is the path a caller
+# actually takes and the one that used to stand the stick on its end.
+hanging = luma.venue.place(TRUSS, at=(4.0, 0.0), span=2.0,
+                           surface="rig", trim=6.0)
+on_floor = luma.venue.distribute(standing, "face_-y", head.path, 1, mode=head.mode(18))
+flown = luma.venue.distribute(hanging, "face_-y", head.path, 1, mode=head.mode(18))
+
+tree = luma.venue.describe()
+rest = (beam(on_floor.fixtures[0].node_id, tree),
+        beam(flown.fixtures[0].node_id, tree))
+
+# An aim turns the word, and it turns it about the *mount*: 90 degrees of tilt
+# off a head resting straight down swings it out level. Which way round it
+# goes is the face's own tangent, not a stage direction the caller chose —
+# which is exactly why the beam word, and not the angle, is the check.
+aimed = luma.venue.aim(flown.fixtures[0], tilt=90.0)
+(rest, beam(flown.fixtures[0].node_id, aimed.describe()))
+"#
+            .replace("TRUSS", &format!("{TRUSS:?}")),
+        )
+        .await;
+    expect_ok(&out, "beam words");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert_eq!(
+        repr, "(('down', 'down'), 'upstage')",
+        "the beam word did not follow the mount or the aim: {repr}\n{}",
+        out.stdout
+    );
+
+    f.service.shutdown_all();
+}
+
+/// A piece the catalog does not have is refused at the call that named it, with
+/// the near misses in the message — not placed as a node with no geometry that
+/// the renderer discovers later.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_piece_the_catalog_does_not_have_is_refused() {
+    let Some(f) = Fixture::new("venue unknown piece").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "try:\n\
+            \x20   luma.venue.place(\"deck\", at=(0, 0))\n\
+            \x20   refusal = None\n\
+             except luma.VenueRefused as error:\n\
+            \x20   refusal = str(error)\n\
+             (refusal, luma.venue.describe().count('\\n'))",
+        )
+        .await;
+    expect_ok(&out, "unknown piece");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert!(
+        repr.contains("is not in the catalog") && repr.contains("stage_praticavel"),
+        "the refusal did not name what the catalog has: {repr}"
+    );
+    // Nothing was written: an empty room describes as root plus its two
+    // always-present sections.
+    assert!(
+        repr.ends_with(", 4)"),
+        "a refused place left rows behind: {repr}"
+    );
+
+    f.service.shutdown_all();
+}
+
+// ---------------------------------------------------------------------------
+// B6 — the usability run
+// ---------------------------------------------------------------------------
+
+/// Run an outside agent's program against an empty venue, cell by cell.
+///
+/// Not an assertion: the gauntlet's §8 usability run is evidence, not a
+/// contract, so this drives the same facade the tests above do and writes down
+/// what the room said. Inert unless `LUMA_USABILITY_IN` names a directory of
+/// `cell_*.py`; results land beside them in `LUMA_USABILITY_OUT`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn venue_usability_run() {
+    let Ok(input) = std::env::var("LUMA_USABILITY_IN") else {
+        return;
+    };
+    let out_dir =
+        std::path::PathBuf::from(std::env::var("LUMA_USABILITY_OUT").expect("LUMA_USABILITY_OUT"));
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let Some(f) = Fixture::new("venue usability").await else {
+        panic!("the cell service would not start");
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let mut cells: Vec<_> = std::fs::read_dir(&input)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "py"))
+        .collect();
+    cells.sort();
+
+    let mut transcript = String::new();
+    for cell in &cells {
+        let code = std::fs::read_to_string(cell).unwrap();
+        let name = cell.file_name().unwrap().to_string_lossy().to_string();
+        let out = f.run_in_venue(&thread, &venue_id, &code).await;
+        transcript.push_str(&format!(
+            "===== {name} =====\n{code}\n----- status: {} -----\nstdout:\n{}\n\
+             stderr:\n{}\nrepr: {:?}\ntraceback: {:?}\nnotices: {:?}\nfigures: {:?}\n\n",
+            out.status,
+            out.stdout,
+            out.stderr,
+            out.repr,
+            out.traceback,
+            out.notices,
+            out.figures
+                .iter()
+                .map(|fig| fig.artifact_rel.clone())
+                .collect::<Vec<_>>()
+        ));
+    }
+
+    let tail = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "shot = luma.venue.render(view='front', width=1280, height=720)\n\
+             top = luma.venue.render(view='overhead', width=1280, height=720)\n\
+             print(luma.venue.describe())\n\
+             print(luma.venue.tiles())\n\
+             (str(shot.path), str(top.path))",
+        )
+        .await;
+    transcript.push_str(&format!(
+        "===== final =====\nstatus: {}\n{}\nrepr: {:?}\ntraceback: {:?}\n",
+        tail.status, tail.stdout, tail.repr, tail.traceback
+    ));
+    std::fs::write(out_dir.join("transcript.txt"), &transcript).unwrap();
+    for figure in &tail.figures {
+        let name = std::path::Path::new(&figure.artifact_rel)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "figure.png".into());
+        std::fs::write(out_dir.join(format!("{name}.b64")), &figure.base64_png).unwrap();
+    }
+    f.service.shutdown_all();
+}
+
+/// The library is searchable and its answer is what `distribute` is named out
+/// of, and an aim written in degrees comes back as a degree.
+///
+/// Two verbs, one program, because they are two halves of the same sentence:
+/// pick a head out of the library, hang a row of them, point one somewhere its
+/// mount does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_library_names_a_head_and_an_aim_points_it() {
+    let Some(f) = Fixture::new("venue library and aim").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            &r#"
+# The library, searched the way a person says the name.
+found = luma.venue.fixtures("rogue r2 spot")
+head = found[0]
+
+# A tower out of a deck, and a row of that head under it.
+deck = luma.venue.place(DECK, at=(0.0, 0.0))
+tower = luma.venue.extend(deck, "corner_fl", 3.0)
+row = luma.venue.distribute(tower, "face_-z", head.path, 4, mode=head.mode(18))
+along = [f.along_m for f in row.fixtures]
+
+# Point the first one out over the room. `aim` takes the report, not an id.
+aimed = luma.venue.aim(row.fixtures[0], pan=-30.0, tilt=45.0)
+line = [l for l in aimed.describe().splitlines() if row.fixtures[0].node_id in l][0]
+
+# The row comes back in face order, which is what indexing it means.
+(head.path, head.moves, head.mode(18), row.ok, along == sorted(along),
+ "pan=-30deg" in line, "tilt=45deg" in line)
+"#
+            .replace("DECK", &format!("{DECK:?}")),
+        )
+        .await;
+    expect_ok(&out, "library and aim");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert!(
+        repr.starts_with(&format!(
+            "('{MOVER}', True, '{MOVER_MODE}', True, True, True, True)"
+        )),
+        "the library or the aim did not answer as asked: {repr}\n{}",
+        out.stdout
+    );
+
+    f.service.shutdown_all();
+}
+
 /// The second of the design's two hard errors, from Python: an extend longer
 /// than the gap the ray measured is refused, changes nothing, and says by how
 /// much. Asking for exactly the gap bridges it and closes both ends.

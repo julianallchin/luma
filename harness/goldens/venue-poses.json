@@ -44,6 +44,16 @@
       "node": "post",
       "socket": "end_b",
       "type": "truss_end"
+    },
+    {
+      "node": "flown_truss",
+      "socket": "end_a",
+      "type": "truss_end"
+    },
+    {
+      "node": "flown_truss",
+      "socket": "end_b",
+      "type": "truss_end"
     }
   ],
   "nodes": [
@@ -67,6 +77,29 @@
         -0.0,
         -0.0,
         0.0
+      ],
+      "setPiece": false
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "fixture:aimed",
+      "facing": [
+        0.4423,
+        0.646508,
+        -0.62161
+      ],
+      "kind": "fixture",
+      "node": "aimed",
+      "parent": "venue",
+      "position": [
+        1.0,
+        -2.0,
+        5.0
+      ],
+      "rotation": [
+        -0.990952,
+        0.491956,
+        0.358625
       ],
       "setPiece": false
     },
@@ -223,6 +256,52 @@
         -1.0,
         3.0,
         6.5
+      ],
+      "rotation": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "setPiece": false
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "truss/straight",
+      "facing": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "kind": "run",
+      "node": "flown_truss",
+      "parent": "venue",
+      "position": [
+        0.0,
+        0.0,
+        0.16915
+      ],
+      "rotation": [
+        -0.0,
+        -0.0,
+        0.0
+      ],
+      "setPiece": true
+    },
+    {
+      "arrayIndex": null,
+      "catalogRef": "fixture:under",
+      "facing": [
+        0.0,
+        -0.0,
+        -1.0
+      ],
+      "kind": "fixture",
+      "node": "under_truss",
+      "parent": "flown_truss",
+      "position": [
+        0.0,
+        0.0,
+        0.0
       ],
       "rotation": [
         0.0,

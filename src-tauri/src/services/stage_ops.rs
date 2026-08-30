@@ -282,12 +282,23 @@ impl<'a> Stage<'a> {
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_kind(kind)?;
+        self.require_catalog_ref(kind, catalog_ref)?;
         require_in_venue(&mut access, &[parent_id]).await?;
-        let my_socket = match my_socket {
-            Some(name) => name.to_string(),
+        // `derived` is whether the catalog picked the caller's half of the
+        // joint rather than the caller naming it.
+        let (my_socket, derived) = match my_socket {
+            Some(name) => (name.to_string(), false),
             None => {
                 let graph = venue_graph::graph(&mut access).await?;
-                self.mating_socket(&graph, parent_id, their_socket, kind, catalog_ref, &params)?
+                let socket = self.mating_socket(
+                    &graph,
+                    parent_id,
+                    their_socket,
+                    kind,
+                    catalog_ref,
+                    &params,
+                )?;
+                (socket, true)
             }
         };
         let node_id = self
@@ -295,12 +306,24 @@ impl<'a> Stage<'a> {
             .await?;
         let edge = Edge {
             parent: parent_id.to_string(),
-            my_socket,
+            my_socket: my_socket.clone(),
             their_socket: their_socket.to_string(),
             roll: yaw,
         };
         self.check_and_write(&mut access, &node_id, edge).await?;
-        self.report(access, &node_id).await
+        let mut report = self.report(access, &node_id).await?;
+        // The choice, said out loud. Picking the caller's half of the joint is
+        // a convenience — `attach` scores socket *types*, so a piece with four
+        // mating candidates gets whichever comes first, and a deck bolted on a
+        // quarter turn round is indistinguishable in the report from the one
+        // that was meant. Naming it is what lets a caller notice, without
+        // making them name a socket they usually do not care about.
+        if derived {
+            report.warnings.push(format!(
+                "`{node_id}` was bolted by its `{my_socket}` socket, the first that mates `{parent_id}.{their_socket}` — name `my_socket` to pick a different half of the joint"
+            ));
+        }
+        Ok(report)
     }
 
     /// Place a node that already exists somewhere else — a re-attach, or a
@@ -353,6 +376,7 @@ impl<'a> Stage<'a> {
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_kind(kind)?;
+        self.require_catalog_ref(kind, catalog_ref)?;
         let parent_id = match surface_node_id {
             Some(id) => {
                 require_in_venue(&mut access, &[id]).await?;
@@ -366,6 +390,7 @@ impl<'a> Stage<'a> {
         params.insert("u".to_string(), u);
         params.insert("v".to_string(), v);
         params.insert("trim".to_string(), trim);
+        let surface = surface_socket.unwrap_or(FLOOR_SOCKET);
         let my_socket = match my_socket {
             Some(name) => name.to_string(),
             None => self.seat_socket(kind, catalog_ref, &params)?,
@@ -376,7 +401,7 @@ impl<'a> Stage<'a> {
         let edge = Edge {
             parent: parent_id,
             my_socket,
-            their_socket: surface_socket.unwrap_or(FLOOR_SOCKET).to_string(),
+            their_socket: surface.to_string(),
             roll: yaw,
         };
         self.check_and_write(&mut access, &node_id, edge).await?;
@@ -715,6 +740,52 @@ impl<'a> Stage<'a> {
         })
     }
 
+    /// A `catalog_ref` the catalog actually has.
+    ///
+    /// Without this a typo is *placed*: the node has no geometry, the solve
+    /// warns and carries on — which is right for a venue whose catalog entry
+    /// went away — and the mistake surfaces two layers later as a renderer
+    /// failing to open a mesh. A ref that was never in the catalog is not that
+    /// case; it is the caller naming a piece that does not exist, and the only
+    /// moment anyone can say so usefully is the call that made it.
+    ///
+    /// A fixture is exempt: its `catalog_ref` is a patch-row id, not a piece.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`], naming the nearest entries the catalog does
+    /// have, so the fix is in the message.
+    fn require_catalog_ref(&self, kind: &str, catalog_ref: Option<&str>) -> Result<()> {
+        let (Some(wanted), Some(kind)) = (catalog_ref, NodeKind::from_name(kind)) else {
+            return Ok(());
+        };
+        if kind == NodeKind::Fixture {
+            return Ok(());
+        }
+        let catalog = catalog(self.fixtures_root)?;
+        if catalog.pieces.iter().any(|p| p.catalog_ref == wanted) {
+            return Ok(());
+        }
+        let stem = wanted.rsplit('/').next().unwrap_or(wanted).to_lowercase();
+        let near: Vec<&str> = catalog
+            .pieces
+            .iter()
+            .filter(|p| {
+                p.catalog_ref.to_lowercase().contains(&stem)
+                    || p.name.to_lowercase().contains(&stem)
+            })
+            .map(|p| p.catalog_ref.as_str())
+            .take(3)
+            .collect();
+        Err(StageError::Refused(if near.is_empty() {
+            format!("`{wanted}` is not in the catalog — read `catalog()` for what is")
+        } else {
+            format!(
+                "`{wanted}` is not in the catalog; did you mean {}?",
+                near.join(", ")
+            )
+        }))
+    }
+
     // -- which socket the piece is held by ------------------------------
 
     /// The socket a piece is *put down* on when the caller named none: the
@@ -727,6 +798,11 @@ impl<'a> Stage<'a> {
     /// `seat` it declares. Deriving it is what keeps "put a deck on the floor"
     /// from requiring the caller to know that a deck's underside is spelled
     /// `bottom` and a stick's is spelled `seat`.
+    ///
+    /// The same answer serves the `rig` plane, which faces down: a piece hangs
+    /// *under* a down-facing host rather than turning over
+    /// (`luma_scene::venue`'s `hangs_under`), so its underside is the footing
+    /// there too and a flown truss keeps the underside it had on the floor.
     fn seat_socket(
         &self,
         kind: &str,
@@ -1019,13 +1095,20 @@ fn probe(kind: &str, catalog_ref: Option<&str>, params: &BTreeMap<String, f64>) 
     }
 }
 
-/// `u` runs along the host feature's tangent, so its sign is which side of that
-/// feature a child sits on. Nothing else in the vocabulary is handed.
+/// The two handed parameters: `u` runs along the host feature's tangent, so its
+/// sign is which side of that feature a child sits on, and `pan` turns a head
+/// about the mount normal, so its sign is which way that head looks. `v` is
+/// across, `trim` is up, a span has no side, and a tilt is the same tilt in a
+/// mirror.
 fn mirrored(node: &Node, flip: bool) -> BTreeMap<String, f64> {
     node.params
         .iter()
         .map(|(key, value)| {
-            let value = if flip && key == "u" { -value } else { value };
+            let value = if flip && matches!(key, "u" | "pan") {
+                -value
+            } else {
+                value
+            };
             (key.to_string(), value)
         })
         .collect()
@@ -1102,9 +1185,16 @@ fn cast(
 /// The tree as text.
 ///
 /// Two indented spaces per level and one node per line, so a diff of two
-/// descriptions localises a change to the line it happened on. Poses are
-/// deliberately absent: this is the *relation* channel — "the mover is on the
-/// downstage truss" — and [`Stage::tiles`] is the one that answers "where".
+/// descriptions localises a change to the line it happened on.
+///
+/// Primarily the *relation* channel — "the mover is on the downstage truss" —
+/// but every line also carries the pose the solve gave that relation: `at=` in
+/// metres and `heading=` in degrees, both data space, both world. Relations
+/// alone cannot be checked. A caller who hangs a row on the face it believes is
+/// the underside has no way to find out it was wrong from a tree of parents,
+/// and this is the channel it reads after every verb, so the answer to "where
+/// did that actually land" has to be on the line rather than one `tiles()`
+/// call away.
 ///
 /// Everything the solve left open is appended in the resolver's own words, via
 /// the same [`ResolvedVenue`] projection every other surface reads, so a
@@ -1112,6 +1202,29 @@ fn cast(
 fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
     let placed: std::collections::HashSet<&str> =
         solved.nodes.iter().map(|node| node.id.as_str()).collect();
+    // Which way each light points, as the one stage word `StageDirection`
+    // gives it. Only a fixture has a beam to report; a piece's `facing` is the
+    // normal its own frame implies and means nothing to a reader.
+    // Where each node ended up, for the half of a verb's effect a tree of
+    // relations cannot state. Array members are keyed `<id>#<n>` and never
+    // match a graph node, so they are simply absent here.
+    let poses: BTreeMap<&str, ([f64; 3], f64)> = solved
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), (node.position, node.rotation[2])))
+        .collect();
+    let beams: BTreeMap<&str, &'static str> = solved
+        .nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Fixture.as_str())
+        .map(|node| {
+            (
+                node.id.as_str(),
+                fixture_kinematics::StageDirection::of(glam::DVec3::from(node.facing).as_vec3())
+                    .label(),
+            )
+        })
+        .collect();
     let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (node, edge) in graph.relations() {
         children
@@ -1122,7 +1235,7 @@ fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
 
     let root = graph.root();
     let mut out = format!("{root}  venue\n");
-    write_branch(graph, &placed, &children, root, 1, &mut out);
+    write_branch(graph, &placed, &poses, &beams, &children, root, 1, &mut out);
 
     out.push_str("\nunplaced:");
     if solved.unplaced.is_empty() {
@@ -1147,11 +1260,33 @@ fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
     if solved.dangling.is_empty() {
         out.push_str(" none\n");
     } else {
+        // One line per *node*, not per socket. A room of a dozen decks has
+        // thirty-odd open edges and only ever three or four nodes worth
+        // looking at, so a flat list of ids buries the one joint that was
+        // meant to be made under the twenty-six that were never going to be.
+        // The label is carried because the graph has it and a bare uuid is
+        // unreadable.
         out.push('\n');
+        let mut by_node: BTreeMap<&str, Vec<&crate::models::venue_graph::ResolvedDangling>> =
+            BTreeMap::new();
         for open in &solved.dangling {
+            by_node.entry(open.node_id.as_str()).or_default().push(open);
+        }
+        for (node_id, opens) in by_node {
+            let node = graph.node(node_id);
+            let kind = node.map_or("?", |n| n.kind.as_str());
+            let label = node
+                .and_then(|n| n.label.as_deref())
+                .map(|l| format!("  \"{l}\""))
+                .unwrap_or_default();
+            let sockets = opens
+                .iter()
+                .map(|open| format!("{} ({})", open.socket, open.socket_type))
+                .collect::<Vec<_>>()
+                .join(", ");
             out.push_str(&format!(
-                "  {}.{}  {}\n",
-                open.node_id, open.socket, open.socket_type
+                "  {node_id}  {kind}{label}  {} open: {sockets}\n",
+                opens.len()
             ));
         }
     }
@@ -1171,6 +1306,8 @@ fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
 fn write_branch(
     graph: &VenueGraph,
     placed: &std::collections::HashSet<&str>,
+    poses: &BTreeMap<&str, ([f64; 3], f64)>,
+    beams: &BTreeMap<&str, &'static str>,
     children: &BTreeMap<&str, Vec<&str>>,
     parent: &str,
     depth: usize,
@@ -1201,14 +1338,33 @@ fn write_branch(
             }
         }
         for (key, value) in node.params.iter() {
-            line.push_str(&format!("  {key}={value:.2}"));
+            // Angles are radians in the graph and degrees at every surface —
+            // this is one of those surfaces. See `venue::ANGLE_PARAMS`.
+            if luma_scene::venue::ANGLE_PARAMS.contains(&key) {
+                line.push_str(&format!("  {key}={:.0}deg", value.to_degrees()));
+            } else {
+                line.push_str(&format!("  {key}={value:.2}"));
+            }
+        }
+        // Which way it points, for the half of a patch a tree of relations
+        // cannot otherwise say. A face is only "underneath" for a piece the
+        // right way up, and nothing else here would ever tell a reader that
+        // the row it just hung is looking at the roof.
+        if let Some(([x, y, z], heading)) = poses.get(id) {
+            line.push_str(&format!(
+                "  at=({x:.2}, {y:.2}, {z:.2})  heading={:.0}deg",
+                heading.to_degrees()
+            ));
+        }
+        if let Some(word) = beams.get(id) {
+            line.push_str(&format!("  beam={word}"));
         }
         if !placed.contains(id) {
             line.push_str("  [unplaced]");
         }
         out.push_str(&line);
         out.push('\n');
-        write_branch(graph, placed, children, id, depth + 1, out);
+        write_branch(graph, placed, poses, beams, children, id, depth + 1, out);
     }
 }
 

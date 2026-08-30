@@ -214,6 +214,21 @@ impl VenueHost {
         Ok(json!({ "catalog": catalog }))
     }
 
+    /// The fixtures a `distribute` can name, matched by the same rule the patch
+    /// page's search field uses.
+    ///
+    /// A read of the library, not of the venue: the vocabulary half of
+    /// `catalog()`, which answers for structure and cannot answer for lights.
+    fn fixtures(&self, request: FixturesRequest) -> Result<Value, HostCallError> {
+        let found = crate::services::fixtures::library(
+            &self.resource_root,
+            request.query.as_deref().unwrap_or_default(),
+            request.limit.min(FIXTURE_PAGE_MAX),
+        )
+        .map_err(|error| HostCallError::new("internal", error))?;
+        Ok(json!({ "fixtures": found }))
+    }
+
     /// The tree as text — the channel a program reads after every mutation.
     async fn describe(&self) -> Result<Value, HostCallError> {
         Ok(json!({ "text": self.stage().describe().await? }))
@@ -437,6 +452,7 @@ impl HostCallHandler for VenueHost {
                     "venue.render" => self.render(decode(payload)?).await,
                     "venue.tiles" => self.tiles(decode(payload)?).await,
                     "venue.catalog" => self.catalog(),
+                    "venue.fixtures" => self.fixtures(decode(payload)?),
                     "venue.describe" => self.describe().await,
                     "venue.open" => self.open().await,
                     "venue.reach" => self.reach(decode(payload)?).await,
@@ -468,6 +484,20 @@ fn clamp_dimension(name: &str, value: u32) -> Result<u32, HostCallError> {
         ));
     }
     Ok(value.min(MAX_DIMENSION))
+}
+
+/// How many library rows one call will parse and return, whatever it asks for.
+///
+/// A page, not the library: the answer is read by a model, and a thousand
+/// fixtures is a context window rather than an answer.
+const FIXTURE_PAGE_MAX: usize = 100;
+
+/// A library search. `query` absent is every fixture, first page.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FixturesRequest {
+    query: Option<String>,
+    limit: usize,
 }
 
 /// `cell_m` is the only dial: everything else about the map is a function of
