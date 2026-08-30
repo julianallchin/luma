@@ -48,6 +48,18 @@ impl SocketLookup for HashMap<String, Vec<ResolvedSocket>> {
 /// snap to win over the surface / ground fallbacks.
 pub const ATTACH_THRESHOLD: f64 = 0.5;
 
+/// Metres — how far the cursor must travel from a joint the builder has
+/// *already* latched onto before that joint lets go.
+///
+/// The pair with [`ATTACH_THRESHOLD`] is hysteresis, and the two numbers are
+/// written together because only their ordering matters: strictly larger than
+/// the snap-in radius, or a held piece sitting exactly on the boundary chatters
+/// between snapped and free once per pointer sample. It is not read by
+/// [`solve_snap`] — the search has no memory of what was latched last frame, and
+/// giving it one would make the same input answer two different ways. The
+/// caller holding the latch is the caller that can apply it.
+pub const DETACH_THRESHOLD: f64 = 0.8;
+
 /// Edge-mode requires the two sockets to sit on **opposing sides** of their
 /// pieces, so the pieces end up next to each other rather than overlapping. We
 /// compare their `outward` vectors in piece-local space — with edge mode's
