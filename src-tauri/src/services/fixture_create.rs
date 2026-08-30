@@ -14,6 +14,11 @@
 //! no distribution and no patch-page add created" — is unrepresentable because
 //! there is nowhere else to make one.
 //!
+//! [`delete`] is its dual, and for the same reason: the row and the node go
+//! together or neither goes. Deleting only the paperwork left a node the
+//! resolver kept posing — a light in the render that nothing in the patch
+//! could name.
+//!
 //! # A new fixture has no edge, and that is the point
 //!
 //! [`create`] never writes a `venue_edges` row. A node with no edge is
@@ -28,10 +33,10 @@
 //! is the model (or a distribution's `label_prefix`) and `n` is one past the
 //! highest number any label in the venue already claims for that term. It lives
 //! here rather than in the derivation because a name is minted when the fixture
-//! is made; `crate::services::group_derivation::fixture_labels` counts with the
-//! same object to describe a venue's rows. The frontend held a fourth copy of
-//! this rule, spelled `<model> (<n>)` — drifted, as duplicated rules do — and
-//! it has been deleted.
+//! is made: what a light is called is a fact about the row, not something a
+//! solve recomputes. The frontend held a copy of this rule, spelled
+//! `<model> (<n>)` — drifted, as duplicated rules do — and it has been
+//! deleted, as has the derivation's.
 
 use std::collections::BTreeMap;
 
@@ -156,6 +161,40 @@ pub async fn create(
     )
     .await?;
     Ok(fixture)
+}
+
+/// Delete a fixture: the paperwork *and* the thing, in the caller's transaction.
+///
+/// The dual of [`create`], and the only door out. Both callers — the patch
+/// page's `remove_patched_fixture` and `delete_subtree` on a fixture node —
+/// come through here, which is what makes "the row is gone but the resolver
+/// still poses it" unrepresentable rather than merely unlikely. The node's
+/// edge, its params and any constraint naming it go with it by the cascades
+/// `migrations/20260829000000_venue_graph.sql` declares.
+///
+/// The node is dropped through [`venue_graph_db::delete_nodes`] rather than
+/// with a `DELETE` of its own, because that module owns the promise that a
+/// graph write drops the derived-group cache.
+///
+/// # Why this is a function and not a constraint
+///
+/// SQLite cannot express a foreign key over part of a table, so the schema-level
+/// form would be `AFTER DELETE ON fixtures` deleting the node. Rejected twice
+/// over: the derived-group cache is an in-process read cache over
+/// `venue_nodes`, and a trigger firing behind it would leave the group tree
+/// stale with nothing able to notice; and every one of these tables is guarded
+/// by a `BEFORE DELETE` write-admission trigger, so SQL that runs outside an
+/// armed, accepting session — a migration, a repair script — is refused rather
+/// than trusted. This function is the door, and it is the only one.
+///
+/// Returns the number of `fixtures` rows removed, so a caller can tell a real
+/// delete from a stale id.
+///
+/// # Errors
+/// Only the database's.
+pub async fn delete(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, PatchError> {
+    venue_graph_db::delete_nodes(access, &[id.to_string()]).await?;
+    Ok(fixtures_db::delete_fixture(access, id).await?)
 }
 
 /// The numbering a venue's patch list is standing at, in creation order.

@@ -192,7 +192,8 @@ mod tests {
     }
 
     /// A deck's top is as long as the deck, measured off the same GLB its
-    /// sockets were authored against.
+    /// sockets were authored against — the actual extent, not a range that
+    /// would pass whichever axis the tangent picked out.
     #[test]
     fn a_deck_top_is_as_long_as_the_deck() {
         let sockets = sockets();
@@ -206,11 +207,15 @@ mod tests {
         let face = host_face(&sockets, &node, "top").expect("a deck has a top");
         let length = face.feature.length_m.expect("a deck is a bounded piece");
         assert!(
-            (0.5..=4.0).contains(&length),
+            (length - DECK_TOP_M).abs() < 1e-3,
             "a 2x1 m deck measured {length} m along its top"
         );
         assert_eq!(face.feature.quantum_m, None, "a deck cannot be extended");
     }
+
+    /// The long side of `stage_praticavel_2x1x1.glb`, in metres, as the shipped
+    /// mesh measures — a 2 m × 1 m platform, and `top`'s tangent runs the 2 m.
+    const DECK_TOP_M: f64 = 2.0;
 
     /// The floor is a plane: unbounded, so a row on it is refused for nothing.
     #[test]

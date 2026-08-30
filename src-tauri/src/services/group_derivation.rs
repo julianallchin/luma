@@ -393,8 +393,6 @@ impl DerivedGroup {
 pub struct DerivedTree {
     /// Parents before children, roles in [`FixtureRole::ALL`] order.
     pub groups: Vec<DerivedGroup>,
-    /// Fixture id → `<model> <n>`, `n` counting per model in creation order.
-    pub fixture_labels: BTreeMap<String, String>,
 }
 
 /// A derived group's id: a hash of the venue and the derivation path, rendered
@@ -599,10 +597,7 @@ impl Class {
 /// hopeful one.
 #[must_use]
 pub fn derive_groups(facts: &VenueFacts) -> DerivedTree {
-    let mut tree = DerivedTree {
-        fixture_labels: fixture_labels(&facts.fixtures),
-        ..DerivedTree::default()
-    };
+    let mut tree = DerivedTree::default();
 
     for role in FixtureRole::ALL {
         let members: Vec<&FixtureFact> = facts
@@ -925,20 +920,6 @@ fn push(
         members: members.iter().map(|fixture| fixture.id.clone()).collect(),
     });
     id
-}
-
-/// `<model> <n>`, `n` counting per model over the venue's creation order.
-///
-/// The rule itself is [`crate::services::fixture_create::ModelNumbering`] —
-/// where a fixture's stored label is minted — counted here from scratch rather
-/// than seeded, because this describes the venue as the derivation reads it
-/// rather than continuing it.
-fn fixture_labels(fixtures: &[FixtureFact]) -> BTreeMap<String, String> {
-    let mut numbering = crate::services::fixture_create::ModelNumbering::default();
-    fixtures
-        .iter()
-        .map(|fixture| (fixture.id.clone(), numbering.next(&fixture.model)))
-        .collect()
 }
 
 /// Make a run of selection names distinct, in place.
@@ -1984,18 +1965,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn labels_count_per_model_in_creation_order() {
-        let mut facts = horizontal_facts();
-        facts.fixtures[1].model = "Mover".into();
-        let tree = derive_groups(&facts);
-        assert_eq!(tree.fixture_labels["a"], "Bar 1");
-        assert_eq!(tree.fixture_labels["b"], "Mover 1");
-        assert_eq!(tree.fixture_labels["c"], "Bar 2");
-        assert_eq!(tree.fixture_labels["d"], "Bar 3");
-        assert_eq!(tree.fixture_labels["f"], "Bar 5");
-    }
-
     // -----------------------------------------------------------------------
     // Identity
     // -----------------------------------------------------------------------
@@ -2547,6 +2516,16 @@ mod goldens {
 
         fn capture(&self) -> Value {
             let (facts, tree) = self.tree();
+            // Read back off the facts with the venue's own naming rule, rather
+            // than off a field on the tree: what a fixture is *called* is its
+            // stored label, minted once at creation, and a derivation that
+            // recounted it would be a second answer to that question.
+            let mut numbering = crate::services::fixture_create::ModelNumbering::default();
+            let labels: BTreeMap<String, String> = facts
+                .fixtures
+                .iter()
+                .map(|fixture| (fixture.id.clone(), numbering.next(&fixture.model)))
+                .collect();
             let groups: Vec<Value> = tree
                 .groups
                 .iter()
@@ -2558,7 +2537,7 @@ mod goldens {
                         // Members as their derived labels: the golden pins the
                         // naming rule and the set in one readable line.
                         "members": group.members.iter()
-                            .map(|id| tree.fixture_labels[id].clone())
+                            .map(|id| labels[id].clone())
                             .collect::<Vec<_>>(),
                     })
                 })
