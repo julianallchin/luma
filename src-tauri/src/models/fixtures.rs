@@ -390,7 +390,7 @@ pub struct Layout {
     pub height: u32,
 }
 
-#[derive(Debug, Serialize, Clone, TS)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 pub struct FixtureEntry {
     pub manufacturer: String,

@@ -105,6 +105,65 @@ pub async fn update_fixture_address(
     Ok(result.rows_affected())
 }
 
+/// Repatch one fixture into a different mode: the mode's name and the width it
+/// costs, written together.
+///
+/// One statement rather than a mode write beside an address write, because a
+/// row whose `mode_name` and `num_channels` disagree is a footprint nobody can
+/// compute — and the two are decided by the same lookup in the definition.
+///
+/// # Errors
+/// Fails if the write is refused.
+pub async fn update_fixture_mode(
+    access: &mut VenueAccess<'_, Write>,
+    id: &str,
+    mode_name: &str,
+    num_channels: i64,
+    universe: i64,
+    address: i64,
+) -> Result<u64, String> {
+    let venue_id = access.venue_id().to_owned();
+    let result = sqlx::query(
+        "UPDATE fixtures SET mode_name = ?, num_channels = ?, universe = ?, address = ?
+         WHERE id = ? AND venue_id = ?",
+    )
+    .bind(mode_name)
+    .bind(num_channels)
+    .bind(universe)
+    .bind(address)
+    .bind(id)
+    .bind(venue_id)
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to set fixture mode: {e}"))?;
+    Ok(result.rows_affected())
+}
+
+/// Pin or unpin one address, without moving it.
+///
+/// Separate from [`update_fixture_address`] because pinning an address a
+/// fixture is already at is not an address edit: there is nothing to admit, so
+/// there is nothing that can be refused.
+///
+/// # Errors
+/// Fails if the write is refused.
+pub async fn update_fixture_pin(
+    access: &mut VenueAccess<'_, Write>,
+    id: &str,
+    pinned: bool,
+) -> Result<u64, String> {
+    let venue_id = access.venue_id().to_owned();
+    let result =
+        sqlx::query("UPDATE fixtures SET address_pinned = ? WHERE id = ? AND venue_id = ?")
+            .bind(i64::from(pinned))
+            .bind(id)
+            .bind(venue_id)
+            .execute(&mut *access.connection())
+            .await
+            .map_err(|e| format!("Failed to pin fixture address: {e}"))?;
+    Ok(result.rows_affected())
+}
+
 /// Forget every hand-set address in the venue, so the next allocation derives
 /// them all. What the Auto Patch button means.
 ///

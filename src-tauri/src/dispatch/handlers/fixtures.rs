@@ -2,12 +2,14 @@ use std::path::{Component, Path};
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
+use crate::database::local::venue_graph as venue_graph_db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::fixtures::layout::fixture_mount;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell};
 use crate::services::fixture_create;
 use crate::services::fixtures as fixture_service;
+use crate::services::group_derivation::FixtureRole;
 use crate::services::groups::invalidate_venue_fixture_cache;
 use crate::services::patch as patch_service;
 
@@ -222,6 +224,70 @@ pub async fn next_addresses(
     .collect())
 }
 
+/// Repatch one fixture into another of its definition's modes.
+///
+/// `allow_move` off is the page's first ask: a mode whose width no longer fits
+/// where the fixture stands comes back refused, naming the conflict, and
+/// nothing is written. On is the answer to the question that refusal asked,
+/// and the returned row says where the allocator put it.
+pub async fn set_fixture_mode(
+    services: &AppServices,
+    venue_id: String,
+    id: String,
+    mode_name: String,
+    allow_move: bool,
+) -> Result<PatchedFixture, CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
+    let mut access = fixture_write(services, &venue_id, &id).await?;
+    let fixture = patch_service::set_mode(
+        &mut access,
+        &services.fixtures_root,
+        &id,
+        &mode_name,
+        allow_move,
+    )
+    .await?;
+    commit_and_publish(services, access).await?;
+    Ok(fixture)
+}
+
+/// Hold one fixture's address against auto-patch, or release it.
+pub async fn set_address_pinned(
+    services: &AppServices,
+    venue_id: String,
+    id: String,
+    pinned: bool,
+) -> Result<(), CommandError> {
+    let mut access = fixture_write(services, &venue_id, &id).await?;
+    patch_service::set_pinned(&mut access, &id, pinned).await?;
+    commit_and_publish(services, access).await
+}
+
+/// What a definition patched in `mode_name` would be *for*.
+///
+/// The add dialog's "will land in `<role>`" line, answered by the derivation's
+/// own table rather than by a second copy of it in the page (AF10). A caller
+/// with no fixture yet has nothing else to ask.
+pub async fn fixture_role(
+    services: &AppServices,
+    path: String,
+    mode_name: String,
+) -> Result<FixtureRole, CommandError> {
+    let relative = confine_to_root(&path)?;
+    let definition = fixture_service::get_fixture_definition(&services.fixtures_root, relative)?;
+    let mode = definition
+        .modes
+        .iter()
+        .find(|mode| mode.name == mode_name)
+        .ok_or_else(|| {
+            CommandError::NotFound(format!(
+                "{} {} has no mode {mode_name}",
+                definition.manufacturer, definition.model
+            ))
+        })?;
+    Ok(FixtureRole::of(&definition, mode))
+}
+
 pub async fn remove_patched_fixture(
     services: &AppServices,
     venue_id: String,
@@ -229,6 +295,11 @@ pub async fn remove_patched_fixture(
 ) -> Result<(), CommandError> {
     let mut access = fixture_write(services, &venue_id, &id).await?;
     require_changed(fixtures_db::delete_fixture(&mut access, &id).await?)?;
+    // A fixture is two rows (`services::fixture_create`), so unpatching is two
+    // deletes. Dropping only the paperwork left a `venue_nodes` row whose
+    // `catalog_ref` pointed at nothing — a fixture the resolver still placed
+    // and no patch list could name.
+    venue_graph_db::delete_nodes(&mut access, std::slice::from_ref(&id)).await?;
     commit_and_publish(services, access).await
 }
 
