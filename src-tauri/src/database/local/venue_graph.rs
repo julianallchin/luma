@@ -384,18 +384,11 @@ pub async fn delete_nodes(
             .map_err(|e| format!("Failed to clear venue node params: {e}"))?;
     }
     for id in ids {
-        for sql in [
-            "DELETE FROM venue_constraints WHERE node_id = ?1 OR target_node = ?1",
-            "DELETE FROM venue_edges WHERE child_id = ?1 OR parent_id = ?1",
-            "DELETE FROM venue_node_params WHERE node_id = ?1",
-            "DELETE FROM venue_nodes WHERE id = ?1",
-        ] {
-            sqlx::query(sql)
-                .bind(id)
-                .execute(&mut *access.connection())
-                .await
-                .map_err(|e| format!("Failed to delete venue node: {e}"))?;
-        }
+        sqlx::query("DELETE FROM venue_nodes WHERE id = ?")
+            .bind(id)
+            .execute(&mut *access.connection())
+            .await
+            .map_err(|e| format!("Failed to delete venue node: {e}"))?;
     }
     graph_changed();
     Ok(())

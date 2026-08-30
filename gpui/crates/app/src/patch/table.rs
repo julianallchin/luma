@@ -33,6 +33,23 @@ const W_RANGE: f32 = 90.0;
 const W_PLACED: f32 = 76.0;
 const ROW_HEIGHT: f32 = 38.0;
 
+/// The narrowest the nine columns fit in: the fixed widths, both name columns
+/// at their minimum, the gaps between them and the page's own inset. Below
+/// this the table scrolls sideways rather than squeezing — a column of
+/// addresses that has been compressed into an ellipsis is a column that lies.
+const MIN_WIDTH: f32 = W_MODEL
+    + W_MODE
+    + W_UNIVERSE
+    + W_ADDRESS
+    + W_RANGE
+    + W_PLACED
+    + 2.0 * NAME_MIN_WIDTH
+    + 7.0 * COLUMN_GAP
+    + 2.0 * ROW_INSET;
+const NAME_MIN_WIDTH: f32 = 120.0;
+const COLUMN_GAP: f32 = 10.0;
+const ROW_INSET: f32 = 20.0;
+
 pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement {
     let body: AnyElement = match (&state.error, state.data.as_ref()) {
         (Some(error), _) => luma_ui::plate(
@@ -52,8 +69,10 @@ pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) ->
         (None, Some(_)) => rows(state, app, window),
     };
     div()
+        .id("patch-table")
         .flex_1()
         .min_w_0()
+        .overflow_x_scroll()
         .flex()
         .flex_col()
         .child(head())
@@ -68,12 +87,13 @@ fn head() -> impl IntoElement {
     div()
         .flex_shrink_0()
         .h(px(30.0))
-        .px(px(20.0))
+        .px(px(ROW_INSET))
+        .min_w(px(MIN_WIDTH))
         .flex()
         .items_center()
-        .gap(px(10.0))
+        .gap(px(COLUMN_GAP))
         .border_b_1()
-        .border_color(glass::hairline(0.07))
+        .border_color(glass::hairline(HAIRLINE))
         .child(cell_flex().child(float::label("Fixture")))
         .child(cell(W_MODEL).child(float::label("Model")))
         .child(cell(W_MODE).child(float::label("Mode")))
@@ -89,8 +109,13 @@ fn cell(width: f32) -> Div {
 }
 
 fn cell_flex() -> Div {
-    div().flex_1().min_w(px(120.0)).overflow_hidden()
+    div().flex_1().min_w(px(NAME_MIN_WIDTH)).overflow_hidden()
 }
+
+/// The one hairline weight on this page, per the comet table spec: the rule
+/// between rows and the rule under the head are the same line, and a table
+/// drawn with two weights reads as two tables.
+const HAIRLINE: f32 = 0.10;
 
 fn rows(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement {
     div()
@@ -140,12 +165,13 @@ fn fixture_row(
     let mut line = div()
         .id(fade_key.clone())
         .h(px(ROW_HEIGHT))
-        .px(px(20.0))
+        .px(px(ROW_INSET))
+        .min_w(px(MIN_WIDTH))
         .flex()
         .items_center()
-        .gap(px(10.0))
+        .gap(px(COLUMN_GAP))
         .border_b_1()
-        .border_color(glass::hairline(0.05))
+        .border_color(glass::hairline(HAIRLINE))
         // Selection and hover share one fill; nothing else lifts a row, and
         // there is no zebra — the rule between rows is what keeps a wide table
         // readable, per the comet table spec.
@@ -218,11 +244,13 @@ fn fixture_row(
         .child(
             // Only the exception is written. Every fixture in a finished rig is
             // placed, and a column repeating the word down forty rows says
-            // nothing while hiding the one row that does not.
+            // nothing while hiding the one row that does not. "Unplaced" is
+            // the word everywhere on this page — the tray is a stage-page
+            // idea and naming it here would be a second name for one state.
             cell(W_PLACED)
                 .text_size(px(12.0))
                 .text_color(ladder::status_warn())
-                .child(if placed { "" } else { "In tray" })
+                .child(if placed { "" } else { "Unplaced" })
                 .agent_node(
                     Role::Text,
                     format!(
@@ -279,7 +307,23 @@ fn label_cell(
         .filter(|edit| edit.column == Column::Label)
         .and_then(|edit| edit.label.as_ref())
     {
+        // `enter` is unbound in a search-mode field on purpose, so it arrives
+        // here as a plain key event and gets its meaning from the cell: commit
+        // and put the caret away. Blur is the other commit point, and the
+        // commit is idempotent so hitting both is one write.
+        let committed = app.clone();
+        let venue = state.venue_id.clone();
+        let id = row.id.clone();
         return cell_flex()
+            .on_key_down(move |event, _, cx| {
+                if event.keystroke.key != "enter" {
+                    return;
+                }
+                let venue = venue.clone();
+                let id = id.clone();
+                committed.update(cx, |this, cx| this.commit_patch_label(venue, id, cx));
+                cx.stop_propagation();
+            })
             .child(float::field().w_full().child(field.clone()))
             .agent_node(Role::Input, format!("{name} label = {name}"))
             .into_any_element();

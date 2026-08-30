@@ -5,8 +5,8 @@
 //! than merely intended: nothing here writes a `venue_edges` row or a
 //! placement param, and there is no column, field or gesture that could
 //! (gauntlet AF8). A fixture's placement reaches this page as one bit,
-//! [`crate::library::Patch::placed`], because "is it in the tray" is the only
-//! thing a rental sheet needs to know about the room.
+//! [`crate::library::Patch::placed`], because "is it placed" is the only thing
+//! a rental sheet needs to know about the room.
 //!
 //! # One allocator, and it is not here
 //!
@@ -35,7 +35,7 @@ use luma_lib::models::patch::{ArtNetNode, UniverseCell};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::text_input::{self, TextInput};
+use luma_ui::text_input::TextInput;
 
 use crate::confirm::{Action, Confirm};
 use crate::library::Patch as PatchData;
@@ -95,7 +95,11 @@ pub(crate) struct Editing {
     pub(crate) column: Column,
     pub(crate) label: Option<Entity<TextInput>>,
     pub(crate) number: Option<Entity<DraftedNumber>>,
-    _subscription: Subscription,
+    /// What the cell read when the caret arrived. A commit that matches it is
+    /// not a rename, which is what makes "commit on the way out" free of
+    /// writes nobody asked for.
+    opened_on: SharedString,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// A refusal from the allocator, parked against the row that earned it.
@@ -106,6 +110,18 @@ pub(crate) struct Editing {
 pub(crate) struct Refusal {
     pub(crate) fixture: String,
     pub(crate) message: SharedString,
+}
+
+/// A sentence about the write that just happened, and the reload that write
+/// issued.
+///
+/// Scoped to one load because a notice is about an *act*: it survives the
+/// reload its own act asked for and nothing after it. The next change to the
+/// data is a different story, and a stale line under the title would be
+/// claiming to describe it.
+pub(crate) struct Notice {
+    pub(crate) message: SharedString,
+    until: u64,
 }
 
 /// A drag across the footprint strip: the fixture picked up, which of its
@@ -151,8 +167,8 @@ pub(crate) struct Patch {
     pub(crate) menu: Option<(String, Point<gpui::Pixels>)>,
     /// The mode menu, hanging off a row's mode cell.
     pub(crate) mode_menu: Option<(String, Point<gpui::Pixels>)>,
-    /// What the last Auto Patch did, in one line.
-    pub(crate) notice: Option<SharedString>,
+    /// What the last act did, in one line, and the load it outlives.
+    pub(crate) notice: Option<Notice>,
     /// Bumped on every load; a landing older than this one is dropped.
     generation: u64,
 }
@@ -255,6 +271,16 @@ impl Patch {
 
     fn clear_edit(&mut self) {
         self.editing = None;
+    }
+
+    /// Park a sentence under the title for the reload this act is about to
+    /// issue. `reload_patch` bumps the generation immediately after, which is
+    /// the load the notice is allowed to survive.
+    fn say(&mut self, message: impl Into<SharedString>) {
+        self.notice = Some(Notice {
+            message: message.into(),
+            until: self.generation + 1,
+        });
     }
 }
 
@@ -366,6 +392,15 @@ impl Patch {
         cells: Result<Vec<UniverseCell>, LibraryError>,
         nodes: Result<Vec<ArtNetNode>, LibraryError>,
     ) {
+        // A load the notice did not ask for: whatever it says happened is not
+        // what these rows are.
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|n| n.until < self.generation)
+        {
+            self.notice = None;
+        }
         match data {
             Ok(mut data) => {
                 // A rental sheet reads down the patch, not down a table of
@@ -450,23 +485,28 @@ impl Luma {
                     input.set_text(name.clone(), cx);
                     input
                 });
+                // Typing edits the field and nothing else. The rename is one
+                // write at the end, on the same two commit points a
+                // `DraftedNumber` uses — blur here, `enter` in the cell — so a
+                // five-letter name is one row in the undo history of the patch
+                // rather than five.
+                let edited = cx.subscribe(&field, move |_: &mut Luma, _, _, cx| cx.notify());
                 let venue = venue_id.clone();
                 let id = fixture.clone();
-                let subscription =
-                    cx.subscribe(&field, move |this: &mut Luma, field, event, cx| {
-                        if event == &text_input::Event::Edited {
-                            let text = field.read(cx).text().to_string();
-                            this.stage_patch_label(&venue, &id, text, cx);
-                        } else {
-                            cx.notify();
-                        }
+                let luma = cx.entity().downgrade();
+                let blur =
+                    window.on_focus_out(&field.read(cx).focus_handle(cx), cx, move |_, _, cx| {
+                        let (venue, id) = (venue.clone(), id.clone());
+                        luma.update(cx, |this, cx| this.commit_patch_label(venue, id, cx))
+                            .ok();
                     });
                 Editing {
                     fixture: fixture.clone(),
                     column,
                     label: Some(field),
                     number: None,
-                    _subscription: subscription,
+                    opened_on: name.clone().into(),
+                    _subscriptions: vec![edited, blur],
                 }
             }
             Column::Universe | Column::Address => {
@@ -499,7 +539,8 @@ impl Luma {
                     column,
                     label: None,
                     number: Some(field),
-                    _subscription: subscription,
+                    opened_on: value.to_string().into(),
+                    _subscriptions: vec![subscription],
                 }
             }
         };
@@ -517,29 +558,44 @@ impl Luma {
         cx.notify();
     }
 
-    /// The label field commits on every keystroke — a name has no allocator to
-    /// refuse it, so there is nothing to wait for and nothing to undo.
-    fn stage_patch_label(
+    /// Write the drafted name down, if it is a different name.
+    ///
+    /// Idempotent on purpose: blur and `enter` are both commit points and a
+    /// person can hit both, so the second one has to be a no-op rather than a
+    /// second write of the same string.
+    pub(crate) fn commit_patch_label(
         &mut self,
-        venue_id: &str,
-        fixture: &str,
-        label: String,
+        venue_id: String,
+        fixture: String,
         cx: &mut Context<Self>,
     ) {
+        let Some(state) = self.patch_mut(&venue_id) else {
+            return;
+        };
+        let Some(edit) = state
+            .editing
+            .as_ref()
+            .filter(|edit| edit.fixture == fixture && edit.column == Column::Label)
+        else {
+            return;
+        };
+        let Some(field) = edit.label.clone() else {
+            return;
+        };
+        let label = field.read(cx).text().trim().to_string();
+        let unchanged = label == edit.opened_on.as_ref();
+        state.clear_edit();
+        if unchanged || label.is_empty() {
+            cx.notify();
+            return;
+        }
         let pending = self
             .library
-            .rename_patched_fixture(venue_id, fixture, &label);
-        if let Some(state) = self.patch_mut(venue_id) {
-            if let Some(row) = state
-                .data
-                .as_mut()
-                .and_then(|d| d.fixtures.iter_mut().find(|r| r.id == fixture))
-            {
-                row.label = Some(label);
-            }
-        }
-        cx.spawn(async move |_, _| {
+            .rename_patched_fixture(&venue_id, &fixture, &label);
+        cx.spawn(async move |this, cx| {
             pending.await.ok();
+            this.update(cx, |this, cx| this.reload_patch(venue_id, cx))
+                .ok();
         })
         .detach();
         cx.notify();
@@ -594,6 +650,47 @@ impl Luma {
                             message: refusal_message(&error).into(),
                         });
                     }
+                    this.select_occupant(venue, universe, address, cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Put the selection on whatever already holds `universe`:`address`.
+    ///
+    /// The refusal names the fixture in the way; this is the page pointing at
+    /// it. Who that is comes from `universe_occupancy` — the one thing that
+    /// answers "what is at this address" — rather than from a scan of the rows
+    /// here, which would be the second occupancy rule this page exists not to
+    /// have. An address nothing holds simply selects nothing, so an
+    /// out-of-range refusal needs no branch of its own.
+    fn select_occupant(
+        &mut self,
+        venue_id: String,
+        universe: i64,
+        address: i64,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(universe) = u16::try_from(universe) else {
+            return;
+        };
+        let Ok(address) = u16::try_from(address) else {
+            return;
+        };
+        let pending = self.library.universe_occupancy(&venue_id, universe);
+        cx.spawn(async move |this, cx| {
+            let cells = pending.await.unwrap_or_default();
+            let occupant = cells
+                .iter()
+                .find(|cell| cell.address == address)
+                .and_then(|cell| cell.fixture_id.clone());
+            this.update(cx, |this, cx| {
+                if let (Some(occupant), Some(state)) = (occupant, this.patch_mut(&venue_id)) {
+                    state.selected.clear();
+                    state.selected.insert(occupant);
                     cx.notify();
                 }
             })
@@ -626,10 +723,12 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| match result {
                 Ok(_) => this.reload_patch(venue_id, cx),
-                Err(error) if !allow_move => {
+                Err(error) if !allow_move && is_addressing_refusal(&error) => {
                     // The refusal *is* the question: the width does not fit
                     // where it stands, so ask before letting the allocator
-                    // move it.
+                    // move it. Only an addressing refusal asks it — offering
+                    // to move a fixture because the database was unreachable
+                    // would be a question with no answer.
                     this.ask(
                         Confirm {
                             title: format!("Move {name} to fit {mode_name}?").into(),
@@ -781,7 +880,7 @@ impl Luma {
             }
             this.update(cx, |this, cx| {
                 if let (Some(failure), Some(state)) = (failure, this.patch_mut(&venue_id)) {
-                    state.notice = Some(failure.into());
+                    state.say(failure);
                 }
                 this.reload_patch(venue_id, cx);
             })
@@ -790,7 +889,7 @@ impl Luma {
         .detach();
     }
 
-    /// Auto Patch. A venue holding pinned addresses is asked first, because
+    /// Auto patch. A venue holding pinned addresses is asked first, because
     /// the answer discards them.
     pub(crate) fn auto_patch_venue(&mut self, venue_id: String, cx: &mut Context<Self>) {
         let pinned = self
@@ -803,11 +902,11 @@ impl Luma {
         self.ask(
             Confirm {
                 title: "Re-derive every address?".into(),
-                body: "This venue holds hand-set addresses. Auto Patch derives \
+                body: "This venue holds hand-set addresses. Auto patch derives \
                        addresses from where fixtures hang and discards the \
                        overrides it touches."
                     .into(),
-                verb: "Auto Patch".into(),
+                verb: "Auto patch".into(),
                 action: Action::AutoPatch {
                     venue_id: venue_id.into(),
                 },
@@ -836,7 +935,7 @@ impl Luma {
                     Err(error) => error.to_string().into(),
                 };
                 if let Some(state) = this.patch_mut(&venue_id) {
-                    state.notice = Some(notice);
+                    state.say(notice);
                 }
                 this.reload_patch(venue_id, cx);
             })
@@ -989,6 +1088,7 @@ impl Luma {
                     if let Some(state) = this.patch_mut(&venue_id) {
                         state.strip_refusal = Some(refusal_message(&error).into());
                     }
+                    this.select_occupant(venue_id, universe, start, cx);
                     cx.notify();
                 }
             })
@@ -1067,6 +1167,9 @@ impl Luma {
         universe: i64,
         cx: &mut Context<Self>,
     ) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.bind_menu = None;
+        }
         let pending = self.library.unbind_output(universe);
         cx.spawn(async move |this, cx| {
             pending.await.ok();
@@ -1086,6 +1189,20 @@ pub(crate) fn refusal_message(error: &LibraryError) -> String {
     error
         .command()
         .map_or_else(|| error.to_string(), std::string::ToString::to_string)
+}
+
+/// Whether a refusal is about *addressing* — a collision or a footprint off
+/// the end of a universe — rather than about the write failing.
+///
+/// The seam draws that line already: `PatchError`'s two addressing variants
+/// arrive as [`CommandError::Invalid`] and everything else as an internal
+/// failure, so this reads the distinction rather than re-deciding it from the
+/// sentence.
+fn is_addressing_refusal(error: &LibraryError) -> bool {
+    matches!(
+        error.command(),
+        Some(luma_lib::dispatch::CommandError::Invalid(_))
+    )
 }
 
 /// Wide enough for `512` and its caret with room to spare, narrow enough that
@@ -1239,7 +1356,7 @@ fn panel_float(state: &Patch, panel: Panel, app: &Entity<Luma>) -> AnyElement {
 /// The line under the title: what the last act did, or what the patch holds.
 fn subtitle(state: &Patch) -> SharedString {
     if let Some(notice) = &state.notice {
-        return notice.clone();
+        return notice.message.clone();
     }
     if let Some(error) = &state.error {
         return format!("Could not read the patch: {error}").into();
@@ -1253,7 +1370,7 @@ fn subtitle(state: &Patch) -> SharedString {
         .filter(|f| !data.placed.contains(&f.id))
         .count();
     format!(
-        "{} · {} · {unplaced} in the tray",
+        "{} · {} · {unplaced} unplaced",
         plural(data.fixtures.len(), "fixture"),
         plural(data.universes.len(), "universe"),
     )

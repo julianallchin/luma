@@ -107,6 +107,13 @@ const HELPERS: &str = r#"
         const hit = texts().find((l) => l.startsWith(prefix));
         return hit === undefined ? null : hit.slice(prefix.length);
     }
+    // The mode cell is a picker, not prose, so it lands under `select` rather
+    // than under `text` — `reading` would answer null for it.
+    function chosen(prefix) {
+        const hit = app.snapshot().findAll({ role: "select" })
+            .map((n) => n.label).find((l) => l.startsWith(prefix));
+        return hit === undefined ? null : hit.slice(prefix.length);
+    }
     function rowLabels() {
         return app.snapshot().findAll({ role: "row" }).map((n) => n.label);
     }
@@ -157,18 +164,36 @@ fn a_refused_address_leaves_the_row_where_it_was() {
             s.nodes.some((n) => n.role === "text"
                 && n.label.startsWith("Mover 1 address = ")
                 && n.label !== "Mover 1 address = 9"));
-        ({ before, after, refusal, everMoved })
+
+        // The page points at whoever is in the way: the selection lands on
+        // that row, which is the cursor the sentence is describing.
+        until("the conflicting row to be picked", (s) =>
+            s.findAll({ role: "row" }).some((n) => n.label === "Mover 0" && n.focused));
+        app.frames(2);
+        const picked = app.snapshot().findAll({ role: "row" })
+            .filter((n) => n.focused).map((n) => n.label);
+        ({ before, after, refusal, everMoved, picked })
         "#,
     );
     assert_eq!(out["before"], "9", "{out:#}");
     // The write was refused, so the stored address is the one it always was —
     // read back off the row, not restated from the constant that set it.
     assert_eq!(out["after"], out["before"], "{out:#}");
+    let refusal = out["refusal"].as_str().unwrap_or_default().to_string();
+    // Named, not identified: the row in the way is `Mover 0` on screen and a
+    // uuid in the database, and only one of those is a thing to go look for.
     assert!(
-        out["refusal"]
-            .as_str()
-            .is_some_and(|line| line.contains("collides with")),
-        "no refusal named the conflict: {out:#}"
+        refusal.contains("collides with Mover 0"),
+        "the refusal did not name the fixture in the way: {out:#}"
+    );
+    assert!(
+        !refusal.contains("fixture-0"),
+        "the refusal put a row id in front of a person: {out:#}"
+    );
+    assert_eq!(
+        out["picked"],
+        serde_json::json!(["Mover 0"]),
+        "the page did not put the cursor on the conflicting row: {out:#}"
     );
     assert_eq!(
         out["everMoved"], false,
@@ -216,7 +241,7 @@ fn the_footprint_reports_a_collision_and_the_universes_it_holds() {
     // identical cells.
     assert_eq!(
         out["collisions"],
-        serde_json::json!(["Collision at 1.5–12"]),
+        serde_json::json!(["Collision at 1:5–12"]),
         "{out:#}"
     );
     assert_eq!(out["farCollisions"], serde_json::json!([]), "{out:#}");
@@ -301,7 +326,7 @@ fn auto_patch_moves_and_reports() {
         until("the confirmation", (s) =>
             s.findAll({ role: "text" }).some((n) => n.label.startsWith("Re-derive")));
         const asked = texts().find((l) => l.startsWith("Re-derive"));
-        app.click(app.snapshot().findAll({ role: "button", label: "Auto Patch" }).slice(-1)[0]);
+        app.click(app.snapshot().findAll({ role: "button", label: "Auto patch" }).slice(-1)[0]);
         until("the report", (s) =>
             s.findAll({ role: "text" }).some((n) => n.label.startsWith("Auto patch moved")));
         app.frames(6);
@@ -409,6 +434,12 @@ fn adding_n_fixtures_morphs_and_continues_the_numbering() {
             s.findAll({ role: "input" }).some((n) => n.label.startsWith("count = ")));
         app.frames(6);
         const preview = texts().find((l) => l.startsWith("Lands in"));
+        // The mode trigger is sized by a ghost stack of the modes it can
+        // show. Handed none, it collapses to its chevron and the mode name
+        // spills outside the plate — and outside the hit area with it.
+        const chipNode = app.snapshot().find({ role: "select", label: "Default" });
+        const chip = { width: chipNode.bounds.width, height: chipNode.bounds.height,
+                       label: chipNode.label.length };
 
         app.click(app.snapshot().find({ role: "input", label: "count = 1" }));
         app.key("cmd-a 3 enter");
@@ -419,7 +450,8 @@ fn adding_n_fixtures_morphs_and_continues_the_numbering() {
             s.find({ role: "row", label: "Mover 6" }) !== undefined);
         app.frames(6);
         const after = rowLabels().filter((l) => l.startsWith("Mover "));
-        ({ before, library, preview, flight, after })
+        const said = texts().find((l) => l.startsWith("Added "));
+        ({ before, library, preview, flight, after, chip, said })
         "#,
     );
     // The rig ships Mover 0..3, so the mint continues at 4 — the venue's own
@@ -444,6 +476,30 @@ fn adding_n_fixtures_morphs_and_continues_the_numbering() {
             .is_some_and(|line| line.contains("unplaced")),
         "the preview did not say where they land: {out:#}"
     );
+    // What the button made true, in the page's own words — and in the word the
+    // rest of the page uses for a fixture with no place in the room.
+    assert_eq!(
+        out["said"].as_str(),
+        Some("Added 3 fixtures, unplaced"),
+        "the page did not say what it added: {out:#}"
+    );
+
+    // The mode chip is a plate wide enough for the word on it. A trigger sized
+    // to its chevron alone is 20 px, which fails both of these.
+    let chip = &out["chip"];
+    let (width, height, label) = (
+        chip["width"].as_f64().unwrap_or_default(),
+        chip["height"].as_f64().unwrap_or_default(),
+        chip["label"].as_f64().unwrap_or_default(),
+    );
+    // Six pixels a character is well under the advance of the 13 px face the
+    // chip is set in, so this is a floor on "the label fits", not a measurement
+    // of it.
+    assert!(
+        width >= 6.0 * label && width > height,
+        "the mode chip is narrower than the word on it: {out:#}"
+    );
+
     // The card never resizes between routes, so nothing under it re-lays out:
     // the table keeps every row it had for the whole flight.
     let flight = out["flight"].as_array().expect("flight");
@@ -454,4 +510,125 @@ fn adding_n_fixtures_morphs_and_continues_the_numbering() {
             .all(|count| count.as_u64() == Some(before as u64)),
         "the table flashed while the dialog morphed: {out:#}"
     );
+}
+
+/// A wider mode does not fit where the fixture stands, so the refusal becomes
+/// the question — and answering it repatches.
+///
+/// The rig's definition ships one mode, which makes the mode cell a menu of
+/// one and the whole path untestable. A two-mode definition is written over the
+/// bundle after the app is open: definitions are read off disk per call, so the
+/// second mode is there the first time the page asks.
+#[test]
+fn a_wider_mode_asks_before_it_moves_the_fixture() {
+    let mut harness = harness("venue-patch-mode", false);
+    seed_two_modes(&support::config_dir("venue-patch-mode"));
+    let out = run(
+        &mut harness,
+        r#"
+        openPatch();
+        const before = reading("Mover 0 address = ");
+
+        app.click(app.snapshot().find({ role: "select", label: "Mover 0 mode = Default" }));
+        until("the mode menu", (s) =>
+            s.find({ role: "button", label: "Extended · 16 ch" }) !== undefined);
+        const modes = app.snapshot().findAll({ role: "button" })
+            .map((n) => n.label).filter((l) => l.indexOf(" ch") >= 0);
+
+        // Mover 1 sits at 9, so sixteen channels from 1 do not fit and the
+        // refusal comes back as a question rather than as a write.
+        app.click(app.snapshot().find({ role: "button", label: "Extended · 16 ch" }));
+        until("the question", (s) =>
+            s.findAll({ role: "text" }).some((n) => n.label.startsWith("Move Mover 0")));
+        app.frames(4);
+        const asked = texts().find((l) => l.startsWith("Move Mover 0"));
+        const body = texts().find((l) => l.indexOf("collides with") >= 0);
+        const duringQuestion = chosen("Mover 0 mode = ");
+
+        app.click(app.snapshot().findAll({ role: "button", label: "Repatch" }).slice(-1)[0]);
+        until("the repatched row", (s) =>
+            s.findAll({ role: "select" }).some((n) => n.label === "Mover 0 mode = Extended"));
+        app.frames(6);
+        const mode = chosen("Mover 0 mode = ");
+        const range = reading("Mover 0 range = ");
+        const after = reading("Mover 0 address = ");
+        ({ before, modes, asked, body, duringQuestion, mode, range, after })
+        "#,
+    );
+    assert_eq!(
+        out["modes"],
+        serde_json::json!(["Default \u{b7} 8 ch", "Extended \u{b7} 16 ch"]),
+        "the mode menu is not the definition's modes: {out:#}"
+    );
+    // Asked, not done: nothing is written while the question stands.
+    assert!(out["asked"].as_str().is_some(), "{out:#}");
+    assert_eq!(out["duringQuestion"], "Default", "{out:#}");
+    // The question's body is the allocator's own sentence, naming the fixture
+    // in the way rather than its id.
+    assert!(
+        out["body"]
+            .as_str()
+            .is_some_and(|line| line.contains("collides with Mover 1")),
+        "the question did not say who is in the way: {out:#}"
+    );
+
+    assert_eq!(out["mode"], "Extended", "{out:#}");
+    // Sixteen channels wide, and somewhere they fit — which is somewhere else.
+    let range = out["range"].as_str().unwrap_or_default().to_string();
+    let (start, last) = range
+        .split_once('\u{2013}')
+        .expect("a range reads as start\u{2013}last");
+    let (start, last): (i64, i64) = (start.parse().expect("start"), last.parse().expect("last"));
+    assert_eq!(last - start + 1, 16, "{out:#}");
+    assert_ne!(
+        out["after"], out["before"],
+        "it repatched without moving: {out:#}"
+    );
+}
+
+/// Two modes over the rig's one, at eight and sixteen channels. Eight is what
+/// the seeded rows are already patched at, so only the second one is a change.
+fn seed_two_modes(dir: &Path) {
+    let definition = r#"<?xml version="1.0" encoding="UTF-8"?>
+<FixtureDefinition>
+ <Manufacturer>Luma</Manufacturer>
+ <Model>Mover</Model>
+ <Type>Moving Head</Type>
+ <Channel Name="Dimmer" Preset="IntensityMasterDimmer"/>
+ <Mode Name="Default">
+  <Channel Number="0">Dimmer</Channel>
+  <Channel Number="1">Dimmer</Channel>
+  <Channel Number="2">Dimmer</Channel>
+  <Channel Number="3">Dimmer</Channel>
+  <Channel Number="4">Dimmer</Channel>
+  <Channel Number="5">Dimmer</Channel>
+  <Channel Number="6">Dimmer</Channel>
+  <Channel Number="7">Dimmer</Channel>
+ </Mode>
+ <Mode Name="Extended">
+  <Channel Number="0">Dimmer</Channel>
+  <Channel Number="1">Dimmer</Channel>
+  <Channel Number="2">Dimmer</Channel>
+  <Channel Number="3">Dimmer</Channel>
+  <Channel Number="4">Dimmer</Channel>
+  <Channel Number="5">Dimmer</Channel>
+  <Channel Number="6">Dimmer</Channel>
+  <Channel Number="7">Dimmer</Channel>
+  <Channel Number="8">Dimmer</Channel>
+  <Channel Number="9">Dimmer</Channel>
+  <Channel Number="10">Dimmer</Channel>
+  <Channel Number="11">Dimmer</Channel>
+  <Channel Number="12">Dimmer</Channel>
+  <Channel Number="13">Dimmer</Channel>
+  <Channel Number="14">Dimmer</Channel>
+  <Channel Number="15">Dimmer</Channel>
+ </Mode>
+ <Physical>
+  <Dimensions Weight="10" Width="300" Height="400" Depth="300"/>
+  <Lens Name="Fixed" DegreesMin="14" DegreesMax="14"/>
+ </Physical>
+</FixtureDefinition>
+"#;
+    std::fs::write(dir.join("fixtures").join(support::MOVER_PATH), definition)
+        .expect("failed to write the two-mode definition");
 }
