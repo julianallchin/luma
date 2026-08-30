@@ -164,9 +164,16 @@ impl Luma {
                 this.account_action = AccountAction {
                     signing_out: false,
                     error: result
+                        .as_ref()
                         .err()
                         .map(|error| format!("Could not sign out: {error}")),
                 };
+                // Signed out is the interval before the next sign-in, not a
+                // state the shell shows: the library is nobody's now, so the
+                // gate is the next screen.
+                if result.is_ok() {
+                    this.show_sign_in(false, cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -239,7 +246,7 @@ impl Luma {
         if self.library.user_id().is_some() {
             self.sign_out(cx);
         } else {
-            self.show_sign_in(cx);
+            self.show_sign_in(false, cx);
         }
     }
 

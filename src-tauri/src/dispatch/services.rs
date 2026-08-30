@@ -466,6 +466,27 @@ impl AppServices {
 
     /// What [`SyncEngine`] reaches outside its own handles. Derived from these
     /// fields rather than stored, so the two cannot drift.
+    /// The background sync loop, for a host to spawn on its own reactor: dirty
+    /// rows pushed every ten seconds or on demand, a full pull and file sync
+    /// every minute, until `shutdown` says stop. The Tauri app runs one; so
+    /// must any host that wants the library to stay current between the syncs
+    /// it asks for by name.
+    pub fn sync_loop(
+        &self,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        crate::sync::push::run_sync_loop(
+            self.sync.pool().clone(),
+            self.sync.state_pool().clone(),
+            self.sync.remote().clone(),
+            self.sync.push_notify.clone(),
+            self.sync.sync_lock.clone(),
+            self.sync.authored().clone(),
+            self.sync_host(),
+            shutdown,
+        )
+    }
+
     pub(crate) fn sync_host(&self) -> SyncHost {
         SyncHost {
             storage: self.storage.clone(),
