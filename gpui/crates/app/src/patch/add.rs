@@ -100,6 +100,10 @@ pub(crate) struct AddFixtures {
     search_focus: FocusHandle,
     add_focus: FocusHandle,
     close_focus: FocusHandle,
+    /// Whether the card has claimed the keyboard once. After that focus moves
+    /// only when the *route* does — a card that re-took it every frame would
+    /// pull the caret out of the count field between keystrokes.
+    seated: bool,
 }
 
 impl AddFixtures {
@@ -128,6 +132,7 @@ impl Luma {
             search_focus,
             add_focus: cx.focus_handle().tab_stop(true),
             close_focus: cx.focus_handle().tab_stop(true),
+            seated: false,
         };
         self.overlay.open(Overlay::AddFixtures(Box::new(state)));
         self.fetch_fixture_page(cx);
@@ -369,12 +374,14 @@ pub(crate) fn tick(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) 
     if state.morph.tick(std::time::Instant::now(), reduced) {
         window.request_animation_frame();
     }
-    let held = [&state.search_focus, &state.add_focus, &state.close_focus]
-        .iter()
-        .any(|handle| handle.is_focused(window));
-    if held {
+    // A route that has just landed wants the keyboard; a route that landed
+    // some frames ago does not, because by then the operator may have put it
+    // somewhere — the count field, most of the time.
+    let landed = state.morph.take_focus_after_commit().is_some();
+    if state.seated && !landed {
         return;
     }
+    state.seated = true;
     let wanted = match state.morph.target_key() {
         Route::Library => state.search_focus.clone(),
         Route::Configure(_) => state.add_focus.clone(),

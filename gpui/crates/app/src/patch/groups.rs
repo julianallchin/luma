@@ -19,6 +19,7 @@ pub(super) fn groups(state: &Patch) -> AnyElement {
     let nodes: &[GroupTreeNode] = state.data.as_ref().map_or(&[], |data| &data.groups);
     super::section(
         "GROUPS",
+        true,
         div()
             .id("patch-groups")
             .flex_1()
@@ -44,8 +45,6 @@ pub(super) fn groups(state: &Patch) -> AnyElement {
             .children(nodes.iter().map(|node| row(nodes, node)))
             .into_any_element(),
     )
-    .flex_1()
-    .into_any_element()
 }
 
 fn row(nodes: &[GroupTreeNode], node: &GroupTreeNode) -> impl IntoElement {

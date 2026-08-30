@@ -64,7 +64,7 @@ fn harness(fixture: &'static str) -> Harness {
 /// else to click: a fixture is found by pointing at where it is drawn, which is
 /// the very question under test.
 const OPEN: &str = r#"
-    nav.universe("Test Venue");
+    nav.patch("Test Venue");
     app.frames(6, { waitMs: 60 });
 
     function camera() {

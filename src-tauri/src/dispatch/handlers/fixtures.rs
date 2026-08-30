@@ -69,12 +69,22 @@ pub async fn initialize_fixtures(services: &AppServices) -> Result<usize, Comman
     Ok(fixture_service::initialize_fixtures(&services.fixtures_root, &services.fixtures).await?)
 }
 
+/// Search the bundled definitions, building the index if this is the first ask.
+///
+/// "Not initialized yet" was an error every caller had to know to pre-empt with
+/// a call it could not have known to make — and the index is derived from a
+/// directory that does not change while the app runs, so there was never a
+/// decision behind it. [`initialize_fixtures`] stays as the way to *rebuild*
+/// one deliberately.
 pub async fn search_fixtures(
     services: &AppServices,
     query: String,
     offset: usize,
     limit: usize,
 ) -> Result<Vec<FixtureEntry>, CommandError> {
+    if !services.fixtures.is_indexed() {
+        fixture_service::initialize_fixtures(&services.fixtures_root, &services.fixtures).await?;
+    }
     Ok(fixture_service::search_fixtures(
         query,
         offset,

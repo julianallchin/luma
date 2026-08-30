@@ -25,6 +25,13 @@ impl FixtureState {
     pub fn empty() -> Self {
         Self(Mutex::new(None))
     }
+
+    /// Whether the index has been built. What lets a reader build it on demand
+    /// instead of handing its caller an error nobody can act on.
+    #[must_use]
+    pub fn is_indexed(&self) -> bool {
+        self.0.lock().unwrap().is_some()
+    }
 }
 
 /// Initialize the fixture library (file-system side)

@@ -340,6 +340,35 @@ pub async fn delete_nodes(
     access: &mut VenueAccess<'_, Write>,
     ids: &[String],
 ) -> Result<(), String> {
+    // Everything that hangs off a node goes first, in one pass over the whole
+    // batch, and only then the nodes themselves.
+    //
+    // Not for tidiness — `ON DELETE CASCADE` would do it — but because the
+    // cascade cannot be authorized. Each of these tables has a delete trigger
+    // that admits the write by joining the row back to its `venue_nodes` row,
+    // and inside a cascade that row is already gone: the join finds nothing,
+    // the trigger aborts, and the whole delete fails with the *dependant's*
+    // error rather than the node's. Deleting them while their node still
+    // stands is what lets the trigger see what it is checking. The batch is
+    // swept table by table because a subtree's edges name its siblings.
+    for id in ids {
+        for statement in [
+            "DELETE FROM venue_constraints WHERE node_id = ? OR target_node = ?",
+            "DELETE FROM venue_edges WHERE child_id = ? OR parent_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(id)
+                .bind(id)
+                .execute(&mut *access.connection())
+                .await
+                .map_err(|e| format!("Failed to detach venue node: {e}"))?;
+        }
+        sqlx::query("DELETE FROM venue_node_params WHERE node_id = ?")
+            .bind(id)
+            .execute(&mut *access.connection())
+            .await
+            .map_err(|e| format!("Failed to clear venue node params: {e}"))?;
+    }
     for id in ids {
         sqlx::query("DELETE FROM venue_nodes WHERE id = ?")
             .bind(id)
