@@ -245,6 +245,24 @@ pub struct RendererProfile {
     pub timestamp_period_ns: Option<f32>,
 }
 
+impl RendererProfile {
+    /// Read off the device rather than the adapter for the timestamp feature:
+    /// an adopted device may have declined what its adapter offers.
+    fn of(adapter: &wgpu::Adapter, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let info = adapter.get_info();
+        let timestamp_query_supported = device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        Self {
+            name: info.name,
+            backend: format!("{:?}", info.backend),
+            device_type: format!("{:?}", info.device_type),
+            driver: info.driver,
+            driver_info: info.driver_info,
+            timestamp_query_supported,
+            timestamp_period_ns: timestamp_query_supported.then(|| queue.get_timestamp_period()),
+        }
+    }
+}
+
 /// GPU-timeline timings for one production live render.
 ///
 /// The three region spans are cut at consecutive fragment-stage completions,
@@ -643,7 +661,6 @@ enum PresentationTarget {
     },
     /// Written where the compositor can already see it. There is no second
     /// copy, so there is nothing to map and nothing to own afterwards.
-    #[cfg(target_os = "macos")]
     Shared(crate::share::Shared),
 }
 
@@ -651,7 +668,6 @@ impl PresentationTarget {
     fn view(&self) -> &wgpu::TextureView {
         match self {
             Self::Staged { view, .. } => view,
-            #[cfg(target_os = "macos")]
             Self::Shared(shared) => shared.view(),
         }
     }
@@ -663,8 +679,7 @@ enum Finish {
     /// Copy the texture into the buffer, then map the buffer.
     Copy(wgpu::Texture, wgpu::Buffer),
     /// Hand back the surface that was written directly.
-    #[cfg(target_os = "macos")]
-    Share(core_video::pixel_buffer::CVPixelBuffer),
+    Share(crate::share::Surface),
 }
 
 /// A submitted frame that has not finished.
@@ -707,9 +722,8 @@ enum Completion {
         mapped_result: Option<Result<(), String>>,
         bytes_per_row: u32,
     },
-    #[cfg(target_os = "macos")]
     Shared {
-        buffer: core_video::pixel_buffer::CVPixelBuffer,
+        surface: crate::share::Surface,
         done: mpsc::Receiver<Instant>,
         finished: bool,
     },
@@ -860,6 +874,8 @@ pub struct Gpu {
     material_defaults: MaterialDefaults,
     /// Set from the driver's device-lost callback; see [`Gpu::shared`].
     lost: Arc<AtomicBool>,
+    /// Whether `device` is the window compositor's; see [`Gpu::adopt`].
+    adopted: bool,
     /// How long [`Gpu::build`] took. Kept because it is the number the launch
     /// indicator is reporting on, and reading it from the device means the
     /// answer is the same whoever triggered the build.
@@ -942,8 +958,24 @@ impl Gpu {
         &self.adapter_profile
     }
 
-    fn build() -> anyhow::Result<Self> {
+    pub(crate) fn build() -> anyhow::Result<Self> {
         let started = Instant::now();
+        let adopted = ADOPTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .filter(|adopted| !adopted.lost.load(Ordering::Relaxed));
+        if let Some(Adopted {
+            device,
+            queue,
+            adapter,
+            lost,
+        }) = adopted
+        {
+            let profile = RendererProfile::of(&adapter, &device, &queue);
+            return Self::on(device, queue, profile, lost, true, started);
+        }
+
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -954,13 +986,11 @@ impl Gpu {
             // process-local and never serialised, so exact limits are fine.
             apply_limit_buckets: false,
         }))?;
-        let timestamp_query_supported =
-            adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         // Enabled whenever the adapter offers it, because this device is now
         // the only one: refusing the feature here would mean no renderer built
         // on it could ever be profiled. Declaring it costs nothing — the cost
         // is writing timestamps, which is per-frame and stays opt-in.
-        let required_features = if timestamp_query_supported {
+        let required_features = if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             wgpu::Features::TIMESTAMP_QUERY
         } else {
             wgpu::Features::empty()
@@ -972,16 +1002,7 @@ impl Gpu {
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             }))?;
-        let adapter_info = adapter.get_info();
-        let adapter_profile = RendererProfile {
-            name: adapter_info.name,
-            backend: format!("{:?}", adapter_info.backend),
-            device_type: format!("{:?}", adapter_info.device_type),
-            driver: adapter_info.driver,
-            driver_info: adapter_info.driver_info,
-            timestamp_query_supported,
-            timestamp_period_ns: timestamp_query_supported.then(|| queue.get_timestamp_period()),
-        };
+        let profile = RendererProfile::of(&adapter, &device, &queue);
         let lost = Arc::new(AtomicBool::new(false));
         device.set_device_lost_callback({
             let lost = Arc::clone(&lost);
@@ -993,6 +1014,18 @@ impl Gpu {
                 eprintln!("luma-render device lost ({reason:?}): {message}");
             }
         });
+        Self::on(device, queue, profile, lost, false, started)
+    }
+
+    /// Every pipeline, on a device somebody has already made.
+    fn on(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_profile: RendererProfile,
+        lost: Arc<AtomicBool>,
+        adopted: bool,
+        started: Instant,
+    ) -> anyhow::Result<Self> {
         let environment = EnvironmentPipelines::new(&device, &queue);
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
@@ -1623,10 +1656,78 @@ impl Gpu {
             white_material,
             material_defaults,
             lost,
+            adopted,
             built_in: started.elapsed(),
         })
     }
+
+    /// The device every renderer draws with.
+    pub(crate) fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Its queue.
+    pub(crate) fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Whether this device is the window compositor's — see [`Gpu::adopt`].
+    #[must_use]
+    pub fn is_adopted(&self) -> bool {
+        self.adopted
+    }
+
+    /// Draw on the window compositor's device from now on.
+    ///
+    /// Where the compositor is itself wgpu, a renderer built on its device
+    /// can hand it frames as they are: same device, same queue, so the
+    /// compositor's draw is ordered after the renderer's submit by the queue
+    /// and nothing is copied or fenced. This is that hand-over; the `share`
+    /// module is what cashes it in.
+    ///
+    /// Call it before [`Gpu::shared`] first builds — in practice, as the
+    /// window opens and before [`crate::warm`]. Idempotent, and cheap enough
+    /// to repeat every frame: a live adoption is kept, and only a lost one is
+    /// replaced, which is how a compositor that recovered from device loss
+    /// gets its renderer back.
+    ///
+    /// The arguments mirror `gpui::WgpuDevice` field for field; this crate
+    /// does not know gpui, so the caller spreads the struct.
+    pub fn adopt(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        adapter: wgpu::Adapter,
+        lost: Arc<AtomicBool>,
+    ) {
+        let mut slot = ADOPTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot
+            .as_ref()
+            .is_some_and(|adopted| !adopted.lost.load(Ordering::Relaxed))
+        {
+            return;
+        }
+        *slot = Some(Adopted {
+            device: (*device).clone(),
+            queue: (*queue).clone(),
+            adapter,
+            lost,
+        });
+    }
 }
+
+/// A compositor's device, offered through [`Gpu::adopt`].
+#[derive(Clone)]
+struct Adopted {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter: wgpu::Adapter,
+    lost: Arc<AtomicBool>,
+}
+
+/// The device [`Gpu::build`] prefers, if a compositor has offered one.
+static ADOPTED: Mutex<Option<Adopted>> = Mutex::new(None);
 
 impl Renderer {
     /// Build a renderer on the process-wide device.
@@ -1785,10 +1886,8 @@ impl Renderer {
             };
             let bytes_per_row = (width * 4).div_ceil(256) * 256;
             let presentations = std::array::from_fn(|_| {
-                #[cfg(target_os = "macos")]
                 if destination == Destination::Compositor {
-                    if let Some(shared) = crate::share::Shared::new(&self.gpu.device, width, height)
-                    {
+                    if let Some(shared) = crate::share::Shared::new(&self.gpu, width, height) {
                         return PresentationTarget::Shared(shared);
                     }
                 }
@@ -2610,8 +2709,7 @@ impl Renderer {
                 PresentationTarget::Staged {
                     output, readback, ..
                 } => Finish::Copy(output.clone(), readback.clone()),
-                #[cfg(target_os = "macos")]
-                PresentationTarget::Shared(shared) => Finish::Share(shared.buffer()),
+                PresentationTarget::Shared(shared) => Finish::Share(shared.surface()),
             };
             (
                 t.msaa_color.clone(),
@@ -3301,10 +3399,10 @@ impl Renderer {
                 }
             }
             // Without a readback there is no map to wait on, so the queue itself
-            // has to say when the surface is safe to sample. This is the only
-            // fence between the two devices.
-            #[cfg(target_os = "macos")]
-            Finish::Share(buffer) => {
+            // has to say when the surface is safe to sample. On Metal this is
+            // the only fence between the two devices; on a shared device it is
+            // only the completion stamp.
+            Finish::Share(surface) => {
                 let (done_tx, done) = mpsc::sync_channel(1);
                 // Stamped in the callback, not where it is noticed: the whole
                 // question is how much of `draw_time` is the GPU finishing and
@@ -3313,7 +3411,7 @@ impl Renderer {
                     let _ = done_tx.send(Instant::now());
                 });
                 Completion::Shared {
-                    buffer,
+                    surface,
                     done,
                     finished: false,
                 }
@@ -4200,7 +4298,6 @@ impl Completion {
                 }
                 Ok(mapped_result.is_some())
             }
-            #[cfg(target_os = "macos")]
             Self::Shared { done, finished, .. } => {
                 if !*finished {
                     *finished = match done.try_recv() {
@@ -4254,10 +4351,7 @@ impl Completion {
                 Ok(Presented::Pixels(pixels))
             }
             // Already where it belongs; the handle is all that moves.
-            #[cfg(target_os = "macos")]
-            Self::Shared { buffer, .. } => Ok(Presented::Shared(crate::viewport::Surface::new(
-                buffer.clone(),
-            ))),
+            Self::Shared { surface, .. } => Ok(Presented::Shared(surface.clone())),
         }
     }
 }

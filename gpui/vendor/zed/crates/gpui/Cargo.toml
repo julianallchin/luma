@@ -592,6 +592,11 @@ version = "21"
 version = "0.5.2"
 features = ["metal"]
 
+# LUMA LOCAL EDIT: `SurfaceHandle` and `WgpuDevice` name wgpu types on the
+# platforms whose compositor is `gpui_wgpu`; see `scene.rs`.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wgpu]
+version = "30.0.1"
+
 [target.'cfg(target_os = "macos")'.dependencies.font-kit]
 version = "0.14.1-zed"
 git = "https://github.com/zed-industries/font-kit"

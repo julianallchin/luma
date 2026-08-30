@@ -67,6 +67,7 @@ pub use library::{
 #[cfg(feature = "agent")]
 pub use library::{SourceAdapterFixture, SourceSearchFixtureResponse};
 pub use luma_lib::models::tracks::{TrackImportPhase, TrackImportProgress, TrackImportResult};
+pub use visualizer::warm_renderer;
 
 /// Everything the app's views need present in an `App` before a window opens:
 /// gpui-component's theme (every `Icon` reads it), Inter (not a system font,

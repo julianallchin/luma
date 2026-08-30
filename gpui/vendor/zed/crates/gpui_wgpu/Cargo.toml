@@ -102,14 +102,14 @@ default-features = false
 version = "1.10"
 
 [dependencies.wgpu]
-version = "29.0.4"
+version = "30.0.1"
 
 [dev-dependencies.criterion]
 version = "0.5"
 features = ["html_reports"]
 
 [dev-dependencies.naga]
-version = "29.0.4"
+version = "30.0.1"
 features = ["wgsl-in"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies.pollster]
@@ -129,7 +129,7 @@ version = "0.3"
 features = ["HtmlCanvasElement"]
 
 [target.'cfg(target_family = "wasm")'.dependencies.wgpu]
-version = "29.0.4"
+version = "30.0.1"
 features = ["webgl"]
 
 [lints.clippy]

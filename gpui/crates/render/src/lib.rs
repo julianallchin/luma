@@ -41,7 +41,6 @@ pub mod luminaire;
 pub mod metrics;
 pub mod overlay;
 pub mod scene_desc;
-#[cfg(target_os = "macos")]
 mod shadow;
 mod share;
 pub mod viewport;
@@ -52,8 +51,7 @@ pub use gpu::{CpuSpans, FrameTimings, Gpu, Renderer, RendererProfile, ShadowStat
 pub use light_index::LightIndexStats;
 pub use metrics::MetricSummary;
 pub use scene_desc::Catalogue;
-#[cfg(target_os = "macos")]
-pub use viewport::Surface;
+pub use share::Surface;
 pub use viewport::{
     AsyncPresentation, AsyncViewport, Occupancy, Pacing, Presentation, Presented, SubmitOutcome,
     Viewport, LIVE_HAZE_RESOLUTION, LIVE_SUBFRAMES,
