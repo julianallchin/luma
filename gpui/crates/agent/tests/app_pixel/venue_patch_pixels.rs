@@ -83,15 +83,32 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
         nav.expand();
         nav.stageOff();
         until("the patch table", (s) => s.find({ role: "row", label: "Mover 0" }) !== undefined);
+        app.frames(6);
+        const table = app.screenshot();
+
+        app.click(app.snapshot().find({ role: "toggle", label: "Footprint" }));
         until("the footprint", (s) =>
             s.findAll({ role: "text" }).some((n) => n.label.startsWith("Collision at")));
         app.frames(6);
-        const table = app.screenshot();
-        // The strip's own section: 512 cells are not 512 automation nodes, so
-        // the section is the smallest thing that can be pointed at.
+        const withPanel = app.screenshot();
+        // The float's own card: 512 cells are not 512 automation nodes, so the
+        // panel is the smallest thing that can be pointed at.
         const footprint = app.screenshot({
-            node: app.snapshot().find({ role: "card", label: "FOOTPRINT" }),
+            node: app.snapshot().find({ role: "card", label: "Footprint" }),
         });
+
+        // A press outside an open float is eaten by its dismissal (see
+        // `float::Dismiss`), so panel-to-panel is close-then-open rather than
+        // one click. That is the primitive's decision, not this page's.
+        app.click(app.snapshot().find({ role: "toggle", label: "Footprint" }));
+        app.frames(4);
+        app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
+        until("the outputs", (s) =>
+            s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
+        app.frames(6);
+        const outputs = app.screenshot();
+        app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
+        app.frames(4);
 
         app.click(app.snapshot().find({ role: "button", label: "Add fixtures" }));
         const bundle = until("the bundle", (s) =>
@@ -111,7 +128,7 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
         const configure = app.screenshot({
             node: app.snapshot().find({ role: "card", label: "Add fixtures dialog" }),
         });
-        ({ table, footprint, library, configure })
+        ({ table, footprint, withPanel, outputs, library, configure })
         "#,
     );
     let result = harness.exec(&script, Duration::from_secs(300));
@@ -121,13 +138,18 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
     let (table_path, table) = support::image::keep_in(DRAWER, &out["table"], "table");
     let (footprint_path, footprint) =
         support::image::keep_in(DRAWER, &out["footprint"], "footprint-collision");
+    let (panel_path, _panel) =
+        support::image::keep_in(DRAWER, &out["withPanel"], "footprint-panel");
+    let (outputs_path, _outputs) = support::image::keep_in(DRAWER, &out["outputs"], "outputs");
     let (library_path, library) = support::image::keep_in(DRAWER, &out["library"], "add-library");
     let (configure_path, configure) =
         support::image::keep_in(DRAWER, &out["configure"], "add-configure");
     println!(
-        "patch captures:\n  {}\n  {}\n  {}\n  {}",
+        "patch captures:\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}",
         table_path.display(),
         footprint_path.display(),
+        panel_path.display(),
+        outputs_path.display(),
         library_path.display(),
         configure_path.display(),
     );

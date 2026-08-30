@@ -13,8 +13,9 @@
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Entity, SharedString};
 
+use luma_ui::float::RowState;
 use luma_ui::ladder;
-use luma_ui::node::{AgentNode as _, Instrument as _, Role};
+use luma_ui::node::{Instrument as _, Role};
 
 use super::Patch;
 use crate::Luma;
@@ -25,33 +26,27 @@ const CELL: f32 = 8.0;
 const GAP: f32 = 1.0;
 
 pub(super) fn footprint(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    super::section(
-        "FOOTPRINT",
-        false,
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .px(px(12.0))
-            .pb(px(12.0))
-            .child(selector(state, app))
-            .child(grid(state, app))
-            .children(collision_notes(state))
-            .children(state.strip_refusal.as_ref().map(|message| {
-                div()
-                    .text_size(px(11.0))
-                    .text_color(ladder::danger())
-                    .child(message.clone())
-                    .agent_node(Role::Text, message.clone())
-            }))
-            .into_any_element(),
-    )
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .child(selector(state, app))
+        .child(grid(state, app))
+        .children(collision_notes(state))
+        .children(state.strip_refusal.as_ref().map(|message| {
+            div()
+                .text_size(px(11.5))
+                .text_color(ladder::danger())
+                .child(message.clone())
+                .agent_node(Role::Text, message.clone())
+        }))
+        .into_any_element()
 }
 
-/// A chip per universe in use. A row rather than a dropdown: a venue runs one
-/// universe per truss, so the whole list is three or four chips wide and
-/// hiding it behind a trigger would cost a click to read a fact.
-fn selector(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
+/// Which universe the grid is of, as a picker rather than a row of toggles: a
+/// venue runs one universe per truss and the list grows with the rig, so a row
+/// of chips is a wrap waiting to happen.
+fn selector(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let universes = state
         .data
         .as_ref()
@@ -62,23 +57,66 @@ fn selector(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
     } else {
         universes
     };
+    let shown = format!("Universe {}", state.strip_universe);
+    let options: Vec<String> = universes
+        .iter()
+        .map(|universe| format!("Universe {universe}"))
+        .collect();
+    let toggled = app.clone();
+    let venue = state.venue_id.clone();
     div()
-        .flex()
-        .flex_wrap()
-        .gap(px(4.0))
-        .children(universes.into_iter().map(|universe| {
-            let shown = universe == state.strip_universe;
-            let picked = app.clone();
-            let venue = state.venue_id.clone();
-            luma_ui::luma_toggle(&format!("U{universe}"), shown)
-                .id(SharedString::from(format!("patch-universe-{universe}")))
+        .relative()
+        .child(
+            luma_ui::float::picker_chip(
+                &shown,
+                &options.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+            .id("patch-universe")
+            .on_click(move |_, _, cx| {
+                let venue = venue.clone();
+                toggled.update(cx, |this, cx| this.toggle_universe_menu(venue, cx));
+            })
+            .agent_node(Role::Select, shown.clone()),
+        )
+        .when(state.universe_menu, |slot| {
+            slot.child(universe_menu(state, &universes, app))
+        })
+        .into_any_element()
+}
+
+fn universe_menu(state: &Patch, universes: &[u16], app: &Entity<Luma>) -> AnyElement {
+    let dismissed = app.clone();
+    let dismiss_venue = state.venue_id.clone();
+    luma_ui::float::anchored_below(
+        "patch-universe-menu",
+        luma_ui::CONTROL_HEIGHT,
+        luma_ui::float::Dismiss::on_press_out(move |_, cx| {
+            let venue = dismiss_venue.clone();
+            dismissed.update(cx, |this, cx| this.toggle_universe_menu(venue, cx));
+        }),
+        luma_ui::float::popover_card()
+            .min_w(px(150.0))
+            .children(universes.iter().map(|universe| {
+                let universe = *universe;
+                let label = format!("Universe {universe}");
+                let picked = app.clone();
+                let venue = state.venue_id.clone();
+                luma_ui::float::menu_row(
+                    RowState::of(universe == state.strip_universe, false),
+                    format!("universe-{universe}"),
+                )
+                .id(SharedString::from(format!("universe-row-{universe}")))
+                .h(px(26.0))
+                .px(px(10.0))
+                .child(label.clone())
                 .on_click(move |_, _, cx| {
                     let venue = venue.clone();
                     picked.update(cx, |this, cx| this.show_universe(venue, universe, cx));
                 })
-                .agent_node(Role::Toggle, format!("Universe {universe}"))
-                .agent_focused(shown)
-        }))
+                .agent_node(Role::Button, label)
+            }))
+            .into_any_element(),
+    )
 }
 
 fn grid(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {

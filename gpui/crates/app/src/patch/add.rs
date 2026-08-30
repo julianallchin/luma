@@ -99,7 +99,6 @@ pub(crate) struct AddFixtures {
     chosen: Option<Chosen>,
     search_focus: FocusHandle,
     add_focus: FocusHandle,
-    close_focus: FocusHandle,
     /// Whether the card has claimed the keyboard once. After that focus moves
     /// only when the *route* does — a card that re-took it every frame would
     /// pull the caret out of the count field between keystrokes.
@@ -131,7 +130,6 @@ impl Luma {
             chosen: None,
             search_focus,
             add_focus: cx.focus_handle().tab_stop(true),
-            close_focus: cx.focus_handle().tab_stop(true),
             seated: false,
         };
         self.overlay.open(Overlay::AddFixtures(Box::new(state)));
@@ -523,10 +521,10 @@ fn configure(state: &AddFixtures, app: &Entity<Luma>) -> AnyElement {
         .size_full()
         .flex()
         .flex_col()
-        .gap(px(16.0))
+        .gap(px(18.0))
         .p(px(20.0))
-        .child(luma_ui::arg::arg_row(
-            "MODE",
+        .child(float::field_row(
+            "Mode",
             div()
                 .relative()
                 .child(
@@ -541,7 +539,7 @@ fn configure(state: &AddFixtures, app: &Entity<Luma>) -> AnyElement {
                     slot.child(mode_list(definition, app))
                 }),
         ))
-        .child(luma_ui::arg::arg_row("COUNT", chosen.count.clone()))
+        .child(float::field_row("Count", chosen.count.clone()))
         .child(preview(state, chosen, channels))
         .into_any_element()
 }
@@ -581,25 +579,29 @@ fn preview(state: &AddFixtures, chosen: &Chosen, channels: usize) -> AnyElement 
         || SharedString::from("…"),
         |role| SharedString::from(role.display_name()),
     );
-    let line = format!("→ will land in {role} / unplaced · {channels} ch each");
+    let line = format!(
+        "Lands in {role} / unplaced · {} each",
+        crate::patch::plural(channels, "channel")
+    );
     div()
         .flex()
         .flex_col()
         .gap(px(4.0))
+        .pt(px(4.0))
         .child(
             div()
-                .text_size(px(12.0))
-                .text_color(ladder::muted_foreground())
+                .text_size(px(12.5))
+                .text_color(ladder::foreground_alpha(0.72))
                 .child(line.clone())
                 .agent_node(Role::Text, line),
         )
         .child(
             div()
-                .text_size(px(11.0))
-                .text_color(ladder::muted_foreground())
+                .text_size(px(11.5))
+                .text_color(ladder::foreground_alpha(0.45))
                 .child(
-                    "Addresses come from the venue's allocator when you add them; \
-                     nothing is placed in the room.",
+                    "Addresses come from the venue's allocator. Nothing is placed \
+                     in the room until you hang it on the stage.",
                 ),
         )
         .into_any_element()

@@ -17,7 +17,7 @@ use luma_lib::models::fixtures::PatchedFixture;
 use luma_ui::ladder;
 use luma_ui::menu::ContextMenu;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::{float, glass};
+use luma_ui::{float, glass, motion};
 
 use super::{Column, Patch};
 use crate::Luma;
@@ -25,14 +25,13 @@ use crate::Luma;
 /// Column widths. Fixed for the numbers so a table of forty rows reads as a
 /// column of numbers rather than forty independently-sized cells; flexible for
 /// the two that hold names.
-const W_MODEL: f32 = 156.0;
-const W_MODE: f32 = 112.0;
-const W_UNIVERSE: f32 = 52.0;
-const W_ADDRESS: f32 = 58.0;
-const W_RANGE: f32 = 84.0;
-const W_CHANNELS: f32 = 44.0;
-const W_PLACED: f32 = 74.0;
-const ROW_HEIGHT: f32 = 34.0;
+const W_MODEL: f32 = 168.0;
+const W_MODE: f32 = 116.0;
+const W_UNIVERSE: f32 = 64.0;
+const W_ADDRESS: f32 = 64.0;
+const W_RANGE: f32 = 90.0;
+const W_PLACED: f32 = 76.0;
+const ROW_HEIGHT: f32 = 38.0;
 
 pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement {
     let body: AnyElement = match (&state.error, state.data.as_ref()) {
@@ -42,12 +41,11 @@ pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) ->
         )
         .into_any_element(),
         (None, None) => {
-            luma_ui::plate("Loading the patch…".to_string(), ladder::muted_foreground())
+            luma_ui::plate("Reading the patch…".to_string(), ladder::muted_foreground())
                 .into_any_element()
         }
         (None, Some(data)) if data.fixtures.is_empty() => luma_ui::plate(
-            "Nothing is patched in this venue yet. Add fixtures to start the rental sheet."
-                .to_string(),
+            "Nothing is patched in this venue yet.".to_string(),
             ladder::muted_foreground(),
         )
         .into_any_element(),
@@ -63,27 +61,27 @@ pub(super) fn table(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) ->
         .into_any_element()
 }
 
-/// The silkscreened column names. Frameless: one hairline under the band and
-/// nothing around the cells, per the comet table spec.
+/// The column names, quiet and in sentence case. Frameless: one hairline under
+/// the row and nothing around the cells, per the comet table spec — no header
+/// fill, no outer box, no radius.
 fn head() -> impl IntoElement {
     div()
         .flex_shrink_0()
-        .h(px(26.0))
-        .px(px(14.0))
+        .h(px(30.0))
+        .px(px(20.0))
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(10.0))
         .border_b_1()
-        .border_color(ladder::trim())
-        .child(cell_flex().child(luma_ui::silkscreen("LABEL")))
-        .child(cell(W_MODEL).child(luma_ui::silkscreen("FIXTURE")))
-        .child(cell(W_MODE).child(luma_ui::silkscreen("MODE")))
-        .child(cell(W_UNIVERSE).child(luma_ui::silkscreen("UNI")))
-        .child(cell(W_ADDRESS).child(luma_ui::silkscreen("ADDR")))
-        .child(cell(W_RANGE).child(luma_ui::silkscreen("RANGE")))
-        .child(cell(W_CHANNELS).child(luma_ui::silkscreen("CH")))
-        .child(cell_flex().child(luma_ui::silkscreen("GROUP")))
-        .child(cell(W_PLACED).child(luma_ui::silkscreen("PLACED")))
+        .border_color(glass::hairline(0.07))
+        .child(cell_flex().child(float::label("Fixture")))
+        .child(cell(W_MODEL).child(float::label("Model")))
+        .child(cell(W_MODE).child(float::label("Mode")))
+        .child(cell(W_UNIVERSE).child(float::label("Universe")))
+        .child(cell(W_ADDRESS).child(float::label("Address")))
+        .child(cell(W_RANGE).child(float::label("Channels")))
+        .child(cell_flex().child(float::label("Group")))
+        .child(cell(W_PLACED).child(float::label("Placed")))
 }
 
 fn cell(width: f32) -> Div {
@@ -100,13 +98,11 @@ fn rows(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement 
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .py(px(4.0))
         .children(
             state
                 .rows()
                 .iter()
-                .enumerate()
-                .map(|(index, row)| fixture_row(state, row, index, app, window)),
+                .map(|row| fixture_row(state, row, app, window)),
         )
         .into_any_element()
 }
@@ -114,7 +110,6 @@ fn rows(state: &Patch, app: &Entity<Luma>, window: &gpui::Window) -> AnyElement 
 fn fixture_row(
     state: &Patch,
     row: &PatchedFixture,
-    index: usize,
     app: &Entity<Luma>,
     window: &gpui::Window,
 ) -> AnyElement {
@@ -126,7 +121,12 @@ fn fixture_row(
     let selected = state.selected.contains(&row.id);
     let placed = state.is_placed(&row.id);
     let last = row.address + row.num_channels - 1;
-    let group = state.group_path(&row.id).unwrap_or_else(|| "—".to_string());
+    // The selection vocabulary is snake_case because an expression is typed; a
+    // table is read. Underscores become spaces for the eye only — the name a
+    // score would name is unchanged.
+    let group = state
+        .group_path(&row.id)
+        .map_or_else(|| "—".to_string(), |path| path.replace('_', " "));
     let editing = state.editing.as_ref().filter(|edit| edit.fixture == row.id);
 
     let picked = app.clone();
@@ -136,17 +136,24 @@ fn fixture_row(
     let id_pick = row.id.clone();
     let id_menu = row.id.clone();
 
+    let fade_key = SharedString::from(format!("patch-row-{}", row.id));
     let mut line = div()
-        .id(SharedString::from(format!("patch-row-{}", row.id)))
+        .id(fade_key.clone())
         .h(px(ROW_HEIGHT))
-        .px(px(14.0))
+        .px(px(20.0))
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .when(index.is_multiple_of(2) && !selected, |row| {
-            row.bg(ladder::stripe())
+        .gap(px(10.0))
+        .border_b_1()
+        .border_color(glass::hairline(0.05))
+        // Selection and hover share one fill; nothing else lifts a row, and
+        // there is no zebra — the rule between rows is what keeps a wide table
+        // readable, per the comet table spec.
+        .bg(if selected {
+            glass::card_selected_bg()
+        } else {
+            motion::hover_blend(&fade_key, glass::wash(0.0), glass::glass_hover())
         })
-        .when(selected, |row| row.bg(glass::card_selected_bg()))
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
             let extend = event.modifiers.secondary() || event.modifiers.shift;
             let venue = venue_pick.clone();
@@ -159,13 +166,17 @@ fn fixture_row(
             let at = event.position;
             menued.update(cx, |this, cx| this.open_patch_menu(venue, id, at, cx));
         });
+    // The globally-keyed hover, not `.hover()`: a row that scrolls back into
+    // view is a remount, and a local hover would snap rather than fade.
+    line.interactivity()
+        .on_hover(motion::hover_listener(fade_key));
 
     line = line
         .child(label_cell(state, row, &name, editing, app, window))
         .child(
             cell(W_MODEL)
-                .text_size(px(11.0))
-                .text_color(ladder::muted_foreground())
+                .text_size(px(12.0))
+                .text_color(ladder::foreground_alpha(0.62))
                 .truncate()
                 .child(format!("{} {}", row.manufacturer, row.model)),
         )
@@ -196,24 +207,22 @@ fn fixture_row(
             reading(W_RANGE, format!("{}–{last}", row.address))
                 .agent_node(Role::Text, format!("{name} range = {}–{last}", row.address)),
         )
-        .child(reading(W_CHANNELS, row.num_channels.to_string()))
         .child(
             cell_flex()
-                .text_size(px(11.0))
-                .text_color(ladder::muted_foreground())
+                .text_size(px(12.0))
+                .text_color(ladder::foreground_alpha(0.62))
                 .truncate()
                 .child(group.clone())
                 .agent_node(Role::Text, format!("{name} group = {group}")),
         )
         .child(
+            // Only the exception is written. Every fixture in a finished rig is
+            // placed, and a column repeating the word down forty rows says
+            // nothing while hiding the one row that does not.
             cell(W_PLACED)
-                .text_size(px(11.0))
-                .text_color(if placed {
-                    ladder::muted_foreground()
-                } else {
-                    ladder::status_warn()
-                })
-                .child(if placed { "placed" } else { "unplaced" })
+                .text_size(px(12.0))
+                .text_color(ladder::status_warn())
+                .child(if placed { "" } else { "In tray" })
                 .agent_node(
                     Role::Text,
                     format!(
@@ -237,9 +246,9 @@ fn fixture_row(
             .child(line)
             .child(
                 div()
-                    .px(px(14.0))
-                    .pb(px(6.0))
-                    .text_size(px(11.0))
+                    .px(px(20.0))
+                    .pb(px(8.0))
+                    .text_size(px(11.5))
                     .text_color(ladder::danger())
                     .child(refusal.message.clone())
                     .agent_node(Role::Text, refusal.message.clone()),
@@ -248,11 +257,13 @@ fn fixture_row(
     }
 }
 
+/// A numeric cell. Mono, because a column of addresses is a column of numbers
+/// and they have to line up; everything else on this page is sans.
 fn reading(width: f32, text: String) -> Div {
     cell(width)
         .font_family(luma_ui::fonts::MONO)
-        .text_size(px(11.0))
-        .text_color(ladder::foreground_90())
+        .text_size(px(12.0))
+        .text_color(ladder::foreground_alpha(0.85))
         .child(text)
 }
 
@@ -278,7 +289,7 @@ fn label_cell(
     let id = row.id.clone();
     cell_flex()
         .id(SharedString::from(format!("patch-label-{}", row.id)))
-        .text_size(px(12.0))
+        .text_size(px(13.0))
         .text_color(ladder::foreground())
         .truncate()
         .child(name.clone())
@@ -349,8 +360,8 @@ fn mode_cell(
     let mode = row.mode_name.clone();
     cell(W_MODE)
         .id(SharedString::from(format!("patch-mode-{}", row.id)))
-        .text_size(px(11.0))
-        .text_color(ladder::foreground_90())
+        .text_size(px(12.0))
+        .text_color(ladder::foreground_alpha(0.85))
         .truncate()
         .child(mode.clone())
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {

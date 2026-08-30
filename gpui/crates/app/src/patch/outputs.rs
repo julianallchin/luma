@@ -20,38 +20,28 @@ use crate::Luma;
 
 pub(super) fn outputs(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let Some(data) = state.data.as_ref() else {
-        return super::section(
-            "OUTPUTS",
-            false,
-            div().px(px(12.0)).pb(px(12.0)).into_any_element(),
-        );
+        return div().into_any_element();
     };
-    super::section(
-        "OUTPUTS",
-        false,
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .px(px(12.0))
-            .pb(px(12.0))
-            .children(
-                data.universes
-                    .iter()
-                    .map(|universe| row(state, i64::from(*universe), app)),
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .children(
+            data.universes
+                .iter()
+                .map(|universe| row(state, i64::from(*universe), app)),
+        )
+        .when(data.universes.is_empty(), |body| {
+            body.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(ladder::foreground_alpha(0.55))
+                    .child("No universe is patched yet.")
+                    .agent_node(Role::Text, "No universe is patched yet."),
             )
-            .when(data.universes.is_empty(), |body| {
-                body.child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(ladder::muted_foreground())
-                        .child("No universe is patched yet.")
-                        .agent_node(Role::Text, "No universe is patched yet."),
-                )
-            })
-            .children(discovery(state))
-            .into_any_element(),
-    )
+        })
+        .children(discovery(state))
+        .into_any_element()
 }
 
 fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
@@ -59,14 +49,14 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
         .data
         .as_ref()
         .and_then(|data| data.outputs.iter().find(|out| out.universe == universe));
-    let reading: SharedString = match bound {
-        Some(out) => format!(
-            "Universe {universe} → {}:{} port {}",
-            out.node_ip, out.node_port, out.port_address
-        )
-        .into(),
-        None => format!("Universe {universe} → unbound").into(),
+    let destination: SharedString = match bound {
+        Some(out) => match out.node_name.as_deref() {
+            Some(name) => format!("{name} · {} · port {}", out.node_ip, out.port_address).into(),
+            None => format!("{} · port {}", out.node_ip, out.port_address).into(),
+        },
+        None => "Not bound".into(),
     };
+    let reading: SharedString = format!("Universe {universe} → {destination}").into();
     let action = app.clone();
     let venue = state.venue_id.clone();
     let bound_here = bound.is_some();
@@ -75,30 +65,41 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
     let mut line = div()
         .flex()
         .flex_col()
-        .gap(px(2.0))
+        .gap(px(3.0))
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .font_family(luma_ui::fonts::MONO)
-                        .text_size(px(11.0))
-                        .text_color(if bound_here {
-                            ladder::foreground_90()
-                        } else {
-                            ladder::status_warn()
-                        })
-                        .child(reading.clone()),
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.0))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .text_color(ladder::foreground())
+                                .child(format!("Universe {universe}")),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.5))
+                                .text_color(if bound_here {
+                                    ladder::foreground_alpha(0.55)
+                                } else {
+                                    ladder::status_warn().into()
+                                })
+                                .child(destination),
+                        ),
                 )
                 .child(
-                    luma_ui::luma_button(
+                    luma_ui::float::btn(
                         if bound_here { "Unbind" } else { "Bind" },
-                        luma_ui::Enabled::Yes,
+                        format!("output-{universe}"),
                     )
                     .id(SharedString::from(format!("output-{universe}")))
                     .on_click(move |_, _, cx| {
@@ -121,17 +122,22 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
                 ),
         )
         .when(!bound_here, |line| {
+            // Named, not silent: an unbound universe still sends, through the
+            // arithmetic this table replaced, and that arithmetic puts 17 and 1
+            // on the same wire.
             let warning = format!(
-                "Universe {universe} has no node: Art-Net falls back to \
-                 net/subnet arithmetic, which aliases it onto {}",
+                "Falls back to net/subnet arithmetic, which aliases it onto {}",
                 universe & 0xF
             );
             line.child(
                 div()
-                    .text_size(px(10.5))
-                    .text_color(ladder::status_warn())
+                    .text_size(px(11.0))
+                    .text_color(ladder::foreground_alpha(0.45))
                     .child(warning.clone())
-                    .agent_node(Role::Text, warning),
+                    .agent_node(
+                        Role::Text,
+                        format!("Universe {universe} has no node: {warning}"),
+                    ),
             )
         });
 
@@ -150,8 +156,8 @@ fn node_list(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
             .unwrap_or_else(|| "No Art-Net node has answered a poll yet.".into());
         return div()
             .pl(px(8.0))
-            .text_size(px(10.5))
-            .text_color(ladder::muted_foreground())
+            .text_size(px(11.5))
+            .text_color(ladder::foreground_alpha(0.45))
             .child(message.clone())
             .agent_node(Role::Text, message)
             .into_any_element();
@@ -191,15 +197,15 @@ fn node_list(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
 /// network with no nodes on it are different answers, and this says which.
 fn discovery(state: &Patch) -> Option<AnyElement> {
     let message: SharedString = match (&state.discovery_error, state.nodes.len()) {
-        (Some(error), _) => format!("Art-Net discovery unavailable: {error}").into(),
+        (Some(error), _) => format!("No Art-Net on this host — {error}").into(),
         (None, 0) => "No Art-Net node has answered a poll yet.".into(),
         (None, count) => format!("{count} Art-Net nodes discovered").into(),
     };
     Some(
         div()
-            .pt(px(4.0))
-            .text_size(px(10.5))
-            .text_color(ladder::muted_foreground())
+            .pt(px(2.0))
+            .text_size(px(11.0))
+            .text_color(ladder::foreground_alpha(0.45))
             .child(message.clone())
             .agent_node(Role::Text, message)
             .into_any_element(),

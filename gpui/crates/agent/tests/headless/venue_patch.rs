@@ -185,17 +185,22 @@ fn the_footprint_reports_a_collision_and_the_universes_it_holds() {
         &mut harness,
         r#"
         openPatch();
-        until("the footprint", (s) => s.find({ role: "toggle", label: "Universe 1" }) !== undefined);
+        // The strip hangs off the band's chip, one panel at a time.
+        app.click(app.snapshot().find({ role: "toggle", label: "Footprint" }));
+        until("the footprint", (s) => s.find({ role: "select", label: "Universe 1" }) !== undefined);
         app.frames(4);
-        const universes = app.snapshot().findAll({ role: "toggle" })
-            .map((n) => n.label).filter((l) => l.startsWith("Universe "));
         const collisions = texts().filter((l) => l.startsWith("Collision at"));
 
+        app.click(app.snapshot().find({ role: "select", label: "Universe 1" }));
+        until("the universe menu", (s) =>
+            s.find({ role: "button", label: "Universe 17" }) !== undefined);
+        const universes = app.snapshot().findAll({ role: "button" })
+            .map((n) => n.label).filter((l) => l.startsWith("Universe "));
+
         // Universe 17 is a different strip, and it is not colliding.
-        app.click(app.snapshot().find({ role: "toggle", label: "Universe 17" }));
+        app.click(app.snapshot().find({ role: "button", label: "Universe 17" }));
         until("the seventeenth universe", (s) =>
-            s.findAll({ role: "toggle", label: "Universe 17" })
-                .some((n) => n.focused === true));
+            s.find({ role: "select", label: "Universe 17" }) !== undefined);
         app.frames(4);
         const farCollisions = texts().filter((l) => l.startsWith("Collision at"));
         ({ universes, collisions, farCollisions })
@@ -226,6 +231,7 @@ fn universe_one_and_seventeen_are_different_outputs() {
         &mut harness,
         r#"
         openPatch();
+        app.click(app.snapshot().find({ role: "toggle", label: "Outputs" }));
         until("the outputs table", (s) =>
             s.findAll({ role: "row" }).some((n) => n.label.startsWith("Universe 1 →")));
         app.frames(4);
@@ -235,7 +241,7 @@ fn universe_one_and_seventeen_are_different_outputs() {
         // now falls back to.
         app.click(app.snapshot().find({ role: "button", label: "Unbind universe 17" }));
         until("the unbound row", (s) =>
-            s.findAll({ role: "row" }).some((n) => n.label === "Universe 17 → unbound"));
+            s.findAll({ role: "row" }).some((n) => n.label === "Universe 17 → Not bound"));
         app.frames(4);
         const after = rowLabels().filter((l) => l.startsWith("Universe "));
         const warning = texts().find((l) => l.startsWith("Universe 17 has no node"));
@@ -291,7 +297,7 @@ fn auto_patch_moves_and_reports() {
         app.frames(4);
         const pinned = reading("Mover 1 address = ");
 
-        app.click(app.snapshot().find({ role: "button", label: "Auto Patch" }));
+        app.click(app.snapshot().find({ role: "button", label: "Auto patch" }));
         until("the confirmation", (s) =>
             s.findAll({ role: "text" }).some((n) => n.label.startsWith("Re-derive")));
         const asked = texts().find((l) => l.startsWith("Re-derive"));
@@ -402,7 +408,7 @@ fn adding_n_fixtures_morphs_and_continues_the_numbering() {
         until("the count page", (s) =>
             s.findAll({ role: "input" }).some((n) => n.label.startsWith("count = ")));
         app.frames(6);
-        const preview = texts().find((l) => l.startsWith("→ will land in"));
+        const preview = texts().find((l) => l.startsWith("Lands in"));
 
         app.click(app.snapshot().find({ role: "input", label: "count = 1" }));
         app.key("cmd-a 3 enter");

@@ -265,6 +265,26 @@ pub fn label(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
+/// A labelled control on a floating surface: the [`label`] over the thing it
+/// names.
+///
+/// The float tier's answer to `arg::arg_row`, which stencils a 9px uppercase
+/// silkscreen legend because it belongs to the instrument panel. A dialog is
+/// not a panel: its legends are sentence case and quiet, and a card that
+/// borrowed the panel's would read as a different application.
+pub fn field_row(label_text: impl Into<SharedString>, control: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        // Controls hug their content: a chip stretched to the card's width by
+        // its column would read as a text field, and the ghost stack that
+        // sizes a picker to its widest option would have nothing to say.
+        .items_start()
+        .gap(px(6.0))
+        .child(label(label_text))
+        .child(control)
+}
+
 /// A quiet heading over a group of [`nav_row`]s.
 pub fn section_heading(text: impl Into<SharedString>) -> Div {
     label(text).px(px(8.0)).pb(px(4.0))

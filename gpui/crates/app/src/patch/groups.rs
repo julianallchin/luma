@@ -17,34 +17,27 @@ use super::Patch;
 
 pub(super) fn groups(state: &Patch) -> AnyElement {
     let nodes: &[GroupTreeNode] = state.data.as_ref().map_or(&[], |data| &data.groups);
-    super::section(
-        "GROUPS",
-        true,
-        div()
-            .id("patch-groups")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(px(12.0))
-            .pb(px(12.0))
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .when(nodes.is_empty(), |body| {
-                body.child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(ladder::muted_foreground())
-                        .child("No groups yet — a group is derived once a fixture is placed.")
-                        .agent_node(
-                            Role::Text,
-                            "No groups yet — a group is derived once a fixture is placed.",
-                        ),
-                )
-            })
-            .children(nodes.iter().map(|node| row(nodes, node)))
-            .into_any_element(),
-    )
+    div()
+        .id("patch-groups")
+        .max_h(px(360.0))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .when(nodes.is_empty(), |body| {
+            body.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(ladder::foreground_alpha(0.55))
+                    .child("No groups yet — a group is derived once a fixture is placed.")
+                    .agent_node(
+                        Role::Text,
+                        "No groups yet — a group is derived once a fixture is placed.",
+                    ),
+            )
+        })
+        .children(nodes.iter().map(|node| row(nodes, node)))
+        .into_any_element()
 }
 
 fn row(nodes: &[GroupTreeNode], node: &GroupTreeNode) -> impl IntoElement {
@@ -52,6 +45,7 @@ fn row(nodes: &[GroupTreeNode], node: &GroupTreeNode) -> impl IntoElement {
     let count = node.fixtures.len();
     div()
         .pl(px(depth as f32 * 12.0))
+        .py(px(3.0))
         .flex()
         .items_center()
         .gap(px(6.0))
@@ -60,16 +54,16 @@ fn row(nodes: &[GroupTreeNode], node: &GroupTreeNode) -> impl IntoElement {
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_size(px(11.0))
-                .text_color(ladder::foreground_90())
+                .text_size(px(12.5))
+                .text_color(ladder::foreground())
                 .child(node.label.clone()),
         )
         .child(
             div()
                 .flex_shrink_0()
                 .font_family(luma_ui::fonts::MONO)
-                .text_size(px(10.5))
-                .text_color(ladder::muted_foreground())
+                .text_size(px(11.5))
+                .text_color(ladder::foreground_alpha(0.45))
                 .child(count.to_string()),
         )
         .agent_node(Role::Row, format!("{} = {count}", node.name))
