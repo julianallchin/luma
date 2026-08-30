@@ -1477,6 +1477,7 @@ pub(crate) fn scene(
         camera: scene_desc::CameraPose {
             position: [0.0; 3],
             target: [0.0; 3],
+            pov: None,
         },
         editing: true,
         // Interactive dark-stage defaults, with the haze resolution reduced

@@ -26,7 +26,17 @@ from luma_exec.figures import FigureSink  # noqa: E402
 from luma_exec.host_errors import LumaHostCallError  # noqa: E402
 from luma_exec.venue import Venue, VenueHostUnavailableError  # noqa: E402
 
-VIEWS = ["front", "audience", "overhead", "quarter_left", "quarter_right", "dj"]
+VIEWS = [
+    "front",
+    "audience",
+    "overhead",
+    "quarter_left",
+    "quarter_right",
+    "dj",
+    "pov:mover-1",
+]
+
+TILE_MAP = "gauntlet view\nplan as the house sees it\n\n  T\n"
 
 
 def record(**overrides: Any) -> LumaRecord:
@@ -40,7 +50,7 @@ def record(**overrides: Any) -> LumaRecord:
 
 
 class Host:
-    """The Rust `venue.render` contract, minus the GPU."""
+    """The Rust `venue.render` and `venue.tiles` contracts, minus the GPU."""
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
@@ -48,6 +58,8 @@ class Host:
 
     def __call__(self, method: str, payload: Any) -> Any:
         self.calls.append((method, payload))
+        if method == "venue.tiles":
+            return {"map": TILE_MAP}
         assert method == "venue.render"
         outputs = self.workspace / "outputs"
         outputs.mkdir(parents=True, exist_ok=True)
@@ -102,6 +114,7 @@ class VenueRenderTests(unittest.TestCase):
                         "t": 12.5,
                         "width": 320,
                         "height": 200,
+                        "highlight": None,
                     },
                 )
             ],
@@ -172,6 +185,44 @@ class VenueRenderTests(unittest.TestCase):
         self.assertEqual(namespace.venue.views, tuple(VIEWS))
         # The catalog still walks the underlying record, facade or not.
         self.assertIn("luma.venue.id", namespace.catalog())
+
+
+class VenueTilesTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workspace = Path(tempfile.mkdtemp(prefix="luma-venue-"))
+        self.host = Host(self.workspace)
+        self.venue = Venue(record(), host_call=self.host, workspace=self.workspace)
+
+    def test_tiles_sends_the_cell_size_and_returns_the_map_itself(self) -> None:
+        self.assertEqual(self.venue.tiles(cell_m=1.0), TILE_MAP)
+        self.assertEqual(self.host.calls, [("venue.tiles", {"cellM": 1.0})])
+
+    def test_the_default_cell_is_half_a_metre(self) -> None:
+        self.venue.tiles()
+        self.assertEqual(self.host.calls[0][1]["cellM"], 0.5)
+
+    def test_a_map_is_not_a_figure(self) -> None:
+        """Text is read in the transcript; only a picture goes in `figures`."""
+        figures = FigureSink()
+        venue = Venue(
+            record(), host_call=self.host, figures=figures, workspace=self.workspace
+        )
+        venue.tiles()
+        self.assertEqual(figures.collect(self.workspace, None)[0], [])
+
+    def test_a_non_finite_cell_never_reaches_the_host(self) -> None:
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(LumaHostCallError):
+                self.venue.tiles(cell_m=bad)
+        self.assertEqual(self.host.calls, [])
+
+    def test_a_venue_with_no_host_says_so(self) -> None:
+        with self.assertRaises(VenueHostUnavailableError):
+            Venue(record(), workspace=self.workspace).tiles()
+
+    def test_a_head_is_offered_as_a_view_like_any_other(self) -> None:
+        """`pov:<id>` entries arrive in the same manifest list as `front`."""
+        self.assertIn("pov:mover-1", self.venue.views)
 
 
 class FigureCapTests(unittest.TestCase):

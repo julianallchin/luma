@@ -241,7 +241,7 @@ impl Luma {
                         scene,
                         definitions,
                         stage_render::meshes_root(None),
-                        View::Front,
+                        &View::Front.into(),
                         None,
                         PREVIEW_PIXELS,
                     )

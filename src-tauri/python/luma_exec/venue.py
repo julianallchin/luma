@@ -8,9 +8,11 @@ back a `StageImage`.
 
     luma.venue.render()                              # front, t=0
     luma.venue.render(view="dj", t=64.0)             # the operator's own view
+    luma.venue.render(view="pov:mover-3")            # through one head's lens
     luma.venue.render(highlight="moving_spots")      # light only those heads
     shot = luma.venue.render(view="overhead")
     Image.open(shot.path)                            # the PNG on disk
+    print(luma.venue.tiles())                        # the room as a text map
 
 Every render is also a figure: it lands in the cell's `figures` list next to any
 matplotlib output, so the model sees the picture without being handed bytes.
@@ -30,6 +32,8 @@ and returns::
 
 `view` and `t` come back because the host clamps both: an out-of-span `t` is
 pulled inside the track rather than refused.
+
+``venue.tiles`` receives ``{"cellM": float}`` and returns ``{"map": str}``.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ HostCall = Callable[[str, Any], Any]
 DEFAULT_VIEW = "front"
 DEFAULT_WIDTH = 960
 DEFAULT_HEIGHT = 540
+DEFAULT_CELL_M = 0.5
 
 
 class VenueHostUnavailableError(RuntimeError):
@@ -216,6 +221,25 @@ class Venue:
         if figures is not None:
             figures.register(shot.artifact_rel, shot.width, shot.height)
         return shot
+
+    def tiles(self, *, cell_m: float = DEFAULT_CELL_M) -> str:
+        """The room as a top-down text map, one character per `cell_m` square.
+
+        The cheapest way to see where everything ended up: a plan of the venue
+        as the house sees it, with a header naming the convention and the
+        unplaced branches listed below it. Reach for this before `render()` —
+        it answers "is the rig the shape I asked for" in a few hundred
+        characters, and a diff of two maps localises a moved piece to one row.
+
+        Raises `LumaHostCallError` if `cell_m` is not a finite number of metres.
+        """
+        host_call = object.__getattribute__(self, "_host_call")
+        if host_call is None:
+            raise VenueHostUnavailableError(
+                "this thread has no venue in scope, so there is no room to map"
+            )
+        response = host_call("venue.tiles", {"cellM": _finite("cell_m", cell_m)})
+        return str(response["map"])
 
     def __repr__(self) -> str:
         values = object.__getattribute__(self, "_values")

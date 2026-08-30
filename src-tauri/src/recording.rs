@@ -28,7 +28,7 @@ use crate::models::universe::UniverseState;
 use crate::stage_render::{self, Continuity, Sequence, VenueGeometry};
 use crate::storage::StorageRoot;
 use luma_render::{coords, DEFAULT_SUBFRAMES, LIVE_SUBFRAMES};
-use luma_scene::View;
+use luma_scene::Viewpoint;
 
 /// How a recording integrates time into each output frame.
 ///
@@ -159,7 +159,7 @@ const BITS_PER_PIXEL: f64 = 0.15;
 pub struct Recording {
     /// The score to render. Its track and venue come with it.
     pub score_id: String,
-    pub view: View,
+    pub view: Viewpoint,
     /// Seconds, clamped into the track. `None` records the whole track.
     pub span: Option<(f32, f32)>,
     pub size: (u32, u32),
@@ -459,7 +459,7 @@ struct Session {
     lighting: crate::eval::Scene,
     geometry: VenueGeometry,
     meshes_root: PathBuf,
-    view: View,
+    view: Viewpoint,
     size: (u32, u32),
     audio: PathBuf,
     output: PathBuf,
@@ -532,7 +532,7 @@ impl Session {
             scene,
             definitions,
             self.meshes_root.clone(),
-            self.view,
+            &self.view,
             booth,
             self.size,
         )?;

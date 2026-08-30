@@ -573,6 +573,7 @@ commands! {
     ) -> DistributeReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
     stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
+    stage::venue_tiles(venue_id: String, cell_m: Option<f64>) -> String;
     stage::attach(
         venue_id: String,
         kind: String,
