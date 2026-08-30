@@ -26,6 +26,16 @@
 //! The pointer half *is* here, because it is not a rung but a property of
 //! floating: [`crate::float::Dismiss`] closes the menu on any press outside
 //! it, and swallows that press.
+//!
+//! # Choosing closes it
+//!
+//! A row that has acted dismisses the menu, here rather than in each item's
+//! closure. Left to the caller it is a step every item must remember and none
+//! of the three did: the menu stayed up over the room, and because a press
+//! outside is *swallowed* to dismiss, the first click after choosing a verb
+//! went nowhere at all.
+
+use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, ElementId, Point, SharedString, Window};
@@ -48,6 +58,10 @@ pub enum Tone {
     /// the moment the pointer is nowhere near it — which is when it matters.
     Destructive,
 }
+
+/// The menu's own dismiss, shared by every row because choosing closes it.
+/// Shared and not [`Dismissal`]'s box: one closer, N rows plus the press-out.
+type Closer = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// One line of the menu.
 enum Entry {
@@ -131,6 +145,7 @@ impl ContextMenu {
     /// the two doors out lead to the same place.
     pub fn render(self, dismiss: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {
         let Self { id, at, entries } = self;
+        let dismiss: Closer = Rc::new(dismiss);
         let mut card = float::popover_card().min_w(px(MIN_WIDTH));
         let mut pending_separator = false;
         let mut drawn = 0usize;
@@ -144,14 +159,14 @@ impl ContextMenu {
                         card = card.child(float::divider().my(px(2.0)));
                     }
                     drawn += 1;
-                    card = card.child(row(&id, label, tone, act));
+                    card = card.child(row(&id, label, tone, act, dismiss.clone()));
                 }
             }
         }
         float::anchored_at(
             id,
             at,
-            Dismiss::on_press_out(dismiss),
+            Dismiss::on_press_out(move |window, cx| dismiss(window, cx)),
             card.agent_node(Role::Card, MENU_LABEL).into_any_element(),
         )
     }
@@ -166,7 +181,13 @@ pub const MENU_LABEL: &str = "Context menu";
 /// treatment every other float in the app gets.
 const MIN_WIDTH: f32 = 176.0;
 
-fn row(menu: &SharedString, label: SharedString, tone: Tone, act: Dismissal) -> AnyElement {
+fn row(
+    menu: &SharedString,
+    label: SharedString,
+    tone: Tone,
+    act: Dismissal,
+    close: Closer,
+) -> AnyElement {
     let key = SharedString::from(format!("{menu}:{label}"));
     let mut row = float::menu_row(RowState::Rest, key.clone())
         .id(ElementId::Name(key))
@@ -174,7 +195,10 @@ fn row(menu: &SharedString, label: SharedString, tone: Tone, act: Dismissal) -> 
     if tone == Tone::Destructive {
         row = row.text_color(ladder::danger());
     }
-    row.on_click(move |_, window, cx| act(window, cx))
-        .agent_node(Role::Button, label)
-        .into_any_element()
+    row.on_click(move |_, window, cx| {
+        act(window, cx);
+        close(window, cx);
+    })
+    .agent_node(Role::Button, label)
+    .into_any_element()
 }

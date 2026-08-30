@@ -40,6 +40,19 @@ impl From<DistributeLayout> for Layout {
     }
 }
 
+/// The inverse, for a caller that solved a preview locally and has to say what
+/// it previewed. Beside the forward conversion so the two spellings of one
+/// union cannot drift apart unnoticed.
+impl From<Layout> for DistributeLayout {
+    fn from(layout: Layout) -> DistributeLayout {
+        match layout {
+            Layout::Even => DistributeLayout::Even,
+            Layout::Spacing(metres) => DistributeLayout::Spacing { metres },
+            Layout::Span(from, to) => DistributeLayout::Span { from, to },
+        }
+    }
+}
+
 /// One fixture a distribution created.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
