@@ -810,6 +810,44 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     if app.visualizer.is_none() {
         return active_tab(app, window, cx);
     }
+    // The stage tab *is* the picture: its chrome floats over the room rather
+    // than sitting under it, so there is nothing to split and no seam to drag.
+    // Every other tab is an editor beside a rig view, and keeps the split.
+    //
+    // This is the one place the difference is stated. A stage page that had to
+    // be told how tall the room was would be a page that could disagree with
+    // it.
+    let full_bleed = matches!(app.workspace.active_body(), Some(Body::Stage(_)));
+    if full_bleed {
+        let Luma {
+            visualizer,
+            library,
+            ..
+        } = app;
+        let room = visualizer
+            .as_mut()
+            .map(|state| visualizer::visualizer(state, &cx.entity(), library, window));
+        return div()
+            .flex_1()
+            .min_h_0()
+            .relative()
+            .key_context(keymap::context::VISUALIZER)
+            .children(room)
+            // The tab renders as an overlay inside the room's own box, so the
+            // builder's floats are positioned against the picture they aim at.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    // A flex box, because `active_tab` sizes itself with
+                    // `flex_1` — inside a bare absolute parent that resolves to
+                    // nothing and the whole page collapses to zero height.
+                    .flex()
+                    .flex_col()
+                    .child(active_tab(app, window, cx)),
+            )
+            .into_any_element();
+    }
     let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
     let (stage_height, _) = app.visualizer_split.resolve(available);
     let grip = visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx);
@@ -995,6 +1033,9 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     // Read before the workspace is borrowed mutably: the builder lives beside
     // the picture, not in the tab, and its state is a projection either way.
     let stage_view = app.stage_view();
+    // Evaluated here because the tween lives on the builder beside the picture
+    // and only the shell holds it mutably — see `Build::inspector_target`.
+    let sheet = app.stage_inspector_width(window, cx);
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
@@ -1005,7 +1046,8 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         Body::Graph(state) => graph::graph(state, &entity).into_any_element(),
         Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
         Body::Stage(state) => {
-            stage::stage_page(state, &entity, stage_view.as_ref()).into_any_element()
+            stage::stage_page(state, &entity, stage_view.as_ref(), sheet, window, cx)
+                .into_any_element()
         }
     };
     div()

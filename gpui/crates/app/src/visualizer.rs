@@ -92,6 +92,15 @@ const STATS_OVERLAY_TOP: Pixels = px(12.);
 /// by the overlay that draws it *and* by the camera fit, so the two cannot
 /// drift: a rig framed to the whole pane is framed partly under this chrome.
 const TOOLBAR_OVERLAY_BOTTOM: Pixels = px(16.);
+
+/// How tall [`toolbar`] comes out: two 8px pads, one line of 12px text, and
+/// the seam under it.
+///
+/// Named because the stage page floats its chrome over this same box and must
+/// not cover the row that names the venue — see `shell::workspace_body`'s
+/// full-bleed branch. A number written down twice is a number that drifts the
+/// first time the padding is retuned.
+pub(crate) const HEADER_HEIGHT: f32 = 8. + 19.5 + 8. + 1.;
 /// Height of one control slab plus the hairline trim around it — the vertical
 /// span the toolbar occupies, and so the band the fit keeps clear.
 const OVERLAY_BAND: Pixels = px(30.);
@@ -651,7 +660,11 @@ impl RenderLab {
             environment_enabled: editor_lit,
             background_color: scene_desc::Environment::EDITOR.background,
             ambient_color: scene_desc::Environment::EDITOR.ambient_color,
-            ambient_intensity: if editor_lit { 0.2 } else { 0.0 },
+            ambient_intensity: if editor_lit {
+                scene_desc::Environment::EDITOR.ambient_intensity
+            } else {
+                0.0
+            },
             probe_enabled: false,
             probe_intensity: 0.8,
             probe_rotation_deg: 0.0,
@@ -678,7 +691,11 @@ impl RenderLab {
     fn set_editor_lit(&mut self, editor_lit: bool) {
         self.sun_enabled = editor_lit;
         self.environment_enabled = editor_lit;
-        self.ambient_intensity = if editor_lit { 0.2 } else { 0.0 };
+        self.ambient_intensity = if editor_lit {
+            scene_desc::Environment::EDITOR.ambient_intensity
+        } else {
+            0.0
+        };
         self.grid_enabled = editor_lit;
     }
 
@@ -977,10 +994,12 @@ impl Visualizer {
                         });
             }
         }
-        if rig.is_empty() {
-            self.status = Status::Empty(format!("{} has nothing patched", self.venue_name));
-            return;
-        }
+        // No early return for an empty rig. A venue with nothing in it is
+        // exactly the venue the builder exists to fill, and returning here left
+        // it with no scene — so no floor, no grid, and nothing to put a first
+        // piece *on*. The room is built whether or not anything is patched;
+        // "nothing patched" is a fact the header states, not a reason to draw
+        // an empty pane.
         let definitions: BTreeMap<_, _> = rig
             .definitions
             .iter()
@@ -2595,12 +2614,18 @@ fn clock_readout(library: &Library) -> Div {
         )))
 }
 
-/// The web's bottom-centre floating toolbar, cut to the verbs that mean
-/// something with no editing: the two zoom buttons.
+/// The bottom-centre floating toolbar: how the camera is driven, and which
+/// gizmo the selection wears.
+///
+/// Float tier, not slab. It hangs unattached over the picture, which is the
+/// whole of `luma_ui::float`'s rule about which language a control speaks —
+/// and since the builder's chrome floats over this same viewport, a row of
+/// opaque square uppercase slabs beside a translucent rounded popover would be
+/// two design languages in one tab.
 fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
     let zoom = |label: &'static str, factor: f32| {
         let app = app.clone();
-        luma_ui::luma_button(label, Enabled::Yes)
+        luma_ui::float::btn(label, label)
             .id(label)
             .on_click(move |_, _, cx| {
                 app.update(cx, |this, cx| {
@@ -2612,9 +2637,10 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
             })
             .agent_node(Role::Button, label)
     };
+    let current = state.gizmo_mode;
     let mode = |label: &'static str, mode: GizmoMode| {
         let app = app.clone();
-        luma_ui::luma_button(label, Enabled::Yes)
+        luma_ui::float::segment(label, current == mode, label)
             .id(label)
             .on_click(move |_, _, cx| {
                 app.update(cx, |this, cx| {
@@ -2624,7 +2650,7 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     cx.notify();
                 });
             })
-            .agent_node(Role::Button, label)
+            .agent_node(Role::Toggle, label)
     };
     div()
         .absolute()
@@ -2635,17 +2661,22 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
         .justify_center()
         .when(matches!(state.status, Status::Live { .. }), |el| {
             el.child(
-                div()
-                    .flex()
-                    .gap(px(1.))
-                    .bg(ladder::trim())
-                    .p(px(1.))
+                luma_ui::float::popover_card()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.))
+                    .p(px(4.))
                     // The bar, not the centring row it sits in: an opaque
                     // surface over the viewport owns the pointer it covers
                     // (see [`listen`]), and the row is air either side of it.
                     .occlude()
-                    .child(mode("Translate", GizmoMode::Translate))
-                    .child(mode("Rotate", GizmoMode::Rotate))
+                    // The two gizmo modes are one choice, so they share one
+                    // track; the two zooms are two verbs and stay two buttons.
+                    .child(
+                        luma_ui::float::segmented()
+                            .child(mode("Translate", GizmoMode::Translate))
+                            .child(mode("Rotate", GizmoMode::Rotate)),
+                    )
                     .child(zoom("Zoom In", DOLLY_IN))
                     .child(zoom("Zoom Out", DOLLY_OUT)),
             )
@@ -2708,6 +2739,13 @@ fn fps_reading(stage: &Stage) -> FpsReading {
 /// numbers the hitch ring already records, under the same labels the harness
 /// has always read (`DRAW`, `UI`, `PRES`, `CPU`).
 fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
+    // The renderer lab's instrument, shown with the lab. It is pointed at the
+    // renderer rather than at the room, and on its own it sat in the top-left
+    // corner of every screenshot anybody ever took of this page. One control
+    // for "I am looking at the renderer" rather than two.
+    if !state.render_lab.open {
+        return div();
+    }
     let live = matches!(state.status, Status::Live { .. });
     let expanded = state.fps_expanded;
     let (resting, reading, draw, ui, pres, gpu, shadows) = {

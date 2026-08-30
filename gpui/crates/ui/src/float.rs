@@ -31,6 +31,7 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, Div, FontWeight, SharedString, Window};
 use gpui_component::{Icon, IconName};
 
+use crate::node::Instrument as _;
 use crate::{glass, ladder, motion, radius, select};
 
 // ---------------------------------------------------------------------------
@@ -656,6 +657,269 @@ pub fn field() -> Div {
         .text_size(px(12.0))
         .text_color(ladder::foreground())
 }
+
+// ---------------------------------------------------------------------------
+// Labelled controls
+// ---------------------------------------------------------------------------
+
+/// One argument on glass: a [`label`] over the control it names.
+///
+/// The float tier's answer to [`crate::arg::arg_row`], and it exists because
+/// that one writes its label in the instrument tier's 9px uppercase
+/// silkscreen. A stencilled panel legend inside a translucent popover is the
+/// same category error [`btn`] avoids on the other side — see this module's
+/// header. Label *over* control for the reason `arg::arg_row` states: every
+/// control then gets the card's full width whatever it is called.
+pub fn arg_row(label_text: impl Into<SharedString>, control: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(ARG_LABEL_GAP))
+        .w_full()
+        .child(label(label_text))
+        .child(control)
+}
+
+/// The seam between an [`arg_row`]'s label and its control.
+const ARG_LABEL_GAP: f32 = 6.0;
+
+// ---------------------------------------------------------------------------
+// Segmented
+// ---------------------------------------------------------------------------
+
+/// The float tier's one-of-N control: cells in a recessed track, the chosen
+/// one lit.
+///
+/// It is here and not beside [`crate::luma_toggle_group`] for the reason this
+/// module exists at all: that group is a row of `luma_button` slabs — opaque,
+/// square, 9px uppercase — and a row of those inside a popover paints out the
+/// glass it sits on. The two are the same *concept* on the two tiers, the way
+/// [`btn`] and `luma_button` are.
+///
+/// The track is [`field`]'s recessed box, so a segmented control and the field
+/// beside it read as one row of holes; the lit cell takes the **one** selection
+/// recipe ([`glass::card_selected_bg`] and its inset ring), so a chosen segment
+/// and a chosen [`menu_row`] cannot say "chosen" two different ways.
+///
+/// The caller builds the cells with [`segment`] so each can carry its own id
+/// and click.
+pub fn segmented() -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SEGMENT_GAP))
+        .h(px(crate::CONTROL_HEIGHT))
+        .p(px(SEGMENT_GAP))
+        .rounded(px(radius::ROW))
+        .border_1()
+        .border_color(glass::hairline(0.08))
+        .bg(glass::ink(0.03))
+}
+
+/// One cell of a [`segmented`] track. The caller adds `.id()` and the click.
+///
+/// `fade_key` as in [`menu_row`]: an unchosen cell is a hover target and takes
+/// the same blended wash every other resting surface on this tier takes.
+pub fn segment(
+    label_text: impl Into<SharedString>,
+    chosen: bool,
+    fade_key: impl Into<SharedString>,
+) -> Div {
+    let cell = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .flex_1()
+        .h_full()
+        .px(px(SEGMENT_PAD))
+        .rounded(px(radius::CONTROL))
+        .text_size(px(12.0))
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
+        .text_color(ladder::foreground_alpha(if chosen { 1.0 } else { 0.55 }))
+        .child(select::sentence_case(&label_text.into()));
+    let state = if chosen {
+        RowState::Selected
+    } else {
+        RowState::Rest
+    };
+    row_state_paint(cell, state, fade_key)
+}
+
+/// The track's inset, and so also the air between two cells — one number,
+/// because a cell's plate must clear the track's edge by exactly what it
+/// clears its neighbour by or the row reads as ragged.
+const SEGMENT_GAP: f32 = 2.0;
+
+/// A cell's own horizontal inset. Wider than [`SEGMENT_GAP`] so a two-letter
+/// label still reads as a cell rather than as a word in a box.
+const SEGMENT_PAD: f32 = 10.0;
+
+// ---------------------------------------------------------------------------
+// Numbers
+// ---------------------------------------------------------------------------
+
+/// A [`scrub`] drag in flight, and *which* scrub is in it.
+///
+/// gpui routes a drag by its payload's type, so every scrub in the window
+/// shares this one type and hears every scrub's drag; the id is how a listener
+/// knows the move is its own. Exactly [`crate::luma_slider`]'s arrangement, for
+/// exactly its reason.
+#[derive(Clone)]
+struct ScrubDrag {
+    id: SharedString,
+}
+
+impl crate::arg::OwnedDrag for ScrubDrag {
+    fn owner(&self) -> &SharedString {
+        &self.id
+    }
+}
+
+/// A whole number the pointer sets by sweeping across it — the float tier's
+/// value box.
+///
+/// This is [`crate::luma_slider`] on glass, and it is a separate function for
+/// the tier reason rather than a behavioural one: the slider paints an opaque
+/// `ladder::apex` slab with a `ladder::primary` fill, which is a hole cut in a
+/// translucent card. Here the box is [`field`]'s and the fill is [`glass::ink`],
+/// so the control reads as the same recessed hole as the field beside it, with
+/// its value shaded in.
+///
+/// It replaces a **pair of step buttons**, which is what a count had before:
+/// two buttons say "count" three times (the readout and both verbs) and give
+/// the pointer no way to ask for eight without pressing four times.
+///
+/// The value handed to `on_change` is absolute and already clamped — see
+/// [`crate::luma_slider`] on why a drag may not wind up. A press that does not
+/// move changes nothing.
+pub fn scrub(
+    id: impl Into<SharedString>,
+    value: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+    width: f32,
+    on_change: impl Fn(f64, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<Div> {
+    let id = id.into();
+    let span = (max - min).max(f64::EPSILON);
+    #[allow(clippy::cast_possible_truncation)]
+    let fraction = (((value - min) / span) as f32).clamp(0.0, 1.0);
+    let text = format_step(value, step);
+    let moved = id.clone();
+    field()
+        .relative()
+        .w(px(width))
+        .px(px(0.0))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .h_full()
+                .w(gpui::relative(fraction))
+                .bg(glass::ink(SCRUB_FILL)),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .px(px(PICKER_CHIP_PAD))
+                .flex()
+                .items_center()
+                .font_family(crate::fonts::MONO)
+                .text_size(px(11.0))
+                .text_color(ladder::foreground())
+                .child(text.clone())
+                // The number the box draws, published — see
+                // [`crate::luma_slider`]: without it a driver can sweep the
+                // control and has no way to read what it landed on.
+                // A slider, because that is what it is: the harness drags a
+                // control by its node, and a value box published as prose is
+                // one no script can move.
+                .agent_node(crate::node::Role::Slider, format!("{id} = {text}")),
+        )
+        .id(gpui::ElementId::Name(id.clone()))
+        .cursor_ew_resize()
+        .on_drag(ScrubDrag { id }, |_, _, _, cx| {
+            // The press belongs to the control, not to the picture under the
+            // card: a scrub over a 3D stage would otherwise orbit the camera.
+            cx.stop_propagation();
+            cx.new(|_| crate::drag::DragGhost)
+        })
+        .on_drag_move(crate::arg::drag_fraction(
+            moved,
+            move |at, _: &ScrubDrag, window, cx| {
+                let raw = min + span * f64::from(at.x);
+                // Land on the step, so a swept value is one the model can
+                // hold: the caller's step is what makes 0.5 m a length and
+                // 0.4999 m a rounding artefact in a readout.
+                let value = (raw / step).round() * step;
+                on_change(value.clamp(min, max), window, cx);
+            },
+        ))
+}
+
+/// Spell `value` to the precision its own `step` carries — whole numbers for a
+/// count, two places for a length in metres.
+///
+/// Derived from the step rather than passed alongside it because the two can
+/// only ever disagree: a control that steps by 0.5 and prints no decimals
+/// shows the same digit for two different values.
+fn format_step(value: f64, step: f64) -> String {
+    let places = if step >= 1.0 {
+        0
+    } else if step >= 0.1 {
+        1
+    } else {
+        2
+    };
+    format!("{value:.places$}")
+}
+
+/// How much ink a scrub's fill lays down. One step above [`field`]'s own
+/// recessed wash — enough to read as a level, not so much that it competes
+/// with the digits over it.
+const SCRUB_FILL: f32 = 0.07;
+
+// ---------------------------------------------------------------------------
+// Badges
+// ---------------------------------------------------------------------------
+
+/// A count riding on a control — the "there are four of these" mark on a
+/// toolbar button.
+///
+/// Deliberately not a colour: a badge says *how many*, and what to think about
+/// the number is the caller's to say by handing it a tint. A capsule rather
+/// than a step off [`radius`]'s ladder — the ladder is a vocabulary of
+/// *corners*, and a shape whose radius is defined as half its own height is
+/// not choosing one, the same way an avatar or a status dot is not.
+pub fn badge(count: usize, tint: gpui::Hsla) -> Div {
+    div()
+        .flex_none()
+        .h(px(BADGE_HEIGHT))
+        .min_w(px(BADGE_HEIGHT))
+        .px(px(4.0))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(tint)
+        .text_size(px(9.5))
+        .font_weight(FontWeight::MEDIUM)
+        .font_family(crate::fonts::MONO)
+        .text_color(ladder::background())
+        .child(count.to_string())
+}
+
+/// A badge's height. Small enough to ride *on* a control rather than beside
+/// it, and what makes the capsule a circle at one digit.
+const BADGE_HEIGHT: f32 = 14.0;
 
 // ---------------------------------------------------------------------------
 // Anchored menus
