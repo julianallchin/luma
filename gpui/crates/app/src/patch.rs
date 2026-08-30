@@ -53,6 +53,30 @@ pub(crate) use add::render as add_fixtures_dialog;
 pub(crate) use add::tick as tick_add_fixtures;
 pub(crate) use add::AddFixtures;
 
+/// What the header's chips hang.
+///
+/// Three things a *universe* answers for, rather than three things a fixture
+/// does — which is why none of them is a column, and why they are floats over
+/// the table instead of panels beside it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Panel {
+    Footprint,
+    Outputs,
+    Groups,
+}
+
+impl Panel {
+    pub(crate) const ALL: [Panel; 3] = [Panel::Footprint, Panel::Outputs, Panel::Groups];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Panel::Footprint => "Footprint",
+            Panel::Outputs => "Outputs",
+            Panel::Groups => "Groups",
+        }
+    }
+}
+
 /// Which cell of a row an edit is in.
 ///
 /// A closed list because it is also the list of things this page may write:
@@ -112,6 +136,13 @@ pub(crate) struct Patch {
     pub(crate) discovery_error: Option<SharedString>,
     /// Which universe row has its node menu open.
     pub(crate) bind_menu: Option<i64>,
+    /// The one panel hanging off the header, if any. One at a time, because
+    /// they are three answers to "and where does this come out" and a page
+    /// showing all three at once is the stack of labelled panels this design
+    /// replaced.
+    pub(crate) panel: Option<Panel>,
+    /// Whether the footprint's universe picker has its menu down.
+    pub(crate) universe_menu: bool,
 
     pub(crate) selected: HashSet<String>,
     pub(crate) editing: Option<Editing>,
@@ -140,6 +171,8 @@ impl Patch {
             nodes: Vec::new(),
             discovery_error: None,
             bind_menu: None,
+            panel: None,
+            universe_menu: false,
             selected: HashSet::new(),
             editing: None,
             refusal: None,
@@ -182,8 +215,7 @@ impl Patch {
         let leaf = data
             .groups
             .iter()
-            .filter(|node| node.fixtures.iter().any(|f| f == id))
-            .next_back()?;
+            .rfind(|node| node.fixtures.iter().any(|f| f == id))?;
         let mut path = vec![leaf.label.clone()];
         let mut parent = leaf.parent_id.clone();
         while let Some(id) = parent {
@@ -304,6 +336,7 @@ impl Luma {
         };
         state.strip_universe = universe;
         state.strip_refusal = None;
+        state.universe_menu = false;
         state.generation += 1;
         let generation = state.generation;
         let pending = self.library.universe_occupancy(&venue_id, universe);
@@ -365,7 +398,10 @@ impl Patch {
             // an empty list would read as a quiet network.
             Err(error) => {
                 self.nodes.clear();
-                self.discovery_error = Some(error.to_string().into());
+                // The seam's own sentence, without the wire verb it prefixes:
+                // an operator never typed `get_discovered_nodes` and should
+                // not have to read it to learn their machine has no Art-Net.
+                self.discovery_error = Some(refusal_message(&error).into());
             }
         }
     }
@@ -963,6 +999,37 @@ impl Luma {
 
     // -- outputs ---------------------------------------------------------------
 
+    /// Show one of the header's panels, or put the one that is up away.
+    pub(crate) fn toggle_patch_panel(
+        &mut self,
+        venue_id: String,
+        panel: Panel,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.panel = (state.panel != Some(panel)).then_some(panel);
+            state.universe_menu = false;
+            state.bind_menu = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_patch_panel(&mut self, venue_id: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.panel = None;
+            state.universe_menu = false;
+            state.bind_menu = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_universe_menu(&mut self, venue_id: String, cx: &mut Context<Self>) {
+        if let Some(state) = self.patch_mut(&venue_id) {
+            state.universe_menu = !state.universe_menu;
+        }
+        cx.notify();
+    }
+
     pub(crate) fn open_bind_menu(
         &mut self,
         venue_id: String,
@@ -1029,22 +1096,21 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // The page
 // ---------------------------------------------------------------------------
 
-/// Header, table, and the rail that answers "and where does it come out".
+/// The table, under one band of chrome.
+///
+/// The table *is* the page: everything that is about a universe rather than a
+/// fixture — the footprint, the outputs, the derived groups — hangs off a chip
+/// in the band as a float, one at a time. Three panels standing permanently
+/// beside the rows would be three walls of legends competing with the thing
+/// the page is for.
 pub(crate) fn patch(state: &Patch, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
     div()
         .size_full()
         .flex()
         .flex_col()
         .bg(ladder::background())
-        .child(header(state, app))
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .child(table::table(state, app, window))
-                .child(rail(state, app)),
-        )
+        .child(band(state, app))
+        .child(table::table(state, app, window))
         .children(
             state
                 .menu
@@ -1060,36 +1126,55 @@ pub(crate) fn patch(state: &Patch, app: &Entity<Luma>, window: &Window) -> impl 
         .agent_node(Role::Card, format!("{} Patch", state.venue_name))
 }
 
-fn header(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
+/// Title, what the patch holds, and the four things a person came here to do.
+fn band(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
     let add = app.clone();
     let auto = app.clone();
     let for_add = state.venue_id.clone();
     let for_auto = state.venue_id.clone();
     div()
         .flex_shrink_0()
-        .px(px(18.0))
-        .py(px(14.0))
+        .h(px(BAND_HEIGHT))
+        .px(px(20.0))
         .flex()
         .items_center()
-        .gap(px(12.0))
+        .gap(px(8.0))
         .border_b_1()
-        .border_color(ladder::trim())
+        .border_color(luma_ui::glass::hairline(0.07))
         .child(
             div()
-                .flex_1()
-                .min_w_0()
-                .child(luma_ui::silkscreen("PATCH"))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .mr(px(12.0))
                 .child(
                     div()
-                        .mt(px(5.0))
+                        .text_size(px(15.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(ladder::foreground())
+                        .child("Patch"),
+                )
+                .child(
+                    div()
                         .text_size(px(12.0))
-                        .text_color(ladder::muted_foreground())
+                        .text_color(ladder::foreground_alpha(0.55))
                         .child(subtitle(state))
                         .agent_node(Role::Text, subtitle(state)),
                 ),
         )
+        .child(div().flex_1().min_w_0())
+        .children(Panel::ALL.map(|panel| panel_chip(state, panel, app)))
         .child(
-            luma_ui::luma_button("Add fixtures", luma_ui::Enabled::Yes)
+            luma_ui::float::btn("Auto patch", "patch-auto")
+                .id("patch-auto")
+                .on_click(move |_, _, cx| {
+                    let venue = for_auto.clone();
+                    auto.update(cx, |this, cx| this.auto_patch_venue(venue, cx));
+                })
+                .agent_node(Role::Button, "Auto patch"),
+        )
+        .child(
+            luma_ui::float::btn_primary("Add fixtures")
                 .id("patch-add")
                 .on_click(move |_, window, cx| {
                     let venue = for_add.clone();
@@ -1097,15 +1182,58 @@ fn header(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                 })
                 .agent_node(Role::Button, "Add fixtures"),
         )
+}
+
+/// A chip in the band, and the float it hangs when it is lit.
+fn panel_chip(state: &Patch, panel: Panel, app: &Entity<Luma>) -> impl IntoElement {
+    let open = state.panel == Some(panel);
+    let toggled = app.clone();
+    let venue = state.venue_id.clone();
+    let label = panel.label();
+    div()
+        .relative()
+        .flex_shrink_0()
         .child(
-            luma_ui::luma_button("Auto Patch", luma_ui::Enabled::Yes)
-                .id("patch-auto")
-                .on_click(move |_, _, cx| {
-                    let venue = for_auto.clone();
-                    auto.update(cx, |this, cx| this.auto_patch_venue(venue, cx));
+            luma_ui::float::chip()
+                .id(SharedString::from(format!("patch-panel-{label}")))
+                .when(open, |chip| {
+                    chip.bg(luma_ui::glass::card_selected_bg())
+                        .text_color(ladder::foreground())
                 })
-                .agent_node(Role::Button, "Auto Patch"),
+                .on_click(move |_, _, cx| {
+                    let venue = venue.clone();
+                    toggled.update(cx, |this, cx| this.toggle_patch_panel(venue, panel, cx));
+                })
+                .child(label)
+                .agent_node(Role::Toggle, label)
+                .agent_focused(open),
         )
+        .when(open, |slot| slot.child(panel_float(state, panel, app)))
+}
+
+fn panel_float(state: &Patch, panel: Panel, app: &Entity<Luma>) -> AnyElement {
+    let dismissed = app.clone();
+    let venue = state.venue_id.clone();
+    let body = match panel {
+        Panel::Footprint => footprint::footprint(state, app),
+        Panel::Outputs => outputs::outputs(state, app),
+        Panel::Groups => groups::groups(state),
+    };
+    luma_ui::float::anchored_below(
+        SharedString::from(format!("patch-panel-float-{}", panel.label())),
+        luma_ui::CONTROL_HEIGHT,
+        luma_ui::float::Dismiss::on_press_out(move |_, cx| {
+            let venue = venue.clone();
+            dismissed.update(cx, |this, cx| this.close_patch_panel(venue, cx));
+        }),
+        luma_ui::float::popover_card()
+            .w(px(PANEL_WIDTH))
+            .p(px(14.0))
+            .gap(px(10.0))
+            .child(body)
+            .agent_node(Role::Card, panel.label())
+            .into_any_element(),
+    )
 }
 
 /// The line under the title: what the last act did, or what the patch holds.
@@ -1114,10 +1242,10 @@ fn subtitle(state: &Patch) -> SharedString {
         return notice.clone();
     }
     if let Some(error) = &state.error {
-        return format!("Failed to load the patch: {error}").into();
+        return format!("Could not read the patch: {error}").into();
     }
     let Some(data) = state.data.as_ref() else {
-        return "Loading the patch…".into();
+        return "Reading the patch…".into();
     };
     let unplaced = data
         .fixtures
@@ -1134,7 +1262,7 @@ fn subtitle(state: &Patch) -> SharedString {
 
 /// `n thing`, `n things`. One helper rather than an `s` at each call site,
 /// because "1 universes" is the kind of thing nobody notices until it ships.
-fn plural(count: usize, noun: &str) -> String {
+pub(crate) fn plural(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("{count} {noun}")
     } else {
@@ -1142,53 +1270,11 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
-/// Everything that is about a *universe* rather than about a fixture.
-fn rail(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
-    div()
-        .flex_shrink_0()
-        .w(px(RAIL_WIDTH))
-        .h_full()
-        .flex()
-        .flex_col()
-        .border_l_1()
-        .border_color(ladder::trim())
-        .child(footprint::footprint(state, app))
-        .child(outputs::outputs(state, app))
-        .child(groups::groups(state))
-}
+/// One row of chrome, a shade taller than a dialog's band because it carries a
+/// title and a subtitle rather than one line of controls.
+const BAND_HEIGHT: f32 = 62.0;
 
-/// Wide enough for a 32-column footprint grid at 8 px a cell plus its gutters.
-const RAIL_WIDTH: f32 = 336.0;
-
-/// A section in the rail: a silkscreen heading over its body.
-///
-/// `grow` says whether it takes the room left over — one section does, the
-/// others are the size of what is in them. Passed rather than chained on by
-/// the caller because the automation node has to be the outermost thing, and a
-/// caller that added layout after it would be sizing a box the tree does not
-/// describe.
-fn section(heading: &'static str, grow: bool, body: AnyElement) -> AnyElement {
-    div()
-        .flex()
-        .flex_col()
-        .min_h_0()
-        .map(|section| {
-            if grow {
-                section.flex_1()
-            } else {
-                section.flex_shrink_0()
-            }
-        })
-        .border_b_1()
-        .border_color(ladder::trim())
-        .child(
-            div()
-                .px(px(12.0))
-                .pt(px(12.0))
-                .pb(px(8.0))
-                .child(luma_ui::silkscreen(heading)),
-        )
-        .child(body)
-        .agent_node(Role::Card, heading)
-        .into_any_element()
-}
+/// Wide enough for a 32-column footprint grid at 8 px a cell plus the card's
+/// own inset — the widest of the three panels, and they share a width so
+/// switching between them does not move the float.
+const PANEL_WIDTH: f32 = 332.0;

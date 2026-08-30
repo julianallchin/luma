@@ -825,15 +825,23 @@ impl Fixture {
         let span = (count as f64).max(1.0) * 0.6;
         let depth = if self.skewed_rig { SKEW_DEPTH_M } else { 0.0 };
         for i in 0..count {
+            // Sixty-four eight-channel fixtures fill a universe, and the
+            // addressing migration refuses a footprint that leaves one. A rig
+            // of 480 is four hundred and eighty *real* fixtures, so it rolls
+            // to the next universe the way the allocator does rather than
+            // running off the end of the first.
+            let universe = i as i64 / FIXTURES_PER_UNIVERSE + 1;
+            let address = (i as i64 % FIXTURES_PER_UNIVERSE) * 8 + 1;
             sqlx::query(
                 "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
                                        manufacturer, model, mode_name, fixture_path, label,
                                        pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-                 VALUES (?, NULL, ?, 1, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, ?, 3.0, 0.0, 0.0, 0.0)",
+                 VALUES (?, NULL, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, ?, 3.0, 0.0, 0.0, 0.0)",
             )
             .bind(format!("fixture-{i}"))
             .bind(VENUE)
-            .bind(i as i64 * 8 + 1)
+            .bind(universe)
+            .bind(address)
             .bind(MOVER_PATH)
             .bind(format!("Mover {i}"))
             .bind((i as f64 / (count.max(2) - 1) as f64 - 0.5) * span)
@@ -917,6 +925,9 @@ impl Fixture {
         .expect("failed to seed the beat grid");
     }
 }
+
+/// How many eight-channel movers fit in one DMX universe.
+const FIXTURES_PER_UNIVERSE: i64 = 512 / 8;
 
 /// Where a named fixture's library lives.
 ///
