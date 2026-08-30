@@ -92,9 +92,7 @@ impl AuthoredDocuments {
         input: CreateAgentThreadInput,
         principal: Option<&str>,
     ) -> Result<AgentThread> {
-        input
-            .authored_route()
-            .map_err(AuthoredDocumentsError::Invalid)?;
+        input.route().map_err(AuthoredDocumentsError::Invalid)?;
         let request_id = normalized_creation_request_id(&input.request_id)?;
         let principal_key = principal_key(principal);
         let thread_id =
@@ -127,13 +125,21 @@ impl AuthoredDocuments {
             ));
         }
 
+        // A venue thread revises the room's relational rig, which has no
+        // authored document to guard or import — so there is nothing to hold
+        // while its row is inserted.
         let provisional = provisional_scope(&input, principal)?;
         let created = {
-            let _guard = self.document_guard(&provisional.document_id).await;
+            let _guard = match &provisional {
+                Some(scope) => Some(self.document_guard(&scope.document_id).await),
+                None => None,
+            };
             // Import a legacy live document before binding the thread. A failed
             // thread insert may leave legitimate authored history, never a partial
             // conversation or a second authority.
-            self.load_current_locked(pool, &provisional).await?;
+            if let Some(scope) = &provisional {
+                self.load_current_locked(pool, scope).await?;
+            }
             match agent_threads::create_thread_with_id(pool, &thread_id, input.clone(), principal)
                 .await
             {
@@ -284,17 +290,26 @@ impl AuthoredDocuments {
             )));
         };
         ensure_thread_owned(&thread, principal)?;
-        let scope = ResolvedScope::from_thread(&thread, principal)?;
+        // A venue thread revises no authored document: there is nothing to
+        // guard, no workspaces to retire, and its receipt names no document.
+        let scope = ResolvedScope::of_thread(&thread, principal)?;
         {
-            let _guard = self.document_guard(&scope.document_id).await;
+            let _guard = match &scope {
+                Some(scope) => Some(self.document_guard(&scope.document_id).await),
+                None => None,
+            };
             agent_threads::mark_thread_deleting(pool, thread_id, principal)
                 .await
                 .map_err(AuthoredDocumentsError::Scope)?;
         }
 
-        let workspace_ids = self
-            .thread_workspace_ids_for_cleanup(pool, &scope, thread_id)
-            .await?;
+        let workspace_ids = match &scope {
+            Some(scope) => {
+                self.thread_workspace_ids_for_cleanup(pool, scope, thread_id)
+                    .await?
+            }
+            None => Vec::new(),
+        };
 
         cleanup(workspace_ids).await.map_err(|error| {
             AuthoredDocumentsError::Storage(format!(
@@ -302,20 +317,26 @@ impl AuthoredDocuments {
             ))
         })?;
 
-        let _guard = self.document_guard(&scope.document_id).await;
+        let _guard = match &scope {
+            Some(scope) => Some(self.document_guard(&scope.document_id).await),
+            None => None,
+        };
         agent_threads::mark_thread_deleting(pool, thread_id, principal)
             .await
             .map_err(AuthoredDocumentsError::Scope)?;
-        self.retire_thread_workspaces_locked(pool, &scope, thread_id)
-            .await?;
+        if let Some(scope) = &scope {
+            self.retire_thread_workspaces_locked(pool, scope, thread_id)
+                .await?;
+        }
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|error| {
             AuthoredDocumentsError::Storage(format!("begin authored thread deletion: {error}"))
         })?;
+        let document_id = scope.as_ref().map(|scope| scope.document_id.to_string());
         let inserted_receipt = agent_threads::insert_thread_deletion_receipt(
             &mut transaction,
             thread_id,
             principal,
-            scope.document_id.as_str(),
+            document_id.as_deref(),
         )
         .await
         .map_err(AuthoredDocumentsError::Storage)?;
@@ -328,7 +349,7 @@ impl AuthoredDocuments {
                  WHERE principal_key = ? AND table_name = 'agent_threads'
                    AND record_id = ? AND op_type = 'upsert_explicit'",
             )
-            .bind(&scope.principal_key)
+            .bind(principal_key(principal))
             .bind(thread_id)
             .execute(&mut *transaction)
             .await
@@ -361,19 +382,21 @@ impl AuthoredDocuments {
     }
 }
 
+/// The authored document a new thread will write to, or `None` for a thread
+/// that writes no document at all.
 fn provisional_scope(
     input: &CreateAgentThreadInput,
     principal: Option<&str>,
-) -> Result<ResolvedScope> {
-    match input
-        .authored_route()
-        .map_err(AuthoredDocumentsError::Invalid)?
-    {
-        crate::models::agent_threads::AuthoredThreadRoute::Track {
-            track_id,
-            venue_id,
-            score_id,
-        } => ResolvedScope::track(
+) -> Result<Option<ResolvedScope>> {
+    match input.route().map_err(AuthoredDocumentsError::Invalid)? {
+        crate::models::agent_threads::ThreadRoute::Venue { .. } => return Ok(None),
+        crate::models::agent_threads::ThreadRoute::Authored(
+            crate::models::agent_threads::AuthoredThreadRoute::Track {
+                track_id,
+                venue_id,
+                score_id,
+            },
+        ) => ResolvedScope::track(
             principal,
             super::TrackScope {
                 score_id: score_id.to_owned(),
@@ -381,11 +404,14 @@ fn provisional_scope(
                 venue_id: venue_id.to_owned(),
             },
         ),
-        crate::models::agent_threads::AuthoredThreadRoute::Pattern {
-            pattern_id,
-            implementation_id,
-        } => ResolvedScope::pattern(principal, pattern_id, implementation_id),
+        crate::models::agent_threads::ThreadRoute::Authored(
+            crate::models::agent_threads::AuthoredThreadRoute::Pattern {
+                pattern_id,
+                implementation_id,
+            },
+        ) => ResolvedScope::pattern(principal, pattern_id, implementation_id),
     }
+    .map(Some)
 }
 
 fn verify_agent_thread_creation_scope(

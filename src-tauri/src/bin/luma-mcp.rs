@@ -11,6 +11,7 @@
 //! ```text
 //! find   {track?, venue?}                   -> matching tracks and venues
 //! open   {track_query|track_id, venue_id?}  -> the bound namespace's catalog
+//! open   {venue_id}                         -> the same, for a room with no track
 //! python {code}                             -> stdout/repr/traceback + figures
 //! reset  {}                                 -> a fresh workspace and kernel
 //! cancel {}                                 -> interrupt the cell in flight
@@ -27,6 +28,11 @@
 //! second copy. What it adds is the *session*: an MCP client has no editor to
 //! read a track from, so `open` pins one durable agent thread and every later
 //! call addresses it.
+//!
+//! A session is usually a track in a room. Naming no track opens the *room*
+//! instead: a venue thread, whose namespace is `luma.venue` alone and which
+//! mints no score — a score is a track's membership in a room, and there is no
+//! track to have one.
 //!
 //! One subcommand sits beside the server, sharing its host and its admission:
 //!
@@ -69,6 +75,17 @@ const LISTING_LIMIT: usize = 60;
 // Session
 // -----------------------------------------------------------------------------
 
+/// What a session is *about*: a track in a room, or the room alone.
+///
+/// The room is not optional in either case — `luma.venue` is bound both times,
+/// and the venue is resolved before the thread is pinned. What varies is
+/// whether there is a track, and therefore a score.
+#[derive(Clone, Debug)]
+enum Subject {
+    Track { track_id: String, score_id: String },
+    Venue,
+}
+
 /// What `open` pinned. Every later call addresses this thread; `python` never
 /// takes a scope, exactly as the in-app tool never lets the model choose one.
 #[derive(Clone, Debug)]
@@ -85,15 +102,14 @@ struct Session {
     ///
     /// [`Role::Session`]: luma_lib::agent::transcript::Role::Session
     session_message_id: String,
-    track_id: String,
-    /// The room `luma.venue` describes. Always present: a session is a track
-    /// *in a venue*, and the venue is resolved before the thread is pinned.
+    /// The room `luma.venue` describes. Always present.
     venue_id: String,
-    /// The track's membership in that venue — the authored timeline
-    /// `luma.track` reads and edits. `open` binds the score the app would open
-    /// (see [`bind_venue`]) and creates one when the track has none, rather
-    /// than requiring the caller to have made it in the app first.
-    score_id: String,
+    /// The track and its membership in that venue — the authored timeline
+    /// `luma.track` reads and edits — or [`Subject::Venue`] when this session
+    /// is about the room alone. `open` binds the score the app would open (see
+    /// [`bind_venue`]) and creates one when the track has none, rather than
+    /// requiring the caller to have made it in the app first.
+    subject: Subject,
     /// What the client said is driving it, when it said. Remembered so `reset`
     /// rebinds the same writer, not just the same track.
     model: Option<String>,
@@ -134,13 +150,15 @@ fn tools() -> Value {
         ),
         tool(
             "open",
-            "Bind a track's Luma workspace to this session, and return the catalog of \
-             everything `luma` then exposes. Name the track with `track_id` or `track_query` \
-             (which matches artist and title); `find` searches for both. `venue_id` picks the \
-             room; without it the track's own venue is used, or the library's if there is \
-             only one. Opening a venue the track is not in yet adds it, which writes. Opening \
-             again replaces the session. `new_score` starts a blank score beside whatever the \
-             track already has in that room instead of continuing the latest one.",
+            "Bind a Luma workspace to this session, and return the catalog of everything \
+             `luma` then exposes. Name the track with `track_id` or `track_query` (which \
+             matches artist and title); `find` searches for both. `venue_id` picks the room; \
+             without it the track's own venue is used, or the library's if there is only one. \
+             Opening a venue the track is not in yet adds it, which writes. Name *no* track \
+             and the room itself is the subject: `luma.venue` is bound, `luma.track` is not \
+             there at all, and no score is written. Opening again replaces the session. \
+             `new_score` starts a blank score beside whatever the track already has in that \
+             room instead of continuing the latest one.",
             &json!({
                 "type": "object",
                 "properties": {
@@ -151,7 +169,7 @@ fn tools() -> Value {
                     },
                     "venue_id": {
                         "type": "string",
-                        "description": "Venue to bind. Defaults to the track's venue, or the library's only venue.",
+                        "description": "Venue to bind. Defaults to the track's venue, or the library's only venue. With no track named, this is the whole subject.",
                     },
                     "model": {
                         "type": "string",
@@ -175,7 +193,7 @@ fn tools() -> Value {
         ),
         tool(
             "reset",
-            "Throw the workspace and kernel away and bind the same track again. Every \
+            "Throw the workspace and kernel away and bind the same subject again. Every \
              variable, import and staged edit is lost.",
             &json!({ "type": "object", "properties": {} }),
         ),
@@ -226,8 +244,13 @@ async fn call(
     }
 }
 
-/// Resolve a track (and the venue/score that make `luma.venue` and
-/// `luma.track` real), pin a durable thread to it, and report the catalog.
+/// Resolve the subject — a track in a room, or a room on its own — pin a
+/// durable thread to it, and report the catalog.
+///
+/// Naming no track is not a degenerate open: it is the room's own session. It
+/// mints no score, so it is the only `open` that writes nothing to the library
+/// at all, and it is the only one that works against a library with no tracks
+/// in it.
 async fn open(
     services: &AppServices,
     arguments: &Value,
@@ -244,6 +267,9 @@ async fn open(
         .unwrap_or(false);
 
     let (tracks, venues) = library(services, venue_id).await?;
+    if track_id.is_none() && track_query.is_none() {
+        return open_venue(services, venue_id, &venues, model, session, client).await;
+    }
     let track = pick_track(&tracks, track_id, track_query)?;
     let track_id = string(&track, "id");
     let label = track_label(&track);
@@ -296,33 +322,13 @@ async fn open(
         .await;
     }
 
-    let appended = invoke(
-        services,
-        "agent_thread_append_messages",
-        json!({
-            "threadId": thread_id,
-            "input": {
-                "operationId": uuid(),
-                "expectedHeadMessageId": Value::Null,
-                "messages": [{ "role": "session", "parts": [
-                    { "type": "text", "text": format!("Session opened on {label}.") },
-                ]}],
-            },
-        }),
-    )
-    .await?;
-    let session_message_id = appended
-        .as_array()
-        .and_then(|messages| messages.first())
-        .map(|message| string(message, "id"))
-        .ok_or_else(|| format!("the session turn was not appended: {appended}"))?;
+    let session_message_id = session_turn(services, &thread_id, &label).await?;
 
     let opened = Session {
         thread_id,
         session_message_id,
-        track_id,
         venue_id,
-        score_id,
+        subject: Subject::Track { track_id, score_id },
         model: model.map(str::to_owned),
     };
     let previous = session.write().await.replace(opened.clone());
@@ -351,15 +357,136 @@ async fn open(
     // caller outside this process has on what the session *cost*: the harness
     // that spawned the client learns the price after the client hangs up, by
     // which time this server is gone, and `record-usage` needs an id.
+    let Subject::Track { track_id, score_id } = &opened.subject else {
+        unreachable!("this path binds a track");
+    };
     Ok(format!(
-        "opened {label}\ntrack {}\nvenue {}, score {}\nthread {}\n\n{}\n{}",
-        opened.track_id,
+        "opened {label}\ntrack {track_id}\nvenue {}, score {score_id}\nthread {}\n\n{}\n{}",
         opened.venue_id,
-        opened.score_id,
         opened.thread_id,
         catalog.stdout,
         skills::bundled().listing(),
     ))
+}
+
+/// Open the room itself: a venue thread, bound to `luma.venue` and nothing
+/// else.
+///
+/// The venue must be named, or be the library's only one. There is no track to
+/// infer it from, and guessing at which room a rig-building session is about
+/// would be the worst possible thing to be wrong about.
+async fn open_venue(
+    services: &AppServices,
+    requested: Option<&str>,
+    venues: &[Value],
+    model: Option<&str>,
+    session: &SessionCell,
+    client: &ClientCell,
+) -> Result<String, String> {
+    let venue = match (requested, venues) {
+        (Some(requested), _) => venues
+            .iter()
+            .find(|venue| string(venue, "id") == requested)
+            .ok_or_else(|| format!("no venue with id '{requested}'\n{}", venue_list(venues)))?,
+        (None, [only]) => only,
+        (None, []) => return Err("the library has no venue — create one in the app first".into()),
+        (None, many) => {
+            return Err(format!(
+                "name the venue to open with `venue_id`\n{}",
+                venue_list(many)
+            ))
+        }
+    };
+    let venue_id = string(venue, "id");
+    let label = string(venue, "name");
+
+    let connected = client.read().await.clone();
+    let thread = invoke(
+        services,
+        "agent_thread_create",
+        json!({ "input": {
+            "requestId": uuid(),
+            "agentKind": "venue_rig",
+            "subjectKind": "venue",
+            "subjectId": venue_id,
+            "venueId": venue_id,
+            "title": format!("mcp: {label}"),
+        }}),
+    )
+    .await?;
+    let thread_id = string(&thread, "id");
+    if let Some(connected) = &connected {
+        set_actor(
+            services,
+            "agent_thread_set_actor",
+            json!({ "threadId": thread_id, "actor": client_actor(connected, model) }),
+        )
+        .await;
+    }
+
+    let session_message_id = session_turn(services, &thread_id, &label).await?;
+    let opened = Session {
+        thread_id,
+        session_message_id,
+        venue_id,
+        subject: Subject::Venue,
+        model: model.map(str::to_owned),
+    };
+    let previous = session.write().await.replace(opened.clone());
+    if let Some(previous) = previous {
+        if let Err(error) = close(services, &previous).await {
+            eprintln!("[luma-mcp] closing the previous session: {error}");
+        }
+    }
+
+    let catalog = cell(services, &opened, "print(luma.catalog())").await?;
+    if catalog.status != "ok" {
+        return Err(format!(
+            "the kernel could not bind {label}: {}",
+            catalog.traceback.unwrap_or(catalog.stderr)
+        ));
+    }
+    Ok(format!(
+        "opened {label}\nvenue {}\nthread {}\n\n{}\n{}",
+        opened.venue_id,
+        opened.thread_id,
+        catalog.stdout,
+        skills::bundled().listing(),
+    ))
+}
+
+/// Open the session's turn: the one row every later cell is attributed to.
+///
+/// [`Role::Session`] and no speech — this client is a principal but not a
+/// *user*, and who opened it is the thread's actor, not a sentence in the
+/// transcript.
+///
+/// [`Role::Session`]: luma_lib::agent::transcript::Role::Session
+async fn session_turn(
+    services: &AppServices,
+    thread_id: &str,
+    label: &str,
+) -> Result<String, String> {
+    let appended = invoke(
+        services,
+        "agent_thread_append_messages",
+        json!({
+            "threadId": thread_id,
+            "input": {
+                "operationId": uuid(),
+                "expectedHeadMessageId": Value::Null,
+                "messages": [{ "role": "session", "parts": [
+                    { "type": "text", "text": format!("Session opened on {label}.") },
+                ]}],
+            },
+        }),
+    )
+    .await?;
+    appended
+        .as_array()
+        .and_then(|messages| messages.first())
+        .map(|message| string(message, "id"))
+        .ok_or_else(|| format!("the session turn was not appended: {appended}"))
 }
 
 /// The room this session binds, and the track's membership in it.
@@ -496,7 +623,7 @@ fn venue_list(venues: &[Value]) -> String {
 
 async fn python(services: &AppServices, code: &str, session: &SessionCell) -> Value {
     let Some(open) = session.read().await.clone() else {
-        return tool_error("no track is open — call `open` first");
+        return tool_error("nothing is open — call `open` first");
     };
     match cell(services, &open, code).await {
         Err(error) => tool_error(error),
@@ -523,20 +650,27 @@ async fn reset(
     client: &ClientCell,
 ) -> Result<String, String> {
     let Some(open) = session.write().await.take() else {
-        return Err("no track is open — call `open` first".into());
+        return Err("nothing is open — call `open` first".into());
     };
     close(services, &open).await?;
-    let arguments = json!({
-        "track_id": open.track_id,
-        "venue_id": open.venue_id,
-        "model": open.model,
-    });
+    let arguments = match &open.subject {
+        Subject::Track { track_id, .. } => json!({
+            "track_id": track_id,
+            "venue_id": open.venue_id,
+            "model": open.model,
+        }),
+        // No track key at all: that absence is what `open` reads as "the room".
+        Subject::Venue => json!({
+            "venue_id": open.venue_id,
+            "model": open.model,
+        }),
+    };
     self::open(services, &arguments, session, client).await
 }
 
 async fn cancel(services: &AppServices, session: &SessionCell) -> Result<String, String> {
     let Some(open) = session.read().await.clone() else {
-        return Err("no track is open — call `open` first".into());
+        return Err("nothing is open — call `open` first".into());
     };
     let interrupted = invoke(
         services,

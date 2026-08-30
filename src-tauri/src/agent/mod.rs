@@ -63,6 +63,9 @@ use model::{ModelClient, ModelError, StopReason, Usage};
 pub enum AgentKind {
     TrackCopilot,
     PatternGraph,
+    /// The room builder. Its thread carries a venue and nothing else — no
+    /// track, no score — and its namespace is `luma.venue` alone.
+    VenueRig,
 }
 
 impl AgentKind {
@@ -71,6 +74,7 @@ impl AgentKind {
         match self {
             AgentKind::TrackCopilot => "track_copilot",
             AgentKind::PatternGraph => "pattern_graph",
+            AgentKind::VenueRig => "venue_rig",
         }
     }
 
@@ -81,6 +85,7 @@ impl AgentKind {
         match value {
             "track_copilot" => Ok(AgentKind::TrackCopilot),
             "pattern_graph" => Ok(AgentKind::PatternGraph),
+            "venue_rig" => Ok(AgentKind::VenueRig),
             other => Err(AgentError::Invalid(format!(
                 "unsupported agent kind '{other}'"
             ))),
@@ -97,9 +102,11 @@ impl AgentKind {
     pub fn system_prompt(self) -> &'static str {
         static TRACK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         static GRAPH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        static VENUE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         let (cell, prose) = match self {
             AgentKind::TrackCopilot => (&TRACK, include_str!("prompts/track.md")),
             AgentKind::PatternGraph => (&GRAPH, include_str!("prompts/graph.md")),
+            AgentKind::VenueRig => (&VENUE, include_str!("prompts/venue.md")),
         };
         cell.get_or_init(|| match skills::bundled().listing() {
             "" => prose.to_string(),
@@ -114,6 +121,7 @@ impl AgentKind {
 pub enum SubjectKind {
     Track,
     Pattern,
+    Venue,
 }
 
 impl SubjectKind {
@@ -122,6 +130,7 @@ impl SubjectKind {
         match self {
             SubjectKind::Track => "track",
             SubjectKind::Pattern => "pattern",
+            SubjectKind::Venue => "venue",
         }
     }
 }
@@ -378,6 +387,24 @@ impl ThreadScope {
             implementation_id: None,
             venue_id: Some(venue_id.into()),
             score_id: Some(score_id.into()),
+        }
+    }
+
+    /// The room builder's scope: one venue, no track and no score.
+    ///
+    /// `venue_id` repeats the subject rather than being derived from it: the
+    /// durable row is filtered on `venue_id` by every listing, and a venue
+    /// thread that left the column null would be invisible to them.
+    #[must_use]
+    pub fn venue(venue_id: impl Into<String>) -> Self {
+        let venue_id = venue_id.into();
+        Self {
+            agent_kind: AgentKind::VenueRig,
+            subject_kind: SubjectKind::Venue,
+            subject_id: venue_id.clone(),
+            implementation_id: None,
+            venue_id: Some(venue_id),
+            score_id: None,
         }
     }
 

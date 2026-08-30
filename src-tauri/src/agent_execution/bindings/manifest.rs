@@ -105,6 +105,8 @@ impl std::fmt::Display for ArtifactId {
 pub enum AgentKind {
     TrackCopilot,
     PatternGraph,
+    /// The room builder. Its namespace is `luma.venue` alone.
+    VenueRig,
 }
 
 /// The window of interest, in absolute track seconds.
