@@ -50,20 +50,38 @@ const OPEN: &str = r#"
     app.frames(6);
 
     // Every readout the builder prints, as plain strings.
+    // What the picture says. The builder publishes no state labels — the spec
+    // forbids them — so every claim below is read off the thing that draws it:
+    // the ghost, the station marks, the measurement, the beads.
     const said = () => app.snapshot().findAll({ role: "text" }).map((n) => n.label);
     const one = (prefix) => said().find((l) => l.startsWith(prefix));
+    const marks = (prefix) => said().filter((l) => l.startsWith(prefix));
     const press = (label) => {
         app.click(app.snapshot().find({ role: "button", label }));
         app.frames(4);
     };
+    // The add-element dialog is the only way into place mode. The query is what
+    // brings a row into view: the list is longer than the card, and a click on
+    // a clipped row is a refusal rather than a miss.
     const arm = (row) => {
-        press("Palette");
+        press("Add element");
+        until("the dialog", (s) =>
+            s.findAll({ role: "input", label: "Search elements" }).length > 0);
+        app.type(app.snapshot().find({ role: "input", label: "Search elements" }),
+            row.slice(0, 5));
+        until("the row", (s) => {
+            const n = s.findAll({ role: "row" }).find((n) => n.label === row);
+            return n !== undefined && n.bounds.height > 0;
+        });
         app.click(app.snapshot().find({ role: "row", label: row }));
-        app.frames(4);
+        app.frames(6);
     };
-    // Drop free on the floor at a point in the viewport, and wait for the
-    // round trip. `Hand: empty` is the release; the relation is the landing.
+    // Drop free on the floor at a point in the viewport, and wait for the round
+    // trip. Place mode is sticky, so the hand is no evidence a placement
+    // landed — the room is: a placed piece brings its own sockets, and a bead
+    // is the picture saying the node exists.
     const dropAt = (fx, fy) => {
+        const was = sockets().length;
         const pane = app.snapshot().find({ role: "card", label: "Stage drop surface" });
         // A one-pixel drag rather than a click, because a point is not a node
         // and `drag` is the only call that takes one. It also walks the pointer
@@ -76,8 +94,7 @@ const OPEN: &str = r#"
             { dx: 1, dy: 0 },
             { steps: 2 },
         );
-        until("the placement to land", (s) =>
-            s.findAll({ role: "text" }).some((n) => n.label === "Hand: empty"));
+        until("the placement to land", () => sockets().length > was);
         app.frames(8);
     };
     // Click a node found on an earlier frame. The builder repaints on every
@@ -86,63 +103,91 @@ const OPEN: &str = r#"
         app.click(node, { restale: "match" });
         app.frames(4);
     };
-    // The inspector's feature list is as long as the room is complicated, so a
-    // row near its end can be below the fold. Bring it back before pointing at
-    // it — a clipped node is a refusal, not a miss.
-    const reveal = (node) => {
-        if (node.bounds.height > 0 && node.bounds.width > 0) { return node; }
-        app.scroll(app.snapshot().find({ role: "text", label: "DISTRIBUTE ONTO" }), { dy: -240 });
-        app.frames(4);
-        return app.snapshot().findAll({ role: "row" })
-            .find((n) => n.label === node.label) || node;
+    // Sweep a value box to a fraction of its own range. Dragged from a *point*,
+    // not from the node: the box writes its value into its label, so a node
+    // re-resolved by label mid-drag is one that no longer exists.
+    const sweep = (name, fraction) => {
+        const box = app.snapshot().findAll({ role: "slider" })
+            .find((n) => n.label.startsWith(name + " = "));
+        if (box === undefined) { throw new Error("no " + name + ": " + said().join(", ")); }
+        const y = box.bounds.y + box.bounds.height / 2;
+        app.drag(
+            { x: box.bounds.x + 2, y },
+            { dx: (box.bounds.width - 4) * fraction, dy: 0 },
+            { steps: 8 },
+        );
+        app.frames(6);
     };
     const sockets = () => app.snapshot().findAll({ role: "button" })
         .filter((n) => n.label.startsWith("Socket "));
 "#;
 
-/// Picking a palette row is what arms the hand; nothing else does, and escape
+/// The add-element dialog is what arms the hand; nothing else does, and escape
 /// is the way back out.
 #[test]
-fn the_palette_arms_a_ghost_and_escape_puts_it_down() {
-    let mut harness = harness("venue-builder-palette");
+fn the_dialog_arms_a_ghost_and_escape_puts_it_down() {
+    let mut harness = harness("venue-builder-dialog");
     let out = exec(
         &mut harness,
         &format!(
             r#"{OPEN}
-        const before = one("Hand: ");
-        press("Palette");
+        const before = marks("Ghost ");
+        press("Add element");
+        until("the dialog", (s) =>
+            s.findAll({{ role: "input", label: "Search elements" }}).length > 0);
         const rows = app.snapshot().findAll({{ role: "row" }}).map((n) => n.label);
         app.click(app.snapshot().find({{ role: "row", label: "Truss · straight" }}));
-        app.frames(4);
-        const armed = one("Hand: ");
+        app.frames(6);
         // A held piece owns the pointer: the surface only exists while it does.
         const surface = app.snapshot().find({{ role: "card", label: "Stage drop surface" }});
+        // The ghost is the hand, so it has to be aimed before it can be seen.
+        const bead = sockets().find((n) => n.label.endsWith("corner_fl"));
+        app.scroll(bead, {{ dy: 0 }});
+        app.frames(6);
+        const armed = marks("Ghost ");
         app.key("escape");
-        app.frames(4);
+        app.frames(6);
         ({{
             before,
             rows,
             armed,
             owned: surface !== undefined,
-            after: one("Hand: "),
+            after: marks("Ghost "),
             released: app.snapshot().find({{ role: "card", label: "Stage drop surface" }}) === undefined,
         }})
     "#
         ),
     );
-    assert_eq!(out["before"], "Hand: empty", "{out:#}");
+    assert_eq!(
+        out["before"],
+        serde_json::json!([]),
+        "something was already in the hand\n{out:#}"
+    );
     let rows = strings(&out, "rows");
     assert!(
         rows.iter().any(|r| r == "Truss · tower"),
-        "the tower row is missing — a stick and a tower are two palette rows over one \
+        "the tower row is missing — a stick and a tower are two catalog rows over one \
          generator\n{out:#}"
     );
-    assert_eq!(out["armed"], "Hand: holding Truss · straight", "{out:#}");
+    assert!(
+        rows.iter().any(|r| r == "Luma Mover"),
+        "the dialog offers catalog pieces but not fixtures — it is one list or it is the \
+         two menus it replaced\n{out:#}"
+    );
+    assert_eq!(
+        out["armed"],
+        serde_json::json!(["Ghost Truss · straight"]),
+        "the dialog did not arm a ghost\n{out:#}"
+    );
     assert_eq!(
         out["owned"], true,
         "an armed hand did not take the pointer\n{out:#}"
     );
-    assert_eq!(out["after"], "Hand: empty", "{out:#}");
+    assert_eq!(
+        out["after"],
+        serde_json::json!([]),
+        "escape did not put the hand down\n{out:#}"
+    );
     assert_eq!(
         out["released"], true,
         "the pointer stayed claimed after the hand was put down\n{out:#}"

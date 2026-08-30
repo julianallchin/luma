@@ -58,11 +58,23 @@ const OPEN: &str = r#"
         app.click(app.snapshot().find({ role: "button", label }));
         app.frames(4);
     };
+    // The dialog is the only way into place mode now. The query is what brings
+    // a row into view: the list is longer than the card, and a click on a
+    // clipped row is a refusal rather than a miss.
     const arm = (row) => {
-        press("Palette");
+        press("Add element");
+        until("the dialog", (s) => s.findAll({ role: "input", label: "Search elements" }).length > 0);
+        app.type(app.snapshot().find({ role: "input", label: "Search elements" }), row.slice(0, 5));
+        until("the row", (s) => {
+            const n = s.findAll({ role: "row" }).find((n) => n.label === row);
+            return n !== undefined && n.bounds.height > 0;
+        });
         app.click(app.snapshot().find({ role: "row", label: row }));
-        app.frames(4);
+        app.frames(6);
     };
+    // What the hand is proposing, read off the picture rather than a caption.
+    const marks = (prefix) => app.snapshot().findAll({ role: "text" })
+        .filter((n) => n.label.startsWith(prefix));
     const sockets = () => app.snapshot().findAll({ role: "button" })
         .filter((n) => n.label.startsWith("Socket "));
     const shoot = () => app.screenshot({});
@@ -85,20 +97,11 @@ fn a_ghost_and_its_beads_are_drawn_without_moving_the_eye() {
         if (bead === undefined) {{
             throw new Error("no corner bead: " + sockets().map((n) => n.label).join(", "));
         }}
-        // Aim *without* committing. A release over the drop surface is a
-        // placement, so the drag starts in the page below — where nothing
-        // handles a press — and only walks the pointer across the room. The
-        // ghost is what the walk solved, and it is still standing there when
-        // the button comes up somewhere that does not want it.
-        const tray = app.snapshot().find({{ role: "text", label: "TRAY" }});
-        app.drag(
-            {{ x: tray.bounds.x + 40, y: tray.bounds.y + 20 }},
-            {{
-                dx: bead.bounds.x + bead.bounds.width / 2 - (tray.bounds.x + 40),
-                dy: bead.bounds.y + bead.bounds.height / 2 - (tray.bounds.y + 20),
-            }},
-            {{ steps: 6 }},
-        );
+        // Aim *without* committing. `scroll` walks the pointer to its target
+        // and leaves it there (it has to: gpui routes a wheel by where the
+        // pointer last was), which is the one call that moves the cursor with
+        // no press — and a press over the room is a placement.
+        app.scroll(bead, {{ dy: 0 }});
         app.frames(14);
         const ghost = shoot();
         ({{
@@ -106,8 +109,7 @@ fn a_ghost_and_its_beads_are_drawn_without_moving_the_eye() {
             after: camera(),
             empty,
             ghost,
-            hand: said().find((l) => l.startsWith("Hand: ")),
-            landing: said().find((l) => l.startsWith("Landing: ")),
+            ghosts: marks("Ghost ").map((n) => n.label),
         }})
     "#
         ),
@@ -129,12 +131,11 @@ fn a_ghost_and_its_beads_are_drawn_without_moving_the_eye() {
         out["before"], out["after"],
         "a build gesture moved the camera\n{out:#}"
     );
-    // Still held: the picture is a ghost, not a placement.
-    assert_eq!(out["hand"], "Hand: holding Truss · straight", "{out:#}");
-    assert!(
-        out["landing"]
-            .as_str()
-            .is_some_and(|l| l.contains("corner_fl")),
+    // Still held, and settled where it was walked to — read off the mark the
+    // picture draws, which is the same node an eye is looking at.
+    assert_eq!(
+        out["ghosts"],
+        serde_json::json!(["Ghost Truss · straight"]),
         "the ghost never settled on the corner it was walked to\n{out:#}"
     );
     let changed = support::image::differing_fraction(&empty, &ghost, support::image::CHANNEL_NOISE);
@@ -171,36 +172,74 @@ fn a_refused_run_is_red_and_an_accepted_one_is_not() {
                 {{ dx: 1, dy: 0 }},
                 {{ steps: 2 }},
             );
+            // Place mode is sticky, so the hand is no evidence a placement
+            // landed. The room is: a placed piece brings its own sockets, and
+            // a bead is the picture saying the node exists.
             until("the placement to land", (s) =>
-                s.findAll({{ role: "text" }}).some((n) => n.label === "Hand: empty"));
+                s.findAll({{ role: "button" }})
+                    .filter((n) => n.label.startsWith("Socket ")).length > before);
             app.frames(10);
         }};
         arm("Truss · straight");
+        let before = sockets().length;
         dropAt(0.34, 0.74);
-        arm("Truss · straight");
+        before = sockets().length;
         dropAt(0.66, 0.74);
+        // Two sticks from one trip to the dialog: place mode persisted.
+        app.key("escape");
+        app.frames(4);
 
         let measured = false;
         for (const bead of sockets().filter((n) => n.label.includes("end_"))) {{
             app.click(bead, {{ restale: "match" }});
             app.frames(6);
+            // The gap label rides on the measurement line in the picture.
             if (said().some((l) => l.startsWith("Gap: "))) {{ measured = true; break; }}
-            press("Cancel run");
+            app.key("escape");
+            app.frames(4);
         }}
         if (!measured) {{ throw new Error("no end measured a gap"); }}
         app.frames(12);
         const accepted = shoot();
-        const start = said().filter((l) => l.startsWith("Length ") || l.startsWith("Gap: "));
-        for (let i = 0; i < 8; i += 1) {{ press("Longer"); }}
-        until("the refusal", (s) =>
-            s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("Refused")));
+        const start = app.snapshot().findAll({{ role: "slider" }})
+            .map((n) => n.label).filter((l) => l.startsWith("stage-length = "));
+        // Sweep the length box to its far end. A scrub maps the pointer to a
+        // position in its own box, so one drag past the right edge asks for the
+        // maximum — which is well past any gap this room has.
+        const box_ = app.snapshot().findAll({{ role: "slider" }})
+            .find((n) => n.label.startsWith("stage-length = "));
+        if (box_ === undefined) {{ throw new Error("no length box: " + said().join(", ")); }}
+        // Dragged from a *point*, not from the node: the box writes its own
+        // value into its label, so a node re-resolved by label mid-drag is a
+        // node that no longer exists. The slider suite makes the same note.
+        //
+        // Centre to right edge — a scrub maps the pointer to a position in its
+        // box and clamps, so that is the maximum, and the gesture never leaves
+        // the control. The button that commits the run is right beside it.
+        app.drag(
+            {{
+                x: box_.bounds.x + box_.bounds.width / 2,
+                y: box_.bounds.y + box_.bounds.height / 2,
+            }},
+            {{ dx: box_.bounds.width / 2 - 6, dy: 0 }},
+            {{ steps: 8 }},
+        );
+        // Past the gap is the refusal. What it *looks* like is the ghost going
+        // red, which the pixels below measure; what the tree can say is the
+        // length that provoked it.
+        until("the length to run past the gap", (s) =>
+            s.findAll({{ role: "slider" }}).some((n) => {{
+                const m = /stage-length = ([0-9.]+)/.exec(n.label);
+                return m !== null && parseFloat(m[1]) > 2.0;
+            }}));
         app.frames(12);
         const refused = shoot();
         ({{
             accepted,
             refused,
             start,
-            said: said().filter((l) => l.startsWith("Refused") || l.startsWith("Length ")),
+            length: app.snapshot().findAll({{ role: "slider" }})
+                .map((n) => n.label).filter((l) => l.startsWith("stage-length = ")),
         }})
     "#
         ),
@@ -212,13 +251,13 @@ fn a_refused_run_is_red_and_an_accepted_one_is_not() {
         ok_path.display(),
         bad_path.display()
     );
-    let said = out["said"]
-        .as_array()
-        .map(|rows| rows.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
-    assert!(
-        said.iter().any(|l| l.starts_with("Refused")),
-        "the run was never refused, so the red is not the refusal's\n{out:#}"
+    // The refusal is not a sentence any more — it is the ghost turning red,
+    // which is what the pixels below measure. What the tree still owes is the
+    // length that provoked it, so the two shots are known to differ by the
+    // gesture and not by a repaint.
+    assert_ne!(
+        out["start"], out["length"],
+        "the length never moved, so the red is not the refusal's\n{out:#}"
     );
     let before = red_pixels(&ok);
     let after = red_pixels(&bad);
@@ -241,14 +280,16 @@ fn the_distribution_popup_is_drawn_over_the_room() {
         &format!(
             r#"{OPEN}
         const before = shoot();
-        const face = app.snapshot().findAll({{ role: "row" }})
-            .find((n) => n.label.includes("floor"));
-        if (face === undefined) {{ throw new Error("no feature to distribute onto"); }}
+        // A fixture in hand, then the face it is laid along: the popover is
+        // opened by pointing at the room, which is the only way in.
+        arm("Luma Mover");
+        const face = sockets().find((n) => n.label.endsWith("Deck top"));
+        if (face === undefined) {{ throw new Error("no feature to lay a row along"); }}
         app.click(face, {{ restale: "match" }});
-        until("the popup", (s) =>
-            s.findAll({{ role: "button" }}).some((n) => n.label === "Distribute"));
+        until("the popover", (s) =>
+            s.findAll({{ role: "button" }}).some((n) => n.label === "Place"));
         app.frames(10);
-        ({{ before, popup: shoot() }})
+        ({{ before, popup: shoot(), stations: marks("Station ").length }})
     "#
         ),
     );

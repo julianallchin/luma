@@ -2,6 +2,9 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] gpui hit-testing is paint order and nothing warns you: the stage's run controls were added to the overlay before the socket beads, so every press aimed at the length box was swallowed by a bead on top of it. An hour of bisecting a drag that looked like a broken primitive.
+- [2026-08-29] a control anchored to the value it edits cannot be fixed by tuning: the run's length box sat at the measurement midpoint, which is a function of the length, so dragging it slid it out from under the pointer that was dragging it. Anchor to the socket, not the span.
+- [2026-08-29] `Environment::EDITOR.ambient_intensity` was restated as a literal `0.2` twice in visualizer.rs, so raising the constant changed nothing anybody could see — several minutes spent staring at an unchanged screenshot.
 - [2026-08-29] `app.click` only takes a node, so "press at this point on a canvas" has to be written as `app.drag(point, {dx: 1, dy: 0})` — and a one-pixel drag is also the only way to move the pointer at all, because there is no hover/move primitive. A gesture that must *not* end in a click has to start its drag somewhere with no handler and walk into the target, which is a trick the API docs do not mention.
 - [2026-08-29] `cargo test -p luma-render` in a shared checkout reports another agent's uncommitted red tests as yours, and nothing in the output distinguishes them; the only way to tell is to read their diff.
 - [2026-08-29] `rustfmt --check` passes on a file `cargo fmt` would still rewrite when the path is given from the wrong directory — `rustfmt <path>` silently formats nothing rather than erroring if the path is relative to a different cwd than the one you are in.
