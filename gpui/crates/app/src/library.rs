@@ -43,7 +43,7 @@
 //! host-side failures and the command name, and hands the seam's own error
 //! back untouched through [`LibraryError::command`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 #[cfg(feature = "agent")]
 use std::collections::VecDeque;
 use std::fmt;
@@ -69,7 +69,7 @@ use luma_lib::dispatch::{
 };
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
-use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
+use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use luma_lib::models::groups::FixtureGroup;
 use luma_lib::models::node_graph::{
     BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
@@ -81,7 +81,8 @@ use luma_lib::models::scores::{
 use luma_lib::models::selection::Selection;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
-use luma_lib::models::venue_graph::ResolvedVenue;
+use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
+use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
@@ -1983,6 +1984,7 @@ impl Library {
                 command(&services, "get_patched_fixtures", &venue).await?;
             let venue_graph: ResolvedVenue =
                 command(&services, "get_resolved_venue", &venue).await?;
+            let rows: VenueGraphRows = command(&services, "get_venue_graph", &venue).await?;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -2001,6 +2003,7 @@ impl Library {
                 fixtures,
                 venue: venue_graph,
                 definitions,
+                rows,
             })
         });
         async move {
@@ -2008,6 +2011,226 @@ impl Library {
                 LibraryError::at("get_patched_fixtures", Cause::Cancelled(e.to_string()))
             })?
         }
+    }
+
+    // -----------------------------------------------------------------
+    // The venue graph — the verbs. The two reads arrive together in
+    // `venue_rig`, because a pose and the relation that produced it are one
+    // answer.
+    //
+    // Thin on purpose. Each is one dispatch command with the argument names
+    // `src-tauri/src/dispatch/mod.rs` declares, and every mutating one hands
+    // back the whole solved venue inside its `PlacementReport`: a graph edit
+    // moves everything bolted to what it touched, so a caller that re-fetched
+    // would be asking for a second solve of a graph it was just given.
+    // -----------------------------------------------------------------
+
+    /// Every QLC+ definition matching `query`, for the distribution popup and
+    /// the patch page's add dialog.
+    pub fn search_fixtures(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FixtureEntry>, LibraryError>> + use<> {
+        self.call(
+            "search_fixtures",
+            json!({ "query": query, "offset": 0, "limit": limit }),
+        )
+    }
+
+    /// One QLC+ definition, for its mode list.
+    pub fn fixture_definition(
+        &self,
+        path: &str,
+    ) -> impl Future<Output = Result<FixtureDefinition, LibraryError>> + use<> {
+        self.call("get_fixture_definition", json!({ "path": path }))
+    }
+
+    /// Place a new node by mating two sockets.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach(
+        &self,
+        venue_id: &str,
+        kind: &str,
+        catalog_ref: Option<&str>,
+        label: Option<&str>,
+        parent_id: &str,
+        my_socket: &str,
+        their_socket: &str,
+        yaw: f64,
+        params: BTreeMap<String, f64>,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "attach",
+            json!({
+                "venueId": venue_id,
+                "kind": kind,
+                "catalogRef": catalog_ref,
+                "label": label,
+                "parentId": parent_id,
+                "mySocket": my_socket,
+                "theirSocket": their_socket,
+                "yaw": yaw,
+                "params": params,
+            }),
+        )
+    }
+
+    /// Place a node that already exists — a re-attach, or a fixture dragged
+    /// out of the tray.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reattach(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        parent_id: &str,
+        my_socket: &str,
+        their_socket: &str,
+        yaw: f64,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "reattach",
+            json!({
+                "venueId": venue_id,
+                "nodeId": node_id,
+                "parentId": parent_id,
+                "mySocket": my_socket,
+                "theirSocket": their_socket,
+                "yaw": yaw,
+            }),
+        )
+    }
+
+    /// Free placement: seat a new node on a surface at `(u, v, yaw, trim)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn place_free(
+        &self,
+        venue_id: &str,
+        kind: &str,
+        catalog_ref: Option<&str>,
+        label: Option<&str>,
+        surface: Option<(&str, &str)>,
+        my_socket: &str,
+        seat: luma_scene::venue::SurfacePlacement,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        let (surface_node_id, surface_socket) = match surface {
+            Some((node, socket)) => (Some(node), Some(socket)),
+            None => (None, None),
+        };
+        self.call(
+            "place_free",
+            json!({
+                "venueId": venue_id,
+                "kind": kind,
+                "catalogRef": catalog_ref,
+                "label": label,
+                "surfaceNodeId": surface_node_id,
+                "surfaceSocket": surface_socket,
+                "mySocket": my_socket,
+                "u": seat.u,
+                "v": seat.v,
+                "yaw": seat.yaw,
+                "trim": seat.trim,
+            }),
+        )
+    }
+
+    /// Unplace a node. Its rows stay, so re-attaching restores the branch.
+    pub fn detach(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "detach",
+            json!({ "venueId": venue_id, "nodeId": node_id }),
+        )
+    }
+
+    /// Write down a far end: this socket meets that one. A check, never an
+    /// edge.
+    pub fn constrain(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        my_socket: &str,
+        target_node: &str,
+        target_socket: &str,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "constrain",
+            json!({
+                "venueId": venue_id,
+                "nodeId": node_id,
+                "mySocket": my_socket,
+                "targetNode": target_node,
+                "targetSocket": target_socket,
+            }),
+        )
+    }
+
+    /// Merge parameters into a node, and optionally rename it. `yaw` is
+    /// spelled as itself and lands on the edge.
+    pub fn set_params(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        params: BTreeMap<String, f64>,
+        label: Option<&str>,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "set_params",
+            json!({
+                "venueId": venue_id,
+                "nodeId": node_id,
+                "params": params,
+                "label": label,
+            }),
+        )
+    }
+
+    /// Delete a node and everything hanging off it.
+    pub fn delete_subtree(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+    ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
+        self.call(
+            "delete_subtree",
+            json!({ "venueId": venue_id, "nodeId": node_id }),
+        )
+    }
+
+    /// One command, one transaction: place, name, group and patch a row of
+    /// fixtures along a host feature.
+    #[allow(clippy::too_many_arguments)]
+    pub fn distribute(
+        &self,
+        venue_id: &str,
+        host: Option<(&str, &str)>,
+        fixture_path: &str,
+        mode_name: &str,
+        count: usize,
+        layout: DistributeLayout,
+        label_prefix: Option<&str>,
+    ) -> impl Future<Output = Result<DistributeReport, LibraryError>> + use<> {
+        let (host_node_id, host_socket) = match host {
+            Some((node, socket)) => (Some(node), Some(socket)),
+            None => (None, None),
+        };
+        self.call(
+            "distribute",
+            json!({
+                "venueId": venue_id,
+                "hostNodeId": host_node_id,
+                "hostSocket": host_socket,
+                "fixturePath": fixture_path,
+                "modeName": mode_name,
+                "count": count,
+                "layout": layout,
+                "labelPrefix": label_prefix,
+            }),
+        )
     }
 
     /// The installed scene evaluated at one absolute track time, or `None`
@@ -2117,6 +2340,14 @@ pub struct Rig {
     /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
     /// absent rather than an error.
     pub definitions: HashMap<String, FixtureDefinition>,
+    /// The graph as rows — `(parent, my_socket, their_socket, params)`.
+    ///
+    /// [`Self::venue`] is the same graph *solved*, and a solve throws the
+    /// relations away: it answers where a node is, never which socket met
+    /// which. The builder needs both — the pose to draw and the socket to
+    /// click — so the two arrive together rather than as a second fetch that
+    /// could disagree with the first.
+    pub rows: VenueGraphRows,
 }
 
 impl Rig {
