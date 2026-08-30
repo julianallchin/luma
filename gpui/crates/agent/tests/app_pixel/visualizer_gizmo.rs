@@ -78,8 +78,9 @@ const OPEN: &str = r#"
     function shoot() {
         return app.screenshot({ node: app.snapshot().find({ role: "card", label: "Stage" }) });
     }
+    // A segmented choice is a toggle, not a button — one track, one of N on.
     function mode(name) {
-        app.click(app.snapshot().find({ role: "button", label: name }), { restale: "match" });
+        app.click(app.snapshot().find({ role: "toggle", label: name }), { restale: "match" });
         app.frames(3, { waitMs: 60 });
     }
     // The frame-stats readout paints over the viewport and turns red when the

@@ -14,7 +14,7 @@
 //! edge-on hide/flip rules below are that implementation, term for term.
 
 use glam::{Mat3, Mat4, Vec3};
-use luma_scene::{gizmo_scale, GizmoMode, RING_RADIUS};
+use luma_scene::{gizmo_scale, Axis, GizmoHandle, GizmoMode, RING_RADIUS};
 
 use crate::assets::Library;
 use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_from_world, three_pose_from_data};
@@ -72,6 +72,10 @@ const REFUSED: u32 = 0xff_3b_30;
 /// the gizmo's octahedron, because a socket is a place to aim at, not a handle
 /// to grab.
 const SOCKET_RADIUS: f32 = 0.025;
+
+/// How solid the selected-piece tint is — under the ghost's alpha, because a
+/// selection is a fact about what is already there, not a preview.
+const SELECTED_PIECE_ALPHA: f32 = 0.3;
 
 /// Half-length of a measure end tick, before the same factor.
 const TICK_RADIUS: f32 = 0.06;
@@ -217,6 +221,31 @@ pub(crate) fn build(
         });
     }
 
+    // --- selected stage pieces ---------------------------------------------
+    // A piece has no physical-dimensions block to cage, so the selection is
+    // said by drawing the piece itself again, unlit, in the cage's own colour
+    // — a tint that reads through the room the way the ghost does. Every
+    // selected piece gets it, snapped or free: selection and grab-ability are
+    // two facts, and this is the first one.
+    for id in &scene.editor.selected_piece_ids {
+        let Some(piece) = scene.pieces.iter().find(|p| &p.id == id) else {
+            continue;
+        };
+        let model = to_world
+            * three_pose_from_data(piece.pos, piece.rot)
+            * Mat4::from_scale(Vec3::splat(piece.scale));
+        let draws =
+            crate::frame::piece_draws(&piece.geometry, model, lib, bank, None).unwrap_or_default();
+        out.extend(draws.into_iter().map(|draw| Overlay {
+            mesh: draw.mesh,
+            model: draw.model,
+            lines: false,
+            color: hex_srgb(0xff_ff_00),
+            opacity: SELECTED_PIECE_ALPHA,
+            depth: OverlayDepth::Free,
+        }));
+    }
+
     // --- builder affordances -----------------------------------------------
     // Sockets first, then the ghost over them, then the measure over both:
     // painted in the order of how much they say about the *next* click. All
@@ -328,11 +357,20 @@ pub(crate) fn build(
     let dots = [eye.x, eye.y, eye.z];
 
     if scene.editor.gizmo == GizmoMode::Rotate {
-        out.extend(rotate_rings(pivot_three, scale, eye, to_world, bank));
+        out.extend(rotate_rings(
+            pivot_three,
+            scale,
+            eye,
+            scene.editor.hover,
+            to_world,
+            bank,
+        ));
         return out;
     }
 
+    let hover = scene.editor.hover;
     for handle in translate_handles() {
+        let hovered = hover.is_some_and(|hover| handle_hovered(&handle, hover));
         if handle.axis_only.is_some_and(|a| dots[a].abs() > AXIS_HIDE)
             || handle
                 .plane_normal
@@ -368,13 +406,46 @@ pub(crate) fn build(
                 * Mat4::from_scale(flip * scale)
                 * handle.local,
             lines: handle.mesh.lines(),
-            color: handle.color,
-            opacity: handle.opacity,
+            // three's hover rule: the picked handle turns yellow whole —
+            // shaft, arrowheads, ticks and quad together — so what will move
+            // is named before the press.
+            color: if hovered {
+                hex_srgb(0xff_ff_00)
+            } else {
+                handle.color
+            },
+            opacity: if hovered { 1.0 } else { handle.opacity },
             depth: OverlayDepth::Free,
         });
     }
 
     out
+}
+
+/// Whether one drawn primitive belongs to the handle the pointer is on.
+///
+/// The pick names a handle; the drawing is several primitives — a line and two
+/// arrowheads, or two ticks and a quad. What they share is their `axes`
+/// signature, which is what makes "light the whole handle" one comparison.
+fn handle_hovered(handle: &Handle, hover: GizmoHandle) -> bool {
+    let index = |axis: Axis| match axis {
+        Axis::X => 0,
+        Axis::Y => 1,
+        Axis::Z => 2,
+    };
+    match hover {
+        GizmoHandle::TranslateAxis(axis) => handle.axis_only == Some(index(axis)),
+        // A plane handle's primitives all name the two in-plane axes and never
+        // a single one — which is exactly not the axis lines' signature.
+        GizmoHandle::TranslatePlane(normal) => {
+            handle.axis_only.is_none()
+                && !handle.axes[index(normal)]
+                && handle.axes.iter().filter(|&&p| p).count() == 2
+        }
+        GizmoHandle::TranslateScreen => handle.axes == [true, true, true],
+        // Rings are drawn by `rotate_rings`, which lights its own.
+        GizmoHandle::RotateAxis(_) | GizmoHandle::RotateScreen => false,
+    }
 }
 
 /// One arrow per emitting fixture, from its mount point along the beam it
@@ -471,7 +542,7 @@ pub(crate) fn pivot(scene: &Scene, lib: &mut Library, to_world: Mat4) -> Option<
         let fixture = scene.fixtures.iter().find(|f| &f.id == id)?;
         Some(to_world.transform_point3(three_from_data(Vec3::from(fixture.pos))))
     });
-    let pieces = scene.editor.selected_piece_ids.iter().filter_map(|id| {
+    let pieces = scene.editor.gizmo_piece_ids.iter().filter_map(|id| {
         let piece = scene.pieces.iter().find(|p| &p.id == id)?;
         let model = to_world
             * three_pose_from_data(piece.pos, piece.rot)
@@ -509,15 +580,24 @@ fn rotate_rings(
     pivot_three: Vec3,
     scale: f32,
     eye: Vec3,
+    hover: Option<GizmoHandle>,
     to_world: Mat4,
     bank: &mut crate::frame::Bank,
 ) -> Vec<Overlay> {
     let mesh = bank.insert("::gizmo-ring".to_string(), ring);
     let q = std::f32::consts::FRAC_PI_2;
     let axes = [
-        (Vec3::new(0.0, q, 0.0), hex_srgb(0xff_00_00)),
-        (Vec3::new(q, 0.0, 0.0), hex_srgb(0x00_ff_00)),
-        (Vec3::ZERO, hex_srgb(0x00_00_ff)),
+        (
+            Vec3::new(0.0, q, 0.0),
+            hex_srgb(0xff_00_00),
+            GizmoHandle::RotateAxis(Axis::X),
+        ),
+        (
+            Vec3::new(q, 0.0, 0.0),
+            hex_srgb(0x00_ff_00),
+            GizmoHandle::RotateAxis(Axis::Y),
+        ),
+        (Vec3::ZERO, hex_srgb(0x00_00_ff), GizmoHandle::RotateAxis(Axis::Z)),
     ];
     // The screen ring's plane is normal to the view, so its basis is built from
     // the eye direction rather than from an axis.
@@ -525,18 +605,27 @@ fn rotate_rings(
     let u = n.cross(Vec3::Y).normalize_or(Vec3::X);
     let screen = Mat4::from_mat3(Mat3::from_cols(u, n.cross(u), n));
     axes.into_iter()
-        .map(|(rot, color)| (Mat4::from_mat3(euler_xyz(rot.x, rot.y, rot.z)), color))
+        .map(|(rot, color, handle)| (Mat4::from_mat3(euler_xyz(rot.x, rot.y, rot.z)), color, handle))
         // Grey, three's `XYZE`: the screen ring is the one handle that is not
-        // an axis, and yellow is the selection cage's colour.
-        .chain(std::iter::once((screen, hex_srgb(0x78_78_78))))
-        .map(|(orientation, color)| Overlay {
+        // an axis, and yellow is the selection cage's colour — which is also
+        // why yellow is what a *hovered* ring turns.
+        .chain(std::iter::once((
+            screen,
+            hex_srgb(0x78_78_78),
+            GizmoHandle::RotateScreen,
+        )))
+        .map(|(orientation, color, handle)| Overlay {
             mesh,
             model: to_world
                 * Mat4::from_translation(pivot_three)
                 * Mat4::from_scale(Vec3::splat(scale))
                 * orientation,
             lines: true,
-            color,
+            color: if hover == Some(handle) {
+                hex_srgb(0xff_ff_00)
+            } else {
+                color
+            },
             opacity: 1.0,
             depth: OverlayDepth::Free,
         })

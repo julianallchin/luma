@@ -404,6 +404,10 @@ pub(crate) struct Visualizer {
     editor_drag: Option<EditorDrag>,
     selection: Selection,
     gizmo_mode: GizmoMode,
+    /// The gizmo handle under the pointer, or the one being dragged — lit in
+    /// the picture so the hand knows what it is about to grab. Recomputed on
+    /// every unbuttoned move over the viewport.
+    gizmo_hover: Option<GizmoHandle>,
     /// The element's size as the last frame laid it out. Three's orbit rates
     /// are all per element *height*, and a rate needs the height a frame
     /// earlier than prepaint can supply it.
@@ -586,6 +590,7 @@ struct IdleKey {
     selected: Vec<String>,
     selected_pieces: Vec<String>,
     gizmo_mode: GizmoMode,
+    gizmo_hover: Option<GizmoHandle>,
     universe: Option<UniverseState>,
 }
 
@@ -920,6 +925,7 @@ impl Visualizer {
             editor_drag: None,
             selection: Selection::default(),
             gizmo_mode: GizmoMode::Translate,
+            gizmo_hover: None,
             size: gpui::Size::default(),
             viewport_origin: Point::default(),
             render_lab: RenderLab::new(editor_lit),
@@ -1202,6 +1208,9 @@ impl Visualizer {
                 // that moves nothing: see [`set_object_pose`] for why a stage
                 // piece is not draggable.
                 if !originals.is_empty() {
+                    // The grabbed handle stays lit for the whole drag: the
+                    // hover is only recomputed on unbuttoned moves.
+                    self.gizmo_hover = Some(hit.handle);
                     self.editor_drag = Some(EditorDrag::Gizmo {
                         handle: hit.handle,
                         start: at,
@@ -1217,6 +1226,38 @@ impl Visualizer {
             shift,
             start: at,
         });
+    }
+
+    /// The gizmo handle under the pointer, tested against the frame on
+    /// screen — the same cast [`Self::editor_press`] makes, asked on every
+    /// unbuttoned move so the widget lights the handle *before* it is
+    /// grabbed. Analytic against a handful of primitives, so it is cheap
+    /// enough to ask per move.
+    fn hover_gizmo(&self, point: Point<Pixels>) -> Option<GizmoHandle> {
+        let at = self.viewport_point(point);
+        let viewport = self.viewport_size();
+        let stage = self.stage.borrow();
+        let pick = stage.displayed_pick.as_ref()?;
+        let pivot = pick.gizmo_pivot?;
+        let scale = gizmo_scale(
+            (pick.camera.position() - pivot).length(),
+            pick.camera.fov_y_deg,
+        );
+        hit_test_gizmo(
+            pick.ray(at, viewport),
+            pivot,
+            scale,
+            pick.camera.position() - pivot,
+            self.gizmo_mode,
+        )
+        .map(|hit| hit.handle)
+    }
+
+    /// Switch which transform widget the selection wears — the toolbar's two
+    /// segments and the stage page's `W`/`E` land here together.
+    pub(crate) fn set_gizmo_mode(&mut self, mode: GizmoMode) {
+        self.gizmo_mode = mode;
+        self.gizmo_hover = None;
     }
 
     fn editor_moved(&mut self, point: Point<Pixels>) {
@@ -2712,18 +2753,22 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     // The two gizmo modes are one choice, so they share one
                     // track; the two zooms are two verbs and stay two buttons.
                     //
-                    // And the track is drawn only where the choice applies. On
-                    // the stage page a snapped piece has no gizmo at all — it
-                    // moves in its joint's one freedom — so a Translate/Rotate
-                    // pair beside it would be two modes of a widget that is not
-                    // there. `Build::gizmo_offered` is that rule; a viewport
-                    // with no builder keeps the pair, because there the gizmo
-                    // is the only way to move anything.
+                    // And the track is drawn exactly where the widget is. A
+                    // selected fixture always wears one; a piece wears one only
+                    // free on the floor (`Build::gizmo_offered`) — a snapped
+                    // piece moves in its joint's one freedom, and a
+                    // Translate/Rotate pair beside it would be two modes of a
+                    // widget that is not there.
                     .when(
                         state
-                            .build
-                            .as_ref()
-                            .is_none_or(crate::stage::Build::gizmo_offered),
+                            .selection
+                            .selected()
+                            .iter()
+                            .any(|target| target.kind == ObjectKind::Fixture)
+                            || state
+                                .build
+                                .as_ref()
+                                .is_none_or(crate::stage::Build::gizmo_offered),
                         |bar| {
                             bar.child(
                                 luma_ui::float::segmented()
@@ -3150,21 +3195,27 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                     Some(EditorObject::StagePiece(id)) => Some(id.clone()),
                     _ => None,
                 })
-                // **No transform gizmo on snapped pieces.** The widget is drawn
-                // from this list (`luma_render::overlay::pivot`), so the rule is
-                // enforced where the widget is decided rather than beside it:
-                // a bolted piece's pose is a relation, and three axes of freedom
-                // over a relation is a widget that lies about what it can do.
-                .filter(|id| {
-                    state
-                        .build
-                        .as_ref()
-                        .is_none_or(|build| build.freedom_of(id) == crate::stage::Freedom::Free)
-                })
                 .collect()
         })
     };
+    // **No transform gizmo on snapped pieces.** The widget is drawn from this
+    // narrower list (`luma_render::overlay::pivot`), so the rule is enforced
+    // where the widget is decided rather than beside it: a bolted piece's pose
+    // is a relation, and three axes of freedom over a relation is a widget
+    // that lies about what it can do. The *selection highlight* reads the full
+    // list above — a snapped piece is still selected, it just is not grabbed.
+    let gizmo_piece_ids: Vec<String> = selected_piece_ids
+        .iter()
+        .filter(|id| {
+            state
+                .build
+                .as_ref()
+                .is_none_or(|build| build.freedom_of(id) == crate::stage::Freedom::Free)
+        })
+        .cloned()
+        .collect();
     let gizmo_mode = state.gizmo_mode;
+    let gizmo_hover = state.gizmo_hover;
     // The builder's ghost, measurement and socket beads, snapshotted for the
     // paint closure. They ride inside `scene.editor`, which `IdleKey` compares
     // whole — so a ghost that moved is a frame the stage owes, without a
@@ -3260,6 +3311,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             selected: selected_fixture_ids.clone(),
                             selected_pieces: selected_piece_ids.clone(),
                             gizmo_mode,
+                            gizmo_hover,
                             universe: universe.clone(),
                         };
                         let rest = if interacting {
@@ -3333,7 +3385,9 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             scene.selected_fixture_ids = selected_fixture_ids.clone();
                             scene.editor = scene_desc::Editor {
                                 selected_piece_ids: selected_piece_ids.clone(),
+                                gizmo_piece_ids: gizmo_piece_ids.clone(),
                                 gizmo: gizmo_mode,
+                                hover: gizmo_hover,
                                 build: build_affordances.clone(),
                             };
                             match gpu.frame(LiveFrameInputs {
@@ -3603,12 +3657,14 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
     });
 
     let dragged = app.clone();
-    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+    let over_move = hitbox.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble {
             return;
         }
         let at = event.position;
         let held = event.pressed_button;
+        let over = over_move.is_hovered(window);
         dragged.update(cx, |this, cx| {
             let Some(state) = this.visualizer_mut() else {
                 return;
@@ -3618,6 +3674,13 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
             // anchor cannot turn a hover into an orbit.
             let Some(held) = held else {
                 state.drag = None;
+                // Nothing pressed: the move is a hover, and what it may be
+                // hovering is the gizmo.
+                let hover = over.then(|| state.hover_gizmo(at)).flatten();
+                if state.gizmo_hover != hover {
+                    state.gizmo_hover = hover;
+                    cx.notify();
+                }
                 return;
             };
             if held == MouseButton::Left {

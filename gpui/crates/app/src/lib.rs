@@ -460,6 +460,21 @@ impl Render for Luma {
                 cx.listener(|this, _: &keymap::DuplicateSubtree, _, cx| this.stage_duplicate(cx)),
             )
             .on_action(cx.listener(|this, _: &keymap::CancelBuild, _, cx| this.stage_escape(cx)))
+            .on_action(
+                cx.listener(|this, _: &keymap::DeleteStageElement, _, cx| this.stage_delete(cx)),
+            )
+            .on_action(cx.listener(|this, _: &keymap::GizmoTranslate, _, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.set_gizmo_mode(luma_scene::GizmoMode::Translate);
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &keymap::GizmoRotate, _, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.set_gizmo_mode(luma_scene::GizmoMode::Rotate);
+                }
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _, cx| {
                 this.sidebar_hidden = !this.sidebar_hidden;
                 cx.notify();

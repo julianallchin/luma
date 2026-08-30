@@ -383,10 +383,9 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
                     measured = {{ socket: bead.label, gap, metres }};
                 }}
             }}
-            // Out of the run and back to nothing held, so the next bead is
-            // measured from the same state as this one.
-            app.key("escape");
-            app.frames(4);
+            // No escape between beads: clicking the next socket starts its
+            // own run directly, and staying in a run keeps every bead on
+            // screen — at rest the room only beads the selected piece.
         }}
         if (measured === null) {{
             throw new Error("no end measured a gap: " + sockets().map((n) => n.label).join(", "));
@@ -725,11 +724,14 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         app.key("escape");
         app.frames(4);
 
-        // Selecting the piece opened the sheet, so its unresolved block is up:
-        // the sentences the room's own count is a count of.
+        // The complaints print only when asked for: press the badge to pin
+        // them, read them, and unpin — the sheet on a selection is about the
+        // selection, and the badge is the resting claim.
         const badge = app.snapshot().findAll({{ role: "button" }})
             .map((n) => n.label).find((l) => l.startsWith("Warnings "));
+        press(badge);
         const unresolved = rows().filter((l) => !resting.includes(l));
+        press(badge);
 
         menu(socket("Truss · straight end_a"), "Detach");
         settle("the piece to leave the room", (s) =>
@@ -789,7 +791,6 @@ fn a_socket_facing_nothing_still_builds_a_stub_at_the_length_asked_for() {
         dropAt(0.5, 0.72);
         app.key("escape");
         app.frames(4);
-        const before = sockets().length;
 
         tap(socket("Truss · straight end_b"));
         app.frames(6);
@@ -800,7 +801,12 @@ fn a_socket_facing_nothing_still_builds_a_stub_at_the_length_asked_for() {
         const asked = setScrub("stage-length", 3);
         const live = app.snapshot().find({{ role: "button", label: "Place run" }}).enabled;
         press("Place run");
-        settle("the stub to land", () => sockets().length > before);
+        // The landed run selects itself, and the sheet's relation is the
+        // graph's own claim — a bead count is not, now that the room at rest
+        // only beads the selected piece.
+        settle("the stub to land", (s) =>
+            s.findAll({{ role: "text" }}).some((n) =>
+                n.label.startsWith("Edge: ") && n.label.includes("end_")));
         app.frames(10);
         // The span the graph took, read off the control the sheet offers for
         // it — which is the "configure it inline" the design promises, and is
@@ -943,9 +949,11 @@ fn an_empty_venue_takes_the_first_piece_from_the_button_alone() {
         const dialog = app.snapshot()
             .findAll({{ role: "input", label: "Search elements" }}).length;
         dropAt(0.58, 0.7);
+        // Read while the hand still stamps: at rest the room only beads the
+        // selected piece, and this claim is about both.
+        const ends = pieces().map((n) => n.label);
         app.key("escape");
         app.frames(6);
-        const ends = pieces().map((n) => n.label);
         ({{ empty, dialog, ends }})
     "#
         ),
