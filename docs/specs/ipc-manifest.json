@@ -645,7 +645,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 155
+        "line": 164
       },
       "name": "auto_patch",
       "prose": {
@@ -1323,6 +1323,52 @@
       "returns": "PlacementReport"
     },
     {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "hostNodeId",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "hostSocket",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "fixturePath",
+          "rust": "String"
+        },
+        {
+          "name": "modeName",
+          "rust": "String"
+        },
+        {
+          "name": "count",
+          "rust": "usize"
+        },
+        {
+          "name": "layout",
+          "rust": "DistributeLayout"
+        },
+        {
+          "name": "labelPrefix",
+          "rust": "Option<String>"
+        }
+      ],
+      "domain": "distribute",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/distribute.rs",
+        "line": 29
+      },
+      "name": "distribute",
+      "prose": {
+        "returns": "DistributeReport"
+      },
+      "returns": "DistributeReport"
+    },
+    {
       "args": [],
       "domain": "engine_dj",
       "handler": {
@@ -1640,7 +1686,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 83
+        "line": 84
       },
       "name": "get_fixture_definition",
       "prose": {
@@ -1662,7 +1708,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 39
+        "line": 40
       },
       "name": "get_fixture_facings",
       "prose": {
@@ -1742,7 +1788,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 17
+        "line": 18
       },
       "name": "get_patched_fixtures",
       "prose": {
@@ -2380,7 +2426,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 65
+        "line": 66
       },
       "name": "initialize_fixtures",
       "prose": {
@@ -3273,7 +3319,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 193
+        "line": 202
       },
       "name": "next_addresses",
       "prose": {
@@ -3323,7 +3369,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 95
+        "line": 96
       },
       "name": "patch_fixture",
       "prose": {
@@ -3913,7 +3959,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 216
+        "line": 225
       },
       "name": "remove_patched_fixture",
       "prose": {
@@ -3993,7 +4039,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 226
+        "line": 235
       },
       "name": "rename_patched_fixture",
       "prose": {
@@ -4529,7 +4575,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 69
+        "line": 70
       },
       "name": "search_fixtures",
       "prose": {
@@ -4616,7 +4662,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 142
+        "line": 151
       },
       "name": "set_fixture_address",
       "prose": {
@@ -4876,7 +4922,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 168
+        "line": 177
       },
       "name": "universe_occupancy",
       "prose": {
@@ -4894,7 +4940,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 179
+        "line": 188
       },
       "name": "universes_in_use",
       "prose": {
@@ -5250,6 +5296,11 @@
       "handlers": "src-tauri/src/dispatch/handlers/controller.rs"
     },
     {
+      "commandCount": 1,
+      "domain": "distribute",
+      "handlers": "src-tauri/src/dispatch/handlers/distribute.rs"
+    },
+    {
       "commandCount": 7,
       "domain": "engine_dj",
       "handlers": "src-tauri/src/dispatch/handlers/engine_dj.rs"
@@ -5504,7 +5555,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:131",
+        "gpui/crates/app/src/library.rs:132",
         "src/features/dj-import/components/dj-import-browser.tsx:86",
         "src/features/tracks/components/track-browser.tsx:355"
       ],
@@ -5566,8 +5617,8 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 208,
-    "domainCount": 32,
+    "commandCount": 209,
+    "domainCount": 33,
     "eventCount": 18,
     "unportedCount": 0
   },
