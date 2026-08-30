@@ -140,6 +140,10 @@ impl SyncEngine {
         if report.pull.rows_pulled > 0 {
             host.events.emit("library-changed", ());
         }
+        // Unconditionally, unlike `library-changed`: this says the *pull* is
+        // over, which a host holding its door shut until the library is
+        // current needs to hear even when nothing changed.
+        host.events.emit("sync-pulled", ());
 
         // 3. File sync — runs before push so storage_path updates are
         //    included when dirty records are flushed to remote.

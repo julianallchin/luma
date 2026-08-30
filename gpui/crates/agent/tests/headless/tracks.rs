@@ -21,6 +21,7 @@
 // Only for `support::script` — this test seeds its own fixture, but the
 // navigation helpers it drives the app with are the suite's, not its own.
 use super::support;
+use support::session;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -115,15 +116,15 @@ async fn seed(config_dir: &Path) {
     for (id, name) in [("venue-main", "Test Venue"), ("venue-other", "Other Venue")] {
         run(
             pool,
-            "INSERT INTO venues (id, uid, name) VALUES (?, NULL, ?)",
-            [id, name],
+            "INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)",
+            [id, session::PRINCIPAL, name],
         )
         .await;
     }
     run(
         pool,
-        "INSERT INTO patterns (id, uid, name) VALUES ('pattern', NULL, 'Strobe')",
-        [],
+        "INSERT INTO patterns (id, uid, name) VALUES ('pattern', ?, 'Strobe')",
+        [session::PRINCIPAL],
     )
     .await;
 
@@ -155,6 +156,7 @@ async fn seed(config_dir: &Path) {
     // Membership is score existence, not clip existence. Cascade has an
     // intentionally empty score and must survive the In Venue filter.
     insert_empty_score(pool, "track-cascade", "venue-main").await;
+    session::signed_in(config_dir).await;
     pool.close().await;
 }
 
@@ -171,7 +173,9 @@ async fn insert_track(
          VALUES (?, ?, ?, ?, ?, 240.0, ?, ?)",
     )
     .bind(id)
-    .bind(uid)
+    // "Mine" is the signed-in principal's, which is what a fixture with no
+    // opinion about ownership means.
+    .bind(uid.unwrap_or(session::PRINCIPAL))
     .bind(format!("{id}-hash"))
     .bind(title)
     .bind(artist)
@@ -185,9 +189,10 @@ async fn insert_track(
 async fn insert_clip(pool: &SqlitePool, track: &str, venue: &str) {
     let score = format!("score-{track}-{venue}");
     sqlx::query(
-        "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, NULL, ?, ?, 'Score')",
+        "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, 'Score')",
     )
     .bind(&score)
+    .bind(session::PRINCIPAL)
     .bind(track)
     .bind(venue)
     .execute(pool)
@@ -195,9 +200,10 @@ async fn insert_clip(pool: &SqlitePool, track: &str, venue: &str) {
     .expect("failed to seed a score");
     sqlx::query(
         "INSERT INTO track_scores (id, uid, score_id, pattern_id, start_time, end_time)
-         VALUES (?, NULL, ?, 'pattern', 0.0, 60.0)",
+         VALUES (?, ?, ?, 'pattern', 0.0, 60.0)",
     )
     .bind(format!("clip-{score}"))
+    .bind(session::PRINCIPAL)
     .bind(&score)
     .execute(pool)
     .await
@@ -206,9 +212,10 @@ async fn insert_clip(pool: &SqlitePool, track: &str, venue: &str) {
 
 async fn insert_empty_score(pool: &SqlitePool, track: &str, venue: &str) {
     sqlx::query(
-        "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, NULL, ?, ?, 'Score')",
+        "INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES (?, ?, ?, ?, 'Score')",
     )
     .bind(format!("score-{track}-{venue}"))
+    .bind(session::PRINCIPAL)
     .bind(track)
     .bind(venue)
     .execute(pool)

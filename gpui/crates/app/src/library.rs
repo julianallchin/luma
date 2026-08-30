@@ -125,10 +125,16 @@ const WINDOW_DEBOUNCE: Duration = Duration::from_millis(40);
 
 struct LibraryEvents {
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
+    /// A sync's pull has landed — see [`Library::sync_pull`].
+    sync_pulled: tokio::sync::broadcast::Sender<()>,
 }
 
 impl EventSink for LibraryEvents {
     fn emit(&self, event: &str, payload: Value) {
+        if event == "sync-pulled" {
+            let _ = self.sync_pulled.send(());
+            return;
+        }
         if event != "track-import-state" {
             return;
         }
@@ -553,6 +559,13 @@ pub struct Library {
     /// in-flight work, so it lives exactly as long as the `Library`.
     runtime: tokio::runtime::Runtime,
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
+    /// Whether this library talks to the cloud — see `Runtime::cloud`.
+    cloud: bool,
+    /// Fires when a sync's pull phase is over; see [`Library::sync_pull`].
+    sync_pulled: tokio::sync::broadcast::Sender<()>,
+    /// Tells the background sync loop to stop. Sent on drop; the reactor
+    /// going with it is what makes the stop take.
+    sync_shutdown: tokio::sync::watch::Sender<bool>,
     /// Session navigation writes are an actor, not detached calls. Its FIFO is
     /// the durable ordering boundary: selecting B after A cannot leave A as
     /// the last-open venue merely because A's SQLite task completed later.
@@ -604,9 +617,14 @@ impl Library {
         let fixtures_root = fixtures_root()?;
 
         let (progress_tx, _) = tokio::sync::broadcast::channel(256);
+        let (sync_pulled, _) = tokio::sync::broadcast::channel(16);
         let events = Events::new(LibraryEvents {
             import_progress: progress_tx.clone(),
+            sync_pulled: sync_pulled.clone(),
         });
+        // Whether this process may talk to the cloud at all — see
+        // `Runtime::cloud`. Unasked is a launched app, which may.
+        let cloud = luma_ui::runtime::Runtime::with(|runtime| runtime.cloud);
         #[cfg(feature = "agent")]
         let source_fixture = Arc::new(Mutex::new(None));
         #[cfg(feature = "agent")]
@@ -701,6 +719,14 @@ impl Library {
         })?;
 
         let services = services.into_shared();
+        // The loop that keeps the library current after the sync that opened
+        // it: the same one the Tauri app runs, on this library's reactor, for
+        // as long as the library lives. It handles its own sign-in state —
+        // a 401 backs it off, and the next sign-in's push wakes it.
+        let (sync_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        if cloud {
+            runtime.spawn(services.sync_loop(shutdown_rx));
+        }
         let (session_writes, mut session_write_rx) =
             tokio::sync::mpsc::unbounded_channel::<SessionWrite>();
         let session_services = services.clone();
@@ -734,6 +760,9 @@ impl Library {
             lapsed,
             runtime,
             import_progress: progress_tx,
+            cloud,
+            sync_pulled,
+            sync_shutdown,
             session_writes,
             model: None,
             tools: None,
@@ -872,6 +901,112 @@ impl Library {
                 email: Some(email),
             });
             Ok(user_id)
+        }
+    }
+
+    /// Bring the library up to date with the cloud, resolving the moment the
+    /// pull has landed.
+    ///
+    /// A full sync — discovery, pull, files, push — is started on this
+    /// library's reactor and left to finish; what the returned future waits
+    /// for is only the pull, because that is the phase after which every
+    /// venue, track and score the account owns is in the local database. Audio
+    /// and stems keep downloading behind whatever the caller opens next, and
+    /// the push has nothing to do with being current.
+    ///
+    /// `Err` is a sync that failed before its pull could land — no network, a
+    /// session the server refused. The library is then whatever it was, and
+    /// the caller decides whether that is usable.
+    ///
+    /// Immediate on a library that does not talk to the cloud.
+    pub fn sync_pull(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        if !self.cloud {
+            let _ = done_tx.send(Ok(()));
+        } else {
+            // Subscribed before the sync starts, so a pull that lands before
+            // the task is even polled is still seen.
+            let mut pulled = self.sync_pulled.subscribe();
+            let services = self.services.clone();
+            self.runtime.spawn(async move {
+                let args = json!({});
+                let mut sync = Box::pin(command::<Value>(&services, "sync_full", &args));
+                let mut done_tx = Some(done_tx);
+                let finished = tokio::select! {
+                    _ = pulled.recv() => {
+                        if let Some(done) = done_tx.take() {
+                            let _ = done.send(Ok(()));
+                        }
+                        None
+                    }
+                    result = &mut sync => Some(result),
+                };
+                let report = match finished {
+                    Some(result) => {
+                        let outcome = result.as_ref().map(|_| ()).map_err(|error| {
+                            LibraryError::at("sync_pull", Cause::Cancelled(error.to_string()))
+                        });
+                        if let Some(done) = done_tx.take() {
+                            let _ = done.send(outcome);
+                        }
+                        result
+                    }
+                    None => sync.await,
+                };
+                match report {
+                    Ok(report) => {
+                        if let Some(errors) = report["errors"].as_array().filter(|e| !e.is_empty())
+                        {
+                            eprintln!("[luma] sync finished with errors: {errors:?}");
+                        }
+                    }
+                    Err(error) => eprintln!("[luma] sync failed: {error}"),
+                }
+            });
+        }
+        async move {
+            done_rx.await.map_err(|_| {
+                LibraryError::at(
+                    "sync_pull",
+                    Cause::Cancelled("the sync task was dropped".into()),
+                )
+            })?
+        }
+    }
+
+    /// Ask Supabase to turn the stored session back into a principal, and
+    /// adopt whichever answer comes back.
+    ///
+    /// The refresh is the host's `get_session_item` on the session key —
+    /// reading it is what refreshes an expiring token and re-arms admission
+    /// for the identity it proves — followed by `current_account` for the
+    /// label. Sequenced inside one spawned task for the same reason
+    /// [`Self::sign_out`] is: [`Self::call`] dispatches immediately, and the
+    /// label must be read *after* the identity switch it describes.
+    ///
+    /// `Ok(None)` is a session Supabase would not renew; `Err` is a network
+    /// that would not say. Neither is a principal, and the caller treats them
+    /// alike — the difference is only worth a log line.
+    pub fn refresh_session(
+        &self,
+    ) -> impl Future<Output = Result<Option<Account>, LibraryError>> + use<> {
+        let services = self.services.clone();
+        let cache = Arc::clone(&self.account);
+        let task = self.runtime.spawn(async move {
+            command::<Option<String>>(
+                &services,
+                "get_session_item",
+                &json!({ "key": luma_lib::database::local::auth::SUPABASE_SESSION_KEY }),
+            )
+            .await?;
+            command::<Option<Account>>(&services, "current_account", &Value::Null).await
+        });
+        async move {
+            let account = task.await.map_err(|error| {
+                LibraryError::at("refresh_session", Cause::Cancelled(error.to_string()))
+            })??;
+            *cache.lock().unwrap() = account.clone();
+            Ok(account)
         }
     }
 
@@ -2415,4 +2550,10 @@ fn repo_fixtures_root() -> Option<PathBuf> {
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
         .max()
+}
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        let _ = self.sync_shutdown.send(true);
+    }
 }

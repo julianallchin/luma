@@ -15,6 +15,10 @@
 
 #![allow(dead_code)]
 
+// Mounted by `#[path]` from several binaries, so there is no `super` to
+// borrow the session fixture from — bring it in the same way.
+#[path = "session.rs"]
+mod session;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -326,6 +330,7 @@ async fn seed(config_dir: &Path) {
     let db = luma_lib::database::local::database::init_app_db_at(config_dir)
         .await
         .expect("failed to open the fixture database");
+    session::signed_in(config_dir).await;
     let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
         .await
         .expect("failed to open the fixture state database");
@@ -344,9 +349,10 @@ async fn seed(config_dir: &Path) {
     {
         sqlx::query(
             "INSERT INTO tracks (id, uid, track_hash, title, artist, duration_seconds, file_path)
-             VALUES (?, NULL, ?, ?, ?, 210.0, ?)",
+             VALUES (?, ?, ?, ?, ?, 210.0, ?)",
         )
         .bind(format!("chat-track-{index}"))
+        .bind(session::PRINCIPAL)
         .bind(format!("chat-track-{index}-hash"))
         .bind(title)
         .bind(artist)

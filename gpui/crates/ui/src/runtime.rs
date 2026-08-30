@@ -44,6 +44,12 @@ pub struct Runtime {
     /// while an explicit request still wins. Unasked reads as on — see
     /// [`Runtime::stage_gpu_enabled`].
     pub stage_gpu: Option<bool>,
+    /// Whether the library talks to the cloud at all: the sync on open and
+    /// sign-in, and the loop that keeps it current afterwards. On for a
+    /// launched app; the harness turns it off, because its fixtures carry
+    /// credentials that prove nothing to a server and its real-library tests
+    /// are read-only by contract.
+    pub cloud: bool,
 }
 
 impl Default for Runtime {
@@ -62,6 +68,7 @@ impl Default for Runtime {
             stage_gpu: std::env::var("LUMA_STAGE_GPU")
                 .ok()
                 .map(|value| !matches!(value.as_str(), "off" | "0")),
+            cloud: !matches!(std::env::var("LUMA_CLOUD").as_deref(), Ok("off") | Ok("0")),
         }
     }
 }

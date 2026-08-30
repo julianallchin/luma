@@ -162,6 +162,12 @@ pub struct Luma {
     /// subscriptions, and `Luma` is one entity that would otherwise carry all
     /// of that for the entire session it is not showing.
     pub(crate) sign_in: Option<Box<signin::SignIn>>,
+    /// A lapsed session is being asked online whether it still proves anyone;
+    /// the window shows [`signin::splash`] until it answers.
+    pub(crate) refreshing_session: bool,
+    /// The library is being brought up to date with the cloud before anything
+    /// opens; the window shows [`signin::splash`] until the pull lands.
+    pub(crate) syncing: bool,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
     /// The dialog on screen, and — for the frames after it is dismissed —
     /// the one leaving. See [`luma_ui::dialog::Popup`]: gpui unmounts an
@@ -245,6 +251,8 @@ impl Luma {
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
             sign_in: None,
+            refreshing_session: false,
+            syncing: false,
             overlay: luma_ui::dialog::Popup::default(),
             account_menu: luma_ui::dialog::Popup::default(),
             account_focus: cx.focus_handle().tab_stop(true),
@@ -265,15 +273,18 @@ impl Luma {
             sign_in_generation: 0,
             venue_selection_generation: 0,
         };
-        // Which door the app opens on. The gate is raised only for a session
-        // that stopped proving anyone (see `Library::lapsed`) — not for merely
-        // being signed out, which is a working state a guest may have chosen.
-        // Either way it is a first screen, not a failure: the gate dismisses
-        // to exactly what the other branch opens.
-        if app.library.lapsed().is_some() {
-            app.show_sign_in(cx);
+        // Which door the app opens on. Nothing opens without a principal: a
+        // stored session that still proves one goes straight in; one that
+        // stopped proving anyone (see `Library::lapsed`) is asked online
+        // whether it can be made to, behind a splash; anything else is the
+        // gate. The gate is a first screen, not a failure, and it lands on
+        // exactly what the signed-in branch opens.
+        if app.library.user_id().is_some() {
+            app.sync_then_restore(cx);
+        } else if app.library.lapsed().is_some() {
+            app.refresh_session(cx);
         } else {
-            app.restore_venue(cx);
+            app.show_sign_in(false, cx);
         }
         app.auto_repro(cx);
         app
@@ -370,6 +381,12 @@ impl Render for Luma {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Nobody is signed in yet, so there is no library to show and no shell
         // to show it in — the gate is the app, not a plane over it.
+        if self.refreshing_session {
+            return signin::splash(window, "Signing in…");
+        }
+        if self.syncing {
+            return signin::splash(window, "Syncing your library…");
+        }
         if self.sign_in.is_some() {
             return signin::screen(self, window, cx);
         }

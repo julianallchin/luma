@@ -48,6 +48,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use support::session;
 
 use gpui::{px, size, AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode};
@@ -133,8 +134,9 @@ async fn seed(config_dir: &Path) {
     // while admission is still unarmed.
     let audio = config_dir.join("aurora.wav");
     std::fs::write(&audio, super::support::wav(8)).expect("failed to write the fixture audio");
-    sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, NULL, ?)")
+    sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)")
         .bind(super::support::VENUE)
+        .bind(session::PRINCIPAL)
         .bind(super::support::VENUE_NAME)
         .execute(&db.0)
         .await
@@ -142,14 +144,16 @@ async fn seed(config_dir: &Path) {
     sqlx::query(
         "INSERT INTO tracks
             (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-         VALUES (?, NULL, 'gauntlet-aurora-8s', ?, 'Nightliner', 8.0, ?, CURRENT_TIMESTAMP)",
+         VALUES (?, ?, 'gauntlet-aurora-8s', ?, 'Nightliner', 8.0, ?, CURRENT_TIMESTAMP)",
     )
     .bind(super::support::TRACK)
+    .bind(session::PRINCIPAL)
     .bind(super::support::TRACK_NAME)
     .bind(audio.to_string_lossy().to_string())
     .execute(&db.0)
     .await
     .expect("failed to seed the track");
+    session::signed_in(config_dir).await;
     let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
         .await
         .expect("failed to open the fixture state database");

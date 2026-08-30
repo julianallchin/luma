@@ -216,7 +216,11 @@ pub fn run(config: Config, root: RootFactory, on_ready: impl FnOnce(PumpClient))
     // Before the app exists, and on the thread that will own it: everything
     // downstream — the library directory, the motion timescale, the stage's
     // GPU policy — resolves through the thread's runtime.
-    config.runtime.clone().install();
+    let mut runtime = config.runtime.clone();
+    // A driven app is not a launched one: nothing here may reach a server —
+    // see `Runtime::cloud`.
+    runtime.cloud = false;
+    runtime.install();
     on_ready(client);
     let mut backend = Backend::open(&config, &root);
     serve(&mut backend, &config, &root, rx);

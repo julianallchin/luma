@@ -34,6 +34,7 @@
 #![cfg(all(feature = "app", feature = "pixel"))]
 
 use super::support;
+use support::session;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -71,8 +72,9 @@ async fn seed(config_dir: &Path) -> String {
         .expect("failed to open the fixture database");
     let audio = config_dir.join("aurora.wav");
     std::fs::write(&audio, support::wav(8)).expect("failed to write the fixture audio");
-    sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, NULL, ?)")
+    sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)")
         .bind(support::VENUE)
+        .bind(session::PRINCIPAL)
         .bind(support::VENUE_NAME)
         .execute(&db.0)
         .await
@@ -80,14 +82,16 @@ async fn seed(config_dir: &Path) -> String {
     sqlx::query(
         "INSERT INTO tracks
             (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-         VALUES (?, NULL, 'graph-aurora-8s', ?, 'Nightliner', 8.0, ?, CURRENT_TIMESTAMP)",
+         VALUES (?, ?, 'graph-aurora-8s', ?, 'Nightliner', 8.0, ?, CURRENT_TIMESTAMP)",
     )
     .bind(support::TRACK)
+    .bind(session::PRINCIPAL)
     .bind(support::TRACK_NAME)
     .bind(audio.to_string_lossy().to_string())
     .execute(&db.0)
     .await
     .expect("failed to seed the track");
+    session::signed_in(config_dir).await;
     let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
         .await
         .expect("failed to open the fixture state database");
