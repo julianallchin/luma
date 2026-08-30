@@ -3,10 +3,10 @@
 //!
 //! The bug this pins: a spent Supabase refresh token used to abort `main`
 //! before a window existed (`could not open the library: … refresh_token_
-//! already_used`). Boot no longer asks the network anything, so the token's
-//! liveness cannot decide whether Luma opens — only whether the *cloud* works,
-//! which is a later, recoverable question. What decides the first screen is
-//! whether the stored session still proves a principal offline.
+//! already_used`). A session that proves a principal offline opens the app
+//! without asking the network anything; one that does not is asked online,
+//! behind a splash, and lands at the gate when the answer is no. Nothing
+//! opens without a principal — there is no guest door.
 
 #![cfg(feature = "app")]
 
@@ -117,21 +117,19 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
             // signed-out launch, not an error to report.
             failure: gate.find((n) => n.role === "text"
                 && n.label.toLowerCase().includes("could not open")) !== undefined,
-            // Escape is the offline door, and it opens onto the venue picker
-            // the launch was heading for.
-            dismissed: (() => {
+            // …but it says why the person is here.
+            expired: gate.find((n) => n.role === "text"
+                && n.label.startsWith("Your session expired")) !== undefined,
+            // Escape is not a door. The gate is the app until someone signs in.
+            held: (() => {
                 app.key("escape");
-                return until("the shell the gate stood in front of", (s) =>
-                    s.find({ role: "card", label: "Venue dialog" }) !== undefined
-                        && s.find({ role: "text", label: "Sign in to Luma" }) === undefined)
-                    !== undefined;
+                return app.snapshot().find({ role: "text", label: "Sign in to Luma" }) !== undefined;
             })(),
         })
     "#,
     );
     assert_eq!(out["field"], true, "the gate shows an email field");
     assert_eq!(out["submit"], true, "the gate offers its primary capsule");
-    assert_eq!(out["offline"], true, "the gate offers a way past it");
     assert_eq!(out["venues"], false, "the gate replaces the venue picker");
     assert_eq!(
         out["shell"], false,
@@ -142,55 +140,9 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
         "the screen carries the window's own controls"
     );
     assert_eq!(out["failure"], false, "nothing is reported as a failure");
-    assert_eq!(
-        out["dismissed"], true,
-        "escape works offline, it does not trap"
-    );
-
-    // The gate is not the only way back to it: settings is where an account
-    // lives here, and a guest must be able to sign in from there later.
-    let account = exec(
-        &mut harness,
-        r#"
-        // The venue picker will not stand aside until a room is chosen, and
-        // a guest's own rows are exactly what is still readable here.
-        nav.venue("Sign-in Venue");
-        until("the shell", (s) =>
-            s.find({ role: "button", label: "Account" }) !== undefined
-                && s.find({ role: "card", label: "Venue dialog" }) === undefined);
-        // The foot names the guest namespace before anything is opened.
-        const foot = app.snapshot().find({ role: "text", label: "Working locally" }) !== undefined;
-        nav.settings();
-        const settings = until("the settings dialog", (s) =>
-            s.find({ role: "toggle", label: "Account" }) !== undefined);
-        app.click(settings.find({ role: "toggle", label: "Account" }));
-        const shown = until("the account section", (s) =>
-            s.find({ role: "button", label: "Sign in" }) !== undefined);
-        app.click(shown.find({ role: "button", label: "Sign in" }));
-        const reopened = until("the gate reopened from settings", (s) =>
-            s.find({ role: "text", label: "Sign in to Luma" }) !== undefined
-                // Settings went with the shell rather than lingering under it.
-                && s.find({ role: "toggle", label: "Account" }) === undefined);
-        ({
-            foot,
-            identity: shown.find({ role: "input", label: "Working locally" })
-                !== undefined,
-            reopened: reopened.find({ role: "button", label: "Continue" }) !== undefined,
-        })
-    "#,
-    );
-    assert_eq!(
-        account["foot"], true,
-        "the sidebar's foot names the guest namespace"
-    );
-    assert_eq!(
-        account["identity"], true,
-        "the account section names the guest namespace"
-    );
-    assert_eq!(
-        account["reopened"], true,
-        "settings can reach the gate after it was dismissed"
-    );
+    assert_eq!(out["offline"], false, "there is no guest door");
+    assert_eq!(out["expired"], true, "the gate says why it is up");
+    assert_eq!(out["held"], true, "escape must not get past the gate");
 }
 
 #[test]
@@ -212,14 +164,14 @@ fn a_proven_session_launches_past_the_gate_even_with_a_dead_refresh_token() {
 }
 
 /// Sign out from the sidebar foot's account menu — the door a person actually
-/// presses — and land in the guest namespace.
+/// presses — and land at the gate: signed out is not a state the shell shows.
 ///
 /// The principal's one row is already durable, so the cloud flush sign-out
 /// begins with has nothing to send and the whole boundary runs offline. That
 /// is the point: what is under test is the *gesture*, from the foot to the end
 /// state, not the sync it fronts.
 #[test]
-fn signing_out_from_the_account_foot_reaches_the_guest_namespace() {
+fn signing_out_from_the_account_foot_lands_at_the_gate() {
     let dir = fixture_dir_at("signout", Stored::Proven { expires_in: 3600 }, true);
     let mut harness = harness(&dir);
     let out = exec(
@@ -233,17 +185,17 @@ fn signing_out_from_the_account_foot_reaches_the_guest_namespace() {
         const before = app.snapshot().find({ role: "text", label: "Working locally" }) === undefined;
         nav.step("the account foot", "button", "Account");
         nav.step("the sign-out row", "row", "Sign out");
-        // Either the gesture lands — the foot names the guest namespace — or
-        // it failed, and the failure has to be readable from right here,
-        // because the person who pressed this never opened settings.
+        // Either the gesture lands — the gate is the next screen — or it
+        // failed, and the failure has to be readable from right here, because
+        // the person who pressed this never opened settings.
         const settled = until("sign-out to settle", (s) =>
-            s.find({ role: "text", label: "Working locally" }) !== undefined
+            s.find({ role: "text", label: "Sign in to Luma" }) !== undefined
                 || s.find((n) => n.role === "text"
                     && n.label.startsWith("Could not sign out")) !== undefined
                 ? s : undefined);
         ({
             before,
-            guest: settled.find({ role: "text", label: "Working locally" }) !== undefined,
+            gate: settled.find({ role: "text", label: "Sign in to Luma" }) !== undefined,
             failure: (settled.find((n) => n.role === "text"
                 && n.label.startsWith("Could not sign out")) || {}).label || null,
             // The menu went with the gesture rather than sitting open over it.
@@ -258,10 +210,7 @@ fn signing_out_from_the_account_foot_reaches_the_guest_namespace() {
         "sign-out reported a failure: {}",
         out["failure"]
     );
-    assert_eq!(
-        out["guest"], true,
-        "the foot does not name the guest namespace after signing out"
-    );
+    assert_eq!(out["gate"], true, "signing out must land at the gate");
     assert_eq!(out["menu"], false, "the account menu stayed open");
 }
 
@@ -289,13 +238,13 @@ fn a_sign_out_that_cannot_flush_says_so_at_the_foot() {
         const settled = until("the refusal", (s) =>
             s.find((n) => n.role === "text"
                 && n.label.startsWith("Could not sign out")) !== undefined
-                || s.find({ role: "text", label: "Working locally" }) !== undefined
+                || s.find({ role: "text", label: "Sign in to Luma" }) !== undefined
                 ? s : undefined);
         ({
             failure: (settled.find((n) => n.role === "text"
                 && n.label.startsWith("Could not sign out")) || {}).label || null,
             // Nothing half-happened: the account is still this library's.
-            guest: settled.find({ role: "text", label: "Working locally" }) !== undefined,
+            gate: settled.find({ role: "text", label: "Sign in to Luma" }) !== undefined,
             // …and the gesture is pressable again rather than stuck mid-flight.
             retry: (() => {
                 app.click(app.snapshot().find({ role: "button", label: "Account" }));
@@ -315,7 +264,7 @@ fn a_sign_out_that_cannot_flush_says_so_at_the_foot() {
         out["failure"]
     );
     assert_eq!(
-        out["guest"], false,
+        out["gate"], false,
         "a refused sign-out must not read as signed out"
     );
     assert_eq!(out["retry"], true, "the gesture is stuck after a failure");

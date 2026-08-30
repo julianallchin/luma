@@ -219,3 +219,11 @@ fn load_poly_sprite(instance_id: u32) -> PolychromeSprite {
         read_atlas_tile(&cursor),
     );
 }
+
+fn load_surface(instance_id: u32) -> Surface {
+    var cursor = instance_cursor(instance_id * 8u);
+    return Surface(
+        read_bounds(&cursor),
+        read_bounds(&cursor),
+    );
+}

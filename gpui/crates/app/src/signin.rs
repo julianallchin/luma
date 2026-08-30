@@ -18,16 +18,18 @@
 //! than a morph: nothing encloses the content, so there is no outline for a
 //! tween to carry between two shapes.
 //!
-//! # It is a gate, not a wall
+//! # It is the door, and the only one
 //!
-//! Every route offers the way past it — the secondary capsule on the first
-//! step, the quiet link on the second — and Escape does the same thing. A
-//! signed-out Luma is not a broken Luma: guest rows carry no `uid`, and the
-//! app database's admission triggers admit those unconditionally, so the whole
-//! local library — venues, tracks, patterns, scores — opens and edits without
-//! a session. What being signed out costs is the cloud: sync, shared venues,
-//! anything that needs a principal to own the row. So this screen offers the
-//! door and holds it open; it does not bar it.
+//! Nothing in Luma opens without a principal: every row a person makes is
+//! owned, and the cloud — sync, shared venues — is what the app is for. So
+//! this screen has no way past it: no guest capsule, and Escape only steps
+//! back a route. The guest namespace still exists in the database, as the
+//! admission the host arms between a sign-out and the next sign-in, but it
+//! is an interval, not a place a person can work in.
+//!
+//! A stored session that still proves a principal never sees this screen;
+//! one that no longer does is asked online whether it can be made to (see
+//! [`Luma::refresh_session`]) and lands here only when it cannot.
 //!
 //! # Why the host performs the exchange
 //!
@@ -97,16 +99,20 @@ pub(crate) struct SignIn {
     /// holds it, so the root's key handler always has a dispatch path to be on.
     screen_focus: FocusHandle,
     action_focus: FocusHandle,
+    /// The Code route's "use a different email"; the Email route has no
+    /// alternative to offer.
     secondary_focus: FocusHandle,
-    /// The quiet link, which only the Code route carries.
-    link_focus: FocusHandle,
+    /// Raised because a session this machine held stopped proving anyone,
+    /// rather than because nobody had signed in — the one thing the screen
+    /// says differently.
+    expired: bool,
     /// Which route's field should take the keyboard on the next frame.
     focus_pending: Option<Route>,
     _field_subscriptions: [Subscription; 2],
 }
 
 impl SignIn {
-    fn new(generation: u64, cx: &mut Context<Luma>) -> Self {
+    fn new(generation: u64, expired: bool, cx: &mut Context<Luma>) -> Self {
         let email_field = cx.new(|cx| TextInput::search("Email", cx));
         let code_field = cx.new(|cx| TextInput::search("Code", cx));
         let email_focus = email_field.read(cx).focus_handle(cx);
@@ -144,7 +150,7 @@ impl SignIn {
             screen_focus: cx.focus_handle(),
             action_focus: cx.focus_handle().tab_stop(true),
             secondary_focus: cx.focus_handle().tab_stop(true),
-            link_focus: cx.focus_handle().tab_stop(true),
+            expired,
             focus_pending: Some(Route::Email),
             _field_subscriptions: subscriptions,
         }
@@ -171,7 +177,10 @@ impl Luma {
     /// which goes now rather than animating out later over a shell the user
     /// has not looked at since (settings is the one route that gets here with
     /// an overlay up).
-    pub(crate) fn show_sign_in(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `expired` is why: a session this machine held stopped proving anyone,
+    /// as opposed to a sign-out or a first launch.
+    pub(crate) fn show_sign_in(&mut self, expired: bool, cx: &mut Context<Self>) {
         if self.sign_in.is_some() {
             return;
         }
@@ -181,19 +190,73 @@ impl Luma {
         self.account_menu = luma_ui::dialog::Popup::default();
         self.sign_in_generation = self.sign_in_generation.wrapping_add(1);
         let generation = self.sign_in_generation;
-        self.sign_in = Some(Box::new(SignIn::new(generation, cx)));
+        self.sign_in = Some(Box::new(SignIn::new(generation, expired, cx)));
         cx.notify();
     }
 
-    /// Leave the screen and use the library as a guest. The venue restore that
-    /// a signed-in launch would have run happens here instead, so both ways in
-    /// land on the same screen.
-    pub(crate) fn continue_offline(&mut self, cx: &mut Context<Self>) {
-        if self.sign_in.take().is_none() {
+    /// Ask online whether a stored session that no longer proves anyone can
+    /// be made to, and open whichever door that earns.
+    ///
+    /// The one wait at launch that has to finish before the app knows whose
+    /// library this is, so it stands behind [`splash`] rather than behind the
+    /// gate: a person whose token merely expired should not be asked to type
+    /// a code they do not need. Any answer short of a principal — refused,
+    /// unreachable — is the gate, which says why.
+    pub(crate) fn refresh_session(&mut self, cx: &mut Context<Self>) {
+        if self.refreshing_session {
             return;
         }
-        self.restore_venue(cx);
+        self.refreshing_session = true;
+        let pending = self.library.refresh_session();
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.refreshing_session = false;
+                match result {
+                    Ok(Some(_)) => this.sync_then_restore(cx),
+                    Ok(None) => this.show_sign_in(true, cx),
+                    Err(error) => {
+                        eprintln!("[luma] the stored session could not be refreshed: {error}");
+                        this.show_sign_in(true, cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Bring the library up to date with the cloud, then open it. Nothing is
+    /// usable in between — the window is [`splash`] — because a library that
+    /// has not pulled yet is not this account's library, only what the disk
+    /// last saw of it, and a venue picker over that would offer to create a
+    /// room the person already has.
+    ///
+    /// A sync that cannot land — offline, refused — is logged and the local
+    /// library opens as it is: the door is held for the cloud's answer, not
+    /// for the cloud's existence.
+    pub(crate) fn sync_then_restore(&mut self, cx: &mut Context<Self>) {
+        if self.syncing {
+            return;
+        }
+        self.syncing = true;
+        let pending = self.library.sync_pull();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.syncing = false;
+                if let Err(error) = result {
+                    eprintln!("[luma] the library could not be brought up to date: {error}");
+                }
+                this.restore_venue(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn sign_in_email_changed(&mut self, email: String, cx: &mut Context<Self>) {
@@ -211,8 +274,8 @@ impl Luma {
     }
 
     /// The screen's keyboard, in the same navigator shape as the dialogs':
-    /// Enter commits the route, ← / ⌫-on-empty step back, Escape works
-    /// offline.
+    /// Enter commits the route; ← / ⌫-on-empty and Escape step back. On the
+    /// first route there is nowhere to step back to, and Escape does nothing.
     fn sign_in_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let Some(state) = self.sign_in.as_ref() else {
             return;
@@ -223,8 +286,8 @@ impl Luma {
             Route::Code => state.code.is_empty(),
         };
         match (route, event.keystroke.key.as_str()) {
-            (_, "escape") => self.continue_offline(cx),
             (_, "enter") => self.sign_in_submit(cx),
+            (Route::Code, "escape") => self.sign_in_back(cx),
             (Route::Code, "left") => self.sign_in_back(cx),
             (Route::Code, "backspace") if field_empty => self.sign_in_back(cx),
             _ => {}
@@ -317,7 +380,7 @@ impl Luma {
                             .is_some_and(|state| state.generation == generation);
                         if current {
                             this.sign_in = None;
-                            this.restore_venue(cx);
+                            this.sync_then_restore(cx);
                             cx.notify();
                         }
                     }
@@ -378,34 +441,67 @@ pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>
     }
     let state = app.sign_in.as_ref().expect("the screen is up");
     let keys = entity.clone();
-    let viewport = f32::from(window.viewport_size().width);
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        // The app's ground, not a scrim: nothing is behind this screen.
-        .bg(ladder::background())
-        .font_family(luma_ui::fonts::FAMILY)
-        .text_color(ladder::foreground())
+    ground(window, column(state, &entity, window))
         .key_context(keymap::context::SIGN_IN)
         .track_focus(&state.screen_focus)
         .on_key_down(move |event, _, cx| {
             let event = event.clone();
             keys.update(cx, |this, cx| this.sign_in_key(&event, cx));
         })
-        // The window still has to move and close. A screen with no regions
-        // has no region head band either, so it carries its own — see
-        // [`crate::chrome`].
+        .into_any_element()
+}
+
+/// What stands in for the app while it is not yet anyone's to use — a stored
+/// session being turned back into a principal ([`Luma::refresh_session`]),
+/// the library being brought up to date ([`Luma::sync_then_restore`]): the
+/// same ground and chrome as the gate, the mark, and one quiet `line`. Not a
+/// place — the moment before one.
+pub(crate) fn splash(window: &Window, line: &'static str) -> AnyElement {
+    ground(
+        window,
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(MARK_GAP))
+            .pb(px(luma_ui::dialog::TITLEBAR_CLEARANCE))
+            .child(mark::luma(MARK_SIZE))
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .text_color(ladder::muted_foreground())
+                    .child(line)
+                    .agent_node(Role::Text, line),
+            ),
+    )
+    .into_any_element()
+}
+
+/// The app's ground with `body` on it, between the window's own chrome.
+///
+/// Not a scrim: nothing is behind these screens. A screen with no regions
+/// has no region head band either, so this carries one — see
+/// [`crate::chrome`] — and the window controls go last, so nothing can cover
+/// the only things that move and close the window.
+fn ground(window: &Window, body: impl IntoElement) -> Div {
+    let viewport = f32::from(window.viewport_size().width);
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .bg(ladder::background())
+        .font_family(luma_ui::fonts::FAMILY)
+        .text_color(ladder::foreground())
         .child(chrome::band(chrome::BandSpan {
             x: 0.0,
             width: viewport,
             viewport,
         }))
-        .child(column(state, &entity, window))
-        // Last, so nothing can cover the only controls that move and close the
-        // window.
+        .child(body)
         .child(chrome::window_controls())
-        .into_any_element()
 }
 
 /// Mark, title, and the capsules — the only thing on the screen.
@@ -466,7 +562,11 @@ fn head(state: &SignIn) -> Div {
 
 fn subtitle(state: &SignIn) -> Option<SharedString> {
     match state.route {
-        Route::Email => None,
+        // The first route's question is its own title, unless the person is
+        // here because a session they had stopped working — then say so.
+        Route::Email => state
+            .expired
+            .then(|| SharedString::from("Your session expired. Sign in again to continue.")),
         Route::Code => Some(SharedString::from(match &state.sent_to {
             Some(address) => format!("We sent a code to {address}"),
             None => "We sent you a six-digit code".to_string(),
@@ -482,9 +582,8 @@ fn stack(state: &SignIn, app: &Entity<Luma>, window: &Window) -> Div {
         .gap(px(pill::GAP))
         .child(field(state, window))
         .child(primary(state, app, window))
-        .child(secondary(state, app, window))
         .when(state.route == Route::Code, |column| {
-            column.child(link(state, app, window))
+            column.child(secondary(state, app, window))
         })
 }
 
@@ -567,44 +666,21 @@ fn primary(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
         .into_any_element()
 }
 
-/// The route's alternative: the door out on the first step, the way back on
-/// the second. One outlined capsule either way, because both answer the same
-/// question — "not this".
+/// The Code route's alternative — the way back to the address. An outlined
+/// capsule, because it answers the same question as the primary: "not this".
+/// The Email route has no counterpart: there is nothing to go back to and
+/// nothing to skip to.
 fn secondary(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
-    let (label, id) = match state.route {
-        Route::Email => ("Work offline", "sign-in-offline"),
-        Route::Code => ("Use a different email", "sign-in-back"),
-    };
-    let route = state.route;
+    let label = "Use a different email";
     let pressed = app.clone();
     pill::secondary(label)
-        .id(id)
+        .id("sign-in-back")
         .track_focus(&state.secondary_focus)
         .tab_index(0)
         .on_click(move |_, _, cx| {
-            pressed.update(cx, |this, cx| match route {
-                Route::Email => this.continue_offline(cx),
-                Route::Code => this.sign_in_back(cx),
-            });
+            pressed.update(cx, |this, cx| this.sign_in_back(cx));
         })
         .agent_node(Role::Button, label)
         .agent_focused(state.secondary_focus.is_focused(window))
-        .into_any_element()
-}
-
-/// The Code route's way out. A link rather than a third capsule: leaving is
-/// still offered, but it is not one of the two things this step is about.
-fn link(state: &SignIn, app: &Entity<Luma>, window: &Window) -> AnyElement {
-    let leave = app.clone();
-    pill::link("Work offline")
-        .id("sign-in-offline")
-        .mt(px(TIGHT_GAP))
-        .track_focus(&state.link_focus)
-        .tab_index(0)
-        .on_click(move |_, _, cx| {
-            leave.update(cx, |this, cx| this.continue_offline(cx));
-        })
-        .agent_node(Role::Button, "Work offline")
-        .agent_focused(state.link_focus.is_focused(window))
         .into_any_element()
 }

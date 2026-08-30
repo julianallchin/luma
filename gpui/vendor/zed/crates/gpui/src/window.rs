@@ -27,8 +27,6 @@ use crate::{
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
-#[cfg(target_os = "macos")]
-use core_video::pixel_buffer::CVPixelBuffer;
 use derive_more::{Deref, DerefMut};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -4674,8 +4672,8 @@ impl Window {
     /// Paint a surface into the scene for the next frame at the current z-index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
-    #[cfg(target_os = "macos")]
-    pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer) {
+    // LUMA LOCAL EDIT: on every platform; see `SurfaceHandle`.
+    pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, source: crate::SurfaceHandle) {
         use crate::PaintSurface;
 
         self.invalidator.debug_assert_paint();
@@ -4686,8 +4684,22 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            image_buffer,
+            source,
         });
+    }
+
+    /// The device this window's compositor draws with, where that compositor
+    /// is `gpui_wgpu`.
+    ///
+    /// A renderer that builds its frames on this device can hand them to
+    /// [`Self::paint_surface`] as they are: same device, same queue, so the
+    /// compositor's draw is ordered after the renderer's submit by the queue
+    /// itself and nothing is copied or fenced. `None` where the compositor is
+    /// something else (Metal, DirectX) or has not been created yet.
+    // LUMA LOCAL EDIT: not upstream.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub fn wgpu_device(&self) -> Option<crate::WgpuDevice> {
+        self.platform_window.wgpu_device()
     }
 
     /// Replace the pixels of an image already in the sprite atlas, keeping its

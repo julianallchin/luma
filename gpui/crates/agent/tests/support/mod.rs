@@ -407,6 +407,7 @@ impl Fixture {
                 // shoot the slides themselves opt out with `with_motion`.
                 reduced_motion: !self.force_motion,
                 motion_scale: self.motion_scale.unwrap_or(1.0),
+                cloud: false,
                 // Left unset so `Harness::headless` answers from the mode.
                 stage_gpu: None,
             },
@@ -460,8 +461,9 @@ impl Fixture {
             .await
             .expect("failed to open the fixture database");
         let pool = &db.0;
-        sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, NULL, ?)")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)")
             .bind(VENUE)
+            .bind(session::PRINCIPAL)
             .bind(VENUE_NAME)
             .execute(pool)
             .await
@@ -470,8 +472,9 @@ impl Fixture {
         // down: `create_pattern` also makes the graph *implementation* a graph
         // document hangs off, and a row inserted here has none.
         for clip in self.clips.iter().filter(|clip| !clip.lit) {
-            sqlx::query("INSERT INTO patterns (id, uid, name) VALUES (?, NULL, ?)")
+            sqlx::query("INSERT INTO patterns (id, uid, name) VALUES (?, ?, ?)")
                 .bind(&clip.pattern)
+                .bind(session::PRINCIPAL)
                 .bind(&clip.name)
                 .execute(pool)
                 .await
@@ -481,10 +484,11 @@ impl Fixture {
             sqlx::query(
                 "INSERT INTO tracks
                     (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-                 VALUES (?, NULL, ?, ?, 'Nightliner', ?, ?,
+                 VALUES (?, ?, ?, ?, 'Nightliner', ?, ?,
                          COALESCE(?, CURRENT_TIMESTAMP))",
             )
             .bind(TRACK)
+            .bind(session::PRINCIPAL)
             .bind(self.track_hash("aurora"))
             .bind(TRACK_NAME)
             .bind(f64::from(self.seconds))
@@ -498,9 +502,10 @@ impl Fixture {
                 sqlx::query(
                     "INSERT INTO tracks
                         (id, uid, track_hash, title, artist, duration_seconds, file_path, created_at)
-                     VALUES ('track-zulu', NULL, ?, 'Zulu', 'Nightliner', ?, ?,
+                     VALUES ('track-zulu', ?, ?, 'Zulu', 'Nightliner', ?, ?,
                              COALESCE(?, CURRENT_TIMESTAMP))",
                 )
+                .bind(session::PRINCIPAL)
                 .bind(self.track_hash("zulu"))
                 .bind(f64::from(self.seconds))
                 .bind(audio.to_string_lossy().to_string())
@@ -532,9 +537,10 @@ impl Fixture {
                 "INSERT INTO tracks
                     (id, uid, track_hash, title, artist, album, duration_seconds, file_path,
                      album_art_path, album_art_mime)
-                 VALUES (?, NULL, ?, ?, ?, 'Padding', ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, 'Padding', ?, ?, ?, ?)",
             )
             .bind(format!("track-pad-{index:05}"))
+            .bind(session::PRINCIPAL)
             .bind(self.track_hash(&format!("pad-{index}")))
             .bind(format!("Padding Track {index:05}"))
             .bind(format!("Padding Artist {:03}", index % 97))
@@ -551,6 +557,7 @@ impl Fixture {
         }
 
         // Then the score, through the seam — see the module docs.
+        session::signed_in(config_dir).await;
         let state_db = luma_lib::database::local::state::init_state_db_at(config_dir)
             .await
             .expect("failed to open the fixture state database");
@@ -836,9 +843,10 @@ impl Fixture {
                 "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
                                        manufacturer, model, mode_name, fixture_path, label,
                                        pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-                 VALUES (?, NULL, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, ?, 3.0, 0.0, 0.0, 0.0)",
+                 VALUES (?, ?, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?, ?, ?, 3.0, 0.0, 0.0, 0.0)",
             )
             .bind(format!("fixture-{i}"))
+            .bind(session::PRINCIPAL)
             .bind(VENUE)
             .bind(universe)
             .bind(address)
@@ -863,9 +871,10 @@ impl Fixture {
         {
             sqlx::query(
                 "INSERT INTO fixture_groups (id, uid, venue_id, name, display_order)
-                 VALUES (?, NULL, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?)",
             )
             .bind(group)
+            .bind(session::PRINCIPAL)
             .bind(VENUE)
             .bind(name)
             .bind(index as i64)
@@ -896,9 +905,10 @@ impl Fixture {
         sqlx::query(
             "INSERT INTO stage_pieces (id, uid, venue_id, mesh_path, kind, label,
                                        pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, scale)
-             VALUES ('piece-deck', NULL, ?, 'stage_lab/stage_praticavel_2x1x1.glb', 'floor', 'Deck',
+             VALUES ('piece-deck', ?, ?, 'stage_lab/stage_praticavel_2x1x1.glb', 'floor', 'Deck',
                      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)",
         )
+        .bind(session::PRINCIPAL)
         .bind(VENUE)
         .execute(pool)
         .await
@@ -915,9 +925,10 @@ impl Fixture {
         let downbeats: Vec<f64> = beats.iter().copied().step_by(4).collect();
         sqlx::query(
             "INSERT INTO track_beats (track_id, uid, beats_json, downbeats_json, bpm, downbeat_offset, beats_per_bar)
-             VALUES (?, NULL, ?, ?, 120.0, 0.0, 4)",
+             VALUES (?, ?, ?, ?, 120.0, 0.0, 4)",
         )
         .bind(TRACK)
+        .bind(session::PRINCIPAL)
         .bind(serde_json::to_string(&beats).unwrap())
         .bind(serde_json::to_string(&downbeats).unwrap())
         .execute(pool)
