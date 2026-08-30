@@ -1,9 +1,9 @@
-use std::time::Duration;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
 };
 use std::path::Path;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 /// Another handle to the same pool, never a second pool — see
