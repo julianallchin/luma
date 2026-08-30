@@ -642,7 +642,11 @@ mod tests {
         .expect("the array was refused");
 
         let id = report["nodeId"].as_str().unwrap().to_string();
-        assert_eq!(report["ok"], json!(true), "a placed array reports ok");
+        assert_eq!(
+            report["outcome"],
+            json!("placed"),
+            "a placed array is not reported placed"
+        );
         assert_eq!(report["parentId"], json!(deck));
 
         // One row in the graph, `count` derived members plus the anchor in the
@@ -1040,7 +1044,13 @@ mod tests {
         .await
         .expect("the detach was refused");
 
-        assert_eq!(report["ok"], json!(false), "a detached node has no pose");
+        // `unplaced`, and not a refusal: the call did exactly what it was
+        // asked to do, and the outcome is a fact about the node.
+        assert_eq!(
+            report["outcome"],
+            json!("unplaced"),
+            "a detached node was not reported unplaced"
+        );
         let unplaced = report["venue"]["unplaced"].as_array().unwrap();
         assert_eq!(
             unplaced

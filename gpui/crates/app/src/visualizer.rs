@@ -646,15 +646,32 @@ struct RenderLab {
     debug_view: scene_desc::DebugView,
 }
 
+/// [`scene_desc::DirectionalLight::EDITOR`]'s direction as the lab's azimuth
+/// and elevation, in degrees. The lab authors a sun in polar form because that
+/// is what a pair of sliders can hold; the catalogue authors it as a vector.
+/// One of the two has to convert, and it is this one, because the vector is
+/// the shared contract.
+fn editor_sun_angles() -> (f32, f32) {
+    let [x, y, z] = scene_desc::DirectionalLight::EDITOR.direction;
+    (y.atan2(x).to_degrees(), z.atan2(x.hypot(y)).to_degrees())
+}
+
 impl RenderLab {
     fn new(editor_lit: bool) -> Self {
+        let (azimuth_deg, elevation_deg) = editor_sun_angles();
         Self {
             open: false,
             sun_enabled: editor_lit,
-            sun_azimuth_deg: -36.87,
-            sun_elevation_deg: 50.19,
-            sun_intensity: 1.4,
-            sun_color: [1.0; 3],
+            // The editor key light, in the lab's own polar spelling. Read off
+            // `DirectionalLight::EDITOR` rather than typed again: the const and
+            // the three numbers that used to sit here were the same light said
+            // twice, and only one of them moved when the room was made
+            // legible — which is why the golden brightened and the page it is
+            // a golden *of* did not.
+            sun_azimuth_deg: azimuth_deg,
+            sun_elevation_deg: elevation_deg,
+            sun_intensity: scene_desc::DirectionalLight::EDITOR.intensity,
+            sun_color: scene_desc::DirectionalLight::EDITOR.color,
             sun_shadows: true,
             sun_shadow_softness: 1.0,
             environment_enabled: editor_lit,
@@ -690,6 +707,7 @@ impl RenderLab {
     /// throwing away work nobody asked it to.
     fn set_editor_lit(&mut self, editor_lit: bool) {
         self.sun_enabled = editor_lit;
+        self.sun_intensity = scene_desc::DirectionalLight::EDITOR.intensity;
         self.environment_enabled = editor_lit;
         self.ambient_intensity = if editor_lit {
             scene_desc::Environment::EDITOR.ambient_intensity
@@ -2692,10 +2710,26 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     .occlude()
                     // The two gizmo modes are one choice, so they share one
                     // track; the two zooms are two verbs and stay two buttons.
-                    .child(
-                        luma_ui::float::segmented()
-                            .child(mode("Translate", GizmoMode::Translate))
-                            .child(mode("Rotate", GizmoMode::Rotate)),
+                    //
+                    // And the track is drawn only where the choice applies. On
+                    // the stage page a snapped piece has no gizmo at all — it
+                    // moves in its joint's one freedom — so a Translate/Rotate
+                    // pair beside it would be two modes of a widget that is not
+                    // there. `Build::gizmo_offered` is that rule; a viewport
+                    // with no builder keeps the pair, because there the gizmo
+                    // is the only way to move anything.
+                    .when(
+                        state
+                            .build
+                            .as_ref()
+                            .is_none_or(crate::stage::Build::gizmo_offered),
+                        |bar| {
+                            bar.child(
+                                luma_ui::float::segmented()
+                                    .child(mode("Translate", GizmoMode::Translate))
+                                    .child(mode("Rotate", GizmoMode::Rotate)),
+                            )
+                        },
                     )
                     .child(zoom("Zoom In", DOLLY_IN))
                     .child(zoom("Zoom Out", DOLLY_OUT)),

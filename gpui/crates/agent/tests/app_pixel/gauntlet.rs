@@ -44,11 +44,11 @@
 
 #![cfg(all(feature = "app", feature = "pixel"))]
 
+use super::support::session;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use support::session;
 
 use gpui::{px, size, AnyView, App, AppContext as _, Window};
 use gpui_agent::{Config, Harness, Mode};

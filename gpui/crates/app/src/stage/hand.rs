@@ -313,16 +313,6 @@ impl Holding {
         }
     }
 
-    /// The catalog entry whose sockets and geometry the ghost is drawn from.
-    /// A tray fixture has none — it hangs by its clamp and its housing is the
-    /// QLC+ definition's business.
-    pub(crate) fn catalog_ref(&self) -> Option<&str> {
-        match self {
-            Holding::Piece { catalog_ref, .. } => Some(catalog_ref),
-            Holding::Duplicate { .. } | Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
-        }
-    }
-
     pub(crate) fn kind(&self) -> NodeKind {
         match self {
             Holding::Piece { kind, .. } => *kind,

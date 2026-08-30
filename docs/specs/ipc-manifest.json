@@ -5541,7 +5541,7 @@
         "src-tauri/src/dispatch/handlers/tracks.rs:362",
         "src-tauri/src/dispatch/handlers/tracks.rs:427",
         "src-tauri/src/sync/orchestrator.rs:141",
-        "src-tauri/src/sync/orchestrator.rs:188",
+        "src-tauri/src/sync/orchestrator.rs:192",
         "src-tauri/src/sync/push.rs:715",
         "src-tauri/src/sync/push.rs:752"
       ],
@@ -5633,7 +5633,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:136",
+        "gpui/crates/app/src/library.rs:142",
         "src/features/dj-import/components/dj-import-browser.tsx:86",
         "src/features/tracks/components/track-browser.tsx:355"
       ],

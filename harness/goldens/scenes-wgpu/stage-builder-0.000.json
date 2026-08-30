@@ -44,7 +44,7 @@
           1.0,
           1.0
         ],
-        "ambientIntensity": 0.2
+        "ambientIntensity": 0.45
       },
       "haze": {
         "enabled": false,
@@ -63,7 +63,7 @@
           1.0,
           1.0
         ],
-        "intensity": 1.4,
+        "intensity": 6.0,
         "shadows": true,
         "shadowSoftness": 1.0
       },
@@ -113,6 +113,7 @@
       {
         "id": "deck-l",
         "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "kind": "floor",
         "pos": [
           -1.0,
           0.0,
@@ -128,6 +129,7 @@
       {
         "id": "deck-r",
         "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
+        "kind": "floor",
         "pos": [
           1.0,
           0.0,
@@ -143,6 +145,7 @@
       {
         "id": "truss-a",
         "meshPath": "stage_lab/truss_q40_1.83m.glb",
+        "kind": "truss",
         "pos": [
           0.0,
           -1.6,
@@ -158,6 +161,7 @@
       {
         "id": "speaker",
         "meshPath": "stage_lab/speaker_dbr15.glb",
+        "kind": "speaker",
         "pos": [
           2.2,
           0.0,

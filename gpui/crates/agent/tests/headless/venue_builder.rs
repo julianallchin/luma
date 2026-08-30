@@ -208,6 +208,11 @@ const OPEN: &str = r#"
         }
         return last;
     };
+    // How many gizmo-mode cells the viewport is offering. The design's "no
+    // gizmo on snapped pieces" rule, read where it is *drawn*: the pair is one
+    // choice about one widget, so a widget that does not apply has no pair.
+    const gizmoModes = () => app.snapshot().findAll({ role: "toggle" })
+        .filter((n) => n.label === "Translate" || n.label === "Rotate").length;
     // The context menu on a placed piece, reached the way a person reaches it:
     // a right press on its bead, then the verb.
     const menu = (bead, item) => {
@@ -306,6 +311,10 @@ fn a_truss_dropped_on_a_deck_corner_bolts_to_it() {
         }}
         const landing = one("Landing: ");
         tap(bead);
+        // Place mode is sticky and the sheet waits for the hand, so the
+        // relation is read once the stamping has stopped.
+        app.key("escape");
+        app.frames(4);
         settle("the placement to land", (s) =>
             s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("Edge: ")));
         app.frames(8);
@@ -313,7 +322,7 @@ fn a_truss_dropped_on_a_deck_corner_bolts_to_it() {
             target: bead.label,
             landing,
             edge: one("Edge: "),
-            gizmo: one("Gizmo: "),
+            gizmo: gizmoModes(),
             faces: sockets().map((n) => n.label).filter((l) => l.includes("face_")),
         }})
     "#
@@ -329,8 +338,13 @@ fn a_truss_dropped_on_a_deck_corner_bolts_to_it() {
         edge.contains("end_a") || edge.contains("seat") || edge.contains("base"),
         "the edge does not name a socket the truss actually has: {edge}\n{out:#}"
     );
-    // A bolt circle has no roll, so the piece it carries has no widget.
-    assert_eq!(out["gizmo"], "Gizmo: none", "{out:#}");
+    // A bolt circle has no roll, so the piece it carries has no widget — and
+    // no pair of modes for the widget that is not there.
+    assert_eq!(
+        out["gizmo"].as_u64(),
+        Some(0),
+        "a piece bolted to a corner was still offered transform modes\n{out:#}"
+    );
     let faces = strings(&out, "faces");
     assert!(
         !faces.is_empty(),
@@ -455,9 +469,14 @@ fn trim_lifts_a_free_placement() {
             r#"{OPEN}
         arm("Truss · straight");
         dropAt(0.5, 0.7);
+        // Still stamping: place mode is sticky, so the sheet the placement
+        // selected is *withheld* rather than slid over the room the next click
+        // is aimed at.
+        const sheetWhileStamping = app.snapshot().findAll({{ role: "slider" }})
+            .some((n) => n.label.startsWith("stage-trim = "));
         app.key("escape");
-        app.frames(4);
-        const gizmo = one("Gizmo: ");
+        app.frames(6);
+        const gizmo = gizmoModes();
         const resting = scrub("stage-trim");
         // Swept to the middle of the box's own travel rather than to a number
         // this script picked: what is being claimed is that the graph took the
@@ -467,12 +486,21 @@ fn trim_lifts_a_free_placement() {
         sweep("stage-trim", 0.5);
         const lifted = settled("stage-trim");
         const relation = one("Edge: ");
-        ({{ gizmo, resting, lifted, relation }})
+        ({{ gizmo, resting, lifted, relation, sheetWhileStamping }})
     "#
         ),
     );
-    // A piece on the venue's own floor is the gizmo's one case.
-    assert_eq!(out["gizmo"], "Gizmo: translate", "{out:#}");
+    assert_eq!(
+        out["sheetWhileStamping"], false,
+        "the inspector opened over the room while the hand was still stamping\n{out:#}"
+    );
+    // A piece on the venue's own floor is the gizmo's one case, and the only
+    // state in which the transform modes are drawn at all.
+    assert_eq!(
+        out["gizmo"].as_u64(),
+        Some(2),
+        "a free placement was offered no transform modes\n{out:#}"
+    );
     assert_eq!(out["resting"].as_f64(), Some(0.0), "{out:#}");
     let lifted = out["lifted"].as_f64().unwrap_or_default();
     assert!(
@@ -501,11 +529,11 @@ fn duplicate_and_flip_place_a_copy_on_the_opposite_corner() {
             r#"{OPEN}
         arm("Truss · straight");
         tap(socket("corner_fl"));
+        app.key("escape");
+        app.frames(4);
         settle("the first wing", (s) =>
             s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("Edge: ")));
         app.frames(8);
-        app.key("escape");
-        app.frames(4);
         const first = one("Edge: ");
 
         app.key("cmd-d");
@@ -738,5 +766,258 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         counted,
         "the room counted {counted} complaints and the sheet named a different \
          number\n{out:#}"
+    );
+}
+
+/// A socket with nothing in front of it still builds.
+///
+/// The design's fourth extend case — "ray hits nothing → ghost at 0.5 m, type
+/// a length" — and the one the card used to be unreachable in: the controls
+/// were gated on there being a gap to report, so an end facing the room had a
+/// measurement of nothing and therefore no length box and no commit either.
+/// A stub is the ordinary way a rig grows into empty air.
+#[test]
+fn a_socket_facing_nothing_still_builds_a_stub_at_the_length_asked_for() {
+    let mut harness = harness("venue-builder-stub");
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        // One stick alone in the room: every end of it faces nothing, so the
+        // ray has nothing to measure and this is the case under test.
+        arm("Truss · straight");
+        dropAt(0.5, 0.72);
+        app.key("escape");
+        app.frames(4);
+        const before = sockets().length;
+
+        tap(socket("Truss · straight end_b"));
+        app.frames(6);
+        // No gap, because there is nothing out there to have one with.
+        const gap = one("Gap: ");
+        const box_ = app.snapshot().findAll({{ role: "slider" }})
+            .some((n) => n.label.startsWith("stage-length = "));
+        const asked = setScrub("stage-length", 3);
+        const live = app.snapshot().find({{ role: "button", label: "Place run" }}).enabled;
+        press("Place run");
+        settle("the stub to land", () => sockets().length > before);
+        app.frames(10);
+        // The span the graph took, read off the control the sheet offers for
+        // it — which is the "configure it inline" the design promises, and is
+        // the run's own length rather than the number the box was left on.
+        const span = settled("stage-span");
+        ({{ gap, box_, asked, live, span, edge: one("Edge: ") }})
+    "#
+        ),
+    );
+    assert!(
+        out["gap"].is_null(),
+        "a ray that met nothing still reported a gap\n{out:#}"
+    );
+    assert_eq!(
+        out["box_"], true,
+        "an end facing nothing offered no length box — the stub case is unreachable\n{out:#}"
+    );
+    assert_eq!(out["live"], true, "a stub could not be committed\n{out:#}");
+    assert_eq!(
+        out["asked"].as_f64(),
+        Some(3.0),
+        "the length box would not reach 3 m\n{out:#}"
+    );
+    assert_eq!(
+        out["span"].as_f64(),
+        out["asked"].as_f64(),
+        "the run the graph holds is not the length that was asked for\n{out:#}"
+    );
+    let edge = out["edge"].as_str().unwrap_or_default();
+    assert!(
+        edge.contains("end_"),
+        "the stub wrote no edge out of the end it grew from: {edge}\n{out:#}"
+    );
+}
+
+/// Detaching is a call that *works*. It leaves the branch unplaced on purpose,
+/// so nothing about it is a complaint: the sheet gains no refusal line and the
+/// room's count of unresolved things is the solve's, not the verb's.
+#[test]
+fn detaching_is_not_a_refusal() {
+    let mut harness = harness("venue-builder-detach-report");
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        // `row` is one role over three surfaces, so what the sheet says is what
+        // a gesture *added* to the rows that were already on screen — read
+        // before anything is built.
+        const resting = app.snapshot().findAll({{ role: "row" }}).map((n) => n.label);
+        arm("Truss · straight");
+        dropAt(0.5, 0.7);
+        app.key("escape");
+        app.frames(6);
+
+        const badge = () => {{
+            const found = app.snapshot().findAll({{ role: "button" }})
+                .map((n) => n.label).find((l) => l.startsWith("Warnings "));
+            return found === undefined ? 0 : Number(found.slice("Warnings ".length));
+        }};
+        // Every sentence the sheet is prepared to print, before and after.
+        const complaints = () => app.snapshot().findAll({{ role: "row" }})
+            .map((n) => n.label);
+        const beforeBadge = badge();
+
+        menu(socket("Truss · straight end_a"), "Detach");
+        settle("the piece to leave the room", (s) =>
+            s.findAll({{ role: "button" }})
+                .filter((n) => n.label.startsWith("Socket Truss")).length === 0);
+        app.frames(10);
+        // Pin the solve's complaints open with nothing selected, which is the
+        // one way to read them after a detach — the sheet does not stay open
+        // on a branch that has left the room.
+        const pin = app.snapshot().findAll({{ role: "button" }})
+            .find((n) => n.label.startsWith("Warnings "));
+        if (pin !== undefined) {{ app.click(pin); app.frames(6); }}
+        ({{
+            beforeBadge,
+            afterBadge: badge(),
+            unresolved: complaints().filter((l) => !resting.includes(l)).length,
+            complaints: complaints(),
+            selected: app.snapshot().findAll({{ role: "slider" }})
+                .some((n) => n.label.startsWith("stage-trim = ")),
+        }})
+    "#
+        ),
+    );
+    let complaints = strings(&out, "complaints");
+    assert!(
+        !complaints.iter().any(|line| line.contains("refus")),
+        "detaching reported itself as a refusal: {complaints:?}\n{out:#}"
+    );
+    // The count is the *solve's* and nothing else: it is exactly the sentences
+    // the sheet prints, and it went **down**, because a detached stick takes
+    // its own open ends out of the room with it. A verb that reported itself
+    // would have pushed it the other way.
+    let before = out["beforeBadge"].as_u64().unwrap_or_default();
+    let after = out["afterBadge"].as_u64().unwrap_or_default();
+    assert!(
+        before > after,
+        "the stick's ends were never counted, so the count proves nothing: \
+         {before} then {after}\n{out:#}"
+    );
+    assert_eq!(
+        out["unresolved"].as_u64(),
+        Some(after),
+        "the room counted {after} complaints and the sheet named a different number\n{out:#}"
+    );
+    assert_eq!(
+        out["selected"], false,
+        "the inspector stayed open on a branch that had left the room\n{out:#}"
+    );
+}
+
+/// A venue with nothing in it draws its grid and is already buildable: `+`
+/// alone lands the first piece, and the second lands without going back to the
+/// dialog, inheriting the first's untouched parameters.
+#[test]
+fn an_empty_venue_takes_the_first_piece_from_the_button_alone() {
+    // No `with_rig`: no deck, no patched fixtures, no pieces. The room is the
+    // grid and nothing else, which is the state under test.
+    let mut harness = Fixture::new(
+        "venue-builder-empty",
+        20,
+        vec![Clip::new("pat-glow", "Glow", 2.0, 5.0).lit()],
+    )
+    .window(1400., 900.)
+    .open(Mode::Headless);
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        // Nothing in the room. The venue's own two synthesized planes (`floor`
+        // and `rig`) are the room, not something in it, so what is counted is
+        // the beads that belong to a *piece*.
+        const pieces = () => sockets().filter((n) => !n.label.includes(":venue "));
+        const empty = pieces().length;
+        arm("Truss · straight");
+        dropAt(0.42, 0.7);
+        // Place mode is sticky. No second trip through the dialog.
+        const dialog = app.snapshot()
+            .findAll({{ role: "input", label: "Search elements" }}).length;
+        dropAt(0.58, 0.7);
+        app.key("escape");
+        app.frames(6);
+        const ends = pieces().map((n) => n.label);
+        ({{ empty, dialog, ends }})
+    "#
+        ),
+    );
+    assert_eq!(
+        out["empty"].as_u64(),
+        Some(0),
+        "the venue was not empty, so nothing here is about an empty one\n{out:#}"
+    );
+    assert_eq!(
+        out["dialog"].as_u64(),
+        Some(0),
+        "the dialog came back between two placements\n{out:#}"
+    );
+    // Two sticks, each bringing its own pair of ends: the second landed from
+    // the hand the first left there. Counted by the end rather than by the
+    // label, because two of the same piece answer to the same name.
+    let ends = strings(&out, "ends");
+    let placed = ends.iter().filter(|label| label.ends_with("end_a")).count();
+    assert_eq!(
+        placed, 2,
+        "the second click did not place a second piece: {ends:?}\n{out:#}"
+    );
+}
+
+/// A fixture carried onto the *floor* is a row too. The face a person points
+/// at is whatever the ray met — the bead is how a named socket is aimed at,
+/// not the only place a face exists — and the popover opens on it, within the
+/// spec's 32 px of the point that was clicked.
+#[test]
+fn a_fixture_dropped_on_the_floor_opens_the_row_popover_where_it_landed() {
+    let mut harness = harness("venue-builder-floor-row");
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        arm("Luma Mover");
+        const pane = app.snapshot().find({{ role: "card", label: "Stage drop surface" }});
+        const at = {{
+            x: pane.bounds.x + pane.bounds.width * 0.42,
+            y: pane.bounds.y + pane.bounds.height * 0.78,
+        }};
+        app.drag(at, {{ dx: 1, dy: 0 }}, {{ steps: 2 }});
+        until("the popover", (s) =>
+            s.findAll({{ role: "slider" }}).some((n) => n.label.startsWith("stage-count = ")));
+        app.frames(8);
+        const card = app.snapshot().find({{ role: "card", label: "Row popover" }});
+        // How far the card sits from the point that was clicked, measured to
+        // the nearest point of the card rather than to a corner: an anchor is
+        // "on the face", and a card is a rectangle.
+        const dx = Math.max(card.bounds.x - at.x, at.x - (card.bounds.x + card.bounds.width), 0);
+        const dy = Math.max(card.bounds.y - at.y, at.y - (card.bounds.y + card.bounds.height), 0);
+        ({{
+            host: one("On "),
+            offset: Math.round(Math.hypot(dx, dy)),
+            previewed: marks("Station ").length,
+        }})
+    "#
+        ),
+    );
+    let host = out["host"].as_str().unwrap_or_default();
+    assert!(
+        host.contains("floor"),
+        "a fixture dropped on the floor did not open a row on the floor: {host}\n{out:#}"
+    );
+    let offset = out["offset"].as_f64().unwrap_or(f64::MAX);
+    assert!(
+        offset <= 32.0,
+        "the popover anchored {offset} px from the face point, past the spec's 32\n{out:#}"
+    );
+    assert!(
+        out["previewed"].as_u64().unwrap_or_default() > 0,
+        "the row previewed no bodies at all\n{out:#}"
     );
 }

@@ -314,3 +314,67 @@ fn the_distribution_popup_is_drawn_over_the_room() {
         popup_path.display()
     );
 }
+
+/// A fixture in the hand draws a *body*, the way a truss does.
+///
+/// It used to draw nothing at all: the ghost was keyed off a catalog entry and
+/// a fixture has none, so the only thing under the cursor was the element
+/// layer's mark — a dot, which says something is held and not what. What a
+/// ghost is for is the second question.
+#[test]
+#[ignore = "capture: needs a GPU and writes PNGs"]
+fn a_held_fixture_draws_a_body_over_the_face_it_is_aimed_at() {
+    let mut harness = harness("venue-builder-fixture-ghost");
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        const before = camera();
+        const empty = shoot();
+        arm("Luma Mover");
+        const face = sockets().find((n) => n.label.endsWith("Deck top"));
+        if (face === undefined) {{ throw new Error("no face to aim at"); }}
+        // Aim without committing — a press over a face opens the row popover,
+        // and a card over the room is not the ghost this is about.
+        app.scroll(face, {{ dy: 0 }});
+        app.frames(14);
+        ({{
+            before,
+            after: camera(),
+            empty,
+            held: shoot(),
+            ghosts: marks("Ghost ").map((n) => n.label),
+        }})
+    "#
+        ),
+    );
+    let (empty_path, empty) =
+        support::image::keep_in("venue-builder", &out["empty"], "fixture-empty");
+    let (held_path, held) = support::image::keep_in("venue-builder", &out["held"], "fixture-ghost");
+    eprintln!(
+        "fixture ghost shots:\n  {}\n  {}",
+        empty_path.display(),
+        held_path.display()
+    );
+    assert_eq!(
+        out["before"], out["after"],
+        "arming a fixture moved the camera\n{out:#}"
+    );
+    assert_eq!(
+        out["ghosts"],
+        serde_json::json!(["Ghost Luma Mover"]),
+        "a held fixture proposed no placement at all\n{out:#}"
+    );
+    // A *body*, not the element layer's mark. The bound is what separates the
+    // two: a fixture housing at this range covers thousands of pixels, and the
+    // mark over it is a five-pixel dot — some three orders of magnitude less
+    // of the frame. Anything in between is a hand holding nothing again.
+    let changed = support::image::differing_fraction(&empty, &held, support::image::CHANNEL_NOISE);
+    assert!(
+        changed > 0.0002,
+        "only {changed:.4} of the picture changed when a fixture was armed — a dot's worth, so \
+         no body reached the renderer\n  {} vs {}",
+        empty_path.display(),
+        held_path.display()
+    );
+}

@@ -283,11 +283,12 @@ impl Environment {
 
     /// The editor's neutral lit-stage environment.
     ///
-    /// The ambient term is what makes the *room* legible rather than the
-    /// show: a stage lit only by its key light reads as a black field with a
-    /// few grey edges, which is the right picture for a performance and the
-    /// wrong one for a page whose whole job is showing where a truss would go.
-    /// A venue with nothing patched has no fixtures to light it at all.
+    /// The ambient term is the **fill**, not the key: it multiplies albedo, and
+    /// the staging props are near-black, so on its own it cannot make one
+    /// legible. Measured on `stage-builder`, taking the ambient from 0.45 to
+    /// 2.0 moved a vertical deck face from 5.3 to 5.7 mean luma out of 255.
+    /// What lifts the room is [`DirectionalLight::EDITOR`]; this is what keeps
+    /// the faces turned away from it from going to nothing.
     pub const EDITOR: Self = Self {
         // Linear form of the old sRGB `#191919` clear colour.
         background: [0.009_721_217; 3],
@@ -336,11 +337,20 @@ const fn default_shadow_softness() -> f32 {
 
 impl DirectionalLight {
     /// The neutral editor key light used by the legacy lit-stage preset.
+    ///
+    /// Bright, because it is doing the whole job. A stage is built out of black
+    /// steel and black ply, and a key at show level leaves them **darker than
+    /// the floor they stand on** — measured on `stage-builder` at intensity
+    /// 1.4: deck 5.6, floor 9.1, out of 255. That is the wrong picture for a
+    /// page whose subject is where a truss goes, and it is not an ambient
+    /// problem ([`Environment::EDITOR`] carries that measurement). At this
+    /// level the same deck reads 32.6 against a 44.8 floor and casts a shadow
+    /// that says where it is standing.
     pub const EDITOR: Self = Self {
         // `world_from_three([8, 12, 6])` from the original renderer.
         direction: [8.0, -6.0, 12.0],
         color: [1.0; 3],
-        intensity: 1.4,
+        intensity: 6.0,
         shadows: true,
         shadow_softness: 1.0,
     };

@@ -50,7 +50,7 @@ use crate::fixture_library::{self, FixtureLibrary};
 use crate::library::{LibraryError, Rig};
 use crate::Luma;
 
-use hand::{Extending, Hand, Held, Holding, Landing, Room};
+use hand::{Extending, Hand, Held, Holding, Landed, Landing, Room};
 
 /// One palette row: a catalog entry, plus how this row means to put it down.
 ///
@@ -247,9 +247,17 @@ impl Build {
     /// do not each have to remember to open the sheet — the classic "caller
     /// must call A before B", answered by not having a B.
     pub(crate) fn inspector_target(&self) -> f32 {
-        let wanted = self.selected.is_some()
-            || (self.warnings_pinned
-                && !(self.solved.dangling.is_empty() && self.report.is_empty()));
+        // Not while the hand owns the pointer. Place mode is *sticky*, so a
+        // stamped piece selects itself and the sheet would slide over the room
+        // between two clicks of a row of the same thing — covering the surface
+        // the second click was aimed at. Withholding the selection instead
+        // would leave the piece just placed with no way to be inspected at all;
+        // the sheet is what waits, and it opens the moment the hand is put
+        // down.
+        let wanted = !self.hand.owns_pointer()
+            && (self.selected.is_some()
+                || (self.warnings_pinned
+                    && !(self.solved.dangling.is_empty() && self.report.is_empty())));
         if wanted {
             luma_ui::sheet::WIDTH
         } else {
@@ -330,6 +338,18 @@ impl Build {
         ))
     }
 
+    /// Whether a transform gizmo applies to what is selected right now.
+    ///
+    /// The design's rule reaching the one control that draws it: only a piece
+    /// sitting free on the venue's own floor has axes to drag, so a snapped
+    /// piece — or nothing selected at all — is a state the Translate/Rotate
+    /// track does not apply to, and a control that does not apply is not drawn.
+    pub(crate) fn gizmo_offered(&self) -> bool {
+        self.selected
+            .as_ref()
+            .is_some_and(|node| self.freedom_of(node) == Freedom::Free)
+    }
+
     /// The freedom a placed node actually has, which is what the inspector may
     /// offer and the gizmo may not.
     ///
@@ -375,16 +395,6 @@ pub(crate) enum Freedom {
 }
 
 impl Freedom {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Freedom::Unplaced => "unplaced",
-            Freedom::Free => "translate",
-            Freedom::Slide => "slide",
-            Freedom::Roll => "roll",
-            Freedom::Bolted => "none",
-        }
-    }
-
     /// The parameter this freedom edits, when it edits one.
     pub(crate) fn param(self) -> Option<&'static str> {
         match self {
@@ -525,14 +535,22 @@ impl Luma {
                     build.committing = false;
                     match &result {
                         Ok(report) => {
+                            // Warnings only. A report is what the *graph* now
+                            // says, and `PlacementReport::outcome` is a fact
+                            // about the node rather than a verdict on the call
+                            // — `detach` answers `Unplaced` because that is
+                            // what it was asked to do. A refusal is the `Err`
+                            // arm below and cannot arrive here at all.
                             build.report = report.warnings.clone();
-                            if !report.ok {
-                                build.report.push("the placement was refused".to_string());
-                            }
-                            // What the verb touched is what the inspector should
-                            // be about: a placement the operator just made is the
-                            // one they are about to trim, flip or detach.
-                            build.selected = Some(report.node_id.clone());
+                            // What the verb touched is what the inspector
+                            // should be about: the piece just placed is the one
+                            // about to be trimmed, flipped or detached. A
+                            // branch that has just *left* the room is not — a
+                            // sheet open on a detached wing is a sheet about
+                            // nothing, and `Unplaced` is exactly what `detach`
+                            // was asked for.
+                            build.selected =
+                                report.outcome.is_placed().then(|| report.node_id.clone());
                         }
                         Err(error) => build.report = vec![error.to_string()],
                     }
@@ -764,7 +782,10 @@ impl Luma {
     }
 
     /// Release: commit whatever the ghost is standing on.
-    pub(crate) fn stage_drop(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `at` is where the release landed in window pixels, which only a fixture
+    /// needs: it is the point the configure popover anchors to.
+    pub(crate) fn stage_drop(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(build) = self.build_mut() else {
             return;
         };
@@ -772,6 +793,7 @@ impl Luma {
             return;
         }
         let venue = build.venue_id.clone();
+        let root = build.room.root().to_string();
         let Some(held) = build.hand.held() else {
             return;
         };
@@ -781,14 +803,35 @@ impl Luma {
         if landed.refused.is_some() {
             return;
         }
+        let what = held.what.clone();
         // A library fixture reaches the room only through the configure
         // popover — it is created as a *row*, and a row needs a face to lie
-        // along. Dropping one on the floor has no verb, so the gesture is not
-        // one: the ghost simply stays in the hand.
-        if matches!(held.what, Holding::Fixture { .. }) {
+        // along. Which face is whatever the ghost is standing on: the bead is
+        // how a *named* socket is aimed at, but the floor and a truss's
+        // underside are areas, and a face a person can point at is a face they
+        // can distribute along. Landing on something that is not a feature —
+        // a bolt circle, a clamp — leaves the ghost in the hand, because "one
+        // of them there" is not what a row means.
+        if matches!(what, Holding::Fixture { .. }) {
+            let (node, socket) = match &landed.how {
+                Landing::Free { surface, .. } => surface
+                    .clone()
+                    .unwrap_or((root, luma_scene::venue::FLOOR_SOCKET.to_string())),
+                Landing::Socket {
+                    parent,
+                    their_socket,
+                    ..
+                } => (parent.clone(), their_socket.clone()),
+            };
+            if build
+                .room
+                .socket(&node, &socket)
+                .is_some_and(hand::is_feature)
+            {
+                self.stage_configure(what, node, socket, at, cx);
+            }
             return;
         }
-        let what = held.what.clone();
         // Place mode is sticky, and only for a catalog piece: that is a stamp,
         // and an operator rigging a row of them should not have to walk back
         // to the dialog between each. A tray fixture and a duplicate are one
@@ -799,7 +842,6 @@ impl Luma {
                 Hand::Idle
             }
         };
-        let root = build.room.root().to_string();
         let pending: Verb = match (&what, &landed.how) {
             // Refused above: a fixture is created as a row, never dropped.
             (Holding::Fixture { .. }, _) => return,
@@ -914,7 +956,7 @@ impl Luma {
                 return;
             }
             self.stage_aim_socket(&node, &socket, cx);
-            self.stage_drop(cx);
+            self.stage_drop(at, cx);
             return;
         }
 
@@ -975,12 +1017,6 @@ impl Luma {
             // The far end is a **check**, not a second parent: the run hangs
             // off the socket it grew from, and the socket it reaches is
             // written down separately so `dangling()` can report it satisfied.
-            let venue = venue.clone();
-            let library_constrain = |node: &str| {
-                self.library
-                    .constrain(&venue, node, "end_b", &bridge.node, &bridge.socket)
-            };
-            let _ = &library_constrain;
             cx.spawn(async move |this, cx| {
                 let placed = attach.await;
                 let node = placed.as_ref().ok().map(|r| r.node_id.clone());
@@ -1307,6 +1343,13 @@ impl Luma {
     }
 }
 
+/// One body a held thing would put in the room, ready to be drawn.
+struct GhostBody {
+    geometry: luma_render::scene_desc::Geometry,
+    world: glam::DMat4,
+    scale: f32,
+}
+
 /// One `attach` a duplicate owes.
 #[derive(Clone)]
 struct CopyStep {
@@ -1330,6 +1373,118 @@ type Verb = std::pin::Pin<
 >;
 
 impl Build {
+    /// Every body the held thing would put in the room, at the pose it would
+    /// put it.
+    ///
+    /// A ghost is a *preview*, so what it draws is what lands: a truss draws a
+    /// truss, a fixture draws a housing, and a duplicated wing draws the whole
+    /// wing. A single mark under the cursor is enough to know something is held
+    /// and not enough to know what — which is the one question a ghost exists
+    /// to answer, and the reason "no catalog entry" cannot mean "draw nothing".
+    ///
+    /// The copy's poses come from [`Self::copy_plan`] fed through the ordinary
+    /// resolver, not from a transform composed here: flip is written in the
+    /// rows, so a preview that reproduced it geometrically would be a second
+    /// implementation of handedness that could disagree with the commit.
+    fn ghost_bodies(&self, what: &Holding, landed: &Landed) -> Vec<GhostBody> {
+        use luma_render::scene_desc::Geometry;
+        match what {
+            Holding::Piece { catalog_ref, .. } => geometry_of(catalog_ref)
+                .map(|geometry| GhostBody {
+                    geometry,
+                    world: landed.world,
+                    scale: 1.0,
+                })
+                .into_iter()
+                .collect(),
+            // A fixture's housing, in the shape the row preview already draws
+            // one in ([`install`]'s stations): the ghost and the stations are
+            // the same body seen before and after the count is set, and two
+            // spellings of "a light goes here" would be one too many.
+            Holding::Fixture { .. } | Holding::Unplaced { .. } => vec![GhostBody {
+                geometry: Geometry::Procedural(luma_render::catalog::default_params(
+                    luma_scene::catalog::Family::Corner,
+                )),
+                world: landed.world,
+                scale: STATION_GHOST_SCALE,
+            }],
+            Holding::Duplicate { root, flip, .. } => self.copy_ghosts(root, *flip, landed),
+        }
+    }
+
+    /// The duplicated subtree, solved where it would land.
+    ///
+    /// The plan is inserted into a *clone* of the graph under ids no venue can
+    /// mint, and the whole thing is resolved. That is a solve per pointer
+    /// sample while a copy is held — a depth-first walk over a rig the design
+    /// bounds at ~500 nodes, against the alternative of a second, divergent
+    /// notion of where the copy goes.
+    fn copy_ghosts(&self, root: &str, flip: bool, landed: &Landed) -> Vec<GhostBody> {
+        let Some(plan) = self.copy_plan(root, flip, &landed.how) else {
+            return Vec::new();
+        };
+        let mut graph = self.graph.clone();
+        let mut minted: HashMap<String, String> = HashMap::new();
+        for (index, step) in plan.iter().enumerate() {
+            let id = format!("{}{index}", hand::GHOST_NODE);
+            let parent = if index == 0 {
+                step.parent.clone()
+            } else {
+                match minted.get(&step.parent) {
+                    Some(parent) => parent.clone(),
+                    None => continue,
+                }
+            };
+            let mut params = luma_scene::venue::Params::default();
+            for (key, value) in &step.params {
+                params.set(key.clone(), *value);
+            }
+            graph.insert_placed(
+                luma_scene::venue::Node {
+                    id: id.clone(),
+                    kind: step.kind,
+                    catalog_ref: step.catalog_ref.clone(),
+                    label: step.label.clone(),
+                    params,
+                },
+                luma_scene::venue::Edge {
+                    parent,
+                    my_socket: step.my_socket.clone(),
+                    their_socket: step.their_socket.clone(),
+                    roll: step.yaw,
+                },
+            );
+            minted.insert(step.source.clone(), id);
+        }
+        let solved = luma_scene::venue::resolve(&graph, &self.sockets);
+        minted
+            .values()
+            .filter_map(|id| {
+                let pose = solved.pose(id)?;
+                let geometry = pose
+                    .catalog_ref
+                    .as_deref()
+                    .and_then(geometry_of)
+                    .unwrap_or_else(|| {
+                        luma_render::scene_desc::Geometry::Procedural(
+                            luma_render::catalog::default_params(
+                                luma_scene::catalog::Family::Corner,
+                            ),
+                        )
+                    });
+                Some(GhostBody {
+                    geometry,
+                    world: pose.world,
+                    scale: if pose.catalog_ref.is_some() {
+                        1.0
+                    } else {
+                        STATION_GHOST_SCALE
+                    },
+                })
+            })
+            .collect()
+    }
+
     /// The `attach` calls that reproduce a subtree at a new joint.
     ///
     /// **Flip** inverts the subtree's handedness about its root socket, and it
@@ -1393,7 +1548,18 @@ impl Build {
                 catalog_ref: node.catalog_ref.clone(),
                 label: node.label.clone(),
                 parent: edge.parent.clone(),
-                my_socket: edge.my_socket.clone(),
+                // *Both* halves of the joint. A reflection turns the child
+                // over as well as the host, so a piece bolted by its left face
+                // is bolted by its right one in the mirror — mirroring only
+                // the host's side built a wing that met its parent on a
+                // different socket than the hand-built opposite does.
+                // Sideless names ([`hand::mirror_socket`]) are their own
+                // mirror, so a truss end is unaffected.
+                my_socket: if flip {
+                    hand::mirror_socket(&edge.my_socket)
+                } else {
+                    edge.my_socket.clone()
+                },
                 their_socket: if flip {
                     hand::mirror_socket(&edge.their_socket)
                 } else {
@@ -1456,6 +1622,14 @@ pub(crate) struct SelectedView {
     pub(crate) constraint: Option<String>,
     pub(crate) trim: f64,
     pub(crate) param: f64,
+    /// How long the piece itself is, for the pieces that have a length.
+    ///
+    /// Not a freedom: a joint's freedom is how a piece may *move*, and a run's
+    /// span is what it *is*. They are two rows because they answer two
+    /// questions — a truss bolted at both ends has no freedom at all and is
+    /// still the thing whose length the operator came here to change ("place
+    /// it, then configure it inline").
+    pub(crate) span: Option<f64>,
 }
 
 impl Luma {
@@ -1481,6 +1655,12 @@ impl Luma {
                 constraint: build.constraint_of(node),
                 trim: param("trim"),
                 param: freedom.param().map_or(0.0, param),
+                span: build
+                    .solved
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == node)
+                    .and_then(|n| n.params.get("span").copied()),
             }
         });
         Some(StageView {
@@ -1953,7 +2133,7 @@ fn configure(view: &ConfigureView, app: &Entity<Luma>) -> AnyElement {
     );
 
     let set_count = app.clone();
-    card = card.child(float::arg_row(
+    card = card.child(float::field_row(
         "Count",
         float::scrub(
             "stage-count",
@@ -1990,7 +2170,7 @@ fn configure(view: &ConfigureView, app: &Entity<Luma>) -> AnyElement {
                 .agent_node(Role::Toggle, name),
         );
     }
-    card = card.child(float::arg_row("Layout", track));
+    card = card.child(float::field_row("Layout", track));
 
     // The fit, always — a row that fits says so as quietly as one that does
     // not says why. Both sit directly above the button they qualify.
@@ -2048,7 +2228,11 @@ fn configure(view: &ConfigureView, app: &Entity<Luma>) -> AnyElement {
         Dismiss::on_press_out(move |_, cx| {
             close.update(cx, |this, cx| this.stage_escape(cx));
         }),
-        card.into_any_element(),
+        // The card reports its own bounds, because *where it is* is a claim:
+        // the spec asks it to sit on the face that was clicked, and only the
+        // rectangle can say whether it did.
+        card.agent_node(Role::Card, "Row popover")
+            .into_any_element(),
     )
 }
 
@@ -2112,25 +2296,16 @@ fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyEleme
         .gap(px(14.0))
         .p(pad);
     if let Some(selected) = &view.selected {
+        // The label, and nothing beside it naming the widget the selection
+        // would get. Whether a gizmo applies is said by the gizmo being there
+        // (`Build::gizmo_offered`) and by which control this sheet offers
+        // below — a caption spelling the freedom out is a label for state.
         column = column.child(
             div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(
-                    div()
-                        .text_size(px(13.0))
-                        .text_color(ladder::foreground())
-                        .child(selected.label.clone())
-                        .agent_node(Role::Text, selected.label.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(ladder::foreground_alpha(0.5))
-                        .child(format!("Gizmo: {}", selected.freedom.as_str()))
-                        .agent_node(Role::Text, format!("Gizmo: {}", selected.freedom.as_str())),
-                ),
+                .text_size(px(13.0))
+                .text_color(ladder::foreground())
+                .child(selected.label.clone())
+                .agent_node(Role::Text, selected.label.clone()),
         );
         // The one editable freedom the joint admits, as one control. A bolted
         // plate gets none, and gets no row rather than a disabled one.
@@ -2142,7 +2317,7 @@ fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyEleme
             let app = app.clone();
             let node = selected.node.clone();
             let step = if key == "yaw" { 5.0 } else { 0.05 };
-            column = column.child(float::arg_row(
+            column = column.child(float::field_row(
                 axis_title(key),
                 float::scrub(
                     format!("stage-{key}"),
@@ -2159,6 +2334,27 @@ fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyEleme
                             } else {
                                 this.stage_set_param(&node, key, value, cx);
                             }
+                        });
+                    },
+                ),
+            ));
+        }
+        if let Some(span) = selected.span {
+            let app = app.clone();
+            let node = selected.node.clone();
+            column = column.child(float::field_row(
+                "Span",
+                float::scrub(
+                    "stage-span",
+                    span,
+                    hand::LENGTH_STEP_M,
+                    MAX_RUN_M,
+                    hand::LENGTH_STEP_M,
+                    luma_ui::sheet::CONTENT_WIDTH,
+                    move |value, _, cx| {
+                        let node = node.clone();
+                        app.update(cx, |this, cx| {
+                            this.stage_set_param(&node, "span", value, cx)
                         });
                     },
                 ),
@@ -2246,12 +2442,14 @@ pub(crate) fn marks(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
     let mut out = Vec::new();
     if let Some(held) = build.hand.held() {
         if let Some(landed) = &held.landed {
-            if let Some(at) = project(camera, size, landed.world.w_axis.truncate()) {
-                out.push(Mark {
-                    at,
-                    label: format!("Ghost {}", held.what.label()),
-                    refused: landed.refused.is_some(),
-                });
+            for body in build.ghost_bodies(&held.what, landed) {
+                if let Some(at) = project(camera, size, body.world.w_axis.truncate()) {
+                    out.push(Mark {
+                        at,
+                        label: format!("Ghost {}", held.what.label()),
+                        refused: landed.refused.is_some(),
+                    });
+                }
             }
         }
     }
@@ -2271,12 +2469,15 @@ pub(crate) fn marks(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
     out
 }
 
-/// Where the gap label sits, and what it says.
-fn measurement_label(
-    build: &Build,
-    camera: &luma_scene::Camera,
-    size: (f32, f32),
-) -> Option<(Point<Pixels>, String, String)> {
+/// Where the run's own controls sit, and the gap the ray found there.
+///
+/// `Some` for the whole of [`Hand::Extending`], because a run with nothing in
+/// front of it is still a run being built: it gets its length box and its
+/// commit, and what a ray hitting nothing takes away is only the *measurement*.
+/// The design's fourth extend case — "ray hits nothing → ghost at
+/// [`hand::STUB_LENGTH_M`], type a length" — is unreachable if the card is
+/// gated on there being a gap to report.
+fn run_card(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)) -> Option<RunCard> {
     let run = build.hand.extending()?;
     let from = build.room.socket_world(&run.from_node, &run.from_socket)?;
     build.room.socket(&run.from_node, &run.from_socket)?;
@@ -2288,11 +2489,21 @@ fn measurement_label(
     // it. The socket does not move while a run grows, which is the whole
     // requirement for anchoring a control to it.
     let at = project(camera, size, from)?;
-    Some((
+    Some(RunCard {
         at,
-        run.measurement()?,
-        hand::feet_and_inches(run.reach.as_ref()?.gap_m),
-    ))
+        measured: run.measurement().zip(
+            run.reach
+                .as_ref()
+                .map(|reach| hand::feet_and_inches(reach.gap_m)),
+        ),
+    })
+}
+
+/// Where the run's controls hang, and the gap they hang beside.
+struct RunCard {
+    at: Point<Pixels>,
+    /// The gap, in metres and in feet, when the ray found one to report.
+    measured: Option<(String, String)>,
 }
 
 /// A socket-layer point in window pixels, or `None` behind the camera or well
@@ -2531,12 +2742,13 @@ pub(crate) fn build_layer(
                     aim.update(cx, |this, cx| this.stage_aim(world, cx));
                 })
                 .on_click(move |event, _, cx| {
-                    let at = cursor_world(&camera, origin, (width, height), event.position());
+                    let screen = event.position();
+                    let at = cursor_world(&camera, origin, (width, height), screen);
                     drop.update(cx, |this, cx| {
                         if let Some(world) = at {
                             this.stage_aim(world, cx);
                         }
-                        this.stage_drop(cx);
+                        this.stage_drop(screen, cx);
                     });
                 });
         }
@@ -2655,7 +2867,7 @@ pub(crate) fn build_layer(
     // property of *this* measurement, so the number and the press that commits
     // it ride the thing they are about rather than a bar somewhere else — which
     // is the same argument the configure popover makes about a face.
-    if let Some((at, metres, feet)) = measurement_label(build, camera, size) {
+    if let Some(RunCard { at, measured }) = run_card(build, camera, size) {
         // Clear of the inspector, which is painted over this layer: a run out
         // of a socket on the house-right side of the room put its commit
         // *under* the sheet, where the pointer could not reach it and nothing
@@ -2679,7 +2891,11 @@ pub(crate) fn build_layer(
                     .items_center()
                     .gap(px(6.0))
                     .p(px(4.0))
-                    .child(
+                    // The measurement, when the ray found one to make. Nothing
+                    // stands in for it when it did not: a readout echoing the
+                    // length back as a "gap" would invent a measurement out of
+                    // the number being typed.
+                    .children(measured.map(|(metres, feet)| {
                         div()
                             .pl(px(6.0))
                             .flex()
@@ -2698,8 +2914,8 @@ pub(crate) fn build_layer(
                                     .text_color(ladder::foreground_alpha(0.45))
                                     .child(feet.clone()),
                             )
-                            .agent_node(Role::Text, format!("{metres} · {feet}")),
-                    )
+                            .agent_node(Role::Text, format!("{metres} · {feet}"))
+                    }))
                     .child(float::scrub(
                         "stage-length",
                         length,
@@ -2738,17 +2954,15 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
     let mut out = SceneBuild::default();
     if let Some(held) = build.hand.held() {
         if let Some(landed) = &held.landed {
-            if let Some(catalog_ref) = held.what.catalog_ref() {
-                if let Some(geometry) = geometry_of(catalog_ref, &build.sockets) {
-                    let (pos, rot) = luma_scene::coords::data_pose_of_d(landed.world);
-                    out.ghosts.push(Ghost {
-                        geometry,
-                        pos: pos.map(|v| v as f32),
-                        rot: rot.map(|v| v as f32),
-                        scale: 1.0,
-                        refused: landed.refused.is_some(),
-                    });
-                }
+            for body in build.ghost_bodies(&held.what, landed) {
+                let (pos, rot) = luma_scene::coords::data_pose_of_d(body.world);
+                out.ghosts.push(Ghost {
+                    geometry: body.geometry,
+                    pos: pos.map(|v| v as f32),
+                    rot: rot.map(|v| v as f32),
+                    scale: body.scale,
+                    refused: landed.refused.is_some(),
+                });
             }
         }
     }
@@ -2841,15 +3055,176 @@ fn point_of(at: glam::DVec3) -> [f32; 3] {
 }
 
 /// The geometry a catalog entry draws as, at the palette's own defaults.
-fn geometry_of(
-    catalog_ref: &str,
-    _sockets: &VenueSockets,
-) -> Option<luma_render::scene_desc::Geometry> {
+fn geometry_of(catalog_ref: &str) -> Option<luma_render::scene_desc::Geometry> {
     use luma_render::scene_desc::Geometry;
     match luma_scene::catalog::piece(catalog_ref)?.geometry {
         luma_scene::catalog::Geometry::Mesh { path } => Some(Geometry::mesh(path)),
         luma_scene::catalog::Geometry::Procedural(family) => Some(Geometry::Procedural(
             luma_render::catalog::default_params(family),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use luma_scene::venue::{Edge, Node, NodeKind, Params, VenueGraph};
+
+    use super::{Build, CopyStep, Landing, Room};
+
+    /// A graph with no room around it. `copy_plan` reads the graph and nothing
+    /// else — the poses are the *renderer's* half of a duplicate, and the rows
+    /// it plans are decided before anything is solved.
+    fn build_of(graph: VenueGraph) -> Build {
+        let sockets = luma_render::catalog::VenueSockets::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+        )
+        .expect("the shipped meshes");
+        Build {
+            venue_id: "venue".into(),
+            room: Room::new(&graph, &sockets, HashMap::new()),
+            graph,
+            solved: luma_lib::models::venue_graph::ResolvedVenue::default(),
+            hand: super::Hand::Idle,
+            sockets,
+            selected: None,
+            inspector: luma_ui::pane::PaneWidth::new(0.0),
+            warnings_pinned: false,
+            trim_draft: None,
+            report: Vec::new(),
+            committing: false,
+        }
+    }
+
+    fn params(u: f64) -> Params {
+        let mut params = Params::default();
+        params.set("u", u);
+        params
+    }
+
+    fn piece(id: &str, u: f64) -> Node {
+        Node {
+            id: id.into(),
+            kind: NodeKind::Piece,
+            catalog_ref: Some("truss.straight".into()),
+            label: None,
+            params: params(u),
+        }
+    }
+
+    fn edge(parent: &str, mine: &str, theirs: &str, roll: f64) -> Edge {
+        Edge {
+            parent: parent.into(),
+            my_socket: mine.into(),
+            their_socket: theirs.into(),
+            roll,
+        }
+    }
+
+    /// What one row of the plan says, with the minted id dropped: a duplicate
+    /// mints new ids by construction, so ids are the one thing two builds of
+    /// the same wing cannot agree on.
+    fn row(step: &CopyStep, parent: &str) -> (String, String, String, String, i64, i64) {
+        #[allow(clippy::cast_possible_truncation)]
+        let round = |value: f64| (value * 1e6).round() as i64;
+        (
+            parent.to_string(),
+            step.my_socket.clone(),
+            step.their_socket.clone(),
+            step.catalog_ref.clone().unwrap_or_default(),
+            round(step.yaw),
+            round(step.params.get("u").copied().unwrap_or_default()),
+        )
+    }
+
+    /// Duplicate + flip of an asymmetric wing writes the same `venue_edges`
+    /// rows as building the opposite wing by hand.
+    ///
+    /// The wing is asymmetric on purpose — it bolts to its parent by a *sided*
+    /// face, which is the case that a flip mirroring only the host's half of
+    /// each joint got wrong: the copy met its parent on the same socket the
+    /// original did, so the mirrored wing was bolted on inside-out.
+    #[test]
+    fn a_flipped_duplicate_writes_the_hand_built_opposite_wings_rows() {
+        let root = Node {
+            id: "venue".into(),
+            kind: NodeKind::Venue,
+            catalog_ref: None,
+            label: None,
+            params: Params::default(),
+        };
+        let mut graph = VenueGraph::new(root);
+        // The left wing: a stick on the downstage-left corner, an arm bolted to
+        // its left face, a light clamped under the arm.
+        graph.insert_placed(
+            piece("wing_l", 0.4),
+            edge("venue", "end_a", "corner_fl", 0.3),
+        );
+        graph.insert_placed(
+            piece("arm_l", 0.25),
+            edge("wing_l", "face_left", "face_right", 0.2),
+        );
+        graph.insert_placed(
+            piece("light_l", -0.1),
+            edge("arm_l", "clamp", "face_-y", 0.0),
+        );
+        // The same wing built by hand on the other side.
+        graph.insert_placed(
+            piece("wing_r", -0.4),
+            edge("venue", "end_a", "corner_fr", -0.3),
+        );
+        graph.insert_placed(
+            piece("arm_r", -0.25),
+            edge("wing_r", "face_right", "face_left", -0.2),
+        );
+        graph.insert_placed(
+            piece("light_r", 0.1),
+            edge("arm_r", "clamp", "face_-y", 0.0),
+        );
+
+        let build = build_of(graph);
+        let landing = Landing::Socket {
+            parent: "venue".into(),
+            my_socket: "end_a".into(),
+            their_socket: "corner_fr".into(),
+            yaw: -0.3,
+        };
+        let plan = build
+            .copy_plan("wing_l", true, &landing)
+            .expect("a socket landing plans a copy");
+
+        // The plan, with each step's parent named by the *source* it copies —
+        // a source id is a tree position, and tree position is the only thing
+        // two builds of the same wing can be compared by.
+        let copied: Vec<_> = plan.iter().map(|step| row(step, &step.parent)).collect();
+
+        // The hand-built wing's rows, read back off the graph the same way.
+        let hand: Vec<_> = ["wing_r", "arm_r", "light_r"]
+            .into_iter()
+            .map(|id| {
+                let node = build.graph.node(id).expect("the hand-built node");
+                let edge = build.graph.edge(id).expect("its edge");
+                #[allow(clippy::cast_possible_truncation)]
+                let round = |value: f64| (value * 1e6).round() as i64;
+                (
+                    // `wing_r`'s parent is the venue; the others' is the source
+                    // id of the copy's corresponding parent, which is what the
+                    // loop above spells for the copy.
+                    match id {
+                        "wing_r" => "venue",
+                        "arm_r" => "wing_l",
+                        _ => "arm_l",
+                    }
+                    .to_string(),
+                    edge.my_socket.clone(),
+                    edge.their_socket.clone(),
+                    node.catalog_ref.clone().unwrap_or_default(),
+                    round(edge.roll),
+                    round(node.params.get("u", 0.0)),
+                )
+            })
+            .collect();
+        assert_eq!(copied, hand, "the flipped copy is not the opposite wing");
     }
 }
