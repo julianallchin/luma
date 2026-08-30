@@ -360,75 +360,6 @@ impl std::fmt::Display for View {
     }
 }
 
-/// Where a frame is seen from: one of the framed [`View`]s, or one fixture's
-/// own head.
-///
-/// The two are one vocabulary with one spelling — `"front"`, `"pov:mover-3"` —
-/// because they answer the same request (`luma.venue.render(view=...)`) and a
-/// caller that had to know which kind it was asking for would be holding the
-/// renderer's implementation, not its camera.
-///
-/// [`Display`](std::fmt::Display) and [`FromStr`](std::str::FromStr) are
-/// inverses; the fixture id is not validated here, because the venue that would
-/// know is not in this crate.
-/// Exhaustive on purpose, unlike [`View`]: the two cases are the whole model —
-/// a camera that frames the rig, or a camera that *is* one of its lights — and
-/// a consumer forced to write an unreachable third arm would be carrying the
-/// cost of a variant nobody has.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Viewpoint {
-    /// A named camera fitted to the whole rig.
-    Framed(View),
-    /// One fixture's head, looking along its beam with the head parked.
-    Pov(String),
-}
-
-/// What a [`Viewpoint::Pov`] name starts with. One spelling, here.
-pub const POV_PREFIX: &str = "pov:";
-
-impl Viewpoint {
-    /// The name of the fixture this looks through, if any.
-    #[must_use]
-    pub fn pov_fixture(&self) -> Option<&str> {
-        match self {
-            Viewpoint::Pov(id) => Some(id),
-            Viewpoint::Framed(_) => None,
-        }
-    }
-
-    /// The name a fixture's POV is asked for by.
-    #[must_use]
-    pub fn pov_name(fixture_id: &str) -> String {
-        format!("{POV_PREFIX}{fixture_id}")
-    }
-}
-
-impl From<View> for Viewpoint {
-    fn from(view: View) -> Self {
-        Viewpoint::Framed(view)
-    }
-}
-
-impl std::fmt::Display for Viewpoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Viewpoint::Framed(view) => f.write_str(view.name()),
-            Viewpoint::Pov(id) => write!(f, "{POV_PREFIX}{id}"),
-        }
-    }
-}
-
-impl std::str::FromStr for Viewpoint {
-    type Err = UnknownView;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.strip_prefix(POV_PREFIX) {
-            Some("") | None => View::from_str(s).map(Viewpoint::Framed),
-            Some(id) => Ok(Viewpoint::Pov(id.to_string())),
-        }
-    }
-}
-
 /// The name was not one of [`View::ALL`]. Carries the list, because the caller
 /// is nearly always about to tell a human what they could have said.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -437,10 +368,13 @@ pub struct UnknownView(pub String);
 impl std::fmt::Display for UnknownView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "unknown view {:?}; expected one of ", self.0)?;
-        for view in View::ALL {
-            write!(f, "{}, ", view.name())?;
+        for (i, view) in View::ALL.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(view.name())?;
         }
-        write!(f, "or {POV_PREFIX}<fixture id>")
+        Ok(())
     }
 }
 

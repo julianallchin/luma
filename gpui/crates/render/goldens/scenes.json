@@ -5216,26 +5216,26 @@
 			}
 		},
 		{
-			"id": "fixture-pov",
+			"id": "aim-arrows",
 			"times": [
 				0
 			],
 			"camera": {
 				"position": [
 					0,
-					-8,
-					4
+					3.0,
+					13
 				],
 				"target": [
 					0,
-					0,
-					1
-				],
-				"pov": "wing-left"
+					1.6,
+					0
+				]
 			},
 			"editing": false,
+			"aimArrows": true,
 			"render": {
-				"darkStage": false,
+				"darkStage": true,
 				"volumetricHaze": true,
 				"hazeSteps": 8,
 				"hazeResolution": 1,
@@ -5249,63 +5249,48 @@
 			"selectedFixtureIds": [],
 			"fixtures": [
 				{
-					"id": "wing-left",
+					"id": "aim-left",
 					"fixturePath": "golden/moving-head.qxf",
 					"modeName": "Default",
 					"pos": [
-						-3,
+						-2.5,
 						1.5,
 						3.5
 					],
 					"rot": [
-						0.7853981633974483,
-						0,
-						0
+						0.0,
+						-0.9,
+						0.0
 					]
 				},
 				{
-					"id": "wing-right",
+					"id": "aim-centre",
 					"fixturePath": "golden/moving-head.qxf",
 					"modeName": "Default",
 					"pos": [
-						3,
+						0.0,
 						1.5,
 						3.5
 					],
 					"rot": [
-						0.7853981633974483,
-						0,
-						0
+						0.7,
+						0.0,
+						0.0
 					]
 				},
 				{
-					"id": "uplight-left",
-					"fixturePath": "golden/par.qxf",
+					"id": "aim-right",
+					"fixturePath": "golden/moving-head.qxf",
 					"modeName": "Default",
 					"pos": [
-						-3,
-						-3.4,
-						0
+						2.5,
+						1.5,
+						3.5
 					],
 					"rot": [
-						3.141592653589793,
-						0,
-						0
-					]
-				},
-				{
-					"id": "uplight-right",
-					"fixturePath": "golden/par.qxf",
-					"modeName": "Default",
-					"pos": [
-						3,
-						-3.4,
-						0
-					],
-					"rot": [
-						3.141592653589793,
-						0,
-						0
+						0.0,
+						0.9,
+						0.0
 					]
 				},
 				{
@@ -5326,93 +5311,13 @@
 			],
 			"pieces": [
 				{
-					"id": "deck-l",
-					"meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
-					"kind": "floor",
-					"pos": [
-						-3,
-						-2,
-						0
-					],
-					"rot": [
-						0,
-						0,
-						0
-					],
-					"scale": 1
-				},
-				{
-					"id": "deck-r",
-					"meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
-					"kind": "floor",
-					"pos": [
-						3,
-						-2,
-						0
-					],
-					"rot": [
-						0,
-						0,
-						0
-					],
-					"scale": 1
-				},
-				{
-					"id": "truss-l",
+					"id": "truss",
 					"meshPath": "stage_lab/truss_q40_1.83m.glb",
 					"kind": "truss",
 					"pos": [
-						-3,
+						0,
 						1.5,
-						3.5
-					],
-					"rot": [
-						0,
-						0,
-						0
-					],
-					"scale": 1
-				},
-				{
-					"id": "truss-r",
-					"meshPath": "stage_lab/truss_q40_1.83m.glb",
-					"kind": "truss",
-					"pos": [
-						3,
-						1.5,
-						3.5
-					],
-					"rot": [
-						0,
-						0,
-						0
-					],
-					"scale": 1
-				},
-				{
-					"id": "speaker-l",
-					"meshPath": "stage_lab/speaker_dbr15.glb",
-					"kind": "speaker",
-					"pos": [
-						-1.2,
-						-2,
-						0
-					],
-					"rot": [
-						0,
-						0,
-						0
-					],
-					"scale": 1
-				},
-				{
-					"id": "speaker-r",
-					"meshPath": "stage_lab/speaker_dbr15.glb",
-					"kind": "speaker",
-					"pos": [
-						1.2,
-						-2,
-						0
+						3.9
 					],
 					"rot": [
 						0,
@@ -5423,35 +5328,7 @@
 				}
 			],
 			"state": {
-				"wing-left:0": {
-					"dimmer": 0,
-					"color": [
-						1,
-						1,
-						1
-					],
-					"strobe": 0,
-					"position": [
-						0,
-						0
-					],
-					"speed": 0
-				},
-				"wing-right:0": {
-					"dimmer": 0,
-					"color": [
-						1,
-						1,
-						1
-					],
-					"strobe": 0,
-					"position": [
-						0,
-						0
-					],
-					"speed": 0
-				},
-				"uplight-left:0": {
+				"aim-left:0": {
 					"dimmer": 1,
 					"color": [
 						1,
@@ -5465,7 +5342,21 @@
 					],
 					"speed": 0
 				},
-				"uplight-right:0": {
+				"aim-centre:0": {
+					"dimmer": 1,
+					"color": [
+						1,
+						1,
+						1
+					],
+					"strobe": 0,
+					"position": [
+						0,
+						0
+					],
+					"speed": 0
+				},
+				"aim-right:0": {
 					"dimmer": 1,
 					"color": [
 						1,

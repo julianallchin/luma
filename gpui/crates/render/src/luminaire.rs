@@ -71,10 +71,9 @@ fn lens_beam_angle(def: &Definition) -> Option<f32> {
 ///
 /// The lens block when the definition has one, the class median otherwise (25
 /// degrees for a par and for anything unrecognised). Total over a definition
-/// the catalogue no longer has, because a venue outlives a fixture bundle and a
-/// camera still has to be given a lens. Public because the beam
-/// angle is also the lens a POV camera looks through ([`crate::scene_desc::Scene::pov`]),
-/// and a second reading of `Physical.Lens` would be a second answer.
+/// the catalogue no longer has, because a venue outlives a fixture bundle and
+/// the question still has to have an answer. Public because a second reading of
+/// `Physical.Lens` anywhere else would be a second answer.
 #[must_use]
 pub fn beam_angle_deg(def: Option<&Definition>, kind: Option<ModelKind>) -> f32 {
     clamp_opening(

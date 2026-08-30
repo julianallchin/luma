@@ -26,15 +26,7 @@ from luma_exec.figures import FigureSink  # noqa: E402
 from luma_exec.host_errors import LumaHostCallError  # noqa: E402
 from luma_exec.venue import Venue, VenueHostUnavailableError  # noqa: E402
 
-VIEWS = [
-    "front",
-    "audience",
-    "overhead",
-    "quarter_left",
-    "quarter_right",
-    "dj",
-    "pov:mover-1",
-]
+VIEWS = ["front", "audience", "overhead", "quarter_left", "quarter_right", "dj"]
 
 TILE_MAP = "gauntlet view\nplan as the house sees it\n\n  T\n"
 
@@ -115,6 +107,7 @@ class VenueRenderTests(unittest.TestCase):
                         "width": 320,
                         "height": 200,
                         "highlight": None,
+                        "aimArrows": True,
                     },
                 )
             ],
@@ -124,6 +117,14 @@ class VenueRenderTests(unittest.TestCase):
         self.assertEqual(repr(shot), "<StageImage dj t=12.5s 320x200>")
         self.assertTrue(shot.path.is_absolute())
         self.assertEqual(shot.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_aim_arrows_are_on_unless_the_caller_says_otherwise(self) -> None:
+        """This is the verification channel, so the aims are drawn by default."""
+        self.venue.render()
+        self.venue.render(aim_arrows=False)
+        self.assertEqual(
+            [call[1]["aimArrows"] for call in self.host.calls], [True, False]
+        )
 
     def test_the_host_clamp_wins_over_the_requested_time(self) -> None:
         self.assertEqual(self.venue.render(t=1e9).t, 100.0)
@@ -219,10 +220,6 @@ class VenueTilesTests(unittest.TestCase):
     def test_a_venue_with_no_host_says_so(self) -> None:
         with self.assertRaises(VenueHostUnavailableError):
             Venue(record(), workspace=self.workspace).tiles()
-
-    def test_a_head_is_offered_as_a_view_like_any_other(self) -> None:
-        """`pov:<id>` entries arrive in the same manifest list as `front`."""
-        self.assertIn("pov:mover-1", self.venue.views)
 
 
 class FigureCapTests(unittest.TestCase):

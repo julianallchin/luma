@@ -32,7 +32,7 @@ use crate::services::track_edits::TrackScope;
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
 use crate::storage::StorageRoot;
 use luma_render::venue_tiles::TileMap;
-use luma_scene::Viewpoint;
+use luma_scene::View;
 
 /// One cell's venue capability table. Construct only from host-resolved scope.
 pub struct VenueHost {
@@ -70,7 +70,7 @@ impl VenueHost {
     }
 
     async fn render(&self, request: RenderRequest) -> Result<Value, HostCallError> {
-        let view = Viewpoint::from_str(&request.view)
+        let view = View::from_str(&request.view)
             .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
         let width = clamp_dimension("width", request.width)?;
         let height = clamp_dimension("height", request.height)?;
@@ -118,8 +118,8 @@ impl VenueHost {
         };
         drop(access);
 
-        let view_name = view.to_string();
-        let (scene, definitions) = geometry.scene();
+        let (mut scene, definitions) = geometry.scene();
+        scene.aim_arrows = request.aim_arrows;
         let booth = geometry.booth();
         let meshes_root = stage_render::meshes_root(Some(&self.resource_root));
 
@@ -150,7 +150,7 @@ impl VenueHost {
             "artifactRel": artifact_rel,
             "width": width,
             "height": height,
-            "view": view_name,
+            "view": view.name(),
             "t": time,
         }))
     }
@@ -314,4 +314,9 @@ struct RenderRequest {
     /// A selection expression. Present, its heads are the only thing lit, and
     /// the score at `t` is not drawn at all. Absent, the score lights the room.
     highlight: Option<String>,
+    /// Draw each fixture's rest aim as an arrow. Defaulted on the Python side
+    /// rather than here, so the answer to "on or off by default" has one home;
+    /// this channel is a verification channel, and a picture that does not say
+    /// which way the heads point does not verify a patch.
+    aim_arrows: bool,
 }

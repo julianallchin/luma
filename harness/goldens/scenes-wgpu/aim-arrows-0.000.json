@@ -1,6 +1,6 @@
 {
   "schema": "luma.renderer-frame/1",
-  "image": "fixture-pov-0.000.png",
+  "image": "aim-arrows-0.000.png",
   "viewport": {
     "width": 800,
     "height": 500
@@ -13,60 +13,46 @@
   "subframes": 16,
   "timeSeconds": 0.0,
   "scene": {
-    "id": "fixture-pov",
+    "id": "aim-arrows",
     "times": [
       0.0
     ],
     "camera": {
       "position": [
         0.0,
-        -8.0,
-        4.0
+        3.0,
+        13.0
       ],
       "target": [
         0.0,
-        0.0,
-        1.0
-      ],
-      "pov": "wing-left"
+        1.6,
+        0.0
+      ]
     },
     "editing": false,
+    "aimArrows": true,
     "render": {
       "environment": {
         "background": [
-          0.009721217,
-          0.009721217,
-          0.009721217
+          0.0,
+          0.0,
+          0.0
         ],
         "ambientColor": [
           1.0,
           1.0,
           1.0
         ],
-        "ambientIntensity": 0.45
+        "ambientIntensity": 0.0
       },
       "haze": {
-        "enabled": false,
+        "enabled": true,
         "steps": 8,
         "resolution": 1.0,
         "density": 0.8
       },
-      "sun": {
-        "direction": [
-          8.0,
-          -6.0,
-          12.0
-        ],
-        "color": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "intensity": 6.0,
-        "shadows": true,
-        "shadowSoftness": 1.0
-      },
-      "showGrid": true,
+      "sun": null,
+      "showGrid": false,
       "debugView": "pbr",
       "fixtureSurfaceLighting": false,
       "fixtureShadows": false,
@@ -76,62 +62,47 @@
     "selectedFixtureIds": [],
     "fixtures": [
       {
-        "id": "wing-left",
+        "id": "aim-left",
         "fixturePath": "golden/moving-head.qxf",
         "modeName": "Default",
         "pos": [
-          -3.0,
+          -2.5,
           1.5,
           3.5
         ],
         "rot": [
-          0.7853982,
           0.0,
+          -0.9,
           0.0
         ]
       },
       {
-        "id": "wing-right",
+        "id": "aim-centre",
         "fixturePath": "golden/moving-head.qxf",
         "modeName": "Default",
         "pos": [
-          3.0,
+          0.0,
           1.5,
           3.5
         ],
         "rot": [
-          0.7853982,
+          0.7,
           0.0,
           0.0
         ]
       },
       {
-        "id": "uplight-left",
-        "fixturePath": "golden/par.qxf",
+        "id": "aim-right",
+        "fixturePath": "golden/moving-head.qxf",
         "modeName": "Default",
         "pos": [
-          -3.0,
-          -3.4,
-          0.0
+          2.5,
+          1.5,
+          3.5
         ],
         "rot": [
-          3.1415927,
           0.0,
-          0.0
-        ]
-      },
-      {
-        "id": "uplight-right",
-        "fixturePath": "golden/par.qxf",
-        "modeName": "Default",
-        "pos": [
-          3.0,
-          -3.4,
-          0.0
-        ],
-        "rot": [
-          3.1415927,
-          0.0,
+          0.9,
           0.0
         ]
       },
@@ -153,93 +124,13 @@
     ],
     "pieces": [
       {
-        "id": "deck-l",
-        "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
-        "kind": "floor",
-        "pos": [
-          -3.0,
-          -2.0,
-          0.0
-        ],
-        "rot": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": 1.0
-      },
-      {
-        "id": "deck-r",
-        "meshPath": "stage_lab/stage_praticavel_2x1x1.glb",
-        "kind": "floor",
-        "pos": [
-          3.0,
-          -2.0,
-          0.0
-        ],
-        "rot": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": 1.0
-      },
-      {
-        "id": "truss-l",
+        "id": "truss",
         "meshPath": "stage_lab/truss_q40_1.83m.glb",
         "kind": "truss",
         "pos": [
-          -3.0,
+          0.0,
           1.5,
-          3.5
-        ],
-        "rot": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": 1.0
-      },
-      {
-        "id": "truss-r",
-        "meshPath": "stage_lab/truss_q40_1.83m.glb",
-        "kind": "truss",
-        "pos": [
-          3.0,
-          1.5,
-          3.5
-        ],
-        "rot": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": 1.0
-      },
-      {
-        "id": "speaker-l",
-        "meshPath": "stage_lab/speaker_dbr15.glb",
-        "kind": "speaker",
-        "pos": [
-          -1.2,
-          -2.0,
-          0.0
-        ],
-        "rot": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": 1.0
-      },
-      {
-        "id": "speaker-r",
-        "meshPath": "stage_lab/speaker_dbr15.glb",
-        "kind": "speaker",
-        "pos": [
-          1.2,
-          -2.0,
-          0.0
+          3.9
         ],
         "rot": [
           0.0,
@@ -250,68 +141,53 @@
       }
     ],
     "state": {
+      "aim-centre:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "aim-left:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
+      "aim-right:0": {
+        "dimmer": 1.0,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "strobe": 0.0,
+        "position": [
+          0.0,
+          0.0
+        ],
+        "gobo": 0,
+        "gobo_rotation": 0.0
+      },
       "hazer:0": {
         "dimmer": 1.0,
-        "color": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "strobe": 0.0,
-        "position": [
-          0.0,
-          0.0
-        ],
-        "gobo": 0,
-        "gobo_rotation": 0.0
-      },
-      "uplight-left:0": {
-        "dimmer": 1.0,
-        "color": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "strobe": 0.0,
-        "position": [
-          0.0,
-          0.0
-        ],
-        "gobo": 0,
-        "gobo_rotation": 0.0
-      },
-      "uplight-right:0": {
-        "dimmer": 1.0,
-        "color": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "strobe": 0.0,
-        "position": [
-          0.0,
-          0.0
-        ],
-        "gobo": 0,
-        "gobo_rotation": 0.0
-      },
-      "wing-left:0": {
-        "dimmer": 0.0,
-        "color": [
-          1.0,
-          1.0,
-          1.0
-        ],
-        "strobe": 0.0,
-        "position": [
-          0.0,
-          0.0
-        ],
-        "gobo": 0,
-        "gobo_rotation": 0.0
-      },
-      "wing-right:0": {
-        "dimmer": 0.0,
         "color": [
           1.0,
           1.0,
@@ -367,27 +243,6 @@
         "Lens": {
           "@DegreesMin": 11.0,
           "@DegreesMax": 58.0
-        }
-      }
-    },
-    "golden/par.qxf": {
-      "Type": "Color Changer",
-      "Mode": [
-        {
-          "@Name": "Default",
-          "Head": []
-        }
-      ],
-      "Physical": {
-        "Dimensions": {
-          "@Width": 265.0,
-          "@Height": 245.0,
-          "@Depth": 115.0
-        },
-        "Layout": null,
-        "Lens": {
-          "@DegreesMin": 40.0,
-          "@DegreesMax": 40.0
         }
       }
     }

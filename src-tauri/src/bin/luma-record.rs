@@ -21,7 +21,7 @@ use std::time::Instant;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use luma_lib::headless_host::{boot, HostConfig};
 use luma_lib::recording::{record, Haze, Recording};
-use luma_scene::{View, Viewpoint};
+use luma_scene::View;
 
 const USAGE: &str = "usage: luma-record <score-id> <output.mp4> \
 [--view front] [--width 1280] [--height 720] [--fps 30] [--span start:end] \
@@ -110,7 +110,7 @@ render {:.0} ms/frame · encode {:.1} ms/frame",
 fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), String> {
     let mut positional = Vec::new();
     let mut shared = Vec::new();
-    let mut view = Viewpoint::Framed(View::Front);
+    let mut view = View::Front;
     let mut size = (1280u32, 720u32);
     let mut fps = 30u32;
     let mut span = None;
@@ -122,7 +122,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<(Recording, HostConfig), 
             "-h" | "--help" => return Err(USAGE.into()),
             "--view" => {
                 let name = args.next().ok_or("--view needs a value")?;
-                view = Viewpoint::from_str(&name).map_err(|error| error.to_string())?;
+                view = View::from_str(&name).map_err(|error| error.to_string())?;
             }
             "--width" => size.0 = number(args.next(), "--width")?,
             "--height" => size.1 = number(args.next(), "--height")?,
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(out.score_id, "score-1");
         assert_eq!(out.output, PathBuf::from("out.mp4"));
         assert_eq!((out.size, out.fps), ((1280, 720), 30));
-        assert_eq!(out.view, Viewpoint::Framed(View::Front));
+        assert!(matches!(out.view, View::Front));
         assert!(out.span.is_none());
     }
 

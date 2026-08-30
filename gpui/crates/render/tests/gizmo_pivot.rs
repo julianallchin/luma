@@ -52,9 +52,9 @@ fn scene() -> Scene {
         camera: CameraPose {
             position: [4.5, 3.0, 5.0],
             target: [0.0, 0.8, 0.0],
-            pov: None,
         },
         editing: true,
+        aim_arrows: false,
         render: RenderSettings::dark_stage(50.0, 0.5),
         selected_fixture_ids: Vec::new(),
         editor: Editor::default(),

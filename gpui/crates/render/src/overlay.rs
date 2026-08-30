@@ -1,5 +1,5 @@
-//! Editor affordances: the selection cage, the transform gizmo, and what the
-//! venue builder is about to do (`scene_desc::Build`).
+//! Unlit affordances: the aim arrows, the selection cage, the transform gizmo,
+//! and what the venue builder is about to do (`scene_desc::Build`).
 //!
 //! Spec §2.3 calls these `Unlit` — flat colour, no lighting, optionally no
 //! depth test. Spec §5.2 owns the interactive half (hit testing, drag frames);
@@ -17,7 +17,7 @@ use glam::{Mat3, Mat4, Vec3};
 use luma_scene::{gizmo_scale, GizmoMode, RING_RADIUS};
 
 use crate::assets::Library;
-use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_pose_from_data};
+use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_from_world, three_pose_from_data};
 use crate::frame::{Camera, Definitions, MeshData};
 use crate::scene_desc::{Geometry, Scene, SocketMarkState};
 
@@ -75,6 +75,15 @@ const SOCKET_RADIUS: f32 = 0.025;
 
 /// Half-length of a measure end tick, before the same factor.
 const TICK_RADIUS: f32 = 0.06;
+
+/// How far an aim arrow reaches out of the fixture, in metres.
+///
+/// A fixed length rather than a throw traced to the first surface: the arrow
+/// answers "which way", and a ray cast per fixture per frame would buy a length
+/// nobody reads at the price of a BVH over the whole room. Three metres is
+/// longer than any housing and shorter than the smallest room, so a rig of
+/// them reads as a field of directions rather than as a thicket.
+const AIM_LENGTH_M: f32 = 3.0;
 
 /// Handles hide when their axis points within this much of straight at the
 /// camera, where the drag math degenerates (`AXIS_HIDE_TRESHOLD`).
@@ -168,6 +177,9 @@ pub(crate) fn build(
     bank: &mut crate::frame::Bank,
 ) -> Vec<Overlay> {
     let mut out = Vec::new();
+    if scene.aim_arrows {
+        out.extend(aim_arrows(scene, definitions, camera, to_world, bank));
+    }
     if !scene.editing {
         return out;
     }
@@ -362,6 +374,78 @@ pub(crate) fn build(
         });
     }
 
+    out
+}
+
+/// One arrow per emitting fixture, from its mount point along the beam it
+/// leaves at rest.
+///
+/// The direction is [`crate::luminaire::beam_direction`] with no pinned
+/// position — the one answer to "which way is this pointing", so an arrow can
+/// never disagree with the cone drawn under it. A fixture that answers with the
+/// zero vector has no beam (a hazer, a definition the catalogue lost) and gets
+/// no arrow: an arrow out of something that does not light is a lie.
+///
+/// Rest, not the score's aim at `t`: this is a question about how the rig is
+/// hung, and a head swung somewhere by a cue would answer a different one.
+///
+/// The shaft is a world-length segment so the reach is readable in metres; the
+/// head is constant screen size, the same [`gizmo_scale`] every other mark in
+/// this module wears, so it stays legible from across the room.
+fn aim_arrows(
+    scene: &Scene,
+    definitions: &Definitions,
+    camera: &Camera,
+    to_world: Mat4,
+    bank: &mut crate::frame::Bank,
+) -> Vec<Overlay> {
+    let mut out = Vec::new();
+    let color = hex_srgb(ACCENT);
+    for fixture in &scene.fixtures {
+        let direction = crate::luminaire::beam_direction(
+            definitions.get(&fixture.fixture_path),
+            fixture.rot,
+            None,
+        );
+        let Some(direction) = direction.try_normalize().map(three_from_world) else {
+            continue;
+        };
+        let origin = three_from_data(Vec3::from(fixture.pos));
+        let tip = origin + direction * AIM_LENGTH_M;
+        // The unit segment lies along +X, so the run is the X column and the
+        // other two only have to be perpendicular — as the measure ray does.
+        let run = basis_from_up(direction);
+        out.push(Overlay {
+            mesh: bank.insert(MeshKind::Segment.key().to_string(), || {
+                MeshKind::Segment.build()
+            }),
+            model: to_world
+                * Mat4::from_translation(origin)
+                * Mat4::from_mat3(Mat3::from_cols(tip - origin, run.x_axis, run.z_axis)),
+            lines: true,
+            color,
+            opacity: 1.0,
+            depth: OverlayDepth::Free,
+        });
+        // The cone's apex is +Y in its own space, which `run` points along.
+        let scale = gizmo_scale(
+            (camera.eye - to_world.transform_point3(tip)).length(),
+            camera.fov_y_deg,
+        );
+        out.push(Overlay {
+            mesh: bank.insert(MeshKind::Arrow.key().to_string(), || {
+                MeshKind::Arrow.build()
+            }),
+            model: to_world
+                * Mat4::from_translation(tip)
+                * Mat4::from_mat3(run)
+                * Mat4::from_scale(Vec3::splat(scale)),
+            lines: false,
+            color,
+            opacity: 1.0,
+            depth: OverlayDepth::Free,
+        });
+    }
     out
 }
 
