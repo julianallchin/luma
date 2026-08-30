@@ -16,6 +16,7 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Wri
 use crate::database::local::venue_graph as venue_graph_db;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
+use crate::services::fixture_create;
 use crate::venue_graph;
 use luma_scene::venue::{Constraint, Edge, NodeKind, FLOOR_SOCKET};
 
@@ -271,11 +272,20 @@ pub async fn set_params(
     report(access, services, &node_id).await
 }
 
-/// Delete a node and everything hanging off it.
+/// Delete a node and everything structural hanging off it.
 ///
 /// The subtree is computed from the graph rather than left to a foreign-key
 /// cascade: which nodes those are is the graph's question, and the answer has
 /// to be the same one the builder just previewed.
+///
+/// # A fixture is inventory, not structure
+///
+/// Pulling a truss down loses the rig its shape, not its lights: every fixture
+/// under the deleted node is **trayed** — its edge cascades away with its
+/// parent, so the solve reports it unplaced and the tray can hang it
+/// somewhere else. Only a fixture the caller names *directly* is deleted, and
+/// then through [`fixture_create::delete`], which is the one door that takes
+/// the patch row with the node.
 ///
 /// # Errors
 /// Fails if the venue is not writable or the node is not in it.
@@ -292,8 +302,14 @@ pub async fn delete_subtree(
             "the venue root is the room itself and cannot be deleted".into(),
         ));
     }
-    let subtree = graph.subtree(&node_id);
-    venue_graph_db::delete_nodes(&mut access, &subtree).await?;
+    let (fixtures, structure): (Vec<String>, Vec<String>) = graph
+        .subtree(&node_id)
+        .into_iter()
+        .partition(|id| graph.node(id).is_some_and(|n| n.kind == NodeKind::Fixture));
+    venue_graph_db::delete_nodes(&mut access, &structure).await?;
+    if fixtures.contains(&node_id) {
+        fixture_create::delete(&mut access, &node_id).await?;
+    }
     let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
     let out = ResolvedVenue::from(&solved);
     access.commit().await?;

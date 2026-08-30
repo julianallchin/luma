@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] `cargo clippy --all-targets` from `src-tauri` prints two screens of pre-existing warnings from `prodjlink`, `stagelinq`, `python_env` and friends, so "is my diff clean" is a grep by filename rather than an exit code. Confirmed the ipc-manifest test needs three runs, not two: regenerate, still-stale, green.
 - [2026-08-29] A filtered `cargo test --lib <name>` is not a cheap way to check one test: it relinks the whole 1000-test binary (~20-30 s in a fresh worktree), and per AGENTS.md it also rewrites `src/bindings/schema.ts` down to the types those tests touched — so every filtered run has to be paid for again with a full one before `bun run build` will typecheck.
 - [2026-08-29] `ipc_manifest_matches_the_command_table` regenerates `docs/specs/ipc-manifest.{json,md}` and then fails, so adding one dispatch verb costs two full 100s `cargo test` runs before green — and the second run failed too, so it was really three. The panic says "commit the new files" without saying it already wrote them.
 - [2026-08-29] Adding one `SocketType` variant fails `luma-scene`'s binding test and `dispatch`'s ipc-manifest test on the *first* run and passes on the second, because both write the new file and then assert it was unchanged. Correct, but it reads as a red suite twice per change and there is no `--accept` to say "yes, regenerate".

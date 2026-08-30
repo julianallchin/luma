@@ -8,7 +8,8 @@ use luma_scene::distribute::Layout;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::services::distribute::{FitFailure, Placed, Report};
+use crate::models::venue_graph::{warning_line, ResolvedDangling, ResolvedUnplaced};
+use crate::services::distribute::{Occupied, Placed, Refusal, Report};
 
 /// How the caller pinned the row's layout down.
 ///
@@ -69,34 +70,96 @@ impl From<&Placed> for DistributedFixture {
     }
 }
 
-/// Why the row did not fit, and the call that would make it.
+/// Why a distribution wrote nothing.
+///
+/// A tagged union rather than a nullable per reason: a distribution is refused
+/// for exactly one cause, and its absence is the whole of "it worked" — there
+/// is no `ok` flag beside it to disagree with.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export, export_to = "../../src/bindings/distribute.ts")]
+#[ts(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum DistributeRefusal {
+    /// The row is longer than the face.
+    TooLong {
+        /// How long the host face would have to be. Already a length the host
+        /// can be built at, so it can be passed straight to `set_params`.
+        needed_m: f64,
+        /// How long it is now.
+        available_m: f64,
+        /// The node to change the length of.
+        extend_node_id: String,
+        /// The fix, in words, for a page that shows the refusal rather than
+        /// acting on it.
+        suggestion: String,
+    },
+    /// The row would sit on top of one already on this face.
+    Overlap {
+        /// The metres along the face the row would have claimed, from its
+        /// middle.
+        from_m: f64,
+        to_m: f64,
+        /// The fixtures in the way, in face order.
+        held_by: Vec<DistributeOccupied>,
+        suggestion: String,
+    },
+}
+
+/// One stretch of a host face that is already spoken for.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase")]
-pub struct DistributeFit {
-    /// How long the host face would have to be. Already a length the host can
-    /// be built at, so it can be passed straight to `set_params`.
-    pub needed_m: f64,
-    /// How long it is now.
-    pub available_m: f64,
-    /// The node to change the length of.
-    pub extend_node_id: String,
-    /// The fix, in words, for a page that shows the refusal rather than acting
-    /// on it.
-    pub suggestion: String,
+pub struct DistributeOccupied {
+    pub label: String,
+    pub from_m: f64,
+    pub to_m: f64,
 }
 
-impl From<&FitFailure> for DistributeFit {
-    fn from(fit: &FitFailure) -> Self {
-        DistributeFit {
-            needed_m: fit.needed_m,
-            available_m: fit.available_m,
-            extend_node_id: fit.extend_node.clone(),
-            suggestion: format!(
-                "needs {:.2} m, the face is {:.2} m — extend({}, to={:.2})",
-                fit.needed_m, fit.available_m, fit.extend_node, fit.needed_m
-            ),
+impl From<&Occupied> for DistributeOccupied {
+    fn from(held: &Occupied) -> Self {
+        DistributeOccupied {
+            label: held.label.clone(),
+            from_m: held.from_m,
+            to_m: held.to_m,
+        }
+    }
+}
+
+impl From<&Refusal> for DistributeRefusal {
+    fn from(refusal: &Refusal) -> Self {
+        match refusal {
+            Refusal::TooLong(fit) => DistributeRefusal::TooLong {
+                needed_m: fit.needed_m,
+                available_m: fit.available_m,
+                extend_node_id: fit.extend_node.clone(),
+                suggestion: format!(
+                    "needs {:.2} m, the face is {:.2} m — extend({}, to={:.2})",
+                    fit.needed_m, fit.available_m, fit.extend_node, fit.needed_m
+                ),
+            },
+            Refusal::Overlap {
+                from_m,
+                to_m,
+                held_by,
+            } => DistributeRefusal::Overlap {
+                from_m: *from_m,
+                to_m: *to_m,
+                held_by: held_by.iter().map(DistributeOccupied::from).collect(),
+                suggestion: format!(
+                    "{from_m:.2}..{to_m:.2} m of this face is already held by {} — \
+                     distribute into a span that clears it",
+                    held_by
+                        .iter()
+                        .map(|held| held.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
         }
     }
 }
@@ -107,24 +170,22 @@ impl From<&FitFailure> for DistributeFit {
 #[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct DistributeReport {
-    /// `false` carries a [`Self::fit`] and no fixtures — a distribution is all
-    /// of its fixtures or none of them.
-    pub ok: bool,
     pub host_node_id: String,
     pub host_socket: String,
+    /// All of them, or — when [`Self::refusal`] is set — none.
     pub fixtures: Vec<DistributedFixture>,
-    pub fit: Option<DistributeFit>,
+    /// `null` is the whole of "it worked".
+    pub refusal: Option<DistributeRefusal>,
     pub warnings: Vec<String>,
     /// Open structural sockets left in the venue.
-    pub dangling: Vec<String>,
+    pub dangling: Vec<ResolvedDangling>,
     /// Subtrees the solve could not reach — the tray, and anything detached.
-    pub unplaced: Vec<String>,
+    pub unplaced: Vec<ResolvedUnplaced>,
 }
 
 impl From<Report> for DistributeReport {
     fn from(report: Report) -> Self {
         DistributeReport {
-            ok: report.ok,
             host_node_id: report.host_node,
             host_socket: report.host_socket,
             fixtures: report
@@ -132,10 +193,10 @@ impl From<Report> for DistributeReport {
                 .iter()
                 .map(DistributedFixture::from)
                 .collect(),
-            fit: report.fit.as_ref().map(DistributeFit::from),
-            warnings: report.warnings,
-            dangling: report.dangling,
-            unplaced: report.unplaced,
+            refusal: report.refusal.as_ref().map(DistributeRefusal::from),
+            warnings: report.warnings.iter().map(warning_line).collect(),
+            dangling: report.dangling.iter().map(ResolvedDangling::from).collect(),
+            unplaced: report.unplaced.iter().map(ResolvedUnplaced::from).collect(),
         }
     }
 }

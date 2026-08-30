@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use ts_rs::TS;
 
-use luma_scene::venue::{ConstraintStatus, NodePose, ResolvedVenue as Solved, VenueGraph, Warning};
+use luma_scene::venue::{
+    ConstraintStatus, DanglingSocket, NodePose, NodeWarning, ResolvedVenue as Solved, UnplacedNode,
+    VenueGraph, Warning,
+};
 
 /// One `venue_nodes` row.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
@@ -247,6 +250,17 @@ pub struct ResolvedUnplaced {
     pub descendants: u32,
 }
 
+impl From<&UnplacedNode> for ResolvedUnplaced {
+    fn from(unplaced: &UnplacedNode) -> Self {
+        ResolvedUnplaced {
+            node_id: unplaced.node.clone(),
+            kind: unplaced.kind.as_str().to_string(),
+            label: unplaced.label.clone(),
+            descendants: u32::try_from(unplaced.descendants).unwrap_or(u32::MAX),
+        }
+    }
+}
+
 /// An open structural socket.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -256,6 +270,16 @@ pub struct ResolvedDangling {
     pub node_id: String,
     pub socket: String,
     pub socket_type: String,
+}
+
+impl From<&DanglingSocket> for ResolvedDangling {
+    fn from(dangling: &DanglingSocket) -> Self {
+        ResolvedDangling {
+            node_id: dangling.node.clone(),
+            socket: dangling.socket.clone(),
+            socket_type: dangling.socket_type.as_str().to_string(),
+        }
+    }
 }
 
 /// The whole venue, solved — what `get_resolved_venue` returns and what every
@@ -303,29 +327,26 @@ impl From<&Solved> for ResolvedVenue {
             dangling: solved
                 .dangling()
                 .iter()
-                .map(|d| ResolvedDangling {
-                    node_id: d.node.clone(),
-                    socket: d.socket.clone(),
-                    socket_type: d.socket_type.as_str().to_string(),
-                })
+                .map(ResolvedDangling::from)
                 .collect(),
             unplaced: solved
                 .unplaced()
                 .iter()
-                .map(|u| ResolvedUnplaced {
-                    node_id: u.node.clone(),
-                    kind: u.kind.as_str().to_string(),
-                    label: u.label.clone(),
-                    descendants: u32::try_from(u.descendants).unwrap_or(u32::MAX),
-                })
+                .map(ResolvedUnplaced::from)
                 .collect(),
-            warnings: solved
-                .warnings()
-                .iter()
-                .map(|w| format!("{}: {}", w.node, describe(&w.warning)))
-                .collect(),
+            warnings: solved.warnings().iter().map(warning_line).collect(),
         }
     }
+}
+
+/// One warning as a line: which node, and what the solve decided for it.
+///
+/// The single rendering of a [`NodeWarning`]. Every surface that shows one —
+/// the resolved venue, a placement report, a distribution — goes through here,
+/// so a warning reads the same wherever it surfaces and none of them falls back
+/// to `{:?}`.
+pub(crate) fn warning_line(warning: &NodeWarning) -> String {
+    format!("{}: {}", warning.node, describe(&warning.warning))
 }
 
 fn describe(warning: &Warning) -> String {

@@ -228,7 +228,7 @@ pub async fn remove_patched_fixture(
     id: String,
 ) -> Result<(), CommandError> {
     let mut access = fixture_write(services, &venue_id, &id).await?;
-    require_changed(fixtures_db::delete_fixture(&mut access, &id).await?)?;
+    require_changed(fixture_create::delete(&mut access, &id).await?)?;
     commit_and_publish(services, access).await
 }
 
