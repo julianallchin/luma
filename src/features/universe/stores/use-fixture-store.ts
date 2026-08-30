@@ -8,26 +8,6 @@ import type {
 import type { PatchAddress } from "@/bindings/patch";
 import { useGroupStore } from "./use-group-store";
 
-/// The one naming rule for a new patch row, and the only place it lives on
-/// this side of the wire: `<model> (<n>)`, where `n` counts the fixtures of
-/// *that model* — a venue with four movers and one par numbers the next par
-/// `(2)`, not `(6)`.
-///
-/// A counter rather than a function because a batch writes several rows before
-/// any of them are read back: each call consumes its number, so ten duplicates
-/// of two models number 1..n per model instead of sharing one running total.
-function modelNumbering(existing: PatchedFixture[]): (model: string) => string {
-	const counts = new Map<string, number>();
-	for (const fixture of existing) {
-		counts.set(fixture.model, (counts.get(fixture.model) ?? 0) + 1);
-	}
-	return (model) => {
-		const n = (counts.get(model) ?? 0) + 1;
-		counts.set(model, n);
-		return `${model} (${n})`;
-	};
-}
-
 interface FixtureState {
 	// Venue context
 	venueId: string | null;
@@ -391,14 +371,12 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 	},
 
 	patchFixture: async (universe, address, modeName, numChannels) => {
-		const { selectedEntry, selectedDefinition, patchedFixtures, venueId } =
-			get();
+		const { selectedEntry, selectedDefinition, venueId } = get();
 		if (!selectedEntry || !selectedDefinition || venueId === null) {
 			return "No fixture selected.";
 		}
 
 		try {
-			const label = modelNumbering(patchedFixtures)(selectedEntry.model);
 			console.debug("[useFixtureStore] patchFixture invoke", {
 				venueId,
 				universe,
@@ -408,7 +386,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				model: selectedEntry.model,
 				modeName,
 				fixturePath: selectedEntry.path,
-				label,
 			});
 			await invoke("patch_fixture", {
 				venueId,
@@ -419,7 +396,9 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				model: selectedEntry.model,
 				modeName,
 				fixturePath: selectedEntry.path,
-				label,
+				// The backend mints `<model> <n>`: one naming rule, and it is
+				// not on this side of the wire.
+				label: null,
 			});
 			console.debug("[useFixtureStore] patchFixture success");
 			await get().fetchPatchedFixtures();
@@ -498,7 +477,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 				model: fixture.model,
 				modeName: fixture.modeName,
 				fixturePath: fixture.fixturePath,
-				label: modelNumbering(patchedFixtures)(fixture.model),
+				label: null,
 			});
 
 			await get().fetchPatchedFixtures();
@@ -531,10 +510,6 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 			byWidth.set(width, [...(byWidth.get(width) ?? []), fixture]);
 		}
 
-		// Seeded once for the whole batch: the rows written in this loop are
-		// not read back until it finishes, so the counter is the only thing
-		// that knows a second mover has been created.
-		const nextLabel = modelNumbering(patchedFixtures);
 		const newIds: string[] = [];
 		try {
 			for (const [numChannels, group] of byWidth) {
@@ -555,7 +530,7 @@ export const useFixtureStore = create<FixtureState>((set, get) => ({
 						model: fixture.model,
 						modeName: fixture.modeName,
 						fixturePath: fixture.fixturePath,
-						label: nextLabel(fixture.model),
+						label: null,
 					});
 					newIds.push(newFixture.id);
 				}

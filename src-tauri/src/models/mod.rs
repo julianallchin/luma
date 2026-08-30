@@ -1,6 +1,7 @@
 pub mod agent_execution;
 pub mod agent_threads;
 pub mod authored_state;
+pub mod distribute;
 pub mod fixtures;
 pub mod groups;
 pub mod implementations;

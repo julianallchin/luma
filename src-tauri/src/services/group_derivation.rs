@@ -928,15 +928,16 @@ fn push(
 }
 
 /// `<model> <n>`, `n` counting per model over the venue's creation order.
+///
+/// The rule itself is [`crate::services::fixture_create::ModelNumbering`] —
+/// where a fixture's stored label is minted — counted here from scratch rather
+/// than seeded, because this describes the venue as the derivation reads it
+/// rather than continuing it.
 fn fixture_labels(fixtures: &[FixtureFact]) -> BTreeMap<String, String> {
-    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut numbering = crate::services::fixture_create::ModelNumbering::default();
     fixtures
         .iter()
-        .map(|fixture| {
-            let n = seen.entry(fixture.model.as_str()).or_insert(0);
-            *n += 1;
-            (fixture.id.clone(), format!("{} {}", fixture.model, n))
-        })
+        .map(|fixture| (fixture.id.clone(), numbering.next(&fixture.model)))
         .collect()
 }
 

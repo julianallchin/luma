@@ -6,6 +6,7 @@ use crate::dispatch::{AppServices, CommandError};
 use crate::fixtures::layout::fixture_mount;
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell};
+use crate::services::fixture_create;
 use crate::services::fixtures as fixture_service;
 use crate::services::groups::invalidate_venue_fixture_cache;
 use crate::services::patch as patch_service;
@@ -104,11 +105,14 @@ pub async fn patch_fixture(
     fixture_path: String,
     label: Option<String>,
 ) -> Result<PatchedFixture, CommandError> {
+    // The graph has to exist before a fixture can be a node in it, and this is
+    // the first write on the venue for a caller that has only ever patched.
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     // The one door a typed address comes through, and it is shut before
     // anything is written: a refused patch leaves the database untouched.
-    patch_service::admit(
+    let footprint = patch_service::admit(
         &patch_service::occupancy(&mut access).await?,
         None,
         narrow(universe)?,
@@ -116,19 +120,24 @@ pub async fn patch_fixture(
         narrow(num_channels)?,
     )
     .map_err(CommandError::from)?;
-    let fixture = fixtures_db::insert_fixture(
+    let mut numbering = fixture_create::numbering(&mut access).await?;
+    let fixture = fixture_create::create(
         &mut access,
-        universe,
-        address,
-        num_channels,
-        &manufacturer,
-        &model,
-        &mode_name,
-        &fixture_path,
-        label.as_deref(),
-        // Derived, not typed: the address the dialog offered came from
-        // `next_addresses`, so auto-patch is free to move it.
-        false,
+        &mut numbering,
+        fixture_create::NewFixture {
+            manufacturer: &manufacturer,
+            model: &model,
+            mode_name: &mode_name,
+            fixture_path: &fixture_path,
+            footprint,
+            // Derived, not typed: the address the dialog offered came from
+            // `next_addresses`, so auto-patch is free to move it.
+            pinned: false,
+            name: match label {
+                Some(label) => fixture_create::Naming::Given(label),
+                None => fixture_create::Naming::Minted(None),
+            },
+        },
     )
     .await?;
     commit_and_publish(services, access).await?;
