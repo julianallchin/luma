@@ -8,7 +8,7 @@
 //!
 //! # The fixtures it makes are unplaced, and that is the whole point
 //!
-//! Adding here writes a `fixtures` row and a tray node and **no edge**
+//! Adding here writes a `fixtures` row and an unplaced node and **no edge**
 //! (`services::fixture_create`). The rig gains inventory, not geometry; where
 //! each one hangs is a drag on the stage page. That is why the preview line
 //! ends in `unplaced` rather than offering somewhere to put them.
@@ -330,9 +330,16 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let made = pending.await;
             this.update(cx, |this, cx| {
-                if let Err(error) = made {
-                    if let Some(state) = this.patch_mut(&venue_id) {
-                        state.notice = Some(crate::patch::refusal_message(&error).into());
+                if let Some(state) = this.patch_mut(&venue_id) {
+                    // What the button just made true, in the page's own words:
+                    // inventory, not geometry. The count is the batch's, not
+                    // the field's, so a partial batch says what it managed.
+                    match &made {
+                        Ok(rows) => state.say(format!(
+                            "Added {}, unplaced",
+                            crate::patch::plural(rows.len(), "fixture")
+                        )),
+                        Err(error) => state.say(crate::patch::refusal_message(error)),
                     }
                 }
                 this.reload_patch(venue_id, cx);
@@ -516,6 +523,15 @@ fn configure(state: &AddFixtures, app: &Entity<Luma>) -> AnyElement {
         .into();
     let channels = chosen.channels().unwrap_or(0);
     let toggled = app.clone();
+    // The chip sizes itself to the widest thing it can ever say (see
+    // `select::ghost_stack`). Handed nothing, it collapses to the chevron and
+    // the mode name spills outside the plate — which is also outside the
+    // clickable area.
+    let mode_names: Vec<&str> = definition
+        .modes
+        .iter()
+        .map(|mode| mode.name.as_str())
+        .collect();
 
     div()
         .size_full()
@@ -528,7 +544,7 @@ fn configure(state: &AddFixtures, app: &Entity<Luma>) -> AnyElement {
             div()
                 .relative()
                 .child(
-                    float::picker_chip(mode_name.as_ref(), &[])
+                    float::picker_chip(mode_name.as_ref(), &mode_names)
                         .id("add-mode")
                         .on_click(move |_, _, cx| {
                             toggled.update(cx, |this, cx| this.toggle_add_mode_menu(cx));

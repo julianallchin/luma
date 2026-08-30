@@ -1,10 +1,15 @@
 //! What the patch page looks like, for a person to inspect.
 //!
-//! Four frames: the inventory table, the footprint strip with a collision in
-//! it, and both pages of the add-fixtures card. Three of them carry an
-//! assertion as well as a picture — a collision is *red* rather than merely
-//! reported, and the card's two routes are actually different content — but the
-//! captures are the point: this is the surface a critic reads.
+//! The inventory table, the footprint strip with a collision in it, the same
+//! strip on a *clean* universe, the outputs table, and both pages of the
+//! add-fixtures card. Several carry an assertion as well as a picture — a
+//! collision is *red* rather than merely reported, a clean universe is not,
+//! and the card's two routes are actually different content — but the captures
+//! are the point: this is the surface a critic reads.
+//!
+//! The clean strip is captured because red is only meaningful against the
+//! frame that has none: "the collision tone is on screen" says nothing if the
+//! strip is that colour whatever is patched into it.
 
 #![cfg(all(feature = "app", feature = "pixel"))]
 
@@ -21,7 +26,8 @@ const NAME: &str = "venue-patch-pixels";
 const DRAWER: &str = "venue-patch";
 
 /// The rig, plus a hand-set collision no gesture could make — `set_fixture_address`
-/// refuses one, which is exactly why a database can still hold one.
+/// refuses one, which is exactly why a database can still hold one — and one
+/// fixture alone out in universe 17, so there is a clean strip to compare.
 fn harness() -> Harness {
     let harness = Fixture::new(NAME, 20, Vec::new())
         .with_rig()
@@ -53,6 +59,19 @@ fn seed_collision(dir: &Path) {
             .execute(&db.0)
             .await
             .expect("failed to seed the colliding fixture");
+            sqlx::query(
+                "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
+                                       manufacturer, model, mode_name, fixture_path, label,
+                                       pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
+                 VALUES ('fixture-far', NULL, ?, 17, 1, 8,
+                         'Luma', 'Mover', 'Default', ?, 'Far 1',
+                         0.0, 0.0, 3.0, 0.0, 0.0, 0.0)",
+            )
+            .bind(support::VENUE)
+            .bind(support::MOVER_PATH)
+            .execute(&db.0)
+            .await
+            .expect("failed to seed the far fixture");
             db.0.close().await;
         });
 }
@@ -97,6 +116,19 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
             node: app.snapshot().find({ role: "card", label: "Footprint" }),
         });
 
+        // The same panel over a universe with nothing doubled up in it. Red is
+        // a claim about *this* frame not having any.
+        app.click(app.snapshot().find({ role: "select", label: "Universe 1" }));
+        until("the universe menu", (s) =>
+            s.find({ role: "button", label: "Universe 17" }) !== undefined);
+        app.click(app.snapshot().find({ role: "button", label: "Universe 17" }));
+        until("the clean universe", (s) =>
+            s.find({ role: "select", label: "Universe 17" }) !== undefined);
+        app.frames(6);
+        const clean = app.screenshot({
+            node: app.snapshot().find({ role: "card", label: "Footprint" }),
+        });
+
         // A press outside an open float is eaten by its dismissal (see
         // `float::Dismiss`), so panel-to-panel is close-then-open rather than
         // one click. That is the primitive's decision, not this page's.
@@ -128,7 +160,7 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
         const configure = app.screenshot({
             node: app.snapshot().find({ role: "card", label: "Add fixtures dialog" }),
         });
-        ({ table, footprint, withPanel, outputs, library, configure })
+        ({ table, footprint, clean, withPanel, outputs, library, configure })
         "#,
     );
     let result = harness.exec(&script, Duration::from_secs(300));
@@ -138,6 +170,7 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
     let (table_path, table) = support::image::keep_in(DRAWER, &out["table"], "table");
     let (footprint_path, footprint) =
         support::image::keep_in(DRAWER, &out["footprint"], "footprint-collision");
+    let (clean_path, clean) = support::image::keep_in(DRAWER, &out["clean"], "footprint-clean");
     let (panel_path, _panel) =
         support::image::keep_in(DRAWER, &out["withPanel"], "footprint-panel");
     let (outputs_path, _outputs) = support::image::keep_in(DRAWER, &out["outputs"], "outputs");
@@ -145,9 +178,10 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
     let (configure_path, configure) =
         support::image::keep_in(DRAWER, &out["configure"], "add-configure");
     println!(
-        "patch captures:\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}",
+        "patch captures:\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}",
         table_path.display(),
         footprint_path.display(),
+        clean_path.display(),
         panel_path.display(),
         outputs_path.display(),
         library_path.display(),
@@ -155,17 +189,20 @@ fn the_patch_page_and_its_dialog_are_worth_looking_at() {
     );
 
     // The page is drawn, not a black rectangle.
-    assert!(
-        support::image::differing_fraction(&table, &table, 3) < 0.001,
-        "the differ disagrees with itself"
-    );
     assert!(table.width() > 1000, "the table capture is not the window");
 
-    // Red is on screen, and only where a collision is: the whole window carries
-    // a little of it, the strip's own section carries much more.
+    // Red is on screen where a collision is, and nowhere near as much of it on
+    // the universe that has none — which is what makes the first number mean
+    // "collision" rather than "this is what a strip looks like".
     assert!(
         red_fraction(&footprint) > 0.0005,
-        "no danger tone anywhere on the page with a collision in it: {}",
+        "no danger tone on the strip with a collision in it: {}",
+        footprint_path.display()
+    );
+    assert!(
+        red_fraction(&clean) < red_fraction(&footprint) / 4.0,
+        "the clean universe is as red as the colliding one: {} vs {}",
+        clean_path.display(),
         footprint_path.display()
     );
 

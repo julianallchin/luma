@@ -399,6 +399,15 @@ async fn a_colliding_address_is_refused_and_the_row_does_not_move() {
         .cloned()
         .expect("a neighbour in the same universe");
 
+    // A name that is not the id, because the whole claim below is that the
+    // sentence carries the one and not the other. The seed labels every row
+    // with its own id, which would make the two indistinguishable.
+    sqlx::query("UPDATE fixtures SET label = 'Downstage Wash' WHERE id = ?")
+        .bind(&onto.0)
+        .execute(&pool)
+        .await
+        .expect("rename the neighbour");
+
     let mut access = write(&pool).await;
     let refused = set_address(
         &mut access,
@@ -410,7 +419,29 @@ async fn a_colliding_address_is_refused_and_the_row_does_not_move() {
     access.commit().await.expect("commit");
 
     match refused {
-        Err(PatchError::Collision { conflict, .. }) => assert_eq!(conflict, onto.0),
+        Err(error @ PatchError::Collision { .. }) => {
+            let PatchError::Collision {
+                conflict_id,
+                conflict_label,
+                ..
+            } = &error
+            else {
+                unreachable!()
+            };
+            assert_eq!(conflict_id, &onto.0);
+            assert_eq!(conflict_label, "Downstage Wash");
+            // What a person reads names the fixture; the id is carried for the
+            // page to select by, and never shown.
+            let sentence = error.to_string();
+            assert!(
+                sentence.contains("Downstage Wash"),
+                "the refusal did not name the fixture in the way: {sentence}"
+            );
+            assert!(
+                !sentence.contains(&onto.0),
+                "the refusal put a uuid in front of a person: {sentence}"
+            );
+        }
         other => panic!("expected a named collision, got {other:?}"),
     }
     assert_eq!(
@@ -597,16 +628,11 @@ async fn every_offered_slot_is_one_admit_accepts_even_before_an_auto_patch() {
             .expect("slots");
         assert_eq!(slots.len(), 3);
         for slot in &slots {
-            admit(
-                &occupancy,
-                None,
-                slot.universe(),
-                slot.address(),
-                slot.channels(),
-            )
-            .unwrap_or_else(|error| {
-                panic!("{run:?} was offered {slot:?}, which is refused: {error}")
-            });
+            occupancy
+                .admit(None, slot.universe(), slot.address(), slot.channels())
+                .unwrap_or_else(|error| {
+                    panic!("{run:?} was offered {slot:?}, which is refused: {error}")
+                });
         }
     }
 }
