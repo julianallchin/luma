@@ -12,6 +12,7 @@ export type SocketType =
 	| "floor_edge"
 	| "floor_corner"
 	| "truss_end"
+	| "truss_face"
 	| "stand_top"
 	| "stand_bottom"
 	| "speaker_mount"
@@ -128,6 +129,7 @@ export const SOCKET_TYPES: SocketType[] = [
 	"floor_edge",
 	"floor_corner",
 	"truss_end",
+	"truss_face",
 	"stand_top",
 	"stand_bottom",
 	"speaker_mount",
@@ -151,7 +153,8 @@ export const SOCKET_KIND: Record<SocketType, SocketKind> = {
 	"speaker_mount": "surface",
 	"stand_bottom": "surface",
 	"stand_top": "surface",
-	"truss_end": "truss_end"
+	"truss_end": "truss_end",
+	"truss_face": "surface"
 };
 
 export const SOCKET_POLARITY: Record<SocketType, Polarity> = {
@@ -167,7 +170,8 @@ export const SOCKET_POLARITY: Record<SocketType, Polarity> = {
 	"speaker_mount": "male",
 	"stand_bottom": "male",
 	"stand_top": "female",
-	"truss_end": "neutral"
+	"truss_end": "neutral",
+	"truss_face": "female"
 };
 
 export const SOCKET_ROLL: Record<SocketType, RollFreedom> = {
@@ -209,6 +213,9 @@ export const SOCKET_ROLL: Record<SocketType, RollFreedom> = {
 	},
 	"truss_end": {
 		"kind": "fixed"
+	},
+	"truss_face": {
+		"kind": "free"
 	}
 };
 

@@ -67,7 +67,7 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
         Procedural::Corner { faces } => Corner::new(faces)
             .faces()
             .iter()
-            .map(|f| format!("face_{}", f.as_str()))
+            .map(face_socket_name)
             .collect(),
         Procedural::Hinge { .. } => vec!["leaf_fixed".into(), "leaf_swinging".into()],
     };
@@ -90,7 +90,46 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
                 f.up.as_dvec3(),
             )
         }))
+        .chain(mount_faces(params))
         .collect()
+}
+
+/// The four long sides of a stick, as surfaces a clamp can go on.
+///
+/// A truss's *ends* bolt structure together; its *sides* are what a rig hangs
+/// off, and until these existed there was no host socket on a truss a fixture
+/// could mate at all. Only the straight family has them: a corner block's faces
+/// are its ways, and a hinge's are its leaves.
+///
+/// Each face's **tangent is the span axis**, which is the whole reason the
+/// distribution vocabulary needs no per-piece rule: `u` on a truss face is
+/// metres along the run, measured from its middle, for a stick of one panel or
+/// twelve. The normal points out of the face, and beam is the mount normal, so
+/// naming `face_-y` is the whole of "hang them underneath, pointing down".
+fn mount_faces(params: Procedural) -> Vec<ResolvedSocket> {
+    let Procedural::Truss { .. } = params else {
+        return Vec::new();
+    };
+    [Face::NegY, Face::PosY, Face::NegZ, Face::PosZ]
+        .into_iter()
+        .map(|face| {
+            ResolvedSocket::from_frame(
+                &face_socket_name(face),
+                SocketType::TrussFace,
+                (face.normal() * crate::truss::OUTER_M).as_dvec3(),
+                face.normal().as_dvec3(),
+                DVec3::X,
+            )
+        })
+        .collect()
+}
+
+/// The socket name for one face of a generated piece. One spelling, used by the
+/// corner's ways and the stick's mount faces alike, so a venue row naming
+/// `face_-z` means the same side whichever family it is on.
+#[must_use]
+pub fn face_socket_name(face: Face) -> String {
+    format!("face_{}", face.as_str())
 }
 
 /// Every catalog piece's sockets, resolved once.
@@ -101,6 +140,12 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
 /// solver never has to have an opinion about a missing asset.
 pub struct CatalogSockets {
     by_id: HashMap<String, Vec<ResolvedSocket>>,
+    /// Each mesh piece's measured local bounds. Kept rather than discarded
+    /// after the sockets are authored against it, because "how long is this
+    /// face" has the same answer and the same one measurement behind it
+    /// ([`crate::face`]); re-opening the GLB to ask again would be a second
+    /// reading of one number.
+    bounds: HashMap<String, DAabb>,
 }
 
 impl CatalogSockets {
@@ -113,10 +158,22 @@ impl CatalogSockets {
     pub fn load(meshes_root: impl Into<std::path::PathBuf>) -> anyhow::Result<Self> {
         let mut library = Library::new(meshes_root);
         let mut by_id = HashMap::new();
+        let mut bounds = HashMap::new();
         for piece in pieces() {
-            by_id.insert(piece.id.to_string(), resolve(piece, &mut library)?);
+            let (sockets, measured) = resolve(piece, &mut library)?;
+            by_id.insert(piece.id.to_string(), sockets);
+            if let Some(measured) = measured {
+                bounds.insert(piece.id.to_string(), measured);
+            }
         }
-        Ok(Self { by_id })
+        Ok(Self { by_id, bounds })
+    }
+
+    /// One mesh piece's measured local bounds, or `None` for a generated piece
+    /// — whose size is a function of its node's parameters, not of a file.
+    #[must_use]
+    pub fn bounds(&self, piece_id: &str) -> Option<DAabb> {
+        self.bounds.get(piece_id).copied()
     }
 
     /// The pieces this holds sockets for, in catalog order.
@@ -127,9 +184,12 @@ impl CatalogSockets {
 
 /// One piece's sockets: authored against the measured bbox, or read off the
 /// generator's end frames.
-fn resolve(piece: &Piece, library: &mut Library) -> anyhow::Result<Vec<ResolvedSocket>> {
+fn resolve(
+    piece: &Piece,
+    library: &mut Library,
+) -> anyhow::Result<(Vec<ResolvedSocket>, Option<DAabb>)> {
     match piece.geometry {
-        Geometry::Procedural(family) => Ok(procedural_sockets(default_params(family))),
+        Geometry::Procedural(family) => Ok((procedural_sockets(default_params(family)), None)),
         Geometry::Mesh { path } => {
             let (lo, hi) = library.get(path)?.bounds();
             let bbox = DAabb::new(lo.as_dvec3(), hi.as_dvec3());
@@ -137,11 +197,12 @@ fn resolve(piece: &Piece, library: &mut Library) -> anyhow::Result<Vec<ResolvedS
                 bbox.size().max_element() > 0.0,
                 "{path}: measured an empty bounding box"
             );
-            Ok(piece
+            let sockets = piece
                 .sockets
                 .iter()
                 .map(|def| resolve_socket(def, &bbox))
-                .collect())
+                .collect();
+            Ok((sockets, Some(bbox)))
         }
     }
 }
@@ -332,9 +393,12 @@ mod tests {
         for piece in pieces() {
             let resolved = sockets.sockets(piece.id);
             let want = if piece.geometry.is_procedural() {
-                // grab + one per open face.
+                // grab + one per open face + the stick's four mount sides.
                 match piece.geometry {
-                    Geometry::Procedural(f) => default_params(f).end_frames().len() + 1,
+                    Geometry::Procedural(f) => {
+                        let params = default_params(f);
+                        params.end_frames().len() + 1 + mount_faces(params).len()
+                    }
                     Geometry::Mesh { .. } => unreachable!(),
                 }
             } else {
@@ -389,11 +453,34 @@ mod tests {
     fn generated_ends_are_truss_ends() {
         for family in [Family::Truss, Family::Corner, Family::Hinge] {
             for s in procedural_sockets(default_params(family)) {
+                // `TrussFace` joined the vocabulary with the stick's four long
+                // sides: a *face* hosts a clamp, an *end* bolts structure, and
+                // keeping them different types is what makes hanging a light
+                // off a bolt plate a refusal rather than a short face.
                 assert!(matches!(
                     s.socket_type,
-                    SocketType::Grab | SocketType::TrussEnd
+                    SocketType::Grab | SocketType::TrussEnd | SocketType::TrussFace
                 ));
             }
         }
+    }
+
+    /// Only the stick has mount faces: a corner block's faces are its ways and
+    /// a hinge's are its leaves, both of which bolt rather than host.
+    #[test]
+    fn only_the_straight_family_has_mount_faces() {
+        let names = |family| -> Vec<String> {
+            procedural_sockets(default_params(family))
+                .into_iter()
+                .filter(|s| s.socket_type == SocketType::TrussFace)
+                .map(|s| s.name)
+                .collect()
+        };
+        assert_eq!(
+            names(Family::Truss),
+            ["face_-y", "face_+y", "face_-z", "face_+z"]
+        );
+        assert!(names(Family::Corner).is_empty());
+        assert!(names(Family::Hinge).is_empty());
     }
 }

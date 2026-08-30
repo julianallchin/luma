@@ -130,6 +130,13 @@ pub enum SocketType {
     FloorCorner,
     /// End of any truss.
     TrussEnd,
+    /// A long side of a truss — the surface a clamp goes on (host).
+    ///
+    /// A *face*, not an end: ends bolt structure together, and this is what a
+    /// fixture hangs from. Its outward normal is the beam direction of
+    /// everything on it, so which face a distribution names is the whole of
+    /// what makes a light hang downward off a grid and outward off a wing.
+    TrussFace,
     /// Top of a speaker stand.
     StandTop,
     /// Bottom of a speaker stand.
@@ -151,7 +158,7 @@ pub enum SocketType {
 impl SocketType {
     /// Every variant, in declaration order. The generated TypeScript binding
     /// and the polarity-equivalence test both sweep this.
-    pub const ALL: [SocketType; 13] = {
+    pub const ALL: [SocketType; 14] = {
         use SocketType::*;
         [
             Grab,
@@ -159,6 +166,7 @@ impl SocketType {
             FloorEdge,
             FloorCorner,
             TrussEnd,
+            TrussFace,
             StandTop,
             StandBottom,
             SpeakerMount,
@@ -176,7 +184,7 @@ impl SocketType {
         use SocketType::*;
         match self {
             Grab => SocketKind::Grab,
-            FloorTop | StandTop | Ground | BottomMount | StandBottom | SpeakerMount
+            FloorTop | TrussFace | StandTop | Ground | BottomMount | StandBottom | SpeakerMount
             | EquipmentMount => SocketKind::Surface,
             TrussEnd | FloorCorner => SocketKind::TrussEnd,
             FloorEdge | RailEnd => SocketKind::Edge,
@@ -191,7 +199,7 @@ impl SocketType {
             // Receptacles: things get put *on* them, they are never carried
             // onto something else. `Grab` is one so that it drops out of the
             // held set without a name check.
-            Grab | FloorTop | StandTop | Ground | FloorCorner => Polarity::Female,
+            Grab | FloorTop | TrussFace | StandTop | Ground | FloorCorner => Polarity::Female,
             // Plugs: the undersides.
             BottomMount | StandBottom | SpeakerMount | EquipmentMount => Polarity::Male,
             // Self-mating.
@@ -213,8 +221,8 @@ impl SocketType {
             // Edge joints are tangent-aligned by construction.
             FloorEdge | RailEnd | CableEnd => RollFreedom::Fixed,
             // Anything resting on a plane may yaw about its normal.
-            Grab | FloorTop | StandTop | Ground | BottomMount | StandBottom | SpeakerMount
-            | EquipmentMount => RollFreedom::Free,
+            Grab | FloorTop | TrussFace | StandTop | Ground | BottomMount | StandBottom
+            | SpeakerMount | EquipmentMount => RollFreedom::Free,
         }
     }
 
@@ -238,6 +246,7 @@ impl SocketType {
             FloorEdge => "floor_edge",
             FloorCorner => "floor_corner",
             TrussEnd => "truss_end",
+            TrussFace => "truss_face",
             StandTop => "stand_top",
             StandBottom => "stand_bottom",
             SpeakerMount => "speaker_mount",
@@ -257,6 +266,7 @@ impl SocketType {
             "floor_edge" => FloorEdge,
             "floor_corner" => FloorCorner,
             "truss_end" => TrussEnd,
+            "truss_face" => TrussFace,
             "stand_top" => StandTop,
             "stand_bottom" => StandBottom,
             "speaker_mount" => SpeakerMount,
@@ -660,7 +670,10 @@ mod tests {
     fn legacy_compatible(t: SocketType) -> &'static [SocketType] {
         use SocketType::*;
         match t {
-            Grab | FloorTop | FloorCorner | StandTop | Ground => &[],
+            // `TrussFace` postdates the table — it is a host, and a host that
+            // never existed to be listed. It joins the receptacles, which is
+            // exactly what the additions sweep below then has to justify.
+            Grab | FloorTop | FloorCorner | StandTop | Ground | TrussFace => &[],
             FloorEdge => &[FloorEdge],
             TrussEnd => &[TrussEnd, FloorCorner],
             StandBottom => &[FloorTop, Ground],
@@ -677,7 +690,7 @@ mod tests {
     /// old table's asymmetry excluded by hand. Each one is a joint that
     /// physically exists — the old table simply never listed it, because a
     /// hand-maintained adjacency list only holds the cases someone thought of.
-    const INTENTIONAL_ADDITIONS: [(SocketType, SocketType, &str); 4] = {
+    const INTENTIONAL_ADDITIONS: [(SocketType, SocketType, &str); 8] = {
         use SocketType::*;
         [
             // "Anything that sits on a flat surface can sit on a stand top."
@@ -690,6 +703,22 @@ mod tests {
             // refused deck-first. Which piece the user happens to be dragging
             // is not a property of the joint.
             (FloorEdge, RailEnd, "a deck edge butted to a rail end"),
+            // `TrussFace` is a host the old table never had: a truss had ends
+            // and nothing else, so nothing could hang off one. It is a
+            // *surface*, and the rule is "same kind, opposed halves" — so every
+            // underside mates it, not just the clamp that motivated it. Naming
+            // the other three rather than special-casing the clamp is the
+            // choice: a deck bolted under a truss is a rig nobody builds, and
+            // excluding it would need exactly the hand-maintained adjacency
+            // list polarity replaced.
+            (
+                EquipmentMount,
+                TrussFace,
+                "a fixture clamped to a truss face",
+            ),
+            (SpeakerMount, TrussFace, "a speaker flown off a truss face"),
+            (BottomMount, TrussFace, "a piece bolted to a truss face"),
+            (StandBottom, TrussFace, "a stand foot against a truss face"),
         ]
     };
 

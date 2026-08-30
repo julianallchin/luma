@@ -83,7 +83,7 @@ impl From<String> for PatchError {
 /// it is what a new address has to avoid colliding with, and dropping it here
 /// is what made `next_addresses` and [`admit`] disagree about which channels
 /// are free.
-fn inputs(rows: &[PatchedFixture]) -> Vec<Fixture> {
+pub(crate) fn inputs(rows: &[PatchedFixture]) -> Vec<Fixture> {
     rows.iter()
         .map(|row| {
             let channels = u16::try_from(row.num_channels).unwrap_or(u16::MAX);
