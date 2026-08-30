@@ -128,7 +128,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(report["ok"], json!(true), "{report}");
+        assert_eq!(report["refusal"], json!(null), "{report}");
         let placed = report["fixtures"].as_array().unwrap();
         assert_eq!(placed.len(), 8);
 
@@ -226,7 +226,7 @@ mod tests {
         let refusal = spread(&services, &venue, &run, "face_-y", 8, even())
             .await
             .unwrap();
-        assert_eq!(refusal["ok"], json!(false), "{refusal}");
+        assert_eq!(refusal["refusal"]["kind"], json!("tooLong"), "{refusal}");
         assert!(refusal["fixtures"].as_array().unwrap().is_empty());
         assert_eq!(
             patch(&services, &venue).await.len(),
@@ -234,7 +234,7 @@ mod tests {
             "a refusal wrote rows"
         );
 
-        let fit = &refusal["fit"];
+        let fit = &refusal["refusal"];
         let needed = fit["neededM"].as_f64().unwrap();
         assert!((fit["availableM"].as_f64().unwrap() - 1.0).abs() < 1e-9);
         assert_eq!(fit["extendNodeId"], json!(run));
@@ -256,8 +256,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            retry["ok"],
-            json!(true),
+            retry["refusal"],
+            json!(null),
             "extending to the stated {needed} m still did not fit: {retry}"
         );
         assert_eq!(retry["fixtures"].as_array().unwrap().len(), 8);
@@ -301,8 +301,8 @@ mod tests {
         let refusal = spread(&services, &venue, &run, "face_-y", 5, layout.clone())
             .await
             .unwrap();
-        assert_eq!(refusal["ok"], json!(false), "{refusal}");
-        let needed = refusal["fit"]["neededM"].as_f64().unwrap();
+        assert_eq!(refusal["refusal"]["kind"], json!("tooLong"), "{refusal}");
+        let needed = refusal["refusal"]["neededM"].as_f64().unwrap();
 
         dispatch(
             &services,
@@ -314,7 +314,7 @@ mod tests {
         let retry = spread(&services, &venue, &run, "face_-y", 5, layout)
             .await
             .unwrap();
-        assert_eq!(retry["ok"], json!(true), "{retry}");
+        assert_eq!(retry["refusal"], json!(null), "{retry}");
     }
 
     /// An exact fit is a fit; one more is not. Both measured against the same
@@ -328,13 +328,13 @@ mod tests {
         assert_eq!(
             spread(&services, &venue, &run, "face_-y", 11, even())
                 .await
-                .unwrap()["ok"],
-            json!(true)
+                .unwrap()["refusal"],
+            json!(null)
         );
         let over = spread(&services, &venue, &run, "face_-y", 12, even())
             .await
             .unwrap();
-        assert_eq!(over["ok"], json!(false), "{over}");
+        assert_eq!(over["refusal"]["kind"], json!("tooLong"), "{over}");
     }
 
     // -----------------------------------------------------------------------
@@ -446,13 +446,17 @@ mod tests {
         let report = spread(&services, &venue, &deck, "top", 3, even())
             .await
             .unwrap();
-        assert_eq!(report["ok"], json!(true), "{report}");
+        assert_eq!(report["refusal"], json!(null), "{report}");
         assert_eq!(report["fixtures"].as_array().unwrap().len(), 3);
 
         let over = spread(&services, &venue, &deck, "top", 40, even())
             .await
             .unwrap();
-        assert_eq!(over["ok"], json!(false), "a deck is not forty movers long");
+        assert_eq!(
+            over["refusal"]["kind"],
+            json!("tooLong"),
+            "a deck is not forty movers long"
+        );
     }
 
     /// The floor is a plane: no ends, so nothing overruns it however many are
@@ -476,7 +480,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(report["ok"], json!(true), "{report}");
+        assert_eq!(report["refusal"], json!(null), "{report}");
         assert_eq!(report["fixtures"].as_array().unwrap().len(), 30);
     }
 
@@ -491,7 +495,7 @@ mod tests {
         let report = spread(&services, &venue, &run, "face_-y", 1, even())
             .await
             .unwrap();
-        assert_eq!(report["ok"], json!(true));
+        assert_eq!(report["refusal"], json!(null));
         assert!(offsets(&report)[0].abs() < 1e-9);
     }
 
@@ -503,7 +507,7 @@ mod tests {
         let report = spread(&services, &venue, &run, "face_-y", 0, even())
             .await
             .unwrap();
-        assert_eq!(report["ok"], json!(true), "{report}");
+        assert_eq!(report["refusal"], json!(null), "{report}");
         assert!(report["fixtures"].as_array().unwrap().is_empty());
         assert_eq!(patch(&services, &venue).await.len(), 0);
     }
@@ -695,7 +699,7 @@ mod tests {
         )
         .await
         .expect("the tray fixture would not hang");
-        assert_eq!(report["ok"], json!(true), "{report}");
+        assert_eq!(report["refusal"], json!(null), "{report}");
         assert!(report["venue"]["unplaced"].as_array().unwrap().is_empty());
     }
 
@@ -722,6 +726,297 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Two rows on one run
+    // -----------------------------------------------------------------------
+
+    /// The rule, verbatim: two distributions on one run interleave in
+    /// **physical** order, not creation order. The second row is laid at the
+    /// *near* end of the truss, so an allocator that appended would give it the
+    /// higher addresses; the one that derives gives it the lower ones.
+    #[tokio::test]
+    async fn two_rows_on_one_run_interleave_by_position() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+
+        let far = spread(&services, &venue, &run, "face_-y", 2, span(0.6, 1.0))
+            .await
+            .unwrap();
+        let near = spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+            .await
+            .unwrap();
+        assert_eq!(near["refusal"], json!(null), "{near}");
+
+        // The second report already knows it took the low addresses.
+        assert!(
+            offsets(&near).iter().all(|u| *u < 0.0),
+            "the near row is not at the near end: {:?}",
+            offsets(&near)
+        );
+
+        // And the patch, read back, runs in face order across both rows.
+        let mut row: Vec<(f64, &str)> = far["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(near["fixtures"].as_array().unwrap())
+            .map(|f| (f["alongM"].as_f64().unwrap(), f["id"].as_str().unwrap()))
+            .collect();
+        row.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let ids: Vec<&str> = row.iter().map(|(_, id)| *id).collect();
+        let addresses = addresses_of(&services, &venue, &ids).await;
+        assert!(
+            addresses.windows(2).all(|w| w[1] == w[0] + 18),
+            "sorted along the truss, the addresses are {addresses:?}"
+        );
+    }
+
+    /// The first row's *stored* addresses move when the second row lands under
+    /// them — the whole point of re-deriving rather than appending.
+    #[tokio::test]
+    async fn the_earlier_row_is_re_addressed_by_the_later_one() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let far = spread(&services, &venue, &run, "face_-y", 2, span(0.6, 1.0))
+            .await
+            .unwrap();
+        let ids: Vec<&str> = far["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(addresses_of(&services, &venue, &ids).await, [1, 19]);
+
+        spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+            .await
+            .unwrap();
+        assert_eq!(
+            addresses_of(&services, &venue, &ids).await,
+            [37, 55],
+            "the earlier row did not make room"
+        );
+    }
+
+    /// A pinned address is not re-derived, here as anywhere else: the row
+    /// around it flows past.
+    #[tokio::test]
+    async fn a_pinned_address_survives_a_later_row() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let far = spread(&services, &venue, &run, "face_-y", 1, span(0.8, 1.0))
+            .await
+            .unwrap();
+        let pinned = far["fixtures"][0]["id"].as_str().unwrap().to_string();
+        dispatch(
+            &services,
+            "set_fixture_address",
+            &json!({ "venueId": venue, "id": pinned, "universe": 1, "address": 200 }),
+        )
+        .await
+        .unwrap();
+
+        spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+            .await
+            .unwrap();
+        assert_eq!(addresses_of(&services, &venue, &[&pinned]).await, [200]);
+    }
+
+    /// Two `even` rows both want the whole face, so the second is refused —
+    /// and the refusal names what is in the way rather than stacking on it.
+    #[tokio::test]
+    async fn a_second_row_over_the_first_is_refused_by_name() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        spread(&services, &venue, &run, "face_-y", 4, even())
+            .await
+            .unwrap();
+
+        let over = spread(&services, &venue, &run, "face_-y", 4, even())
+            .await
+            .unwrap();
+        assert_eq!(over["refusal"]["kind"], json!("overlap"), "{over}");
+        let held: Vec<&str> = over["refusal"]["heldBy"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            held,
+            [
+                "Rogue R2 Spot 1",
+                "Rogue R2 Spot 2",
+                "Rogue R2 Spot 3",
+                "Rogue R2 Spot 4"
+            ]
+        );
+        assert_eq!(
+            patch(&services, &venue).await.len(),
+            4,
+            "a refusal wrote rows"
+        );
+
+        // The other face of the same truss is a different face, and free.
+        let under = spread(&services, &venue, &run, "face_+y", 4, even())
+            .await
+            .unwrap();
+        assert_eq!(under["refusal"], json!(null), "{under}");
+    }
+
+    /// A row beside another on the same face is not an overlap.
+    #[tokio::test]
+    async fn two_rows_that_clear_each_other_are_both_admitted() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        spread(&services, &venue, &run, "face_-y", 2, span(0.6, 1.0))
+            .await
+            .unwrap();
+        let near = spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+            .await
+            .unwrap();
+        assert_eq!(near["refusal"], json!(null), "{near}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Deleting
+    // -----------------------------------------------------------------------
+
+    /// The dual of creating one. A deleted fixture is gone from the patch *and*
+    /// from the graph — the resolver stops posing it, the derived tree stops
+    /// counting it, and nothing is left to draw.
+    #[tokio::test]
+    async fn deleting_a_fixture_takes_its_node_with_it() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let report = spread(&services, &venue, &run, "face_-y", 3, even())
+            .await
+            .unwrap();
+        let victim = report["fixtures"][1]["id"].as_str().unwrap().to_string();
+
+        dispatch(
+            &services,
+            "remove_patched_fixture",
+            &json!({ "venueId": venue, "id": victim }),
+        )
+        .await
+        .expect("the fixture would not delete");
+
+        assert_eq!(patch(&services, &venue).await.len(), 2);
+        assert!(!graph_nodes(&services, &venue).await.contains(&victim));
+        assert_eq!(facings(&services, &venue).await.len(), 2, "still posed");
+        assert_eq!(
+            group_members(&services, &venue).await,
+            2,
+            "the derived tree still counts it"
+        );
+    }
+
+    /// And the patch page's own add, deleted the same way, leaves no node —
+    /// the tray does not fill up with fixtures nobody has.
+    #[tokio::test]
+    async fn deleting_a_tray_fixture_leaves_no_node() {
+        let (_dir, services, venue) = room().await;
+        let id = patch_one(&services, &venue, 1, 1).await;
+        dispatch(
+            &services,
+            "remove_patched_fixture",
+            &json!({ "venueId": venue, "id": id }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            graph_nodes(&services, &venue).await.is_empty() || {
+                !graph_nodes(&services, &venue).await.contains(&id)
+            }
+        );
+        let resolved = dispatch(
+            &services,
+            "get_resolved_venue",
+            &json!({ "venueId": venue }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resolved["unplaced"].as_array().unwrap().is_empty(),
+            "the tray still holds a deleted fixture: {resolved}"
+        );
+    }
+
+    /// Pulling a truss down loses the rig its shape, not its lights: the
+    /// fixtures survive as inventory, in the tray, ready to hang somewhere
+    /// else.
+    #[tokio::test]
+    async fn deleting_a_truss_trays_its_lights() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let report = spread(&services, &venue, &run, "face_-y", 3, even())
+            .await
+            .unwrap();
+        let ids: Vec<String> = report["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap().to_string())
+            .collect();
+
+        let venue_after = dispatch(
+            &services,
+            "delete_subtree",
+            &json!({ "venueId": venue, "nodeId": run }),
+        )
+        .await
+        .expect("the truss would not come down");
+
+        assert_eq!(
+            patch(&services, &venue).await.len(),
+            3,
+            "the lights went too"
+        );
+        let unplaced: Vec<&str> = venue_after["unplaced"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["nodeId"].as_str().unwrap())
+            .collect();
+        for id in &ids {
+            assert!(unplaced.contains(&id.as_str()), "{id} is not in the tray");
+        }
+        assert!(
+            !venue_after["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["id"] == json!(run)),
+            "the truss is still there"
+        );
+    }
+
+    /// `delete_subtree` aimed straight at a fixture *does* delete it — that is
+    /// the builder saying "this light, gone", and it goes through the same one
+    /// door the patch page uses.
+    #[tokio::test]
+    async fn deleting_a_fixture_node_deletes_the_fixture() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let report = spread(&services, &venue, &run, "face_-y", 3, even())
+            .await
+            .unwrap();
+        let victim = report["fixtures"][0]["id"].as_str().unwrap().to_string();
+
+        dispatch(
+            &services,
+            "delete_subtree",
+            &json!({ "venueId": venue, "nodeId": victim }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(patch(&services, &venue).await.len(), 2);
+        assert!(!graph_nodes(&services, &venue).await.contains(&victim));
+    }
+
+    // -----------------------------------------------------------------------
     // Plumbing
     // -----------------------------------------------------------------------
 
@@ -742,7 +1037,7 @@ mod tests {
         )
         .await
         .expect("the root plane refused a row");
-        assert_eq!(report["ok"], json!(true), "{report}");
+        assert_eq!(report["refusal"], json!(null), "{report}");
     }
 
     async fn beams(
@@ -775,6 +1070,40 @@ mod tests {
 
     fn even() -> Value {
         json!({ "kind": "even" })
+    }
+
+    fn span(from: f64, to: f64) -> Value {
+        json!({ "kind": "span", "from": from, "to": to })
+    }
+
+    /// The stored DMX address of every named fixture, in the order named —
+    /// read off the patch rather than off a report, because what a distribution
+    /// *said* and what the database *holds* is exactly the thing under test.
+    async fn addresses_of(services: &AppServices, venue: &str, ids: &[&str]) -> Vec<u64> {
+        let rows = patch(services, venue).await;
+        ids.iter()
+            .map(|id| {
+                rows.iter()
+                    .find(|row| row["id"] == json!(id))
+                    .unwrap_or_else(|| panic!("no fixture {id} in the patch"))["address"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    /// How many fixtures the derived group tree accounts for, counted once.
+    async fn group_members(services: &AppServices, venue: &str) -> usize {
+        let tree = dispatch(services, "list_group_tree", &json!({ "venueId": venue }))
+            .await
+            .unwrap();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for node in tree.as_array().unwrap() {
+            for fixture in node["fixtures"].as_array().unwrap() {
+                seen.insert(fixture.as_str().unwrap().to_string());
+            }
+        }
+        seen.len()
     }
 
     fn offsets(report: &Value) -> Vec<f64> {

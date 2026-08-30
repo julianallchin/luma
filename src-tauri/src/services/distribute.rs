@@ -18,38 +18,52 @@
 //! | how long is the face, which way does it run | [`luma_render::face`] |
 //! | where along it does each fixture sit | [`luma_scene::distribute`] |
 //! | what pose is that | [`luma_scene::venue::place_on`], through the resolver |
-//! | which universe and address | [`luma_scene::patch::next_addresses`] |
+//! | which universe and address | [`luma_scene::patch`] |
 //! | what is it called | [`crate::services::fixture_create::ModelNumbering`] |
 //! | which group does it land in | [`crate::services::group_derivation`] |
 //!
+//! # Addresses are derived twice, and the second time is the answer
+//!
+//! [`luma_scene::patch::next_addresses`] is asked where the row *would* go,
+//! because at that moment the rows do not exist and there is nothing for the
+//! allocator to order. Once they do exist, the host's run is put through
+//! [`luma_scene::patch::allocate`] — the one allocator — and the answer written
+//! down. That is what makes two distributions on one truss interleave in
+//! physical order rather than in the order somebody typed them, and it is why
+//! this module has no addressing rule of its own to disagree with.
+//!
 //! # Refuse, never squeeze
 //!
-//! A distribution that does not fit writes **nothing** and says how long the
-//! host would have to be ([`FitFailure`]). The number it reports is a length
-//! the host can actually be built at, so feeding it back into the run's `span`
-//! and re-running the same call succeeds — that is the gauntlet's acceptance
-//! test for this surface, and the reason `needed_m` is quantized rather than
-//! raw.
+//! A distribution that will not go writes **nothing** and says why
+//! ([`Refusal`]): the face is too short, and how long it would have to be — a
+//! length the host can actually be built at, so feeding it back into the run's
+//! `span` and re-running the same call succeeds — or there is already a row
+//! where this one would sit, and which fixtures are in the way.
 //!
 //! The refusal is a *report*, not an error: nothing was wrong with the call,
-//! the truss is short. Only the things the design doc calls hard errors — a
-//! socket that does not exist, a polarity that forbids the joint — come back as
-//! [`CommandError`]s, and they come back before any row is written.
+//! the truss is short or the truss is full. Only the things the design doc
+//! calls hard errors — a socket that does not exist, a polarity that forbids
+//! the joint — come back as [`CommandError`]s, and they come back before any
+//! row is written.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use luma_render::face::host_face;
 use luma_scene::distribute::{offsets, Fit, Layout};
-use luma_scene::patch::{next_addresses, Footprint};
-use luma_scene::venue::{Edge, EdgeError, Node, NodeKind, ResolvedVenue, FLOOR_SOCKET};
+use luma_scene::patch::{allocate, next_addresses, Footprint};
+use luma_scene::venue::{
+    DanglingSocket, Edge, EdgeError, Node, NodeKind, NodeWarning, ResolvedVenue, UnplacedNode,
+    VenueGraph, FLOOR_SOCKET,
+};
 
 use crate::database::local::fixtures as fixtures_db;
 use crate::database::local::venue_access::{VenueAccess, Write};
 use crate::database::local::venue_graph as venue_graph_db;
-use crate::models::fixtures::FixtureDefinition;
+use crate::models::fixtures::{FixtureDefinition, PatchedFixture};
 use crate::services::fixture_create::{self, Naming, NewFixture};
 use crate::services::group_derivation::derive_groups;
+use crate::services::patch;
 use crate::services::{fixtures as fixture_service, groups as group_service};
 
 /// The fallback body width, in metres, for a definition whose QLC+ physical
@@ -84,8 +98,12 @@ pub struct Placed {
     pub label: String,
     pub universe: u16,
     pub address: u16,
-    /// Metres along the host face from its middle — ascending across the row,
-    /// which is the order the addresses run in.
+    /// Metres along the host face from its middle, ascending across the row.
+    ///
+    /// Not the same axis as the address order: addresses run along the *run*,
+    /// and a face whose tangent opposes it counts the other way. Sorting a
+    /// venue's fixtures by this and reading their addresses is only monotone
+    /// on a face that agrees with its run.
     pub along_m: f64,
     /// The derived group it landed in, deepest first path. Empty only for a
     /// venue whose derivation found no role for it.
@@ -104,22 +122,68 @@ pub struct FitFailure {
     pub extend_node: String,
 }
 
+/// A stretch of a host face a row of fixtures already holds.
+#[derive(Debug, Clone)]
+pub struct Occupied {
+    /// The fixture in the way, by its label.
+    pub label: String,
+    /// The metres along the face its body spans, from the face's middle.
+    pub from_m: f64,
+    pub to_m: f64,
+}
+
+/// Why a distribution wrote nothing.
+///
+/// One field rather than a nullable per reason: a distribution is refused for
+/// exactly one cause, and "too long *and* in the way" is not a report anybody
+/// can act on. `refusal.is_none()` is the whole of "it worked", so there is no
+/// second `ok` flag to disagree with it.
+#[derive(Debug, Clone)]
+pub enum Refusal {
+    /// The row is longer than the face.
+    TooLong(FitFailure),
+    /// The row would sit on top of one already on this face. The 1-D check
+    /// along the face, which is the only axis a distribution moves in; two rows
+    /// on *different* faces of the same truss never meet here.
+    Overlap {
+        /// The metres the new row would have claimed.
+        from_m: f64,
+        to_m: f64,
+        /// What is already there, in face order.
+        held_by: Vec<Occupied>,
+    },
+}
+
 /// What one distribution did.
 #[derive(Debug, Clone)]
 pub struct Report {
-    /// Whether anything was placed. `false` carries a [`Self::fit`] and no
-    /// rows: a distribution is all of its fixtures or none of them.
-    pub ok: bool,
     pub host_node: String,
     pub host_socket: String,
+    /// Every fixture placed — all of them, or, when [`Self::refusal`] is set,
+    /// none: a distribution is all of its fixtures or nothing at all.
     pub fixtures: Vec<Placed>,
-    pub fit: Option<FitFailure>,
+    pub refusal: Option<Refusal>,
     /// Whatever the solve had to decide, once the row was placed.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<NodeWarning>,
     /// Open structural sockets left in the venue, as the resolver reports them.
-    pub dangling: Vec<String>,
+    pub dangling: Vec<DanglingSocket>,
     /// Subtrees the solve could not reach — the tray, and anything detached.
-    pub unplaced: Vec<String>,
+    pub unplaced: Vec<UnplacedNode>,
+}
+
+impl Report {
+    /// A refusal: the reason, and nothing written.
+    fn refused(host_node: String, host_socket: String, refusal: Refusal) -> Report {
+        Report {
+            host_node,
+            host_socket,
+            fixtures: Vec::new(),
+            refusal: Some(refusal),
+            warnings: Vec::new(),
+            dangling: Vec::new(),
+            unplaced: Vec::new(),
+        }
+    }
 }
 
 /// Patch, name, place and group `count` fixtures along one host face.
@@ -173,40 +237,57 @@ pub async fn distribute(
             needed_m,
             available_m,
         }) => {
-            return Ok(Report {
-                ok: false,
-                host_node: host_id,
+            return Ok(Report::refused(
+                host_id,
                 host_socket,
-                fixtures: Vec::new(),
-                fit: Some(FitFailure {
+                Refusal::TooLong(FitFailure {
                     needed_m,
                     available_m,
                     extend_node: host.id.clone(),
                 }),
-                warnings: Vec::new(),
-                dangling: Vec::new(),
-                unplaced: Vec::new(),
-            });
+            ));
         }
     };
 
+    let rows = fixtures_db::get_patched_fixtures(access).await?;
+    if let Some((from_m, to_m)) = band(&stations, width) {
+        let held_by: Vec<Occupied> = occupied(&graph, &rows, fixtures_root, &host_id, &host_socket)
+            .into_iter()
+            .filter(|held| held.from_m < to_m - TOUCHING_M && from_m < held.to_m - TOUCHING_M)
+            .collect();
+        if !held_by.is_empty() {
+            return Ok(Report::refused(
+                host_id,
+                host_socket,
+                Refusal::Overlap {
+                    from_m,
+                    to_m,
+                    held_by,
+                },
+            ));
+        }
+    }
+
     // Addresses come from the allocator, against the venue as it stands — the
     // rows do not exist yet, so there is nothing for `allocate` to order them
-    // by and `next_addresses` is the door built for exactly this caller.
+    // by and `next_addresses` is the door built for exactly this caller. What
+    // it gives back is provisional; see the re-derivation below.
     let solved = luma_scene::venue::resolve(&graph, sockets);
-    let rows = fixtures_db::get_patched_fixtures(access).await?;
     let run = run_of(&solved, &host_id);
     let footprints = next_addresses(
         &solved,
-        &crate::services::patch::inputs(&rows),
+        &patch::inputs(&rows),
         run.as_deref(),
         channels,
         stations.len(),
     );
     if footprints.len() < stations.len() {
         return Err(format!(
-            "there is no room in the patch for {} more fixtures of {channels} channels",
-            stations.len()
+            "there is no room in the patch for {count} more fixtures of {channels} channels: \
+             {found} of them fit, so {short} would have nowhere to go",
+            count = stations.len(),
+            found = footprints.len(),
+            short = stations.len() - footprints.len(),
         ));
     }
 
@@ -282,40 +363,138 @@ pub async fn distribute(
         placed.push((fixture.id, label, *footprint, *station));
     }
 
-    // One solve and one derivation over the finished venue, rather than a
-    // guess per fixture: which group a fixture lands in is a fact about the
-    // rig it is now part of.
+    // Two distributions on one run interleave in **physical** order, not
+    // creation order (`docs/specs/venue-builder-gauntlet.md` §5).
+    // `next_addresses` could only ever append, because the rows it was asked
+    // about did not exist yet. They do now, so the run's addressing is derived
+    // again — by the one allocator, over the finished venue — and written down.
+    //
+    // Only the host's own run is rewritten. A distribution is not an auto-patch:
+    // re-addressing a truss on the other side of the room because somebody hung
+    // two pars over here is a surprise nobody asked for, and pins are preserved
+    // either way because `allocate` reserves them first.
     let solved = crate::venue_graph::resolved(access, fixtures_root).await?;
+    if let Some(run) = run.as_deref() {
+        let rows = fixtures_db::get_patched_fixtures(access).await?;
+        let allocation = allocate(&solved, &patch::inputs(&rows));
+        for assignment in &allocation.assignments {
+            if assignment.pinned || assignment.run.as_deref() != Some(run) {
+                continue;
+            }
+            let universe = i64::from(assignment.footprint.universe());
+            let address = i64::from(assignment.footprint.address());
+            let stands_there = rows.iter().any(|row| {
+                row.id == assignment.fixture && row.universe == universe && row.address == address
+            });
+            if stands_there {
+                continue;
+            }
+            fixtures_db::update_fixture_address(
+                access,
+                &assignment.fixture,
+                universe,
+                address,
+                false,
+            )
+            .await?;
+        }
+    }
+
+    // The report says what the *database* says, rather than what the allocator
+    // would have said: a run-less host keeps the provisional footprints, and
+    // there is no third account of where a fixture is patched.
+    let addressed = fixtures_db::get_patched_fixtures(access).await?;
     let paths = group_paths(access, fixtures_root).await?;
 
     Ok(Report {
-        ok: true,
         host_node: host_id,
         host_socket,
         fixtures: placed
             .into_iter()
-            .map(|(id, label, footprint, along)| Placed {
-                label,
-                universe: footprint.universe(),
-                address: footprint.address(),
-                along_m: along,
-                group_path: paths.get(&id).cloned().unwrap_or_default(),
-                id,
+            .map(|(id, label, footprint, along)| {
+                let row = addressed.iter().find(|row| row.id == id);
+                Placed {
+                    label,
+                    universe: row
+                        .and_then(|row| u16::try_from(row.universe).ok())
+                        .unwrap_or_else(|| footprint.universe()),
+                    address: row
+                        .and_then(|row| u16::try_from(row.address).ok())
+                        .unwrap_or_else(|| footprint.address()),
+                    along_m: along,
+                    group_path: paths.get(&id).cloned().unwrap_or_default(),
+                    id,
+                }
             })
             .collect(),
-        fit: None,
-        warnings: solved
-            .warnings()
-            .iter()
-            .map(|w| format!("{}: {:?}", w.node, w.warning))
-            .collect(),
-        dangling: solved
-            .dangling()
-            .iter()
-            .map(|d| format!("{}.{}", d.node, d.socket))
-            .collect(),
-        unplaced: solved.unplaced().iter().map(|u| u.node.clone()).collect(),
+        refusal: None,
+        warnings: solved.warnings().to_vec(),
+        dangling: solved.dangling().to_vec(),
+        unplaced: solved.unplaced().to_vec(),
     })
+}
+
+/// Slack, in metres, below which two bodies count as merely touching rather
+/// than overlapping. A row laid flush against another is a rig somebody built
+/// on purpose; a nanometre of float drift between two solves is not.
+const TOUCHING_M: f64 = 1e-6;
+
+/// The metres a row of bodies claims along its face: the outer two centres
+/// pushed out by half a body each. `None` for a row of nothing.
+fn band(stations: &[f64], width_m: f64) -> Option<(f64, f64)> {
+    let first = stations.first()?;
+    let last = stations.last()?;
+    Some((first - width_m / 2.0, last + width_m / 2.0))
+}
+
+/// What is already hanging on one host face, in face order.
+///
+/// Read off the graph rather than the solve, because the question is about a
+/// face and its `u` — a fixture's *pose* has already left the face's frame, and
+/// asking in world space would have to undo the whole walk to get back here.
+///
+/// A fixture whose definition cannot be read is measured at
+/// [`DEFAULT_FIXTURE_WIDTH_M`], the same fallback a new one gets: an
+/// unmeasurable body is still a body in the way.
+fn occupied(
+    graph: &VenueGraph,
+    rows: &[PatchedFixture],
+    fixtures_root: &Path,
+    host: &str,
+    socket: &str,
+) -> Vec<Occupied> {
+    let mut widths: BTreeMap<&str, f64> = BTreeMap::new();
+    let mut held: Vec<Occupied> = graph
+        .nodes()
+        .filter(|node| node.kind == NodeKind::Fixture)
+        .filter(|node| {
+            graph
+                .edge(&node.id)
+                .is_some_and(|edge| edge.parent == host && edge.their_socket == socket)
+        })
+        .filter_map(|node| {
+            let row = rows.iter().find(|row| row.id == node.id)?;
+            let width = *widths
+                .entry(row.fixture_path.as_str())
+                .or_insert_with(|| width_of(fixtures_root, &row.fixture_path));
+            let u = node.params.get("u", 0.0);
+            Some(Occupied {
+                label: row.label.clone().unwrap_or_else(|| node.id.clone()),
+                from_m: u - width / 2.0,
+                to_m: u + width / 2.0,
+            })
+        })
+        .collect();
+    held.sort_by(|a, b| a.from_m.total_cmp(&b.from_m));
+    held
+}
+
+/// One definition's body width, or the fallback if it cannot be read.
+fn width_of(fixtures_root: &Path, fixture_path: &str) -> f64 {
+    fixture_service::get_fixture_definition(fixtures_root, Path::new(fixture_path))
+        .map_or(DEFAULT_FIXTURE_WIDTH_M, |definition| {
+            body_width_m(&definition)
+        })
 }
 
 /// The definition, and how many channels the named mode is wide.

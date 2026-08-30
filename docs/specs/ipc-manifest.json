@@ -359,7 +359,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 56
+        "line": 57
       },
       "name": "attach",
       "prose": {
@@ -771,7 +771,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 197
+        "line": 198
       },
       "name": "constrain",
       "prose": {
@@ -1221,7 +1221,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 282
+        "line": 292
       },
       "name": "delete_subtree",
       "prose": {
@@ -1314,7 +1314,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 173
+        "line": 174
       },
       "name": "detach",
       "prose": {
@@ -1883,7 +1883,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 38
+        "line": 39
       },
       "name": "get_resolved_venue",
       "prose": {
@@ -2168,7 +2168,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 26
+        "line": 27
       },
       "name": "get_venue_graph",
       "prose": {
@@ -3497,7 +3497,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 123
+        "line": 124
       },
       "name": "place_free",
       "prose": {
@@ -3785,7 +3785,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 93
+        "line": 94
       },
       "name": "reattach",
       "prose": {
@@ -4692,7 +4692,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 239
+        "line": 240
       },
       "name": "set_params",
       "prose": {

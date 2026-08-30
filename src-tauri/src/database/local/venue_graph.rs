@@ -330,9 +330,23 @@ pub async fn set_label(
     Ok(())
 }
 
-/// Delete the named nodes. Edges, params and constraints go with them by
-/// cascade; the caller passes the whole subtree it means to remove, because
-/// which nodes those are is the graph's question, not SQL's.
+/// Delete the named nodes, and everything hanging off each row.
+///
+/// The caller passes the whole subtree it means to remove, because which nodes
+/// those are is the graph's question, not SQL's.
+///
+/// # Why the belongings go first, rather than by cascade
+///
+/// The three dependent tables declare `ON DELETE CASCADE`, but their write
+/// admission (`20260802600000`) authorizes a param or a constraint *through the
+/// node that owns it* — and during a cascade that node is already gone, so the
+/// `BEFORE DELETE` guard finds no owner and aborts the whole statement. Deleting
+/// them while the node still stands is the same set of rows, in the order the
+/// admission can actually check.
+///
+/// Dropping the edges a node is the **parent** of is what leaves its children
+/// unplaced rather than dangling at a parent that no longer exists — which is
+/// how `delete_subtree` trays the lights off a truss it takes down.
 ///
 /// # Errors
 /// Fails if any delete is refused.
@@ -341,11 +355,18 @@ pub async fn delete_nodes(
     ids: &[String],
 ) -> Result<(), String> {
     for id in ids {
-        sqlx::query("DELETE FROM venue_nodes WHERE id = ?")
-            .bind(id)
-            .execute(&mut *access.connection())
-            .await
-            .map_err(|e| format!("Failed to delete venue node: {e}"))?;
+        for sql in [
+            "DELETE FROM venue_constraints WHERE node_id = ?1 OR target_node = ?1",
+            "DELETE FROM venue_edges WHERE child_id = ?1 OR parent_id = ?1",
+            "DELETE FROM venue_node_params WHERE node_id = ?1",
+            "DELETE FROM venue_nodes WHERE id = ?1",
+        ] {
+            sqlx::query(sql)
+                .bind(id)
+                .execute(&mut *access.connection())
+                .await
+                .map_err(|e| format!("Failed to delete venue node: {e}"))?;
+        }
     }
     graph_changed();
     Ok(())
