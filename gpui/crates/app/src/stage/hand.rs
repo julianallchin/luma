@@ -87,16 +87,32 @@ pub(crate) const GHOST_NODE: &str = "__ghost__";
 // What is held
 // ---------------------------------------------------------------------------
 
-/// The builder's transient state. See the module docs.
+/// What the operator is doing. The builder's one state machine.
+///
+/// # Why every mode is in here
+///
+/// Three of these used to be flags beside it — `palette_open`, `tray_open` and
+/// an `Option<Distribute>` on the [`crate::stage::Build`] — and the page grew
+/// one panel per flag, because a boolean cannot say what to *hide*. A state
+/// can: the chrome is a `match` on this, so a mode with no controls draws none
+/// by construction rather than by every call site remembering to.
+///
+/// The ordering is the flow: you choose a thing, you place it, and placing it
+/// on a face is what opens the row you configure.
 #[derive(Debug, Default)]
 pub(crate) enum Hand {
     /// Nothing in the air: clicks select, drags orbit.
     #[default]
-    Empty,
-    /// A ghost follows the cursor and a release places it.
-    Holding(Box<Held>),
+    Idle,
+    /// The add-element dialog is up. The one modal surface the builder has.
+    Choosing(Choosing),
+    /// A ghost follows the cursor and a click places it — and leaves the hand
+    /// exactly here, so the next click places another.
+    Placing(Box<Held>),
     /// A socket was clicked and a run is being measured out of it.
     Extending(Box<Extending>),
+    /// A row of fixtures is being fitted to a face, previewed live.
+    Configuring(Box<Configuring>),
 }
 
 impl Hand {
@@ -105,13 +121,30 @@ impl Hand {
     /// The pointer-ownership rule in one predicate: while this is true the
     /// build layer occludes the viewport, so an orbit cannot start under a
     /// ghost, and while it is false the layer is not mounted at all.
+    ///
+    /// Choosing and Configuring are *not* in it: both put a card on screen and
+    /// the room behind it stays live, which is the whole reason the configure
+    /// surface is a popover and not a modal.
     pub(crate) fn owns_pointer(&self) -> bool {
-        !matches!(self, Hand::Empty)
+        matches!(self, Hand::Placing(_) | Hand::Extending(_))
+    }
+
+    /// Whether the pointer's *position* is the thing being edited.
+    ///
+    /// Owning the pointer and being driven by it are two facts, and only
+    /// [`Hand::Placing`] is both. A run owns the pointer — an orbit starting
+    /// mid-extend would swing the room out from under the measurement — but
+    /// its length comes from the box on its own line, not from where the
+    /// cursor is. Mounting move and click handlers for it anyway made the
+    /// surface repaint the whole layer on every mouse move, which is what ate
+    /// the drags aimed at the controls sitting on top of it.
+    pub(crate) fn aims_with_pointer(&self) -> bool {
+        matches!(self, Hand::Placing(_))
     }
 
     pub(crate) fn held(&self) -> Option<&Held> {
         match self {
-            Hand::Holding(held) => Some(held),
+            Hand::Placing(held) => Some(held),
             _ => None,
         }
     }
@@ -123,26 +156,31 @@ impl Hand {
         }
     }
 
-    /// The one-line readout the stage page prints and the harness reads.
-    ///
-    /// Every state the builder can be in has a spelling here, which is what
-    /// makes each of them reachable from a test without a GPU: the picture is
-    /// evidence for a human, and this line is evidence for a machine.
-    pub(crate) fn readout(&self) -> String {
+    pub(crate) fn choosing(&self) -> Option<&Choosing> {
         match self {
-            Hand::Empty => "Hand: empty".to_string(),
-            Hand::Holding(held) => match &held.what {
-                Holding::Duplicate {
-                    display_name,
-                    flip: true,
-                    ..
-                } => format!("Hand: holding {display_name} flipped"),
-                what => format!("Hand: holding {}", what.label()),
-            },
-            Hand::Extending(run) => format!(
-                "Hand: extending {} {}",
-                run.from_node_label, run.from_socket
-            ),
+            Hand::Choosing(choosing) => Some(choosing),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn configuring(&self) -> Option<&Configuring> {
+        match self {
+            Hand::Configuring(row) => Some(row),
+            _ => None,
+        }
+    }
+
+    /// What `Escape` means here.
+    ///
+    /// One rung down the flow rather than straight to [`Hand::Idle`], because
+    /// the states nest: a configure popover was opened from a piece still in
+    /// the hand, so dismissing it should hand that piece back rather than make
+    /// the operator pick it again. The dialog and a placing hand both drop out
+    /// to idle, which is where a selection is cleared.
+    pub(crate) fn escape(self) -> Self {
+        match self {
+            Hand::Configuring(row) => Hand::Placing(Held::new(row.what)),
+            _ => Hand::Idle,
         }
     }
 }
@@ -159,6 +197,44 @@ pub(crate) struct Held {
     pub(crate) landed: Option<Landed>,
 }
 
+/// The add-element dialog's own state.
+///
+/// The query lives in the [`luma_ui::text_input::TextInput`] the page owns —
+/// an editor is an entity and this is not — so all that is here is where the
+/// keyboard is. Rows are derived from the catalog and the venue every frame
+/// rather than cached: they are a pure function of a query over data already
+/// in memory, and a cache of one would be a second answer to the same
+/// question.
+#[derive(Debug, Default)]
+pub(crate) struct Choosing {
+    /// Which row the keyboard is on, as an index into what the query left.
+    pub(crate) cursor: usize,
+}
+
+/// A row of fixtures being fitted to one face, previewed live.
+///
+/// It holds the *request* — a fixture, a count, a layout — and the poses the
+/// band math last answered with. Nothing here is committed: the preview is
+/// [`luma_scene::distribute::offsets`] run on every edit, and the verb runs
+/// once, on Apply. That is what makes the fit failure a thing you *see* rather
+/// than a thing you find out.
+#[derive(Debug)]
+pub(crate) struct Configuring {
+    /// What is being seated. Held so `Escape` can hand it back — see
+    /// [`Hand::escape`].
+    pub(crate) what: Holding,
+    pub(crate) host_node: String,
+    pub(crate) host_label: String,
+    pub(crate) host_socket: String,
+    /// Where on the face the popover hangs, in window space.
+    pub(crate) at: gpui::Point<gpui::Pixels>,
+    pub(crate) count: usize,
+    pub(crate) layout: luma_scene::distribute::Layout,
+    /// The last preview the band math answered with: one pose per body, or the
+    /// reason there is none.
+    pub(crate) preview: Result<Vec<glam::DMat4>, luma_scene::distribute::Fit>,
+}
+
 impl Held {
     pub(crate) fn new(what: Holding) -> Box<Self> {
         Box::new(Self::of(what))
@@ -170,6 +246,18 @@ impl Held {
             latched: None,
             landed: None,
         }
+    }
+
+    /// The same thing, picked up again with nothing landed.
+    ///
+    /// What keeps place mode sticky: a commit rebuilds the hand from the piece
+    /// it just put down, so the parameters the operator tuned for the last one
+    /// — a truss span, a hinge angle — are the next one's starting point. The
+    /// landing is dropped because the ghost has to be re-solved against
+    /// wherever the cursor is now, and keeping it would flash the new piece at
+    /// the old one's pose for one frame.
+    pub(crate) fn again(what: &Holding) -> Box<Self> {
+        Self::new(what.clone())
     }
 }
 
@@ -199,6 +287,20 @@ pub(crate) enum Holding {
     },
     /// A patched fixture that has never been placed — `reattach`.
     Tray { node: String, label: String },
+    /// A fixture from the library that has no row anywhere yet — `distribute`,
+    /// which is how *every* new fixture is created, a single one being a row
+    /// of one. It carries what the fit needs so the preview and the commit
+    /// measure the same body.
+    Fixture {
+        path: String,
+        label: String,
+        /// The mode it will be patched in. `None` until the definition lands.
+        mode: Option<String>,
+        /// The body's width in metres, from the QLC+ definition — the same
+        /// number `luma_lib`'s `body_width_m` gives the commit, so a row that
+        /// previews as fitting cannot be refused for length on apply.
+        width_m: f64,
+    },
 }
 
 impl Holding {
@@ -207,7 +309,7 @@ impl Holding {
             Holding::Piece { display_name, .. } | Holding::Duplicate { display_name, .. } => {
                 display_name
             }
-            Holding::Tray { label, .. } => label,
+            Holding::Tray { label, .. } | Holding::Fixture { label, .. } => label,
         }
     }
 
@@ -217,7 +319,7 @@ impl Holding {
     pub(crate) fn catalog_ref(&self) -> Option<&str> {
         match self {
             Holding::Piece { catalog_ref, .. } => Some(catalog_ref),
-            Holding::Duplicate { .. } | Holding::Tray { .. } => None,
+            Holding::Duplicate { .. } | Holding::Tray { .. } | Holding::Fixture { .. } => None,
         }
     }
 
@@ -225,7 +327,7 @@ impl Holding {
         match self {
             Holding::Piece { kind, .. } => *kind,
             Holding::Duplicate { .. } => NodeKind::Piece,
-            Holding::Tray { .. } => NodeKind::Fixture,
+            Holding::Tray { .. } | Holding::Fixture { .. } => NodeKind::Fixture,
         }
     }
 
@@ -236,7 +338,7 @@ impl Holding {
     pub(crate) fn footing(&self) -> Option<&str> {
         match self {
             Holding::Piece { footing, .. } => *footing,
-            Holding::Duplicate { .. } | Holding::Tray { .. } => None,
+            Holding::Duplicate { .. } | Holding::Tray { .. } | Holding::Fixture { .. } => None,
         }
     }
 }
@@ -249,7 +351,6 @@ impl Holding {
 #[derive(Debug)]
 pub(crate) struct Extending {
     pub(crate) from_node: String,
-    pub(crate) from_node_label: String,
     pub(crate) from_socket: String,
     /// What the ray met, when it met anything.
     pub(crate) reach: Option<Reach>,
@@ -315,37 +416,6 @@ pub(crate) struct Landed {
     /// Set when the placement is one the resolver would not accept. The ghost
     /// draws red and the release commits nothing.
     pub(crate) refused: Option<String>,
-}
-
-impl Landed {
-    /// The one-line readout, which is how a headless test sees a snap.
-    pub(crate) fn readout(&self) -> String {
-        match &self.how {
-            Landing::Socket {
-                parent,
-                my_socket,
-                their_socket,
-                ..
-            } => format!("Landing: attach {my_socket} to {parent} {their_socket}"),
-            Landing::Free {
-                surface,
-                my_socket,
-                seat,
-            } => {
-                let host = surface.as_ref().map_or_else(
-                    || FLOOR_SOCKET.to_string(),
-                    |(node, s)| format!("{node} {s}"),
-                );
-                format!(
-                    "Landing: place {my_socket} on {host} at u {:.2} v {:.2} yaw {:.0} trim {:.2}",
-                    seat.u,
-                    seat.v,
-                    seat.yaw.to_degrees(),
-                    seat.trim
-                )
-            }
-        }
-    }
 }
 
 /// Which verb a landing is.
@@ -845,7 +915,6 @@ mod tests {
     fn a_length_longer_than_the_gap_is_refused_and_an_equal_one_bridges() {
         let run = Extending {
             from_node: "a".into(),
-            from_node_label: "A".into(),
             from_socket: "end_b".into(),
             reach: Some(Reach {
                 node: "b".into(),

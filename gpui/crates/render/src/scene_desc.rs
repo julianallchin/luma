@@ -90,8 +90,13 @@ pub struct Editor {
 /// the current pointer — and is rebuilt each frame rather than edited.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Build {
-    /// The piece under the cursor, not yet committed.
-    pub ghost: Option<Ghost>,
+    /// Placements not yet committed: the piece under the cursor, or every body
+    /// of a row being fitted to a face.
+    ///
+    /// A list rather than one, because a row is previewed the same way a single
+    /// piece is — the operator adjusting a count is asking "what would eight
+    /// look like", and one ghost could only answer it one light at a time.
+    pub ghosts: Vec<Ghost>,
     /// A run being measured — the extend ray's two ends.
     pub measure: Option<Measure>,
     /// Sockets worth pointing at while something is held.
@@ -276,12 +281,18 @@ impl Environment {
         probe: None,
     };
 
-    /// The legacy editor's neutral lit-stage environment.
+    /// The editor's neutral lit-stage environment.
+    ///
+    /// The ambient term is what makes the *room* legible rather than the
+    /// show: a stage lit only by its key light reads as a black field with a
+    /// few grey edges, which is the right picture for a performance and the
+    /// wrong one for a page whose whole job is showing where a truss would go.
+    /// A venue with nothing patched has no fixtures to light it at all.
     pub const EDITOR: Self = Self {
         // Linear form of the old sRGB `#191919` clear colour.
         background: [0.009_721_217; 3],
         ambient_color: [1.0; 3],
-        ambient_intensity: 0.2,
+        ambient_intensity: 0.45,
         probe: None,
     };
 }
