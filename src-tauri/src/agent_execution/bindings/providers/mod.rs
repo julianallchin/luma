@@ -52,7 +52,7 @@ pub const NO_VENUE: &str = "no venue is in scope for this agent thread";
 /// that only the frontend knows.
 #[derive(Debug, Clone, Default)]
 pub struct BindingScope {
-    /// `"track_copilot"` | `"pattern_graph"`.
+    /// `"track_copilot"` | `"pattern_graph"` | `"venue_rig"`.
     pub agent_kind: String,
     pub track_id: Option<String>,
     pub venue_id: Option<String>,
@@ -77,6 +77,7 @@ impl BindingScope {
         match self.agent_kind.as_str() {
             "track_copilot" => Ok(AgentKind::TrackCopilot),
             "pattern_graph" => Ok(AgentKind::PatternGraph),
+            "venue_rig" => Ok(AgentKind::VenueRig),
             other => Err(format!("unknown agent kind '{other}'")),
         }
     }
@@ -135,7 +136,8 @@ pub async fn assemble_bindings(
     graph_run: Option<&GraphRunContribution>,
     store: &mut ArtifactStore,
 ) -> Result<BindingManifest, String> {
-    let mut builder = BindingBuilder::new(scope.agent_kind()?, scope.analysis_scope());
+    let agent_kind = scope.agent_kind()?;
+    let mut builder = BindingBuilder::new(agent_kind, scope.analysis_scope());
 
     // A track id that doesn't resolve is a scope error the agent should see as
     // an unavailable branch, not as a hard failure.
@@ -150,6 +152,16 @@ pub async fn assemble_bindings(
         scope,
         track,
     };
+
+    // A venue thread is about the room and nothing else. The track-, feature-
+    // and pattern-derived branches are *absent* from its namespace rather than
+    // present-and-unavailable: there is no track to be missing data for, so an
+    // entry saying so would be an error the agent has to learn to ignore. What
+    // `dir(luma)` lists is what this thread can answer.
+    if agent_kind == AgentKind::VenueRig {
+        venue::provide(&mut builder, &ctx, store).await?;
+        return builder.build().map_err(String::from);
+    }
 
     track::provide(&mut builder, &ctx).await?;
     audio::provide(&mut builder, &ctx, store).await?;

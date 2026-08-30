@@ -1356,3 +1356,34 @@ async fn an_unknown_agent_kind_is_a_hard_error() {
     .unwrap_err();
     assert!(e.contains("unknown agent kind"), "{e}");
 }
+
+/// A venue thread's namespace is the room and nothing else. `luma.track` is
+/// *absent* rather than unavailable: the error is defined out of existence, so
+/// `dir(luma)` never offers a name this thread cannot answer.
+#[tokio::test]
+async fn a_venue_scope_binds_the_room_alone() {
+    let f = Fixture::new().await;
+    let scope = BindingScope {
+        agent_kind: "venue_rig".into(),
+        track_id: None,
+        venue_id: Some(f.venue_id.clone()),
+        score_id: None,
+        track_editable: false,
+        track_document: None,
+        pattern_id: None,
+        implementation_id: None,
+        window: None,
+        graph_definition: None,
+    };
+    let (manifest, _store) = f.assemble(&scope).await;
+    let v = root(&manifest);
+
+    at(&v, "venue.pieces");
+    at(&v, "venue.unplaced");
+    for absent in ["track", "audio", "features", "patterns", "graph", "score"] {
+        assert!(
+            v.get(absent).is_none(),
+            "'{absent}' is in a venue thread's namespace"
+        );
+    }
+}

@@ -34,7 +34,7 @@ use crate::agent_execution::workspace::{
 use crate::agent_execution::CellHost;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::agent_execution::{PythonCellFigure, PythonCellResult, PythonScopeInput};
-use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute};
+use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute, ThreadRoute};
 use crate::models::authored_state::AuthoredProjectedDocument;
 use crate::services::authored_documents::AuthoredDocuments;
 use crate::services::track_edits::{TrackEditScope, TrackScope};
@@ -121,12 +121,33 @@ async fn resolve_scope(
     requested: PythonScopeInput,
     current_user_id: Option<&str>,
 ) -> Result<ResolvedScope, String> {
-    match thread.authored_route()? {
-        AuthoredThreadRoute::Track {
+    match thread.route()? {
+        ThreadRoute::Venue { venue_id } => {
+            assert_pinned("venue", requested.venue_id.as_deref(), Some(venue_id))?;
+            assert_pinned("track", requested.track_id.as_deref(), None)?;
+            assert_pinned("score", requested.score_id.as_deref(), None)?;
+            Ok(ResolvedScope {
+                bindings: BindingScope {
+                    agent_kind: thread.agent_kind.clone(),
+                    track_id: None,
+                    venue_id: Some(venue_id.to_string()),
+                    score_id: None,
+                    track_editable: false,
+                    track_document: None,
+                    pattern_id: None,
+                    implementation_id: None,
+                    window: requested.window,
+                    graph_definition: None,
+                },
+                track: None,
+                track_edit: None,
+            })
+        }
+        ThreadRoute::Authored(AuthoredThreadRoute::Track {
             track_id,
             venue_id,
             score_id,
-        } => {
+        }) => {
             if crate::database::local::tracks::get_track_by_id(pool, track_id)
                 .await?
                 .is_none()
@@ -179,10 +200,10 @@ async fn resolve_scope(
                 track_edit,
             })
         }
-        AuthoredThreadRoute::Pattern {
+        ThreadRoute::Authored(AuthoredThreadRoute::Pattern {
             pattern_id,
             implementation_id,
-        } => {
+        }) => {
             assert_pinned("pattern", requested.pattern_id.as_deref(), Some(pattern_id))?;
             assert_pinned(
                 "implementation",

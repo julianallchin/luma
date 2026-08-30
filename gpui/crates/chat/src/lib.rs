@@ -1317,11 +1317,13 @@ impl AgentChat {
         let title: SharedString = match self.scope.as_ref().map(|scope| scope.agent_kind) {
             Some(luma_lib::agent::AgentKind::TrackCopilot) => "Track agent".into(),
             Some(luma_lib::agent::AgentKind::PatternGraph) => "Pattern agent".into(),
+            Some(luma_lib::agent::AgentKind::VenueRig) => "Venue agent".into(),
             None => "Agent".into(),
         };
         let badge: Option<SharedString> = match self.scope.as_ref().map(|scope| scope.agent_kind) {
             Some(luma_lib::agent::AgentKind::TrackCopilot) => Some("Track".into()),
             Some(luma_lib::agent::AgentKind::PatternGraph) => Some("Pattern".into()),
+            Some(luma_lib::agent::AgentKind::VenueRig) => Some("Venue".into()),
             None => None,
         };
         div()
@@ -1526,6 +1528,16 @@ impl Opening {
                     "Check the beat grid",
                 ],
             },
+            luma_lib::agent::AgentKind::VenueRig => Self {
+                headline: OPENING_HEADLINE,
+                blurb: "It reads the room, builds with it, and says what is hung where.",
+                hint: None,
+                prompts: &[
+                    "Describe this room",
+                    "What is still unplaced?",
+                    "Hang four washes on the downstage truss",
+                ],
+            },
         }
     }
 }
@@ -1540,7 +1552,7 @@ pub const OPENING_HEADLINE: &str = "Where do you want to start?";
 /// because it is what the exit gate looks for: a test that spelled the promise
 /// itself would pass while the shipped copy said something else.
 pub const UNATTACHED_BLURB: &str =
-    "Open a pattern's graph or a track's timeline, and the chat attaches to it.";
+    "Open a venue, a pattern's graph, or a track's timeline, and the chat attaches to it.";
 
 /// A conversation that has not started: a mark, a headline, what the agent can
 /// do, and the prompts that fill the composer.
@@ -1694,6 +1706,7 @@ fn status_strip(
     let subject = match kind {
         luma_lib::agent::AgentKind::TrackCopilot => "Track thread",
         luma_lib::agent::AgentKind::PatternGraph => "Pattern thread",
+        luma_lib::agent::AgentKind::VenueRig => "Venue thread",
     };
     strip
         .text_color(theme.text_faint)
