@@ -149,9 +149,9 @@ globalThis.nav = {
 		// screen until something is open there. `luma::NewTab` is the path
 		// chrome.rs documents as surviving a closed panel.
 		app.action("luma::NewTab");
-		nav.step("the universe choice", "button", "Universe setup");
+		nav.step("the universe choice", "button", "Patch");
 		until("the universe tab", (s) =>
-			s.find({ role: "card", label: `${venue} Universe setup` }) !== undefined,
+			s.find({ role: "card", label: `${venue} Patch` }) !== undefined,
 		);
 	},
 

@@ -150,7 +150,7 @@ fn the_chat_follows_the_screen_onto_the_track_editor() {
         &mut app,
         r#"
             nav.step("the add-tab control", "button", "new-tab");
-            nav.step("the universe choice", "button", "Universe setup");
+            nav.step("the universe choice", "button", "Patch");
             until("the patch tab", (s) =>
                 s.findAll({ role: "text" }).some((n) => n.label === "Track agent"))
                 .nodes

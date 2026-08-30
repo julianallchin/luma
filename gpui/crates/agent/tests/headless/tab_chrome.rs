@@ -32,7 +32,7 @@ const SCRIPT: &str = r#"
         const shot = app.snapshot();
         return {
             shot,
-            choices: ["Universe setup", "Pattern editor", "Track editor"]
+            choices: ["Patch", "Pattern editor", "Track editor"]
                 .map((label) => shot.find({ role: "button", label })),
             reasons: shot.findAll({ role: "text" }).map((node) => node.label),
         };
@@ -57,7 +57,7 @@ const SCRIPT: &str = r#"
     const third = menu();
     app.click(third.choices[0]);
     until("the universe tab", (s) =>
-        s.find({ role: "card", label: "Test Venue Universe setup" }) !== undefined);
+        s.find({ role: "card", label: "Test Venue Patch" }) !== undefined);
     app.action("luma::CloseTab");
     app.frames(2);
 
@@ -131,7 +131,7 @@ fn new_tab_opens_the_panel_and_its_menu_together() {
             app.frames(12, { waitMs: 40 });
             const settled = app.snapshot();
             ({
-                opened: menu.find({ role: "button", label: "Universe setup" }) !== undefined,
+                opened: menu.find({ role: "button", label: "Patch" }) !== undefined,
                 stillUp: settled.find({ role: "card", label: "New tab menu" }) !== undefined,
                 strip: settled.find({ role: "card", label: "Tab strip" }) !== undefined,
             })

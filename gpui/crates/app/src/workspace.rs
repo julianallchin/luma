@@ -249,7 +249,7 @@ mod tests {
     }
 
     fn patch(venue: &str) -> Target {
-        Target::Universe {
+        Target::Patch {
             venue: venue.to_string(),
         }
     }
