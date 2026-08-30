@@ -753,18 +753,43 @@ mod tests {
 
     #[test]
     fn menu_reasons_name_each_missing_prerequisite() {
-        let none = menu_choices(&NewTabPrerequisites::default());
-        assert_eq!(none[0].reason, Some("Select a venue first"));
-        assert_eq!(none[1].reason, Some("Open a track to edit patterns"));
-        assert_eq!(none[2].reason, Some("Select a venue first"));
+        // Looked up by choice, not by index: the menu's order is a display
+        // decision and a new entry must not move what this test is about.
+        let reason = |prerequisites: &NewTabPrerequisites, choice: NewTabChoice| {
+            menu_choices(prerequisites)
+                .into_iter()
+                .find(|availability| availability.choice == choice)
+                .expect("every choice is offered")
+                .reason
+        };
+        let none = NewTabPrerequisites::default();
+        assert_eq!(
+            reason(&none, NewTabChoice::Universe),
+            Some("Select a venue first")
+        );
+        assert_eq!(
+            reason(&none, NewTabChoice::Stage),
+            Some("Select a venue first")
+        );
+        assert_eq!(
+            reason(&none, NewTabChoice::Pattern),
+            Some("Open a track to edit patterns")
+        );
+        assert_eq!(
+            reason(&none, NewTabChoice::Track),
+            Some("Select a venue first")
+        );
 
         let venue = NewTabPrerequisites {
             venue: Some("v".into()),
             ..Default::default()
         };
-        let venue_only = menu_choices(&venue);
-        assert!(venue_only[0].enabled());
-        assert_eq!(venue_only[2].reason, Some("Select a track first"));
+        assert_eq!(reason(&venue, NewTabChoice::Universe), None);
+        assert_eq!(reason(&venue, NewTabChoice::Stage), None);
+        assert_eq!(
+            reason(&venue, NewTabChoice::Track),
+            Some("Select a track first")
+        );
 
         // The track gate outranks the pattern gate; with a track editor open
         // the pattern gate is what remains.
@@ -774,7 +799,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            menu_choices(&track_open)[1].reason,
+            reason(&track_open, NewTabChoice::Pattern),
             Some("Select a pattern first")
         );
 

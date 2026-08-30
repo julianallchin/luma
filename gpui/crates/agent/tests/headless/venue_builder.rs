@@ -86,6 +86,16 @@ const OPEN: &str = r#"
         app.click(node, { restale: "match" });
         app.frames(4);
     };
+    // The inspector's feature list is as long as the room is complicated, so a
+    // row near its end can be below the fold. Bring it back before pointing at
+    // it — a clipped node is a refusal, not a miss.
+    const reveal = (node) => {
+        if (node.bounds.height > 0 && node.bounds.width > 0) { return node; }
+        app.scroll(app.snapshot().find({ role: "text", label: "DISTRIBUTE ONTO" }), { dy: -240 });
+        app.frames(4);
+        return app.snapshot().findAll({ role: "row" })
+            .find((n) => n.label === node.label) || node;
+    };
     const sockets = () => app.snapshot().findAll({ role: "button" })
         .filter((n) => n.label.startsWith("Socket "));
 "#;
@@ -329,8 +339,8 @@ fn duplicate_lights_the_compatible_sockets_and_places_a_copy() {
         app.key("cmd-d");
         app.frames(4);
         const held = one("Hand: ");
-        const flip_before = said().length;
         press("Flip");
+        const flipped = one("Hand: ");
         const target = sockets().find((n) => n.label.endsWith("corner_fr"));
         if (target === undefined) {{
             throw new Error("no opposite corner: " + sockets().map((n) => n.label).join(", "));
@@ -340,7 +350,7 @@ fn duplicate_lights_the_compatible_sockets_and_places_a_copy() {
             s.findAll({{ role: "text" }}).some((n) =>
                 n.label.startsWith("Edge: ") && n.label.includes("corner_fr")));
         app.frames(10);
-        ({{ first, held, copy: one("Edge: ") }})
+        ({{ first, held, flipped, copy: one("Edge: ") }})
     "#
         ),
     );
@@ -349,6 +359,12 @@ fn duplicate_lights_the_compatible_sockets_and_places_a_copy() {
             .as_str()
             .is_some_and(|h| h.starts_with("Hand: holding")),
         "⌘D put nothing in the hand\n{out:#}"
+    );
+    assert!(
+        out["flipped"]
+            .as_str()
+            .is_some_and(|h| h.ends_with("flipped")),
+        "Flip did not change what the hand is holding\n{out:#}"
     );
     let first = out["first"].as_str().unwrap_or_default();
     let copy = out["copy"].as_str().unwrap_or_default();
@@ -431,7 +447,7 @@ fn a_row_that_will_not_fit_is_refused_and_the_offer_makes_it_fit() {
             throw new Error("no truss face: " + app.snapshot()
                 .findAll({{ role: "row" }}).map((n) => n.label).join(", "));
         }}
-        tap(face);
+        tap(reveal(face));
         until("the fixture list", (s) =>
             s.findAll({{ role: "row" }}).some((n) => n.label.includes("Mover")));
         tap(app.snapshot().findAll({{ role: "row" }}).find((n) => n.label.includes("Mover")));
