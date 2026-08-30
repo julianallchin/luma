@@ -64,7 +64,11 @@ const OPEN: &str = r#"
     const arm = (row) => {
         press("Add element");
         until("the dialog", (s) => s.findAll({ role: "input", label: "Search elements" }).length > 0);
-        app.type(app.snapshot().find({ role: "input", label: "Search elements" }), row.slice(0, 5));
+        // The first word: enough to narrow the catalog, and a whole token, so
+        // the library's own search matches it too — "Luma " with the space does
+        // not.
+        app.type(app.snapshot().find({ role: "input", label: "Search elements" }),
+            row.split(" ")[0]);
         until("the row", (s) => {
             const n = s.findAll({ role: "row" }).find((n) => n.label === row);
             return n !== undefined && n.bounds.height > 0;

@@ -37,7 +37,6 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, Context, Div, Entity, Pixels, Point, Window};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{Icon, IconName};
-use luma_lib::models::distribute::DistributeLayout;
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
 use luma_scene::catalog::{pieces, PaletteGroup};
@@ -47,6 +46,7 @@ use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
+use crate::fixture_library::{self, FixtureLibrary};
 use crate::library::{LibraryError, Rig};
 use crate::Luma;
 
@@ -115,8 +115,6 @@ pub(crate) struct Build {
     pub(crate) inspector: luma_ui::pane::PaneWidth,
     /// The operator asked to see the solve's complaints with nothing selected.
     pub(crate) warnings_pinned: bool,
-    /// What the fixture library last answered the dialog's query with.
-    pub(crate) fixtures: Vec<(String, String)>,
     /// The trim field's draft text. Held as typed so a half-entered number is
     /// not rounded under the operator's caret.
     pub(crate) trim_draft: Option<String>,
@@ -147,7 +145,6 @@ impl Build {
             selected: None,
             inspector: luma_ui::pane::PaneWidth::new(0.0),
             warnings_pinned: false,
-            fixtures: Vec::new(),
             trim_draft: None,
             report: Vec::new(),
             committing: false,
@@ -174,6 +171,14 @@ impl Build {
         {
             self.selected = None;
         }
+        // The row being fitted is measured against the *room* — how long the
+        // host face is — so a room that changed under it is a preview that is
+        // now about a face that no longer exists at that length. Re-solved
+        // here rather than by whoever adopted, because "extend the host, then
+        // look again" is one gesture and the caller that had to remember the
+        // second half would be the caller that forgot it: the extend the
+        // popover offers did exactly that, and the refusal never went away.
+        self.repreview();
     }
 
     /// Record what the fixture library said about the thing in the hand.
@@ -286,7 +291,7 @@ impl Build {
                 .node(root)
                 .map(|node| self.sockets.sockets(node))
                 .unwrap_or_default(),
-            Holding::Tray { .. } | Holding::Fixture { .. } => {
+            Holding::Unplaced { .. } | Holding::Fixture { .. } => {
                 vec![luma_render::catalog::fixture_clamp()]
             }
         }
@@ -346,24 +351,6 @@ impl Build {
             (_, luma_scene::sockets::RollFreedom::Fixed) => Freedom::Bolted,
             _ => Freedom::Roll,
         }
-    }
-}
-
-/// The row layout, in the words the commit speaks.
-///
-/// Two vocabularies exist because the preview is geometry and the commit is a
-/// request over the wire; this is the one place they meet, so neither has to
-/// know the other's spelling.
-///
-/// **Smell:** `luma_lib`'s `distribute` model already carries the *forward*
-/// conversion as `impl From<DistributeLayout> for Layout`. This is its inverse
-/// and belongs beside it as a second `From`, not here — it lives in the app
-/// only because `src-tauri` is another owner's tree this pass.
-fn layout_of(layout: luma_scene::distribute::Layout) -> DistributeLayout {
-    match layout {
-        luma_scene::distribute::Layout::Even => DistributeLayout::Even,
-        luma_scene::distribute::Layout::Spacing(metres) => DistributeLayout::Spacing { metres },
-        luma_scene::distribute::Layout::Span(t0, t1) => DistributeLayout::Span { from: t0, to: t1 },
     }
 }
 
@@ -453,10 +440,16 @@ fn poses(solved: &ResolvedVenue) -> HashMap<String, glam::DMat4> {
 /// [`Build`] beside the picture, and this is the venue the tab dies with.
 pub(crate) struct StagePage {
     pub(crate) venue_name: String,
-    /// The add-element dialog's query. An editor is an entity — it owns a
-    /// caret, a selection and an undo history — so it lives on the page rather
-    /// than in [`hand::Hand`], which holds no state a window could focus.
-    pub(crate) search: Entity<luma_ui::text_input::TextInput>,
+    /// The one search the add-element dialog has, and the fixture rows it
+    /// fetched. The shared picker rather than a private query: the bundle is
+    /// fifteen thousand definitions, so "what fixtures match this" is paged,
+    /// generation-guarded and error-reporting wherever it is asked, and the
+    /// stage page asking it a second way was the duplicate.
+    ///
+    /// Its field is the dialog's *only* field: [`FixtureLibrary::query`] is
+    /// what the catalog and unplaced sections are filtered by too, so one
+    /// string narrows all three provenances.
+    pub(crate) library: FixtureLibrary,
     /// The focus the dialog traps while it is up.
     pub(crate) focus: gpui::FocusHandle,
     /// Where the node menu is open, if it is. On the page and not the hand:
@@ -482,7 +475,9 @@ impl Luma {
         }
         let page = StagePage {
             venue_name,
-            search: cx.new(|cx| luma_ui::text_input::TextInput::search("Search elements…", cx)),
+            library: FixtureLibrary::new("Search elements", cx, |luma, query, cx| {
+                luma.stage_fixture_query(query, cx);
+            }),
             focus: cx.focus_handle(),
             menu: None,
         };
@@ -594,11 +589,59 @@ impl Luma {
         if let Some(build) = self.build_mut() {
             build.hand = Hand::Choosing(hand::Choosing::default());
         }
-        // The library is asked once per opening rather than per keystroke: the
-        // dialog filters what it has, and forty rows is the whole index for a
-        // query this shallow.
-        self.stage_search_fixtures(String::new(), cx);
+        // Opened on a fresh question. A dialog that came back holding the last
+        // search would be answering one nobody asked — and the field is the
+        // page's, not the hand's, so nothing else clears it.
+        if let Some(page) = self.stage_page_mut() {
+            page.library.set_query(String::new());
+            let field = page.library.field().clone();
+            field.update(cx, |field, cx| field.set_text("", cx));
+        }
+        self.stage_fetch_fixture_page(cx);
         cx.notify();
+    }
+
+    /// The stage tab the dialog belongs to — the active one, because the hand
+    /// it arms is the one beside the picture and there is only ever one of
+    /// those.
+    fn stage_page_mut(&mut self) -> Option<&mut StagePage> {
+        match self.workspace.active_body_mut()? {
+            crate::shell::Body::Stage(page) => Some(page),
+            _ => None,
+        }
+    }
+
+    /// A keystroke in the dialog's field.
+    fn stage_fixture_query(&mut self, query: String, cx: &mut Context<Self>) {
+        if let Some(page) = self.stage_page_mut() {
+            page.library.set_query(query);
+        }
+        self.stage_fetch_fixture_page(cx);
+        cx.notify();
+    }
+
+    /// Ask the bundle for the next page of fixture rows, if there is one.
+    fn stage_fetch_fixture_page(&mut self, cx: &mut Context<Self>) {
+        // Two disjoint fields of `self`: the tab's browsing state, and the
+        // command seam it asks through.
+        let Some(crate::shell::Body::Stage(page)) = self.workspace.active_body_mut() else {
+            return;
+        };
+        let generation = page.library.generation();
+        let Some(pending) = page.library.page(&self.library) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let page = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.stage_page_mut() {
+                    state.library.landed(generation, page);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Take a row out of the dialog and into the hand.
@@ -752,7 +795,7 @@ impl Luma {
         // specific thing each — once placed there is no second one to hold.
         build.hand = match &what {
             Holding::Piece { .. } => Hand::Placing(Held::again(&what)),
-            Holding::Duplicate { .. } | Holding::Tray { .. } | Holding::Fixture { .. } => {
+            Holding::Duplicate { .. } | Holding::Unplaced { .. } | Holding::Fixture { .. } => {
                 Hand::Idle
             }
         };
@@ -761,7 +804,7 @@ impl Luma {
             // Refused above: a fixture is created as a row, never dropped.
             (Holding::Fixture { .. }, _) => return,
             (
-                Holding::Tray { node, .. },
+                Holding::Unplaced { node, .. },
                 Landing::Socket {
                     parent,
                     my_socket,
@@ -778,7 +821,7 @@ impl Luma {
             // re-attached rather than created — the tray is the one place an
             // unplaced fixture may live, never the origin.
             (
-                Holding::Tray { node, .. },
+                Holding::Unplaced { node, .. },
                 Landing::Free {
                     surface,
                     my_socket,
@@ -1162,7 +1205,7 @@ impl Luma {
             path,
             &mode,
             row.count,
-            layout_of(row.layout),
+            row.layout.into(),
             None,
         );
         if let Some(build) = self.build_mut() {
@@ -1183,43 +1226,6 @@ impl Luma {
                 // rather than adopted — one more round trip, and the only verb
                 // that needs it.
                 this.reload_stage(cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Search the fixture library for the add-element dialog.
-    pub(crate) fn stage_search_fixtures(&mut self, query: String, cx: &mut Context<Self>) {
-        let pending = self.library.search_fixtures(&query, 0, 40);
-        cx.spawn(async move |this, cx| {
-            let found = pending.await;
-            this.update(cx, |this, cx| {
-                match found {
-                    Ok(found) => {
-                        if let Some(build) = this.build_mut() {
-                            build.fixtures = found
-                                .into_iter()
-                                .map(|entry| {
-                                    (
-                                        format!("{} {}", entry.manufacturer, entry.model),
-                                        entry.path,
-                                    )
-                                })
-                                .collect();
-                        }
-                    }
-                    // A library that will not answer is a state the dialog has
-                    // to show: an empty list meaning "no such fixture" and one
-                    // meaning "the index never built" are the same picture, and
-                    // only one of them is the operator's problem.
-                    Err(error) => {
-                        if let Some(build) = this.build_mut() {
-                            build.report = vec![error.to_string()];
-                        }
-                    }
-                }
-                cx.notify();
             })
             .ok();
         })
@@ -1418,9 +1424,7 @@ pub(crate) struct StageView {
     pub(crate) inspector_open: bool,
     pub(crate) selected: Option<SelectedView>,
     /// Unplaced fixtures, as dialog rows.
-    pub(crate) tray: Vec<(String, String)>,
-    /// What the fixture library last answered with, as dialog rows.
-    pub(crate) fixtures: Vec<(String, String)>,
+    pub(crate) unplaced: Vec<(String, String)>,
     pub(crate) dangling: Vec<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) configuring: Option<ConfigureView>,
@@ -1483,7 +1487,7 @@ impl Luma {
             choosing: build.hand.choosing().map(|c| c.cursor),
             inspector_open: build.inspector.target() > 0.0,
             selected,
-            tray: build
+            unplaced: build
                 .solved
                 .unplaced
                 .iter()
@@ -1494,7 +1498,6 @@ impl Luma {
                     )
                 })
                 .collect(),
-            fixtures: build.fixtures.clone(),
             dangling: build
                 .solved
                 .dangling
@@ -1568,7 +1571,6 @@ pub(crate) fn stage_page(
     view: Option<&StageView>,
     revealed: Pixels,
     window: &Window,
-    cx: &App,
 ) -> AnyElement {
     let Some(view) = view else {
         return div()
@@ -1586,7 +1588,7 @@ pub(crate) fn stage_page(
         .child(add_button(view, app))
         .children(
             view.choosing
-                .map(|cursor| chooser(state, view, cursor, app, window, cx)),
+                .map(|cursor| chooser(state, view, cursor, app, window)),
         )
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
         .children(state.menu.as_ref().map(|at| node_menu(*at, app)))
@@ -1678,15 +1680,30 @@ pub(crate) struct ChooserRow {
     pub(crate) take: Holding,
 }
 
-/// Every element this venue can be given, in one list.
+/// Every element this venue can be given that matches the dialog's query, in
+/// one list.
 ///
 /// Catalog pieces, the fixtures the patch has never placed, and the library —
 /// three provenances, one question ("what goes in next"), so one list. They
 /// were two menus and a search field before, which is three places to look for
 /// one answer.
-pub(crate) fn chooser_rows(view: &StageView) -> Vec<ChooserRow> {
+///
+/// Already narrowed, because the three provenances narrow differently and only
+/// this function knows which is which: the catalog and the unplaced rows are
+/// in memory and filtered here, while the library's rows *are* the answer to
+/// the query — [`Library::search_fixtures`] matched them, and re-filtering the
+/// page it returned would drop rows it matched on a field the label does not
+/// carry.
+pub(crate) fn chooser_rows(view: &StageView, library: &FixtureLibrary) -> Vec<ChooserRow> {
+    let needle = library.query().trim().to_lowercase();
+    let matches = |label: &str, section: &str| {
+        needle.is_empty()
+            || label.to_lowercase().contains(&needle)
+            || section.to_lowercase().contains(&needle)
+    };
     let mut rows: Vec<ChooserRow> = palette_rows()
         .into_iter()
+        .filter(|row| matches(&row.label, row.group.as_str()))
         .map(|row| ChooserRow {
             label: row.label.clone(),
             section: row.group.as_str(),
@@ -1699,23 +1716,31 @@ pub(crate) fn chooser_rows(view: &StageView) -> Vec<ChooserRow> {
             },
         })
         .collect();
-    rows.extend(view.tray.iter().map(|(node, label)| ChooserRow {
-        label: label.clone(),
-        section: "Unplaced",
-        take: Holding::Tray {
-            node: node.clone(),
+    rows.extend(
+        view.unplaced
+            .iter()
+            .filter(|(_, label)| matches(label, "Unplaced"))
+            .map(|(node, label)| ChooserRow {
+                label: label.clone(),
+                section: "Unplaced",
+                take: Holding::Unplaced {
+                    node: node.clone(),
+                    label: label.clone(),
+                },
+            }),
+    );
+    rows.extend(library.entries().iter().map(|entry| {
+        let label = format!("{} {}", entry.manufacturer, entry.model);
+        ChooserRow {
             label: label.clone(),
-        },
-    }));
-    rows.extend(view.fixtures.iter().map(|(label, path)| ChooserRow {
-        label: label.clone(),
-        section: "Fixtures",
-        take: Holding::Fixture {
-            path: path.clone(),
-            label: label.clone(),
-            mode: None,
-            width_m: DEFAULT_FIXTURE_WIDTH_M,
-        },
+            section: "Fixtures",
+            take: Holding::Fixture {
+                path: entry.path.clone(),
+                label,
+                mode: None,
+                width_m: DEFAULT_FIXTURE_WIDTH_M,
+            },
+        }
     }));
     rows
 }
@@ -1724,20 +1749,6 @@ pub(crate) fn chooser_rows(view: &StageView) -> Vec<ChooserRow> {
 /// fallback `luma_lib`'s `body_width_m` uses, so an un-fetched preview and a
 /// fetched one differ only where the definition actually says something.
 const DEFAULT_FIXTURE_WIDTH_M: f64 = 0.3;
-
-/// Which rows a query leaves, in list order.
-pub(crate) fn chooser_matches(rows: &[ChooserRow], query: &str) -> Vec<usize> {
-    let needle = query.trim().to_lowercase();
-    rows.iter()
-        .enumerate()
-        .filter(|(_, row)| {
-            needle.is_empty()
-                || row.label.to_lowercase().contains(&needle)
-                || row.section.to_lowercase().contains(&needle)
-        })
-        .map(|(at, _)| at)
-        .collect()
-}
 
 /// What the row under the keyboard is, at a size worth looking at.
 ///
@@ -1762,7 +1773,7 @@ fn chooser_preview(row: Option<&ChooserRow>) -> Div {
             || "Seats on its own underside".to_string(),
             |footing| format!("Stands on {footing}"),
         ),
-        Holding::Tray { .. } => "Patched, never placed".to_string(),
+        Holding::Unplaced { .. } => "Patched, never placed".to_string(),
         // The dialog never offers one — a duplicate comes off a selection.
         Holding::Duplicate { .. } => "A copy of what is selected".to_string(),
         Holding::Fixture { .. } => "Placed as a row along a face".to_string(),
@@ -1794,17 +1805,13 @@ fn chooser(
     cursor: usize,
     app: &Entity<Luma>,
     window: &Window,
-    cx: &App,
 ) -> AnyElement {
-    let rows = chooser_rows(view);
-    let query = state.search.read(cx).text().to_string();
-    let shown = chooser_matches(&rows, &query);
+    let rows = chooser_rows(view, &state.library);
     let dismiss = app.clone();
 
     let mut list = float::list().id("stage-chooser-list").overflow_y_scroll();
     let mut section = "";
-    for (at, &index) in shown.iter().enumerate() {
-        let row = &rows[index];
+    for (index, row) in rows.iter().enumerate() {
         if row.section != section {
             section = row.section;
             list = list.child(float::section_heading(section.to_string()));
@@ -1813,7 +1820,7 @@ fn chooser(
         let take = row.take.clone();
         let label = row.label.clone();
         list = list.child(
-            float::menu_row(RowState::of(false, at == cursor), label.clone())
+            float::menu_row(RowState::of(false, index == cursor), label.clone())
                 .id(gpui::SharedString::from(format!("choose:{index}")))
                 .child(label.clone())
                 .on_click(move |_, _, cx| {
@@ -1823,12 +1830,12 @@ fn chooser(
                 .agent_node(Role::Row, label),
         );
     }
-    if shown.is_empty() {
+    if rows.is_empty() {
         list = list.child(float::empty_row("Nothing matches"));
     }
 
     let keys = app.clone();
-    let taken: Vec<Holding> = shown.iter().map(|&at| rows[at].take.clone()).collect();
+    let taken: Vec<Holding> = rows.iter().map(|row| row.take.clone()).collect();
     let body = div()
         .size_full()
         .flex()
@@ -1869,21 +1876,20 @@ fn chooser(
                 cx.notify();
             });
         })
-        .child(
-            float::header_band().child(
-                float::field()
-                    .w_full()
-                    .child(state.search.clone())
-                    .agent_node(Role::Input, "Search elements"),
-            ),
-        )
+        .child(float::header_band().child(
+            float::field().w_full().child(fixture_library::search_field(
+                &state.library,
+                true,
+                true,
+            )),
+        ))
         .child(
             div()
                 .flex_1()
                 .min_h_0()
                 .flex()
                 .flex_row()
-                .child(chooser_preview(shown.get(cursor).map(|&at| &rows[at])))
+                .child(chooser_preview(rows.get(cursor)))
                 .child(
                     div()
                         .flex_1()
@@ -2324,6 +2330,16 @@ const MAX_RUN_M: f64 = 12.0;
 /// How wide the run's length box is.
 const RUN_SCRUB_W: f32 = 84.0;
 
+/// How wide the run's whole control strip is: the measurement with its
+/// imperial small print, the length box and the commit, inside the card's own
+/// padding.
+///
+/// Fixed rather than fitted, because the strip has to be *placed* before it
+/// could be measured — see the clamp in [`build_layer`] — and a card that had
+/// to be laid out before it could be kept reachable is a card that cannot be.
+/// Its three children are a fixed set, so this is a fact about the strip.
+const RUN_CARD_W: f32 = 360.0;
+
 /// The hit box a station mark carries, and the dot inside it.
 const MARK_HALF: f32 = 9.0;
 const STATION_DOT: f32 = 6.0;
@@ -2343,6 +2359,43 @@ const BEAD_QUIET: f32 = 5.0;
 
 /// A socket that would take what is in the hand, or has taken it.
 const BEAD_LIVE: f32 = 7.0;
+
+/// How far apart two beads must sit before both can be pressed.
+///
+/// Two beads on one pixel is not a near miss, it is one unreachable socket:
+/// hit-testing is paint order, so the later bead swallows every press aimed at
+/// the earlier one. The venue's own two hosts are the standing case — the floor
+/// and the grid are the *same point* with opposite normals
+/// ([`luma_scene::venue::root_socket`]) — but a deck seen edge-on stacks its
+/// corners the same way, so the fix is the general one.
+const BEAD_CLEAR: f32 = 2.0 * BEAD_LIVE;
+
+/// Push beads apart until each has its own pixel.
+///
+/// A bead is a *handle for* a socket, not a claim about where the socket is:
+/// pressing one aims by name ([`Luma::stage_aim_socket`]), and the renderer
+/// draws the socket itself at the exact point. So a nudged handle costs
+/// nothing that is true, and buys a socket that can be reached.
+///
+/// Downward, in list order, because the order sockets come out of the room is
+/// stable — so the same room lays its beads out the same way every frame, and
+/// a script that found one last frame finds it in the same place this frame.
+fn declutter(beads: &mut [Bead]) {
+    for at in 1..beads.len() {
+        loop {
+            let here = beads[at].at;
+            let crowded = beads[..at].iter().any(|other| {
+                let dx = f32::from(other.at.x - here.x);
+                let dy = f32::from(other.at.y - here.y);
+                dx.hypot(dy) < BEAD_CLEAR
+            });
+            if !crowded {
+                break;
+            }
+            beads[at].at.y += px(BEAD_CLEAR);
+        }
+    }
+}
 
 /// One socket, projected.
 pub(crate) struct Bead {
@@ -2412,6 +2465,7 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
             state,
         });
     }
+    declutter(&mut out);
     out
 }
 
@@ -2602,6 +2656,14 @@ pub(crate) fn build_layer(
     // it ride the thing they are about rather than a bar somewhere else — which
     // is the same argument the configure popover makes about a face.
     if let Some((at, metres, feet)) = measurement_label(build, camera, size) {
+        // Clear of the inspector, which is painted over this layer: a run out
+        // of a socket on the house-right side of the room put its commit
+        // *under* the sheet, where the pointer could not reach it and nothing
+        // in the tree said so — the button reports its bounds and its
+        // enablement either way. Anchored to the socket until that would hide
+        // it, and pushed left exactly as far as it must be.
+        let reachable = size.0 - build.inspector_target() - INSET;
+        let left = px(f32::from(at.x).min(reachable - RUN_CARD_W).max(INSET));
         let refused = build
             .hand
             .extending()
@@ -2610,8 +2672,9 @@ pub(crate) fn build_layer(
         let length = build.hand.extending().map_or(0.0, |run| run.length_m);
         let (set, commit) = (app.clone(), app.clone());
         layer = layer.child(
-            div().absolute().left(at.x).top(at.y).occlude().child(
+            div().absolute().left(left).top(at.y).occlude().child(
                 float::popover_card()
+                    .w(px(RUN_CARD_W))
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))

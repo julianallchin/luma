@@ -6,20 +6,19 @@
 //! with the answer and not at all in how the question is asked, so the search,
 //! the paging and the rows live here once.
 //!
-//! # The stage page has not adopted it yet
+//! # Two hosts, two ways of drawing the same rows
 //!
-//! `Luma::stage_search_fixtures` (`stage/mod.rs`) still keeps its own `query`
-//! and `results` on `Distribute` and asks `search_fixtures` with a hard-coded
-//! first page of 40 — no paging, no exhaustion, no manufacturer headings, and
-//! its own spelling of the error case. That is the second browser, and it is
-//! the one to delete: this module is already the general form of it. Adopting
-//! it is `Distribute { library: FixtureLibrary, .. }`, [`FixtureLibrary::new`]
-//! with an `on_edit` that routes back to the popup, [`rows`] with an `on_pick`
-//! that distributes, and the host's existing fetch loop calling
-//! [`FixtureLibrary::page`] / [`FixtureLibrary::landed`] — which is exactly
-//! what `Luma::fetch_fixture_page` does for the add dialog. Nothing here is
-//! shaped around the dialog: the component owns browsing, and the host owns
-//! storage and the runtime, which is the whole point of the split below.
+//! The patch page's dialog is browsing *fixtures* and nothing else, so it
+//! renders [`rows`] and takes the whole component including its field.
+//!
+//! The stage page's add-element dialog asks one question — "what goes in
+//! next" — over three provenances: catalog pieces, the rows the patch has
+//! never placed, and this bundle. So it takes the state and not the picture:
+//! its own field drives [`FixtureLibrary::set_query`], [`FixtureLibrary::query`]
+//! is what narrows the other two sections, and [`FixtureLibrary::entries`]
+//! becomes rows in its own sectioned list. What it does *not* keep is a second
+//! query, a second page cursor and a second spelling of the error — which is
+//! what `Luma::stage_search_fixtures` was before it was deleted.
 //!
 //! # What this owns, and what its host owns
 //!
@@ -50,6 +49,11 @@ pub(crate) const PAGE: usize = 60;
 
 pub(crate) struct FixtureLibrary {
     field: Entity<TextInput>,
+    /// What the field says when it is empty, and the name it answers to in the
+    /// automation tree. Held because the two hosts ask one question in two
+    /// vocabularies: the patch page is picking a fixture, and the stage page's
+    /// one field also narrows catalog pieces and unplaced rows.
+    placeholder: SharedString,
     /// The query, mirrored out of the field. The field is the editor; this is
     /// what the fetch was issued for.
     query: String,
@@ -69,10 +73,15 @@ impl FixtureLibrary {
     /// `on_edit` routes a keystroke back to wherever the host keeps this — the
     /// one thing the component cannot know.
     pub(crate) fn new(
+        placeholder: impl Into<SharedString>,
         cx: &mut Context<Luma>,
         on_edit: impl Fn(&mut Luma, String, &mut Context<Luma>) + 'static,
     ) -> Self {
-        let field = cx.new(|cx| TextInput::search("Search fixtures…", cx));
+        let placeholder = placeholder.into();
+        let field = cx.new({
+            let placeholder = placeholder.clone();
+            |cx| TextInput::search(placeholder, cx)
+        });
         let subscription = cx.subscribe(&field, move |luma, field, event, cx| {
             if event == &text_input::Event::Edited {
                 let query = field.read(cx).text().to_string();
@@ -83,6 +92,7 @@ impl FixtureLibrary {
         });
         Self {
             field,
+            placeholder,
             query: String::new(),
             entries: Vec::new(),
             offset: 0,
@@ -100,6 +110,18 @@ impl FixtureLibrary {
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The rows the last page landed with, for a host that renders them in a
+    /// list of its own rather than through [`rows`].
+    pub(crate) fn entries(&self) -> &[FixtureEntry] {
+        &self.entries
+    }
+
+    /// What the last fetch was issued for. The one query — a host that narrows
+    /// other lists beside these rows narrows them by this string.
+    pub(crate) fn query(&self) -> &str {
+        &self.query
     }
 
     /// A new query. Drops the rows it had — a list that kept the old ones while
@@ -252,16 +274,16 @@ pub(crate) fn search_field(state: &FixtureLibrary, interactive: bool, focused: b
                 ladder::foreground_alpha(1.0)
             })
             .child(if state.query.is_empty() {
-                "Search fixtures…".to_string()
+                state.placeholder.to_string()
             } else {
                 state.query.clone()
             })
-            .agent_node(Role::Input, "Search fixtures…")
+            .agent_node(Role::Input, state.placeholder.clone())
             .agent_disabled(true)
             .into_any_element();
     }
     slot.child(state.field.clone())
-        .agent_node(Role::Input, "Search fixtures…")
+        .agent_node(Role::Input, state.placeholder.clone())
         .agent_focused(focused)
         .into_any_element()
 }

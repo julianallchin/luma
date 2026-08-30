@@ -119,7 +119,7 @@ impl Luma {
         cx: &mut Context<Self>,
     ) {
         let venue = venue_id.clone();
-        let library = FixtureLibrary::new(cx, move |luma, query, cx| {
+        let library = FixtureLibrary::new("Search fixtures…", cx, move |luma, query, cx| {
             luma.add_fixtures_query(query, cx);
         });
         let search_focus = library.field().read(cx).focus_handle(cx);

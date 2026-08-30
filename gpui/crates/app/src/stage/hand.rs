@@ -286,7 +286,7 @@ pub(crate) enum Holding {
         flip: bool,
     },
     /// A patched fixture that has never been placed — `reattach`.
-    Tray { node: String, label: String },
+    Unplaced { node: String, label: String },
     /// A fixture from the library that has no row anywhere yet — `distribute`,
     /// which is how *every* new fixture is created, a single one being a row
     /// of one. It carries what the fit needs so the preview and the commit
@@ -309,7 +309,7 @@ impl Holding {
             Holding::Piece { display_name, .. } | Holding::Duplicate { display_name, .. } => {
                 display_name
             }
-            Holding::Tray { label, .. } | Holding::Fixture { label, .. } => label,
+            Holding::Unplaced { label, .. } | Holding::Fixture { label, .. } => label,
         }
     }
 
@@ -319,7 +319,7 @@ impl Holding {
     pub(crate) fn catalog_ref(&self) -> Option<&str> {
         match self {
             Holding::Piece { catalog_ref, .. } => Some(catalog_ref),
-            Holding::Duplicate { .. } | Holding::Tray { .. } | Holding::Fixture { .. } => None,
+            Holding::Duplicate { .. } | Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
         }
     }
 
@@ -327,7 +327,7 @@ impl Holding {
         match self {
             Holding::Piece { kind, .. } => *kind,
             Holding::Duplicate { .. } => NodeKind::Piece,
-            Holding::Tray { .. } | Holding::Fixture { .. } => NodeKind::Fixture,
+            Holding::Unplaced { .. } | Holding::Fixture { .. } => NodeKind::Fixture,
         }
     }
 
@@ -338,7 +338,7 @@ impl Holding {
     pub(crate) fn footing(&self) -> Option<&str> {
         match self {
             Holding::Piece { footing, .. } => *footing,
-            Holding::Duplicate { .. } | Holding::Tray { .. } | Holding::Fixture { .. } => None,
+            Holding::Duplicate { .. } | Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
         }
     }
 }
