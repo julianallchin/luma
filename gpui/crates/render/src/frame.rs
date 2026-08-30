@@ -264,6 +264,49 @@ impl Bank {
     }
 }
 
+/// One stage piece's geometry, resolved into draws in `root`'s space.
+///
+/// Authored art expands to one draw per glTF primitive, each at its node's
+/// world transform; a generated family is a single mesh at `root` wearing
+/// [`crate::truss::ALUMINIUM`]. The one place that knows how a [`Geometry`]
+/// becomes drawable: the lit pass builds placed pieces through here, and
+/// `overlay::build` builds the builder's ghost through here, so a piece and its
+/// preview can never be different shapes.
+///
+/// # Errors
+///
+/// Propagates the asset library's failure to load an authored mesh.
+pub(crate) fn piece_draws(
+    geometry: &Geometry,
+    root: Mat4,
+    lib: &mut Library,
+    bank: &mut Bank,
+    editor_object: Option<EditorObject>,
+) -> anyhow::Result<Vec<Draw>> {
+    Ok(match geometry {
+        Geometry::MeshPath(path) => {
+            let glb = lib.get(path)?;
+            let worlds = glb.world_matrices(root, &HashMap::new());
+            glb.nodes
+                .iter()
+                .zip(&worlds)
+                .flat_map(|(node, world)| node.primitives.iter().map(move |&p| (p, *world)))
+                .map(|(p, world)| glb_draw(bank, path, glb, p, world, |m| m, editor_object.clone()))
+                .collect()
+        }
+        Geometry::Procedural(procedural) => {
+            let mesh = bank.insert(procedural.mesh_key(), || procedural.mesh());
+            vec![Draw {
+                mesh,
+                model: root,
+                material: crate::truss::ALUMINIUM,
+                textures: MaterialTextures::default(),
+                editor_object,
+            }]
+        }
+    })
+}
+
 /// Intern one glTF primitive's geometry and base-colour texture, and emit the
 /// draw that references them. `material` is the caller's chance to override the
 /// asset's own constants (the near-black fixture housing).
@@ -700,35 +743,7 @@ pub fn build_with(
             * three_pose_from_data(piece.pos, piece.rot)
             * Mat4::from_scale(Vec3::splat(piece.scale));
         let object = Some(EditorObject::StagePiece(piece.id.clone()));
-        match &piece.geometry {
-            Geometry::MeshPath(path) => {
-                let glb = lib.get(path)?;
-                let worlds = glb.world_matrices(root, &HashMap::new());
-                for (node, world) in glb.nodes.iter().zip(&worlds) {
-                    for &p in &node.primitives {
-                        draws.push(glb_draw(
-                            &mut bank,
-                            path,
-                            glb,
-                            p,
-                            *world,
-                            |m| m,
-                            object.clone(),
-                        ));
-                    }
-                }
-            }
-            Geometry::Procedural(procedural) => {
-                let mesh = bank.insert(procedural.mesh_key(), || procedural.mesh());
-                draws.push(Draw {
-                    mesh,
-                    model: root,
-                    material: crate::truss::ALUMINIUM,
-                    textures: MaterialTextures::default(),
-                    editor_object: object,
-                });
-            }
-        }
+        draws.extend(piece_draws(&piece.geometry, root, lib, &mut bank, object)?);
     }
 
     let camera = Camera {
@@ -765,6 +780,7 @@ pub fn build_with(
         &camera,
         to_world,
         gizmo_pivot,
+        lib,
         &mut bank,
     );
 

@@ -1,4 +1,5 @@
-//! Editor affordances: the selection cage and the translate gizmo.
+//! Editor affordances: the selection cage, the transform gizmo, and what the
+//! venue builder is about to do (`scene_desc::Build`).
 //!
 //! Spec §2.3 calls these `Unlit` — flat colour, no lighting, optionally no
 //! depth test. Spec §5.2 owns the interactive half (hit testing, drag frames);
@@ -18,7 +19,7 @@ use luma_scene::{gizmo_scale, GizmoMode, RING_RADIUS};
 use crate::assets::Library;
 use crate::coords::{euler_xyz, hex_srgb, three_from_data, three_pose_from_data};
 use crate::frame::{Camera, Definitions, MeshData};
-use crate::scene_desc::{Geometry, Scene};
+use crate::scene_desc::{Geometry, Scene, SocketMarkState};
 
 /// How an overlay sits against the scene it is drawn over. The two variants are
 /// the two material configurations three.js uses, not a free combination:
@@ -50,6 +51,22 @@ pub struct Overlay {
     /// Depth and blend behaviour.
     pub depth: OverlayDepth,
 }
+
+/// The builder's "yes": the one accent the venue builder paints with, shared by
+/// a compatible socket and a run that fits.
+const ACCENT: u32 = 0x6b_7d_ff;
+
+/// The builder's "no", on every affordance that can be refused at once — a
+/// refused ghost and its refused run are one answer, not two.
+const REFUSED: u32 = 0xff_3b_30;
+
+/// A socket bead's radius before the constant-screen-size factor. A quarter of
+/// the gizmo's octahedron, because a socket is a place to aim at, not a handle
+/// to grab.
+const SOCKET_RADIUS: f32 = 0.025;
+
+/// Half-length of a measure end tick, before the same factor.
+const TICK_RADIUS: f32 = 0.06;
 
 /// Handles hide when their axis points within this much of straight at the
 /// camera, where the drag math degenerates (`AXIS_HIDE_TRESHOLD`).
@@ -130,13 +147,16 @@ impl MeshKind {
 
 /// Every editor affordance the scene asks for, in draw order.
 ///
-/// `bank` interns the geometry into the frame's shared mesh table.
+/// `bank` interns the geometry into the frame's shared mesh table; `lib`
+/// resolves the ghost's authored mesh, the one affordance whose shape comes
+/// from an asset rather than from this module.
 pub(crate) fn build(
     scene: &Scene,
     definitions: &Definitions,
     camera: &Camera,
     to_world: Mat4,
     pivot: Option<Vec3>,
+    lib: &mut Library,
     bank: &mut crate::frame::Bank,
 ) -> Vec<Overlay> {
     let mut out = Vec::new();
@@ -175,6 +195,95 @@ pub(crate) fn build(
             opacity: 1.0,
             depth: OverlayDepth::Tested,
         });
+    }
+
+    // --- builder affordances -----------------------------------------------
+    // Sockets first, then the ghost over them, then the measure over both:
+    // painted in the order of how much they say about the *next* click. All
+    // three ignore depth, so a joint behind a truss still reads.
+    let build = &scene.editor.build;
+    for mark in &build.sockets {
+        let pos = three_from_data(Vec3::from(mark.pos));
+        let world = to_world.transform_point3(pos);
+        let scale = gizmo_scale((camera.eye - world).length(), camera.fov_y_deg);
+        let (color, opacity) = match mark.state {
+            SocketMarkState::Open => (0x6e_6e_6e, 0.5),
+            SocketMarkState::Compatible => (ACCENT, 0.9),
+            SocketMarkState::Latched => (0xff_ff_ff, 1.0),
+        };
+        out.push(Overlay {
+            mesh: bank.insert("::socket-bead".to_string(), || octahedron(SOCKET_RADIUS)),
+            // Squashed along the joint's own normal, so the bead reads as a
+            // face on the piece rather than as a free-floating handle.
+            model: to_world
+                * Mat4::from_translation(pos)
+                * Mat4::from_mat3(basis_from_up(three_from_data(Vec3::from(mark.normal))))
+                * Mat4::from_scale(scale * Vec3::new(1.0, 0.6, 1.0)),
+            lines: false,
+            color: hex_srgb(color),
+            opacity,
+            depth: OverlayDepth::Free,
+        });
+    }
+
+    if let Some(ghost) = &build.ghost {
+        let root = to_world
+            * three_pose_from_data(ghost.pos, ghost.rot)
+            * Mat4::from_scale(Vec3::splat(ghost.scale));
+        // A ghost whose asset will not load draws nothing: the same missing
+        // mesh is already absent from the room, and a placement preview is not
+        // worth failing a frame over.
+        let draws =
+            crate::frame::piece_draws(&ghost.geometry, root, lib, bank, None).unwrap_or_default();
+        out.extend(draws.into_iter().map(|draw| Overlay {
+            mesh: draw.mesh,
+            model: draw.model,
+            lines: false,
+            color: hex_srgb(if ghost.refused { REFUSED } else { 0xff_ff_ff }),
+            // The refusal is drawn *harder* than the acceptance: a placement
+            // that will not commit has to stop the hand, not fade out of it.
+            opacity: if ghost.refused { 0.5 } else { 0.35 },
+            depth: OverlayDepth::Free,
+        }));
+    }
+
+    // The extend ray, with a tick at each end so a run the pointer has not
+    // dragged yet is still a mark on the room rather than nothing. The metres
+    // readout belongs beside it — that is a gpui element the app projects onto
+    // the viewport, and there is deliberately no text in this layer.
+    if let Some(measure) = &build.measure {
+        let from = three_from_data(Vec3::from(measure.from));
+        let to = three_from_data(Vec3::from(measure.to));
+        let color = hex_srgb(if measure.refused { REFUSED } else { ACCENT });
+        let run = basis_from_up(to - from);
+        out.push(Overlay {
+            mesh: bank.insert(MeshKind::Segment.key().to_string(), || {
+                MeshKind::Segment.build()
+            }),
+            // The unit segment lies along +X, so the run itself is the X column;
+            // the other two only have to be perpendicular.
+            model: to_world
+                * Mat4::from_translation(from)
+                * Mat4::from_mat3(Mat3::from_cols(to - from, run.x_axis, run.z_axis)),
+            lines: true,
+            color,
+            opacity: 1.0,
+            depth: OverlayDepth::Free,
+        });
+        for end in [from, to] {
+            let world = to_world.transform_point3(end);
+            let scale = gizmo_scale((camera.eye - world).length(), camera.fov_y_deg);
+            out.push(Overlay {
+                mesh: bank.insert("::measure-tick".to_string(), tick_cross),
+                model: to_world
+                    * Mat4::from_translation(end)
+                    * Mat4::from_scale(Vec3::splat(scale * TICK_RADIUS)),
+                lines: true,
+                color,
+                opacity: 1.0,
+                depth: OverlayDepth::Free,
+            });
+        }
     }
 
     // --- transform gizmo ---------------------------------------------------
@@ -488,6 +597,29 @@ fn translate_handles() -> Vec<Handle> {
             magenta,
         ),
     ]
+}
+
+/// An orthonormal basis whose +Y is `up`. The other two axes are arbitrary but
+/// stable, which is all a shape symmetric about that axis needs; a zero vector
+/// answers with the identity rather than with NaNs.
+fn basis_from_up(up: Vec3) -> Mat3 {
+    let y = up.normalize_or(Vec3::Y);
+    // Any seed not parallel to `y`, so the cross product has a direction.
+    let seed = if y.z.abs() < 0.9 { Vec3::Z } else { Vec3::X };
+    let x = y.cross(seed).normalize();
+    Mat3::from_cols(x, y, x.cross(y))
+}
+
+/// Three unit segments crossed at the origin: an end mark that is visible from
+/// any angle, including down the run it terminates.
+fn tick_cross() -> MeshData {
+    MeshData {
+        key: String::new(),
+        vertices: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+            .map(vertex)
+            .into(),
+        indices: vec![0, 1, 2, 3, 4, 5].into(),
+    }
 }
 
 fn vertex(p: Vec3) -> crate::assets::Vertex {

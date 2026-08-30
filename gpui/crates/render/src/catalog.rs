@@ -91,7 +91,53 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
             )
         }))
         .chain(mount_faces(params))
+        .chain(footings(params))
         .collect()
+}
+
+/// The name of the socket a generated piece lies down on.
+pub const SEAT_SOCKET: &str = "seat";
+
+/// The name of the socket a stick stands up on.
+pub const BASE_SOCKET: &str = "base";
+
+/// The two ways a generated piece can be **put down** rather than bolted on.
+///
+/// A truss end is `Neutral` and lives in the `TrussEnd` joint; the floor is
+/// `Ground` and lives in the `Surface` joint, so no socket the generator
+/// already had could ever meet a floor. Without these a stick could not stand
+/// in a room at all — only hang off something that was already there — and
+/// "place a truss on the floor" would have no spelling.
+///
+/// - **`seat`** is the underside centre: the piece lies flat, resting on the
+///   section's own outer face. Every family has one, at the same place, because
+///   every family's section is that same box.
+/// - **`base`** is the upstream end taken as a foot, which is what makes a
+///   **tower**: the same generator, stood on end. Only the straight family has
+///   one — a block or a hinge stood on a way is a piece bolted to something,
+///   not a piece put down.
+fn footings(params: Procedural) -> Vec<ResolvedSocket> {
+    let seat = ResolvedSocket::from_frame(
+        SEAT_SOCKET,
+        SocketType::BottomMount,
+        DVec3::new(0.0, f64::from(-crate::truss::OUTER_M), 0.0),
+        DVec3::NEG_Y,
+        DVec3::X,
+    );
+    let Procedural::Truss { .. } = params else {
+        return vec![seat];
+    };
+    let foot = params.end_frames()[0];
+    vec![
+        seat,
+        ResolvedSocket::from_frame(
+            BASE_SOCKET,
+            SocketType::BottomMount,
+            foot.position.as_dvec3(),
+            foot.normal.as_dvec3(),
+            DVec3::Y,
+        ),
+    ]
 }
 
 /// The four long sides of a stick, as surfaces a clamp can go on.
@@ -397,7 +443,10 @@ mod tests {
                 match piece.geometry {
                     Geometry::Procedural(f) => {
                         let params = default_params(f);
-                        params.end_frames().len() + 1 + mount_faces(params).len()
+                        params.end_frames().len()
+                            + 1
+                            + mount_faces(params).len()
+                            + footings(params).len()
                     }
                     Geometry::Mesh { .. } => unreachable!(),
                 }
@@ -444,7 +493,7 @@ mod tests {
             faces: FaceSet::of([Face::NegX, Face::PosY, Face::PosZ]),
         });
         let names: Vec<&str> = sockets.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["grab", "face_-x", "face_+y", "face_+z"]);
+        assert_eq!(names, ["grab", "face_-x", "face_+y", "face_+z", "seat"]);
     }
 
     /// Two generated pieces mate through the same socket vocabulary the GLB
@@ -457,9 +506,16 @@ mod tests {
                 // sides: a *face* hosts a clamp, an *end* bolts structure, and
                 // keeping them different types is what makes hanging a light
                 // off a bolt plate a refusal rather than a short face.
+                // `BottomMount` is the footing a piece is *put down* on —
+                // see `footings`. It is the same type the deck's `bottom` and
+                // the speaker's `mount` carry, which is what lets a truss rest
+                // on a floor at all.
                 assert!(matches!(
                     s.socket_type,
-                    SocketType::Grab | SocketType::TrussEnd | SocketType::TrussFace
+                    SocketType::Grab
+                        | SocketType::TrussEnd
+                        | SocketType::TrussFace
+                        | SocketType::BottomMount
                 ));
             }
         }

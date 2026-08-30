@@ -70,12 +70,89 @@ pub struct Scene {
 }
 
 /// What the editor is doing to the scene it is drawn over.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Editor {
     /// Selected stage pieces. Fixtures are in [`Scene::selected_fixture_ids`].
     pub selected_piece_ids: Vec<String>,
     /// Which widget the transform gizmo shows.
     pub gizmo: luma_scene::GizmoMode,
+    /// What the builder is about to do, drawn over the room it would change.
+    /// Empty on every screen that is not the stage page.
+    pub build: Build,
+}
+
+/// The builder's uncommitted intent: the piece under the cursor, the run being
+/// measured, and the joints worth pointing at.
+///
+/// Poses are in data space, the convention [`Piece::pos`]/[`Piece::rot`] use, so
+/// the drawer converts them with `three_pose_from_data` exactly as it does a
+/// placed piece. Everything here is derived state — the resolver's answer for
+/// the current pointer — and is rebuilt each frame rather than edited.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Build {
+    /// The piece under the cursor, not yet committed.
+    pub ghost: Option<Ghost>,
+    /// A run being measured — the extend ray's two ends.
+    pub measure: Option<Measure>,
+    /// Sockets worth pointing at while something is held.
+    pub sockets: Vec<SocketMark>,
+}
+
+/// A placement preview: the held piece's own geometry, at the pose the resolver
+/// would commit it to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ghost {
+    /// The held piece's shape, drawn flat rather than lit.
+    pub geometry: Geometry,
+    /// Data-space position.
+    pub pos: [f32; 3],
+    /// Data-space Euler triple.
+    pub rot: [f32; 3],
+    /// Uniform scale, as [`Piece::scale`].
+    pub scale: f32,
+    /// A placement the resolver would refuse — drawn red rather than white. The
+    /// ghost still shows where the cursor *is*, so the refusal reads as a
+    /// rejected position and not as a lost drag.
+    pub refused: bool,
+}
+
+/// The extend ray a run is being measured along.
+///
+/// Both ends are data-space points; the metres readout that belongs beside them
+/// is a gpui element the app projects, never geometry from this layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Measure {
+    /// Where the run starts.
+    pub from: [f32; 3],
+    /// Where the pointer has dragged it to.
+    pub to: [f32; 3],
+    /// The run does not fit — the same refusal the ghost shows.
+    pub refused: bool,
+}
+
+/// One joint on a piece already in the room, marked while something is held.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SocketMark {
+    /// Data-space position of the joint.
+    pub pos: [f32; 3],
+    /// Outward normal in data space, so the mark can lean the way the joint
+    /// faces.
+    pub normal: [f32; 3],
+    /// How the mark reads against what is held.
+    pub state: SocketMarkState,
+}
+
+/// How prominent a socket mark is, from "there is a joint here" to "release and
+/// it lands on this one".
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SocketMarkState {
+    /// A joint that exists; nothing is aiming at it.
+    #[default]
+    Open,
+    /// The held piece could mate here.
+    Compatible,
+    /// The held piece is snapped to it right now.
+    Latched,
 }
 
 /// Three.js Y-up, because that is the space `useCameraStore` holds.
@@ -408,7 +485,7 @@ pub struct Fixture {
 /// it is generated, and a schema that can say both at once needs a precedence
 /// rule nobody can see. Serialized flat into [`Piece`], so an authored piece is
 /// still `{"meshPath": "..."}` and every existing scene file reads unchanged.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Geometry {
     /// Path under `resources/meshes/`.
@@ -431,7 +508,7 @@ impl Geometry {
 /// other — see [`crate::truss`]. Parameters here are *requests*: each is
 /// quantized or clamped by the generator's constructor, so an unbuildable value
 /// is not an error, it is the nearest buildable one.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Procedural {
     /// A continuous F34 lattice.
