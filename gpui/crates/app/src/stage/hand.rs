@@ -131,7 +131,14 @@ impl Hand {
     pub(crate) fn readout(&self) -> String {
         match self {
             Hand::Empty => "Hand: empty".to_string(),
-            Hand::Holding(held) => format!("Hand: holding {}", held.what.label()),
+            Hand::Holding(held) => match &held.what {
+                Holding::Duplicate {
+                    display_name,
+                    flip: true,
+                    ..
+                } => format!("Hand: holding {display_name} flipped"),
+                what => format!("Hand: holding {}", what.label()),
+            },
             Hand::Extending(run) => format!(
                 "Hand: extending {} {}",
                 run.from_node_label, run.from_socket
@@ -778,6 +785,37 @@ pub(crate) fn can_host(socket: &ResolvedSocket) -> bool {
     socket.socket_type.polarity().can_host() && socket.socket_type != SocketType::Grab
 }
 
+/// The socket on the other hand.
+///
+/// A **mirror**, spelled in the catalog's own names. Flipping a wing means
+/// every relation inside it meets the room's other side, and the catalog
+/// already says which side each socket is on: a deck's `corner_fl` faces
+/// `corner_fr`, its `edge_left` faces `edge_right`, and a stick's `face_-z`
+/// faces `face_+z`. A name with no side is its own mirror — a truss end and a
+/// deck top are the same joint whichever way round the wing is.
+///
+/// The design doc forbids `mirror` as a *node kind* and as an *op*, and this is
+/// neither: it is how `duplicate(flip=True)` spells itself in the one
+/// vocabulary the graph already has, so the copy is ordinary rows that any
+/// other verb can edit afterwards.
+pub(crate) fn mirror_socket(name: &str) -> String {
+    const PAIRS: [(&str, &str); 4] = [
+        ("_fl", "_fr"),
+        ("_bl", "_br"),
+        ("left", "right"),
+        ("-z", "+z"),
+    ];
+    for (a, b) in PAIRS {
+        if name.contains(a) {
+            return name.replace(a, b);
+        }
+        if name.contains(b) {
+            return name.replace(b, a);
+        }
+    }
+    name.to_string()
+}
+
 /// Whether a socket is something a row of fixtures can be spread along.
 ///
 /// A truss face, a deck top or edge, the venue's own floor and grid — anything
@@ -861,5 +899,25 @@ mod tests {
             Room::seat_socket(&sockets).map(|s| s.name.as_str()),
             Some("bottom")
         );
+    }
+}
+
+#[cfg(test)]
+mod mirror_tests {
+    use super::mirror_socket;
+
+    #[test]
+    fn a_side_is_swapped_and_a_sideless_socket_is_its_own_mirror() {
+        assert_eq!(mirror_socket("corner_fl"), "corner_fr");
+        assert_eq!(mirror_socket("corner_fr"), "corner_fl");
+        assert_eq!(mirror_socket("edge_left"), "edge_right");
+        assert_eq!(mirror_socket("face_-z"), "face_+z");
+        // A truss end and a deck top have no side to swap.
+        assert_eq!(mirror_socket("end_a"), "end_a");
+        assert_eq!(mirror_socket("top"), "top");
+        // The mirror is its own inverse.
+        for name in ["corner_bl", "edge_right", "face_+z", "seat"] {
+            assert_eq!(mirror_socket(&mirror_socket(name)), name);
+        }
     }
 }

@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, HashMap};
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Pixels, Point};
 use gpui_component::scroll::ScrollableElement as _;
-use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
+use luma_lib::models::distribute::{DistributeLayout, DistributeRefusal, DistributeReport};
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
 use luma_scene::catalog::{pieces, PaletteGroup};
@@ -962,18 +962,25 @@ impl Luma {
             return;
         };
         let venue = build.venue_id.clone();
-        let Some(fit) = build
+        // Only the too-long refusal carries a fix this button can press: an
+        // overlap is answered by moving something, and which something is the
+        // operator's call.
+        let Some(DistributeRefusal::TooLong {
+            needed_m,
+            extend_node_id,
+            ..
+        }) = build
             .distribute
             .as_ref()
             .and_then(|popup| popup.report.as_ref())
-            .and_then(|report| report.fit.clone())
+            .and_then(|report| report.refusal.clone())
         else {
             return;
         };
         let pending = self.library.set_params(
             &venue,
-            &fit.extend_node_id,
-            BTreeMap::from([("span".to_string(), fit.needed_m)]),
+            &extend_node_id,
+            BTreeMap::from([("span".to_string(), needed_m)]),
             None,
         );
         cx.spawn(async move |this, cx| {
@@ -1088,16 +1095,19 @@ type Verb = std::pin::Pin<
 impl Build {
     /// The `attach` calls that reproduce a subtree at a new joint.
     ///
-    /// **Flip** is the mirror about the root socket's own normal, and it is
-    /// expressed as the one number an edge has: `roll`. A wing bolted to a
-    /// stage's downstage-left corner and duplicated onto downstage-right is
-    /// the same subtree turned half a turn about the joint, which is what
-    /// makes the copy's handedness the opposite of the original's — the
-    /// design doc's "inverts the subtree's handedness about its root socket".
-    /// No node kind, no mirrored geometry, and nothing to keep in sync: the
-    /// resolver already clamps a roll to the freedom its joint admits, so a
-    /// flip a bolted joint cannot express comes back as a warning rather than
-    /// a lie.
+    /// **Flip** inverts the subtree's handedness about its root socket, and it
+    /// is written in the rows themselves rather than as an op: every relation
+    /// inside the copy meets the mirrored socket
+    /// ([`hand::mirror_socket`]), every roll changes sign, and every
+    /// along-the-face offset is negated. What comes out is ordinary rows any
+    /// other verb can edit afterwards — no node kind, no mirrored geometry, and
+    /// nothing to keep in sync.
+    ///
+    /// A half turn about the joint would have been smaller and would have been
+    /// wrong: handedness is a reflection, and the joints a wing actually bolts
+    /// to (`TrussEnd`, `FloorCorner`) have `RollFreedom::Fixed`, so the
+    /// resolver would clamp that turn to nothing and the button would do
+    /// nothing but warn.
     fn copy_plan(&self, root: &str, flip: bool, how: &Landing) -> Option<Vec<CopyStep>> {
         let Landing::Socket {
             parent,
@@ -1111,6 +1121,18 @@ impl Build {
             // seated free would be a second, different gesture.
             return None;
         };
+        // `u` runs along the host feature's tangent, so its sign is which side
+        // of that feature a child sits on. Nothing else in the vocabulary is
+        // handed: `v` is across, `trim` is up, and a span has no side.
+        let mirrored = |params: &luma_scene::venue::Params| -> BTreeMap<String, f64> {
+            params
+                .iter()
+                .map(|(key, value)| {
+                    let value = if flip && key == "u" { -value } else { value };
+                    (key.to_string(), value)
+                })
+                .collect()
+        };
         let mut steps = Vec::new();
         let source = self.graph.node(root)?;
         steps.push(CopyStep {
@@ -1121,12 +1143,8 @@ impl Build {
             parent: parent.clone(),
             my_socket: my_socket.clone(),
             their_socket: their_socket.clone(),
-            yaw: yaw + if flip { std::f64::consts::PI } else { 0.0 },
-            params: source
-                .params
-                .iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
+            yaw: *yaw,
+            params: mirrored(&source.params),
         });
         for id in self.graph.subtree(root).into_iter().filter(|id| id != root) {
             let (Some(node), Some(edge)) = (self.graph.node(&id), self.graph.edge(&id)) else {
@@ -1139,13 +1157,13 @@ impl Build {
                 label: node.label.clone(),
                 parent: edge.parent.clone(),
                 my_socket: edge.my_socket.clone(),
-                their_socket: edge.their_socket.clone(),
-                yaw: edge.roll,
-                params: node
-                    .params
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect(),
+                their_socket: if flip {
+                    hand::mirror_socket(&edge.their_socket)
+                } else {
+                    edge.their_socket.clone()
+                },
+                yaw: if flip { -edge.roll } else { edge.roll },
+                params: mirrored(&node.params),
             });
         }
         Some(steps)
@@ -1192,6 +1210,8 @@ pub(crate) struct SelectedView {
 
 pub(crate) struct DistributeView {
     pub(crate) host: String,
+    /// Whether the refusal carries a length the one-press fix can apply.
+    pub(crate) extendable: bool,
     pub(crate) layout: &'static str,
     pub(crate) fixture: Option<String>,
     pub(crate) mode: Option<String>,
@@ -1278,13 +1298,19 @@ impl Luma {
                 placed: popup
                     .report
                     .as_ref()
-                    .filter(|r| r.ok)
-                    .map(|r| r.fixtures.len()),
+                    .filter(|report| report.refusal.is_none())
+                    .map(|report| report.fixtures.len()),
                 fit: popup
                     .report
                     .as_ref()
-                    .and_then(|r| r.fit.as_ref())
-                    .map(|fit| fit.suggestion.clone()),
+                    .and_then(|report| report.refusal.as_ref())
+                    .map(|refusal| match refusal {
+                        DistributeRefusal::TooLong { suggestion, .. }
+                        | DistributeRefusal::Overlap { suggestion, .. } => suggestion.clone(),
+                    }),
+                extendable: popup.report.as_ref().is_some_and(|report| {
+                    matches!(report.refusal, Some(DistributeRefusal::TooLong { .. }))
+                }),
             }),
             faces: build
                 .room
@@ -1673,21 +1699,9 @@ fn inspector(view: &StageView, app: &Entity<Luma>) -> AnyElement {
             }
         }
     }
-    column = column.child(
-        div()
-            .text_size(px(10.0))
-            .text_color(ladder::muted_foreground())
-            .child(format!("Dangling: {}", view.dangling.len()))
-            .agent_node(Role::Text, format!("Dangling {}", view.dangling.len())),
-    );
+    // The features first and the diagnostics under them: one is the next thing
+    // a hand does, the other is a report on what it already did.
     column
-        .children(view.dangling.iter().map(|text| {
-            div()
-                .text_size(px(10.0))
-                .text_color(ladder::status_warn())
-                .child(text.clone())
-                .agent_node(Role::Text, format!("Dangling {text}"))
-        }))
         .child(
             div()
                 .mt(px(10.0))
@@ -1710,6 +1724,24 @@ fn inspector(view: &StageView, app: &Entity<Luma>) -> AnyElement {
                             });
                         })
                         .agent_node(Role::Row, label.clone())
+                })),
+        )
+        .child(
+            div()
+                .mt(px(10.0))
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(ladder::muted_foreground())
+                        .child(format!("Dangling: {}", view.dangling.len()))
+                        .agent_node(Role::Text, format!("Dangling {}", view.dangling.len())),
+                )
+                .children(view.dangling.iter().map(|text| {
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(ladder::status_warn())
+                        .child(text.clone())
+                        .agent_node(Role::Text, format!("Dangling {text}"))
                 })),
         )
         .into_any_element()
@@ -1841,15 +1873,15 @@ fn distribute_card(view: &DistributeView, app: &Entity<Luma>) -> AnyElement {
         );
     }
     if let Some(fit) = &view.fit {
-        card = card
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(ladder::status_warn())
-                    .child(fit.clone())
-                    .agent_node(Role::Text, fit.clone()),
-            )
-            .child(
+        card = card.child(
+            div()
+                .text_size(px(10.0))
+                .text_color(ladder::status_warn())
+                .child(fit.clone())
+                .agent_node(Role::Text, fit.clone()),
+        );
+        if view.extendable {
+            card = card.child(
                 luma_ui::luma_button("Extend and retry", Enabled::Yes)
                     .id("stage-extend-retry")
                     .on_click(move |_, _, cx| {
@@ -1857,6 +1889,7 @@ fn distribute_card(view: &DistributeView, app: &Entity<Luma>) -> AnyElement {
                     })
                     .agent_node(Role::Button, "Extend and retry"),
             );
+        }
     }
     card.into_any_element()
 }
