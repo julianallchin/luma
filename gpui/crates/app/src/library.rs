@@ -131,12 +131,19 @@ struct LibraryEvents {
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
     /// A sync's pull has landed — see [`Library::sync_pull`].
     sync_pulled: tokio::sync::broadcast::Sender<()>,
+    /// The stored session stopped proving anyone — see
+    /// [`Library::session_revoked`].
+    session_revoked: tokio::sync::broadcast::Sender<()>,
 }
 
 impl EventSink for LibraryEvents {
     fn emit(&self, event: &str, payload: Value) {
         if event == "sync-pulled" {
             let _ = self.sync_pulled.send(());
+            return;
+        }
+        if event == "session-revoked" {
+            let _ = self.session_revoked.send(());
             return;
         }
         if event != "track-import-state" {
@@ -567,6 +574,9 @@ pub struct Library {
     cloud: bool,
     /// Fires when a sync's pull phase is over; see [`Library::sync_pull`].
     sync_pulled: tokio::sync::broadcast::Sender<()>,
+    /// Fires when the backend learns the session is revoked; see
+    /// [`Library::session_revoked`].
+    session_revoked: tokio::sync::broadcast::Sender<()>,
     /// Tells the background sync loop to stop. Sent on drop; the reactor
     /// going with it is what makes the stop take.
     sync_shutdown: tokio::sync::watch::Sender<bool>,
@@ -622,9 +632,11 @@ impl Library {
 
         let (progress_tx, _) = tokio::sync::broadcast::channel(256);
         let (sync_pulled, _) = tokio::sync::broadcast::channel(16);
+        let (session_revoked, _) = tokio::sync::broadcast::channel(4);
         let events = Events::new(LibraryEvents {
             import_progress: progress_tx.clone(),
             sync_pulled: sync_pulled.clone(),
+            session_revoked: session_revoked.clone(),
         });
         // Whether this process may talk to the cloud at all — see
         // `Runtime::cloud`. Unasked is a launched app, which may.
@@ -766,6 +778,7 @@ impl Library {
             import_progress: progress_tx,
             cloud,
             sync_pulled,
+            session_revoked,
             sync_shutdown,
             session_writes,
             model: None,
@@ -1209,6 +1222,13 @@ impl Library {
     /// silently replaying stale state; callers reconcile from `all_tracks`.
     pub fn import_progress(&self) -> tokio::sync::broadcast::Receiver<TrackImportProgress> {
         self.import_progress.subscribe()
+    }
+
+    /// Fires when Supabase refuses to renew the stored session — its refresh
+    /// token was spent by another process, or the session was revoked. The
+    /// backend stops presenting it; the app's answer is the sign-in gate.
+    pub fn session_revoked(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.session_revoked.subscribe()
     }
 
     /// Resolve the installed Engine DJ library root. The source picker owns no

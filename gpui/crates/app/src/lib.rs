@@ -288,6 +288,7 @@ impl Luma {
             app.show_sign_in(false, cx);
         }
         app.auto_repro(cx);
+        app.watch_session(cx);
         app
     }
 
@@ -305,6 +306,25 @@ impl Luma {
     /// `LUMA_AUTOREPRO_ZOOM` is how many dolly steps to take once the stage is
     /// live (default 8, which reaches the near clamp on any rig).
     ///
+    /// Raise the gate the moment the backend learns the stored session is
+    /// gone for good. The sync loop is what finds out — a refresh refused as
+    /// spent or revoked — and nothing it could retry would change the answer,
+    /// so the only door left is a new sign-in, shown as an expiry.
+    fn watch_session(&mut self, cx: &mut Context<Self>) {
+        let mut revoked = self.library.session_revoked();
+        cx.spawn(async move |this, cx| {
+            while revoked.recv().await.is_ok() {
+                if this
+                    .update(cx, |this, cx| this.show_sign_in(true, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     /// Polls rather than chains callbacks: the venue restore and the track
     /// open are each several awaited reads, and a poll that gives up after a
     /// bounded number of tries cannot hang a launch that has nothing to open.
