@@ -1312,22 +1312,17 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
 
 // --- surfaces --- //
 
-struct SurfaceParams {
+// A foreign renderer's frame, already in this target's own encoding: the
+// texture is sampled and written as is, exactly as a polychrome sprite is.
+// (Upstream's YCbCr video surface was never wired to this renderer and is
+// gone; a frame from `Window::paint_surface` is one BGRA plane.)
+struct Surface {
     bounds: Bounds,
     content_mask: Bounds,
 }
 
-@group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
-@group(1) @binding(1) var t_y: texture_2d<f32>;
-@group(1) @binding(2) var t_cb_cr: texture_2d<f32>;
-@group(1) @binding(3) var s_surface: sampler;
-
-const ycbcr_to_RGB = mat4x4<f32>(
-    vec4<f32>( 1.0000f,  1.0000f,  1.0000f, 0.0),
-    vec4<f32>( 0.0000f, -0.3441f,  1.7720f, 0.0),
-    vec4<f32>( 1.4020f, -0.7141f,  0.0000f, 0.0),
-    vec4<f32>(-0.7010f,  0.5291f, -0.8860f, 1.0),
-);
+@group(2) @binding(0) var t_surface: texture_2d<f32>;
+@group(2) @binding(1) var s_surface: sampler;
 
 struct SurfaceVarying {
     @builtin(position) position: vec4<f32>,
@@ -1336,27 +1331,23 @@ struct SurfaceVarying {
 }
 
 @vertex
-fn vs_surface(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
+fn vs_surface(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> SurfaceVarying {
     let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
+    let surface = load_surface(instance_id);
 
     var out = SurfaceVarying();
-    out.position = to_device_position(unit_vertex, surface_locals.bounds);
+    out.position = to_device_position(unit_vertex, surface.bounds);
     out.texture_position = unit_vertex;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, surface_locals.bounds, surface_locals.content_mask);
+    out.clip_distances = distance_from_clip_rect(unit_vertex, surface.bounds, surface.content_mask);
     return out;
 }
 
 @fragment
 fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
+    let sample = textureSample(t_surface, s_surface, input.texture_position);
     // Alpha clip after using the derivatives.
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
     }
-
-    let y_cb_cr = vec4<f32>(
-        textureSampleLevel(t_y, s_surface, input.texture_position, 0.0).r,
-        textureSampleLevel(t_cb_cr, s_surface, input.texture_position, 0.0).rg,
-        1.0);
-
-    return ycbcr_to_RGB * y_cb_cr;
+    return sample;
 }

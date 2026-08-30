@@ -31,11 +31,6 @@ fn main() {
     let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
     app.run(move |cx| {
         luma_app::init(cx);
-        // Before the window exists, because compiling every render pipeline is
-        // the longest thing between launch and a first frame and it does not
-        // need anything the window provides. Returns immediately; the stage
-        // reports the progress (see `visualizer::body`).
-        luma_render::warm();
 
         let options = WindowOptions {
             // No *visible* native chrome: `chrome`'s head bands draw it, the same
@@ -77,6 +72,12 @@ fn main() {
 
         cx.open_window(options, |window, cx| {
             luma_app::hide_native_window_buttons(window);
+            // As early as there is a window, because compiling every render
+            // pipeline is the longest thing between launch and a first frame
+            // — and not before, because on a wgpu compositor the pipelines
+            // belong on the window's own device. Returns immediately; the
+            // stage reports the progress (see `visualizer::body`).
+            luma_app::warm_renderer(window);
             let luma = cx.new(|cx| Luma::new(library, cx));
             cx.new(|cx| Root::new(luma, window, cx).bordered(false))
         })

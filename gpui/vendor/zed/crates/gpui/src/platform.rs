@@ -928,6 +928,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
+    /// See [`crate::Window::wgpu_device`].
+    // LUMA LOCAL EDIT: not upstream. The default is the answer for every
+    // compositor that is not `gpui_wgpu`.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn wgpu_device(&self) -> Option<crate::WgpuDevice> {
+        None
+    }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 
