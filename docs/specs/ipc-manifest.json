@@ -645,7 +645,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 166
+        "line": 176
       },
       "name": "auto_patch",
       "prose": {
@@ -1567,7 +1567,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 271
+        "line": 281
       },
       "name": "fixture_role",
       "prose": {
@@ -1708,7 +1708,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 86
+        "line": 96
       },
       "name": "get_fixture_definition",
       "prose": {
@@ -3341,7 +3341,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 204
+        "line": 214
       },
       "name": "next_addresses",
       "prose": {
@@ -3391,7 +3391,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 98
+        "line": 108
       },
       "name": "patch_fixture",
       "prose": {
@@ -3981,7 +3981,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 291
+        "line": 301
       },
       "name": "remove_patched_fixture",
       "prose": {
@@ -4061,7 +4061,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 306
+        "line": 316
       },
       "name": "rename_patched_fixture",
       "prose": {
@@ -4597,7 +4597,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 72
+        "line": 79
       },
       "name": "search_fixtures",
       "prose": {
@@ -4680,7 +4680,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 255
+        "line": 265
       },
       "name": "set_address_pinned",
       "prose": {
@@ -4710,7 +4710,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 153
+        "line": 163
       },
       "name": "set_fixture_address",
       "prose": {
@@ -4740,7 +4740,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 233
+        "line": 243
       },
       "name": "set_fixture_mode",
       "prose": {
@@ -5000,7 +5000,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 179
+        "line": 189
       },
       "name": "universe_occupancy",
       "prose": {
@@ -5018,7 +5018,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 190
+        "line": 200
       },
       "name": "universes_in_use",
       "prose": {
