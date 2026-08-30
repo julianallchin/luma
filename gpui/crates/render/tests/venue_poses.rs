@@ -176,6 +176,66 @@ fn venue() -> VenueGraph {
         ),
         on_floor(FIXTURE_CLAMP_SOCKET, 1.1),
     );
+    // A third, hung off the same grid but aimed off its rest direction. Both
+    // angles are non-zero and neither is a right angle, so a dropped `pan`, a
+    // dropped `tilt` and the two swapped all move `facing` here — which is the
+    // only line in this golden that says a rest aim reached the pose at all.
+    attach(
+        &mut graph,
+        node(
+            "aimed",
+            NodeKind::Fixture,
+            "fixture:aimed",
+            &[
+                ("u", 1.0),
+                ("v", -2.0),
+                ("trim", 5.0),
+                ("pan", 0.6),
+                ("tilt", 0.9),
+            ],
+        ),
+        Edge {
+            parent: "venue".into(),
+            my_socket: FIXTURE_CLAMP_SOCKET.into(),
+            their_socket: RIG_SOCKET.into(),
+            roll: 0.0,
+        },
+    );
+
+    // A stick flown from the rig plane, with a head on its underside.
+    //
+    // The rig faces *down*, and a face mate opposes the two normals, so seating
+    // a piece on it used to turn the piece over — which quietly made `face_-y`
+    // the top of every flown truss and pointed a whole rig at the roof. A piece
+    // hangs under a down-facing host instead, so the two lines below are the
+    // pin: `flown_truss` keeps its own up, and `under_truss` beams straight
+    // down. `beam_of` asserts that second half in world terms, because a golden
+    // of nine digits is exactly the thing a reader cannot check by eye.
+    attach(
+        &mut graph,
+        node(
+            "flown_truss",
+            NodeKind::Run,
+            "truss/straight",
+            &[("span", 3.0)],
+        ),
+        Edge {
+            parent: "venue".into(),
+            my_socket: "seat".into(),
+            their_socket: RIG_SOCKET.into(),
+            roll: 0.0,
+        },
+    );
+    attach(
+        &mut graph,
+        node("under_truss", NodeKind::Fixture, "fixture:under", &[]),
+        Edge {
+            parent: "flown_truss".into(),
+            my_socket: FIXTURE_CLAMP_SOCKET.into(),
+            their_socket: "face_-y".into(),
+            roll: 0.0,
+        },
+    );
 
     // An array of five speakers spread over four metres of the deck top.
     attach(
@@ -368,6 +428,40 @@ fn venue_poses_golden_is_current() {
 #[test]
 fn two_solves_are_byte_identical() {
     assert_eq!(golden(), golden());
+}
+
+/// A head on the underside of a flown stick points at the floor.
+///
+/// The claim the golden's nine digits make but cannot state: `face_-y` is the
+/// piece's underside wherever the piece ended up, so a row hung there beams
+/// straight down whether the stick stands on a deck or hangs from the grid.
+/// Read in world terms — data space `-Z` — rather than as a face name, because
+/// naming the face is the very thing that was wrong when a flown piece came out
+/// upside down.
+#[test]
+fn a_head_under_a_flown_stick_beams_down() {
+    let solved = resolve(&venue(), catalog());
+    let beam = |id: &str| {
+        let (_, basis) = solved
+            .pose(id)
+            .unwrap_or_else(|| panic!("{id} is in the room"))
+            .data_basis();
+        basis * glam::DVec3::NEG_Z
+    };
+    assert!(
+        beam("under_truss").abs_diff_eq(glam::DVec3::NEG_Z, 1e-9),
+        "a head on the underside of a flown stick beams {:?}, not straight down",
+        beam("under_truss")
+    );
+    // And the flown stick itself kept its own up: not asserted through the
+    // fixture, because a beam that happened to be right off an upside-down
+    // truss would be two errors cancelling.
+    let (_, truss) = solved.pose("flown_truss").unwrap().data_basis();
+    assert!(
+        (truss * glam::DVec3::Z).dot(glam::DVec3::Z) > 0.999,
+        "the flown stick was turned over: up is {:?}",
+        truss * glam::DVec3::Z
+    );
 }
 
 // ---------------------------------------------------------------------------

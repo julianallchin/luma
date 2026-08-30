@@ -14,6 +14,7 @@ use crate::fixtures::parser::{self, FixtureIndex};
 use crate::models::fixtures::{
     FixtureDefinition, FixtureEntry, FixtureNode, FixtureNodeType, PatchedFixture,
 };
+use crate::services::group_derivation;
 
 /// In-memory fixture-definition index. `None` until [`initialize_fixtures`]
 /// builds it.
@@ -55,31 +56,123 @@ pub fn search_fixtures(
         .as_ref()
         .ok_or("Fixtures not initialized. Call initialize_fixtures first.")?;
 
-    let query = query.to_lowercase();
-
-    if query.is_empty() {
-        return Ok(index
-            .entries
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect());
-    }
-
-    let results: Vec<FixtureEntry> = index
+    Ok(index
         .entries
         .iter()
-        .filter(|f| {
-            f.manufacturer.to_lowercase().contains(&query)
-                || f.model.to_lowercase().contains(&query)
-        })
+        .filter(|entry| matches(entry, &query))
         .skip(offset)
         .take(limit)
         .cloned()
-        .collect();
+        .collect())
+}
 
-    Ok(results)
+/// Whether one library entry answers `query`.
+///
+/// The one match rule, shared by the patch page's search field and the agent's
+/// `luma.venue.fixtures`: every whitespace-separated term must appear somewhere
+/// in "manufacturer model", case-insensitively. Terms rather than a substring
+/// because the two names are written in one order in the file and the other in
+/// a person's head — "rogue spot" and "spot rogue" find the same fixture, and
+/// an empty query matches everything.
+#[must_use]
+pub fn matches(entry: &FixtureEntry, query: &str) -> bool {
+    let haystack = format!("{} {}", entry.manufacturer, entry.model).to_lowercase();
+    query
+        .split_whitespace()
+        .all(|term| haystack.contains(&term.to_lowercase()))
+}
+
+/// One mode of a library fixture, as a caller choosing one needs to see it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryMode {
+    /// The exact string `distribute` takes as its `mode`.
+    pub name: String,
+    pub channels: usize,
+    /// Whether *this* mode patches a pan or a tilt — see
+    /// [`crate::services::group_derivation::aims`]. A mover in a stripped-down
+    /// mode does not move.
+    pub moves: bool,
+    /// What the derivation will file this mode under: `wash`, `spot`, `beam`,
+    /// `strobe`, `blinder`, `pixel`, `fx`, `other`.
+    pub role: String,
+}
+
+/// A library fixture resolved far enough to be named in a `distribute` call.
+///
+/// The projection the agent surface hands out: everything needed to pick a
+/// fixture and a mode, and nothing needed only to drive DMX. The channel list
+/// itself stays behind — a caller choosing between "8 Channel" and "18 Channel"
+/// wants the count, and the parse is thirty kilobytes.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFixture {
+    /// Relative to the fixtures root — the `fixture` argument of `distribute`.
+    pub path: String,
+    pub manufacturer: String,
+    pub model: String,
+    /// The definition's own QLC+ `Type` string, free text.
+    pub kind: String,
+    /// Whether any mode of this fixture aims.
+    pub moves: bool,
+    /// Lens half-range in degrees, `(min, max)`, when the definition measures
+    /// one. Absent on the many QLC+ files that do not.
+    pub beam_deg: Option<(f32, f32)>,
+    pub modes: Vec<LibraryMode>,
+}
+
+/// The fixtures an agent can name, `query` matched by [`matches`].
+///
+/// Reads the same index the patch page searches — [`parser::build_index`] is a
+/// directory walk, not a parse — and then parses only the page it returns, so
+/// naming a fixture costs one file read per row rather than one per library.
+/// A definition that will not parse is dropped rather than failing the call:
+/// the answer to "what can I use" must not be an error because of a file
+/// nobody asked about.
+///
+/// # Errors
+/// Fails only if the fixtures root cannot be walked.
+pub fn library(root: &Path, query: &str, limit: usize) -> Result<Vec<LibraryFixture>, String> {
+    let index = parser::build_index(root).map_err(|e| e.to_string())?;
+    Ok(index
+        .entries
+        .iter()
+        .filter(|entry| matches(entry, query))
+        .filter_map(|entry| resolve_entry(root, entry))
+        .take(limit)
+        .collect())
+}
+
+/// One library entry with its definition read, or `None` if it will not parse.
+fn resolve_entry(root: &Path, entry: &FixtureEntry) -> Option<LibraryFixture> {
+    let definition = parser::parse_definition(&root.join(&entry.path)).ok()?;
+    let modes: Vec<LibraryMode> = definition
+        .modes
+        .iter()
+        .map(|mode| LibraryMode {
+            name: mode.name.clone(),
+            channels: mode.channels.len(),
+            moves: group_derivation::aims(&definition, mode),
+            role: group_derivation::FixtureRole::of(&definition, mode)
+                .as_str()
+                .to_string(),
+        })
+        .collect();
+    let lens = definition
+        .physical
+        .as_ref()
+        .and_then(|physical| physical.lens.as_ref());
+    Some(LibraryFixture {
+        path: entry.path.clone(),
+        manufacturer: definition.manufacturer.clone(),
+        model: definition.model.clone(),
+        kind: definition.type_.clone(),
+        moves: modes.iter().any(|mode| mode.moves),
+        beam_deg: lens
+            .and_then(|lens| Some((lens.degrees_min?, lens.degrees_max?)))
+            .filter(|(min, max)| *max > 0.0 && max >= min),
+        modes,
+    })
 }
 
 /// Get fixture definition from a path relative to the fixtures root.

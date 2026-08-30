@@ -359,7 +359,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 121
+        "line": 123
       },
       "name": "attach",
       "prose": {
@@ -771,7 +771,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 237
+        "line": 239
       },
       "name": "constrain",
       "prose": {
@@ -1221,7 +1221,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 321
+        "line": 323
       },
       "name": "delete_subtree",
       "prose": {
@@ -1332,7 +1332,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 218
+        "line": 220
       },
       "name": "detach",
       "prose": {
@@ -1412,7 +1412,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 298
+        "line": 300
       },
       "name": "duplicate",
       "prose": {
@@ -1627,7 +1627,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 277
+        "line": 279
       },
       "name": "extend",
       "prose": {
@@ -1653,7 +1653,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 103
+        "line": 105
       },
       "name": "extend_reach",
       "prose": {
@@ -3631,7 +3631,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 181
+        "line": 183
       },
       "name": "place_free",
       "prose": {
@@ -3919,7 +3919,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 152
+        "line": 154
       },
       "name": "reattach",
       "prose": {
@@ -4882,7 +4882,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 257
+        "line": 259
       },
       "name": "set_params",
       "prose": {

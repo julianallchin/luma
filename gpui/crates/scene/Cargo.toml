@@ -8,6 +8,11 @@ publish = false
 # logic, and it must stay testable with nothing but `cargo test`.
 [dependencies]
 glam = "0.30"
+# Glam-only, and the owner of the pan/tilt convention. The resolver bakes a
+# fixture's rest aim into its mount frame, and that frame must be the one the
+# beam math would have produced — so the two factors are read from there rather
+# than restated here.
+fixture-kinematics = { path = "../../../src-tauri/crates/fixture-kinematics" }
 
 [dev-dependencies]
 serde_json = "1"

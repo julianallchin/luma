@@ -107,6 +107,15 @@ pub const FLOOR_SOCKET: &str = "floor";
 /// is the floor: same origin, same `(u, v)`, same `trim`.
 pub const RIG_SOCKET: &str = "rig";
 
+/// The parameters held in radians in the graph and quoted in **degrees** at
+/// every surface a person or an agent reads.
+///
+/// One list, named here because the graph owns the parameter vocabulary, so the
+/// tree rendering and the Python facade's conversion cannot come to disagree
+/// about which parameter is an angle. `yaw` is not in it: a turn about a joint
+/// lives on the edge, not on the node.
+pub const ANGLE_PARAMS: [&str; 2] = ["pan", "tilt"];
+
 /// A node's parameters, by key. The vocabulary is `u`, `v`, `trim` on a
 /// placement; `span`, `angle`, `faces` on a generated piece; `count`, `span` on
 /// an array.
@@ -1304,7 +1313,10 @@ fn place(
             catalog_ref: node.catalog_ref.clone(),
             label: node.label.clone(),
             parent: Some(edge.parent.clone()),
-            world,
+            // The head's own turn rides on the pose and not on `world`: a
+            // fixture's clamp does not move when its head pans, so anything
+            // ever bolted to one hangs off the mount frame, not off the aim.
+            world: world * head_turn(node),
             array_index: None,
             params: node.params.clone(),
         },
@@ -1377,7 +1389,32 @@ pub fn place_on(
     host_world
         * DMat4::from_translation(DVec3::new(placement.u, placement.v, 0.0) + lift)
         * DMat4::from_rotation_z(placement.yaw)
-        * mate_suffix(kind, held)
+        * mate_suffix(kind, host_world, held)
+}
+
+/// A fixture's rest aim as a turn on its own mount frame, or nothing.
+///
+/// `pan` and `tilt` are radians, off the mount normal, and they live on the
+/// fixture node because a rest aim is *paperwork*: the socket a head hangs from
+/// decides where it points by default, and pointing it somewhere else is a
+/// value about that one light, not a change to the structure holding it. Baking
+/// it into the pose here is what makes every consumer of a pose — the stored
+/// rotation, `beam_direction`, the aim arrows, a POV camera — follow it with no
+/// second path to keep in step.
+///
+/// The two factors are `fixture_kinematics`'s, read rather than restated: an
+/// aim the solve and the beam math spell differently is a rig whose arrows lie.
+fn head_turn(node: &Node) -> DMat4 {
+    if node.kind != NodeKind::Fixture {
+        return DMat4::IDENTITY;
+    }
+    let (pan, tilt) = (node.params.get("pan", 0.0), node.params.get("tilt", 0.0));
+    if pan == 0.0 && tilt == 0.0 {
+        return DMat4::IDENTITY;
+    }
+    DMat4::from_mat3(crate::coords::swapped_basis(
+        fixture_kinematics::articulation_basis_d(pan, tilt),
+    ))
 }
 
 /// Half a turn about the host socket's tangent, or nothing.
@@ -1447,12 +1484,41 @@ const VERTICAL_HOST_EPSILON: f64 = 1e-9;
 ///
 /// The two differ by exactly a half turn, which is the sign error the design
 /// doc's audit found three copies of.
-fn mate_suffix(kind: NodeKind, held: &ResolvedSocket) -> DMat4 {
+///
+/// A piece on a **down-facing** host *hangs* rather than turning over: see
+/// [`hangs_under`]. A fixture is unaffected — it has no up of its own, only a
+/// beam, and the beam is the host normal either way.
+fn mate_suffix(kind: NodeKind, host_world: DMat4, held: &ResolvedSocket) -> DMat4 {
     if kind == NodeKind::Fixture {
         DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2)
+    } else if hangs_under(host_world) {
+        socket_frame(held).inverse()
     } else {
         flip_for(held.mode) * socket_frame(held).inverse()
     }
+}
+
+/// Whether a host surface is one a piece hangs *under* rather than stands *on*.
+///
+/// The face mate opposes the two normals, which is what stands a deck up on the
+/// floor — and, on a plane that faces down, what turns that deck upside down.
+/// Nothing in a room is mounted upside down by being flown: a truss hung from
+/// the grid has the same underside it had on the floor, which is the whole
+/// reason `face_-y` can mean "hang them below, pointing down" on a stick
+/// wherever that stick ended up. Dropping the half turn is what makes a piece's
+/// own up stay world up on both kinds of surface, so a caller never has to know
+/// which way the thing they hung it from was looking.
+///
+/// Asked of the host's **world** frame, not its local normal: "faces down" is a
+/// fact about the room, and the same `face_-y` is the underside of a stick
+/// lying flat and the side of one stood on end.
+///
+/// A fixture is excluded at the call site rather than here: it has no up to
+/// preserve, and its beam *is* the host normal by construction. There is no
+/// [`SocketMode`] gate either — an edge mate's [`flip_for`] is already the
+/// identity, so the two branches agree wherever the mode would have mattered.
+fn hangs_under(host_world: DMat4) -> bool {
+    host_world.z_axis.truncate().dot(crate::snap::WORLD_UP) < 0.0
 }
 
 /// The roll a joint actually admits.
@@ -1672,13 +1738,13 @@ pub fn invert_placement(
 ) -> SurfacePlacement {
     // `world = parent_world · host_frame · T · Rz · mate`, so
     // `T · Rz = (parent_world · host_frame)⁻¹ · world · mate⁻¹`.
-    let seat =
-        (parent_world * socket_frame(host)).inverse() * world * mate_suffix(kind, held).inverse();
+    let host_world = parent_world * socket_frame(host);
+    let seat = host_world.inverse() * world * mate_suffix(kind, host_world, held).inverse();
     let offset = seat.w_axis.truncate();
     // The offset is `u·x̂ + v·ŷ + trim·up`, with `up` the host frame's view of
     // world up. Its `z` component is trim's alone, because `x̂` and `ŷ` have
     // none — so the split is one division, not a least-squares fit.
-    let up = trim_axis(parent_world * socket_frame(host));
+    let up = trim_axis(host_world);
     let trim = if up.z.abs() < VERTICAL_HOST_EPSILON {
         0.0
     } else {
@@ -2377,6 +2443,59 @@ mod tests {
             normal.abs_diff_eq(DVec3::Z, 1e-12),
             "a floor light points {normal:?}, wanted +Z (up)"
         );
+    }
+
+    /// A rest aim turns the head and nothing else: the mount stays where the
+    /// socket put it, and the beam leaves where `fixture_kinematics` says it
+    /// would for the same articulation off the same rest frame.
+    ///
+    /// Measured against the beam math rather than against a written-out vector,
+    /// so a sign flipped in either spelling parts the two.
+    #[test]
+    fn a_rest_aim_turns_the_beam_and_leaves_the_mount() {
+        let solved = |pan_deg: f64, tilt_deg: f64| {
+            let mut graph = VenueGraph::new(root());
+            let mut light = node("light", NodeKind::Fixture, "mover");
+            light.params = on_floor(1.0, 2.0, 6.0);
+            light.params.set("pan", pan_deg.to_radians());
+            light.params.set("tilt", tilt_deg.to_radians());
+            graph.insert(light);
+            graph
+                .attach(
+                    "light",
+                    Edge {
+                        parent: "venue".into(),
+                        my_socket: "clamp".into(),
+                        their_socket: RIG_SOCKET.into(),
+                        roll: 0.0,
+                    },
+                    &table(),
+                )
+                .unwrap();
+            let resolved = resolve(&graph, &table());
+            let (position, rot) = resolved.pose("light").unwrap().data_basis();
+            (position, rot)
+        };
+
+        let (rest_position, rest_rot) = solved(0.0, 0.0);
+        let rest = fixture_kinematics::Mount::from_frame(glam::Vec3::ZERO, rest_rot.as_mat3());
+        for (pan, tilt) in [(0.0, 90.0), (35.0, 20.0), (-120.0, 45.0)] {
+            let (position, rot) = solved(pan, tilt);
+            // The clamp is where the socket put it, aim or no aim.
+            assert!(
+                position.abs_diff_eq(rest_position, 1e-12),
+                "aim moved the mount to {position:?}"
+            );
+            let beam = (rot * DVec3::NEG_Z).as_vec3();
+            let expected = fixture_kinematics::aim(
+                &rest,
+                &fixture_kinematics::Articulation::from_degrees(pan as f32, tilt as f32),
+            );
+            assert!(
+                beam.abs_diff_eq(expected, 1e-6),
+                "pan {pan} tilt {tilt}: solve says {beam:?}, beam math says {expected:?}"
+            );
+        }
     }
 
     /// The grid is the floor's opposite: the same `(u, v, trim)`, a beam that

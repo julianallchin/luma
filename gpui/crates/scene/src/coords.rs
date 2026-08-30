@@ -212,8 +212,21 @@ pub fn data_basis_from_three(m: DMat4) -> (DVec3, DMat3) {
     let (_, rotation, translation) = m.to_scale_rotation_translation();
     (
         three_from_data_d(translation),
-        SWAP_YZ * DMat3::from_quat(rotation) * SWAP_YZ,
+        swapped_basis(DMat3::from_quat(rotation)),
     )
+}
+
+/// The same turn, read in the other space.
+///
+/// The `(y, z)` swap is a reflection and its own inverse, so a rotation crosses
+/// the boundary by conjugation (`S · R · S`) and one function serves both
+/// directions: [`data_basis_from_three`] is this reading data-ward, and a
+/// caller with a data-space turn to apply to a three-space pose reads it the
+/// other way. Conjugating by a reflection preserves the determinant, so the
+/// result is still a rotation.
+#[must_use]
+pub fn swapped_basis(r: DMat3) -> DMat3 {
+    SWAP_YZ * r * SWAP_YZ
 }
 
 /// The `(x, z, y)` axis swap as a matrix. Its own inverse, determinant −1.

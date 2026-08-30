@@ -1515,7 +1515,18 @@ impl Luma {
                 relation: build.relation_of(node),
                 constraint: build.constraint_of(node),
                 trim: param("trim"),
-                param: freedom.param().map_or(0.0, param),
+                // `yaw` is the one freedom that is not a node param: a mate's
+                // turn about the shared normal lives on the *edge*, and it is
+                // radians there and degrees on this sheet. Reading it out of
+                // `params` found nothing and drew every joint at zero.
+                param: match freedom.param() {
+                    Some("yaw") => build
+                        .graph
+                        .edge(node)
+                        .map_or(0.0, |edge| edge.roll.to_degrees().rem_euclid(360.0)),
+                    Some(key) => param(key),
+                    None => 0.0,
+                },
                 span: build
                     .solved
                     .nodes
@@ -2192,6 +2203,10 @@ fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyEleme
                         app.update(cx, |this, cx| {
                             if key == "trim" {
                                 this.stage_set_trim(value, cx);
+                            } else if key == "yaw" {
+                                // Degrees on the sheet, radians in the graph —
+                                // and `set_params` puts this one on the edge.
+                                this.stage_set_param(&node, key, value.to_radians(), cx);
                             } else {
                                 this.stage_set_param(&node, key, value, cx);
                             }

@@ -66,7 +66,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
-use glam::{Mat3, Vec3};
+use glam::{DMat3, Mat3, Vec3};
 
 /// The mount normal, in the mount's own frame — the axis a parked fixture emits
 /// along before the mount is oriented.
@@ -367,9 +367,27 @@ impl Articulation {
     }
 
     /// The rotation this articulation applies, in data space.
-    fn rotation(self) -> Mat3 {
+    ///
+    /// Public because a *rest* aim is baked into the mount frame by the venue
+    /// resolver rather than replayed per frame, and the frame it bakes has to
+    /// be the one the beam math would have produced. A second spelling of these
+    /// two factors is how a rig's arrows and its light come to disagree.
+    #[must_use]
+    pub fn rotation(self) -> Mat3 {
         Mat3::from_rotation_z(-self.pan) * Mat3::from_rotation_x(self.tilt)
     }
+}
+
+/// [`Articulation::rotation`] in `f64`, taking radians.
+///
+/// The venue solve is `f64` — its golden poses are pinned to a micrometre —
+/// so an `f32` turn on the way through would show up in the diff. Same two
+/// factors in the same order, adjacent to the `f32` original and held to it by
+/// `the_two_precisions_agree`, exactly as `luma_scene::coords` keeps its own
+/// pair.
+#[must_use]
+pub fn articulation_basis_d(pan: f64, tilt: f64) -> DMat3 {
+    DMat3::from_rotation_z(-pan) * DMat3::from_rotation_x(tilt)
 }
 
 /// A beam: where it starts and which way it goes. `direction` is unit length.
@@ -653,5 +671,24 @@ mod tests {
             0,
         );
         assert!((ray.direction.length() - 1.0).abs() < 1e-6);
+    }
+
+    /// The `f64` articulation is the `f32` one, to the precision `f32` has.
+    ///
+    /// Not a restated constant: both sides are computed, and a sign flipped on
+    /// either spelling parts them.
+    #[test]
+    // The narrowing is the point: the `f32` spelling is what a caller with
+    // `f32` angles gets, and the test asks whether it lands in the same place.
+    #[allow(clippy::cast_possible_truncation)]
+    fn the_two_precisions_agree() {
+        for (pan, tilt) in [(0.0, 0.0), (0.4, -1.2), (-2.7, 0.9), (3.1, 3.1)] {
+            let wide = articulation_basis_d(pan, tilt);
+            let narrow = Articulation::from_radians(pan as f32, tilt as f32).rotation();
+            assert!(
+                wide.as_mat3().abs_diff_eq(narrow, 1e-6),
+                "pan {pan} tilt {tilt}: {wide:?} vs {narrow:?}"
+            );
+        }
     }
 }

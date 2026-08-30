@@ -798,6 +798,9 @@ mod tests {
         node("post", "tower", Some("truss/straight"), None);
         node("flown", "fixture", Some("fixture:flown"), None);
         node("uplight", "fixture", Some("fixture:uplight"), None);
+        node("aimed", "fixture", Some("fixture:aimed"), None);
+        node("flown_truss", "run", Some("truss/straight"), None);
+        node("under_truss", "fixture", Some("fixture:under"), None);
         node("wall", "array", Some("stage_lab/speaker_dbr15.glb"), None);
         node(
             "tray_speaker",
@@ -829,6 +832,15 @@ mod tests {
         edge("post", "end_a", "deck_a", "corner_br", 0.0);
         edge("flown", FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0);
         edge("uplight", FIXTURE_CLAMP_SOCKET, "venue", FLOOR_SOCKET, 1.1);
+        edge("aimed", FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0);
+        edge("flown_truss", "seat", "venue", RIG_SOCKET, 0.0);
+        edge(
+            "under_truss",
+            FIXTURE_CLAMP_SOCKET,
+            "flown_truss",
+            "face_-y",
+            0.0,
+        );
         edge("wall", "mount", "venue", FLOOR_SOCKET, 0.0);
         edge("tray_on_tray", "mount", "tray_speaker", "mount", 0.0);
 
@@ -844,6 +856,17 @@ mod tests {
         param("post", &[("span", 2.0)]);
         param("flown", &[("u", -1.0), ("v", 3.0), ("trim", 6.5)]);
         param("uplight", &[("u", 2.0), ("v", 0.5)]);
+        param("flown_truss", &[("span", 3.0)]);
+        param(
+            "aimed",
+            &[
+                ("u", 1.0),
+                ("v", -2.0),
+                ("trim", 5.0),
+                ("pan", 0.6),
+                ("tilt", 0.9),
+            ],
+        );
         param(
             "wall",
             &[("count", 5.0), ("span", 4.0), ("u", 0.0), ("v", 0.0)],
