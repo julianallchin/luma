@@ -1901,6 +1901,11 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().renderer.gpu_specs().into()
     }
 
+    // LUMA LOCAL EDIT: see `gpui::Window::wgpu_device`.
+    fn wgpu_device(&self) -> Option<gpui::WgpuDevice> {
+        self.borrow().renderer.wgpu_device()
+    }
+
     fn play_system_bell(&self) {
         let state = self.borrow();
         let surface = if state.surface_state.toplevel().is_some() {

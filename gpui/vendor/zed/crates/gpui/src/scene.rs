@@ -835,14 +835,33 @@ impl From<PolychromeSprite> for Primitive {
     }
 }
 
+/// Memory a foreign renderer drew into that this platform's compositor can
+/// sample without a copy.
+///
+/// One name on every platform, so a caller has a single `paint_surface` to
+/// call; what the name means is the compositor's business. Metal samples an
+/// `IOSurface` through a `CVPixelBuffer`; `gpui_wgpu` samples a texture that
+/// lives on its own device (see [`Window::wgpu_device`], which is how a
+/// renderer gets hold of that device). Where the compositor has no such
+/// memory the type is uninhabited: nothing can be painted, and code that
+/// matches on a surface still compiles.
+// LUMA LOCAL EDIT: upstream is macOS-only.
+#[cfg(target_os = "macos")]
+pub type SurfaceHandle = core_video::pixel_buffer::CVPixelBuffer;
+/// See the macOS definition.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub type SurfaceHandle = wgpu::Texture;
+/// See the macOS definition.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+pub type SurfaceHandle = std::convert::Infallible;
+
 #[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub struct PaintSurface {
     pub order: DrawOrder,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    #[cfg(target_os = "macos")]
-    pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+    pub source: SurfaceHandle,
 }
 
 impl From<PaintSurface> for Primitive {
