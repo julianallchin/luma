@@ -26,7 +26,7 @@ use glam::Vec3;
 use luma_render::scene_desc::{self, RenderSettings};
 use luma_render::{assets, build_frame_with, coords, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::venue::ResolvedVenue;
-use luma_scene::{Camera, View, Viewfinder};
+use luma_scene::{Camera, Viewfinder, Viewpoint};
 
 use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
@@ -58,7 +58,7 @@ fn offscreen_render() -> RenderSettings {
 pub const MAX_DIMENSION: u32 = 2000;
 
 /// The stage-piece kinds that stand in for "where the operator is", best first.
-/// Only [`View::Dj`] reads it.
+/// Only [`luma_scene::View::Dj`] reads it.
 const BOOTH_KINDS: [&str; 2] = ["cdj", "mixer"];
 
 /// One venue's 3D contents, as the database holds them.
@@ -155,6 +155,7 @@ impl VenueGeometry {
             camera: scene_desc::CameraPose {
                 position: [0.0; 3],
                 target: [0.0; 3],
+                pov: None,
             },
             editing: false,
             render,
@@ -388,9 +389,9 @@ pub fn highlight_state(resolved: &[ResolvedFixture]) -> UniverseState {
 /// Owned rather than borrowed because the frame is built and rendered on the
 /// renderer's own thread — see [`render_png`].
 pub struct Shot {
-    /// Named camera position.
-    pub view: View,
-    /// World position of the DJ booth; only [`View::Dj`] reads it.
+    /// Where the frame is seen from.
+    pub view: Viewpoint,
+    /// World position of the DJ booth; only [`luma_scene::View::Dj`] reads it.
     pub booth: Option<Vec3>,
     /// Evaluated light state. `None` draws the rig unlit.
     pub state: Option<UniverseState>,
@@ -421,7 +422,7 @@ pub fn render_rgba(
         scene,
         definitions,
         meshes_root,
-        shot.view,
+        &shot.view,
         shot.booth,
         shot.size,
     )?;
@@ -482,7 +483,7 @@ impl Sequence {
         scene: scene_desc::Scene,
         definitions: BTreeMap<String, scene_desc::Definition>,
         meshes_root: PathBuf,
-        view: View,
+        view: &Viewpoint,
         booth: Option<Vec3>,
         size: (u32, u32),
     ) -> Result<Self, String> {
@@ -490,10 +491,22 @@ impl Sequence {
             size.0.clamp(1, MAX_DIMENSION),
             size.1.clamp(1, MAX_DIMENSION),
         );
-        let framing = scene.framing(&definitions);
-        // No chrome over a headless frame, so the fit gets the whole of it.
-        let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1 as f32);
-        let camera = Camera::for_view(view, &framing, booth, &viewfinder);
+        let camera = match view {
+            Viewpoint::Framed(view) => {
+                let framing = scene.framing(&definitions);
+                // No chrome over a headless frame, so the fit gets the whole of it.
+                let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1 as f32);
+                Camera::for_view(*view, &framing, booth, &viewfinder)
+            }
+            // A head's own camera is a pose, not a fit: nothing about the rig's
+            // extent changes where a light is or which way it points.
+            Viewpoint::Pov(fixture) => {
+                let pov = scene.pov(fixture, &definitions).ok_or_else(|| {
+                    format!("this venue has no placed fixture {fixture:?} to look through")
+                })?;
+                Camera::looking_from(pov.eye, pov.target, pov.fov_y_deg)
+            }
+        };
 
         let id = NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         jobs()

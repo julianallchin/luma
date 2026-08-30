@@ -31,7 +31,8 @@ use crate::services::groups;
 use crate::services::track_edits::TrackScope;
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
 use crate::storage::StorageRoot;
-use luma_scene::View;
+use luma_render::venue_tiles::TileMap;
+use luma_scene::Viewpoint;
 
 /// One cell's venue capability table. Construct only from host-resolved scope.
 pub struct VenueHost {
@@ -69,7 +70,7 @@ impl VenueHost {
     }
 
     async fn render(&self, request: RenderRequest) -> Result<Value, HostCallError> {
-        let view = View::from_str(&request.view)
+        let view = Viewpoint::from_str(&request.view)
             .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
         let width = clamp_dimension("width", request.width)?;
         let height = clamp_dimension("height", request.height)?;
@@ -117,6 +118,7 @@ impl VenueHost {
         };
         drop(access);
 
+        let view_name = view.to_string();
         let (scene, definitions) = geometry.scene();
         let booth = geometry.booth();
         let meshes_root = stage_render::meshes_root(Some(&self.resource_root));
@@ -148,9 +150,43 @@ impl VenueHost {
             "artifactRel": artifact_rel,
             "width": width,
             "height": height,
-            "view": view.name(),
+            "view": view_name,
             "t": time,
         }))
+    }
+
+    /// The Gauntlet view: the room as a top-down text map.
+    ///
+    /// A read of the same solve `render` draws, in the channel the design doc
+    /// ranks above a picture — it says where every piece is in something a
+    /// diff can localise, at a thousandth of the tokens.
+    async fn tiles(&self, request: TilesRequest) -> Result<Value, HostCallError> {
+        if !request.cell_m.is_finite() {
+            return Err(HostCallError::new(
+                "invalid_argument",
+                "cell_m must be a finite number of metres",
+            ));
+        }
+        let mut access =
+            VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
+                .await
+                .map_err(|error| {
+                    HostCallError::new(
+                        "invalid_venue",
+                        format!("the venue is not available: {error}"),
+                    )
+                })?;
+        let map = crate::venue_graph::tiles(
+            &mut access,
+            &self.resource_root,
+            TileMap {
+                cell_m: request.cell_m,
+                ..TileMap::default()
+            },
+        )
+        .await
+        .map_err(|error| HostCallError::new("invalid_venue", error))?;
+        Ok(json!({ "map": map }))
     }
 
     /// The evaluated universe at `time`, or `None` when this thread has no
@@ -236,6 +272,7 @@ impl HostCallHandler for VenueHost {
             async {
                 match method {
                     "venue.render" => self.render(decode(payload)?).await,
+                    "venue.tiles" => self.tiles(decode(payload)?).await,
                     _ => Err(HostCallError::new(
                         "unknown_method",
                         format!("unknown venue host method {method:?}"),
@@ -256,6 +293,15 @@ fn clamp_dimension(name: &str, value: u32) -> Result<u32, HostCallError> {
         ));
     }
     Ok(value.min(MAX_DIMENSION))
+}
+
+/// `cell_m` is the only dial: everything else about the map is a function of
+/// the venue, and the size of a tile is the one thing a reader trades detail
+/// against width for.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TilesRequest {
+    cell_m: f64,
 }
 
 #[derive(Deserialize)]

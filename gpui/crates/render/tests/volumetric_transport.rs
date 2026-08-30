@@ -33,6 +33,7 @@ fn scene(pieces: Vec<Piece>) -> Scene {
         camera: CameraPose {
             position: [4.5, 3.0, 5.0],
             target: [0.0, 0.8, 0.0],
+            pov: None,
         },
         editing: false,
         render,
@@ -177,6 +178,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
         camera: CameraPose {
             position: descriptor.camera.position,
             target: descriptor.camera.target,
+            pov: None,
         },
         editing: false,
         render,

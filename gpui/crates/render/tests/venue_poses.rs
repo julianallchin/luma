@@ -19,6 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use luma_render::catalog::{fixture_clamp, VenueSockets, FIXTURE_CLAMP_SOCKET};
+use luma_render::venue_tiles::TileMap;
 use luma_scene::venue::{
     resolve, ConstraintStatus, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET, RIG_SOCKET,
 };
@@ -367,4 +368,128 @@ fn venue_poses_golden_is_current() {
 #[test]
 fn two_solves_are_byte_identical() {
     assert_eq!(golden(), golden());
+}
+
+// ---------------------------------------------------------------------------
+// the Gauntlet view of the same room
+// ---------------------------------------------------------------------------
+
+/// The tile map of this rig, at the default cell and at a coarse one.
+///
+/// Captured from **this** graph rather than a second hand-built one: the map is
+/// a projection of the solve, so a rig that already pins every way a node can
+/// be placed pins every way one can be drawn. Lines rather than one string
+/// because a JSON string with escaped newlines is not a diff anybody can read,
+/// and localising a one-piece move to one row is the whole claim.
+fn tiles_golden() -> String {
+    let solved = resolve(&venue(), catalog());
+    let bounds = catalog().0.catalog();
+    let map = |cell_m: f64| {
+        let text = TileMap {
+            cell_m,
+            ..TileMap::default()
+        }
+        .draw(&solved, bounds);
+        json!({
+            "cellM": cell_m,
+            "map": text.lines().collect::<Vec<_>>(),
+        })
+    };
+    let mut out = serde_json::to_string_pretty(&json!({
+        "venue-poses": map(0.5),
+        "venue-poses-coarse": map(1.0),
+    }))
+    .expect("the capture serializes");
+    out.push('\n');
+    out
+}
+
+#[test]
+fn venue_tiles_golden_is_current() {
+    let path = repo_root().join("harness/goldens/venue-tiles.json");
+    assert!(
+        !write_if_changed(path, &tiles_golden()),
+        "the tile-map golden was stale and has been rewritten — review and commit it"
+    );
+}
+
+/// The map is a pure function of the solve, so two draws are one string.
+#[test]
+fn the_tile_map_is_byte_stable() {
+    assert_eq!(tiles_golden(), tiles_golden());
+}
+
+/// Half-metre cells means a metre is two cells — the property that makes a
+/// diff localisable, measured by moving a piece rather than restated as a
+/// constant.
+///
+/// Measured *against a fixture that does not move*, not against the left edge
+/// of the map: the map is sized to its contents, so a piece that moves also
+/// moves the frame around it, and only the separation between two things in
+/// the room is the rig's own geometry.
+#[test]
+fn a_metre_of_truss_is_two_cells() {
+    let separation = |u: f64| {
+        let mut graph = VenueGraph::new(Node {
+            id: "venue".into(),
+            kind: NodeKind::Venue,
+            catalog_ref: None,
+            label: None,
+            params: Params::default(),
+        });
+        let mut place = |node: Node, socket: &str| {
+            let id = node.id.clone();
+            graph.insert(node);
+            graph
+                .attach(
+                    &id,
+                    Edge {
+                        parent: "venue".into(),
+                        my_socket: socket.into(),
+                        their_socket: FLOOR_SOCKET.into(),
+                        roll: 0.0,
+                    },
+                    catalog(),
+                )
+                .unwrap_or_else(|e| panic!("{id}: {e}"));
+        };
+        place(
+            node(
+                "mark",
+                NodeKind::Fixture,
+                "fixture:mark",
+                &[("u", -6.0), ("v", 0.0)],
+            ),
+            FIXTURE_CLAMP_SOCKET,
+        );
+        place(
+            node(
+                "stick",
+                NodeKind::Run,
+                "truss/straight",
+                &[("u", u), ("v", 0.0), ("span", 2.0)],
+            ),
+            "seat",
+        );
+        let text = TileMap::default().draw(&resolve(&graph, catalog()), catalog().0.catalog());
+        // The legend names every glyph, so the search starts below it: three
+        // header lines, a blank, and the two ruler lines.
+        // Columns are a grid, so two glyphs are comparable whatever rows they
+        // are on. The search starts below the legend, which names them both.
+        let column = |glyph: char| {
+            text.lines()
+                .skip(6)
+                .find_map(|line| line.find(glyph))
+                .unwrap_or_else(|| panic!("{glyph} is not on the map:\n{text}"))
+        };
+        column('\u{b7}') - column('\u{2550}')
+    };
+
+    // Columns run +x to -x, so moving the stick +1 m along x walks it two cells
+    // *away* from a mark that is further -x than it is.
+    assert_eq!(
+        separation(1.0) - separation(0.0),
+        2,
+        "a metre is two half-metre cells"
+    );
 }

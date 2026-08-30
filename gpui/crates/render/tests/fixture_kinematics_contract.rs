@@ -79,6 +79,7 @@ fn characterization_frame() -> Frame {
         camera: CameraPose {
             position: [5.0, 3.0, 5.0],
             target: [0.0, 1.5, 0.0],
+            pov: None,
         },
         editing: false,
         render: RenderSettings::dark_stage(48.0, 0.5),

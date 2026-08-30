@@ -46,6 +46,7 @@ pub mod scene_desc;
 mod shadow;
 mod share;
 pub mod truss;
+pub mod venue_tiles;
 pub mod viewport;
 pub mod warmup;
 

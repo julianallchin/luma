@@ -746,10 +746,20 @@ pub fn build_with(
         draws.extend(piece_draws(&piece.geometry, root, lib, &mut bank, object)?);
     }
 
-    let camera = Camera {
-        eye: world_from_three(Vec3::from(scene.camera.position)),
-        target: world_from_three(Vec3::from(scene.camera.target)),
-        fov_y_deg: scene.render.fov,
+    // A scene names a fixture to look through, or it gives a pose. The lens is
+    // the fixture's own in the first case, so `render.fov` is not consulted.
+    let camera = match scene.camera.pov.as_deref() {
+        Some(id) => scene.pov(id, definitions).ok_or_else(|| {
+            anyhow::anyhow!(
+                "scene {:?} looks through {id:?}, which it does not patch",
+                scene.id
+            )
+        })?,
+        None => Camera {
+            eye: world_from_three(Vec3::from(scene.camera.position)),
+            target: world_from_three(Vec3::from(scene.camera.target)),
+            fov_y_deg: scene.render.fov,
+        },
     };
 
     // The fading grid is an editor affordance, independent of environment

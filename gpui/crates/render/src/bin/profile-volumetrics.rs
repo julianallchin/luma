@@ -1051,6 +1051,7 @@ fn base_frame(with_geometry: bool) -> anyhow::Result<luma_render::Frame> {
         camera: CameraPose {
             position: [4.5, 3.0, 5.0],
             target: [0.0, 0.8, 0.0],
+            pov: None,
         },
         editing: false,
         render: settings,

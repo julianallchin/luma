@@ -52,6 +52,7 @@ fn scene() -> Scene {
         camera: CameraPose {
             position: [4.5, 3.0, 5.0],
             target: [0.0, 0.8, 0.0],
+            pov: None,
         },
         editing: true,
         render: RenderSettings::dark_stage(50.0, 0.5),

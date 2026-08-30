@@ -26,7 +26,7 @@ use crate::eval::ops::spatial::rig_uv;
 use fixture_kinematics::StageDirection;
 use glam::DVec3;
 use luma_scene::venue::{NodePose, ResolvedVenue};
-use luma_scene::View;
+use luma_scene::{View, Viewpoint};
 
 /// One patched fixture, with what its pose *means* alongside the pose itself.
 ///
@@ -128,7 +128,7 @@ pub async fn provide(
         ] {
             unavailable(b, path, NO_VENUE)?;
         }
-        views(b)?;
+        views(b, None)?;
         return Ok(());
     };
 
@@ -156,7 +156,7 @@ pub async fn provide(
             ] {
                 unavailable(b, path, format!("the venue is not available: {error}"))?;
             }
-            views(b)?;
+            views(b, None)?;
             return Ok(());
         }
     };
@@ -179,11 +179,12 @@ pub async fn provide(
     // One solve, both records. `venue.fixtures` and `venue.pieces` are two
     // halves of the same walk, and solving twice would be two answers to a
     // question with one.
-    match crate::venue_graph::resolved(&mut access, ctx.resource_root).await {
+    let solved = crate::venue_graph::resolved(&mut access, ctx.resource_root).await;
+    match &solved {
         Ok(venue) => {
-            fixtures(b, &mut access, &venue).await?;
-            pieces(b, &venue)?;
-            unplaced(b, &venue)?;
+            fixtures(b, &mut access, venue).await?;
+            pieces(b, venue)?;
+            unplaced(b, venue)?;
         }
         Err(e) => {
             for path in ["venue.fixtures", "venue.pieces", "venue.unplaced"] {
@@ -192,7 +193,7 @@ pub async fn provide(
         }
     }
 
-    views(b)?;
+    views(b, solved.as_ref().ok())?;
     groups(b, ctx, &mut access).await?;
     positions(b, ctx, store, &mut access).await
 }
@@ -307,11 +308,26 @@ fn unplaced(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String>
 
 /// The camera names `luma.venue.render(view=...)` accepts.
 ///
-/// Sourced from [`View::ALL`] so the vocabulary is declared once, in the crate
-/// that implements it. A hand-written list in Python would be a second source
-/// of truth that drifts the first time a view is added.
-fn views(b: &mut BindingBuilder) -> Result<(), String> {
-    let names: Vec<&str> = View::ALL.iter().map(|view| view.name()).collect();
+/// The framed views come from [`View::ALL`], so the vocabulary is declared once
+/// in the crate that implements it; a hand-written list in Python would drift
+/// the first time a view is added.
+///
+/// A `pov:<fixture id>` is listed for every fixture that is **placed** — an
+/// unplaced fixture is in the tray, has no mount frame, and there is nothing
+/// for a camera to sit in. Listing only what renders is what makes "an unknown
+/// view" the only refusal this call has.
+fn views(b: &mut BindingBuilder, venue: Option<&ResolvedVenue>) -> Result<(), String> {
+    let names: Vec<String> = View::ALL
+        .iter()
+        .map(|view| view.name().to_string())
+        .chain(
+            venue
+                .into_iter()
+                .flat_map(ResolvedVenue::poses)
+                .filter(|pose| pose.kind == luma_scene::venue::NodeKind::Fixture)
+                .map(|pose| Viewpoint::pov_name(&pose.node)),
+        )
+        .collect();
     inline(b, "venue.views", &names)
 }
 

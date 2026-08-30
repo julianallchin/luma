@@ -17,6 +17,7 @@ use std::sync::OnceLock;
 
 use glam::{DMat4, DVec3};
 use luma_render::catalog::{fixture_clamp, origin_mount, VenueSockets, FIXTURE_CLAMP_SOCKET};
+use luma_render::venue_tiles::TileMap;
 use luma_scene::coords::three_pose_from_data_d;
 use luma_scene::sockets::ResolvedSocket;
 use luma_scene::venue::{
@@ -77,6 +78,24 @@ pub fn resolve_rows(
         .to_graph()
         .ok_or_else(|| "this venue has no graph root".to_string())?;
     Ok(resolve_graph(&graph, sockets(fixtures_root)?))
+}
+
+/// The venue as a top-down text map — the "Gauntlet view".
+///
+/// Beside [`resolved`] because it is the same two inputs: the graph, and the
+/// catalog geometry it resolves against. The map itself is
+/// [`luma_render::venue_tiles`], which is where a piece's measured extent is
+/// already read.
+///
+/// # Errors
+/// As [`resolved`].
+pub async fn tiles(
+    access: &mut impl AuthorizedVenue,
+    fixtures_root: &Path,
+    options: TileMap,
+) -> Result<String, String> {
+    let venue = resolved(access, fixtures_root).await?;
+    Ok(options.draw(&venue, sockets(fixtures_root)?.catalog()))
 }
 
 /// Convert this venue off the old schema if it has never been converted.

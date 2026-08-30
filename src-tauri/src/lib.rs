@@ -612,6 +612,7 @@ pub fn run() {
             // Stage pieces
             dispatch::adapter::get_venue_graph,
             dispatch::adapter::get_resolved_venue,
+            dispatch::adapter::venue_tiles,
             dispatch::adapter::attach,
             dispatch::adapter::reattach,
             dispatch::adapter::constrain,

@@ -18,6 +18,7 @@ use crate::dispatch::{AppServices, CommandError};
 use crate::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
 use crate::services::fixture_create;
 use crate::venue_graph;
+use luma_render::venue_tiles::TileMap;
 use luma_scene::venue::{Constraint, Edge, NodeKind, FLOOR_SOCKET};
 
 /// The rows themselves — what the builder edits.
@@ -43,6 +44,27 @@ pub async fn get_resolved_venue(
     let mut access = admit(services, &venue_id).await?;
     let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
     Ok(ResolvedVenue::from(&solved))
+}
+
+/// The venue as a top-down text map — the "Gauntlet view".
+///
+/// The same solve [`get_resolved_venue`] returns, quantized into something a
+/// human or an agent reads at a glance and diffs line by line. `cell_m` is
+/// metres per character; the drawer clamps it, so no value refuses.
+///
+/// # Errors
+/// As [`get_resolved_venue`].
+pub async fn venue_tiles(
+    services: &AppServices,
+    venue_id: String,
+    cell_m: Option<f64>,
+) -> Result<String, CommandError> {
+    let mut access = admit(services, &venue_id).await?;
+    let options = TileMap {
+        cell_m: cell_m.unwrap_or(TileMap::default().cell_m),
+        ..TileMap::default()
+    };
+    Ok(venue_graph::tiles(&mut access, &services.fixtures_root, options).await?)
 }
 
 /// Place a new node by mating two sockets.

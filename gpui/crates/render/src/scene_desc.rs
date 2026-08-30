@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use fixture_kinematics::{aim, Articulation, Mount};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 /// The whole golden-scene catalogue, as `dump-golden-scenes.ts` writes it.
@@ -160,13 +161,25 @@ pub enum SocketMarkState {
     Latched,
 }
 
+/// How big a fixture with no `Physical` block is assumed to be, in metres. The
+/// same 300 mm [`Definition::dimensions_m`] defaults each missing axis to.
+const DEFAULT_HOUSING_M: f32 = 0.3;
+
+/// Where a frame is seen from: an eye and a look-at point, or one fixture's own
+/// head.
+///
 /// Three.js Y-up, because that is the space `useCameraStore` holds.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct CameraPose {
     /// Eye position.
     pub position: [f32; 3],
     /// Look-at point.
     pub target: [f32; 3],
+    /// Look through this fixture's head instead, along its beam with the head
+    /// parked. [`Self::position`] and [`Self::target`] are then unread — see
+    /// [`Scene::pov`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pov: Option<String>,
 }
 
 /// The subset of `use-render-settings-store.ts` the renderer reads. `bloom` and
@@ -857,6 +870,47 @@ impl Catalogue {
 }
 
 impl Scene {
+    /// The camera that sits in one fixture's head and looks along its beam,
+    /// or `None` if this scene has no such fixture.
+    ///
+    /// The **rest** direction, not the score's: a POV is a question about how
+    /// the rig is hung, and a head that happens to be swung somewhere at `t`
+    /// would answer a different one. `fixture_kinematics::aim` at
+    /// [`Articulation::REST`] is that direction, and it is defined for a
+    /// fixture whose definition the catalogue has since lost — which
+    /// [`beam_direction`](crate::luminaire::beam_direction) is not, because it
+    /// also decides whether a fixture emits at all.
+    ///
+    /// The lens is the definition's own beam angle
+    /// ([`beam_angle_deg`](crate::luminaire::beam_angle_deg)), so the frame is
+    /// the light this fixture puts in the room and nothing else. The eye is
+    /// pushed clear of the housing's own half-depth: a camera inside its own
+    /// head renders the inside of a mesh.
+    #[must_use]
+    pub fn pov(
+        &self,
+        fixture_id: &str,
+        definitions: &BTreeMap<String, Definition>,
+    ) -> Option<crate::frame::Camera> {
+        let fixture = self.fixtures.iter().find(|f| f.id == fixture_id)?;
+        let definition = definitions.get(&fixture.fixture_path);
+        let mount = Mount::from_stored(glam::Vec3::ZERO, fixture.rot);
+        let forward = crate::coords::world_from_data(aim(&mount, &Articulation::REST));
+        let clear = 0.5
+            * definition.map_or(DEFAULT_HOUSING_M, |d| {
+                d.dimensions_m().into_iter().fold(0.0, f32::max)
+            });
+        let eye = crate::coords::world_from_data(glam::Vec3::from(fixture.pos)) + forward * clear;
+        Some(crate::frame::Camera {
+            eye,
+            target: eye + forward,
+            fov_y_deg: crate::luminaire::beam_angle_deg(
+                definition,
+                definition.and_then(crate::luminaire::model_kind),
+            ),
+        })
+    }
+
     /// What a camera looking at this scene has to fit, in world space.
     ///
     /// The rule lives in [`luma_scene::Framing`]; this is the one place the
@@ -964,6 +1018,7 @@ mod tests {
             camera: CameraPose {
                 position: [0.0; 3],
                 target: [0.0; 3],
+                pov: None,
             },
             editing: false,
             render: RenderSettings::dark_stage(50.0, 1.0),
