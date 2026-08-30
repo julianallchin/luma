@@ -16,6 +16,7 @@ use super::{
     FinalizeAuthoredTurnInput, MainState, PrepareAuthoredTurnInput, PreparedAuthoredTurn,
     ResolvedScope, Result, RevisionId, RevisionInfo, TrackProjectionAuthority, MAX_HISTORY_PAGE,
 };
+use crate::sync::registry;
 
 /// The head an agent turn writes to.
 ///
@@ -320,7 +321,10 @@ impl AuthoredDocuments {
                 connection,
                 user_id,
                 "authored_turn_preparations",
-                &format!("{}:{}", input.thread_id, input.assistant_message_id),
+                &registry::record_id([
+                    input.thread_id.as_str(),
+                    input.assistant_message_id.as_str(),
+                ]),
             )
             .await?;
         }
@@ -1101,7 +1105,7 @@ async fn enqueue_turn_outcome(
             connection,
             user_id,
             "authored_turn_outcomes",
-            &format!("{thread_id}:{assistant_message_id}"),
+            &registry::record_id([thread_id, assistant_message_id]),
         )
         .await?;
     }

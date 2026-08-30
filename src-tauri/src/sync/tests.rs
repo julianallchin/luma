@@ -749,6 +749,7 @@ mod tests {
                 "model": "Mover",
                 "mode_name": "16ch",
                 "fixture_path": "acme/mover.qxf",
+                "address_pinned": 0,
                 "label": null,
                 "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0,
                 "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0,
@@ -857,19 +858,15 @@ mod tests {
         assert_eq!(cursor, 4);
     }
 
-    /// What it costs that `address_pinned` is local and `address` is not.
+    /// The pin travels with the address it is a pin on.
     ///
-    /// A pulls a fixture it had pinned at 1/100; B auto-patched it to 3/17 and
-    /// pushed. The address is registry-driven so it lands; the pin is not in
-    /// the registry, so it stays — and A now holds a *pin* at an address
-    /// nobody chose, which no auto-patch will move.
-    ///
-    /// This pins the behaviour rather than blessing it: the fix is a remote
-    /// column (`supabase/migrations/20260831000000_fixtures_address_pinned_
-    /// NOT_DEPLOYED.sql`), and when it lands this test should be turned around
-    /// — the pin follows the pusher — not deleted.
+    /// A had this fixture pinned at 1/100; B unpinned it and auto-patched it to
+    /// 3/17. Both halves of the footprint are registry-driven now, so A's pull
+    /// takes the address *and* the pin. Leaving the pin behind was how A came to
+    /// hold a *pinned* 3/17 — a hand-chosen address nobody chose, which no
+    /// auto-patch would ever move again.
     #[tokio::test]
-    async fn a_pulled_address_keeps_a_local_pin_until_the_pin_syncs() {
+    async fn a_pulled_address_brings_the_pushers_pin_with_it() {
         let (_directory, pool) = migrated_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("u-1"))
             .await
@@ -914,6 +911,7 @@ mod tests {
                 "model": "Mover",
                 "mode_name": "16ch",
                 "fixture_path": "acme/mover.qxf",
+                "address_pinned": 0,
                 "label": null,
                 "pos_x": 0.0, "pos_y": 0.0, "pos_z": 0.0,
                 "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0,
@@ -948,8 +946,8 @@ mod tests {
             "the address is registry-driven, so the remote's wins"
         );
         assert_eq!(
-            pinned, 1,
-            "and the pin, which is not, stays behind on the address it did not choose"
+            pinned, 0,
+            "and the pin, being registry-driven too, comes with it"
         );
     }
 
@@ -1203,6 +1201,10 @@ mod tests {
              DROP TRIGGER IF EXISTS sync_delete_midi_modifiers;
              DROP TRIGGER IF EXISTS sync_delete_cues;
              DROP TRIGGER IF EXISTS sync_delete_midi_bindings;
+             DROP TRIGGER IF EXISTS sync_delete_venue_nodes;
+             DROP TRIGGER IF EXISTS sync_delete_venue_edges;
+             DROP TRIGGER IF EXISTS sync_delete_venue_node_params;
+             DROP TRIGGER IF EXISTS sync_delete_venue_constraints;
              DROP TABLE pending_ops;
              CREATE TABLE pending_ops (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1839,5 +1841,226 @@ mod tests {
         assert_eq!(ops[0].table_name, "venues");
         assert_eq!(ops[1].table_name, "fixtures");
         assert_eq!(ops[2].table_name, "fixture_group_members");
+    }
+
+    /// Where the venue graph's rows live in the repo, so a solve here resolves
+    /// the real catalog rather than a stub of it.
+    fn fixtures_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/fixtures")
+    }
+
+    /// One venue's graph, seeded the way the builder leaves it: a root whose id
+    /// is `"<venue>:venue"`, a truss under it, the truss's span, and a far-end
+    /// check. Two of the four tables are composite-keyed and the root's id
+    /// carries a colon, which is exactly the shape record-id encoding has to
+    /// survive.
+    async fn seed_venue_graph(pool: &SqlitePool) {
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('v-1', 'alice', 'Room')")
+            .execute(pool)
+            .await
+            .unwrap();
+        for (id, kind, catalog_ref, label) in [
+            ("v-1:venue", "venue", None, None),
+            ("run-1", "run", Some("truss/straight"), Some("Downstage")),
+        ] {
+            sqlx::query(
+                "INSERT INTO venue_nodes (id, uid, venue_id, kind, catalog_ref, label)
+                 VALUES (?, 'alice', 'v-1', ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(kind)
+            .bind(catalog_ref)
+            .bind(label)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO venue_edges (child_id, uid, parent_id, my_socket, their_socket, roll)
+             VALUES ('run-1', 'alice', 'v-1:venue', 'grab', 'floor', 0.0)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_node_params (node_id, uid, key, value)
+             VALUES ('run-1', 'alice', 'span', 8.0)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO venue_constraints (node_id, uid, my_socket, target_node, target_socket)
+             VALUES ('run-1', 'alice', 'end_b', 'v-1:venue', 'floor')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The graph goes out, a second machine's edit comes back, and it still
+    /// solves.
+    ///
+    /// The four tables are what phase 3 moved fixture placement into, so this
+    /// is the whole regression the venue-graph deploy was paying off: the sweep
+    /// has to find dirty rows under two composite keys, `mark_synced` has to
+    /// clean them, pull has to upsert onto the same keys, and the rows it
+    /// leaves have to still be a graph.
+    #[tokio::test]
+    async fn a_venue_graph_pushes_and_pulls_and_still_solves() {
+        let (_directory, pool) = migrated_pool().await;
+        // `flush_pending` reads the session out of the state database; here the
+        // app database stands in for both, so it needs the session schema.
+        crate::database::local::auth::initialize_auth_state_schema(&pool)
+            .await
+            .unwrap();
+        authenticate(&pool, "alice").await;
+        seed_venue_graph(&pool).await;
+
+        let enqueued = crate::sync::orchestrator::enqueue_dirty(&pool, "alice")
+            .await
+            .unwrap();
+        assert!(enqueued >= 5, "every graph row is dirty on creation");
+        let queued: Vec<(String, String)> = sqlx::query_as(
+            "SELECT table_name, record_id FROM pending_ops
+             WHERE table_name LIKE 'venue\\_%' ESCAPE '\\' ORDER BY table_name, record_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            queued,
+            vec![
+                (
+                    "venue_constraints".to_owned(),
+                    format!("run-1{}end_b", registry::RECORD_ID_SEPARATOR)
+                ),
+                ("venue_edges".to_owned(), "run-1".to_owned()),
+                (
+                    "venue_node_params".to_owned(),
+                    format!("run-1{}span", registry::RECORD_ID_SEPARATOR)
+                ),
+                ("venue_nodes".to_owned(), "run-1".to_owned()),
+                ("venue_nodes".to_owned(), "v-1:venue".to_owned()),
+            ],
+            "a composite record id names every key column, and never splits an id",
+        );
+
+        let remote = MockRemoteClient::new();
+        push::flush_pending(&pool, &pool, &remote).await.unwrap();
+        let pushed = remote.upserted.lock().unwrap().clone();
+        let param = pushed
+            .iter()
+            .find(|(table, _)| table == "venue_node_params")
+            .expect("the span was pushed");
+        assert_eq!(param.1["node_id"], json!("run-1"));
+        assert_eq!(param.1["key"], json!("span"));
+        assert_eq!(param.1["uid"], json!("alice"));
+        assert_eq!(
+            param.1.as_object().unwrap().len(),
+            registry::get_table("venue_node_params")
+                .unwrap()
+                .remote_columns()
+                .len(),
+            "the payload is exactly the columns the remote has",
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM venue_node_params WHERE synced_at IS NULL"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0,
+            "a composite-keyed row is marked synced by its whole key",
+        );
+
+        // The other machine widens the truss and moves the far end.
+        remote.on_select_page(
+            "venue_node_params",
+            vec![json!({
+                "node_id": "run-1",
+                "uid": "alice",
+                "key": "span",
+                "value": 12.0,
+                "created_at": "2026-08-01T00:00:00Z",
+                "updated_at": "2026-08-03T00:00:00Z",
+                "sync_seq": 7,
+            })],
+        );
+        remote.on_select_page(
+            "venue_edges",
+            vec![json!({
+                "child_id": "run-1",
+                "uid": "alice",
+                "parent_id": "v-1:venue",
+                "my_socket": "grab",
+                "their_socket": "floor",
+                "roll": 0.25,
+                "created_at": "2026-08-01T00:00:00Z",
+                "updated_at": "2026-08-03T00:00:00Z",
+                "sync_seq": 8,
+            })],
+        );
+
+        let authored_directory = tempfile::tempdir().unwrap();
+        let authored = crate::services::authored_documents::AuthoredDocuments::new(
+            crate::storage::StorageRoot::from_path(authored_directory.path().join("authored")),
+        );
+        let workspaces = crate::agent_execution::PythonWorkspaceService::new(
+            authored_directory.path().join("python-workspaces"),
+            std::sync::Arc::new(|| Err("python is not used by this sync test".into())),
+        );
+        let graph_runs = crate::agent_execution::GraphRunStore::new();
+        let subagents = crate::agent::subagent::SubagentRegistry::default();
+        pull::pull_all(
+            &pool,
+            &authored,
+            &workspaces,
+            &graph_runs,
+            &subagents,
+            &remote,
+            "token",
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+
+        let (span, span_origin, span_synced): (f64, String, Option<String>) = sqlx::query_as(
+            "SELECT value, origin, synced_at FROM venue_node_params
+             WHERE node_id = 'run-1' AND key = 'span'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!((span - 12.0).abs() < f64::EPSILON, "the remote span landed");
+        assert_eq!(
+            span_origin, "local",
+            "alice's own row, so a later delete pushes"
+        );
+        assert!(span_synced.is_some(), "a pulled row is not dirty");
+        let roll: f64 = sqlx::query_scalar("SELECT roll FROM venue_edges WHERE child_id = 'run-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!((roll - 0.25).abs() < f64::EPSILON);
+
+        let mut access = crate::database::local::venue_access::VenueAccess::<
+            crate::database::local::venue_access::Read,
+        >::read(
+            &pool,
+            crate::database::local::venue_access::VenueResource::Venue("v-1"),
+        )
+        .await
+        .unwrap();
+        let rows = crate::database::local::venue_graph::get_graph(&mut access)
+            .await
+            .unwrap();
+        drop(access);
+        let solved = crate::venue_graph::resolve_rows(&rows, &fixtures_root()).expect("solve");
+        assert!(
+            solved.pose("run-1").is_some(),
+            "the truss is still placed after the round trip",
+        );
     }
 }

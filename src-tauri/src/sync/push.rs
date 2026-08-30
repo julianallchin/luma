@@ -238,7 +238,12 @@ async fn execute_op(
             // Uses PATCH (not upsert) because upsert's INSERT half fails
             // NOT NULL constraints when sending only PK + deleted_at.
             let pk_cols = table.pk_columns();
-            let pk_values = table.decode_record_id(&op.record_id);
+            let pk_values = table.decode_record_id(&op.record_id).ok_or_else(|| {
+                SyncError::Parse(format!(
+                    "queued tombstone {}.{} does not name every primary-key column",
+                    op.table_name, op.record_id
+                ))
+            })?;
 
             // Build PostgREST filter: "col1=eq.val1&col2=eq.val2"
             let filter: Vec<String> = pk_cols
@@ -550,7 +555,12 @@ async fn mark_synced(
          )",
         table.mark_synced_sql()
     );
-    let pk_values = table.decode_record_id(&op.record_id);
+    let pk_values = table.decode_record_id(&op.record_id).ok_or_else(|| {
+        SyncError::Parse(format!(
+            "queued operation {}.{} does not name every primary-key column",
+            op.table_name, op.record_id
+        ))
+    })?;
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     for val in &pk_values {
         query = query.bind(*val);

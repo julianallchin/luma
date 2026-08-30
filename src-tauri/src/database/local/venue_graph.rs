@@ -48,6 +48,28 @@ pub fn graph_committed() {
     crate::services::groups::invalidate_venue_fixture_cache();
 }
 
+/// The four tables this module owns.
+///
+/// Sync is the one writer that does not come through the functions below: it
+/// upserts and deletes graph rows straight from the registry, by name. This is
+/// how it says the same thing they say.
+pub const TABLES: &[&str] = &[
+    "venue_nodes",
+    "venue_edges",
+    "venue_node_params",
+    "venue_constraints",
+];
+
+/// [`graph_committed`], if `table` is one of [`TABLES`].
+///
+/// A pulled truss moves the rig exactly as a local drag does, and the derived
+/// group tree is read out of these rows either way.
+pub fn graph_table_committed(table: &str) {
+    if TABLES.contains(&table) {
+        graph_committed();
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Reads
 // -----------------------------------------------------------------------------
@@ -196,16 +218,19 @@ pub async fn upsert_edge(
     their_socket: &str,
     roll: f64,
 ) -> Result<(), String> {
+    let principal = access.principal().map(str::to_owned);
     sqlx::query(
-        "INSERT INTO venue_edges (child_id, parent_id, my_socket, their_socket, roll)
-         VALUES (?, ?, ?, ?, ?)
+        "INSERT INTO venue_edges (child_id, uid, parent_id, my_socket, their_socket, roll)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(child_id) DO UPDATE SET
+             uid = excluded.uid,
              parent_id = excluded.parent_id,
              my_socket = excluded.my_socket,
              their_socket = excluded.their_socket,
              roll = excluded.roll",
     )
     .bind(child_id)
+    .bind(principal)
     .bind(parent_id)
     .bind(my_socket)
     .bind(their_socket)
@@ -236,14 +261,17 @@ pub async fn upsert_constraint(
     target_node: &str,
     target_socket: &str,
 ) -> Result<(), String> {
+    let principal = access.principal().map(str::to_owned);
     sqlx::query(
-        "INSERT INTO venue_constraints (node_id, my_socket, target_node, target_socket)
-         VALUES (?, ?, ?, ?)
+        "INSERT INTO venue_constraints (node_id, uid, my_socket, target_node, target_socket)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(node_id, my_socket) DO UPDATE SET
+             uid = excluded.uid,
              target_node = excluded.target_node,
              target_socket = excluded.target_socket",
     )
     .bind(node_id)
+    .bind(principal)
     .bind(my_socket)
     .bind(target_node)
     .bind(target_socket)
@@ -281,14 +309,18 @@ pub async fn set_params(
     node_id: &str,
     params: &BTreeMap<String, Option<f64>>,
 ) -> Result<(), String> {
+    let principal = access.principal().map(str::to_owned);
     for (key, value) in params {
         match value {
             Some(value) if value.is_finite() => {
                 sqlx::query(
-                    "INSERT INTO venue_node_params (node_id, key, value) VALUES (?, ?, ?)
-                     ON CONFLICT(node_id, key) DO UPDATE SET value = excluded.value",
+                    "INSERT INTO venue_node_params (node_id, uid, key, value) VALUES (?, ?, ?, ?)
+                     ON CONFLICT(node_id, key) DO UPDATE SET
+                         uid = excluded.uid,
+                         value = excluded.value",
                 )
                 .bind(node_id)
+                .bind(principal.clone())
                 .bind(key)
                 .bind(value)
                 .execute(&mut *access.connection())

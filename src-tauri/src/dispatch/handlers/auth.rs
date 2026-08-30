@@ -877,11 +877,14 @@ const CLASSIFIED: &[&str] = &[
     "track_waveforms",
     "tracks",
     "venue_implementation_overrides",
-    // Local-only, exactly like `stage_pieces`: the venue graph has no remote
-    // table yet (`supabase/migrations/…_venue_graph_NOT_DEPLOYED`), so it is
-    // never dirty-swept — and it is never wiped either. See
-    // `wipe_signed_in_projection`: venue content is a sealed local cache that
-    // survives sign-out, which is what makes "unsynced" survivable here.
+    // The venue graph. Synced since
+    // `supabase/migrations/20260902000000_venue_graph_sync_shape.sql`, and not
+    // wiped either — see `wipe_signed_in_projection`: venue content is a sealed
+    // local cache that survives sign-out, so a row that has not been pushed yet
+    // is still there to push next time.
+    "venue_constraints",
+    "venue_edges",
+    "venue_node_params",
     "venue_nodes",
     "venues",
 ];
@@ -1125,12 +1128,16 @@ mod tests {
         );
     }
 
-    /// The venue graph has no remote table yet, so its rows are permanently
-    /// unsynced. That is survivable only because the wipe does not touch venue
-    /// content — `wipe_signed_in_projection` treats it as a sealed local cache.
-    /// If that ever changes, sign-out starts destroying rigs, and this fails.
+    /// An unsynced venue graph blocks sign-out, and sign-out keeps it.
+    ///
+    /// Two separate promises, and the graph needs both. The audit refuses the
+    /// wipe while any registered row of alice's is still dirty — the graph is
+    /// registered now, so it counts exactly as an unpushed fixture does. And
+    /// once it is clean, the wipe still leaves it alone:
+    /// `wipe_signed_in_projection` treats venue content as a sealed local
+    /// cache, so signing out never destroys a rig.
     #[tokio::test]
-    async fn sign_out_keeps_an_unsynced_venue_graph() {
+    async fn an_unsynced_venue_graph_blocks_sign_out_and_survives_it() {
         let directory = tempfile::tempdir().unwrap();
         let pool = migrated_pool(directory.path()).await;
         sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('ven', 'alice', 'Basement')")
@@ -1150,19 +1157,17 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM venue_nodes WHERE uid = 'alice' AND synced_at IS NULL"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            1,
-            "the graph has never synced, and cannot: there is no remote table"
-        );
-
         let authored =
             AuthoredDocuments::new(StorageRoot::from_path(directory.path().join("storage")));
+        let error = wipe_database_pool(&pool, &authored, "alice")
+            .await
+            .expect_err("a dirty graph row is undelivered work");
+        assert!(error.contains("venue_nodes"), "{error}");
+
+        sqlx::query("UPDATE venue_nodes SET synced_at = updated_at, version = version + 1")
+            .execute(&pool)
+            .await
+            .unwrap();
         wipe_database_pool(&pool, &authored, "alice").await.unwrap();
 
         assert_eq!(
@@ -1171,7 +1176,7 @@ mod tests {
                 .await
                 .unwrap(),
             1,
-            "signing out must not destroy a venue graph that has nowhere to sync to"
+            "signing out must not destroy a venue graph"
         );
     }
 
