@@ -69,10 +69,13 @@ use luma_lib::dispatch::{
 };
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
-use luma_lib::models::fixtures::{FixtureDefinition, PatchedFixture};
-use luma_lib::models::groups::FixtureGroup;
+use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
+use luma_lib::models::groups::{FixtureGroup, GroupTreeNode};
 use luma_lib::models::node_graph::{
     BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
+};
+use luma_lib::models::patch::{
+    ArtNetNode, AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput,
 };
 use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
 use luma_lib::models::scores::{
@@ -86,6 +89,7 @@ use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
+use luma_lib::services::group_derivation::FixtureRole;
 use luma_lib::services::track_edits::{TrackClip, TrackEditResult};
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
@@ -2052,6 +2056,309 @@ impl Library {
         self.services.host_audio().snapshot()
     }
 
+    // -- the patch -----------------------------------------------------------
+
+    /// Everything the patch page reads about a venue, in one pass.
+    ///
+    /// One method for the same reason [`Self::venue_rig`] is one: these are
+    /// only meaningful together — a patch list with no group tree is a table
+    /// with a blank column, and "placed" is a fact about the *solved* venue
+    /// rather than about a row — and a page that orchestrated six calls would
+    /// be a page that knew which of them depend on each other.
+    pub fn patch_data(&self, venue_id: &str) -> impl Future<Output = Result<Patch, LibraryError>> {
+        let services = self.services.clone();
+        let venue = json!({ "venueId": venue_id });
+        let task = self.runtime.spawn(async move {
+            let fixtures: Vec<PatchedFixture> =
+                command(&services, "get_patched_fixtures", &venue).await?;
+            let solved: ResolvedVenue = command(&services, "get_resolved_venue", &venue).await?;
+            let groups: Vec<GroupTreeNode> = command(&services, "list_group_tree", &venue).await?;
+            let universes: Vec<u16> = command(&services, "universes_in_use", &venue).await?;
+            let outputs: Vec<UniverseOutput> =
+                command(&services, "list_outputs", &json!({})).await?;
+            let mut definitions = HashMap::new();
+            for path in fixtures
+                .iter()
+                .map(|f| f.fixture_path.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+            {
+                // A venue outliving its bundle leaves that fixture without a
+                // mode list rather than taking the page down — same contract
+                // as `venue_rig`.
+                if let Ok(def) = command(
+                    &services,
+                    "get_fixture_definition",
+                    &json!({ "path": path }),
+                )
+                .await
+                {
+                    definitions.insert(path, def);
+                }
+            }
+            // Placed means the solve reached it. A fixture node the walk could
+            // not reach is in `unplaced` and has no pose at all — which is
+            // exactly what the tray is — so membership of the solved node list
+            // is the whole question, and there is no pose to copy out of it.
+            let placed: std::collections::HashSet<String> = fixtures
+                .iter()
+                .filter(|f| solved.nodes.iter().any(|node| node.id == f.id))
+                .map(|f| f.id.clone())
+                .collect();
+            Ok::<_, LibraryError>(Patch {
+                fixtures,
+                placed,
+                definitions,
+                groups,
+                universes,
+                outputs,
+            })
+        });
+        async move {
+            task.await.map_err(|e| {
+                LibraryError::at("get_patched_fixtures", Cause::Cancelled(e.to_string()))
+            })?
+        }
+    }
+
+    /// One universe as 512 cells — what the footprint strip draws, collisions
+    /// and all.
+    pub fn universe_occupancy(
+        &self,
+        venue_id: &str,
+        universe: u16,
+    ) -> impl Future<Output = Result<Vec<UniverseCell>, LibraryError>> + use<> {
+        self.call(
+            "universe_occupancy",
+            json!({ "venueId": venue_id, "universe": universe }),
+        )
+    }
+
+    /// Put one fixture at a hand-chosen address, and pin it there. A collision
+    /// or a footprint past 512 comes back as [`CommandError::Invalid`] naming
+    /// the conflict, with nothing written.
+    pub fn set_fixture_address(
+        &self,
+        venue_id: &str,
+        id: &str,
+        universe: i64,
+        address: i64,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "set_fixture_address",
+            json!({ "venueId": venue_id, "id": id, "universe": universe, "address": address }),
+        )
+    }
+
+    /// Repatch one fixture into another of its definition's modes.
+    ///
+    /// `allow_move` off asks whether the new width fits where it stands; the
+    /// refusal is the question the page puts to the human, and calling again
+    /// with it on is the answer.
+    pub fn set_fixture_mode(
+        &self,
+        venue_id: &str,
+        id: &str,
+        mode_name: &str,
+        allow_move: bool,
+    ) -> impl Future<Output = Result<PatchedFixture, LibraryError>> + use<> {
+        self.call(
+            "set_fixture_mode",
+            json!({
+                "venueId": venue_id, "id": id,
+                "modeName": mode_name, "allowMove": allow_move,
+            }),
+        )
+    }
+
+    /// Hold one address against auto-patch, or release it.
+    pub fn set_address_pinned(
+        &self,
+        venue_id: &str,
+        id: &str,
+        pinned: bool,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "set_address_pinned",
+            json!({ "venueId": venue_id, "id": id, "pinned": pinned }),
+        )
+    }
+
+    pub fn rename_patched_fixture(
+        &self,
+        venue_id: &str,
+        id: &str,
+        label: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "rename_patched_fixture",
+            json!({ "venueId": venue_id, "id": id, "label": label }),
+        )
+    }
+
+    /// Unpatch: the paperwork and the node in the room, together.
+    pub fn remove_patched_fixture(
+        &self,
+        venue_id: &str,
+        id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "remove_patched_fixture",
+            json!({ "venueId": venue_id, "id": id }),
+        )
+    }
+
+    /// Re-derive every address from where the fixtures hang, discarding the
+    /// hand-set ones it touches. What the Auto Patch button means.
+    pub fn auto_patch(
+        &self,
+        venue_id: &str,
+    ) -> impl Future<Output = Result<AutoPatchReport, LibraryError>> + use<> {
+        self.call("auto_patch", json!({ "venueId": venue_id }))
+    }
+
+    /// Where the next `count` fixtures of `channels` channels each would go.
+    /// The only allocator anything on this page asks.
+    pub fn next_addresses(
+        &self,
+        venue_id: &str,
+        channels: i64,
+        count: usize,
+    ) -> impl Future<Output = Result<Vec<PatchAddress>, LibraryError>> + use<> {
+        self.call(
+            "next_addresses",
+            json!({ "venueId": venue_id, "run": null, "channels": channels, "count": count }),
+        )
+    }
+
+    /// Patch `spec.count` unplaced copies, in one task.
+    ///
+    /// The allocator is asked once for the whole batch and then each row is
+    /// written at the slot it was given, so labels number consecutively and no
+    /// two copies race for one address. Chained here rather than in the page
+    /// because the second call depends on the first — the same reason
+    /// [`Self::venue_rig`] is one method.
+    pub fn add_fixtures(
+        &self,
+        venue_id: &str,
+        spec: NewFixtures,
+    ) -> impl Future<Output = Result<Vec<PatchedFixture>, LibraryError>> {
+        let services = self.services.clone();
+        let venue_id = venue_id.to_string();
+        let task = self.runtime.spawn(async move {
+            let slots: Vec<PatchAddress> = command(
+                &services,
+                "next_addresses",
+                &json!({
+                    "venueId": venue_id, "run": null,
+                    "channels": spec.channels, "count": spec.count,
+                }),
+            )
+            .await?;
+            let mut made = Vec::with_capacity(slots.len());
+            for slot in slots {
+                let row: PatchedFixture = command(
+                    &services,
+                    "patch_fixture",
+                    &json!({
+                        "venueId": venue_id,
+                        "universe": slot.universe,
+                        "address": slot.address,
+                        "numChannels": spec.channels,
+                        "manufacturer": spec.manufacturer,
+                        "model": spec.model,
+                        "modeName": spec.mode_name,
+                        "fixturePath": spec.fixture_path,
+                        "label": null,
+                    }),
+                )
+                .await?;
+                made.push(row);
+            }
+            Ok::<_, LibraryError>(made)
+        });
+        async move {
+            task.await
+                .map_err(|e| LibraryError::at("patch_fixture", Cause::Cancelled(e.to_string())))?
+        }
+    }
+
+    /// The bundled QLC+ definitions matching `query`, one page at a time.
+    pub fn search_fixtures(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<FixtureEntry>, LibraryError>> + use<> {
+        self.call(
+            "search_fixtures",
+            json!({ "query": query, "offset": offset, "limit": limit }),
+        )
+    }
+
+    pub fn fixture_definition(
+        &self,
+        path: &str,
+    ) -> impl Future<Output = Result<FixtureDefinition, LibraryError>> + use<> {
+        self.call("get_fixture_definition", json!({ "path": path }))
+    }
+
+    /// What a definition patched in `mode_name` would be *for* — the group
+    /// branch a new fixture lands under, answered by the derivation itself.
+    pub fn fixture_role(
+        &self,
+        path: &str,
+        mode_name: &str,
+    ) -> impl Future<Output = Result<FixtureRole, LibraryError>> + use<> {
+        self.call(
+            "fixture_role",
+            json!({ "path": path, "modeName": mode_name }),
+        )
+    }
+
+    // -- outputs --------------------------------------------------------------
+
+    pub fn start_artnet_discovery(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("start_discovery", json!({}))
+    }
+
+    pub fn stop_artnet_discovery(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("stop_discovery", json!({}))
+    }
+
+    /// Every Art-Net node that has answered a poll since discovery started.
+    /// Fails on a host with no Art-Net at all, which is a state the outputs
+    /// panel says out loud rather than drawing as an empty network.
+    pub fn artnet_nodes(
+        &self,
+    ) -> impl Future<Output = Result<Vec<ArtNetNode>, LibraryError>> + use<> {
+        self.call("get_discovered_nodes", json!({}))
+    }
+
+    /// Point one universe at one node's announced port address.
+    pub fn bind_output(
+        &self,
+        universe: i64,
+        node: &ArtNetNode,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "bind_output",
+            json!({
+                "universe": universe,
+                "nodeIp": node.ip,
+                "nodePort": ARTNET_PORT,
+                "portAddress": node.port_address,
+                "nodeName": node.name,
+            }),
+        )
+    }
+
+    pub fn unbind_output(
+        &self,
+        universe: i64,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("unbind_output", json!({ "universe": universe }))
+    }
+
     /// Run one command on the Tokio runtime and decode its result.
     ///
     /// The returned future is detached from `&self` so a caller can hold it
@@ -2100,6 +2407,48 @@ async fn command<T: DeserializeOwned>(
         .map_err(|error| LibraryError::at(name, Cause::Command(error)))?;
     serde_json::from_value(value)
         .map_err(|error| LibraryError::at(name, Cause::Shape(error.to_string())))
+}
+
+/// The Art-Net port every node listens on. Fixed by the protocol, so a binding
+/// carries it rather than asking anyone to type it.
+const ARTNET_PORT: i64 = 6454;
+
+/// A batch of identical fixtures to bring into existence, unplaced.
+///
+/// `channels` is the mode's width, which the caller already read out of the
+/// definition to show it; passing it keeps [`Library::add_fixtures`] from
+/// re-parsing the same file once per copy.
+#[derive(Clone, Debug)]
+pub struct NewFixtures {
+    pub manufacturer: String,
+    pub model: String,
+    pub mode_name: String,
+    pub fixture_path: String,
+    pub channels: i64,
+    pub count: usize,
+}
+
+/// One venue's paperwork, as [`Library::patch_data`] resolves it.
+///
+/// The patch is what *exists*; where a fixture hangs is the stage page's
+/// business and reaches here only as [`Patch::placed`] — a set, because
+/// "placed" is the one thing a patch row needs to know about the room and a
+/// pose would invite this page to edit one.
+pub struct Patch {
+    /// Every patched fixture, in patch order.
+    pub fixtures: Vec<PatchedFixture>,
+    /// The ids the resolver found a pose for. Everything else is in the tray.
+    pub placed: std::collections::HashSet<String>,
+    /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
+    /// absent rather than an error.
+    pub definitions: HashMap<String, FixtureDefinition>,
+    /// The derived group tree, flat and parents-first.
+    pub groups: Vec<GroupTreeNode>,
+    /// Every universe the venue patches into, ascending.
+    pub universes: Vec<u16>,
+    /// The universe→node table. Not per-venue: an output is a fact about this
+    /// machine's wiring.
+    pub outputs: Vec<UniverseOutput>,
 }
 
 /// One venue's 3D contents, as [`Library::venue_rig`] resolves them.
