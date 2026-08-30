@@ -121,10 +121,11 @@ fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
                     ),
                 ),
         )
-        .when(!bound_here, |line| {
-            // Named, not silent: an unbound universe still sends, through the
-            // arithmetic this table replaced, and that arithmetic puts 17 and 1
-            // on the same wire.
+        // Named, not silent: an unbound universe still sends, through the
+        // arithmetic this table replaced, and that arithmetic puts 17 and 1 on
+        // the same wire. Universes 0–15 are their own alias, though — saying
+        // "aliases it onto 1" under universe 1 is a warning about nothing.
+        .when(!bound_here && universe & 0xF != universe, |line| {
             let warning = format!(
                 "Falls back to net/subnet arithmetic, which aliases it onto {}",
                 universe & 0xF
@@ -193,13 +194,18 @@ fn node_list(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-/// Why the network is empty, when it is. A host with no Art-Net at all and a
-/// network with no nodes on it are different answers, and this says which.
+/// Why the network is empty, when it is. A host with no Art-Net running at all
+/// and a network with no nodes on it are different answers, and this says
+/// which — the first in the seam's words, the second in this page's.
 fn discovery(state: &Patch) -> Option<AnyElement> {
     let message: SharedString = match (&state.discovery_error, state.nodes.len()) {
-        (Some(error), _) => format!("No Art-Net on this host — {error}").into(),
+        // The seam's own sentence, unprefixed: it already says the host has no
+        // Art-Net, and a second clause in front of it would say it twice.
+        (Some(error), _) => error.clone(),
         (None, 0) => "No Art-Net node has answered a poll yet.".into(),
-        (None, count) => format!("{count} Art-Net nodes discovered").into(),
+        (None, count) => {
+            format!("{} discovered", crate::patch::plural(count, "Art-Net node")).into()
+        }
     };
     Some(
         div()

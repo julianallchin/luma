@@ -645,7 +645,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 175
+        "line": 176
       },
       "name": "auto_patch",
       "prose": {
@@ -1567,7 +1567,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 280
+        "line": 281
       },
       "name": "fixture_role",
       "prose": {
@@ -3341,7 +3341,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 213
+        "line": 214
       },
       "name": "next_addresses",
       "prose": {
@@ -3981,7 +3981,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 300
+        "line": 301
       },
       "name": "remove_patched_fixture",
       "prose": {
@@ -4061,7 +4061,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 310
+        "line": 311
       },
       "name": "rename_patched_fixture",
       "prose": {
@@ -4680,7 +4680,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 264
+        "line": 265
       },
       "name": "set_address_pinned",
       "prose": {
@@ -4710,7 +4710,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 162
+        "line": 163
       },
       "name": "set_fixture_address",
       "prose": {
@@ -4740,7 +4740,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 242
+        "line": 243
       },
       "name": "set_fixture_mode",
       "prose": {
@@ -5000,7 +5000,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 188
+        "line": 189
       },
       "name": "universe_occupancy",
       "prose": {
@@ -5018,7 +5018,7 @@
       "domain": "fixtures",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 199
+        "line": 200
       },
       "name": "universes_in_use",
       "prose": {

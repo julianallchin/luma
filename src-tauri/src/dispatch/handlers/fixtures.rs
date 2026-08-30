@@ -123,14 +123,15 @@ pub async fn patch_fixture(
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     // The one door a typed address comes through, and it is shut before
     // anything is written: a refused patch leaves the database untouched.
-    let footprint = patch_service::admit(
-        &patch_service::occupancy(&mut access).await?,
-        None,
-        narrow(universe)?,
-        narrow(address)?,
-        narrow(num_channels)?,
-    )
-    .map_err(CommandError::from)?;
+    let footprint = patch_service::occupancy(&mut access)
+        .await?
+        .admit(
+            None,
+            narrow(universe)?,
+            narrow(address)?,
+            narrow(num_channels)?,
+        )
+        .map_err(CommandError::from)?;
     let mut numbering = fixture_create::numbering(&mut access).await?;
     let fixture = fixture_create::create(
         &mut access,

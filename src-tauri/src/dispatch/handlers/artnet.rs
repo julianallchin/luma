@@ -14,7 +14,7 @@ fn manager(services: &AppServices) -> Result<&ArtNetManager, CommandError> {
     services
         .artnet
         .as_deref()
-        .ok_or_else(|| CommandError::NotFound("ArtNet is unavailable on this host".into()))
+        .ok_or_else(|| CommandError::NotFound("Art-Net is not running on this host".into()))
 }
 
 pub async fn start_discovery(services: &AppServices) -> Result<(), CommandError> {
