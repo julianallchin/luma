@@ -155,6 +155,17 @@ globalThis.nav = {
 		);
 	},
 
+	// The venue's builder tab, reached the same way. The one tab that can
+	// write a position, so every placement test starts here.
+	stage(venue) {
+		nav.venue(venue);
+		app.action("luma::NewTab");
+		nav.step("the stage choice", "button", "Stage builder");
+		until("the stage tab", (s) =>
+			s.find({ role: "card", label: `${venue} Stage builder` }) !== undefined,
+		);
+	},
+
 	// Close the visible tab, dropping its state. What "leave and come back"
 	// means now: a reopened tab reloads, which is what the persistence tests
 	// lean on.
