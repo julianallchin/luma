@@ -22,13 +22,13 @@ pub(super) fn outputs(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let Some(data) = state.data.as_ref() else {
         return super::section(
             "OUTPUTS",
+            false,
             div().px(px(12.0)).pb(px(12.0)).into_any_element(),
-        )
-        .flex_shrink_0()
-        .into_any_element();
+        );
     };
     super::section(
         "OUTPUTS",
+        false,
         div()
             .flex()
             .flex_col()
@@ -52,8 +52,6 @@ pub(super) fn outputs(state: &Patch, app: &Entity<Luma>) -> AnyElement {
             .children(discovery(state))
             .into_any_element(),
     )
-    .flex_shrink_0()
-    .into_any_element()
 }
 
 fn row(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {

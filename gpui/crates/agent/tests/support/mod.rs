@@ -439,8 +439,7 @@ impl Fixture {
     /// A library of its own, so the run cannot see — or corrupt — the
     /// developer's. Named after the process so two runs never share one.
     fn seed(&self) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("luma-gpui-{}-{}", self.name, std::process::id()));
+        let dir = config_dir(self.name);
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).expect("failed to create the temporary config directory");
         tokio::runtime::Builder::new_multi_thread()
@@ -917,6 +916,18 @@ impl Fixture {
         .await
         .expect("failed to seed the beat grid");
     }
+}
+
+/// Where a named fixture's library lives.
+///
+/// Public because a test that has to seed something [`Fixture`] does not model
+/// — a hand-made address collision, a second universe, an output binding —
+/// writes it into this directory after [`Fixture::open`] and before its script
+/// navigates. One spelling, so the writer and the reader cannot disagree about
+/// which library they are talking about.
+#[must_use]
+pub fn config_dir(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("luma-gpui-{name}-{}", std::process::id()))
 }
 
 /// How far off the `y = 0` plane [`Fixture::with_skewed_rig`] patches its

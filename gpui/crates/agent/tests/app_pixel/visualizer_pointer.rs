@@ -37,7 +37,7 @@ fn harness(name: &'static str) -> Harness {
 /// the top of every render, so a frame is always one behind by the time a
 /// script acts on it — see `visualizer.rs`.
 const OPEN: &str = r#"
-    nav.universe("Test Venue");
+    nav.patch("Test Venue");
     app.frames(6, { waitMs: 60 });
 
     function camera() {

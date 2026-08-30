@@ -70,7 +70,7 @@ fn publishing_a_frame_reports_its_cost() {
         &mut harness,
         &support::script(
             r#"
-            nav.universe("Test Venue");
+            nav.patch("Test Venue");
             app.frames(4, { waitMs: 60 });
             nav.expand();
             app.frames(8, { waitMs: 60 });

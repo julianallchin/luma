@@ -27,6 +27,7 @@ const GAP: f32 = 1.0;
 pub(super) fn footprint(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     super::section(
         "FOOTPRINT",
+        false,
         div()
             .flex()
             .flex_col()
@@ -45,8 +46,6 @@ pub(super) fn footprint(state: &Patch, app: &Entity<Luma>) -> AnyElement {
             }))
             .into_any_element(),
     )
-    .flex_shrink_0()
-    .into_any_element()
 }
 
 /// A chip per universe in use. A row rather than a dropdown: a venue runs one
@@ -125,7 +124,10 @@ fn grid(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                 } else if selected {
                     ladder::foreground_90()
                 } else if occupied.is_some() {
-                    ladder::apex()
+                    // The top of the grey ladder: a used channel has to read as
+                    // used against an empty one at 8 px square, and `apex` was
+                    // one step too close to `trim` to do that.
+                    ladder::hover()
                 } else {
                     ladder::trim()
                 })

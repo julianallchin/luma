@@ -34,7 +34,7 @@ use luma_lib::models::fixtures::PatchedFixture;
 use luma_lib::models::patch::{ArtNetNode, UniverseCell};
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::ladder;
-use luma_ui::node::{Instrument as _, Role};
+use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::text_input::{self, TextInput};
 
 use crate::confirm::{Action, Confirm};
@@ -334,7 +334,14 @@ impl Patch {
         nodes: Result<Vec<ArtNetNode>, LibraryError>,
     ) {
         match data {
-            Ok(data) => {
+            Ok(mut data) => {
+                // A rental sheet reads down the patch, not down a table of
+                // row ids: `get_patched_fixtures` orders by primary key, which
+                // is a uuid and therefore an arbitrary order that changes as
+                // fixtures are added. Sorting here is presentation — the stored
+                // order is nobody's business.
+                data.fixtures
+                    .sort_by_key(|row| (row.universe, row.address, row.id.clone()));
                 // A universe that emptied out from under the strip: fall back
                 // to the first one in use rather than drawing 512 blanks and
                 // calling it a universe.
@@ -531,7 +538,15 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| match result {
-                Ok(()) => this.reload_patch(venue, cx),
+                Ok(()) => {
+                    // Committed: the caret has nothing left to say. The label
+                    // field stays open because a name is still being typed;
+                    // a number is done the moment it lands.
+                    if let Some(state) = this.patch_mut(&venue) {
+                        state.clear_edit();
+                    }
+                    this.reload_patch(venue, cx);
+                }
                 Err(error) => {
                     // Refused. The row keeps the address it had — nothing was
                     // written — and the sentence saying why sits under it until
@@ -720,11 +735,21 @@ impl Luma {
             .map(|id| self.library.remove_patched_fixture(&venue_id, id))
             .collect();
         cx.spawn(async move |this, cx| {
+            let mut failure = None;
             for call in pending {
-                call.await.ok();
+                if let Err(error) = call.await {
+                    // The first refusal is the one worth reading; the rest are
+                    // usually the same sentence about the same venue.
+                    failure.get_or_insert_with(|| refusal_message(&error));
+                }
             }
-            this.update(cx, |this, cx| this.reload_patch(venue_id, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                if let (Some(failure), Some(state)) = (failure, this.patch_mut(&venue_id)) {
+                    state.notice = Some(failure.into());
+                }
+                this.reload_patch(venue_id, cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -1059,7 +1084,8 @@ fn header(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
                         .mt(px(5.0))
                         .text_size(px(12.0))
                         .text_color(ladder::muted_foreground())
-                        .child(subtitle(state)),
+                        .child(subtitle(state))
+                        .agent_node(Role::Text, subtitle(state)),
                 ),
         )
         .child(
@@ -1099,11 +1125,21 @@ fn subtitle(state: &Patch) -> SharedString {
         .filter(|f| !data.placed.contains(&f.id))
         .count();
     format!(
-        "{} fixtures · {} universes · {unplaced} in the tray",
-        data.fixtures.len(),
-        data.universes.len()
+        "{} · {} · {unplaced} in the tray",
+        plural(data.fixtures.len(), "fixture"),
+        plural(data.universes.len(), "universe"),
     )
     .into()
+}
+
+/// `n thing`, `n things`. One helper rather than an `s` at each call site,
+/// because "1 universes" is the kind of thing nobody notices until it ships.
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("{count} {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
 }
 
 /// Everything that is about a *universe* rather than about a fixture.
@@ -1125,11 +1161,24 @@ fn rail(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
 const RAIL_WIDTH: f32 = 336.0;
 
 /// A section in the rail: a silkscreen heading over its body.
-fn section(heading: &str, body: AnyElement) -> gpui::Div {
+///
+/// `grow` says whether it takes the room left over — one section does, the
+/// others are the size of what is in them. Passed rather than chained on by
+/// the caller because the automation node has to be the outermost thing, and a
+/// caller that added layout after it would be sizing a box the tree does not
+/// describe.
+fn section(heading: &'static str, grow: bool, body: AnyElement) -> AnyElement {
     div()
         .flex()
         .flex_col()
         .min_h_0()
+        .map(|section| {
+            if grow {
+                section.flex_1()
+            } else {
+                section.flex_shrink_0()
+            }
+        })
         .border_b_1()
         .border_color(ladder::trim())
         .child(
@@ -1140,4 +1189,6 @@ fn section(heading: &str, body: AnyElement) -> gpui::Div {
                 .child(luma_ui::silkscreen(heading)),
         )
         .child(body)
+        .agent_node(Role::Card, heading)
+        .into_any_element()
 }

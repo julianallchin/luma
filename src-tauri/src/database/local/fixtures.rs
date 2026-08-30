@@ -199,6 +199,17 @@ pub async fn update_fixture_label(
 
 pub async fn delete_fixture(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
     let venue_id = access.venue_id().to_owned();
+    // Memberships go first, while the fixture is still there to authorize
+    // them. `fixture_group_members` cascades on `fixtures`, and its delete
+    // trigger authorizes by joining the row back to its fixture — inside a
+    // cascade that fixture is already gone, so the join finds nothing and the
+    // whole delete aborts. Unpatching anything that was in a group failed that
+    // way, with the membership's error rather than the fixture's.
+    sqlx::query("DELETE FROM fixture_group_members WHERE fixture_id = ?")
+        .bind(id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to remove fixture from its groups: {e}"))?;
     let result = sqlx::query("DELETE FROM fixtures WHERE id = ? AND venue_id = ?")
         .bind(id)
         .bind(venue_id)
