@@ -232,6 +232,31 @@ impl Fixture {
         .unwrap()
     }
 
+    /// A venue thread over a library that holds a room and nothing else — no
+    /// track, so no score could exist even if one were wanted.
+    async fn venue_thread(&self) -> AgentThread {
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Venue')")
+            .bind(self.owner.as_deref())
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        self.authored
+            .create_thread_with_authored_state(
+                &self.pool,
+                CreateAgentThreadInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    agent_kind: "venue_rig".into(),
+                    subject_kind: Some("venue".into()),
+                    subject_id: Some("venue".into()),
+                    venue_id: Some("venue".into()),
+                    ..Default::default()
+                },
+                self.owner.as_deref(),
+            )
+            .await
+            .unwrap()
+    }
+
     async fn append_assistant(&self, thread_id: &str, message_id: &str) {
         let head = agent_threads::transcript_head(&self.pool, thread_id, self.owner.as_deref())
             .await
@@ -3054,4 +3079,58 @@ async fn recovery_finalizes_a_live_workspace_turn_and_skips_a_discarded_one() {
         .await
         .unwrap();
     assert_eq!(after.revision_id, before.revision_id);
+}
+
+/// A venue thread exists over a library with no tracks, writes assistant rows
+/// with no prepared authored turn, and creates no authored document at all.
+///
+/// The invariant is one preparation per assistant row *of a document thread*;
+/// this is the other half of it, and the trigger that used to demand one
+/// unconditionally is what would have made the room unbuildable.
+#[tokio::test]
+async fn a_venue_thread_authors_no_document_and_prepares_no_turn() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.venue_thread().await;
+    assert_eq!(thread.score_id, None);
+    assert_eq!(thread.subject_id.as_deref(), Some("venue"));
+
+    let documents: i64 = sqlx::query_scalar("SELECT count(*) FROM authored_documents")
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap();
+    assert_eq!(documents, 0, "a venue thread minted an authored document");
+
+    fixture.append_assistant(&thread.id, "assistant-1").await;
+    let preparations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM authored_turn_preparations WHERE thread_id = ?")
+            .bind(&thread.id)
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap();
+    assert_eq!(preparations, 0);
+}
+
+/// Deleting one leaves the same replayable receipt every other thread leaves,
+/// naming no document because it revised none.
+#[tokio::test]
+async fn deleting_a_venue_thread_leaves_a_receipt_with_no_document() {
+    let fixture = Fixture::new().await;
+    let thread = fixture.venue_thread().await;
+
+    fixture
+        .authored
+        .delete_thread_with_authored_state(&fixture.pool, None, &thread.id, |workspace_ids| {
+            assert!(workspace_ids.is_empty());
+            async { Ok(()) }
+        })
+        .await
+        .unwrap();
+
+    let document_id: Option<String> =
+        sqlx::query_scalar("SELECT document_id FROM agent_thread_deletions WHERE thread_id = ?")
+            .bind(&thread.id)
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap();
+    assert_eq!(document_id, None);
 }

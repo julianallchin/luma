@@ -228,10 +228,28 @@ pub enum AgentThreadAppendOutcome {
     },
 }
 
-/// The only two authored-document routes an agent thread may own. Keeping the
-/// shape here lets command input, durable rows, and authored-state resolution
-/// share one invariant instead of accepting a partially routed thread and
-/// hoping later initialization can compensate it.
+/// What one agent thread is about, and therefore what it revises.
+///
+/// Keeping the shape here lets command input, durable rows, and authored-state
+/// resolution share one invariant instead of accepting a partially routed
+/// thread and hoping later initialization can compensate it.
+///
+/// Two of the three routes revise an *authored document*; a venue thread
+/// revises the room's relational rig, which has no revision history of its own.
+/// Which of the two a thread is, is the enum's answer rather than each
+/// caller's guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadRoute<'a> {
+    Authored(AuthoredThreadRoute<'a>),
+    /// The room itself: fixtures, stage pieces and their poses. No track, no
+    /// score, no authored document — so no assistant row of such a thread
+    /// carries a prepared authored turn.
+    Venue {
+        venue_id: &'a str,
+    },
+}
+
+/// The two authored-document routes an agent thread may own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AuthoredThreadRoute<'a> {
     Track {
@@ -246,8 +264,8 @@ pub(crate) enum AuthoredThreadRoute<'a> {
 }
 
 impl CreateAgentThreadInput {
-    pub(crate) fn authored_route(&self) -> Result<AuthoredThreadRoute<'_>, String> {
-        authored_route(
+    pub(crate) fn route(&self) -> Result<ThreadRoute<'_>, String> {
+        route(
             &self.agent_kind,
             self.subject_kind.as_deref(),
             self.subject_id.as_deref(),
@@ -259,8 +277,8 @@ impl CreateAgentThreadInput {
 }
 
 impl AgentThread {
-    pub(crate) fn authored_route(&self) -> Result<AuthoredThreadRoute<'_>, String> {
-        authored_route(
+    pub(crate) fn route(&self) -> Result<ThreadRoute<'_>, String> {
+        route(
             &self.agent_kind,
             self.subject_kind.as_deref(),
             self.subject_id.as_deref(),
@@ -271,14 +289,14 @@ impl AgentThread {
     }
 }
 
-fn authored_route<'a>(
+fn route<'a>(
     agent_kind: &str,
     subject_kind: Option<&str>,
     subject_id: Option<&'a str>,
     implementation_id: Option<&'a str>,
     venue_id: Option<&'a str>,
     score_id: Option<&'a str>,
-) -> Result<AuthoredThreadRoute<'a>, String> {
+) -> Result<ThreadRoute<'a>, String> {
     match (
         agent_kind,
         subject_kind,
@@ -295,11 +313,11 @@ fn authored_route<'a>(
             Some(venue_id),
             Some(score_id),
         ) if !track_id.is_empty() && !venue_id.is_empty() && !score_id.is_empty() => {
-            Ok(AuthoredThreadRoute::Track {
+            Ok(ThreadRoute::Authored(AuthoredThreadRoute::Track {
                 track_id,
                 venue_id,
                 score_id,
-            })
+            }))
         }
         (
             "pattern_graph",
@@ -312,10 +330,15 @@ fn authored_route<'a>(
             && !implementation_id.is_empty()
             && venue_id.is_none_or(|value| !value.is_empty()) =>
         {
-            Ok(AuthoredThreadRoute::Pattern {
+            Ok(ThreadRoute::Authored(AuthoredThreadRoute::Pattern {
                 pattern_id,
                 implementation_id,
-            })
+            }))
+        }
+        ("venue_rig", Some("venue"), Some(venue_id), None, Some(subject_venue), None)
+            if !venue_id.is_empty() && subject_venue == venue_id =>
+        {
+            Ok(ThreadRoute::Venue { venue_id })
         }
         ("track_copilot", ..) => Err(
             "track agent thread requires non-empty track, venue, and score IDs and no graph implementation"
@@ -323,6 +346,10 @@ fn authored_route<'a>(
         ),
         ("pattern_graph", ..) => Err(
             "pattern agent thread requires non-empty pattern and implementation IDs and no score ID"
+                .into(),
+        ),
+        ("venue_rig", ..) => Err(
+            "venue agent thread requires a non-empty venue ID as its subject and no track, score, or graph implementation"
                 .into(),
         ),
         _ => Err(format!("unsupported agent thread kind '{agent_kind}'")),

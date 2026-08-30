@@ -234,7 +234,7 @@ pub(crate) async fn create_thread_with_id(
     input: CreateAgentThreadInput,
     owner_user_id: Option<&str>,
 ) -> Result<AgentThread, String> {
-    input.authored_route()?;
+    input.route()?;
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
@@ -490,7 +490,7 @@ pub(crate) async fn insert_thread_deletion_receipt(
     connection: &mut SqliteConnection,
     thread_id: &str,
     owner_user_id: Option<&str>,
-    document_id: &str,
+    document_id: Option<&str>,
 ) -> Result<bool, String> {
     let principal_key = principal_key(owner_user_id);
     // The deleting projection owns the terminal timestamp. A remote thread
@@ -525,7 +525,7 @@ pub(crate) async fn insert_thread_deletion_receipt(
         let exact = sqlx::query_scalar::<_, i64>(
             "SELECT 1 FROM agent_thread_deletions
              WHERE thread_id = ? AND owner_user_id IS ?
-               AND principal_key = ? AND document_id = ? AND deleted_at = ?",
+               AND principal_key = ? AND document_id IS ? AND deleted_at = ?",
         )
         .bind(thread_id)
         .bind(owner_user_id)
@@ -2209,7 +2209,7 @@ mod tests {
         .unwrap_err();
         assert!(null_subject_error
             .to_string()
-            .contains("exact track or pattern authored route"));
+            .contains("exact track, pattern, or venue route"));
 
         let track = create_thread(&pool, track_thread("valid-track"), None)
             .await
