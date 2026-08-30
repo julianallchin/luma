@@ -496,13 +496,15 @@ async fn override_node(
     // written — it is both the uniqueness check's subject and the answer handed
     // back, so the caller cannot be told one thing while the venue holds
     // another.
+    //
+    // The check is `clash_for` and not a scan of `after`: a typed name is
+    // refused, and `after` has already had every name it could clash with
+    // separated from it.
     sources.apply(row.clone(), group_id);
-    let after = sources.tree();
-    if let Some(node) = after.iter().find(|node| node.id == group_id) {
-        if let Some(clash) = groups_service::node_answering_to(&after, &node.name, group_id) {
-            return Err(name_taken(&node.name, clash));
-        }
+    if let Some(clash) = sources.clash_for(group_id) {
+        return Err(name_taken(&clash.name, &clash));
     }
+    let after = sources.tree();
 
     match &row {
         Some(row) => overrides_db::put(&mut access, row).await?,
@@ -815,6 +817,76 @@ mod tests {
         );
     }
 
+    /// Defect: a derived name was minted from the path and never checked
+    /// against the rest of the tree, so two pieces labelled `Truss 1` and
+    /// `Truss-1` both answered to `spots_horizontal_truss_1` — and an
+    /// expression naming it selected six movers where the tree showed three.
+    #[tokio::test]
+    async fn two_pieces_labelled_alike_do_not_answer_to_one_name() {
+        let (_dir, services, venue) = alike_rig("Truss 1", "Truss-1").await;
+        assert_eq!(
+            names(&tree(&services, &venue).await),
+            [
+                "spots",
+                "spots_horizontal",
+                "spots_horizontal_truss_1",
+                "spots_horizontal_truss_1_2",
+            ]
+        );
+        assert_eq!(
+            selection(&services, &venue, "spots_horizontal_truss_1").await,
+            3,
+            "one name still stands for both runs"
+        );
+        assert_eq!(
+            selection(&services, &venue, "spots_horizontal_truss_1_2").await,
+            3
+        );
+    }
+
+    /// Defect: the conversion off the old schema commits like any other write,
+    /// and only the write path told the cache. A reader that got in beside it
+    /// saw a venue with no graph at all, cached the empty tree that follows,
+    /// and the commit left the answer there.
+    #[tokio::test]
+    async fn a_read_between_the_migration_and_its_commit_leaves_no_empty_tree() {
+        use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
+
+        let directory = tempfile::tempdir().unwrap();
+        let services = seed(directory.path()).await;
+        let venue = unconverted_venue(&services).await;
+
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+            .await
+            .expect("the venue would not open for writing");
+        assert!(
+            crate::venue_graph::migrate(&mut access, &services.fixtures_root)
+                .await
+                .expect("the venue would not convert")
+        );
+
+        // The racing reader, and a *reading* one: every group verb converts
+        // before it reads, so a caller that arrives beside someone else's
+        // conversion is one that does not. It cannot see the conversion, and it
+        // refills the cache with the tree the commit is about to replace.
+        let racing = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            unconverting_selection(&services, &venue, "spots_horizontal"),
+        )
+        .await
+        .expect("the reader could not get in beside the open conversion");
+        assert_eq!(racing, 0, "the reader saw a conversion that has not landed");
+
+        crate::venue_graph::commit_graph(access)
+            .await
+            .expect("the conversion did not commit");
+        assert_eq!(
+            selection(&services, &venue, "spots_horizontal").await,
+            6,
+            "the cache still answers from before the conversion"
+        );
+    }
+
     /// Defect: the cache was dropped *inside* the write transaction, so a read
     /// arriving between the last write and the commit refilled it from the rows
     /// the commit was about to replace — and the stale answer outlived the verb
@@ -850,8 +922,9 @@ mod tests {
         .expect("the reader could not get in beside the open write");
         assert_eq!(racing, 2);
 
-        access.commit().await.expect("the move did not commit");
-        venue_graph_db::graph_committed();
+        crate::venue_graph::commit_graph(access)
+            .await
+            .expect("the move did not commit");
         assert_eq!(
             selection(&services, &venue, "spots_left_wing").await,
             1,
@@ -903,6 +976,14 @@ mod tests {
             .unwrap()
             .iter()
             .map(|node| node["label"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn names(tree: &Value) -> Vec<String> {
+        tree.as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["name"].as_str().unwrap().to_string())
             .collect()
     }
 
@@ -993,6 +1074,26 @@ mod tests {
         .len()
     }
 
+    /// The same, for a caller that does not convert first — which is every
+    /// reader outside a group verb, and the only kind that can arrive while a
+    /// conversion is still open.
+    async fn unconverting_selection(services: &AppServices, venue: &str, query: &str) -> usize {
+        use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+
+        let mut access = VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue))
+            .await
+            .expect("the venue would not open for reading");
+        crate::services::groups::resolve_selection_expression_with_path(
+            &services.fixtures_root,
+            &mut access,
+            &crate::models::selection::Selection::new(query),
+            0,
+        )
+        .await
+        .expect("the expression did not resolve")
+        .len()
+    }
+
     /// The two tower nodes, in the order they were placed.
     async fn towers(services: &AppServices, venue: &str) -> Vec<String> {
         let rows = dispatch(services, "get_venue_graph", &json!({ "venueId": venue }))
@@ -1025,16 +1126,13 @@ mod tests {
             .clone()
     }
 
-    /// A stage with four towers on it, one mover up each — the wing rig, built
-    /// through `dispatch` from end to end.
+    /// A venue with `n` movers patched into it and nothing placed yet.
     ///
     /// The fixtures are patched *before* the graph is first read, because the
     /// conversion is what gives a patched fixture its graph node.
-    async fn rig() -> (tempfile::TempDir, AppServices, String) {
-        let directory = tempfile::tempdir().unwrap();
-        let services = seed(directory.path()).await;
+    async fn venue_with_movers(services: &AppServices, n: i64) -> (String, Vec<String>) {
         let venue = dispatch(
-            &services,
+            services,
             "create_venue",
             &json!({ "name": "Golden room", "description": null }),
         )
@@ -1045,9 +1143,9 @@ mod tests {
             .to_string();
 
         let mut fixtures = Vec::new();
-        for n in 0..4 {
+        for n in 0..n {
             let patched = dispatch(
-                &services,
+                services,
                 "patch_fixture",
                 &json!({
                     "venueId": venue,
@@ -1065,6 +1163,52 @@ mod tests {
             .expect("the fixture was not patched");
             fixtures.push(patched["id"].as_str().unwrap().to_string());
         }
+        (venue, fixtures)
+    }
+
+    /// Clamp `fixture` to `piece`'s top, `u` along it and `trim` above it.
+    async fn clamp(
+        services: &AppServices,
+        venue: &str,
+        fixture: &str,
+        piece: &str,
+        u: f64,
+        trim: f64,
+    ) {
+        dispatch(
+            services,
+            "reattach",
+            &json!({
+                "venueId": venue,
+                "nodeId": fixture,
+                "parentId": piece,
+                "mySocket": "clamp",
+                "theirSocket": "top",
+                "yaw": null,
+            }),
+        )
+        .await
+        .expect("the mover would not clamp to the piece");
+        dispatch(
+            services,
+            "set_params",
+            &json!({
+                "venueId": venue,
+                "nodeId": fixture,
+                "params": { "u": u, "v": 0.0, "trim": trim },
+                "label": null,
+            }),
+        )
+        .await
+        .expect("the mover would not take a trim");
+    }
+
+    /// A stage with four towers on it, one mover up each — the wing rig, built
+    /// through `dispatch` from end to end.
+    async fn rig() -> (tempfile::TempDir, AppServices, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let services = seed(directory.path()).await;
+        let (venue, fixtures) = venue_with_movers(&services, 4).await;
 
         let stage = place(
             &services,
@@ -1105,36 +1249,87 @@ mod tests {
         }
 
         for (n, fixture) in fixtures.iter().enumerate() {
-            let tower = &towers[n];
-            dispatch(
-                &services,
-                "reattach",
-                &json!({
-                    "venueId": venue,
-                    "nodeId": fixture,
-                    "parentId": tower,
-                    "mySocket": "clamp",
-                    "theirSocket": "top",
-                    "yaw": null,
-                }),
-            )
-            .await
-            .expect("the mover would not clamp to the tower");
-            dispatch(
-                &services,
-                "set_params",
-                &json!({
-                    "venueId": venue,
-                    "nodeId": fixture,
-                    "params": { "u": 0.0, "v": 0.0, "trim": 2.0 + (n % 2) as f64 * 3.0 },
-                    "label": null,
-                }),
-            )
-            .await
-            .expect("the mover would not take a trim");
+            let trim = 2.0 + (n % 2) as f64 * 3.0;
+            clamp(&services, &venue, fixture, &towers[n], 0.0, trim).await;
         }
 
         (directory, services, venue)
+    }
+
+    /// Two pieces on the floor whose labels normalize to one name, three movers
+    /// evenly spaced along each: one `horizontal` class, two labelled rows, and
+    /// the same word for both unless something separates them.
+    async fn alike_rig(first: &str, second: &str) -> (tempfile::TempDir, AppServices, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let services = seed(directory.path()).await;
+        let (venue, fixtures) = venue_with_movers(&services, 6).await;
+
+        for (n, label) in [first, second].into_iter().enumerate() {
+            let truss = place(
+                &services,
+                &venue,
+                "piece",
+                DECK,
+                None,
+                Some(label),
+                0.0,
+                n as f64 * 4.0,
+            )
+            .await;
+            for (step, fixture) in fixtures[n * 3..n * 3 + 3].iter().enumerate() {
+                clamp(
+                    &services,
+                    &venue,
+                    fixture,
+                    &truss,
+                    step as f64 * 2.0 - 2.0,
+                    2.0,
+                )
+                .await;
+            }
+        }
+
+        (directory, services, venue)
+    }
+
+    /// Six movers in a row on the *old* schema: positions in `fixtures.pos_*`
+    /// and no graph at all, which is the venue `ensure_migrated` converts.
+    ///
+    /// Built by patching through `dispatch` — which converts — and then taking
+    /// the graph back out, because the old write path it would otherwise need
+    /// is gone.
+    async fn unconverted_venue(services: &AppServices) -> String {
+        let (venue, fixtures) = venue_with_movers(services, 6).await;
+        let pool = &services.db.0;
+
+        for (n, fixture) in fixtures.iter().enumerate() {
+            // Evenly spaced, so the run is one distribution and the class it
+            // makes is the whole answer: `spots_horizontal`, six movers.
+            sqlx::query("UPDATE fixtures SET pos_x = ?, pos_y = 0.0, pos_z = 3.0 WHERE id = ?")
+                .bind(n as f64 * 2.0 - 5.0)
+                .bind(fixture)
+                .execute(pool)
+                .await
+                .expect("the fixture would not take a position");
+        }
+        for statement in [
+            "DELETE FROM venue_node_params WHERE node_id IN
+                 (SELECT id FROM venue_nodes WHERE venue_id = ?)",
+            "DELETE FROM venue_constraints WHERE node_id IN
+                 (SELECT id FROM venue_nodes WHERE venue_id = ?)",
+            "DELETE FROM venue_edges WHERE child_id IN
+                 (SELECT id FROM venue_nodes WHERE venue_id = ?)",
+            "DELETE FROM venue_nodes WHERE venue_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(&venue)
+                .execute(pool)
+                .await
+                .expect("the graph would not come back out");
+        }
+        crate::services::groups::invalidate_venue_fixture_cache();
+
+        venue
     }
 
     #[allow(clippy::too_many_arguments)]

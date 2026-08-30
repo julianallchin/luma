@@ -977,10 +977,34 @@ impl GroupSources {
     }
 
     /// The merged group tree: derivation, the overrides on top, and the
-    /// authored groups beside them. Parents before children.
+    /// authored groups beside them. Parents before children, and every name
+    /// distinct.
     #[must_use]
     pub fn tree(&self) -> Vec<GroupTreeNode> {
+        let mut nodes = self.named();
+        group_derivation::make_names_distinct(&mut nodes);
+        nodes
+    }
+
+    /// The same tree with the names the rules mint, two of which can be one
+    /// word. Private: [`Self::tree`] and [`Self::clash_for`] are the two
+    /// questions it answers, and nothing else should have to know that
+    /// distinctness is a second step.
+    fn named(&self) -> Vec<GroupTreeNode> {
         group_derivation::merge_tree(&self.derived, &self.overrides, &self.manual)
+    }
+
+    /// The node already answering to the name `group_id` asks for, if any.
+    ///
+    /// Asked of the minted names rather than the distinct ones, because after
+    /// [`group_derivation::make_names_distinct`] there is no collision left to
+    /// find. That is the line between the two: a name someone *typed* is
+    /// refused here, and only a name nobody typed gets a suffix.
+    #[must_use]
+    pub fn clash_for(&self, group_id: &str) -> Option<GroupTreeNode> {
+        let named = self.named();
+        let asked = &named.iter().find(|node| node.id == group_id)?.name;
+        node_answering_to(&named, asked, group_id).cloned()
     }
 
     /// Whether `group_id` names a node of this venue's tree at all.
@@ -1035,6 +1059,14 @@ impl GroupSources {
 /// being renamed, which is allowed to keep its own name.
 ///
 /// Names that normalize to empty are not names and never collide.
+///
+/// This is the check for a name someone *typed* — a created group, a renamed
+/// node — and it refuses. A name nobody typed is a different question: a piece
+/// labelled `Truss-1` beside one labelled `Truss 1` mints one derived name
+/// twice, and refusing the label would make a stage verb answer for a group
+/// tree it cannot see. Derivation separates those instead
+/// ([`group_derivation::make_names_distinct`]), so a label write stays a label
+/// write.
 #[must_use]
 pub fn node_answering_to<'a>(
     tree: &'a [GroupTreeNode],
