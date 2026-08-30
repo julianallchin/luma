@@ -29,7 +29,7 @@ use crate::database::local::agent_threads;
 use crate::database::local::auth::principal_key;
 use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
 use crate::database::local::write_admission;
-use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute};
+use crate::models::agent_threads::{AgentThread, AuthoredThreadRoute, ThreadRoute};
 use crate::models::authored_state::{
     AppliedAuthoredState, AuthoredConversationCheckpoint, AuthoredHistoryEntry,
     AuthoredHistoryPage, AuthoredMergeConflict, AuthoredMergeConflictKind,
@@ -235,11 +235,26 @@ struct ResolvedScope {
 
 impl ResolvedScope {
     fn from_thread(thread: &AgentThread, principal: Option<&str>) -> Result<Self> {
+        Self::of_thread(thread, principal)?.ok_or_else(|| {
+            AuthoredDocumentsError::Scope(
+                "a venue agent thread revises the room's rig, not an authored document".into(),
+            )
+        })
+    }
+
+    /// The authored document this thread writes to, or `None` for a thread
+    /// that writes none.
+    ///
+    /// The two are told apart here rather than at each caller: a caller that
+    /// cannot honour `None` asks [`Self::from_thread`] and gets the refusal in
+    /// one place.
+    fn of_thread(thread: &AgentThread, principal: Option<&str>) -> Result<Option<Self>> {
         ensure_thread_owned(thread, principal)?;
-        let mut scope = match thread
-            .authored_route()
-            .map_err(AuthoredDocumentsError::Scope)?
-        {
+        let route = match thread.route().map_err(AuthoredDocumentsError::Scope)? {
+            ThreadRoute::Venue { .. } => return Ok(None),
+            ThreadRoute::Authored(route) => route,
+        };
+        let mut scope = match route {
             AuthoredThreadRoute::Track {
                 track_id,
                 venue_id,
@@ -259,7 +274,7 @@ impl ResolvedScope {
         };
         scope.thread_id = Some(thread.id.clone());
         scope.thread_actor = thread.actor.as_deref().map(Actor::parse).transpose()?;
-        Ok(scope)
+        Ok(Some(scope))
     }
 
     fn track(principal: Option<&str>, track_scope: TrackScope) -> Result<Self> {

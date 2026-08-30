@@ -38,7 +38,7 @@ use crate::database::local::agent_threads as db;
 use crate::models::agent_execution::PythonScopeInput;
 use crate::models::agent_threads::{
     AgentThread, AgentThreadAppendOutcome, AgentThreadUsage, AppendAgentThreadMessagesInput,
-    NewAgentThreadMessage,
+    NewAgentThreadMessage, ThreadRoute,
 };
 use crate::models::authored_state::{
     AuthoredTurnCommit, FinalizeAuthoredTurnInput, PrepareAuthoredTurnInput,
@@ -112,6 +112,12 @@ struct TurnSetup<'a> {
     /// same detached state `prepare_turn` will finalize, and no tool is in a
     /// position to disagree about which.
     workspace_id: Option<&'a str>,
+    /// Whether this thread's assistant rows reserve authored state. A venue
+    /// thread revises the room's relational rig, which has no revision history
+    /// to stage against, so its rows close without a preparation — the
+    /// invariant is "one preparation per assistant row *of a document
+    /// thread*", and this is where the two are told apart.
+    authored: bool,
     /// Resolved once per turn rather than once per step: every step of a turn
     /// writes into the same prefix, and re-reading the environment mid-turn
     /// could change the TTL under a cache that is already warm.
@@ -139,6 +145,10 @@ impl Turn {
             .unwrap_or_default();
         self.spend.thread_id.clone_from(&self.thread_id);
         let kind = AgentKind::parse(&detail.thread.agent_kind)?;
+        let authored = matches!(
+            detail.thread.route().map_err(AgentError::Invalid)?,
+            ThreadRoute::Authored(_)
+        );
         self.transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
         self.head = self.transcript.head_message_id();
 
@@ -148,13 +158,19 @@ impl Turn {
             .clone()
             .unwrap_or_else(|| tools::registry(kind));
         let scope = python_scope(&detail.thread);
-        let workspace_id = self
-            .service
-            .services()
-            .authored()
-            .thread_workspace(&pool, self.principal.as_deref(), &self.thread_id)
-            .await
-            .map_err(|error| AgentError::Storage(error.to_string()))?;
+        // Only a document thread can have one: a workspace is a detached head
+        // of an authored document, and a venue thread has no document to
+        // detach from.
+        let workspace_id = match authored {
+            false => None,
+            true => self
+                .service
+                .services()
+                .authored()
+                .thread_workspace(&pool, self.principal.as_deref(), &self.thread_id)
+                .await
+                .map_err(|error| AgentError::Storage(error.to_string()))?,
+        };
         let (client, model, reasoning) = self.resolve_model().await?;
         let setup = TurnSetup {
             client: &*client,
@@ -164,6 +180,7 @@ impl Turn {
             registry: &registry,
             scope: &scope,
             workspace_id: workspace_id.as_deref(),
+            authored,
             cache_retention: CacheRetention::from_env(),
         };
 
@@ -185,7 +202,8 @@ impl Turn {
         loop {
             let (stop_reason, usage, assistant_id) =
                 self.assistant_row(&setup, &turn_message_id).await?;
-            self.close_row(&assistant_id, stop_reason, usage).await?;
+            self.close_row(&setup, &assistant_id, stop_reason, usage)
+                .await?;
             // After the row is durable, so a run's recorded price never
             // describes work the transcript does not have.
             self.spend.turns += 1;
@@ -370,12 +388,26 @@ impl Turn {
     /// commit. The row becomes durable only after an immutable prepared
     /// revision exists, so a crash between the two is recoverable
     /// (`authored_state_recover_turns`) rather than a lost association.
+    ///
+    /// A thread that revises no authored document has nothing to reserve, and
+    /// its row is simply appended — see [`TurnSetup::authored`].
     async fn close_row(
         &mut self,
+        setup: &TurnSetup<'_>,
         assistant_id: &str,
         stop_reason: StopReason,
         usage: Usage,
     ) -> Result<(), AgentError> {
+        if !setup.authored {
+            let row = self.assistant_row_of(assistant_id)?;
+            self.append(&row).await?;
+            self.emit(TurnEvent::MessageEnded {
+                id: assistant_id.to_string(),
+                stop_reason,
+                usage,
+            });
+            return Ok(());
+        }
         let pool = self.service.services().db().0.clone();
         let authored = self.service.services().authored().clone();
         let prepared = authored
@@ -393,14 +425,7 @@ impl Turn {
             .await
             .map_err(|error| AgentError::Storage(error.to_string()))?;
 
-        let row = self
-            .transcript
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.id == assistant_id)
-            .cloned()
-            .ok_or_else(|| AgentError::Invalid("assistant row vanished mid-turn".into()))?;
+        let row = self.assistant_row_of(assistant_id)?;
         self.append(&row).await?;
 
         let commit = authored
@@ -438,6 +463,18 @@ impl Turn {
             usage,
         });
         Ok(())
+    }
+
+    /// The row this turn just produced, read back out of the transcript it was
+    /// folded into.
+    fn assistant_row_of(&self, assistant_id: &str) -> Result<AgentChatMessage, AgentError> {
+        self.transcript
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.id == assistant_id)
+            .cloned()
+            .ok_or_else(|| AgentError::Invalid("assistant row vanished mid-turn".into()))
     }
 
     async fn append(&mut self, message: &AgentChatMessage) -> Result<(), AgentError> {

@@ -19,6 +19,7 @@ mod add_tracks_flow;
 mod add_tracks_focus;
 mod add_tracks_source_race;
 mod agent_chat_track;
+mod agent_chat_venue;
 mod chrome_anchors;
 mod click_off;
 mod dialog_escape;

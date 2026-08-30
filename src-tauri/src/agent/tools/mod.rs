@@ -181,6 +181,13 @@ pub fn registry(kind: super::AgentKind) -> ToolRegistry {
             Arc::new(skill::SkillTool),
             Arc::new(subagent::SubagentTool),
         ]),
+        // No subagent: a child thread is given a detached head of its parent's
+        // authored document, and a venue thread has no document to detach.
+        // Offering the tool would be a refusal the model has to discover.
+        super::AgentKind::VenueRig => ToolRegistry::new(vec![
+            Arc::new(python::PythonTool),
+            Arc::new(skill::SkillTool),
+        ]),
     }
 }
 

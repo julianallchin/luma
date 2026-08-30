@@ -19,6 +19,7 @@ use luma_chat::AgentChat;
 use luma_lib::agent::{AgentKind, SubjectKind, ThreadScope};
 
 use crate::shell::Body;
+use crate::tabs::Target;
 use crate::Luma;
 
 /// The conversation the shell is about right now, or `None` when nothing an
@@ -35,12 +36,23 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
     // web app pairs the track sidebar with the track agent and the pattern
     // editor's Agent tab with the graph agent, and front-tab scoping is that
     // same contract in a single-chat-column shell. An active graph tab is the
-    // pattern-graph conversation; tabs that name no agent of their own (the
-    // patch) fall back to the track being worked on, so glancing at the rig
-    // does not end a track conversation. Deliberately the dumbest switch that
-    // makes both agents reachable: the eventual design injects the open
-    // view's context into the user message instead of deriving agent identity
-    // from a tab, and supersedes this.
+    // pattern-graph conversation; the two venue tabs are the venue
+    // conversation; tabs that name no agent of their own fall back to the
+    // track being worked on, so glancing elsewhere does not end a track
+    // conversation. Deliberately the dumbest switch that makes the agents
+    // reachable: the eventual design injects the open view's context into the
+    // user message instead of deriving agent identity from a tab, and
+    // supersedes this.
+    //
+    // The two venue tabs read their subject off the *target* rather than the
+    // body: a target names the venue exactly, and asking the page would be a
+    // second spelling of the same id.
+    match app.workspace.active() {
+        Some(Target::Stage { venue } | Target::Patch { venue }) => {
+            return Some(ThreadScope::venue(venue.clone()))
+        }
+        _ => {}
+    }
     if let Some(Body::Graph(editor)) = app.workspace.active_body() {
         let (pattern, implementation) = editor.subject()?;
         return Some(ThreadScope {
