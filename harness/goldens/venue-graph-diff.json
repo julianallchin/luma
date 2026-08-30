@@ -1,0 +1,174 @@
+{
+  "changes": [
+    {
+      "catalogRef": "fixture:spot_1",
+      "change": "added",
+      "kind": "fixture",
+      "node": {
+        "id": "spot_1",
+        "label": "Rogue R2 Spot 1"
+      },
+      "params": {
+        "u": 1.0,
+        "v": 4.0
+      },
+      "placement": {
+        "mySocket": "clamp",
+        "parent": "venue",
+        "roll": 0.0,
+        "theirSocket": "rig"
+      }
+    },
+    {
+      "catalogRef": "fixture:spot_2",
+      "change": "added",
+      "kind": "fixture",
+      "node": {
+        "id": "spot_2",
+        "label": "Rogue R2 Spot 2"
+      },
+      "params": {
+        "u": 2.0,
+        "v": 4.0
+      },
+      "placement": {
+        "mySocket": "clamp",
+        "parent": "venue",
+        "roll": 0.0,
+        "theirSocket": "rig"
+      }
+    },
+    {
+      "catalogRef": "fixture:spot_3",
+      "change": "added",
+      "kind": "fixture",
+      "node": {
+        "id": "spot_3",
+        "label": "Rogue R2 Spot 3"
+      },
+      "params": {
+        "u": 3.0,
+        "v": 4.0
+      },
+      "placement": {
+        "mySocket": "clamp",
+        "parent": "venue",
+        "roll": 0.0,
+        "theirSocket": "rig"
+      }
+    },
+    {
+      "catalogRef": "fixture:spot_4",
+      "change": "added",
+      "kind": "fixture",
+      "node": {
+        "id": "spot_4",
+        "label": "Rogue R2 Spot 4"
+      },
+      "params": {
+        "u": 4.0,
+        "v": 4.0
+      },
+      "placement": {
+        "mySocket": "clamp",
+        "parent": "venue",
+        "roll": 0.0,
+        "theirSocket": "rig"
+      }
+    },
+    {
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "change": "removed",
+      "kind": "piece",
+      "node": {
+        "id": "tray_on_tray",
+        "label": null
+      },
+      "params": {},
+      "placement": {
+        "mySocket": "mount",
+        "parent": "tray_speaker",
+        "roll": 0.0,
+        "theirSocket": "mount"
+      }
+    },
+    {
+      "catalogRef": "stage_lab/speaker_dbr15.glb",
+      "change": "removed",
+      "kind": "piece",
+      "node": {
+        "id": "tray_speaker",
+        "label": null
+      },
+      "params": {},
+      "placement": null
+    },
+    {
+      "change": "reparented",
+      "from": {
+        "mySocket": "edge_left",
+        "parent": "deck_a",
+        "roll": 0.0,
+        "theirSocket": "edge_right"
+      },
+      "node": {
+        "id": "deck_b",
+        "label": null
+      },
+      "to": {
+        "mySocket": "edge_left",
+        "parent": "deck_a",
+        "roll": 0.0,
+        "theirSocket": "edge_front"
+      }
+    },
+    {
+      "change": "paramChanged",
+      "from": 4.5,
+      "key": "span",
+      "node": {
+        "id": "tower",
+        "label": null
+      },
+      "to": 5.0
+    },
+    {
+      "change": "relabelled",
+      "from": "Golden room",
+      "node": {
+        "id": "venue",
+        "label": "Golden room"
+      },
+      "to": "Golden room, refit"
+    },
+    {
+      "change": "constraintAdded",
+      "mySocket": "end_b",
+      "node": {
+        "id": "run",
+        "label": null
+      },
+      "targetNode": "post",
+      "targetSocket": "end_b"
+    },
+    {
+      "change": "constraintRemoved",
+      "mySocket": "end_b",
+      "node": {
+        "id": "run",
+        "label": null
+      },
+      "targetNode": "tower",
+      "targetSocket": "end_a"
+    }
+  ],
+  "summary": [
+    "+ 4 fixtures (Rogue R2 Spot 1–4)",
+    "- 2 pieces (tray_on_tray, tray_speaker)",
+    "~ deck_b: deck_a.edge_right → deck_a.edge_front",
+    "~ tower: span 4.5 → 5",
+    "~ Golden room: label \"Golden room\" → \"Golden room, refit\"",
+    "+ check run.end_b → post.end_b",
+    "- check run.end_b → tower.end_a"
+  ]
+}

@@ -58,7 +58,21 @@ pub async fn resolved(
     access: &mut impl AuthorizedVenue,
     fixtures_root: &Path,
 ) -> Result<ResolvedVenue, String> {
-    let rows = local::venue_graph::get_graph(access).await?;
+    resolve_rows(&local::venue_graph::get_graph(access).await?, fixtures_root)
+}
+
+/// Solve rows that came from somewhere other than the venue's current tables
+/// — a revision out of the document store, a proposal being previewed.
+///
+/// Touches no database and no cache, so a historical revision can be solved
+/// beside the live one without either standing for the other.
+///
+/// # Errors
+/// Fails if the catalog cannot be resolved, or if the rows have no root.
+pub fn resolve_rows(
+    rows: &crate::models::venue_graph::VenueGraphRows,
+    fixtures_root: &Path,
+) -> Result<ResolvedVenue, String> {
     let graph = rows
         .to_graph()
         .ok_or_else(|| "this venue has no graph root".to_string())?;
@@ -705,6 +719,289 @@ mod tests {
         assert_eq!(
             edge.my_socket, "mount",
             "a cdj meets a surface through its mount"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The venue as a document: the golden rig, as rows
+    // -----------------------------------------------------------------------
+
+    use crate::models::venue_graph::{
+        diff, summarize, VenueConstraint, VenueEdge, VenueGraphRows, VenueNode,
+    };
+    use std::collections::BTreeMap;
+
+    fn repo_root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate has a parent directory")
+            .to_path_buf()
+    }
+
+    /// The `venue-poses` rig, spelled as rows.
+    ///
+    /// The same room `luma-render`'s `venue_poses` golden builds through
+    /// `VenueGraph::attach` — deliberately asymmetric, one of every way a node
+    /// can be placed, an unplaced branch and a violated far end. It is written
+    /// here as rows because that is the shape a document stores, and
+    /// [`resolve_rows_reproduce_the_venue_poses_golden`] holds the two
+    /// spellings to the same solve, so the copy cannot drift in silence.
+    fn golden_rows() -> VenueGraphRows {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        let mut params: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+
+        let mut node = |id: &str, kind: &str, catalog_ref: Option<&str>, label: Option<&str>| {
+            nodes.push(VenueNode {
+                id: id.into(),
+                venue_id: "golden".into(),
+                kind: kind.into(),
+                catalog_ref: catalog_ref.map(Into::into),
+                label: label.map(Into::into),
+            });
+        };
+        node("venue", "venue", None, Some("Golden room"));
+        node(
+            "deck_a",
+            "stage",
+            Some("stage_lab/stage_praticavel_2x1x1.glb"),
+            None,
+        );
+        node(
+            "deck_b",
+            "stage",
+            Some("stage_lab/stage_praticavel_1x1.glb"),
+            None,
+        );
+        node("tower", "tower", Some("truss/straight"), None);
+        node("corner", "piece", Some("truss/corner"), None);
+        node("run", "run", Some("truss/straight"), None);
+        node("post", "tower", Some("truss/straight"), None);
+        node("flown", "fixture", Some("fixture:flown"), None);
+        node("uplight", "fixture", Some("fixture:uplight"), None);
+        node("wall", "array", Some("stage_lab/speaker_dbr15.glb"), None);
+        node(
+            "tray_speaker",
+            "piece",
+            Some("stage_lab/speaker_dbr15.glb"),
+            None,
+        );
+        node(
+            "tray_on_tray",
+            "piece",
+            Some("stage_lab/speaker_dbr15.glb"),
+            None,
+        );
+
+        let mut edge = |child: &str, my: &str, parent: &str, their: &str, roll: f64| {
+            edges.push(VenueEdge {
+                child_id: child.into(),
+                parent_id: parent.into(),
+                my_socket: my.into(),
+                their_socket: their.into(),
+                roll,
+            });
+        };
+        edge("deck_a", "bottom", "venue", FLOOR_SOCKET, 0.4);
+        edge("deck_b", "edge_left", "deck_a", "edge_right", 0.0);
+        edge("tower", "end_a", "deck_a", "corner_fl", 0.0);
+        edge("corner", "face_-x", "tower", "end_b", 0.0);
+        edge("run", "end_a", "corner", "face_-z", 0.0);
+        edge("post", "end_a", "deck_a", "corner_br", 0.0);
+        edge("flown", FIXTURE_CLAMP_SOCKET, "venue", RIG_SOCKET, 0.0);
+        edge("uplight", FIXTURE_CLAMP_SOCKET, "venue", FLOOR_SOCKET, 1.1);
+        edge("wall", "mount", "venue", FLOOR_SOCKET, 0.0);
+        edge("tray_on_tray", "mount", "tray_speaker", "mount", 0.0);
+
+        let mut param = |id: &str, entries: &[(&str, f64)]| {
+            params.insert(
+                id.into(),
+                entries.iter().map(|(k, v)| ((*k).into(), *v)).collect(),
+            );
+        };
+        param("deck_a", &[("u", 1.5), ("v", -2.25), ("trim", 0.0)]);
+        param("tower", &[("span", 4.5)]);
+        param("run", &[("span", 6.0)]);
+        param("post", &[("span", 2.0)]);
+        param("flown", &[("u", -1.0), ("v", 3.0), ("trim", 6.5)]);
+        param("uplight", &[("u", 2.0), ("v", 0.5)]);
+        param(
+            "wall",
+            &[("count", 5.0), ("span", 4.0), ("u", 0.0), ("v", 0.0)],
+        );
+
+        VenueGraphRows {
+            nodes,
+            edges,
+            params,
+            constraints: vec![VenueConstraint {
+                node_id: "run".into(),
+                my_socket: "end_b".into(),
+                target_node: "tower".into(),
+                target_socket: "end_a".into(),
+            }],
+        }
+    }
+
+    /// The same room after a refit: a bar of four movers goes in, the spare
+    /// speakers leave the tray, a deck is turned round, the tower grows, the
+    /// room is renamed and the far end is re-aimed. One of every change kind.
+    fn refit_rows() -> VenueGraphRows {
+        let mut rows = golden_rows();
+        rows.nodes.retain(|n| !n.id.starts_with("tray_"));
+        rows.edges.retain(|e| !e.child_id.starts_with("tray_"));
+        for index in 1..=4 {
+            rows.nodes.push(VenueNode {
+                id: format!("spot_{index}"),
+                venue_id: "golden".into(),
+                kind: "fixture".into(),
+                catalog_ref: Some(format!("fixture:spot_{index}")),
+                label: Some(format!("Rogue R2 Spot {index}")),
+            });
+            rows.edges.push(VenueEdge {
+                child_id: format!("spot_{index}"),
+                parent_id: "venue".into(),
+                my_socket: FIXTURE_CLAMP_SOCKET.into(),
+                their_socket: RIG_SOCKET.into(),
+                roll: 0.0,
+            });
+            rows.params.insert(
+                format!("spot_{index}"),
+                [("u".to_string(), f64::from(index)), ("v".to_string(), 4.0)].into(),
+            );
+        }
+        for node in &mut rows.nodes {
+            if node.id == "venue" {
+                node.label = Some("Golden room, refit".into());
+            }
+        }
+        for edge in &mut rows.edges {
+            if edge.child_id == "deck_b" {
+                edge.their_socket = "edge_front".into();
+            }
+        }
+        rows.params
+            .get_mut("tower")
+            .expect("the tower has a span")
+            .insert("span".into(), 5.0);
+        rows.constraints = vec![VenueConstraint {
+            node_id: "run".into(),
+            my_socket: "end_b".into(),
+            target_node: "post".into(),
+            target_socket: "end_b".into(),
+        }];
+        rows
+    }
+
+    /// Six decimals — a micrometre, as `venue_poses` rounds.
+    fn round(v: f64) -> f64 {
+        (v * 1e6).round() / 1e6
+    }
+
+    fn write_if_changed(path: &Path, contents: &[u8]) -> bool {
+        let same = std::fs::read(path).is_ok_and(|old| old == contents);
+        if !same {
+            std::fs::write(path, contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        }
+        !same
+    }
+
+    /// The rows and the `VenueGraph` the render crate builds by hand are the
+    /// same room, so a change to either rig fails here rather than leaving two
+    /// goldens describing different venues.
+    #[test]
+    fn resolve_rows_reproduce_the_venue_poses_golden() {
+        let solved = crate::models::venue_graph::ResolvedVenue::from(
+            &resolve_rows(&golden_rows(), Path::new(FIXTURES_ROOT)).expect("the rig resolves"),
+        );
+        let golden: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(repo_root().join("harness/goldens/venue-poses.json"))
+                .expect("the pose golden is committed"),
+        )
+        .expect("the pose golden is JSON");
+
+        let poses: Vec<serde_json::Value> = solved
+            .nodes
+            .iter()
+            .map(|node| {
+                serde_json::json!({
+                    "node": node.id,
+                    "kind": node.kind,
+                    "catalogRef": node.catalog_ref,
+                    "parent": node.parent_id,
+                    "arrayIndex": node.array_index,
+                    "setPiece": node.set_piece,
+                    "position": node.position.map(round),
+                    "rotation": node.rotation.map(round),
+                    "facing": node.facing.map(round),
+                })
+            })
+            .collect();
+        assert_eq!(
+            serde_json::Value::Array(poses),
+            golden["nodes"],
+            "the rows resolve to the poses the render crate's rig pins"
+        );
+        assert_eq!(
+            solved
+                .unplaced
+                .iter()
+                .map(|u| u.node_id.as_str())
+                .collect::<Vec<_>>(),
+            golden["unplaced"]
+                .as_array()
+                .expect("unplaced is an array")
+                .iter()
+                .map(|u| u["node"].as_str().expect("a node id"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            solved.dangling.len(),
+            golden["dangling"].as_array().map_or(0, Vec::len)
+        );
+        assert_eq!(
+            solved
+                .constraints
+                .iter()
+                .map(|c| c.status.as_str())
+                .collect::<Vec<_>>(),
+            ["violated"],
+            "the far end is violated by construction"
+        );
+    }
+
+    /// The canonical file for the golden rig, pinned byte for byte: this is
+    /// what a revision of that venue *is*, so a change to the encoding shows
+    /// up here as a diff a human reads rather than as a silent rehash of
+    /// everyone's history.
+    #[test]
+    fn venue_graph_canonical_golden_is_current() {
+        assert!(
+            !write_if_changed(
+                &repo_root().join("harness/goldens/venue-graph-canonical.json"),
+                &golden_rows().to_canonical_json(),
+            ),
+            "the canonical venue golden was stale and has been rewritten — review and commit it"
+        );
+    }
+
+    /// One diff, in both spellings: the change list a caller consumes and the
+    /// summary a rigger reads.
+    #[test]
+    fn venue_graph_diff_golden_is_current() {
+        let changes = diff(&golden_rows(), &refit_rows());
+        let mut capture = serde_json::to_string_pretty(&serde_json::json!({
+            "changes": changes,
+            "summary": summarize(&changes).lines().collect::<Vec<_>>(),
+        }))
+        .expect("the capture serializes");
+        capture.push('\n');
+        assert!(
+            !write_if_changed(
+                &repo_root().join("harness/goldens/venue-graph-diff.json"),
+                capture.as_bytes(),
+            ),
+            "the venue diff golden was stale and has been rewritten — review and commit it"
         );
     }
 }

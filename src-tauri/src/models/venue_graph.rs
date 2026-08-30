@@ -6,7 +6,8 @@
 //! [`luma_scene::venue::Node`] / [`luma_scene::venue::NodePose`], and the
 //! vocabularies (`kind`, socket names, param keys) are the crate's strings.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -412,6 +413,642 @@ impl PlacementReport {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The venue as an authored document
+// ---------------------------------------------------------------------------
+
+/// The version this build writes. A file numbered higher is refused rather
+/// than guessed at, as `graph.json` refuses one.
+const VENUE_FILE_SCHEMA_VERSION: u32 = 1;
+
+/// A ceiling on what will be parsed, so a corrupt blob is a message rather
+/// than an allocation. A room of a thousand fixtures is tens of kilobytes.
+const MAX_VENUE_JSON_BYTES: usize = 8 * 1024 * 1024;
+
+/// The canonical file, version 1.
+///
+/// `venueId` is hoisted off the rows: every row of one venue's graph carries
+/// the same owner, and a document should state its address once rather than
+/// once per node. Round-tripping restores it to every row.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VenueFileV1 {
+    schema_version: u32,
+    venue_id: String,
+    nodes: Vec<FileNode>,
+    edges: Vec<VenueEdge>,
+    params: BTreeMap<String, BTreeMap<String, f64>>,
+    constraints: Vec<VenueConstraint>,
+}
+
+/// A node row without the owner column.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FileNode {
+    id: String,
+    kind: String,
+    catalog_ref: Option<String>,
+    label: Option<String>,
+}
+
+impl VenueGraphRows {
+    /// The rows as the exact bytes one revision of this venue is.
+    ///
+    /// Deterministic in the two ways a revision store needs: the same rows in
+    /// any insertion order produce the same bytes, and the bytes are stable
+    /// across builds. Rows are sorted by their identity, object keys are
+    /// sorted recursively, and numbers are spelled by
+    /// `crate::canonical_json` — the one encoding this codebase hashes,
+    /// merges and diffs by, so the same store machinery that carries a
+    /// `graph.json` carries a venue.
+    ///
+    /// A non-finite `roll` or param is not a value the graph can hold; were
+    /// one to arrive it would encode as `null` and
+    /// [`Self::from_canonical_json`] would refuse the file, which is louder
+    /// than rounding it away here.
+    #[must_use]
+    pub fn to_canonical_json(&self) -> Vec<u8> {
+        let value = serde_json::to_value(VenueFileV1::from_rows(self))
+            .expect("the venue file's maps are keyed by strings");
+        let mut json = crate::canonical_json::to_string(&value);
+        json.push('\n');
+        json.into_bytes()
+    }
+
+    /// The rows a canonical file holds.
+    ///
+    /// # Errors
+    /// Fails if the bytes are not JSON, are longer than the parser accepts,
+    /// carry a schema version this build does not know, or do not match the
+    /// file's shape.
+    pub fn from_canonical_json(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_VENUE_JSON_BYTES {
+            return Err(format!("venue.json exceeds {MAX_VENUE_JSON_BYTES} bytes"));
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|e| format!("venue.json: {e}"))?;
+        // The version is read before the shape, so a file from a later build
+        // says so rather than reporting whichever field moved first.
+        let version = value
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| "venue.json.schemaVersion: missing or not a number".to_string())?;
+        if version != u64::from(VENUE_FILE_SCHEMA_VERSION) {
+            return Err(format!(
+                "venue.json.schemaVersion: unsupported version {version}; this build writes {VENUE_FILE_SCHEMA_VERSION}"
+            ));
+        }
+        let file: VenueFileV1 =
+            serde_json::from_value(value).map_err(|e| format!("venue.json: {e}"))?;
+        Ok(file.into_rows())
+    }
+}
+
+impl VenueFileV1 {
+    fn from_rows(rows: &VenueGraphRows) -> Self {
+        let mut nodes: Vec<&VenueNode> = rows.nodes.iter().collect();
+        nodes.sort_by(|left, right| left.id.cmp(&right.id));
+        let venue_id = nodes
+            .first()
+            .map(|n| n.venue_id.clone())
+            .unwrap_or_default();
+
+        let mut edges = rows.edges.clone();
+        edges.sort_by(|left, right| edge_key(left).cmp(&edge_key(right)));
+        let mut constraints = rows.constraints.clone();
+        constraints.sort_by(|left, right| constraint_key(left).cmp(&constraint_key(right)));
+
+        Self {
+            schema_version: VENUE_FILE_SCHEMA_VERSION,
+            venue_id,
+            nodes: nodes
+                .into_iter()
+                .map(|node| FileNode {
+                    id: node.id.clone(),
+                    kind: node.kind.clone(),
+                    catalog_ref: node.catalog_ref.clone(),
+                    label: node.label.clone(),
+                })
+                .collect(),
+            edges,
+            params: rows.params.clone(),
+            constraints,
+        }
+    }
+
+    fn into_rows(self) -> VenueGraphRows {
+        VenueGraphRows {
+            nodes: self
+                .nodes
+                .into_iter()
+                .map(|node| VenueNode {
+                    id: node.id,
+                    venue_id: self.venue_id.clone(),
+                    kind: node.kind,
+                    catalog_ref: node.catalog_ref,
+                    label: node.label,
+                })
+                .collect(),
+            edges: self.edges,
+            params: self.params,
+            constraints: self.constraints,
+        }
+    }
+}
+
+/// An edge's identity: one placement per child, spelled in full so the order
+/// is total even if a venue ever holds two.
+fn edge_key(edge: &VenueEdge) -> (&str, &str, &str, &str) {
+    (
+        &edge.child_id,
+        &edge.parent_id,
+        &edge.my_socket,
+        &edge.their_socket,
+    )
+}
+
+/// A constraint's identity — the whole row, which is what makes two of them
+/// the same check.
+fn constraint_key(constraint: &VenueConstraint) -> (&str, &str, &str, &str) {
+    (
+        &constraint.node_id,
+        &constraint.my_socket,
+        &constraint.target_node,
+        &constraint.target_socket,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The semantic diff between two revisions
+// ---------------------------------------------------------------------------
+
+/// A node as a change names it: the id it is matched by, and the label a
+/// human reads it by.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeRef {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+impl fmt::Display for NodeRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label.as_deref().unwrap_or(&self.id))
+    }
+}
+
+/// Where a node hangs: whose socket it is bolted to, by which of its own, and
+/// how far it is turned about the joint.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodePlacement {
+    pub parent: String,
+    pub my_socket: String,
+    pub their_socket: String,
+    pub roll: f64,
+}
+
+impl fmt::Display for NodePlacement {
+    /// The socket a rigger would name it by — `tower_a.top`. `my_socket` is
+    /// the node's own end and reads as noise in a summary; a change to it
+    /// still shows, because a placement is compared whole.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}.{}", self.parent, self.their_socket)
+    }
+}
+
+impl From<&VenueEdge> for NodePlacement {
+    fn from(edge: &VenueEdge) -> Self {
+        Self {
+            parent: edge.parent_id.clone(),
+            my_socket: edge.my_socket.clone(),
+            their_socket: edge.their_socket.clone(),
+            roll: edge.roll,
+        }
+    }
+}
+
+/// One difference between two revisions of a venue, in the vocabulary of the
+/// room rather than of the rows.
+///
+/// A node that changed its `kind` or its `catalogRef` is not the same object
+/// with a new attribute — a truss did not become a fixture — so it reads as a
+/// [`Self::Removed`] and an [`Self::Added`] rather than as a mutation.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(
+    tag = "change",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum VenueChange {
+    Added {
+        node: NodeRef,
+        kind: String,
+        catalog_ref: Option<String>,
+        placement: Option<NodePlacement>,
+        params: BTreeMap<String, f64>,
+    },
+    Removed {
+        node: NodeRef,
+        kind: String,
+        catalog_ref: Option<String>,
+        placement: Option<NodePlacement>,
+        params: BTreeMap<String, f64>,
+    },
+    Reparented {
+        node: NodeRef,
+        from: Option<NodePlacement>,
+        to: Option<NodePlacement>,
+    },
+    ParamChanged {
+        node: NodeRef,
+        key: String,
+        from: Option<f64>,
+        to: Option<f64>,
+    },
+    Relabelled {
+        node: NodeRef,
+        from: Option<String>,
+        to: Option<String>,
+    },
+    ConstraintAdded {
+        node: NodeRef,
+        my_socket: String,
+        target_node: String,
+        target_socket: String,
+    },
+    ConstraintRemoved {
+        node: NodeRef,
+        my_socket: String,
+        target_node: String,
+        target_socket: String,
+    },
+}
+
+/// What changed between two revisions of one venue, matching nodes by id.
+///
+/// Ordered so it reads as a report and not as a walk: what arrived, what
+/// left, what moved, then the far ends. Within each section the order is by
+/// node id, which is also what lets [`summarize`] collapse a rack of
+/// identical fixtures into one line.
+#[must_use]
+pub fn diff(before: &VenueGraphRows, after: &VenueGraphRows) -> Vec<VenueChange> {
+    let index = |rows: &VenueGraphRows| -> BTreeMap<String, NodeSnapshot> {
+        let placements: BTreeMap<&str, &VenueEdge> = rows
+            .edges
+            .iter()
+            .map(|edge| (edge.child_id.as_str(), edge))
+            .collect();
+        rows.nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.id.clone(),
+                    NodeSnapshot {
+                        node: node.clone(),
+                        placement: placements.get(node.id.as_str()).map(|e| (*e).into()),
+                        params: rows.params.get(&node.id).cloned().unwrap_or_default(),
+                    },
+                )
+            })
+            .collect()
+    };
+    let (before_nodes, after_nodes) = (index(before), index(after));
+
+    // A node whose kind or catalog entry changed is two events, not one, so
+    // it is classified before anything is emitted.
+    let same_thing = |id: &String| match (before_nodes.get(id), after_nodes.get(id)) {
+        (Some(old), Some(new)) => {
+            old.node.kind == new.node.kind && old.node.catalog_ref == new.node.catalog_ref
+        }
+        _ => false,
+    };
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut modified = Vec::new();
+
+    for (id, snapshot) in &after_nodes {
+        if !before_nodes.contains_key(id) || !same_thing(id) {
+            added.push(snapshot.as_change(true));
+        }
+    }
+    for (id, snapshot) in &before_nodes {
+        if !after_nodes.contains_key(id) || !same_thing(id) {
+            removed.push(snapshot.as_change(false));
+        }
+    }
+
+    for (id, new) in &after_nodes {
+        if !same_thing(id) {
+            continue;
+        }
+        let old = &before_nodes[id];
+        let node = new.node_ref();
+        if old.node.label != new.node.label {
+            modified.push(VenueChange::Relabelled {
+                node: NodeRef {
+                    id: id.clone(),
+                    label: old.node.label.clone(),
+                },
+                from: old.node.label.clone(),
+                to: new.node.label.clone(),
+            });
+        }
+        if old.placement != new.placement {
+            modified.push(VenueChange::Reparented {
+                node: node.clone(),
+                from: old.placement.clone(),
+                to: new.placement.clone(),
+            });
+        }
+        let keys: BTreeSet<&String> = old.params.keys().chain(new.params.keys()).collect();
+        for key in keys {
+            let (from, to) = (old.params.get(key).copied(), new.params.get(key).copied());
+            if from != to {
+                modified.push(VenueChange::ParamChanged {
+                    node: node.clone(),
+                    key: key.clone(),
+                    from,
+                    to,
+                });
+            }
+        }
+    }
+
+    // A constraint has no identity apart from the four names that make it, so
+    // an edited check is a removal and an addition — which is also how it
+    // reads: the far end you were holding to is not the one you are now.
+    let label_of = |id: &str| -> Option<String> {
+        after_nodes
+            .get(id)
+            .or_else(|| before_nodes.get(id))
+            .and_then(|s| s.node.label.clone())
+    };
+    let keys = |rows: &VenueGraphRows| -> BTreeSet<(String, String, String, String)> {
+        rows.constraints
+            .iter()
+            .map(|c| {
+                (
+                    c.node_id.clone(),
+                    c.my_socket.clone(),
+                    c.target_node.clone(),
+                    c.target_socket.clone(),
+                )
+            })
+            .collect()
+    };
+    let (before_checks, after_checks) = (keys(before), keys(after));
+    let check =
+        |(node_id, my_socket, target_node, target_socket): &(String, String, String, String)| {
+            (
+                NodeRef {
+                    id: node_id.clone(),
+                    label: label_of(node_id),
+                },
+                my_socket.clone(),
+                target_node.clone(),
+                target_socket.clone(),
+            )
+        };
+
+    let mut changes = added;
+    changes.extend(removed);
+    changes.extend(modified);
+    for key in after_checks.difference(&before_checks) {
+        let (node, my_socket, target_node, target_socket) = check(key);
+        changes.push(VenueChange::ConstraintAdded {
+            node,
+            my_socket,
+            target_node,
+            target_socket,
+        });
+    }
+    for key in before_checks.difference(&after_checks) {
+        let (node, my_socket, target_node, target_socket) = check(key);
+        changes.push(VenueChange::ConstraintRemoved {
+            node,
+            my_socket,
+            target_node,
+            target_socket,
+        });
+    }
+    changes
+}
+
+/// One node with everything a change has to say about it, gathered from the
+/// three tables that hold it.
+struct NodeSnapshot {
+    node: VenueNode,
+    placement: Option<NodePlacement>,
+    params: BTreeMap<String, f64>,
+}
+
+impl NodeSnapshot {
+    fn node_ref(&self) -> NodeRef {
+        NodeRef {
+            id: self.node.id.clone(),
+            label: self.node.label.clone(),
+        }
+    }
+
+    fn as_change(&self, added: bool) -> VenueChange {
+        let (node, kind, catalog_ref, placement, params) = (
+            self.node_ref(),
+            self.node.kind.clone(),
+            self.node.catalog_ref.clone(),
+            self.placement.clone(),
+            self.params.clone(),
+        );
+        if added {
+            VenueChange::Added {
+                node,
+                kind,
+                catalog_ref,
+                placement,
+                params,
+            }
+        } else {
+            VenueChange::Removed {
+                node,
+                kind,
+                catalog_ref,
+                placement,
+                params,
+            }
+        }
+    }
+}
+
+/// A number as this codebase spells numbers — `6`, not `6.0`, and `1.25` at
+/// full precision. The same spelling the canonical file uses, so a summary
+/// and a diff of the bytes never disagree about what a value is.
+fn number(value: f64) -> String {
+    crate::canonical_json::to_string(&serde_json::json!(value))
+}
+
+/// The size a piece reads by, when it has one: a truss and an array are the
+/// length of their span, in metres.
+fn span_of(params: &BTreeMap<String, f64>) -> Option<String> {
+    params
+        .get("span")
+        .map(|span| format!("({} m)", number(*span)))
+}
+
+impl fmt::Display for VenueChange {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Added {
+                node,
+                placement,
+                params,
+                ..
+            }
+            | Self::Removed {
+                node,
+                placement,
+                params,
+                ..
+            } => {
+                let sign = if matches!(self, Self::Added { .. }) {
+                    '+'
+                } else {
+                    '-'
+                };
+                write!(formatter, "{sign} {node}")?;
+                if let Some(span) = span_of(params) {
+                    write!(formatter, " {span}")?;
+                }
+                match placement {
+                    Some(placement) => write!(formatter, " on {placement}"),
+                    None => formatter.write_str(" unplaced"),
+                }
+            }
+            Self::Reparented { node, from, to } => {
+                let side = |p: &Option<NodePlacement>| {
+                    p.as_ref()
+                        .map_or_else(|| "unplaced".to_string(), NodePlacement::to_string)
+                };
+                write!(formatter, "~ {node}: {} → {}", side(from), side(to))
+            }
+            Self::ParamChanged {
+                node,
+                key,
+                from,
+                to,
+            } => {
+                let side = |v: &Option<f64>| v.map_or_else(|| "unset".to_string(), number);
+                write!(formatter, "~ {node}: {key} {} → {}", side(from), side(to))
+            }
+            Self::Relabelled { node, from, to } => {
+                let side = |s: &Option<String>| {
+                    s.as_ref()
+                        .map_or_else(|| "unnamed".to_string(), |s| format!("\"{s}\""))
+                };
+                write!(formatter, "~ {node}: label {} → {}", side(from), side(to))
+            }
+            Self::ConstraintAdded {
+                node,
+                my_socket,
+                target_node,
+                target_socket,
+            } => write!(
+                formatter,
+                "+ check {node}.{my_socket} → {target_node}.{target_socket}"
+            ),
+            Self::ConstraintRemoved {
+                node,
+                my_socket,
+                target_node,
+                target_socket,
+            } => write!(
+                formatter,
+                "- check {node}.{my_socket} → {target_node}.{target_socket}"
+            ),
+        }
+    }
+}
+
+/// The changes as a rigger would read them out, one line each, with runs of
+/// the same kind collapsed.
+///
+/// Collapsing is what makes a diff of a real rig readable: patching a bar of
+/// eight movers is eight [`VenueChange::Added`]s and one fact. A run is
+/// collapsed only when every member is the same `kind`, and its names print
+/// as a range when they are one prefix and consecutive numbers.
+#[must_use]
+pub fn summarize(changes: &[VenueChange]) -> String {
+    let mut lines = Vec::new();
+    let mut rest = changes;
+    while let Some((first, _)) = rest.split_first() {
+        let run: usize = rest
+            .iter()
+            .take_while(|change| collapses_with(first, change))
+            .count();
+        if run > 1 {
+            lines.push(collapsed(&rest[..run]));
+            rest = &rest[run..];
+        } else {
+            lines.push(first.to_string());
+            rest = &rest[1..];
+        }
+    }
+    lines.join("\n")
+}
+
+/// Two changes collapse when they are the same event about the same kind of
+/// thing. Only arrivals and departures collapse: a run of moves or of
+/// renames is a list of different facts, not one repeated.
+fn collapses_with(first: &VenueChange, other: &VenueChange) -> bool {
+    match (first, other) {
+        (VenueChange::Added { kind: left, .. }, VenueChange::Added { kind: right, .. })
+        | (VenueChange::Removed { kind: left, .. }, VenueChange::Removed { kind: right, .. }) => {
+            left == right
+        }
+        _ => false,
+    }
+}
+
+fn collapsed(run: &[VenueChange]) -> String {
+    let (sign, kind) = match &run[0] {
+        VenueChange::Added { kind, .. } => ('+', kind),
+        VenueChange::Removed { kind, .. } => ('-', kind),
+        _ => unreachable!("only arrivals and departures collapse"),
+    };
+    let names: Vec<String> = run
+        .iter()
+        .map(|change| match change {
+            VenueChange::Added { node, .. } | VenueChange::Removed { node, .. } => node.to_string(),
+            _ => unreachable!("only arrivals and departures collapse"),
+        })
+        .collect();
+    format!("{sign} {} {kind}s ({})", run.len(), name_range(&names))
+}
+
+/// A run of names as one phrase: `Rogue R2 Spot 1–4` when they are one prefix
+/// and consecutive numbers, and a list otherwise.
+fn name_range(names: &[String]) -> String {
+    let split = |name: &str| -> Option<(String, u64)> {
+        let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        (digits > 0).then(|| {
+            let (prefix, number) = name.split_at(name.len() - digits);
+            (prefix.to_string(), number.parse().unwrap_or(u64::MAX))
+        })
+    };
+    let parts: Option<Vec<(String, u64)>> = names.iter().map(|name| split(name)).collect();
+    if let Some(parts) = parts {
+        let (prefix, first) = parts[0].clone();
+        let consecutive = parts.iter().enumerate().all(|(index, (p, n))| {
+            *p == prefix && u64::try_from(index).is_ok_and(|index| *n == first + index)
+        });
+        if consecutive {
+            let last = first + parts.len() as u64 - 1;
+            return format!("{prefix}{first}–{last}");
+        }
+    }
+    names.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +1143,273 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["deck1"],
             "what stood on it is reported, not lost"
+        );
+    }
+
+    fn labelled(id: &str, kind: &str, label: &str) -> VenueNode {
+        VenueNode {
+            label: Some(label.into()),
+            ..row(id, kind)
+        }
+    }
+
+    fn rows(nodes: Vec<VenueNode>, edges: Vec<VenueEdge>) -> VenueGraphRows {
+        VenueGraphRows {
+            nodes,
+            edges,
+            params: BTreeMap::new(),
+            constraints: Vec::new(),
+        }
+    }
+
+    /// A room with something of every table in it.
+    fn sample() -> VenueGraphRows {
+        VenueGraphRows {
+            nodes: vec![
+                row("venue", "venue"),
+                row("tower_a", "tower"),
+                row("run_3", "run"),
+            ],
+            edges: vec![
+                edge("tower_a", "venue", "floor"),
+                edge("run_3", "tower_a", "top"),
+            ],
+            params: [
+                ("tower_a".to_string(), [("trim".to_string(), 6.0)].into()),
+                (
+                    "run_3".to_string(),
+                    [("span".to_string(), 6.0), ("u".to_string(), 1.25)].into(),
+                ),
+            ]
+            .into(),
+            constraints: vec![VenueConstraint {
+                node_id: "run_3".into(),
+                my_socket: "end_b".into(),
+                target_node: "tower_a".into(),
+                target_socket: "top".into(),
+            }],
+        }
+    }
+
+    /// The codec is a codec: nothing the rows hold is spent on the way out and
+    /// back, including the owner the file states once instead of per row.
+    #[test]
+    fn canonical_json_round_trips_the_rows() {
+        let bytes = sample().to_canonical_json();
+        let back = VenueGraphRows::from_canonical_json(&bytes).expect("the file parses");
+
+        assert_eq!(back.to_canonical_json(), bytes, "the codec is idempotent");
+        assert!(
+            back.nodes.iter().all(|n| n.venue_id == "v"),
+            "the hoisted owner is restored to every row"
+        );
+        assert_eq!(back.params, sample().params);
+        assert_eq!(back.constraints.len(), 1);
+        assert_eq!(back.edges.len(), 2);
+        assert!(
+            bytes.ends_with(b"\n"),
+            "a canonical file ends in a newline, as `graph.json` does"
+        );
+    }
+
+    /// The bytes are a function of the venue, not of the order SQLite handed
+    /// the rows over in — which is what lets two writes of the same room hash
+    /// to one revision.
+    #[test]
+    fn canonical_bytes_ignore_row_order() {
+        let mut shuffled = sample();
+        shuffled.nodes.reverse();
+        shuffled.edges.reverse();
+        shuffled.constraints.push(VenueConstraint {
+            node_id: "tower_a".into(),
+            my_socket: "top".into(),
+            target_node: "run_3".into(),
+            target_socket: "end_a".into(),
+        });
+        shuffled.constraints.reverse();
+
+        let mut ordered = sample();
+        ordered.constraints.insert(
+            0,
+            VenueConstraint {
+                node_id: "tower_a".into(),
+                my_socket: "top".into(),
+                target_node: "run_3".into(),
+                target_socket: "end_a".into(),
+            },
+        );
+
+        assert_eq!(shuffled.to_canonical_json(), ordered.to_canonical_json());
+    }
+
+    /// A file from a later build is refused by version rather than by
+    /// whichever field happened to move, so the message names the cause.
+    #[test]
+    fn a_later_schema_version_is_refused_by_version() {
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&sample().to_canonical_json()).unwrap();
+        file["schemaVersion"] = serde_json::Value::from(99);
+        let error = VenueGraphRows::from_canonical_json(file.to_string().as_bytes())
+            .expect_err("a later version is refused");
+        assert!(error.contains("unsupported version 99"), "{error}");
+    }
+
+    #[test]
+    fn an_arrival_names_its_kind_its_size_and_the_socket_it_hangs_on() {
+        let before = rows(vec![row("venue", "venue"), row("tower_a", "tower")], vec![]);
+        let mut after = before.clone();
+        after.nodes.push(row("run_3", "run"));
+        after.edges.push(edge("run_3", "tower_a", "top"));
+        after
+            .params
+            .insert("run_3".into(), [("span".to_string(), 6.0)].into());
+
+        let changes = diff(&before, &after);
+        assert!(
+            matches!(&changes[..], [VenueChange::Added { node, kind, .. }] if node.id == "run_3" && kind == "run")
+        );
+        assert_eq!(summarize(&changes), "+ run_3 (6 m) on tower_a.top");
+    }
+
+    #[test]
+    fn a_departure_is_the_arrival_read_backwards() {
+        let before = rows(
+            vec![row("venue", "venue"), row("tower_a", "tower")],
+            vec![edge("tower_a", "venue", "floor")],
+        );
+        let after = rows(vec![row("venue", "venue")], vec![]);
+
+        let changes = diff(&before, &after);
+        assert!(
+            matches!(&changes[..], [VenueChange::Removed { node, .. }] if node.id == "tower_a")
+        );
+        assert_eq!(summarize(&changes), "- tower_a on venue.floor");
+    }
+
+    /// A truss did not become a fixture. A node that changed what it *is* is
+    /// two events, so nothing downstream has to reconcile a kind change.
+    #[test]
+    fn a_node_that_changed_kind_left_and_a_new_one_arrived() {
+        let before = rows(vec![row("venue", "venue"), row("x", "tower")], vec![]);
+        let after = rows(vec![row("venue", "venue"), row("x", "run")], vec![]);
+
+        assert!(matches!(
+            &diff(&before, &after)[..],
+            [VenueChange::Added { kind: added, .. }, VenueChange::Removed { kind: gone, .. }]
+                if added == "run" && gone == "tower"
+        ));
+    }
+
+    #[test]
+    fn reparenting_reports_the_socket_it_left_and_the_one_it_reached() {
+        let before = rows(
+            vec![row("venue", "venue"), row("tower_a", "tower")],
+            vec![edge("tower_a", "venue", "floor")],
+        );
+        let mut after = before.clone();
+        after.edges[0].their_socket = "rig".into();
+
+        let changes = diff(&before, &after);
+        assert!(matches!(
+            &changes[..],
+            [VenueChange::Reparented { from: Some(from), to: Some(to), .. }]
+                if from.their_socket == "floor" && to.their_socket == "rig"
+        ));
+        assert_eq!(summarize(&changes), "~ tower_a: venue.floor → venue.rig");
+    }
+
+    #[test]
+    fn a_changed_param_names_the_key_and_both_values() {
+        let before = VenueGraphRows {
+            params: [("tower_a".to_string(), [("trim".to_string(), 6.0)].into())].into(),
+            ..rows(vec![row("venue", "venue"), row("tower_a", "tower")], vec![])
+        };
+        let mut after = before.clone();
+        after
+            .params
+            .get_mut("tower_a")
+            .unwrap()
+            .insert("trim".into(), 7.0);
+
+        let changes = diff(&before, &after);
+        assert!(matches!(
+            &changes[..],
+            [VenueChange::ParamChanged { key, from: Some(from), to: Some(to), .. }]
+                if key == "trim" && *from == 6.0 && *to == 7.0
+        ));
+        assert_eq!(summarize(&changes), "~ tower_a: trim 6 → 7");
+    }
+
+    /// The subject of a rename is the name it *had*: a reader who knows the
+    /// room by the old name has to be able to find the line.
+    #[test]
+    fn relabelling_reads_from_the_old_name() {
+        let before = rows(
+            vec![
+                row("venue", "venue"),
+                labelled("tower_a", "tower", "SL tower"),
+            ],
+            vec![],
+        );
+        let after = rows(
+            vec![
+                row("venue", "venue"),
+                labelled("tower_a", "tower", "SR tower"),
+            ],
+            vec![],
+        );
+
+        let changes = diff(&before, &after);
+        assert!(matches!(
+            &changes[..],
+            [VenueChange::Relabelled { node, .. }] if node.label.as_deref() == Some("SL tower")
+        ));
+        assert_eq!(
+            summarize(&changes),
+            "~ SL tower: label \"SL tower\" → \"SR tower\""
+        );
+    }
+
+    /// A check has no identity apart from its four names, so re-aiming one is
+    /// a removal and an addition rather than a mutation nobody can name.
+    #[test]
+    fn a_re_aimed_check_is_removed_and_added_whole() {
+        let before = sample();
+        let mut after = sample();
+        after.constraints[0].target_socket = "bottom".into();
+
+        let changes = diff(&before, &after);
+        assert_eq!(
+            summarize(&changes),
+            "+ check run_3.end_b → tower_a.bottom\n- check run_3.end_b → tower_a.top"
+        );
+    }
+
+    /// Patching a bar of movers is one fact, not eight — and the names read as
+    /// the range the rigger labelled them with.
+    #[test]
+    fn a_run_of_same_kind_arrivals_collapses_to_one_line() {
+        let before = rows(vec![row("venue", "venue")], vec![]);
+        let mut after = before.clone();
+        for index in 1..=4 {
+            after.nodes.push(labelled(
+                &format!("spot_{index}"),
+                "fixture",
+                &format!("Rogue R2 Spot {index}"),
+            ));
+        }
+        let mut gone = before.clone();
+        gone.nodes.push(row("odd", "fixture"));
+        gone.nodes.push(row("even", "fixture"));
+
+        assert_eq!(
+            summarize(&diff(&before, &after)),
+            "+ 4 fixtures (Rogue R2 Spot 1–4)"
+        );
+        assert_eq!(
+            summarize(&diff(&gone, &before)),
+            "- 2 fixtures (even, odd)",
+            "names that are not a range are listed"
         );
     }
 }
