@@ -44,7 +44,7 @@
           1.0,
           1.0
         ],
-        "ambientIntensity": 0.2
+        "ambientIntensity": 0.45
       },
       "haze": {
         "enabled": false,
@@ -63,7 +63,7 @@
           1.0,
           1.0
         ],
-        "intensity": 1.4,
+        "intensity": 6.0,
         "shadows": true,
         "shadowSoftness": 1.0
       },

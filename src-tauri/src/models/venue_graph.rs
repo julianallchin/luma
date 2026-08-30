@@ -14,8 +14,8 @@ use sqlx::FromRow;
 use ts_rs::TS;
 
 use luma_scene::venue::{
-    ConstraintStatus, DanglingSocket, NodePose, NodeWarning, ResolvedVenue as Solved, UnplacedNode,
-    VenueGraph, Warning,
+    ConstraintStatus, DanglingSocket, NodePose, NodeWarning, Outcome, ResolvedVenue as Solved,
+    UnplacedNode, VenueGraph, Warning,
 };
 
 /// One `venue_nodes` row.
@@ -376,13 +376,44 @@ fn describe(warning: &Warning) -> String {
 #[ts(rename_all = "camelCase")]
 pub struct PlacementReport {
     pub node_id: String,
-    /// Whether the node came out of the solve with a pose at all.
-    pub ok: bool,
+    /// What the graph now says about the node. **Not** whether the call
+    /// worked — a refusal is this call's `Err`, and never reaches here.
+    pub outcome: PlacementOutcome,
     pub parent_id: Option<String>,
     pub warnings: Vec<String>,
     pub dangling: Vec<ResolvedDangling>,
     pub constraints: Vec<ResolvedConstraint>,
     pub venue: ResolvedVenue,
+}
+
+/// [`luma_scene::venue::Outcome`] on the wire.
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
+#[ts(rename_all = "camelCase")]
+pub enum PlacementOutcome {
+    /// The solve reached it: it has a pose, and it is in the room.
+    Placed,
+    /// No edge leads to it — a patched-but-unplaced fixture, or a detached
+    /// branch. Its rows are still there.
+    Unplaced,
+}
+
+impl PlacementOutcome {
+    /// Whether the node is in the room.
+    #[must_use]
+    pub fn is_placed(self) -> bool {
+        matches!(self, Self::Placed)
+    }
+}
+
+impl From<Outcome> for PlacementOutcome {
+    fn from(outcome: Outcome) -> Self {
+        match outcome {
+            Outcome::Placed => Self::Placed,
+            Outcome::Unplaced => Self::Unplaced,
+        }
+    }
 }
 
 impl PlacementReport {
@@ -393,7 +424,7 @@ impl PlacementReport {
         let venue = ResolvedVenue::from(solved);
         Self {
             node_id: node_id.to_string(),
-            ok: placement.ok,
+            outcome: placement.outcome.into(),
             parent_id: placement.parent,
             warnings: placement.warnings.iter().map(describe).collect(),
             dangling: venue

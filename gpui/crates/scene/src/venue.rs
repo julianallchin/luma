@@ -940,7 +940,11 @@ impl ResolvedVenue {
         let pose = self.pose(node);
         Placement {
             node: node.to_string(),
-            ok: pose.is_some(),
+            outcome: if pose.is_some() {
+                Outcome::Placed
+            } else {
+                Outcome::Unplaced
+            },
             parent: pose.and_then(|p| p.parent.clone()),
             warnings: self
                 .warnings
@@ -985,12 +989,42 @@ fn member_of(id: &str) -> Option<&str> {
 #[derive(Clone, Debug)]
 pub struct Placement {
     pub node: String,
-    /// Whether the node came out of the solve with a pose at all.
-    pub ok: bool,
+    /// What the graph now says about the node — **not** whether the call
+    /// worked. See [`Outcome`].
+    pub outcome: Outcome,
     pub parent: Option<String>,
     pub warnings: Vec<Warning>,
     pub dangling: Vec<DanglingSocket>,
     pub constraints: Vec<ConstraintReport>,
+}
+
+/// Where the node a call named ended up.
+///
+/// This is a fact about the *graph*, not a verdict on the call. Conflating the
+/// two is how `detach` — which does exactly what it says and unplaces a branch
+/// on purpose — came to report itself as a refusal.
+///
+/// There is no `Refused` variant, because a refused call produces no
+/// `Placement` at all: the two hard errors ([`EdgeError`]) are raised before
+/// any write, so a refusal is the `Err` half of the caller's `Result` and
+/// cannot be read out of this. A variant nothing can construct would be a
+/// promise the type does not keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The solve reached it: it has a pose, and it is in the room.
+    Placed,
+    /// No edge leads to it. The ordinary state of a patched fixture nobody has
+    /// placed, and the whole point of `detach`; the rows are still there, which
+    /// is the difference between unplaced and deleted.
+    Unplaced,
+}
+
+impl Outcome {
+    /// Whether the node is in the room.
+    #[must_use]
+    pub fn is_placed(self) -> bool {
+        matches!(self, Outcome::Placed)
+    }
 }
 
 /// Solve one venue: every node's pose, arrays expanded, checks evaluated.
@@ -2182,7 +2216,7 @@ mod tests {
         assert_eq!(anchor.array_index, None);
         assert!(anchor.world.transform_point3(DVec3::ZERO).x.abs() < 1e-12);
         let placement = resolved.placement("bar");
-        assert!(placement.ok);
+        assert!(placement.outcome.is_placed());
         assert_eq!(placement.parent.as_deref(), Some("deck1"));
         // Members are derived from the generator, so they name it as parent.
         assert!(members.iter().all(|m| m.parent.as_deref() == Some("bar")));
@@ -2804,7 +2838,7 @@ mod tests {
         graph.insert(node("tray", NodeKind::Fixture, "mover"));
         let resolved = resolve(&graph, &table());
         assert!(resolved.pose("tray").is_none());
-        assert!(!resolved.placement("tray").ok);
+        assert!(!resolved.placement("tray").outcome.is_placed());
         // No pose, but not silence: a fixture in the tray is the legitimate
         // case, and the caller has to be able to tell it from a lost one.
         let unplaced = resolved.unplaced();

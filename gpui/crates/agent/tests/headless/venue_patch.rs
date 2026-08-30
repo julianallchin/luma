@@ -60,10 +60,13 @@ fn seed_extras(dir: &Path) {
                     "INSERT INTO fixtures (id, uid, venue_id, universe, address, num_channels,
                                            manufacturer, model, mode_name, fixture_path, label,
                                            pos_x, pos_y, pos_z, rot_x, rot_y, rot_z)
-                     VALUES (?, NULL, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?,
+                     VALUES (?, ?, ?, ?, ?, 8, 'Luma', 'Mover', 'Default', ?, ?,
                              0.0, 0.0, 3.0, 0.0, 0.0, 0.0)",
                 )
                 .bind(id)
+                // The owner, as `support::seed_rig` binds it: a fixture row
+                // with no principal is refused by admission (trigger 1811).
+                .bind(support::session::PRINCIPAL)
                 .bind(support::VENUE)
                 .bind(universe)
                 .bind(address)

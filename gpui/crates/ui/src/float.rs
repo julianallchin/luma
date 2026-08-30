@@ -267,12 +267,16 @@ pub fn label(text: impl Into<SharedString>) -> Div {
 }
 
 /// A labelled control on a floating surface: the [`label`] over the thing it
-/// names.
+/// names. **The** labelled row of this tier — a dialog field, a popover
+/// argument and an inspector row are one shape, and there is one of it.
 ///
-/// The float tier's answer to `arg::arg_row`, which stencils a 9px uppercase
-/// silkscreen legend because it belongs to the instrument panel. A dialog is
-/// not a panel: its legends are sentence case and quiet, and a card that
-/// borrowed the panel's would read as a different application.
+/// The float tier's answer to [`crate::arg::arg_row`], which stencils a 9px
+/// uppercase silkscreen legend because it belongs to the instrument panel. A
+/// dialog is not a panel: its legends are sentence case and quiet, and a card
+/// that borrowed the panel's would read as a different application.
+///
+/// Label *over* control, for `arg::arg_row`'s reason: every control then gets
+/// the surface's full width whatever it is called.
 pub fn field_row(label_text: impl Into<SharedString>, control: impl IntoElement) -> Div {
     div()
         .flex()
@@ -657,32 +661,6 @@ pub fn field() -> Div {
         .text_size(px(12.0))
         .text_color(ladder::foreground())
 }
-
-// ---------------------------------------------------------------------------
-// Labelled controls
-// ---------------------------------------------------------------------------
-
-/// One argument on glass: a [`label`] over the control it names.
-///
-/// The float tier's answer to [`crate::arg::arg_row`], and it exists because
-/// that one writes its label in the instrument tier's 9px uppercase
-/// silkscreen. A stencilled panel legend inside a translucent popover is the
-/// same category error [`btn`] avoids on the other side — see this module's
-/// header. Label *over* control for the reason `arg::arg_row` states: every
-/// control then gets the card's full width whatever it is called.
-pub fn arg_row(label_text: impl Into<SharedString>, control: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(ARG_LABEL_GAP))
-        .w_full()
-        .child(label(label_text))
-        .child(control)
-}
-
-/// The seam between an [`arg_row`]'s label and its control.
-const ARG_LABEL_GAP: f32 = 6.0;
 
 // ---------------------------------------------------------------------------
 // Segmented
