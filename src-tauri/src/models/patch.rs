@@ -135,6 +135,26 @@ impl UniverseCell {
     }
 }
 
+/// An Art-Net node that answered a poll.
+///
+/// A wire model beside [`UniverseOutput`] rather than a struct inside the
+/// sender, because it is half of a binding: the outputs table names a node, and
+/// the two halves of one decision should be described in one place. `port_address`
+/// is the node's **own** announced Net/SubNet/Universe — never derived from a
+/// Luma universe number.
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/patch.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct ArtNetNode {
+    pub ip: String,
+    pub name: String,
+    pub long_name: String,
+    pub port_address: u16,
+    /// Unix seconds at the last reply.
+    pub last_seen: u64,
+}
+
 /// Where one universe goes on the wire: a row of `universe_outputs`.
 ///
 /// The table that replaces `(net << 8) | (subnet << 4) | (universe & 0xF)`.

@@ -6,9 +6,9 @@
 //! host that cannot do ArtNet at all indistinguishable from a network with no
 //! nodes on it.
 
-use crate::artnet::{ArtNetManager, ArtNetNode};
+use crate::artnet::ArtNetManager;
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::patch::UniverseOutput;
+use crate::models::patch::{ArtNetNode, UniverseOutput};
 
 fn manager(services: &AppServices) -> Result<&ArtNetManager, CommandError> {
     services

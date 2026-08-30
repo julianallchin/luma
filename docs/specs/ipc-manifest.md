@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**208 commands** across **32 domains** · **18 events** · **0 commands not on the seam**
+**212 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -25,8 +25,9 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
 | `compositor` | 2 | `src-tauri/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `src-tauri/src/dispatch/handlers/controller.rs` |
+| `distribute` | 1 | `src-tauri/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
-| `fixtures` | 13 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
+| `fixtures` | 16 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
 | `groups` | 16 | `src-tauri/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `src-tauri/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `src-tauri/src/dispatch/handlers/midi.rs` |
@@ -46,7 +47,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **208** | |
+| **total** | **212** | |
 
 ## Commands
 
@@ -162,6 +163,12 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `controller_start_learn` | `venueId: String` | `()` |
 | `controller_cancel_learn` | `venueId: String` | `()` |
 
+### `distribute`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `distribute` | `venueId: String`<br>`hostNodeId: Option<String>`<br>`hostSocket: Option<String>`<br>`fixturePath: String`<br>`modeName: String`<br>`count: usize`<br>`layout: DistributeLayout`<br>`labelPrefix: Option<String>` | `DistributeReport` |
+
 ### `engine_dj`
 
 | Command | Arguments | Returns |
@@ -189,6 +196,9 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `universe_occupancy` | `venueId: String`<br>`universe: i64` | `Vec<UniverseCell>` |
 | `universes_in_use` | `venueId: String` | `Vec<u16>` |
 | `next_addresses` | `venueId: String`<br>`run: Option<String>`<br>`channels: i64`<br>`count: usize` | `Vec<PatchAddress>` |
+| `set_fixture_mode` | `venueId: String`<br>`id: String`<br>`modeName: String`<br>`allowMove: bool` | `PatchedFixture` |
+| `set_address_pinned` | `venueId: String`<br>`id: String`<br>`pinned: bool` | `()` |
+| `fixture_role` | `path: String`<br>`modeName: String` | `FixtureRole` |
 | `remove_patched_fixture` | `venueId: String`<br>`id: String` | `()` |
 | `rename_patched_fixture` | `venueId: String`<br>`id: String`<br>`label: String` | `()` |
 
