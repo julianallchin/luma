@@ -94,9 +94,9 @@ pub(crate) enum Hand {
     #[default]
     Empty,
     /// A ghost follows the cursor and a release places it.
-    Holding(Held),
+    Holding(Box<Held>),
     /// A socket was clicked and a run is being measured out of it.
-    Extending(Extending),
+    Extending(Box<Extending>),
 }
 
 impl Hand {
@@ -153,7 +153,11 @@ pub(crate) struct Held {
 }
 
 impl Held {
-    pub(crate) fn new(what: Holding) -> Self {
+    pub(crate) fn new(what: Holding) -> Box<Self> {
+        Box::new(Self::of(what))
+    }
+
+    fn of(what: Holding) -> Self {
         Self {
             what,
             latched: None,
@@ -268,11 +272,15 @@ impl Extending {
         ((self.length_m - reach.gap_m).abs() <= f64::EPSILON.max(1e-6)).then_some(reach)
     }
 
-    /// The measurement readout: metres, with feet as the small print. Feet are
-    /// display-only — nothing in the model is ever imperial.
-    pub(crate) fn measurement(&self) -> String {
-        let metres = self.reach.as_ref().map_or(self.length_m, |r| r.gap_m);
-        format!("Gap: {metres:.2} m")
+    /// The measurement readout: the gap the ray found, with feet as the small
+    /// print. Feet are display-only — nothing in the model is ever imperial.
+    ///
+    /// `None` when the ray met nothing, because there is no gap to report and a
+    /// readout echoing the length back as a "gap" would invent a measurement
+    /// out of the number being typed.
+    pub(crate) fn measurement(&self) -> Option<String> {
+        let reach = self.reach.as_ref()?;
+        Some(format!("Gap: {:.2} m", reach.gap_m))
     }
 }
 
@@ -566,8 +574,8 @@ impl Room {
                     };
                 }
                 let world = place_on(parent_world, &host, held, kind, seat);
-                let surface = (host_node != self.root || host_socket != FLOOR_SOCKET)
-                    .then(|| (host_node, host_socket));
+                let free_floor = host_node == self.root && host_socket == FLOOR_SOCKET;
+                let surface = (!free_floor).then_some((host_node, host_socket));
                 Some((
                     Landed {
                         world,
