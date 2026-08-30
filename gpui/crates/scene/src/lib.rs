@@ -27,6 +27,7 @@ pub mod bvh;
 pub mod camera;
 pub mod catalog;
 pub mod coords;
+pub mod distribute;
 pub mod framing;
 pub mod gesture;
 pub mod gizmo;

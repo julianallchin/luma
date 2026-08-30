@@ -33,6 +33,7 @@ pub mod assets;
 pub mod catalog;
 pub mod coords;
 mod environment;
+pub mod face;
 pub mod frame;
 mod gpu;
 mod haze_field;

@@ -22,6 +22,7 @@ pub mod categories;
 pub mod cloud_sync;
 pub mod compositor;
 pub mod controller;
+pub mod distribute;
 pub mod engine_dj;
 pub mod fixtures;
 pub mod groups;

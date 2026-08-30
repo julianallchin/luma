@@ -164,6 +164,7 @@ use crate::models::authored_state::{
     FinalizeAuthoredTurnInput, MergeAuthoredWorkspaceInput, PrepareAuthoredTurnInput,
     PreparedAuthoredTurn, RestoreAuthoredStateInput,
 };
+use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::models::fixtures::{FixtureDefinition, FixtureEntry, FixtureFacing, PatchedFixture};
 use crate::models::groups::{FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig};
 use crate::models::midi::{
@@ -551,6 +552,16 @@ commands! {
     ) -> Vec<SearchPatternRow>;
     cloud_sync::get_display_names(uids: Vec<String>) -> HashMap<String, String>;
 
+    distribute::distribute(
+        venue_id: String,
+        host_node_id: Option<String>,
+        host_socket: Option<String>,
+        fixture_path: String,
+        mode_name: String,
+        count: usize,
+        layout: DistributeLayout,
+        label_prefix: Option<String>,
+    ) -> DistributeReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
     stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
     stage::attach(

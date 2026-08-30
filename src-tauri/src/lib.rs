@@ -613,6 +613,7 @@ pub fn run() {
             dispatch::adapter::reattach,
             dispatch::adapter::place_free,
             dispatch::adapter::detach,
+            dispatch::adapter::distribute,
             dispatch::adapter::set_params,
             dispatch::adapter::delete_subtree,
             // Groups
