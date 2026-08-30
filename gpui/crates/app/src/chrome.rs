@@ -808,6 +808,6 @@ fn kind_icon(target: &Target) -> IconName {
     match target {
         Target::TrackEditor { .. } => IconName::Play,
         Target::Graph { .. } => IconName::Network,
-        Target::Universe { .. } => IconName::Cpu,
+        Target::Patch { .. } => IconName::Cpu,
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! An empty workspace used to be a second, silent reason to hide the panel —
 //! so the surface that offers the first tab was withheld until a tab existed.
-//! `Universe setup` has no sidebar path (a track or a pattern is opened by
+//! `Patch` has no sidebar path (a track or a pattern is opened by
 //! clicking one; a room is not), which made it unreachable outright: the `+`
 //! lives in the panel, and the panel was not there.
 //!
@@ -45,7 +45,7 @@ const READ: &str = r#"
     function read() {
         const shot = app.snapshot();
         const empty = shot.find({ role: "card", label: "Empty panel" });
-        const universe = shot.find({ role: "button", label: "Universe setup" });
+        const universe = shot.find({ role: "button", label: "Patch" });
         const panel = shot.find({ role: "button", label: "panel-toggle" });
         const add = shot.find({ role: "button", label: "new-tab" });
         return {
@@ -126,7 +126,7 @@ fn an_empty_panel_offers_the_three_ways_to_open_a_tab() {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    for expected in ["Universe setup", "Pattern editor", "Track editor"] {
+    for expected in ["Patch", "Pattern editor", "Track editor"] {
         assert!(
             labels.contains(&expected),
             "the empty panel did not offer {expected:?}: {labels:?}"
@@ -145,7 +145,7 @@ fn an_empty_panel_offers_the_three_ways_to_open_a_tab() {
     assert_eq!(
         out["landed"]["universeEnabled"].as_bool(),
         Some(true),
-        "Universe setup was not offered with a venue selected: {:#}",
+        "Patch was not offered with a venue selected: {:#}",
         out["landed"]
     );
 }
@@ -230,7 +230,7 @@ fn new_tab_reaches_universe_setup_with_no_tabs_open() {
             app.frames(4);
             const afterNewTab = read();
 
-            app.click(app.snapshot().find({{ role: "button", label: "Universe setup" }}));
+            app.click(app.snapshot().find({{ role: "button", label: "Patch" }}));
             until("the universe tab", (s) =>
                 s.find({{ role: "button", label: "panel-toggle" }}) !== undefined &&
                 s.find({{ role: "card", label: "Empty panel" }}) === undefined);
