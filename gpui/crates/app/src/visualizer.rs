@@ -1036,6 +1036,11 @@ impl Visualizer {
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
         stage.scene = Some(scene);
+        // A new scene is a frame owed. The idle gate's key deliberately does
+        // not carry scene contents, so a resting viewport handed a reloaded
+        // rig would keep re-presenting the room it had — a deleted piece
+        // stayed on screen until a click or the camera changed the key.
+        stage.idle = None;
         drop(stage);
         self.status = Status::Live { lit: false };
     }
