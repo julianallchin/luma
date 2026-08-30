@@ -289,66 +289,37 @@ pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncEr
         let has_principal = table.has_principal();
         let sql = format!("{base_sql} LIMIT {DIRTY_BATCH_LIMIT}");
 
-        if table.is_composite_pk() {
-            let rows: Vec<(String, String)> = if has_principal {
-                sqlx::query_as(sqlx::AssertSqlSafe(&*sql))
-                    .bind(uid)
-                    .fetch_all(pool)
-                    .await?
-            } else {
-                sqlx::query_as(sqlx::AssertSqlSafe(&*sql))
-                    .fetch_all(pool)
-                    .await?
-            };
-            if !rows.is_empty() {
-                eprintln!("[sync] {} dirty in {}", rows.len(), table.name);
-            }
-            for (a, b) in &rows {
-                let record_id = format!("{a}:{b}");
-                if let Ok(payload) = read_record_as_json(pool, table, &record_id).await {
-                    let json = serde_json::to_string(&payload)
-                        .map_err(|e| SyncError::Parse(e.to_string()))?;
-                    pending::enqueue_upsert(
-                        pool,
-                        uid,
-                        table.name,
-                        &record_id,
-                        &json,
-                        table.conflict_key,
-                    )
-                    .await?;
-                    count += 1;
-                }
-            }
-        } else {
-            let ids: Vec<String> = if has_principal {
-                sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
-                    .bind(uid)
-                    .fetch_all(pool)
-                    .await?
-            } else {
-                sqlx::query_scalar(sqlx::AssertSqlSafe(&*sql))
-                    .fetch_all(pool)
-                    .await?
-            };
-            if !ids.is_empty() {
-                eprintln!("[sync] {} dirty in {}", ids.len(), table.name);
-            }
-            for record_id in &ids {
-                if let Ok(payload) = read_record_as_json(pool, table, record_id).await {
-                    let json = serde_json::to_string(&payload)
-                        .map_err(|e| SyncError::Parse(e.to_string()))?;
-                    pending::enqueue_upsert(
-                        pool,
-                        uid,
-                        table.name,
-                        record_id,
-                        &json,
-                        table.conflict_key,
-                    )
-                    .await?;
-                    count += 1;
-                }
+        // One column per primary key, whatever the arity: the dirty query
+        // selects exactly `pk_columns()` and each row is read back positionally.
+        // Reading a fixed-width tuple instead silently truncated every table
+        // with a third key column to its first two.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(&*sql));
+        if has_principal {
+            query = query.bind(uid);
+        }
+        let rows = query.fetch_all(pool).await?;
+        if !rows.is_empty() {
+            eprintln!("[sync] {} dirty in {}", rows.len(), table.name);
+        }
+        for row in &rows {
+            use sqlx::Row;
+            let values: Vec<String> = (0..table.pk_columns().len())
+                .map(|index| row.try_get::<String, _>(index))
+                .collect::<Result<_, _>>()?;
+            let record_id = registry::record_id(values.iter().map(String::as_str));
+            if let Ok(payload) = read_record_as_json(pool, table, &record_id).await {
+                let json =
+                    serde_json::to_string(&payload).map_err(|e| SyncError::Parse(e.to_string()))?;
+                pending::enqueue_upsert(
+                    pool,
+                    uid,
+                    table.name,
+                    &record_id,
+                    &json,
+                    table.conflict_key,
+                )
+                .await?;
+                count += 1;
             }
         }
     }
@@ -362,7 +333,12 @@ pub async fn read_record_as_json(
     record_id: &str,
 ) -> Result<serde_json::Value, SyncError> {
     let cols = table.columns.join(", ");
-    let pk_values = table.decode_record_id(record_id);
+    let pk_values = table
+        .decode_record_id(record_id)
+        .ok_or_else(|| SyncError::NotFound {
+            table: table.name.to_string(),
+            id: record_id.to_string(),
+        })?;
     let where_clause = table.pk_where();
 
     let sql = format!("SELECT {cols} FROM {} WHERE {where_clause}", table.name);

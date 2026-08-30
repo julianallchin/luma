@@ -500,7 +500,7 @@ impl AuthoredDocuments {
                 connection,
                 user_id,
                 "authored_operation_outcomes",
-                &format!("{}:{}:{}", scope.document_id, operation.kind, operation.id),
+                &registry::record_id([scope.document_id.as_str(), operation.kind, operation.id]),
             )
             .await?;
         }
@@ -608,7 +608,7 @@ impl AuthoredDocuments {
                 connection,
                 user_id,
                 "authored_revision_files",
-                &format!("{}:{path}", revision.id),
+                &registry::record_id([revision.id.as_str(), path.as_str()]),
             )
             .await?;
         }
@@ -617,7 +617,7 @@ impl AuthoredDocuments {
                 connection,
                 user_id,
                 "authored_revision_parents",
-                &format!("{}:{parent_order}", revision.id),
+                &registry::record_id([revision.id.as_str(), parent_order.to_string().as_str()]),
             )
             .await?;
         }
@@ -626,7 +626,7 @@ impl AuthoredDocuments {
                 connection,
                 user_id,
                 "authored_operation_outcomes",
-                &format!("{}:{kind}:{id}", scope.document_id),
+                &registry::record_id([scope.document_id.as_str(), kind, id]),
             )
             .await?;
         }
@@ -810,7 +810,12 @@ pub(super) async fn local_row_payload(
         table.pk_where()
     );
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for value in table.decode_record_id(record_id) {
+    let pk_values = table.decode_record_id(record_id).ok_or_else(|| {
+        AuthoredDocumentsError::Storage(format!(
+            "authored sync record id {table_name}.{record_id} does not name every primary-key column"
+        ))
+    })?;
+    for value in pk_values {
         query = query.bind(value);
     }
     let row = query

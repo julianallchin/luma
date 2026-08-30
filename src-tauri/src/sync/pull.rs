@@ -601,24 +601,21 @@ fn repair_incoming(table: &str, row: &Value) -> Option<(Value, String)> {
 /// Best-effort by design: a table with no `synced_at` is not pushed at all, and
 /// failing to re-dirty a row that did land must not stop the pull.
 async fn mark_dirty(pool: &SqlitePool, table: &TableMeta, record_id: &str) {
-    let pk_cols = table.pk_columns();
-    let where_clause = pk_cols
-        .iter()
-        .enumerate()
-        .map(|(index, column)| format!("{column} = ?{}", index + 1))
-        .collect::<Vec<_>>()
-        .join(" AND ");
+    let Some(pk_values) = table.decode_record_id(record_id) else {
+        eprintln!(
+            "[sync] Could not re-queue repaired {}.{record_id}: malformed record id",
+            table.name
+        );
+        return;
+    };
     let sql = format!(
-        "UPDATE {} SET synced_at = NULL WHERE {where_clause}",
-        table.name
+        "UPDATE {} SET synced_at = NULL WHERE {}",
+        table.name,
+        table.pk_where()
     );
     let mut query = sqlx::query(sqlx::AssertSqlSafe(&*sql));
-    if pk_cols.len() == 1 {
-        query = query.bind(record_id);
-    } else {
-        for part in record_id.split(':') {
-            query = query.bind(part);
-        }
+    for value in pk_values {
+        query = query.bind(value);
     }
     if let Err(error) = query.execute(pool).await {
         eprintln!(
@@ -832,6 +829,7 @@ async fn execute_upsert(
         .await
         .map_err(SyncError::Local)?;
     transaction.commit().await?;
+    crate::database::local::venue_graph::graph_table_committed(table.name);
     Ok(())
 }
 
@@ -873,7 +871,7 @@ fn extract_record_id(table: &TableMeta, row: &Value) -> String {
         .iter()
         .map(|col| row.get(*col).and_then(|v| v.as_str()).unwrap_or(""))
         .collect();
-    parts.join(":")
+    registry::record_id(parts)
 }
 
 fn extract_sync_seq(table: &TableMeta, row: &Value) -> Result<u64, SyncError> {
@@ -980,7 +978,12 @@ async fn delete_local(
         _ => {}
     }
     let where_clause = table.pk_where();
-    let pk_values = table.decode_record_id(record_id);
+    let pk_values = table.decode_record_id(record_id).ok_or_else(|| {
+        SyncError::Parse(format!(
+            "remote tombstone {}.{record_id} does not name every primary-key column",
+            table.name
+        ))
+    })?;
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let exists_sql = format!("SELECT 1 FROM {} WHERE {where_clause}", table.name);
@@ -1026,6 +1029,7 @@ async fn delete_local(
         .await
         .map_err(SyncError::Local)?;
     transaction.commit().await?;
+    crate::database::local::venue_graph::graph_table_committed(table.name);
     Ok(deleted.rows_affected() > 0)
 }
 

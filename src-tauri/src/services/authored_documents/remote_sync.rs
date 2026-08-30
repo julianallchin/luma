@@ -22,6 +22,7 @@ use crate::sync::authored_remote::{
 };
 use crate::sync::error::SyncError;
 use crate::sync::pending;
+use crate::sync::registry;
 use crate::sync::traits::RemoteClient;
 
 #[derive(FromRow)]
@@ -803,15 +804,16 @@ impl AuthoredDocuments {
             .map_err(sync_local)?;
         let mut rows = vec![("authored_documents", document_id.to_string())];
         rows.push(("authored_revisions", revision_id.to_string()));
-        rows.extend(
-            files
-                .keys()
-                .map(|path| ("authored_revision_files", format!("{revision_id}:{path}"))),
-        );
+        rows.extend(files.keys().map(|path| {
+            (
+                "authored_revision_files",
+                registry::record_id([revision_id.as_str(), path.as_str()]),
+            )
+        }));
         rows.extend((0..revision.parents.len()).map(|order| {
             (
                 "authored_revision_parents",
-                format!("{revision_id}:{order}"),
+                registry::record_id([revision_id.as_str(), order.to_string().as_str()]),
             )
         }));
         for (table_name, record_id) in rows {

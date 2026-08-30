@@ -164,7 +164,7 @@ async fn enqueue_append_receipt(
         connection,
         user_id,
         "agent_thread_message_appends",
-        &format!("{thread_id}:{operation_id}"),
+        &crate::sync::registry::record_id([thread_id, operation_id]),
         &payload,
         "thread_id,operation_id",
     )

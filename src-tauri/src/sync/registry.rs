@@ -159,11 +159,6 @@ impl TableMeta {
         self.conflict_key.split(',').collect()
     }
 
-    /// Whether this table has a composite primary key.
-    pub fn is_composite_pk(&self) -> bool {
-        self.conflict_key.contains(',')
-    }
-
     /// Remote-only columns (excludes local_only).
     pub fn remote_columns(&self) -> Vec<&str> {
         self.columns
@@ -242,14 +237,45 @@ impl TableMeta {
         }
     }
 
-    /// Decode a record ID string into PK column values.
-    pub fn decode_record_id<'a>(&self, record_id: &'a str) -> Vec<&'a str> {
-        if self.is_composite_pk() {
-            record_id.splitn(self.pk_columns().len(), ':').collect()
-        } else {
-            vec![record_id]
+    /// Decode a record id into one value per primary-key column, or `None` if
+    /// it does not carry exactly one.
+    ///
+    /// The arity is checked here rather than at the four call sites because
+    /// every one of them turns the values into a `WHERE` clause or a PostgREST
+    /// filter: a short list would silently *widen* it to every row sharing the
+    /// prefix, which for a delete means every parameter of a node instead of
+    /// one.
+    pub fn decode_record_id<'a>(&self, record_id: &'a str) -> Option<Vec<&'a str>> {
+        let columns = self.pk_columns().len();
+        if columns == 1 {
+            return Some(vec![record_id]);
         }
+        let values: Vec<&str> = record_id.split(RECORD_ID_SEPARATOR).collect();
+        (values.len() == columns).then_some(values)
     }
+}
+
+/// The separator between primary-key values inside a composite record id.
+///
+/// A control character rather than something typeable, because decoding is a
+/// split and any value that can contain the separator makes that split
+/// ambiguous. `':'` used to serve, on the unstated assumption that only the
+/// *last* value could contain one — which `venue_node_params` breaks, since a
+/// venue's root node is named `"<venue_id>:venue"` by `venue_graph::migrate`
+/// and cannot be renamed (the id is immutable by admission trigger). Nothing
+/// that reaches a primary key here — an id, a socket name, a parameter key, a
+/// path — contains a unit separator.
+pub const RECORD_ID_SEPARATOR: char = '\u{1f}';
+
+/// The record id `pending_ops` carries for one row, from its primary-key
+/// values in `pk_columns` order.
+///
+/// The inverse of [`TableMeta::decode_record_id`]; the SQL delete triggers on
+/// composite tables build the same string with `char(31)`.
+pub fn record_id<'a>(keys: impl IntoIterator<Item = &'a str>) -> String {
+    keys.into_iter()
+        .collect::<Vec<_>>()
+        .join(&RECORD_ID_SEPARATOR.to_string())
 }
 
 pub fn get_table(name: &str) -> Option<&'static TableMeta> {
@@ -296,11 +322,10 @@ pub static TABLES: &[TableMeta] = &[
         ],
         local_only: &["file_path", "album_art_path"],
     },
-    // `address_pinned` is deliberately not listed: the remote `fixtures` table
-    // has no such column yet. Until it does, `address` syncs and the pin does
-    // not, so somebody else's auto-patch can relocate a local pin — see
-    // `supabase/migrations/20260831000000_fixtures_address_pinned_NOT_DEPLOYED.sql`
-    // for the column and the order the two changes have to land in.
+    // `address_pinned` rides along with `address` and `universe`: the pin is a
+    // property of the address, so a push that moves one moves the other. It is
+    // an integer, not a bool, because `read_record_as_json` sends SQLite
+    // INTEGER as a JSON number and PostgREST refuses `0` for a boolean.
     TableMeta {
         name: "fixtures",
         conflict_key: "id",
@@ -311,6 +336,7 @@ pub static TABLES: &[TableMeta] = &[
             "venue_id",
             "universe",
             "address",
+            "address_pinned",
             "num_channels",
             "manufacturer",
             "model",
@@ -323,6 +349,66 @@ pub static TABLES: &[TableMeta] = &[
             "rot_x",
             "rot_y",
             "rot_z",
+            "created_at",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    // The venue graph. A node's placement is an `venue_edges` row keyed by the
+    // child, its parameters are `venue_node_params` rows and its far-end checks
+    // are `venue_constraints` rows — all three reach their venue through the
+    // node, which is what the remote RLS checks and what gives them their
+    // `uid`. Rows the three carry are meaningless without their node, so the
+    // node is their only registered parent.
+    TableMeta {
+        name: "venue_nodes",
+        conflict_key: "id",
+        parents: &["venues"],
+        columns: &[
+            "id",
+            "uid",
+            "venue_id",
+            "kind",
+            "catalog_ref",
+            "label",
+            "created_at",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "venue_edges",
+        conflict_key: "child_id",
+        parents: &["venue_nodes"],
+        columns: &[
+            "child_id",
+            "uid",
+            "parent_id",
+            "my_socket",
+            "their_socket",
+            "roll",
+            "created_at",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "venue_node_params",
+        conflict_key: "node_id,key",
+        parents: &["venue_nodes"],
+        columns: &["node_id", "uid", "key", "value", "created_at", "updated_at"],
+        local_only: &[],
+    },
+    TableMeta {
+        name: "venue_constraints",
+        conflict_key: "node_id,my_socket",
+        parents: &["venue_nodes"],
+        columns: &[
+            "node_id",
+            "uid",
+            "my_socket",
+            "target_node",
+            "target_socket",
             "created_at",
             "updated_at",
         ],
@@ -900,6 +986,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A venue's root node is named `"<venue_id>:venue"`, so the first key
+    /// column of a `venue_node_params` record id contains a colon. Round-trip
+    /// it, and refuse an id that names too few columns rather than letting a
+    /// caller build a `WHERE` clause that matches the whole node.
+    #[test]
+    fn a_composite_record_id_survives_a_colon_in_its_first_key() {
+        let table = get_table("venue_node_params").expect("registered");
+        let encoded = record_id(["v-1:venue", "span"]);
+        assert_eq!(
+            table.decode_record_id(&encoded).as_deref(),
+            Some(&["v-1:venue", "span"][..])
+        );
+        assert_eq!(table.decode_record_id("v-1:venue:span"), None);
+        let single = get_table("venues").expect("registered");
+        assert_eq!(single.decode_record_id("v:1"), Some(vec!["v:1"]));
     }
 
     #[test]

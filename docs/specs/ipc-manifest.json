@@ -5689,8 +5689,8 @@
         "src-tauri/src/dispatch/handlers/tracks.rs:427",
         "src-tauri/src/sync/orchestrator.rs:141",
         "src-tauri/src/sync/orchestrator.rs:192",
-        "src-tauri/src/sync/push.rs:722",
-        "src-tauri/src/sync/push.rs:759"
+        "src-tauri/src/sync/push.rs:732",
+        "src-tauri/src/sync/push.rs:769"
       ],
       "listeners": [
         "src/App.tsx:468",
