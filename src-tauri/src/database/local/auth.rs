@@ -39,9 +39,9 @@ pub enum AuthError {
 impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuthError::SessionRevoked => f.write_str(
-                "the stored session was revoked by Supabase and needs a new sign-in",
-            ),
+            AuthError::SessionRevoked => {
+                f.write_str("the stored session was revoked by Supabase and needs a new sign-in")
+            }
             AuthError::Other(message) => f.write_str(message),
         }
     }
@@ -326,7 +326,9 @@ impl AuthServer for SupabaseAuthServer {
             .json(&serde_json::json!({ "refresh_token": refresh_token }))
             .send()
             .await
-            .map_err(|error| RefreshError::Failed(format!("Supabase session refresh failed: {error}")))?;
+            .map_err(|error| {
+                RefreshError::Failed(format!("Supabase session refresh failed: {error}"))
+            })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -343,7 +345,9 @@ impl AuthServer for SupabaseAuthServer {
         }
 
         let value: serde_json::Value = response.json().await.map_err(|error| {
-            RefreshError::Failed(format!("Supabase returned an invalid refresh response: {error}"))
+            RefreshError::Failed(format!(
+                "Supabase returned an invalid refresh response: {error}"
+            ))
         })?;
         serde_json::to_string(&value).map_err(|error| {
             RefreshError::Failed(format!("Failed to serialize refreshed session: {error}"))
@@ -1876,7 +1880,8 @@ mod tests {
         }
 
         async fn refresh(&self, refresh_token: &str) -> Result<String, RefreshError> {
-            self.refresh_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.refresh_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.refreshes
                 .lock()
                 .unwrap()
@@ -2375,7 +2380,9 @@ mod tests {
             .await
             .err()
             .unwrap();
-        assert!(error.to_string().contains("changed the authenticated principal"));
+        assert!(error
+            .to_string()
+            .contains("changed the authenticated principal"));
         assert_eq!(
             get_raw_session_item(&pool, SUPABASE_SESSION_KEY)
                 .await
