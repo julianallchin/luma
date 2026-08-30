@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-29] Worktrees sharing the main cargo target dir poison each other: a `cargo check` in the main checkout compiled `luma` against another worktree's in-progress `luma_scene` (a field that exists only there), failing on code that is correct at HEAD. Path deps don't get distinct fingerprints here; give worktrees their own target dir or expect ghosts.
 - [2026-08-29] `until()` steps one frame per poll, and one frame does not carry a two-deep async chain back to the app — a gpui verb that spawns from inside another spawn's answer never lands, so a thousand polls over ten seconds lose to four frames in one call. Nothing in the helper says its granularity is load-bearing.
 - [2026-08-29] The a11y tree reports a control's bounds and its enablement but nothing about what is painted over it, so a button sitting *under* a sheet reads as perfectly pressable and clicking it is a silent no-op. Two hours, and the only way to see it was to print two nodes' bounds side by side.
 - [2026-08-29] `app.type(node, text)` appends, so a helper that opens a dialog and types into it works once and silently matches nothing the second time — the second call's query is the first one's twice over, and the failure surfaces as "no such row".
