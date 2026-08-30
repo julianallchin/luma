@@ -6,6 +6,21 @@
 //! with the answer and not at all in how the question is asked, so the search,
 //! the paging and the rows live here once.
 //!
+//! # The stage page has not adopted it yet
+//!
+//! `Luma::stage_search_fixtures` (`stage/mod.rs`) still keeps its own `query`
+//! and `results` on `Distribute` and asks `search_fixtures` with a hard-coded
+//! first page of 40 — no paging, no exhaustion, no manufacturer headings, and
+//! its own spelling of the error case. That is the second browser, and it is
+//! the one to delete: this module is already the general form of it. Adopting
+//! it is `Distribute { library: FixtureLibrary, .. }`, [`FixtureLibrary::new`]
+//! with an `on_edit` that routes back to the popup, [`rows`] with an `on_pick`
+//! that distributes, and the host's existing fetch loop calling
+//! [`FixtureLibrary::page`] / [`FixtureLibrary::landed`] — which is exactly
+//! what `Luma::fetch_fixture_page` does for the add dialog. Nothing here is
+//! shaped around the dialog: the component owns browsing, and the host owns
+//! storage and the runtime, which is the whole point of the split below.
+//!
 //! # What this owns, and what its host owns
 //!
 //! It owns the query, the page cursor and the rows — everything that is *about

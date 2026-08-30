@@ -128,7 +128,18 @@ fn grid(state: &Patch, app: &Entity<Luma>) -> impl IntoElement {
         .flex()
         .flex_wrap()
         .w(px(f32::from(COLUMNS) * (CELL + GAP)))
-        .on_mouse_up(gpui::MouseButton::Left, move |_, _, cx| {
+        .on_mouse_up(gpui::MouseButton::Left, {
+            let released = released.clone();
+            let venue_up = venue_up.clone();
+            move |_, _, cx| {
+                let venue = venue_up.clone();
+                released.update(cx, |this, cx| this.drop_strip_block(venue, cx));
+            }
+        })
+        // A press that leaves the grid before it lifts is still a release.
+        // Without this the block stays stuck to the pointer with nothing
+        // holding it, which is the one state a drag must not be able to end in.
+        .on_mouse_up_out(gpui::MouseButton::Left, move |_, _, cx| {
             let venue = venue_up.clone();
             released.update(cx, |this, cx| this.drop_strip_block(venue, cx));
         })
@@ -212,11 +223,13 @@ fn collision_notes(state: &Patch) -> Vec<AnyElement> {
     notes
 }
 
+/// `universe:address`, because `1.5` reads as a number and `1:5` reads as an
+/// address — and `1.5–12` reads as neither.
 fn collision_note(universe: u16, start: u16, end: u16) -> AnyElement {
     let text = if start == end {
-        format!("Collision at {universe}.{start}")
+        format!("Collision at {universe}:{start}")
     } else {
-        format!("Collision at {universe}.{start}–{end}")
+        format!("Collision at {universe}:{start}–{end}")
     };
     div()
         .text_size(px(11.0))

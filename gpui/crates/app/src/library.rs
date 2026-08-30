@@ -2464,20 +2464,6 @@ impl Library {
         self.call("auto_patch", json!({ "venueId": venue_id }))
     }
 
-    /// Where the next `count` fixtures of `channels` channels each would go.
-    /// The only allocator anything on this page asks.
-    pub fn next_addresses(
-        &self,
-        venue_id: &str,
-        channels: i64,
-        count: usize,
-    ) -> impl Future<Output = Result<Vec<PatchAddress>, LibraryError>> + use<> {
-        self.call(
-            "next_addresses",
-            json!({ "venueId": venue_id, "run": null, "channels": channels, "count": count }),
-        )
-    }
-
     /// Patch `spec.count` unplaced copies, in one task.
     ///
     /// The allocator is asked once for the whole batch and then each row is

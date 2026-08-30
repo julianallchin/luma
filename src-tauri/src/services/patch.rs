@@ -47,11 +47,16 @@ pub enum PatchError {
     },
 
     /// Somebody is already there.
-    #[error("universe {universe} address {address} collides with {conflict}")]
+    ///
+    /// Both halves of the conflict are carried: the id is what a page selects
+    /// by, the label is what it reads out. Only the label reaches the sentence
+    /// — a uuid on screen names nothing a person can look for.
+    #[error("universe {universe} address {address} collides with {conflict_label}")]
     Collision {
         universe: u16,
         address: u16,
-        conflict: String,
+        conflict_id: String,
+        conflict_label: String,
     },
 
     /// Anything the database said no to.
@@ -192,54 +197,102 @@ pub async fn next_addresses(
 // Refusing
 // ---------------------------------------------------------------------------
 
-/// What is patched where, read straight from the rows.
+/// What is patched where, and what each one is called.
 ///
 /// Built from the database rather than from an allocation on purpose: a
 /// collision is a property of what is *stored*, and asking the allocator would
 /// only ever describe a patch nobody has written yet.
 ///
-/// # Errors
-/// Fails if the patch cannot be read.
-pub async fn occupancy(access: &mut impl AuthorizedVenue) -> Result<Occupancy, String> {
-    let rows = fixtures_db::get_patched_fixtures(access).await?;
-    Ok(Occupancy::of(rows.iter().filter_map(|row| {
-        footprint_of(row).map(|f| (f, row.id.clone()))
-    })))
+/// The names ride with the footprints rather than being looked up beside them,
+/// so a refusal cannot name a fixture from a different read of the table than
+/// the one that found the conflict.
+#[derive(Debug, Clone)]
+pub struct Patched {
+    occupancy: Occupancy,
+    names: std::collections::HashMap<String, String>,
 }
 
-/// Admit an address, or say why not.
-///
-/// `mover` is the fixture being addressed, so re-addressing a fixture to where
-/// it already is does not collide with itself. `None` for a fixture that does
-/// not exist yet.
+impl Patched {
+    /// The stored footprints and names of `rows`.
+    pub(crate) fn of(rows: &[PatchedFixture]) -> Self {
+        Self {
+            occupancy: Occupancy::of(
+                rows.iter()
+                    .filter_map(|row| footprint_of(row).map(|f| (f, row.id.clone()))),
+            ),
+            names: rows
+                .iter()
+                .map(|row| (row.id.clone(), display_name(row)))
+                .collect(),
+        }
+    }
+
+    /// Admit an address, or say why not.
+    ///
+    /// `mover` is the fixture being addressed, so re-addressing a fixture to
+    /// where it already is does not collide with itself. `None` for a fixture
+    /// that does not exist yet.
+    ///
+    /// # Errors
+    /// [`PatchError::OutOfRange`] if the footprint leaves the universe,
+    /// [`PatchError::Collision`] if something is already there.
+    pub fn admit(
+        &self,
+        mover: Option<&str>,
+        universe: u16,
+        address: u16,
+        channels: u16,
+    ) -> Result<Footprint, PatchError> {
+        let footprint =
+            Footprint::new(universe, address, channels).ok_or(PatchError::OutOfRange {
+                universe,
+                address,
+                channels,
+            })?;
+        let mut free = self.occupancy.clone();
+        if let Some(mover) = mover {
+            free.release(mover);
+        }
+        match free.conflict(&footprint) {
+            Some(conflict) => Err(PatchError::Collision {
+                universe,
+                address,
+                conflict_label: self.name(conflict),
+                conflict_id: conflict.to_string(),
+            }),
+            None => Ok(footprint),
+        }
+    }
+
+    /// What a fixture is called, or its id when the patch no longer holds it —
+    /// which is not a state a refusal can be in, and not one worth a `Result`.
+    fn name(&self, id: &str) -> String {
+        self.names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    /// Whatever already covers `footprint`, if anything.
+    pub fn conflict(&self, footprint: &Footprint) -> Option<&str> {
+        self.occupancy.conflict(footprint)
+    }
+}
+
+/// What a fixture is called on a page, by the one rule both halves use: the
+/// hand-given label, else the model it was patched from.
+fn display_name(row: &PatchedFixture) -> String {
+    row.label.clone().unwrap_or_else(|| row.model.clone())
+}
+
+/// What is patched where, read straight from the rows.
 ///
 /// # Errors
-/// [`PatchError::OutOfRange`] if the footprint leaves the universe,
-/// [`PatchError::Collision`] if something is already there.
-pub fn admit(
-    occupancy: &Occupancy,
-    mover: Option<&str>,
-    universe: u16,
-    address: u16,
-    channels: u16,
-) -> Result<Footprint, PatchError> {
-    let footprint = Footprint::new(universe, address, channels).ok_or(PatchError::OutOfRange {
-        universe,
-        address,
-        channels,
-    })?;
-    let mut free = occupancy.clone();
-    if let Some(mover) = mover {
-        free.release(mover);
-    }
-    match free.conflict(&footprint) {
-        Some(conflict) => Err(PatchError::Collision {
-            universe,
-            address,
-            conflict: conflict.to_string(),
-        }),
-        None => Ok(footprint),
-    }
+/// Fails if the patch cannot be read.
+pub async fn occupancy(access: &mut impl AuthorizedVenue) -> Result<Patched, String> {
+    Ok(Patched::of(
+        &fixtures_db::get_patched_fixtures(access).await?,
+    ))
 }
 
 /// Set one fixture's address by hand, and pin it there.
@@ -262,11 +315,7 @@ pub async fn set_address(
         .ok_or_else(|| PatchError::Database(format!("no fixture {id} in this venue")))?;
     let channels = u16::try_from(row.num_channels).unwrap_or(u16::MAX);
 
-    let occupancy = Occupancy::of(
-        rows.iter()
-            .filter_map(|row| footprint_of(row).map(|f| (f, row.id.clone()))),
-    );
-    let footprint = admit(&occupancy, Some(id), universe, address, channels)?;
+    let footprint = Patched::of(&rows).admit(Some(id), universe, address, channels)?;
 
     fixtures_db::update_fixture_address(
         access,
@@ -341,13 +390,9 @@ pub async fn set_mode(
         })?;
     let channels = u16::try_from(mode.channels.len()).unwrap_or(u16::MAX);
 
-    let occupancy = Occupancy::of(
-        rows.iter()
-            .filter_map(|row| footprint_of(row).map(|f| (f, row.id.clone()))),
-    );
     let universe = u16::try_from(row.universe).unwrap_or(u16::MAX);
     let address = u16::try_from(row.address).unwrap_or(u16::MAX);
-    let footprint = match admit(&occupancy, Some(id), universe, address, channels) {
+    let footprint = match Patched::of(&rows).admit(Some(id), universe, address, channels) {
         Ok(footprint) => footprint,
         Err(refusal) if !allow_move => return Err(refusal),
         // The allocator, not a local scan: `next_addresses` is the one place
@@ -391,11 +436,8 @@ pub async fn universe_occupancy(
     universe: u16,
 ) -> Result<Vec<UniverseCell>, String> {
     let rows = fixtures_db::get_patched_fixtures(access).await?;
-    let occupancy = Occupancy::of(
-        rows.iter()
-            .filter_map(|row| footprint_of(row).map(|f| (f, row.id.clone()))),
-    );
-    Ok(occupancy
+    Ok(Patched::of(&rows)
+        .occupancy
         .cells(universe)
         .iter()
         .enumerate()
@@ -416,7 +458,7 @@ pub async fn universe_occupancy(
 /// # Errors
 /// Fails if the patch cannot be read.
 pub async fn universes_in_use(access: &mut impl AuthorizedVenue) -> Result<Vec<u16>, String> {
-    Ok(occupancy(access).await?.universes().collect())
+    Ok(occupancy(access).await?.occupancy.universes().collect())
 }
 
 #[cfg(test)]

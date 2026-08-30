@@ -764,7 +764,7 @@ mod tests {
         };
         let none = NewTabPrerequisites::default();
         assert_eq!(
-            reason(&none, NewTabChoice::Universe),
+            reason(&none, NewTabChoice::Patch),
             Some("Select a venue first")
         );
         assert_eq!(
@@ -784,7 +784,7 @@ mod tests {
             venue: Some("v".into()),
             ..Default::default()
         };
-        assert_eq!(reason(&venue, NewTabChoice::Universe), None);
+        assert_eq!(reason(&venue, NewTabChoice::Patch), None);
         assert_eq!(reason(&venue, NewTabChoice::Stage), None);
         assert_eq!(
             reason(&venue, NewTabChoice::Track),
