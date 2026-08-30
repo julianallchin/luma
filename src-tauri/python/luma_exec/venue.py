@@ -8,7 +8,7 @@ back a `StageImage`.
 
     luma.venue.render()                              # front, t=0
     luma.venue.render(view="dj", t=64.0)             # the operator's own view
-    luma.venue.render(view="pov:mover-3")            # through one head's lens
+    luma.venue.render(aim_arrows=False)              # drop the aim overlay
     luma.venue.render(highlight="moving_spots")      # light only those heads
     shot = luma.venue.render(view="overhead")
     Image.open(shot.path)                            # the PNG on disk
@@ -23,7 +23,7 @@ Host call
 ``venue.render`` receives::
 
     {"view": str, "t": float, "width": int, "height": int,
-     "highlight": str | None}
+     "highlight": str | None, "aimArrows": bool}
 
 and returns::
 
@@ -50,6 +50,10 @@ DEFAULT_VIEW = "front"
 DEFAULT_WIDTH = 960
 DEFAULT_HEIGHT = 540
 DEFAULT_CELL_M = 0.5
+#: Aim arrows are on by default here and nowhere else: this is the channel an
+#: agent verifies a patch through, and a picture that does not say which way the
+#: heads point cannot answer "is this rig aimed the way I asked".
+DEFAULT_AIM_ARROWS = True
 
 
 class VenueHostUnavailableError(RuntimeError):
@@ -173,6 +177,7 @@ class Venue:
         width: int = DEFAULT_WIDTH,
         height: int = DEFAULT_HEIGHT,
         highlight: str | None = None,
+        aim_arrows: bool = DEFAULT_AIM_ARROWS,
     ) -> StageImage:
         """Render the stage at `t` seconds and return the resulting figure.
 
@@ -187,6 +192,11 @@ class Venue:
         the picture is the answer to "which fixtures is this?". The score at `t`
         is not drawn; `t` still only picks the moment, and the view still picks
         the camera.
+
+        `aim_arrows` draws an arrow out of every head along the beam it leaves
+        at rest, whatever the score is doing. On by default: an aim is the half
+        of a patch a photograph of a dark room cannot show. Turn it off for a
+        picture of the light itself.
 
         Raises `LumaHostCallError` if `t` is not finite or a frame side is
         under one pixel.
@@ -207,6 +217,7 @@ class Venue:
                 "width": width,
                 "height": height,
                 "highlight": None if highlight is None else str(highlight),
+                "aimArrows": bool(aim_arrows),
             },
         )
         shot = StageImage(

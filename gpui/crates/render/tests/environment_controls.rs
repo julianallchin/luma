@@ -17,9 +17,9 @@ fn scene(render: RenderSettings, pieces: Vec<Piece>) -> Scene {
         camera: CameraPose {
             position: [4.5, 3.0, 5.0],
             target: [0.0, 0.8, 0.0],
-            pov: None,
         },
         editing: false,
+        aim_arrows: false,
         render,
         selected_fixture_ids: Vec::new(),
         editor: Default::default(),
@@ -287,9 +287,9 @@ fn gpu_far_cascade_keeps_directional_occlusion() {
             camera: CameraPose {
                 position: [0.0, -80.0, 20.0],
                 target: [0.0, 0.0, 0.0],
-                pov: None,
             },
             editing: false,
+            aim_arrows: false,
             render,
             selected_fixture_ids: Vec::new(),
             editor: Default::default(),

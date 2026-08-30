@@ -47,9 +47,9 @@ fn frame() -> Frame {
         camera: CameraPose {
             position: [4.5, 3.0, 5.0],
             target: [0.0, 0.8, 0.0],
-            pov: None,
         },
         editing: false,
+        aim_arrows: false,
         render,
         selected_fixture_ids: Vec::new(),
         editor: Default::default(),

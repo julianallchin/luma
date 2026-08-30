@@ -213,9 +213,9 @@ fn material_scenes() -> Vec<Scene> {
             camera: CameraPose {
                 position: [4.5, 3.0, 7.5],
                 target: [0.0, 0.0, 0.0],
-                pov: None,
             },
             editing: false,
+            aim_arrows: false,
             render,
             selected_fixture_ids: Vec::new(),
             editor: Default::default(),
@@ -280,6 +280,7 @@ fn truss_bench(id: &str, camera: CameraPose, pieces: Vec<Piece>) -> Scene {
         times: vec![TIME],
         camera,
         editing: false,
+        aim_arrows: false,
         editor: Default::default(),
         render,
         selected_fixture_ids: Vec::new(),
@@ -332,7 +333,6 @@ fn truss_scene() -> Scene {
         CameraPose {
             position: [0.0, 0.95, 2.7],
             target: [0.0, 0.95, 0.0],
-            pov: None,
         },
         vec![
             Piece {
@@ -380,7 +380,6 @@ fn corner_scene() -> Scene {
         CameraPose {
             position: [0.0, 1.25, 1.85],
             target: [0.0, 0.9, 0.0],
-            pov: None,
         },
         vec![
             Piece {
@@ -461,7 +460,6 @@ fn joint_scene() -> Scene {
         CameraPose {
             position: [0.0, 3.0, 3.5],
             target: [0.0, 0.75, 0.0],
-            pov: None,
         },
         pieces,
     )
@@ -490,7 +488,6 @@ fn hinge_scene() -> Scene {
         CameraPose {
             position: [0.0, 1.68, 1.95],
             target: [0.0, 0.9, 0.0],
-            pov: None,
         },
         pieces,
     )
@@ -519,9 +516,9 @@ fn shadow_scene(id: &str, shadow_softness: f32) -> Scene {
         camera: CameraPose {
             position: [6.5, 4.0, 8.5],
             target: [0.0, 0.8, 0.0],
-            pov: None,
         },
         editing: false,
+        aim_arrows: false,
         render,
         selected_fixture_ids: Vec::new(),
         editor: Default::default(),
