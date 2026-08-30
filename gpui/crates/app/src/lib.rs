@@ -49,6 +49,7 @@ mod patterns;
 mod settings;
 mod shell;
 mod signin;
+mod stage;
 mod subagents;
 mod tab_chrome;
 mod tabs;
@@ -416,6 +417,10 @@ impl Render for Luma {
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleVisualizer, _, cx| this.toggle_visualizer(cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &keymap::DuplicateSubtree, _, cx| this.stage_duplicate(cx)),
+            )
+            .on_action(cx.listener(|this, _: &keymap::CancelBuild, _, cx| this.stage_cancel(cx)))
             .on_action(cx.listener(|this, _: &keymap::ToggleSidebar, _, cx| {
                 this.sidebar_hidden = !this.sidebar_hidden;
                 cx.notify();
