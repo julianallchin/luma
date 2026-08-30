@@ -31,6 +31,7 @@
 //! [`Pacing`] for why that measurement has to exist beside the GPU timings
 //! rather than instead of them.
 
+use crate::share::Surface;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -140,74 +141,6 @@ pub const LIVE_SUBFRAMES: u32 = 2;
 /// The goldens pin it at `1.0`, so the export image is untouched.
 pub const LIVE_HAZE_RESOLUTION: f32 = 0.5;
 
-/// A frame's memory, addressable by the window compositor.
-///
-/// `core-video`'s `CVPixelBuffer` is not `Send` — its binding is a raw pointer
-/// — but the object behind it is a CoreFoundation type backed by an
-/// `IOSurface`, which Apple documents as shareable across threads *and*
-/// processes. Sending one from the renderer thread to the UI thread is the
-/// modest end of what it is for. This newtype is where that reasoning lives, so
-/// no call site has to repeat it.
-#[cfg(target_os = "macos")]
-#[derive(Clone)]
-pub struct Surface(core_video::pixel_buffer::CVPixelBuffer);
-
-// SAFETY: retain, release and the `IOSurface` backing are all thread-safe; the
-// pointer is the only reason the binding is not `Send` already.
-#[cfg(target_os = "macos")]
-unsafe impl Send for Surface {}
-
-#[cfg(target_os = "macos")]
-impl Surface {
-    pub(crate) fn new(buffer: core_video::pixel_buffer::CVPixelBuffer) -> Self {
-        Self(buffer)
-    }
-
-    /// A retained handle for the compositor to paint.
-    #[must_use]
-    pub fn pixel_buffer(&self) -> core_video::pixel_buffer::CVPixelBuffer {
-        self.0.clone()
-    }
-
-    /// Copy the texels out, unpadded.
-    ///
-    /// The surface's rows are aligned for the display hardware, so this is a
-    /// per-row copy rather than one memcpy.
-    fn to_bytes(&self) -> Vec<u8> {
-        use core_foundation::base::TCFType;
-        use core_video::pixel_buffer::{
-            CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
-            CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferUnlockBaseAddress,
-        };
-        /// `kCVPixelBufferLock_ReadOnly`.
-        const READ_ONLY: u64 = 1;
-
-        // SAFETY: the buffer is alive for this borrow; lock and unlock are
-        // balanced and the base address is valid between them, which is the
-        // whole contract of the lock.
-        unsafe {
-            let raw = self.0.as_concrete_TypeRef();
-            let width = CVPixelBufferGetWidth(raw);
-            let height = CVPixelBufferGetHeight(raw);
-            let row_bytes = width * 4;
-            if CVPixelBufferLockBaseAddress(raw, READ_ONLY) != 0 {
-                return Vec::new();
-            }
-            let stride = CVPixelBufferGetBytesPerRow(raw);
-            let base: *const u8 = CVPixelBufferGetBaseAddress(raw).cast();
-            let mut pixels = Vec::with_capacity(row_bytes * height);
-            for row in 0..height {
-                pixels.extend_from_slice(std::slice::from_raw_parts(
-                    base.add(row * stride),
-                    row_bytes,
-                ));
-            }
-            CVPixelBufferUnlockBaseAddress(raw, READ_ONLY);
-            pixels
-        }
-    }
-}
-
 /// Where a finished frame's pixels are.
 ///
 /// The two are the same picture, and a caller that only paints it need not care
@@ -219,7 +152,6 @@ pub enum Presented {
     Pixels(Vec<u8>),
     /// Memory the window compositor can address directly, holding the same
     /// BGRA8 texels. Retained, so it outlives the viewport that drew it.
-    #[cfg(target_os = "macos")]
     Shared(Surface),
 }
 
@@ -234,7 +166,6 @@ impl Presented {
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
             Self::Pixels(pixels) => pixels.clone(),
-            #[cfg(target_os = "macos")]
             Self::Shared(surface) => surface.to_bytes(),
         }
     }
@@ -244,7 +175,6 @@ impl Presented {
     pub fn into_pixels(self) -> Option<Vec<u8>> {
         match self {
             Self::Pixels(pixels) => Some(pixels),
-            #[cfg(target_os = "macos")]
             Self::Shared(_) => None,
         }
     }

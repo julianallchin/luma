@@ -120,6 +120,11 @@ pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
 pub use spring::*;
+/// The `wgpu` vocabulary [`Window::paint_surface`], [`PaintSurface`] and
+/// [`Window::wgpu_device`] speak, re-exported for the same reason as
+/// `core_video` above.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub use wgpu;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].
 ///
@@ -346,6 +351,26 @@ where
         self.borrow_mut().default_global::<G>();
         self.update_global(f)
     }
+}
+
+/// A `gpui_wgpu` compositor's device, for a renderer that wants to draw on it.
+///
+/// Everything here is a shared handle: cloning it neither creates nor owns a
+/// device. `lost` is set by the driver's device-lost callback and stays set —
+/// a holder that sees it should ask its window for a fresh handle rather than
+/// keep submitting to a device that will never answer.
+// LUMA LOCAL EDIT: not upstream.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[derive(Clone, Debug)]
+pub struct WgpuDevice {
+    /// The compositor's device.
+    pub device: std::sync::Arc<wgpu::Device>,
+    /// Its one queue.
+    pub queue: std::sync::Arc<wgpu::Queue>,
+    /// The adapter the device was requested from.
+    pub adapter: wgpu::Adapter,
+    /// Whether the driver has reported the device lost.
+    pub lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Information about the GPU GPUI is running on.
