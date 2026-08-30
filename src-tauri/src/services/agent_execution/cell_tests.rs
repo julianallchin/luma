@@ -1142,3 +1142,213 @@ async fn cancelling_a_thread_interrupts_its_busy_cell() {
 
     f.service.shutdown_all();
 }
+
+// ---------------------------------------------------------------------------
+// B6 — the venue facade builds a rig
+// ---------------------------------------------------------------------------
+
+/// A real definition, because `distribute` reads its QLC+ physical block: the
+/// Rogue R2 Spot is 343 mm across, so two of them claim 0.686 m and a 3 m tower
+/// face holds them with room to spare.
+const MOVER: &str = "Chauvet/Chauvet-Rogue-R2-Spot.qxf";
+const MOVER_MODE: &str = "18 Channel";
+/// A measured GLB, because the socket supply is real geometry and a stub would
+/// pin half the answer.
+const DECK: &str = "stage_lab/stage_praticavel_2x1x1.glb";
+/// The generated stick. Its two `TrussEnd`s are the only self-mating sockets in
+/// this catalog, so they are what "open end" and "the gap" are measured on.
+const TRUSS: &str = "truss/straight";
+
+impl Fixture {
+    /// An empty room, and a `venue_rig` thread pinned to it.
+    ///
+    /// Empty on purpose: the acceptance is that a *program* builds the rig, so
+    /// anything seeded here would be a piece the program did not put there.
+    async fn empty_venue(&self) -> (String, String) {
+        let venue_id = format!("ven-empty-{}", uuid::Uuid::new_v4());
+        sqlx::query("INSERT INTO venues (id, name) VALUES (?, 'Empty Room')")
+            .bind(&venue_id)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        crate::database::local::auth::arm_write_admission(&self.pool, None)
+            .await
+            .unwrap();
+        let thread = crate::database::local::agent_threads::create_thread(
+            &self.pool,
+            CreateAgentThreadInput {
+                agent_kind: "venue_rig".to_string(),
+                subject_kind: Some("venue".into()),
+                subject_id: Some(venue_id.clone()),
+                venue_id: Some(venue_id.clone()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("create venue thread")
+        .id;
+        (venue_id, thread)
+    }
+
+    async fn run_in_venue(&self, thread_id: &str, venue_id: &str, code: &str) -> PythonCellResult {
+        self.run_scoped(
+            thread_id,
+            code,
+            PythonScopeInput {
+                venue_id: Some(venue_id.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+}
+
+/// One program builds a whole rig out of an empty room, and reads back what it
+/// built through the same three channels the stage page draws from.
+///
+/// Nothing below is mocked: the manifest is assembled from this database, the
+/// worker loads it, and every verb is one call into `services::stage_ops` —
+/// the module `dispatch::handlers::stage` calls for the human page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_python_program_builds_a_rig_from_an_empty_venue() {
+    let Some(f) = Fixture::new("venue facade").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+catalog = luma.venue.catalog()
+
+# A deck on the room's floor, and a tower up out of each of its front corners.
+deck = luma.venue.place(DECK, at=(0.0, 0.0), label="Deck")
+left = luma.venue.extend(deck, "corner_fl", 3.0)
+right = luma.venue.extend(deck, "corner_fr", 3.0)
+
+# Two sticks lying on the floor with their ends facing each other, so there is
+# a measured gap in the room to bridge and to overrun.
+a = luma.venue.place(TRUSS, at=(-3.0, 3.0), span=2.0, label="A")
+b = luma.venue.place(TRUSS, at=(3.0, 3.0), span=2.0, label="B")
+gap = luma.venue.reach(a, "end_b")
+
+# Movers on the downstage face of each tower. `distribute` is the only way a
+# fixture is ever created.
+rows = [
+    luma.venue.distribute(tower, "face_-z", MOVER, 2, mode=MODE, label=name)
+    for tower, name in ((left, "left"), (right, "right"))
+]
+
+(
+    len(catalog.pieces) > 0,
+    deck.placed and left.placed and right.placed,
+    None if gap is None else round(gap.gap_m, 2),
+    [r.ok for r in rows],
+    len(luma.venue.unplaced()),
+    sorted(f"{d.node_id}.{d.socket}" for d in luma.venue.dangling()).count(a.node_id + ".end_b"),
+)
+"#
+            .replace("DECK", &format!("{DECK:?}"))
+            .replace("TRUSS", &format!("{TRUSS:?}"))
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}"))
+            .as_str(),
+        )
+        .await;
+    expect_ok(&out, "build the rig");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert!(
+        repr.starts_with("(True, True, 4.0, [True, True], 0, 1)"),
+        "the rig did not come out as asked: {repr}\n{}",
+        out.stdout
+    );
+
+    // The tree names the relations, and the map draws the room. Two channels,
+    // one solve apiece — and the four movers exist only because `distribute`
+    // put them there.
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "tree = luma.venue.describe()\n\
+             plan = luma.venue.tiles()\n\
+             (tree.count('  run  truss/straight'), tree.count('fixture'), \
+              'unplaced: none' in tree, len(plan.splitlines()) > 3)",
+        )
+        .await;
+    expect_ok(&out, "describe the rig");
+    assert_eq!(
+        out.repr.as_deref(),
+        Some("(2, 4, True, True)"),
+        "{}",
+        out.stdout
+    );
+
+    f.service.shutdown_all();
+}
+
+/// The second of the design's two hard errors, from Python: an extend longer
+/// than the gap the ray measured is refused, changes nothing, and says by how
+/// much. Asking for exactly the gap bridges it and closes both ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_extend_past_the_measured_gap_is_refused() {
+    let Some(f) = Fixture::new("venue refusal").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            &r#"
+a = luma.venue.place(TRUSS, at=(-3.0, 0.0), span=2.0, label="A")
+b = luma.venue.place(TRUSS, at=(3.0, 0.0), span=2.0, label="B")
+gap = luma.venue.reach(a, "end_b").gap_m
+before = luma.venue.describe()
+try:
+    luma.venue.extend(a, "end_b", gap + 1.0)
+    refusal = None
+except luma.VenueRefused as error:
+    refusal = str(error)
+(gap, refusal, luma.venue.describe() == before)
+"#
+            .replace("TRUSS", &format!("{TRUSS:?}")),
+        )
+        .await;
+    expect_ok(&out, "refused extend");
+    let repr = out.repr.clone().unwrap_or_default();
+    assert!(
+        repr.starts_with("(4.0, '5.00 m is longer than the 4.00 m gap"),
+        "the refusal did not measure the room: {repr}"
+    );
+    assert!(
+        repr.ends_with("True)"),
+        "a refused extend changed the rig: {repr}"
+    );
+
+    // Exactly the gap bridges it: one edge, one far-end check, and neither end
+    // is dangling any more.
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            "bridge = luma.venue.extend(a, \"end_b\")\n\
+             open_ends = {f'{d.node_id}.{d.socket}' for d in luma.venue.dangling()}\n\
+             (bridge.placed, f'{a.node_id}.end_b' in open_ends, \
+              f'{b.node_id}.end_a' in open_ends, 'satisfied' in bridge.describe())",
+        )
+        .await;
+    expect_ok(&out, "bridging extend");
+    assert_eq!(
+        out.repr.as_deref(),
+        Some("(True, False, False, True)"),
+        "{}",
+        out.stdout
+    );
+
+    f.service.shutdown_all();
+}

@@ -49,13 +49,17 @@ use luma_scene::venue::{
 /// above.
 pub(crate) const SOCKET_MARK_PICK_PX: f32 = 11.0;
 
-/// The step a truss span is quantized to, in metres. The generator quantizes
-/// to whole panels of its own; this is the step the *builder* offers, and the
-/// design doc names it.
-pub(crate) const LENGTH_STEP_M: f64 = 0.5;
-
-/// What a ray that hit nothing leaves in front of the cursor.
-pub(crate) const STUB_LENGTH_M: f64 = 0.5;
+/// The build vocabulary the page shares with the verbs, re-exported so this
+/// module reads as one alphabet.
+///
+/// None of it is declared here: an extend's step, its stub and the stick it
+/// runs are all `stage_ops`', because the page and the Python facade call the
+/// same verb, and a second copy of the step would let a length the builder
+/// offered be refused by the command it offered it to.
+pub(crate) use luma_lib::models::venue_graph::Reach;
+pub(crate) use luma_lib::services::stage_ops::{
+    quantize, LENGTH_STEP_M, STUB_LENGTH_M, TRUSS_STRAIGHT,
+};
 
 /// The floor grid, in metres — the ladder's third rung, and the reason it is
 /// called a grid rather than a plane.
@@ -363,13 +367,6 @@ impl Extending {
         })
     }
 
-    /// Whether this length bridges the gap exactly, and therefore owes a
-    /// far-end constraint on the socket it reaches.
-    pub(crate) fn bridges(&self) -> Option<&Reach> {
-        let reach = self.reach.as_ref()?;
-        ((self.length_m - reach.gap_m).abs() <= f64::EPSILON.max(1e-6)).then_some(reach)
-    }
-
     /// The measurement readout: the gap the ray found, with feet as the small
     /// print. Feet are display-only — nothing in the model is ever imperial.
     ///
@@ -380,16 +377,6 @@ impl Extending {
         let reach = self.reach.as_ref()?;
         Some(format!("Gap: {:.2} m", reach.gap_m))
     }
-}
-
-/// What an extend ray met.
-#[derive(Debug, Clone)]
-pub(crate) struct Reach {
-    pub(crate) node: String,
-    pub(crate) socket: String,
-    /// Centre-to-centre distance between the two socket points, quantized down
-    /// to a buildable span.
-    pub(crate) gap_m: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -730,64 +717,6 @@ impl Room {
                     .total_cmp(&b.normal.dot(luma_scene::snap::WORLD_UP))
             })
     }
-
-    /// Cast along a socket's outward normal and report the first open,
-    /// compatible socket it reaches.
-    ///
-    /// A *socket* search, not a mesh raycast: what the extend gesture wants to
-    /// know is where the run could end, and the answer is a joint, not a
-    /// triangle. Candidates must lie ahead of the origin along the normal and
-    /// within [`RAY_HALF_WIDTH_M`] of the line, which is the section's own
-    /// half-width — a truss that would miss by more than its own width is not
-    /// on the way to anywhere.
-    pub(crate) fn cast(&self, from_node: &str, from_socket: &str) -> Option<Reach> {
-        let origin = self.socket_world(from_node, from_socket)?;
-        let socket = self.socket(from_node, from_socket)?;
-        let pose = self.pose(from_node)?;
-        let direction = pose.transform_vector3(socket.normal).normalize_or_zero();
-        let mut best: Option<Reach> = None;
-        for (node, candidate) in self.open_sockets() {
-            if node == from_node || !candidate.socket_type.mates(socket.socket_type) {
-                continue;
-            }
-            let Some(at) = self.socket_world(node, &candidate.name) else {
-                continue;
-            };
-            let along = (at - origin).dot(direction);
-            if along <= LENGTH_STEP_M {
-                continue;
-            }
-            if (at - origin - direction * along).length() > RAY_HALF_WIDTH_M {
-                continue;
-            }
-            let gap_m = quantize_down(along);
-            if gap_m < LENGTH_STEP_M {
-                continue;
-            }
-            if best.as_ref().is_none_or(|b| gap_m < b.gap_m) {
-                best = Some(Reach {
-                    node: node.to_string(),
-                    socket: candidate.name.clone(),
-                    gap_m,
-                });
-            }
-        }
-        best
-    }
-}
-
-/// How far off the ray's line a socket may sit and still count as on the way:
-/// the truss section's own half-width.
-const RAY_HALF_WIDTH_M: f64 = 0.15;
-
-/// The largest buildable length no greater than `metres`.
-pub(crate) fn quantize_down(metres: f64) -> f64 {
-    (metres / LENGTH_STEP_M).floor() * LENGTH_STEP_M
-}
-
-/// The nearest buildable length.
-pub(crate) fn quantize(metres: f64) -> f64 {
-    (metres / LENGTH_STEP_M).round().max(1.0) * LENGTH_STEP_M
 }
 
 /// Metres as feet and inches, for the small print under a measurement. Display
@@ -836,44 +765,10 @@ pub(crate) fn footing_for(catalog_ref: &str, tower: bool) -> Option<&'static str
     }
 }
 
-/// The catalog id of the straight generator — the piece a tower is made of.
-pub(crate) const TRUSS_STRAIGHT: &str = "truss/straight";
-
 /// Whether a socket can host something — used to decide which beads light up
 /// while a piece is held.
 pub(crate) fn can_host(socket: &ResolvedSocket) -> bool {
     socket.socket_type.polarity().can_host() && socket.socket_type != SocketType::Grab
-}
-
-/// The socket on the other hand.
-///
-/// A **mirror**, spelled in the catalog's own names. Flipping a wing means
-/// every relation inside it meets the room's other side, and the catalog
-/// already says which side each socket is on: a deck's `corner_fl` faces
-/// `corner_fr`, its `edge_left` faces `edge_right`, and a stick's `face_-z`
-/// faces `face_+z`. A name with no side is its own mirror — a truss end and a
-/// deck top are the same joint whichever way round the wing is.
-///
-/// The design doc forbids `mirror` as a *node kind* and as an *op*, and this is
-/// neither: it is how `duplicate(flip=True)` spells itself in the one
-/// vocabulary the graph already has, so the copy is ordinary rows that any
-/// other verb can edit afterwards.
-pub(crate) fn mirror_socket(name: &str) -> String {
-    const PAIRS: [(&str, &str); 4] = [
-        ("_fl", "_fr"),
-        ("_bl", "_br"),
-        ("left", "right"),
-        ("-z", "+z"),
-    ];
-    for (a, b) in PAIRS {
-        if name.contains(a) {
-            return name.replace(a, b);
-        }
-        if name.contains(b) {
-            return name.replace(b, a);
-        }
-    }
-    name.to_string()
 }
 
 /// Whether a socket is something a row of fixtures can be spread along.
@@ -902,12 +797,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_length_longer_than_the_gap_is_refused_and_an_equal_one_bridges() {
+    fn a_length_longer_than_the_gap_is_refused_and_an_equal_one_is_not() {
         let run = Extending {
             from_node: "a".into(),
             from_socket: "end_b".into(),
             reach: Some(Reach {
-                node: "b".into(),
+                node_id: "b".into(),
                 socket: "end_a".into(),
                 gap_m: 3.0,
             }),
@@ -918,23 +813,15 @@ mod tests {
             length_m: 3.0,
             ..run
         };
-        assert!(exact.refused().is_none());
-        assert_eq!(exact.bridges().map(|r| r.node.clone()), Some("b".into()));
+        assert!(exact.refused().is_none(), "exactly the gap bridges it");
         let stub = Extending {
             length_m: 1.5,
             ..exact
         };
         assert!(stub.refused().is_none(), "a stub is not a refusal");
-        assert!(stub.bridges().is_none(), "a stub owes no far end");
-    }
-
-    #[test]
-    fn lengths_are_quantized_to_the_half_metre() {
-        assert!((quantize(3.2) - 3.0).abs() < 1e-9);
-        assert!((quantize(3.3) - 3.5).abs() < 1e-9);
-        assert!((quantize_down(3.4) - 3.0).abs() < 1e-9);
-        // Never zero: a run of no length is not a run.
-        assert!((quantize(0.1) - 0.5).abs() < 1e-9);
+        // What a bridge *owes* — the far-end check on the socket it reached —
+        // is `stage_ops::Stage::extend`'s, not this card's: the page shows a
+        // length and the verb decides what that length means.
     }
 
     #[test]
@@ -958,25 +845,5 @@ mod tests {
             Room::seat_socket(&sockets).map(|s| s.name.as_str()),
             Some("bottom")
         );
-    }
-}
-
-#[cfg(test)]
-mod mirror_tests {
-    use super::mirror_socket;
-
-    #[test]
-    fn a_side_is_swapped_and_a_sideless_socket_is_its_own_mirror() {
-        assert_eq!(mirror_socket("corner_fl"), "corner_fr");
-        assert_eq!(mirror_socket("corner_fr"), "corner_fl");
-        assert_eq!(mirror_socket("edge_left"), "edge_right");
-        assert_eq!(mirror_socket("face_-z"), "face_+z");
-        // A truss end and a deck top have no side to swap.
-        assert_eq!(mirror_socket("end_a"), "end_a");
-        assert_eq!(mirror_socket("top"), "top");
-        // The mirror is its own inverse.
-        for name in ["corner_bl", "edge_right", "face_+z", "seat"] {
-            assert_eq!(mirror_socket(&mirror_socket(name)), name);
-        }
     }
 }

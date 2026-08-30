@@ -48,6 +48,8 @@ from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 
+from .host_errors import VenueRefused
+
 # ---------------------------------------------------------------------------
 # constants
 # ---------------------------------------------------------------------------
@@ -630,6 +632,11 @@ class LumaNamespace(LumaRecord):
     """The root `luma` object installed into the user namespace before each cell."""
 
     __slots__ = ("manifest", "store")
+
+    #: The one exception a `luma.venue` verb raises. A class attribute rather
+    #: than a binding, so it is reachable on an empty namespace and does not
+    #: show up in `catalog()` as a thing to read.
+    VenueRefused = VenueRefused
 
     def __init__(
         self,

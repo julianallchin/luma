@@ -8,6 +8,7 @@ Run directly with either the bundled environment or an ordinary Python::
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tempfile
@@ -24,7 +25,14 @@ sys.path.insert(0, str(PACKAGE_ROOT))
 from luma_exec.bindings import LumaRecord, build_namespace  # noqa: E402
 from luma_exec.figures import FigureSink  # noqa: E402
 from luma_exec.host_errors import LumaHostCallError  # noqa: E402
-from luma_exec.venue import Venue, VenueHostUnavailableError  # noqa: E402
+from luma_exec.host_errors import VenueRefused  # noqa: E402
+from luma_exec.venue import (  # noqa: E402
+    Catalog,
+    Distribution,
+    Placement,
+    Venue,
+    VenueHostUnavailableError,
+)
 
 VIEWS = ["front", "audience", "overhead", "quarter_left", "quarter_right", "dj"]
 
@@ -220,6 +228,297 @@ class VenueTilesTests(unittest.TestCase):
     def test_a_venue_with_no_host_says_so(self) -> None:
         with self.assertRaises(VenueHostUnavailableError):
             Venue(record(), workspace=self.workspace).tiles()
+
+
+# ---------------------------------------------------------------------------
+# The build verbs
+# ---------------------------------------------------------------------------
+
+CATALOG = {
+    "kinds": ["stage", "run", "tower", "piece", "fixture", "array"],
+    "rootSockets": ["floor", "rig"],
+    "lengthStepM": 0.5,
+    "pieces": [
+        {
+            "catalogRef": "truss/straight",
+            "name": "Truss",
+            "group": "Trusses",
+            "pieceKind": "truss",
+            "procedural": True,
+            "sockets": [
+                {
+                    "name": "grab",
+                    "socketType": "grab",
+                    "joint": "grab",
+                    "polarity": "male",
+                    "feature": False,
+                },
+                {
+                    "name": "end_a",
+                    "socketType": "truss_end",
+                    "joint": "truss_end",
+                    "polarity": "neutral",
+                    "feature": False,
+                },
+                {
+                    "name": "face_-y",
+                    "socketType": "truss_mount",
+                    "joint": "surface",
+                    "polarity": "female",
+                    "feature": True,
+                },
+            ],
+        }
+    ],
+}
+
+
+def placement(node_id: str = "n-1", tree: str = "root  venue\n") -> dict[str, Any]:
+    """The host's answer to every mutating verb: the resolver's own report, and
+    the tree it produced."""
+    return {
+        "placement": {
+            "nodeId": node_id,
+            "outcome": "placed",
+            "parentId": "root",
+            "warnings": [],
+            "dangling": [],
+            "constraints": [],
+            "venue": {},
+        },
+        "describe": tree,
+    }
+
+
+class BuildHost:
+    """The Rust `venue.*` verb contracts, minus the database.
+
+    Records what the facade sent, so the tests can assert on the *payload* —
+    which is where the facade's own work is: coercing nodes to ids, degrees to
+    radians, and keyword parameters to the graph's map of floats.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+        self.refuse: str | None = None
+
+    def __call__(self, method: str, payload: Any) -> Any:
+        self.calls.append((method, payload))
+        if self.refuse is not None:
+            raise LumaHostCallError("refused", self.refuse)
+        if method == "venue.catalog":
+            return {"catalog": CATALOG}
+        if method == "venue.describe":
+            return {"text": "root  venue\n"}
+        if method == "venue.open":
+            return {
+                "unplaced": [
+                    {
+                        "nodeId": "mover-9",
+                        "kind": "fixture",
+                        "label": "Spare",
+                        "descendants": 0,
+                    }
+                ],
+                "dangling": [
+                    {"nodeId": "run-1", "socket": "end_b", "socketType": "truss_end"}
+                ],
+            }
+        if method == "venue.reach":
+            return {"reach": {"nodeId": "run-2", "socket": "end_a", "gapM": 4.0}}
+        if method == "venue.remove":
+            return {"describe": "root  venue\n"}
+        if method == "venue.distribute":
+            return {
+                "report": {
+                    "hostNodeId": "run-1",
+                    "hostSocket": "face_-y",
+                    "fixtures": [{"id": "fix-1"}, {"id": "fix-2"}],
+                    "refusal": None,
+                    "warnings": [],
+                    "dangling": [],
+                    "unplaced": [],
+                },
+                "describe": "root  venue\n",
+            }
+        return placement()
+
+    def last(self, method: str) -> Any:
+        for name, payload in reversed(self.calls):
+            if name == method:
+                return payload
+        raise AssertionError(f"{method} was never called")
+
+
+class BuildTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workspace = Path(tempfile.mkdtemp(prefix="luma-venue-build-"))
+        self.host = BuildHost()
+        self.venue = Venue(record(), host_call=self.host, workspace=self.workspace)
+
+    # -- reads ----------------------------------------------------------
+
+    def test_the_catalog_is_the_hosts_answer_not_a_python_list(self) -> None:
+        catalog = self.venue.catalog()
+        self.assertIsInstance(catalog, Catalog)
+        self.assertIn("end_a", catalog.sockets("truss/straight"))
+        self.assertEqual(catalog.length_step_m, 0.5)
+        # The printable form is what an agent reads; it names every mating
+        # socket and hides the grab, which nothing can be bolted to.
+        text = str(catalog)
+        self.assertIn("truss/straight", text)
+        self.assertIn("end_a(n)", text)
+        self.assertNotIn("grab", text)
+
+    def test_unplaced_and_dangling_are_read_live(self) -> None:
+        """Not the cell's binding snapshot: a build script asks after it has
+        changed the room."""
+        unplaced = self.venue.unplaced()
+        self.assertEqual(unplaced[0].node_id, "mover-9")
+        self.assertEqual(unplaced[0].descendants, 0)
+        dangling = self.venue.dangling()
+        self.assertEqual(dangling[0].socket, "end_b")
+        self.assertEqual([name for name, _ in self.host.calls], ["venue.open", "venue.open"])
+
+    def test_reach_measures_before_an_extend_refuses(self) -> None:
+        reach = self.venue.reach("run-1", "end_b")
+        self.assertEqual(reach.gap_m, 4.0)
+        self.assertEqual(self.host.last("venue.reach")["nodeId"], "run-1")
+
+    # -- writes ---------------------------------------------------------
+
+    def test_place_sends_uv_and_radians_and_keeps_extra_params(self) -> None:
+        self.venue.place("truss/straight", at=(1.5, -2.0), yaw=90.0, span=4.0)
+        payload = self.host.last("venue.place")
+        self.assertEqual((payload["u"], payload["v"]), (1.5, -2.0))
+        self.assertAlmostEqual(payload["yaw"], math.pi / 2)
+        self.assertEqual(payload["params"], {"span": 4.0})
+        # Nothing named means the catalog decides both the surface and the
+        # footing — that is what keeps socket names out of the caller's head.
+        self.assertIsNone(payload["surfaceNodeId"])
+        self.assertIsNone(payload["mySocket"])
+
+    def test_a_placement_can_be_passed_straight_back_as_a_node(self) -> None:
+        deck = self.venue.place("truss/straight")
+        self.assertIsInstance(deck, Placement)
+        self.venue.attach("truss/straight", to=deck, socket="end_a")
+        self.assertEqual(self.host.last("venue.attach")["parentId"], deck.node_id)
+
+    def test_extend_without_a_length_asks_for_the_measured_gap(self) -> None:
+        self.venue.extend("run-1", "end_b")
+        self.assertIsNone(self.host.last("venue.extend")["lengthM"])
+        self.venue.extend("run-1", "end_b", 3.5)
+        self.assertEqual(self.host.last("venue.extend")["lengthM"], 3.5)
+
+    def test_a_refusal_is_its_own_exception_carrying_the_resolvers_message(self) -> None:
+        self.host.refuse = "5.00 m is longer than the 4.00 m gap"
+        with self.assertRaises(VenueRefused) as caught:
+            self.venue.extend("run-1", "end_b", 5.0)
+        self.assertEqual(str(caught.exception), "5.00 m is longer than the 4.00 m gap")
+        # Any other host failure keeps its own class: only a refusal means the
+        # call changed nothing.
+        self.host.refuse = None
+
+    def test_a_non_refusal_host_error_is_not_a_refusal(self) -> None:
+        def boom(_method: str, _payload: Any) -> Any:
+            raise LumaHostCallError("internal", "the database is gone")
+
+        venue = Venue(record(), host_call=boom, workspace=self.workspace)
+        with self.assertRaises(LumaHostCallError):
+            venue.detach("run-1")
+
+    def test_trim_converts_only_the_angle(self) -> None:
+        self.venue.trim("run-1", trim=6.0, yaw=45.0, span=3.0)
+        params = self.host.last("venue.params")["params"]
+        self.assertEqual(params["trim"], 6.0)
+        self.assertEqual(params["span"], 3.0)
+        self.assertAlmostEqual(params["yaw"], math.pi / 4)
+
+    def test_duplicate_carries_the_flip_through(self) -> None:
+        self.venue.duplicate("wing-1", to="deck-1", socket="corner_fr", flip=True)
+        payload = self.host.last("venue.duplicate")
+        self.assertEqual(payload["nodeId"], "wing-1")
+        self.assertTrue(payload["flip"])
+
+    def test_remove_answers_with_the_tree_that_is_left(self) -> None:
+        self.assertIn("venue", self.venue.remove("wing-1"))
+
+    def test_every_verb_hands_back_the_tree_it_produced(self) -> None:
+        """One solve, both channels — a program never asks twice what its own
+        call did."""
+        placed = self.venue.attach("truss/straight", to="deck-1", socket="corner_fl")
+        self.assertTrue(placed.placed)
+        self.assertIn("root  venue", placed.describe())
+        self.assertIn("root  venue", str(placed))
+
+    # -- distribute ------------------------------------------------------
+
+    def test_distribute_layouts_are_the_tagged_union_the_host_decodes(self) -> None:
+        self.venue.distribute("run-1", "face_-y", "a.qxf", 4, mode="8-Channel")
+        self.assertEqual(self.host.last("venue.distribute")["layout"], {"kind": "even"})
+        self.venue.distribute(
+            "run-1", "face_-y", "a.qxf", 4, mode="8-Channel", layout="spacing", spacing_m=0.75
+        )
+        self.assertEqual(
+            self.host.last("venue.distribute")["layout"],
+            {"kind": "spacing", "metres": 0.75},
+        )
+        self.venue.distribute(
+            "run-1", "face_-y", "a.qxf", 4, mode="8-Channel", layout="span", span=(0.1, 0.9)
+        )
+        self.assertEqual(
+            self.host.last("venue.distribute")["layout"],
+            {"kind": "span", "from": 0.1, "to": 0.9},
+        )
+
+    def test_a_layout_that_needs_a_number_refuses_before_the_host_sees_it(self) -> None:
+        for kwargs in ({"layout": "spacing"}, {"layout": "span"}, {"layout": "wat"}):
+            with self.assertRaises(LumaHostCallError):
+                self.venue.distribute("run-1", "f", "a.qxf", 2, mode="m", **kwargs)
+        self.assertEqual(self.host.calls, [])
+
+    def test_a_row_that_does_not_fit_is_a_report_not_an_exception(self) -> None:
+        def refused(_method: str, _payload: Any) -> Any:
+            return {
+                "report": {
+                    "hostNodeId": "run-1",
+                    "hostSocket": "face_-y",
+                    "fixtures": [],
+                    "refusal": {
+                        "kind": "tooLong",
+                        "neededM": 4.0,
+                        "availableM": 3.0,
+                        "extendNodeId": "run-1",
+                        "suggestion": "needs 4.00 m, the face is 3.00 m",
+                    },
+                    "warnings": [],
+                    "dangling": [],
+                    "unplaced": [],
+                },
+                "describe": "root  venue\n",
+            }
+
+        venue = Venue(record(), host_call=refused, workspace=self.workspace)
+        row = venue.distribute("run-1", "face_-y", "a.qxf", 12, mode="8-Channel")
+        self.assertIsInstance(row, Distribution)
+        self.assertFalse(row.ok)
+        self.assertEqual(row.needed_m, 4.0)
+        self.assertIn("4.00 m", row.message)
+        self.assertEqual(row.fixtures, ())
+
+    # -- no room ---------------------------------------------------------
+
+    def test_a_thread_with_no_venue_cannot_build(self) -> None:
+        venue = Venue(record(), workspace=self.workspace)
+        for call in (
+            venue.describe,
+            venue.dangling,
+            venue.unplaced,
+            lambda: venue.place("truss/straight"),
+            lambda: venue.detach("n"),
+        ):
+            with self.assertRaises(VenueHostUnavailableError):
+                call()
 
 
 class FigureCapTests(unittest.TestCase):

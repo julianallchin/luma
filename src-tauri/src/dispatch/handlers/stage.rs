@@ -1,25 +1,33 @@
 //! The venue graph across the host boundary.
 //!
-//! Six verbs and two reads. Every verb writes rows and then returns the whole
-//! solved venue ([`PlacementReport`]), because a graph edit moves everything
-//! bolted to what it touched: handing back the one row that changed would make
-//! every caller re-fetch, and a second fetch is a second solve of the same
-//! graph.
+//! Injection only. [`crate::services::stage_ops`] owns every verb; these
+//! wrappers do the two things it cannot — pull the pool and the fixtures root
+//! out of the host's [`AppServices`], and lower [`StageError`] into the one
+//! error vocabulary the wire carries. An agent's Python cell reaches the same
+//! `stage_ops` through `venue_host`, so the page and the facade are one
+//! implementation with two doors, not two implementations.
 //!
-//! Authorization is [`VenueAccess`] as everywhere else. Node ids are *not*
-//! authorization: every id a caller hands in is checked against the admitted
-//! venue by [`venue_graph_db::nodes_in_venue`] before it is written.
+//! Every verb returns the whole solved venue ([`PlacementReport`]), because a
+//! graph edit moves everything bolted to what it touched: handing back the one
+//! row that changed would make every caller re-fetch, and a second fetch is a
+//! second solve of the same graph.
+//!
+//! Authorization is [`crate::database::local::venue_access::VenueAccess`] as
+//! everywhere else, and node ids are *not* authorization: every id a caller
+//! hands in is checked against the admitted venue before it is written.
 
 use std::collections::BTreeMap;
 
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
-use crate::database::local::venue_graph as venue_graph_db;
 use crate::dispatch::{AppServices, CommandError};
-use crate::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
-use crate::services::fixture_create;
-use crate::venue_graph;
-use luma_render::venue_tiles::TileMap;
-use luma_scene::venue::{Constraint, Edge, NodeKind, FLOOR_SOCKET};
+use crate::models::venue_graph::{
+    PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
+};
+use crate::services::stage_ops::{Stage, StageError};
+
+/// One venue's verbs, bound to this host's database and catalog.
+fn stage<'a>(services: &'a AppServices, venue_id: &'a str) -> Stage<'a> {
+    Stage::new(&services.db.0, &services.fixtures_root, venue_id)
+}
 
 /// The rows themselves — what the builder edits.
 ///
@@ -29,8 +37,7 @@ pub async fn get_venue_graph(
     services: &AppServices,
     venue_id: String,
 ) -> Result<VenueGraphRows, CommandError> {
-    let mut access = admit(services, &venue_id).await?;
-    Ok(venue_graph_db::get_graph(&mut access).await?)
+    Ok(stage(services, &venue_id).rows().await?)
 }
 
 /// The venue solved — what every consumer draws.
@@ -41,16 +48,12 @@ pub async fn get_resolved_venue(
     services: &AppServices,
     venue_id: String,
 ) -> Result<ResolvedVenue, CommandError> {
-    let mut access = admit(services, &venue_id).await?;
-    let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
-    Ok(ResolvedVenue::from(&solved))
+    Ok(stage(services, &venue_id).resolved().await?)
 }
 
 /// The venue as a top-down text map — the "Gauntlet view".
 ///
-/// The same solve [`get_resolved_venue`] returns, quantized into something a
-/// human or an agent reads at a glance and diffs line by line. `cell_m` is
-/// metres per character; the drawer clamps it, so no value refuses.
+/// `cell_m` is metres per character; the drawer clamps it, so no value refuses.
 ///
 /// # Errors
 /// As [`get_resolved_venue`].
@@ -59,12 +62,53 @@ pub async fn venue_tiles(
     venue_id: String,
     cell_m: Option<f64>,
 ) -> Result<String, CommandError> {
-    let mut access = admit(services, &venue_id).await?;
-    let options = TileMap {
-        cell_m: cell_m.unwrap_or(TileMap::default().cell_m),
-        ..TileMap::default()
-    };
-    Ok(venue_graph::tiles(&mut access, &services.fixtures_root, options).await?)
+    Ok(stage(services, &venue_id).tiles(cell_m).await?)
+}
+
+/// The venue as an indented tree: parent, socket pair, params, and everything
+/// the solve left open.
+///
+/// The relation channel. `venue_tiles` says where a piece is; this says what it
+/// is bolted to, which is the sentence the metres cannot say.
+///
+/// # Errors
+/// As [`get_resolved_venue`].
+pub async fn describe_venue(
+    services: &AppServices,
+    venue_id: String,
+) -> Result<String, CommandError> {
+    Ok(stage(services, &venue_id).describe().await?)
+}
+
+/// The placeable vocabulary: node kinds, the root's own surfaces, and every
+/// catalog piece with the sockets it resolves to.
+///
+/// A read of the catalog, not of a venue — but it takes no venue id and still
+/// needs the mesh root, which is why it lives beside the verbs that consume it.
+///
+/// # Errors
+/// Fails if the catalog's geometry cannot be resolved.
+pub async fn stage_catalog(services: &AppServices) -> Result<StageCatalog, CommandError> {
+    Ok(crate::services::stage_ops::catalog(
+        &services.fixtures_root,
+    )?)
+}
+
+/// What a run out of this socket would meet, and how far away it is.
+///
+/// The measurement the builder shows while a length is typed, and the one
+/// [`extend`] refuses against. `None` means the ray met nothing — there is no
+/// gap, so any length is buildable.
+///
+/// # Errors
+/// As [`get_resolved_venue`].
+pub async fn extend_reach(
+    services: &AppServices,
+    venue_id: String,
+    node_id: String,
+    socket: String,
+) -> Result<Option<Reach>, CommandError> {
+    Ok(stage(services, &venue_id).reach(&node_id, &socket).await?)
 }
 
 /// Place a new node by mating two sockets.
@@ -83,29 +127,23 @@ pub async fn attach(
     catalog_ref: Option<String>,
     label: Option<String>,
     parent_id: String,
-    my_socket: String,
+    my_socket: Option<String>,
     their_socket: String,
     yaw: Option<f64>,
     params: Option<BTreeMap<String, f64>>,
 ) -> Result<PlacementReport, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_kind(&kind)?;
-    require_in_venue(&mut access, std::slice::from_ref(&parent_id)).await?;
-
-    let node_id =
-        venue_graph_db::insert_node(&mut access, &kind, catalog_ref.as_deref(), label.as_deref())
-            .await?;
-    if let Some(params) = params {
-        venue_graph_db::set_params(&mut access, &node_id, &keep(params)).await?;
-    }
-    let edge = Edge {
-        parent: parent_id.clone(),
-        my_socket,
-        their_socket,
-        roll: yaw.unwrap_or(0.0),
-    };
-    check_and_write(&mut access, services, &node_id, edge).await?;
-    report(access, services, &node_id).await
+    Ok(stage(services, &venue_id)
+        .attach(
+            &kind,
+            catalog_ref.as_deref(),
+            label.as_deref(),
+            &parent_id,
+            my_socket.as_deref(),
+            &their_socket,
+            yaw.unwrap_or(0.0),
+            params.unwrap_or_default(),
+        )
+        .await?)
 }
 
 /// Place a node that already exists somewhere else — a re-attach, or a fixture
@@ -122,16 +160,15 @@ pub async fn reattach(
     their_socket: String,
     yaw: Option<f64>,
 ) -> Result<PlacementReport, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, &[node_id.clone(), parent_id.clone()]).await?;
-    let edge = Edge {
-        parent: parent_id,
-        my_socket,
-        their_socket,
-        roll: yaw.unwrap_or(0.0),
-    };
-    check_and_write(&mut access, services, &node_id, edge).await?;
-    report(access, services, &node_id).await
+    Ok(stage(services, &venue_id)
+        .reattach(
+            &node_id,
+            &parent_id,
+            &my_socket,
+            &their_socket,
+            yaw.unwrap_or(0.0),
+        )
+        .await?)
 }
 
 /// Free placement: put a node on a surface at `(u, v, yaw, trim)`.
@@ -151,41 +188,28 @@ pub async fn place_free(
     label: Option<String>,
     surface_node_id: Option<String>,
     surface_socket: Option<String>,
-    my_socket: String,
+    my_socket: Option<String>,
     u: f64,
     v: f64,
     yaw: Option<f64>,
     trim: Option<f64>,
+    params: Option<BTreeMap<String, f64>>,
 ) -> Result<PlacementReport, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_kind(&kind)?;
-    let parent_id = match surface_node_id {
-        Some(id) => {
-            require_in_venue(&mut access, std::slice::from_ref(&id)).await?;
-            id
-        }
-        None => venue_graph_db::root_id(&mut access)
-            .await?
-            .ok_or_else(|| CommandError::Invalid("this venue has no graph root".into()))?,
-    };
-
-    let node_id =
-        venue_graph_db::insert_node(&mut access, &kind, catalog_ref.as_deref(), label.as_deref())
-            .await?;
-    let params = BTreeMap::from([
-        ("u".to_string(), u),
-        ("v".to_string(), v),
-        ("trim".to_string(), trim.unwrap_or(0.0)),
-    ]);
-    venue_graph_db::set_params(&mut access, &node_id, &keep(params)).await?;
-    let edge = Edge {
-        parent: parent_id,
-        my_socket,
-        their_socket: surface_socket.unwrap_or_else(|| FLOOR_SOCKET.to_string()),
-        roll: yaw.unwrap_or(0.0),
-    };
-    check_and_write(&mut access, services, &node_id, edge).await?;
-    report(access, services, &node_id).await
+    Ok(stage(services, &venue_id)
+        .place_free(
+            &kind,
+            catalog_ref.as_deref(),
+            label.as_deref(),
+            surface_node_id.as_deref(),
+            surface_socket.as_deref(),
+            my_socket.as_deref(),
+            u,
+            v,
+            yaw.unwrap_or(0.0),
+            trim.unwrap_or(0.0),
+            params.unwrap_or_default(),
+        )
+        .await?)
 }
 
 /// Unplace a node. It and its subtree drop out of the solve; the rows stay, so
@@ -198,10 +222,7 @@ pub async fn detach(
     venue_id: String,
     node_id: String,
 ) -> Result<PlacementReport, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
-    venue_graph_db::delete_edge(&mut access, &node_id).await?;
-    report(access, services, &node_id).await
+    Ok(stage(services, &venue_id).detach(&node_id).await?)
 }
 
 /// Write down a far end: this socket meets that one.
@@ -213,10 +234,8 @@ pub async fn detach(
 ///
 /// # Errors
 /// Refuses a socket pair that does not exist or whose polarity forbids the
-/// joint, and an array at either end: an array's ends belong to its derived
-/// members, so one check would name one socket where the room has `count` of
-/// them. Whether the ends actually *meet* is not an error — that is the
-/// satisfied / violated / dangling the report carries.
+/// joint, and an array at either end. Whether the ends actually *meet* is not
+/// an error — that is the satisfied / violated / dangling the report carries.
 pub async fn constrain(
     services: &AppServices,
     venue_id: String,
@@ -225,37 +244,15 @@ pub async fn constrain(
     target_node: String,
     target_socket: String,
 ) -> Result<PlacementReport, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, &[node_id.clone(), target_node.clone()]).await?;
-
-    let mut graph = venue_graph::graph(&mut access).await?;
-    let sockets = venue_graph::sockets(&services.fixtures_root)?;
-    graph
-        .constrain(
-            Constraint {
-                node: node_id.clone(),
-                my_socket: my_socket.clone(),
-                target_node: target_node.clone(),
-                target_socket: target_socket.clone(),
-            },
-            sockets,
-        )
-        .map_err(|e| CommandError::Invalid(e.to_string()))?;
-    venue_graph_db::upsert_constraint(
-        &mut access,
-        &node_id,
-        &my_socket,
-        &target_node,
-        &target_socket,
-    )
-    .await?;
-    report(access, services, &node_id).await
+    Ok(stage(services, &venue_id)
+        .constrain(&node_id, &my_socket, &target_node, &target_socket)
+        .await?)
 }
 
 /// Merge parameters into a node, and optionally rename it.
 ///
-/// `yaw` is spelled as itself and lands on the edge, which is where the
-/// mate's turn about the shared normal lives; every other key is a param.
+/// `yaw` is spelled as itself and lands on the edge, which is where the mate's
+/// turn about the shared normal lives; every other key is a param.
 ///
 /// # Errors
 /// Fails if the venue is not writable or the node is not in it.
@@ -266,48 +263,60 @@ pub async fn set_params(
     params: BTreeMap<String, f64>,
     label: Option<String>,
 ) -> Result<PlacementReport, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
+    Ok(stage(services, &venue_id)
+        .set_params(&node_id, params, label.as_deref())
+        .await?)
+}
 
-    let mut params = params;
-    if let Some(yaw) = params.remove("yaw") {
-        let graph = venue_graph::graph(&mut access).await?;
-        let Some(edge) = graph.edge(&node_id).cloned() else {
-            return Err(CommandError::Invalid(
-                "an unplaced node has no yaw to set".into(),
-            ));
-        };
-        venue_graph_db::upsert_edge(
-            &mut access,
-            &node_id,
-            &edge.parent,
-            &edge.my_socket,
-            &edge.their_socket,
-            yaw,
-        )
-        .await?;
-    }
-    venue_graph_db::set_params(&mut access, &node_id, &keep(params)).await?;
-    if label.is_some() {
-        venue_graph_db::set_label(&mut access, &node_id, label.as_deref()).await?;
-    }
-    report(access, services, &node_id).await
+/// Run a stick out of an open socket, along its outward normal.
+///
+/// `length_m` of `None` means "to whatever the ray found". A length equal to
+/// the measured gap bridges it and writes the far end down as a
+/// [`constrain`]; less is a stub; more is refused.
+///
+/// # Errors
+/// Refuses a length past the measured gap, and as [`attach`] otherwise.
+pub async fn extend(
+    services: &AppServices,
+    venue_id: String,
+    node_id: String,
+    socket: String,
+    length_m: Option<f64>,
+) -> Result<PlacementReport, CommandError> {
+    Ok(stage(services, &venue_id)
+        .extend(&node_id, &socket, length_m)
+        .await?)
+}
+
+/// Copy a subtree onto another socket, optionally mirrored.
+///
+/// One `attach` per node, root first, so the copy is ordinary rows every other
+/// verb can edit. `flip` is how the design doc's "duplicate a wing and flip it"
+/// spells itself in the vocabulary the graph already has — there is no `mirror`
+/// node kind and no `mirror` op.
+///
+/// # Errors
+/// As [`attach`], for the root's joint.
+pub async fn duplicate(
+    services: &AppServices,
+    venue_id: String,
+    node_id: String,
+    parent_id: String,
+    their_socket: String,
+    flip: Option<bool>,
+) -> Result<PlacementReport, CommandError> {
+    Ok(stage(services, &venue_id)
+        .duplicate(&node_id, &parent_id, &their_socket, flip.unwrap_or(false))
+        .await?)
 }
 
 /// Delete a node and everything structural hanging off it.
 ///
-/// The subtree is computed from the graph rather than left to a foreign-key
-/// cascade: which nodes those are is the graph's question, and the answer has
-/// to be the same one the builder just previewed.
-///
-/// # A fixture is inventory, not structure
-///
 /// Pulling a truss down loses the rig its shape, not its lights: every fixture
 /// under the deleted node is **trayed** — its edge cascades away with its
-/// parent, so the solve reports it unplaced and the tray can hang it
-/// somewhere else. Only a fixture the caller names *directly* is deleted, and
-/// then through [`fixture_create::delete`], which is the one door that takes
-/// the patch row with the node.
+/// parent, so the solve reports it unplaced and the tray can hang it somewhere
+/// else. Only a fixture the caller names *directly* is deleted, and then
+/// through the one door that takes the patch row with the node.
 ///
 /// # Errors
 /// Fails if the venue is not writable or the node is not in it.
@@ -316,128 +325,23 @@ pub async fn delete_subtree(
     venue_id: String,
     node_id: String,
 ) -> Result<ResolvedVenue, CommandError> {
-    let mut access = write(services, &venue_id).await?;
-    require_in_venue(&mut access, std::slice::from_ref(&node_id)).await?;
-    let graph = venue_graph::graph(&mut access).await?;
-    if node_id == graph.root() {
-        return Err(CommandError::Invalid(
-            "the venue root is the room itself and cannot be deleted".into(),
-        ));
-    }
-    let (fixtures, structure): (Vec<String>, Vec<String>) = graph
-        .subtree(&node_id)
-        .into_iter()
-        .partition(|id| graph.node(id).is_some_and(|n| n.kind == NodeKind::Fixture));
-    venue_graph_db::delete_nodes(&mut access, &structure).await?;
-    if fixtures.contains(&node_id) {
-        fixture_create::delete(&mut access, &node_id).await?;
-    }
-    let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
-    let out = ResolvedVenue::from(&solved);
-    access.commit().await?;
-    venue_graph_db::graph_committed();
-    Ok(out)
+    Ok(stage(services, &venue_id).delete_subtree(&node_id).await?)
 }
 
-// ---------------------------------------------------------------------------
-// Shared plumbing
-// ---------------------------------------------------------------------------
-
-/// A read snapshot, with the old schema converted first if it has not been.
+/// The one lowering of a stage refusal into the wire's vocabulary.
 ///
-/// The conversion needs a write, so a read that finds an unconverted venue
-/// takes one, commits it, and then opens the snapshot. Ordinary reads — every
-/// one after the first — never take a write lock.
-async fn admit<'a>(
-    services: &'a AppServices,
-    venue_id: &str,
-) -> Result<VenueAccess<'a, Read>, CommandError> {
-    ensure_migrated(services, venue_id).await?;
-    Ok(VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(venue_id)).await?)
-}
-
-async fn write<'a>(
-    services: &'a AppServices,
-    venue_id: &str,
-) -> Result<VenueAccess<'a, Write>, CommandError> {
-    ensure_migrated(services, venue_id).await?;
-    Ok(VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(venue_id)).await?)
-}
-
-async fn ensure_migrated(services: &AppServices, venue_id: &str) -> Result<(), CommandError> {
-    Ok(venue_graph::ensure_migrated(&services.db.0, venue_id, &services.fixtures_root).await?)
-}
-
-/// Check the edge against the graph's invariants, then write it.
-///
-/// The check is `luma_scene`'s, not a copy: acyclic, both sockets present on
-/// their catalog entries, polarities compatible.
-async fn check_and_write(
-    access: &mut VenueAccess<'_, Write>,
-    services: &AppServices,
-    node_id: &str,
-    edge: Edge,
-) -> Result<(), CommandError> {
-    let mut graph = venue_graph::graph(access).await?;
-    let sockets = venue_graph::sockets(&services.fixtures_root)?;
-    graph
-        .attach(node_id, edge.clone(), sockets)
-        .map_err(|e| CommandError::Invalid(e.to_string()))?;
-    venue_graph_db::upsert_edge(
-        access,
-        node_id,
-        &edge.parent,
-        &edge.my_socket,
-        &edge.their_socket,
-        edge.roll,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Solve, commit, and report — the tail of every verb.
-async fn report(
-    mut access: VenueAccess<'_, Write>,
-    services: &AppServices,
-    node_id: &str,
-) -> Result<PlacementReport, CommandError> {
-    let solved = venue_graph::resolved(&mut access, &services.fixtures_root).await?;
-    let report = PlacementReport::of(node_id, &solved);
-    access.commit().await?;
-    venue_graph_db::graph_committed();
-    Ok(report)
-}
-
-fn require_kind(kind: &str) -> Result<(), CommandError> {
-    match NodeKind::from_name(kind) {
-        Some(NodeKind::Venue) => Err(CommandError::Invalid(
-            "a venue has exactly one root, and it is made with the venue".into(),
-        )),
-        Some(_) => Ok(()),
-        None => Err(CommandError::Invalid(format!(
-            "`{kind}` is not a node kind"
-        ))),
+/// `Refused` is `Invalid` because it is a precondition the caller violated and
+/// the message is the fix; `NotFound` keeps its own variant so a stale node id
+/// does not read as a bad rig.
+impl From<StageError> for CommandError {
+    fn from(error: StageError) -> Self {
+        let message = error.to_string();
+        match error {
+            StageError::Refused(_) => CommandError::Invalid(message),
+            StageError::NotFound(_) => CommandError::NotFound(message),
+            StageError::Internal(_) => CommandError::Internal(message),
+        }
     }
-}
-
-/// Every id a caller names must belong to the venue it was admitted to.
-async fn require_in_venue(
-    access: &mut VenueAccess<'_, Write>,
-    ids: &[String],
-) -> Result<(), CommandError> {
-    let found = venue_graph_db::nodes_in_venue(access, ids).await?;
-    if found.len() == ids.len() {
-        return Ok(());
-    }
-    Err(CommandError::Invalid(
-        "that node is not in this venue".into(),
-    ))
-}
-
-/// Every key present, every value kept. The `Option` in the DB layer is for
-/// clearing a key, which the wire has no spelling for yet.
-fn keep(params: BTreeMap<String, f64>) -> BTreeMap<String, Option<f64>> {
-    params.into_iter().map(|(k, v)| (k, Some(v))).collect()
 }
 
 #[cfg(test)]

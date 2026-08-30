@@ -187,7 +187,9 @@ use crate::models::scores::{
 use crate::models::selection::Selection;
 use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
 use crate::models::universe::UniverseState;
-use crate::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
+use crate::models::venue_graph::{
+    PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
+};
 use crate::models::venues::Venue;
 use crate::models::waveforms::{TrackWaveform, WaveformWindow};
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
@@ -580,7 +582,7 @@ commands! {
         catalog_ref: Option<String>,
         label: Option<String>,
         parent_id: String,
-        my_socket: String,
+        my_socket: Option<String>,
         their_socket: String,
         yaw: Option<f64>,
         params: Option<BTreeMap<String, f64>>,
@@ -607,12 +609,33 @@ commands! {
         label: Option<String>,
         surface_node_id: Option<String>,
         surface_socket: Option<String>,
-        my_socket: String,
+        my_socket: Option<String>,
         u: f64,
         v: f64,
         yaw: Option<f64>,
         trim: Option<f64>,
+        params: Option<BTreeMap<String, f64>>,
     ) -> PlacementReport;
+    stage::extend(
+        venue_id: String,
+        node_id: String,
+        socket: String,
+        length_m: Option<f64>,
+    ) -> PlacementReport;
+    stage::extend_reach(
+        venue_id: String,
+        node_id: String,
+        socket: String,
+    ) -> Option<Reach>;
+    stage::duplicate(
+        venue_id: String,
+        node_id: String,
+        parent_id: String,
+        their_socket: String,
+        flip: Option<bool>,
+    ) -> PlacementReport;
+    stage::describe_venue(venue_id: String) -> String;
+    stage::stage_catalog() -> StageCatalog;
     stage::detach(venue_id: String, node_id: String) -> PlacementReport;
     stage::set_params(
         venue_id: String,

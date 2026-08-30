@@ -444,6 +444,150 @@ impl PlacementReport {
     }
 }
 
+/// What an extend ray met: the nearest compatible socket ahead of an open one,
+/// and how far it is in a buildable span.
+///
+/// A measurement, not a placement — the builder shows it while a length is
+/// being typed and [`crate::services::stage_ops::Stage::extend`] refuses
+/// anything longer than it.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct Reach {
+    pub node_id: String,
+    pub socket: String,
+    /// Centre-to-centre distance between the two socket points, quantized down
+    /// to a buildable span.
+    pub gap_m: f64,
+}
+
+/// The placeable vocabulary: what a caller may name in `attach`, `place` and
+/// `extend`.
+///
+/// Derived from [`luma_scene::catalog`] and the same socket supply the resolver
+/// mates against, so a socket listed here is a socket a verb will accept. There
+/// is no hand-written table anywhere for this to drift from.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct StageCatalog {
+    /// The node-kind alphabet a caller may place, root excluded — the root is
+    /// made with the venue.
+    pub kinds: Vec<String>,
+    /// The venue root's own two synthesized surfaces: `floor` faces up, `rig`
+    /// is the same plane facing down. Same origin, same `(u, v)`, same `trim`.
+    pub root_sockets: Vec<String>,
+    /// The step every generated span and every extend length is quantized to,
+    /// in metres.
+    pub length_step_m: f64,
+    pub pieces: Vec<CatalogPiece>,
+}
+
+/// One catalog entry, with the sockets it actually resolves to.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct CatalogPiece {
+    /// What `catalog_ref` holds.
+    pub catalog_ref: String,
+    pub name: String,
+    /// Palette section: `Stage`, `Trusses`, `Speakers`, ...
+    pub group: String,
+    /// Snap taxonomy: `floor`, `truss`, `speaker`, `cdj`, ...
+    pub piece_kind: String,
+    /// Whether the shape comes from a generator, in which case its sockets are
+    /// a function of its params and `span` is the one that moves them.
+    pub procedural: bool,
+    /// Resolved against this piece's **default** parameters. A generated piece
+    /// keeps these socket names at every span; only where they are moves.
+    pub sockets: Vec<CatalogSocket>,
+}
+
+/// One socket, in the vocabulary `attach` checks against.
+#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
+#[ts(rename_all = "camelCase")]
+pub struct CatalogSocket {
+    pub name: String,
+    /// The named point's own type, e.g. `truss_end`, `floor_top`.
+    pub socket_type: String,
+    /// The equivalence class two sockets must share to mate at all:
+    /// `surface`, `truss_end`, `edge`, `cable_end`, `grab`.
+    pub joint: String,
+    /// `male` (only ever held), `female` (only ever a host), `neutral`
+    /// (self-mating, either).
+    pub polarity: String,
+    /// Whether a row of fixtures can be spread along it — a face with a length
+    /// and a normal, as opposed to a bolt circle that takes one piece.
+    pub feature: bool,
+}
+
+impl StageCatalog {
+    /// Every piece the palette offers, resolved against `supply`.
+    ///
+    /// Sockets come from the supply rather than from [`luma_scene::catalog`]'s
+    /// authored `SocketDef`s, because a procedural piece has none of those —
+    /// its ends are the generator's frames, and the supply is the one place
+    /// both cases are already answered.
+    #[must_use]
+    pub fn build(supply: &luma_render::catalog::VenueSockets) -> Self {
+        use luma_scene::sockets::SocketKind;
+        use luma_scene::venue::{Node, NodeKind, NodeSockets as _, Params};
+
+        let pieces = luma_scene::catalog::pieces()
+            .iter()
+            .map(|piece| {
+                let probe = Node {
+                    id: String::new(),
+                    kind: NodeKind::Piece,
+                    catalog_ref: Some(piece.id.to_string()),
+                    label: None,
+                    params: Params::default(),
+                };
+                CatalogPiece {
+                    catalog_ref: piece.id.to_string(),
+                    name: piece.display_name.to_string(),
+                    group: piece.palette_group.as_str().to_string(),
+                    piece_kind: piece.kind.as_str().to_string(),
+                    procedural: piece.geometry.is_procedural(),
+                    sockets: supply
+                        .sockets(&probe)
+                        .iter()
+                        .map(|socket| CatalogSocket {
+                            name: socket.name.clone(),
+                            socket_type: socket.socket_type.as_str().to_string(),
+                            joint: socket.socket_type.kind().as_str().to_string(),
+                            polarity: socket.socket_type.polarity().as_str().to_string(),
+                            feature: socket.socket_type.polarity().can_host()
+                                && matches!(
+                                    socket.socket_type.kind(),
+                                    SocketKind::Surface | SocketKind::Edge
+                                ),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        Self {
+            kinds: NodeKind::ALL
+                .iter()
+                .filter(|kind| **kind != NodeKind::Venue)
+                .map(|kind| kind.as_str().to_string())
+                .collect(),
+            root_sockets: vec![
+                luma_scene::venue::FLOOR_SOCKET.to_string(),
+                luma_scene::venue::RIG_SOCKET.to_string(),
+            ],
+            length_step_m: crate::services::stage_ops::LENGTH_STEP_M,
+            pieces,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The venue as an authored document
 // ---------------------------------------------------------------------------

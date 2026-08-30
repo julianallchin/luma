@@ -963,16 +963,37 @@ impl Luma {
         let Some(build) = self.build_mut() else {
             return;
         };
-        let reach = build.room.cast(&node, &socket);
-        let length_m = reach
-            .as_ref()
-            .map_or(hand::STUB_LENGTH_M, |reach| reach.gap_m);
+        // The measurement is the verb's, not a ray of the page's own: `extend`
+        // refuses against exactly this number, and a second cast here could
+        // offer a length the command would then reject. Asked once, on the
+        // click — the answer is a property of the room, and re-casting it while
+        // a length is being typed would move the number under the operator.
+        let venue = build.venue_id.clone();
         build.hand = Hand::Extending(Box::new(Extending {
-            from_node: node,
-            from_socket: socket,
-            reach,
-            length_m,
+            from_node: node.clone(),
+            from_socket: socket.clone(),
+            reach: None,
+            length_m: hand::STUB_LENGTH_M,
         }));
+        let measuring = self.library.extend_reach(&venue, &node, &socket);
+        cx.spawn(async move |this, cx| {
+            let reach = measuring.await.ok().flatten();
+            this.update(cx, |this, cx| {
+                if let Some(Hand::Extending(run)) = this.build_mut().map(|b| &mut b.hand) {
+                    // Only if the same run is still in hand: the operator may
+                    // have escaped or clicked elsewhere while this was in
+                    // flight, and a measurement for a socket nobody is pointing
+                    // at is worse than none.
+                    if run.from_node == node && run.from_socket == socket {
+                        run.length_m = reach.as_ref().map_or(hand::STUB_LENGTH_M, |r| r.gap_m);
+                        run.reach = reach;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -984,7 +1005,12 @@ impl Luma {
         cx.notify();
     }
 
-    /// Commit the run: a bridge, or a stub.
+    /// Commit the run.
+    ///
+    /// One verb: `extend` re-measures the gap, refuses a length past it, and
+    /// writes the far-end check itself when the run bridges — so the page does
+    /// not compose an attach and a constrain of its own, and the Python facade
+    /// and this button cannot disagree about what an extend is.
     pub(crate) fn stage_commit_run(&mut self, cx: &mut Context<Self>) {
         let Some(build) = self.build_mut() else {
             return;
@@ -997,51 +1023,11 @@ impl Luma {
         }
         let venue = build.venue_id.clone();
         let parent = run.from_node.clone();
-        let their_socket = run.from_socket.clone();
-        let bridge = run.bridges().cloned();
-        let params = BTreeMap::from([("span".to_string(), run.length_m)]);
+        let socket = run.from_socket.clone();
+        let length = run.length_m;
         build.hand = Hand::Idle;
-        let library = &self.library;
-        let attach = library.attach(
-            &venue,
-            NodeKind::Run.as_str(),
-            Some(hand::TRUSS_STRAIGHT),
-            None,
-            &parent,
-            "end_a",
-            &their_socket,
-            0.0,
-            params,
-        );
-        if let Some(bridge) = bridge {
-            // The far end is a **check**, not a second parent: the run hangs
-            // off the socket it grew from, and the socket it reaches is
-            // written down separately so `dangling()` can report it satisfied.
-            cx.spawn(async move |this, cx| {
-                let placed = attach.await;
-                let node = placed.as_ref().ok().map(|r| r.node_id.clone());
-                this.update(cx, |this, cx| {
-                    if let (Some(node), Some(build)) = (node, this.build_state()) {
-                        let venue = build.venue_id.clone();
-                        let pending = this.library.constrain(
-                            &venue,
-                            &node,
-                            "end_b",
-                            &bridge.node,
-                            &bridge.socket,
-                        );
-                        this.stage_verb(pending, cx);
-                    } else {
-                        this.reload_stage(cx);
-                    }
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-            return;
-        }
-        self.stage_verb(attach, cx);
+        let pending = self.library.extend(&venue, &parent, &socket, Some(length));
+        self.stage_verb(Box::pin(pending), cx);
     }
 
     /// ⌘D: copy the selected subtree and put it in the hand.
@@ -1268,6 +1254,11 @@ impl Luma {
         .detach();
     }
 
+    /// Commit a held duplicate.
+    ///
+    /// One verb: `duplicate` walks the same plan the ghost previewed and writes
+    /// every copy in one call, so the page owns no loop of its own to drift
+    /// from the one the Python facade calls.
     fn stage_duplicate_commit(
         &mut self,
         venue: &str,
@@ -1276,70 +1267,21 @@ impl Luma {
         how: &Landing,
         cx: &mut Context<Self>,
     ) {
-        let Some(build) = self.build_state() else {
+        // A duplicate is placed on a socket: every compatible open socket
+        // lights up precisely so the copy lands on a joint, and a copy seated
+        // free would be a second, different gesture.
+        let Landing::Socket {
+            parent,
+            their_socket,
+            ..
+        } = how
+        else {
             return;
         };
-        let Some(plan) = build.copy_plan(root, flip, how) else {
-            return;
-        };
-        let venue = venue.to_string();
-        let library_calls: Vec<CopyStep> = plan;
-        let first = library_calls.first().cloned();
-        let Some(first) = first else { return };
-        let rest = library_calls[1..].to_vec();
-        let pending = self.library.attach(
-            &venue,
-            first.kind.as_str(),
-            first.catalog_ref.as_deref(),
-            first.label.as_deref(),
-            &first.parent,
-            &first.my_socket,
-            &first.their_socket,
-            first.yaw,
-            first.params.clone(),
-        );
-        cx.spawn(async move |this, cx| {
-            let mut minted: HashMap<String, String> = HashMap::new();
-            let mut placed = pending.await;
-            if let Ok(report) = &placed {
-                minted.insert(first.source.clone(), report.node_id.clone());
-            }
-            for step in rest {
-                let Some(parent) = minted.get(&step.parent).cloned() else {
-                    continue;
-                };
-                let next = this
-                    .update(cx, |this, _| {
-                        this.library.attach(
-                            &venue,
-                            step.kind.as_str(),
-                            step.catalog_ref.as_deref(),
-                            step.label.as_deref(),
-                            &parent,
-                            &step.my_socket,
-                            &step.their_socket,
-                            step.yaw,
-                            step.params.clone(),
-                        )
-                    })
-                    .ok();
-                let Some(next) = next else { break };
-                placed = next.await;
-                if let Ok(report) = &placed {
-                    minted.insert(step.source.clone(), report.node_id.clone());
-                }
-            }
-            this.update(cx, |this, cx| {
-                if let (Ok(report), Some(build)) = (&placed, this.build_mut()) {
-                    build.report = report.warnings.clone();
-                    build.selected = minted.get(&first.source).cloned();
-                }
-                this.reload_stage(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let pending = self
+            .library
+            .duplicate(venue, root, parent, their_socket, flip);
+        self.stage_verb(Box::pin(pending), cx);
     }
 }
 
@@ -1350,21 +1292,7 @@ struct GhostBody {
     scale: f32,
 }
 
-/// One `attach` a duplicate owes.
-#[derive(Clone)]
-struct CopyStep {
-    /// The node this copies, so the next step can name its copy as a parent.
-    source: String,
-    kind: NodeKind,
-    catalog_ref: Option<String>,
-    label: Option<String>,
-    /// The *source* parent for a descendant; the landing's host for the root.
-    parent: String,
-    my_socket: String,
-    their_socket: String,
-    yaw: f64,
-    params: BTreeMap<String, f64>,
-}
+use luma_lib::services::stage_ops::CopyStep;
 
 /// One verb in flight. Boxed because the four placements are four different
 /// futures of one shape, and the caller only ever awaits them.
@@ -1485,91 +1413,24 @@ impl Build {
             .collect()
     }
 
-    /// The `attach` calls that reproduce a subtree at a new joint.
+    /// The `attach` list a duplicate of `root` would owe, landing on `how`.
     ///
-    /// **Flip** inverts the subtree's handedness about its root socket, and it
-    /// is written in the rows themselves rather than as an op: every relation
-    /// inside the copy meets the mirrored socket
-    /// ([`hand::mirror_socket`]), every roll changes sign, and every
-    /// along-the-face offset is negated. What comes out is ordinary rows any
-    /// other verb can edit afterwards — no node kind, no mirrored geometry, and
-    /// nothing to keep in sync.
-    ///
-    /// A half turn about the joint would have been smaller and would have been
-    /// wrong: handedness is a reflection, and the joints a wing actually bolts
-    /// to (`TrussEnd`, `FloorCorner`) have `RollFreedom::Fixed`, so the
-    /// resolver would clamp that turn to nothing and the button would do
-    /// nothing but warn.
+    /// [`luma_lib::services::stage_ops::duplicate_plan`]'s answer, not a second
+    /// one: the ghost previews exactly the rows the verb will write, so a
+    /// flipped wing cannot draw one way and land another.
     fn copy_plan(&self, root: &str, flip: bool, how: &Landing) -> Option<Vec<CopyStep>> {
+        // A duplicate is placed on a socket: every compatible open socket
+        // lights up precisely so the copy lands on a joint, and a copy seated
+        // free would be a second, different gesture.
         let Landing::Socket {
             parent,
-            my_socket,
             their_socket,
-            yaw,
+            ..
         } = how
         else {
-            // A duplicate is placed on a socket: every compatible open socket
-            // lights up precisely so the copy lands on a joint, and a copy
-            // seated free would be a second, different gesture.
             return None;
         };
-        // `u` runs along the host feature's tangent, so its sign is which side
-        // of that feature a child sits on. Nothing else in the vocabulary is
-        // handed: `v` is across, `trim` is up, and a span has no side.
-        let mirrored = |params: &luma_scene::venue::Params| -> BTreeMap<String, f64> {
-            params
-                .iter()
-                .map(|(key, value)| {
-                    let value = if flip && key == "u" { -value } else { value };
-                    (key.to_string(), value)
-                })
-                .collect()
-        };
-        let mut steps = Vec::new();
-        let source = self.graph.node(root)?;
-        steps.push(CopyStep {
-            source: root.to_string(),
-            kind: source.kind,
-            catalog_ref: source.catalog_ref.clone(),
-            label: source.label.clone(),
-            parent: parent.clone(),
-            my_socket: my_socket.clone(),
-            their_socket: their_socket.clone(),
-            yaw: *yaw,
-            params: mirrored(&source.params),
-        });
-        for id in self.graph.subtree(root).into_iter().filter(|id| id != root) {
-            let (Some(node), Some(edge)) = (self.graph.node(&id), self.graph.edge(&id)) else {
-                continue;
-            };
-            steps.push(CopyStep {
-                source: id.clone(),
-                kind: node.kind,
-                catalog_ref: node.catalog_ref.clone(),
-                label: node.label.clone(),
-                parent: edge.parent.clone(),
-                // *Both* halves of the joint. A reflection turns the child
-                // over as well as the host, so a piece bolted by its left face
-                // is bolted by its right one in the mirror — mirroring only
-                // the host's side built a wing that met its parent on a
-                // different socket than the hand-built opposite does.
-                // Sideless names ([`hand::mirror_socket`]) are their own
-                // mirror, so a truss end is unaffected.
-                my_socket: if flip {
-                    hand::mirror_socket(&edge.my_socket)
-                } else {
-                    edge.my_socket.clone()
-                },
-                their_socket: if flip {
-                    hand::mirror_socket(&edge.their_socket)
-                } else {
-                    edge.their_socket.clone()
-                },
-                yaw: if flip { -edge.roll } else { edge.roll },
-                params: mirrored(&node.params),
-            });
-        }
-        Some(steps)
+        luma_lib::services::stage_ops::duplicate_plan(&self.graph, root, parent, their_socket, flip)
     }
 }
 

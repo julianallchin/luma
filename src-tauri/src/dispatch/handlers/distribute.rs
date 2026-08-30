@@ -5,13 +5,9 @@
 //! addresses either all land or none do, which is what "never partial
 //! placement" means at this layer rather than a loop that tries to undo itself.
 
-use std::path::Path;
-
-use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::distribute::{DistributeLayout, DistributeReport};
-use crate::services::distribute as distribute_service;
-use crate::services::groups::invalidate_venue_fixture_cache;
+use crate::services::stage_ops::Stage;
 
 /// Patch, name, place and group `count` fixtures along one host face.
 ///
@@ -37,61 +33,24 @@ pub async fn distribute(
     layout: DistributeLayout,
     label_prefix: Option<String>,
 ) -> Result<DistributeReport, CommandError> {
-    let relative = confine(&fixture_path)?;
-    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
-    let mut access =
-        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-
-    let report = distribute_service::distribute(
-        &mut access,
-        &services.fixtures_root,
-        distribute_service::Request {
-            host_node: host_node_id.as_deref(),
-            host_socket: host_socket.as_deref(),
-            fixture_path: relative,
-            mode_name: &mode_name,
+    let distributed = Stage::new(&services.db.0, &services.fixtures_root, &venue_id)
+        .distribute(
+            host_node_id.as_deref(),
+            host_socket.as_deref(),
+            &fixture_path,
+            &mode_name,
             count,
-            layout: layout.into(),
-            label_prefix: label_prefix.as_deref(),
-        },
-    )
-    .await
-    .map_err(CommandError::Invalid)?;
-
-    // A refusal never reaches here with rows behind it, but it still opened a
-    // transaction; committing an empty one is cheaper than branching, and the
-    // patch republish below is a no-op when nothing changed.
-    let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
-    access.commit().await?;
-    crate::database::local::venue_graph::graph_committed();
-    if let Some(artnet) = services.artnet.as_ref() {
-        artnet.update_patch(patch);
-    }
-    invalidate_venue_fixture_cache();
-    Ok(report.into())
-}
-
-/// Reject a definition path that would escape the fixtures root.
-///
-/// The same constraint [`super::fixtures`] applies, at the same seam and for
-/// the same reason: the path is joined onto a root directory, so it is
-/// constrained where it is joined rather than trusted where it came from.
-fn confine(path: &str) -> Result<&str, CommandError> {
-    let relative = Path::new(path);
-    let escapes = relative.components().any(|component| {
-        matches!(
-            component,
-            std::path::Component::ParentDir
-                | std::path::Component::RootDir
-                | std::path::Component::Prefix(_)
+            layout,
+            label_prefix.as_deref(),
         )
-    });
-    if escapes {
-        return Err(CommandError::Invalid(format!(
-            "fixture path escapes the fixtures root: {path}"
-        )));
+        .await?;
+    // Only a host with live output republishes; the service places the row
+    // either way, which is what lets an agent's cell build a rig on a machine
+    // that has no Art-Net at all.
+    if let Some(artnet) = services.artnet.as_ref() {
+        artnet.update_patch(distributed.patch);
     }
-    Ok(path)
+    Ok(distributed.report)
 }
 
 #[cfg(test)]

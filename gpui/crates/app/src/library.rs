@@ -85,7 +85,7 @@ use luma_lib::models::scores::{
 use luma_lib::models::selection::Selection;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
-use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
+use luma_lib::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
 use luma_lib::services::fixtures as fixtures_service;
@@ -2369,6 +2369,65 @@ impl Library {
                 "nodeId": node_id,
                 "params": params,
                 "label": label,
+            }),
+        )
+    }
+
+    /// Run a stick out of an open socket, along the way it faces. `length_m`
+    /// of `None` means "to whatever the ray found"; longer than that gap is
+    /// refused, and equal to it writes the far-end check as well.
+    pub fn extend(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        socket: &str,
+        length_m: Option<f64>,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "extend",
+            json!({
+                "venueId": venue_id,
+                "nodeId": node_id,
+                "socket": socket,
+                "lengthM": length_m,
+            }),
+        )
+    }
+
+    /// What a run out of this socket would meet, and the buildable gap to it.
+    ///
+    /// Cast once, when the socket is clicked — the answer is a property of the
+    /// room, and re-casting it while a length is being typed would let the
+    /// number the operator is editing move under them.
+    pub fn extend_reach(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        socket: &str,
+    ) -> impl Future<Output = Result<Option<Reach>, LibraryError>> + use<> {
+        self.call(
+            "extend_reach",
+            json!({ "venueId": venue_id, "nodeId": node_id, "socket": socket }),
+        )
+    }
+
+    /// Copy a subtree onto another socket, optionally mirrored.
+    pub fn duplicate(
+        &self,
+        venue_id: &str,
+        node_id: &str,
+        parent_id: &str,
+        their_socket: &str,
+        flip: bool,
+    ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
+        self.call(
+            "duplicate",
+            json!({
+                "venueId": venue_id,
+                "nodeId": node_id,
+                "parentId": parent_id,
+                "theirSocket": their_socket,
+                "flip": flip,
             }),
         )
     }
