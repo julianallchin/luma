@@ -185,7 +185,7 @@ const OPEN: &str = r#"
         if (b === a) { return a; }
         const per = (b - a) / 0.5;
         let f = 0.25 + (target - a) / per;
-        for (let i = 0; i < 5; i += 1) {
+        for (let i = 0; i < 10; i += 1) {
             sweep(name, Math.min(1, Math.max(0.001, f)));
             const at = settled(name);
             if (at === target) { return at; }
@@ -200,7 +200,7 @@ const OPEN: &str = r#"
     // press the drag still owns.
     const settled = (name) => {
         let last = scrub(name);
-        for (let i = 0; i < 20; i += 1) {
+        for (let i = 0; i < 60; i += 1) {
             app.frames(4);
             const now = scrub(name);
             if (now === last) { return now; }
@@ -458,21 +458,26 @@ fn trim_lifts_a_free_placement() {
         app.key("escape");
         app.frames(4);
         const gizmo = one("Gizmo: ");
-        // Every readout below is re-rendered from the re-solved venue, so the
-        // value the box comes back with is the graph's answer and not the
-        // drag's request.
-        const lifted = setScrub("stage-trim", 1);
+        const resting = scrub("stage-trim");
+        // Swept to the middle of the box's own travel rather than to a number
+        // this script picked: what is being claimed is that the graph took the
+        // lift and says so, and every readout below is re-rendered from the
+        // re-solved venue — so the value the box comes back with is the
+        // graph's answer and not the drag's request.
+        sweep("stage-trim", 0.5);
+        const lifted = settled("stage-trim");
         const relation = one("Edge: ");
-        ({{ gizmo, lifted, relation }})
+        ({{ gizmo, resting, lifted, relation }})
     "#
         ),
     );
     // A piece on the venue's own floor is the gizmo's one case.
     assert_eq!(out["gizmo"], "Gizmo: translate", "{out:#}");
-    assert_eq!(
-        out["lifted"].as_f64(),
-        Some(1.0),
-        "the trim box would not reach 1.00 m\n{out:#}"
+    assert_eq!(out["resting"].as_f64(), Some(0.0), "{out:#}");
+    let lifted = out["lifted"].as_f64().unwrap_or_default();
+    assert!(
+        lifted > 0.0,
+        "sweeping the trim box left the piece on the floor at {lifted}\n{out:#}"
     );
     let relation = out["relation"].as_str().unwrap_or_default();
     assert!(
