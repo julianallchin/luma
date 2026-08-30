@@ -438,16 +438,18 @@ fn progress(started: Instant, now: Instant) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewTabChoice {
     Universe,
+    Stage,
     Pattern,
     Track,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 3] = [Self::Universe, Self::Pattern, Self::Track];
+    pub(crate) const ALL: [Self; 4] = [Self::Universe, Self::Stage, Self::Pattern, Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Universe => "Universe setup",
+            Self::Stage => "Stage builder",
             Self::Pattern => "Pattern editor",
             Self::Track => "Track editor",
         }
@@ -477,10 +479,12 @@ impl ChoiceAvailability {
     }
 }
 
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 3] {
+pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 4] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
-            NewTabChoice::Universe if prerequisites.venue.is_none() => Some("Select a venue first"),
+            NewTabChoice::Universe | NewTabChoice::Stage if prerequisites.venue.is_none() => {
+                Some("Select a venue first")
+            }
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
             // The track gate outranks the pattern gate: a pattern can be
@@ -574,6 +578,7 @@ impl Luma {
         self.tab_chrome.menu_open = false;
         match choice {
             NewTabChoice::Universe => self.open_universe(cx),
+            NewTabChoice::Stage => self.open_stage(cx),
             NewTabChoice::Pattern => {
                 if let Some(pattern) = self.selected_pattern.clone() {
                     self.open_pattern(pattern, cx);

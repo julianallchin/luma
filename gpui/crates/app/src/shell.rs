@@ -37,7 +37,7 @@ use luma_ui::{glass, ladder};
 use crate::tabs::Target;
 use crate::{
     add_tracks, chat_history, chrome, confirm, fixture_picker, graph, keymap, patterns, settings,
-    subagents, tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
+    stage, subagents, tab_chrome, track_editor, tracks, universe, visualizer, welcome, Luma,
 };
 
 /// How wide the sidebar opens. Comet's default.
@@ -117,6 +117,7 @@ pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
     Graph(Box<graph::Editor>),
     Universe(Box<universe::Universe>),
+    Stage(Box<stage::StagePage>),
 }
 
 impl Body {
@@ -126,6 +127,7 @@ impl Body {
             Self::TrackEditor(state) => state.track_name().to_string().into(),
             Self::Graph(state) => state.pattern_name().to_string().into(),
             Self::Universe(state) => state.venue_name().to_string().into(),
+            Self::Stage(state) => state.venue_name.clone().into(),
         }
     }
 }
@@ -273,7 +275,7 @@ impl Luma {
                     .detach();
                 }
             }
-            Body::Graph(_) | Body::Universe(_) => {}
+            Body::Graph(_) | Body::Universe(_) | Body::Stage(_) => {}
         }
     }
 
@@ -978,6 +980,9 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     // being tracked twice, or nowhere.
     let holds_focus = matches!(app.focus_slot(), FocusSlot::Tab(_));
     let focus = app.focus.clone();
+    // Read before the workspace is borrowed mutably: the builder lives beside
+    // the picture, not in the tab, and its state is a projection either way.
+    let stage_view = app.stage_view();
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
@@ -987,6 +992,9 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         }
         Body::Graph(state) => graph::graph(state, &entity).into_any_element(),
         Body::Universe(state) => universe::universe(state).into_any_element(),
+        Body::Stage(state) => {
+            stage::stage_page(state, &entity, stage_view.as_ref()).into_any_element()
+        }
     };
     div()
         .flex_1()

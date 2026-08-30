@@ -60,6 +60,9 @@ pub(crate) enum Target {
     Graph { pattern: String },
     /// One venue's DMX patch. Singleton per venue.
     Universe { venue: String },
+    /// One venue's builder — the room, and everything that puts things in it.
+    /// Singleton per venue, like the patch: a venue has one shape.
+    Stage { venue: String },
 }
 
 impl Target {
@@ -72,6 +75,7 @@ impl Target {
             Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
             Self::Graph { .. } => crate::keymap::context::GRAPH,
             Self::Universe { .. } => crate::keymap::context::UNIVERSE,
+            Self::Stage { .. } => crate::keymap::context::STAGE,
         }
     }
 
@@ -85,6 +89,7 @@ impl Target {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
             Self::Graph { pattern } => format!("graph:{pattern}"),
             Self::Universe { venue } => format!("universe:{venue}"),
+            Self::Stage { venue } => format!("stage:{venue}"),
         }
     }
 
@@ -98,7 +103,7 @@ impl Target {
     /// the call site that asks.
     pub(crate) fn venue(&self) -> Option<&str> {
         match self {
-            Self::Universe { venue } => Some(venue),
+            Self::Universe { venue } | Self::Stage { venue } => Some(venue),
             Self::TrackEditor { .. } | Self::Graph { .. } => None,
         }
     }

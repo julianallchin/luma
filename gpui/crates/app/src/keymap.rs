@@ -53,6 +53,7 @@ pub(crate) mod context {
     pub const GRAPH: &str = "Graph";
     pub const VISUALIZER: &str = "Visualizer";
     pub const UNIVERSE: &str = "Universe";
+    pub const STAGE: &str = "Stage";
 
     // Overlay contexts. One overlay is up at a time, over all three regions.
     pub const VENUES: &str = "Venues";
@@ -139,6 +140,13 @@ actions!(
         /// visible tab, so this is a preference about screen space and never a
         /// navigation.
         ToggleVisualizer,
+        /// Copy the stage builder's selected subtree onto the cursor. Scoped
+        /// to the stage page, because ⌘D means nothing anywhere else and a
+        /// shell-wide binding would take the chord from every tab that might
+        /// one day want it.
+        DuplicateSubtree,
+        /// Put the builder's hand down without placing anything.
+        CancelBuild,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
         /// Undo / redo the track editor's last edit.
@@ -236,6 +244,8 @@ pub(crate) fn init(cx: &mut App) {
         // Not a bare letter: the track editor's alphabet is already spoken
         // for, and this reshapes the column that editor sits in.
         KeyBinding::new("secondary-shift-v", ToggleVisualizer, Some(&shell)),
+        KeyBinding::new("secondary-d", DuplicateSubtree, Some(context::STAGE)),
+        KeyBinding::new("escape", CancelBuild, Some(context::STAGE)),
         KeyBinding::new("secondary-1", SelectTab1, Some(&shell)),
         KeyBinding::new("secondary-2", SelectTab2, Some(&shell)),
         KeyBinding::new("secondary-3", SelectTab3, Some(&shell)),

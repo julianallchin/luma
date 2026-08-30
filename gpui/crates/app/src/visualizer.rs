@@ -361,7 +361,7 @@ pub(crate) struct Visualizer {
     /// tab's subject venue every frame, and this is what that derivation is
     /// compared against — a stage already showing the right room is kept, GPU
     /// and all, rather than rebuilt because the eye moved between two tabs.
-    venue_id: String,
+    pub(crate) venue_id: String,
     venue_name: String,
     /// The score lighting the rig, when one is. Compared alongside
     /// [`Self::venue_id`] so moving between scores — of one track or of two —
@@ -403,6 +403,9 @@ pub(crate) struct Visualizer {
     render_lab: RenderLab,
     /// Whether the FPS readout is unfolded into the full frame-stats panel.
     fps_expanded: bool,
+    /// The builder. `None` until the rig lands, and the one place a position
+    /// is editable in this app — see [`crate::stage`].
+    pub(crate) build: Option<crate::stage::Build>,
     stage: Rc<RefCell<Stage>>,
 }
 
@@ -468,6 +471,14 @@ struct Stage {
     /// The size frames are drawn at, which lags the size the element occupies
     /// for as long as that size keeps moving.
     rendered_size: RenderSize,
+    /// Where the viewport sits in the window, as of the last layout.
+    ///
+    /// Recorded by a measuring element that is mounted whether or not there is
+    /// a renderer, because the builder's own layer projects sockets into these
+    /// bounds and must work with the device off — [`Self::displayed_pick`] and
+    /// [`Visualizer::viewport_origin`] both exist only once a frame has been
+    /// drawn.
+    pane: Bounds<Pixels>,
 }
 
 /// The size the stage renders at, held still while its element is resizing.
@@ -878,6 +889,7 @@ impl Visualizer {
             viewport_origin: Point::default(),
             render_lab: RenderLab::new(editor_lit),
             fps_expanded: false,
+            build: None,
             stage: Rc::default(),
         }
     }
@@ -930,6 +942,18 @@ impl Visualizer {
         }
     }
 
+    /// A rig re-read after a graph edit. The camera stays where the operator
+    /// left it — a builder that re-framed on every placement would throw the
+    /// view away once per piece.
+    pub(crate) fn rig_reloaded(&mut self, loaded: Result<Rig, LibraryError>) {
+        let framing = self.framing.clone();
+        let camera = self.camera;
+        self.rig_loaded(loaded);
+        self.framing = framing;
+        self.camera = camera;
+        self.owes_opening_pose = false;
+    }
+
     fn rig_loaded(&mut self, loaded: Result<Rig, LibraryError>) {
         let rig = match loaded {
             Ok(rig) => rig,
@@ -938,6 +962,21 @@ impl Visualizer {
                 return;
             }
         };
+        // The builder first, and whether or not there is anything to draw: an
+        // empty room is exactly the room a builder is for, and a page that
+        // waited for a piece before offering a palette could never place the
+        // first one.
+        match self.build.as_mut() {
+            Some(build) => build.adopt(&rig),
+            None => {
+                self.build =
+                    luma_render::catalog::VenueSockets::load(stage_render::meshes_root(None))
+                        .ok()
+                        .and_then(|sockets| {
+                            crate::stage::Build::new(&self.venue_id, &rig, sockets)
+                        });
+            }
+        }
         if rig.is_empty() {
             self.status = Status::Empty(format!("{} has nothing patched", self.venue_name));
             return;
@@ -1203,6 +1242,19 @@ impl Visualizer {
                     self.selection.click(target, shift);
                 } else if !shift {
                     self.selection.clear();
+                }
+                // The builder selects the *node*, not the render object: a
+                // subtree, a trim and a detach are all things the graph has
+                // names for, and a draw is not one of them.
+                if let Some(build) = self.build.as_mut() {
+                    build.selected = self
+                        .selection
+                        .primary()
+                        .and_then(|target| pick.object(target))
+                        .map(|object| match object {
+                            EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
+                        });
+                    build.trim_draft = None;
                 }
             }
             EditorDrag::Marquee(marquee) => self.selection.replace(pick.marquee(marquee, viewport)),
@@ -1931,7 +1983,7 @@ fn stage_gpu_enabled() -> bool {
 /// type as each other, which is exactly when positional returns start getting
 /// swapped by accident.
 struct StageSubject {
-    venue_id: String,
+    pub(crate) venue_id: String,
     venue_name: String,
     /// The score that lights the rig, when one does.
     lit: Option<Lit>,
@@ -1988,7 +2040,8 @@ impl Luma {
         // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.lit(),
-            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Universe(_)) | None => None,
+            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Universe(_) | Body::Stage(_))
+            | None => None,
         };
         let name = self
             .sidebar
@@ -2107,6 +2160,27 @@ pub(crate) fn visualizer(
     let chrome = toolbar(state, app, library);
     let floating = overlay_toolbar(state, app);
     let fps = fps_overlay(state, app);
+    let pane = state.stage.borrow().pane;
+    let builder = state.build.as_ref().map(|build| {
+        crate::stage::build_layer(
+            build,
+            &state.camera,
+            pane.origin,
+            (f32::from(pane.size.width), f32::from(pane.size.height)),
+            app,
+        )
+    });
+    let measure = {
+        let stage = Rc::clone(&state.stage);
+        canvas(
+            move |bounds, _, _| {
+                stage.borrow_mut().pane = bounds;
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    };
     let lab = state
         .render_lab
         .open
@@ -2123,6 +2197,8 @@ pub(crate) fn visualizer(
                 .min_h_0()
                 .relative()
                 .child(body(state, app, library))
+                .child(measure)
+                .children(builder)
                 .child(fps)
                 .child(floating)
                 .children(lab),
@@ -2983,10 +3059,28 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         })
     };
     let gizmo_mode = state.gizmo_mode;
+    // The builder's ghost, measurement and socket beads, snapshotted for the
+    // paint closure. They ride inside `scene.editor`, which `IdleKey` compares
+    // whole — so a ghost that moved is a frame the stage owes, without a
+    // second flag to remember.
+    let build_affordances =
+        state
+            .build
+            .as_ref()
+            .map_or_else(luma_render::scene_desc::Build::default, |build| {
+                let mut editor = scene_desc::Editor::default();
+                crate::stage::install(build, &mut editor);
+                editor.build
+            });
     // A pointer drag holds the idle gate open: camera drags move the key's
     // camera anyway, but a gizmo drag mutates the scene's geometry, which the
     // key deliberately does not carry.
-    let interacting = state.drag.is_some() || state.editor_drag.is_some();
+    let interacting = state.drag.is_some()
+        || state.editor_drag.is_some()
+        || state
+            .build
+            .as_ref()
+            .is_some_and(|build| build.hand.owns_pointer());
     let key_lab = {
         let mut lab = state.render_lab.clone();
         lab.open = false;
@@ -3134,6 +3228,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             scene.editor = scene_desc::Editor {
                                 selected_piece_ids: selected_piece_ids.clone(),
                                 gizmo: gizmo_mode,
+                                build: build_affordances.clone(),
                             };
                             match gpu.frame(LiveFrameInputs {
                                 scene,
