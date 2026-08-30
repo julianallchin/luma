@@ -1,6 +1,6 @@
 -- Remote counterpart of `src-tauri/migrations/20260829000000_venue_graph.sql`.
 --
--- ***NOT DEPLOYED, AND NOT YET REACHABLE.*** The four tables are local-only in
+-- Deployed 2026-08-30. The four tables are local-only in
 -- phase 3 — they are absent from `src-tauri/src/sync/registry.rs`, so nothing
 -- pushes to them and nothing pulls from them. The filename says so on purpose:
 -- rename it to `20260829000000_venue_graph.sql` at the same time as the two
