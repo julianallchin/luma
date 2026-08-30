@@ -147,7 +147,6 @@ macro_rules! commands {
 use std::collections::{BTreeMap, HashMap};
 
 use crate::annotation_preview::LivePreviewInput;
-use crate::artnet::ArtNetNode;
 use crate::compositor::LiveAnnotation;
 use crate::database::remote::queries::SearchPatternRow;
 use crate::engine_dj::types::{EngineDjLibraryInfo, EngineDjPlaylist, EngineDjTrack};
@@ -175,6 +174,7 @@ use crate::models::mixer::{MixerMapping, MixerStatus};
 use crate::models::node_graph::{
     BeatGrid, Graph, GraphContext, NodeTypeDef, PatternArgDef, RunResult,
 };
+use crate::models::patch::ArtNetNode;
 use crate::models::patch::{AutoPatchReport, PatchAddress, UniverseCell, UniverseOutput};
 use crate::models::patterns::{
     AnnotationPreview, ForkPatternInput, ForkPatternResult, PatternCategory, PatternSummary,
@@ -193,6 +193,7 @@ use crate::models::waveforms::{TrackWaveform, WaveformWindow};
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 use crate::render_engine::PerformDeckInput;
 use crate::services::graph_documents::{GraphDocument, GraphEditResult};
+use crate::services::group_derivation::FixtureRole;
 use crate::services::track_edits::TrackEditResult;
 use crate::services::tracks::TrackBarClassifications;
 use crate::settings::AppSettings;
@@ -354,6 +355,14 @@ commands! {
         channels: i64,
         count: usize,
     ) -> Vec<PatchAddress>;
+    fixtures::set_fixture_mode(
+        venue_id: String,
+        id: String,
+        mode_name: String,
+        allow_move: bool,
+    ) -> PatchedFixture;
+    fixtures::set_address_pinned(venue_id: String, id: String, pinned: bool) -> ();
+    fixtures::fixture_role(path: String, mode_name: String) -> FixtureRole;
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 

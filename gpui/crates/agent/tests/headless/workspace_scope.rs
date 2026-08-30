@@ -39,7 +39,7 @@ const SCRIPT: &str = r#"
             .findAll({ role: "button" })
             .map((node) => node.label)
             .filter((label) => label === "Aurora" || label === "Zulu"
-                || label === "Strobe" || label === "Test Venue Universe setup");
+                || label === "Strobe" || label === "Test Venue Patch");
     }
 
     nav.venue("Test Venue");

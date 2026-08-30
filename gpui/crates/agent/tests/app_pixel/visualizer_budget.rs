@@ -71,7 +71,7 @@ fn open_viewport(harness: &mut Harness) {
             // The stage is a view of the tab below it, so a venue-naming
             // tab is what puts one on screen. The patch names a room and
             // no score, which is the unlit rig this test wants.
-            nav.universe("Test Venue");
+            nav.patch("Test Venue");
             app.frames(4, { waitMs: 60 });
             nav.expand();
             app.frames(8, { waitMs: 60 });

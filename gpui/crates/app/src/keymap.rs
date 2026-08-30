@@ -52,7 +52,7 @@ pub(crate) mod context {
     pub const TRACK_EDITOR: &str = "TrackEditor";
     pub const GRAPH: &str = "Graph";
     pub const VISUALIZER: &str = "Visualizer";
-    pub const UNIVERSE: &str = "Universe";
+    pub const PATCH: &str = "Patch";
     pub const STAGE: &str = "Stage";
 
     // Overlay contexts. One overlay is up at a time, over all three regions.
@@ -66,6 +66,8 @@ pub(crate) mod context {
     pub const SUBAGENTS: &str = "Subagents";
     /// Picking a clip's fixtures off the room.
     pub const FIXTURE_PICKER: &str = "FixturePicker";
+    /// Picking a definition and a count for the patch page.
+    pub const ADD_FIXTURES: &str = "AddFixtures";
     /// The one confirmation dialog — see [`crate::confirm`].
     pub const CONFIRM: &str = "Confirm";
     /// The full-screen sign-in state. Not in [`DIALOGS`]: it is not a plane
@@ -80,7 +82,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 8] = [
+    pub const DIALOGS: [&str; 9] = [
         VENUES,
         PATTERNS,
         SETTINGS,
@@ -88,6 +90,7 @@ pub(crate) mod context {
         CHAT_HISTORY,
         SUBAGENTS,
         FIXTURE_PICKER,
+        ADD_FIXTURES,
         CONFIRM,
     ];
     /// Declared by a focused field that is taking typed text. Any binding on

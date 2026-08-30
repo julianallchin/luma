@@ -30,6 +30,7 @@ mod track_editor_preview_pixels;
 mod track_editor_sheet_pixels;
 mod track_editor_waveform_pixels;
 mod venue_builder_pixels;
+mod venue_patch_pixels;
 mod venues_pixels;
 mod visualizer;
 mod visualizer_budget;

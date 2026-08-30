@@ -46,6 +46,7 @@ mod track_editor_ux;
 mod track_editor_waveform;
 mod tracks;
 mod venue_builder;
+mod venue_patch;
 mod venues;
 mod visualizer_score;
 mod workspace_scope;

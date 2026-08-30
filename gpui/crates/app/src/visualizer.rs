@@ -2040,7 +2040,7 @@ impl Luma {
         // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.lit(),
-            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Universe(_) | Body::Stage(_))
+            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Patch(_) | Body::Stage(_))
             | None => None,
         };
         let name = self

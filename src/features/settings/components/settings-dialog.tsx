@@ -55,9 +55,9 @@ type AppSettings = {
 type ArtNetNode = {
 	ip: string;
 	name: string;
-	long_name: string;
-	port_address: number;
-	last_seen: number;
+	longName: string;
+	portAddress: number;
+	lastSeen: number;
 };
 
 const TABS: { value: SettingsTab; label: string }[] = [
@@ -483,7 +483,7 @@ function SettingsContent() {
 													{node.name || "Unknown Node"}
 												</div>
 												<div className="text-[10px] text-foreground/60">
-													{node.ip} • {node.long_name}
+													{node.ip} • {node.longName}
 												</div>
 											</div>
 											<Button

@@ -869,7 +869,7 @@ impl Luma {
                 popup.query.clone_from(&query);
             }
         }
-        let pending = self.library.search_fixtures(&query, 40);
+        let pending = self.library.search_fixtures(&query, 0, 40);
         cx.spawn(async move |this, cx| {
             let found = pending.await;
             this.update(cx, |this, cx| {
