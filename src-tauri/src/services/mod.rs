@@ -28,6 +28,7 @@ pub mod groups;
 pub mod patch;
 pub(crate) mod score_dsl;
 pub(crate) mod score_mutations;
+pub mod stage_ops;
 pub mod track_edits;
 pub mod tracks;
 pub mod waveforms;

@@ -591,6 +591,25 @@ def test_shutdown():
 # ---------------------------------------------------------------------------
 
 
+def run_stdlib_suites() -> int:
+    """The focused suites next door, in the same command.
+
+    `test_track.py` and `test_venue.py` drive the same facades this file drives
+    through a worker, at a smaller radius and with no venv — which is exactly
+    why they are easy to forget. They went unrun for a whole surface; one
+    command is the fix.
+    """
+    import unittest
+
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite(
+        loader.loadTestsFromName(name) for name in ("test_track", "test_venue")
+    )
+    print("\n--- stdlib suites (test_track, test_venue) ---")
+    result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
+    return len(result.failures) + len(result.errors)
+
+
 def main() -> int:
     python, is_venv = harness.find_python()
     root = Path(tempfile.mkdtemp(prefix="luma-exec-tests-"))
@@ -620,13 +639,15 @@ def main() -> int:
                 client.close()
         shutil.rmtree(root, ignore_errors=True)
 
+    stdlib_failures = run_stdlib_suites()
+
     print()
     if "startup_s" in _STATE:
         print(f"worker startup (spawn -> ready frame): {_STATE['startup_s'] * 1000:.0f} ms")
     for name, tb in failed:
         print(f"\n--- {name} ---\n{tb}")
-    print(f"\n{passed} passed, {len(failed)} failed")
-    return 1 if failed else 0
+    print(f"\n{passed} passed, {len(failed) + stdlib_failures} failed")
+    return 1 if failed or stdlib_failures else 0
 
 
 if __name__ == "__main__":

@@ -621,6 +621,11 @@ pub fn run() {
             dispatch::adapter::distribute,
             dispatch::adapter::set_params,
             dispatch::adapter::delete_subtree,
+            dispatch::adapter::extend,
+            dispatch::adapter::extend_reach,
+            dispatch::adapter::duplicate,
+            dispatch::adapter::describe_venue,
+            dispatch::adapter::stage_catalog,
             // Groups
             dispatch::adapter::create_group,
             dispatch::adapter::list_groups,
