@@ -1910,8 +1910,8 @@ impl MetalRenderer {
 
         for (index, surface) in surfaces.iter().enumerate() {
             let texture_size = size(
-                DevicePixels::from(surface.image_buffer.get_width() as i32),
-                DevicePixels::from(surface.image_buffer.get_height() as i32),
+                DevicePixels::from(surface.source.get_width() as i32),
+                DevicePixels::from(surface.source.get_height() as i32),
             );
 
             command_encoder.set_vertex_bytes(
@@ -1928,11 +1928,11 @@ impl MetalRenderer {
                 let plane_texture = self
                     .core_video_texture_cache
                     .create_texture_from_image(
-                        surface.image_buffer.as_concrete_TypeRef(),
+                        surface.source.as_concrete_TypeRef(),
                         None,
                         format,
-                        surface.image_buffer.get_width_of_plane(index),
-                        surface.image_buffer.get_height_of_plane(index),
+                        surface.source.get_width_of_plane(index),
+                        surface.source.get_height_of_plane(index),
                         index,
                     )
                     .unwrap();
@@ -1945,7 +1945,7 @@ impl MetalRenderer {
 
             // Held only for its lifetime: the `CVMetalTexture` wrappers must
             // outlive the draw that binds them.
-            let format = surface.image_buffer.get_pixel_format();
+            let format = surface.source.get_pixel_format();
             let _planes = if format == kCVPixelFormatType_32BGRA {
                 command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
                 vec![plane(

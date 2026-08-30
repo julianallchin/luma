@@ -3,6 +3,7 @@
 #![cfg(all(feature = "app", feature = "pixel"))]
 
 use super::support;
+use support::session;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,10 +20,12 @@ async fn seed(dir: &Path, remembered: bool) {
     let db = luma_lib::database::local::database::init_app_db_at(dir)
         .await
         .expect("failed to open pixel fixture app database");
-    sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', NULL, 'Pixel Venue')")
+    sqlx::query("INSERT INTO venues (id, uid, name) VALUES ('venue', ?, 'Pixel Venue')")
+        .bind(session::PRINCIPAL)
         .execute(&db.0)
         .await
         .expect("failed to seed pixel venue");
+    session::signed_in(dir).await;
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await
         .expect("failed to open pixel fixture state database");
@@ -540,8 +543,9 @@ async fn seed_many(dir: &Path, venues: usize) {
         .await
         .expect("failed to open venue cost fixture database");
     for index in 0..venues {
-        sqlx::query("INSERT INTO venues (id, uid, name, description) VALUES (?, NULL, ?, ?)")
+        sqlx::query("INSERT INTO venues (id, uid, name, description) VALUES (?, ?, ?, ?)")
             .bind(format!("venue-{index:04}"))
+            .bind(session::PRINCIPAL)
             .bind(format!("Pixel Venue {index:04}"))
             .bind(format!(
                 "A seeded room for frame-cost measurement, number {index}"
@@ -550,6 +554,7 @@ async fn seed_many(dir: &Path, venues: usize) {
             .await
             .expect("failed to seed venue");
     }
+    session::signed_in(dir).await;
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await
         .expect("failed to open venue cost fixture state database");

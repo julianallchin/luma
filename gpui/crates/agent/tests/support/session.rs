@@ -29,8 +29,9 @@ pub enum Stored {
     /// is exactly the state that used to trigger a fatal refresh at boot.
     Proven { expires_in: i64 },
     /// Session bytes with no proof beside them. Only an online round trip can
-    /// turn this into an identity, and boot does not make one — so this is the
-    /// lapsed session that raises the sign-in gate.
+    /// turn this into an identity; boot tries one, and this refresh token is
+    /// one Supabase will not honour — so this is the lapsed session that
+    /// raises the sign-in gate, after the splash.
     Unproven,
 }
 
@@ -69,6 +70,17 @@ pub fn owner(stored: Stored) -> Option<&'static str> {
         Stored::Proven { .. } => Some(PRINCIPAL),
         Stored::Unproven => None,
     }
+}
+
+/// Sign the fixture at `dir` in as [`PRINCIPAL`], the way every harness that
+/// is not testing the gate itself launches: nothing in Luma opens without a
+/// principal, so a fixture that skipped this would open on the sign-in screen.
+///
+/// Rows the fixture writes must carry [`PRINCIPAL`] as their `uid`, or the
+/// principal will see none of them: visibility is `uid IS active_uid`, and an
+/// authored row's identity is immutable once written.
+pub async fn signed_in(dir: &Path) {
+    seed(dir, Stored::Proven { expires_in: 3600 }).await;
 }
 
 /// Write `stored` into the state database at `dir`, opening and closing it.

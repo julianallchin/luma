@@ -3,6 +3,7 @@
 #![cfg(feature = "app")]
 
 use super::support;
+use support::session;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,8 +21,9 @@ async fn seed(dir: &Path, venues: &[(&str, &str)], remembered: Option<&str>, tra
         .await
         .expect("failed to open fixture app database");
     for (id, name) in venues {
-        sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, NULL, ?)")
+        sqlx::query("INSERT INTO venues (id, uid, name) VALUES (?, ?, ?)")
             .bind(id)
+            .bind(session::PRINCIPAL)
             .bind(name)
             .execute(&db.0)
             .await
@@ -31,9 +33,10 @@ async fn seed(dir: &Path, venues: &[(&str, &str)], remembered: Option<&str>, tra
             sqlx::query(
                 "INSERT INTO tracks
                     (id, uid, track_hash, title, artist, duration_seconds, file_path)
-                 VALUES (?, NULL, ?, ?, 'Fixture', 60.0, ?)",
+                 VALUES (?, ?, ?, ?, 'Fixture', 60.0, ?)",
             )
             .bind(&track_id)
+            .bind(session::PRINCIPAL)
             .bind(format!("hash-{id}"))
             .bind(format!("{name} Track"))
             .bind(format!("/fixture/{id}.wav"))
@@ -42,9 +45,10 @@ async fn seed(dir: &Path, venues: &[(&str, &str)], remembered: Option<&str>, tra
             .expect("failed to seed track");
             sqlx::query(
                 "INSERT INTO scores (id, uid, track_id, venue_id, name)
-                 VALUES (?, NULL, ?, ?, 'Fixture Score')",
+                 VALUES (?, ?, ?, ?, 'Fixture Score')",
             )
             .bind(format!("score-{id}"))
+            .bind(session::PRINCIPAL)
             .bind(&track_id)
             .bind(id)
             .execute(&db.0)
@@ -52,6 +56,7 @@ async fn seed(dir: &Path, venues: &[(&str, &str)], remembered: Option<&str>, tra
             .expect("failed to seed venue score");
         }
     }
+    session::signed_in(dir).await;
     let state = luma_lib::database::local::state::init_state_db_at(dir)
         .await
         .expect("failed to open fixture state database");

@@ -1924,6 +1924,11 @@ impl PlatformWindow for X11Window {
         self.0.state.borrow().renderer.gpu_specs().into()
     }
 
+    // LUMA LOCAL EDIT: see `gpui::Window::wgpu_device`.
+    fn wgpu_device(&self) -> Option<gpui::WgpuDevice> {
+        self.0.state.borrow().renderer.wgpu_device()
+    }
+
     fn play_system_bell(&self) {
         // Volume 0% means don't increase or decrease from system volume
         let _ = self.0.xcb.bell(0);

@@ -95,8 +95,7 @@ fn the_sign_in_screen_is_one_centred_column_on_bare_ground() {
             ({ shot: app.screenshot().path,
                title: gate.find({ role: "text", label: "Sign in to Luma" }).bounds,
                email: gate.find({ role: "input", label: "Email" }).bounds,
-               primary: gate.find({ role: "button", label: "Continue" }).bounds,
-               offline: gate.find({ role: "button", label: "Work offline" }).bounds })
+               primary: gate.find({ role: "button", label: "Continue" }).bounds })
         "#,
         ),
         GPU_LIVENESS_TIMEOUT,
@@ -115,22 +114,16 @@ fn the_sign_in_screen_is_one_centred_column_on_bare_ground() {
     let (tx, ty, tw, _) = read_bounds(&out["title"]);
     let (ex, _, ew, _) = read_bounds(&out["email"]);
     let (px_, py, pw, ph) = read_bounds(&out["primary"]);
-    let (ox, oy, ow, oh) = read_bounds(&out["offline"]);
 
-    for (name, x, w) in [
-        ("title", tx, tw),
-        ("field", ex, ew),
-        ("primary", px_, pw),
-        ("secondary", ox, ow),
-    ] {
+    for (name, x, w) in [("title", tx, tw), ("field", ex, ew), ("primary", px_, pw)] {
         assert!(
             ((x + w / 2.0) - WINDOW.0 / 2.0).abs() <= 1.5,
             "the {name} is centred in the window: x = {x}, width = {w}"
         );
     }
 
-    // The capsule tier, as declared: one width, one height, for every capsule.
-    for (name, w, h) in [("primary", pw, ph), ("secondary", ow, oh)] {
+    // The capsule tier, as declared: one width, one height, for the capsule.
+    for (name, w, h) in [("primary", pw, ph)] {
         assert!(
             (w - luma_ui::pill::WIDTH).abs() <= 1.0 && (h - luma_ui::pill::HEIGHT).abs() <= 1.0,
             "the {name} capsule is {w}x{h}, not the tier's {}x{}",
@@ -142,13 +135,6 @@ fn the_sign_in_screen_is_one_centred_column_on_bare_ground() {
         (ew - luma_ui::pill::WIDTH).abs() <= 1.0,
         "the field is the column's width: {ew}"
     );
-    assert!(
-        ((oy - (py + ph)) - luma_ui::pill::GAP).abs() <= 1.5,
-        "the two capsules are one gap apart: {} vs {}",
-        oy - (py + ph),
-        luma_ui::pill::GAP
-    );
-
     // The whole column clears the drag band and its controls.
     assert!(
         ty >= luma_ui::dialog::TITLEBAR_CLEARANCE - 1.0,

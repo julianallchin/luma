@@ -1852,6 +1852,28 @@ impl HitchRing {
 /// The renderer decides which of these it can produce; the screen paints
 /// whichever it is handed. Neither end chooses — that is what keeps the CPU
 /// path a fallback rather than a mode.
+/// Start compiling the renderer's pipelines, on the compositor's device
+/// where the compositor has one to offer.
+///
+/// The one place gpui's device meets `luma_render`: neither crate knows the
+/// other, so the struct is spread here, field for field. Idempotent — the
+/// adoption keeps a live device and the warmup starts once.
+pub fn warm_renderer(window: &Window) {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    if let Some(gpui::WgpuDevice {
+        device,
+        queue,
+        adapter,
+        lost,
+    }) = window.wgpu_device()
+    {
+        luma_render::Gpu::adopt(device, queue, adapter, lost);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    let _ = window;
+    luma_render::warm();
+}
+
 #[derive(Clone)]
 enum StageFrame {
     /// Uploaded into gpui's sprite atlas under [`STAGE_IMAGE_ID`], refreshed in
@@ -1860,7 +1882,6 @@ enum StageFrame {
     /// Memory the renderer and the compositor both address. Nothing is
     /// uploaded and nothing is copied; the compositor samples where the
     /// renderer wrote.
-    #[cfg(target_os = "macos")]
     Shared(luma_render::Surface),
 }
 
@@ -1927,7 +1948,6 @@ impl Gpu {
         // gpu_total_ms" has two very different explanations and no way to pick.
         let shared_surface = matches!(presented.image, luma_render::Presented::Shared(_));
         let frame = match presented.image {
-            #[cfg(target_os = "macos")]
             luma_render::Presented::Shared(surface) => StageFrame::Shared(surface),
             luma_render::Presented::Pixels(pixels) => {
                 let buffer = image::RgbaImage::from_raw(width, height, pixels)
@@ -2935,10 +2955,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             .agent_node(Role::Card, "Stage")
             .into_any_element();
     }
-    // Idempotent, and normally a no-op: launch has already started this. It is
+    // Idempotent, and normally a no-op: launch has already started this (see
+    // `warm_renderer`, which also adopts the window's device first). It is
     // here as well so a stage opened by something that is not the app — a
     // harness, a test — still drives the warmup to a conclusion instead of
-    // sitting on `Cold` for ever.
+    // sitting on `Cold` for ever; with no window to adopt from, that warmup
+    // builds the renderer's own device, which is the right answer headless.
     luma_render::warm();
     // Compiling every pipeline is the one wait at launch long enough to need
     // naming. Saying so beats a blank rectangle, which is indistinguishable
@@ -2988,7 +3010,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         "request_to_prepaint_ms": "request_animation_frame to this prepaint",
                         "queued_ms": "waited for the renderer to start it",
                         "renders_in_gap": "stage renders during ui_frame_gap_ms; 1 is healthy, 0 means nothing asked for a frame",
-                        "shared_surface": "true = zero-copy IOSurface; false = CPU readback, whose copy and map sit inside draw_ms and are invisible to gpu_total_ms",
+                        "shared_surface": "true = zero-copy (an IOSurface on Metal, a texture on the compositor's own device on wgpu); false = CPU readback, whose copy and map sit inside draw_ms and are invisible to gpu_total_ms",
                         "delivered": "false = a prepaint that submitted a frame and got none back; interval/draw/queued/gpu are absent on those rows, everything measured before submission is valid",
                         "replaced_undelivered": "this submission pushed an older frame out of the queue before it ever reached the screen",
                         "slots_idle/rendering/ready/reserved": "presentation slots at submit; reserved are held because their surface is still on screen",
@@ -3006,7 +3028,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         "gpu_composite_ms": "of gpu_total_ms, the composite pass; scene+volumetric+composite are cut at consecutive fragment-stage completions and exhaust the total exactly, with time two concurrent passes shared charged to whichever finished first",
                         "cluster_ms": "clustered-light rebuild; null when untimed, 0 on a cache hit",
                         "submit_total_ms": "renderer worker, slot claim to queue.submit. NEVER null — a wall bracket, not an adapter timestamp. A slot reads Rendering from the moment it is claimed, so this is the only field that can see a worker blocked BEFORE anything reaches the GPU, which is the stall signature (slots rendering, no GPU work, UI thread healthy)",
-                        "submit_prepare/clusters/upload/targets/encode_ms": "of submit_total_ms, disjoint and summing to it. targets = acquiring the presentation target including the shared IOSurface the compositor samples; encode = command encoding through queue.submit",
+                        "submit_prepare/clusters/upload/targets/encode_ms": "of submit_total_ms, disjoint and summing to it. targets = acquiring the presentation target including the shared surface the compositor samples; encode = command encoding through queue.submit",
                         "worker_finished": "frames the renderer worker had RETIRED at this submit, delivered or discarded. Read the delta between rows: through a stall with slots pinned Rendering, flat = the GPU signalled nothing, climbing = the worker finished frames the UI threw away as stale. The two need opposite fixes",
                         "worker_last_signalled_ms": "the last retired frame's submit-to-completion span, including frames discarded as stale — whose timings reach no other field",
                         "redrawn_shadow_maps": "fixture shadow maps redrawn; 0 is healthy",
@@ -3492,9 +3514,8 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                         }
                         // Nothing to publish: the pixels are already in memory
                         // the compositor can address.
-                        #[cfg(target_os = "macos")]
                         StageFrame::Shared(surface) => {
-                            window.paint_surface(bounds, surface.pixel_buffer());
+                            window.paint_surface(bounds, surface.source());
                         }
                     }
                     stage.previous = Some(frame);

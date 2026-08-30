@@ -23,11 +23,28 @@ navigation, and they can only ever find edits someone remembered to mark; the
 diff is complete by construction. What the diff currently holds:
 
 - **Zero-copy presentation of a foreign renderer's frames** — the reason most of
-  this exists. `gpui_apple/src/metal_renderer.rs` (`bgra_surfaces_pipeline_state`
-  and the BGRA branch in `draw_surfaces`, `SurfaceInputIndex::BgraTexture`),
-  `gpui_apple/src/shaders.metal` (`bgra_surface_fragment`), and
-  `gpui/src/gpui.rs` (the `core_video` re-export, so callers need not pin the
-  crate version themselves).
+  this exists. One `Window::paint_surface(bounds, SurfaceHandle)` on every
+  platform (`gpui/src/scene.rs` defines `SurfaceHandle` and `PaintSurface.source`,
+  `gpui/src/window.rs` the method), then per compositor:
+  - Metal: `gpui_apple/src/metal_renderer.rs` (`bgra_surfaces_pipeline_state`
+    and the BGRA branch in `draw_surfaces`, `SurfaceInputIndex::BgraTexture`),
+    `gpui_apple/src/shaders.metal` (`bgra_surface_fragment`), and
+    `gpui/src/gpui.rs` (the `core_video` re-export, so callers need not pin the
+    crate version themselves).
+  - wgpu (Linux): the renderer draws on the compositor's own device, so the
+    surface is a plain texture. `gpui/src/gpui.rs` (`WgpuDevice`, the `wgpu`
+    re-export), `gpui/src/platform.rs` (`PlatformWindow::wgpu_device`),
+    `gpui_wgpu/src/wgpu_context.rs` (`shared_device`; the device also asks for
+    `TIMESTAMP_QUERY` and WebGPU-default limits so a renderer can live on it),
+    `gpui_wgpu/src/wgpu_renderer.rs` (`wgpu_device`, and `PrimitiveBatch::Surfaces`
+    actually drawn: upstream's stub and its never-wired YCbCr layout are gone,
+    surfaces are an instance array plus a per-draw texture like polychrome
+    sprites), the three `gpui_wgpu/src/shaders*.wgsl` (`Surface`, `load_surface`,
+    the single-texture `fs_surface`), and `gpui_linux/src/linux/{x11,wayland}/window.rs`
+    (the trait method).
+  - `gpui_wgpu` is on **wgpu 30** (upstream: 29) so the compositor and
+    `luma_render` share one `wgpu::Device` type; the two API deltas are
+    `SurfaceConfiguration::color_space` and `Queue::present`.
 - **In-place atlas tile refresh**, so a live viewport can publish under one
   stable `ImageId` instead of churning a full-screen texture every frame. Three
   parts, and all three are load-bearing: `gpui/src/platform.rs` (the trait
