@@ -150,6 +150,13 @@ actions!(
         DuplicateSubtree,
         /// Put the builder's hand down without placing anything.
         CancelBuild,
+        /// Which transform widget the stage's selection wears — three's own
+        /// `W`/`E` pair, scoped to the stage page.
+        GizmoTranslate,
+        GizmoRotate,
+        /// Delete the stage builder's selected subtree. Its fixtures are
+        /// trayed, not destroyed.
+        DeleteStageElement,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
         /// Undo / redo the track editor's last edit.
@@ -213,6 +220,9 @@ pub(crate) fn init(cx: &mut App) {
     // The sidebar's own arrows, and the same exclusion for the same reason:
     // the search field is a text field, and there the arrows are the caret's.
     let browsing = format!("{} && !{}", context::SIDEBAR, context::TEXT_INPUT);
+    // The stage builder's letters and its delete, excluded from the
+    // add-element dialog's search field like every other typed character.
+    let staging = format!("{} && !{}", context::STAGE, context::TEXT_INPUT);
     let mut bindings = vec![
         KeyBinding::new("space", PlayPause, Some(&editing)),
         KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
@@ -249,6 +259,12 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("secondary-shift-v", ToggleVisualizer, Some(&shell)),
         KeyBinding::new("secondary-d", DuplicateSubtree, Some(context::STAGE)),
         KeyBinding::new("escape", CancelBuild, Some(context::STAGE)),
+        // The builder's own letters, with the text exclusion every bare
+        // letter carries.
+        KeyBinding::new("w", GizmoTranslate, Some(&staging)),
+        KeyBinding::new("e", GizmoRotate, Some(&staging)),
+        KeyBinding::new("delete", DeleteStageElement, Some(&staging)),
+        KeyBinding::new("backspace", DeleteStageElement, Some(&staging)),
         KeyBinding::new("secondary-1", SelectTab1, Some(&shell)),
         KeyBinding::new("secondary-2", SelectTab2, Some(&shell)),
         KeyBinding::new("secondary-3", SelectTab3, Some(&shell)),

@@ -81,8 +81,17 @@ pub struct Scene {
 pub struct Editor {
     /// Selected stage pieces. Fixtures are in [`Scene::selected_fixture_ids`].
     pub selected_piece_ids: Vec<String>,
+    /// The subset of [`Self::selected_piece_ids`] the transform gizmo may
+    /// stand on. Selection and grab-ability are two facts: a snapped piece is
+    /// selected and highlighted like anything else, but its pose is a relation
+    /// and the widget must not offer axes over one — so the highlight reads
+    /// the full list and [`crate::overlay::pivot`] reads only this one.
+    pub gizmo_piece_ids: Vec<String>,
     /// Which widget the transform gizmo shows.
     pub gizmo: luma_scene::GizmoMode,
+    /// The handle under the pointer (or being dragged), lit so the hand knows
+    /// what it is about to grab before it grabs it.
+    pub hover: Option<luma_scene::GizmoHandle>,
     /// What the builder is about to do, drawn over the room it would change.
     /// Empty on every screen that is not the stage page.
     pub build: Build,

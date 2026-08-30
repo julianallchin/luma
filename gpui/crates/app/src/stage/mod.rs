@@ -350,6 +350,21 @@ impl Build {
             .is_some_and(|node| self.freedom_of(node) == Freedom::Free)
     }
 
+    /// Whether this node's open sockets wear beads right now.
+    ///
+    /// The room at rest is a picture, not a control surface: beads appear when
+    /// the hand needs a joint to aim at — every candidate while something is
+    /// held or a run is being measured — and, at rest, only on the selected
+    /// piece, which is how an extend is begun. Choosing and configuring draw
+    /// their own affordances and no beads at all.
+    pub(crate) fn socket_shown(&self, node: &str) -> bool {
+        match &self.hand {
+            Hand::Placing(_) | Hand::Extending(_) => true,
+            Hand::Choosing(_) | Hand::Configuring(_) => false,
+            Hand::Idle => self.selected.as_deref() == Some(node),
+        }
+    }
+
     /// The freedom a placed node actually has, which is what the inspector may
     /// offer and the gizmo may not.
     ///
@@ -1111,6 +1126,43 @@ impl Luma {
         self.stage_verb(pending, cx);
     }
 
+    /// Delete the selected node and everything hanging off it.
+    ///
+    /// Fixtures riding a deleted piece are trayed rather than destroyed —
+    /// deletion is creation's dual (`delete_subtree`), so the patch survives
+    /// the structure it was hung on.
+    pub(crate) fn stage_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(build) = self.build_state() else {
+            return;
+        };
+        if build.committing {
+            return;
+        }
+        let (Some(node), venue) = (build.selected.clone(), build.venue_id.clone()) else {
+            return;
+        };
+        let pending = self.library.delete_subtree(&venue, &node);
+        if let Some(build) = self.build_mut() {
+            build.committing = true;
+            build.selected = None;
+        }
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    build.committing = false;
+                    if let Err(error) = &result {
+                        build.report = vec![error.to_string()];
+                    }
+                }
+                this.reload_stage(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Start fitting a row of `what` to one face.
     ///
     /// The preview is solved immediately rather than on the first edit, so the
@@ -1454,6 +1506,11 @@ pub(crate) struct StageView {
     pub(crate) unplaced: Vec<(String, String)>,
     pub(crate) dangling: Vec<String>,
     pub(crate) warnings: Vec<String>,
+    /// Whether the operator asked to see the complaints. The inspector prints
+    /// them only when this is set — the badge by the add button is the quiet
+    /// resting claim, and the sheet on an ordinary selection stays about the
+    /// selection.
+    pub(crate) warnings_pinned: bool,
     pub(crate) configuring: Option<ConfigureView>,
 }
 
@@ -1557,6 +1614,7 @@ impl Luma {
                 .map(|d| format!("{} {}", build.label_of(&d.node_id), d.socket))
                 .collect(),
             warnings: build.report.clone(),
+            warnings_pinned: build.warnings_pinned,
             configuring: build.hand.configuring().map(|row| ConfigureView {
                 host: format!("{} {}", row.host_label, row.host_socket),
                 what: row.what.label().to_string(),
@@ -2129,7 +2187,13 @@ const CONTROL_WIDTH: f32 = 244.0;
 /// thing it would flip is four hundred pixels away is a control that has lost
 /// its subject.
 fn node_menu(at: Point<Pixels>, app: &Entity<Luma>) -> AnyElement {
-    let (dup, flip, detach, close) = (app.clone(), app.clone(), app.clone(), app.clone());
+    let (dup, flip, detach, delete, close) = (
+        app.clone(),
+        app.clone(),
+        app.clone(),
+        app.clone(),
+        app.clone(),
+    );
     luma_ui::menu::ContextMenu::new("stage-node-menu", at)
         .item("Duplicate", move |_, cx| {
             dup.update(cx, |this, cx| this.stage_duplicate(cx));
@@ -2140,6 +2204,9 @@ fn node_menu(at: Point<Pixels>, app: &Entity<Luma>) -> AnyElement {
         .separator()
         .destructive("Detach", move |_, cx| {
             detach.update(cx, |this, cx| this.stage_detach(cx));
+        })
+        .destructive("Delete", move |_, cx| {
+            delete.update(cx, |this, cx| this.stage_delete(cx));
         })
         .render(move |_, cx| {
             close.update(cx, |this, cx| this.stage_close_menu(cx));
@@ -2240,9 +2307,11 @@ fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyEleme
             .children(selected.relation.clone().map(note))
             .children(selected.constraint.clone().map(note));
     }
-    // Warnings last: a selection is what the hand is about to do, a warning is
-    // a report on what it already did.
-    if !view.dangling.is_empty() || !view.warnings.is_empty() {
+    // Warnings last, and only when asked for: the badge by the add button is
+    // the resting claim, and pressing it is what pins the sentences here. A
+    // sheet that dumped them beside every selection would make selecting a
+    // thing mean reading a report about everything else.
+    if view.warnings_pinned && (!view.dangling.is_empty() || !view.warnings.is_empty()) {
         let mut block = div()
             .flex()
             .flex_col()
@@ -2517,7 +2586,7 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
     let forward = (camera.target - camera.position()).normalize_or_zero();
     let mut out = Vec::new();
     for (node, socket) in build.room.open_sockets() {
-        if !hand::can_host(socket) {
+        if !build.socket_shown(node) || !hand::can_host(socket) {
             continue;
         }
         let Some(at) = build.room.socket_world(node, &socket.name) else {
@@ -2906,7 +2975,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
     out.sockets = build
         .room
         .open_sockets()
-        .filter(|(_, socket)| hand::can_host(socket))
+        .filter(|(node, socket)| build.socket_shown(node) && hand::can_host(socket))
         .filter_map(|(node, socket)| {
             let at = build.room.socket_world(node, &socket.name)?;
             let pose = build.room.pose(node)?;
