@@ -34,9 +34,10 @@ pub(crate) mod hand;
 use std::collections::{BTreeMap, HashMap};
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Context, Entity, Pixels, Point};
+use gpui::{div, px, AnyElement, App, Context, Div, Entity, Pixels, Point, Window};
 use gpui_component::scroll::ScrollableElement as _;
-use luma_lib::models::distribute::{DistributeLayout, DistributeRefusal, DistributeReport};
+use gpui_component::{Icon, IconName};
+use luma_lib::models::distribute::DistributeLayout;
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
 use luma_scene::catalog::{pieces, PaletteGroup};
@@ -45,7 +46,6 @@ use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
 use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::{Enabled, CONTROL_HEIGHT};
 
 use crate::library::{LibraryError, Rig};
 use crate::Luma;
@@ -108,10 +108,15 @@ pub(crate) struct Build {
     sockets: VenueSockets,
     /// The selected node — a venue-graph id, not a render object.
     pub(crate) selected: Option<String>,
-    /// Whether the palette is open.
-    pub(crate) palette_open: bool,
-    /// The distribution popup, when one is open.
-    pub(crate) distribute: Option<Distribute>,
+    /// How much of the inspector sheet is on screen. The one place "is the
+    /// inspector up" lives — see [`luma_ui::pane::PaneWidth`]; its target is
+    /// *derived* from the selection by [`Build::inspector_target`], so a
+    /// selection made anywhere cannot forget to open the sheet.
+    pub(crate) inspector: luma_ui::pane::PaneWidth,
+    /// The operator asked to see the solve's complaints with nothing selected.
+    pub(crate) warnings_pinned: bool,
+    /// What the fixture library last answered the dialog's query with.
+    pub(crate) fixtures: Vec<(String, String)>,
     /// The trim field's draft text. Held as typed so a half-entered number is
     /// not rounded under the operator's caret.
     pub(crate) trim_draft: Option<String>,
@@ -121,36 +126,6 @@ pub(crate) struct Build {
     /// so a second release while one is in flight is dropped rather than
     /// queued.
     pub(crate) committing: bool,
-}
-
-/// The distribution popup's state: a host feature, a fixture, a count, a
-/// layout, and whatever the last attempt reported.
-pub(crate) struct Distribute {
-    pub(crate) host_node: String,
-    pub(crate) host_socket: String,
-    pub(crate) fixture_path: Option<String>,
-    pub(crate) mode_name: Option<String>,
-    pub(crate) query: String,
-    pub(crate) results: Vec<(String, String)>,
-    pub(crate) count: usize,
-    pub(crate) layout: DistributeLayout,
-    pub(crate) report: Option<DistributeReport>,
-}
-
-impl Distribute {
-    fn new(host_node: String, host_socket: String) -> Self {
-        Self {
-            host_node,
-            host_socket,
-            fixture_path: None,
-            mode_name: None,
-            query: String::new(),
-            results: Vec::new(),
-            count: 4,
-            layout: DistributeLayout::Even,
-            report: None,
-        }
-    }
 }
 
 impl Build {
@@ -170,8 +145,9 @@ impl Build {
             hand: Hand::default(),
             sockets,
             selected: None,
-            palette_open: false,
-            distribute: None,
+            inspector: luma_ui::pane::PaneWidth::new(0.0),
+            warnings_pinned: false,
+            fixtures: Vec::new(),
             trim_draft: None,
             report: Vec::new(),
             committing: false,
@@ -197,6 +173,82 @@ impl Build {
             .is_some_and(|id| self.graph.node(id).is_none())
         {
             self.selected = None;
+        }
+    }
+
+    /// Record what the fixture library said about the thing in the hand.
+    ///
+    /// Reaches into whichever state is holding it, because the definition may
+    /// land after the operator has already carried the fixture onto a face —
+    /// the read is async and the hand does not wait for it.
+    pub(crate) fn set_fixture_facts(&mut self, mode: Option<String>, width: f64) {
+        let what = match &mut self.hand {
+            Hand::Placing(held) => &mut held.what,
+            Hand::Configuring(row) => &mut row.what,
+            Hand::Idle | Hand::Choosing(_) | Hand::Extending(_) => return,
+        };
+        if let Holding::Fixture {
+            mode: slot,
+            width_m,
+            ..
+        } = what
+        {
+            *slot = mode;
+            *width_m = width;
+        }
+    }
+
+    /// Re-solve the row being configured, in place.
+    ///
+    /// The preview and the commit share both halves of the arithmetic —
+    /// [`luma_render::face::host_face`] for how long the face is, and
+    /// [`luma_scene::distribute::offsets`] for where the bodies land — so a
+    /// row that previews as fitting cannot come back refused, and the
+    /// "Extend to X m" the popover offers is the number the backend would
+    /// have quoted. Called after every edit to a count or a layout; it is
+    /// pure arithmetic over data already in memory, which is what makes
+    /// re-solving on every keystroke the cheap option rather than the
+    /// careful one.
+    pub(crate) fn repreview(&mut self) {
+        let Hand::Configuring(row) = &self.hand else {
+            return;
+        };
+        let Some((face, pose)) = self
+            .graph
+            .node(&row.host_node)
+            .and_then(|node| luma_render::face::host_face(&self.sockets, node, &row.host_socket))
+            .zip(self.room.pose(&row.host_node))
+        else {
+            return;
+        };
+        let Holding::Fixture { width_m, .. } = row.what else {
+            return;
+        };
+        let solved = luma_scene::distribute::offsets(face.feature, row.layout, row.count, width_m)
+            .map(|stations| {
+                stations
+                    .into_iter()
+                    .map(|u| station_pose(&face.socket, pose, u))
+                    .collect()
+            });
+        if let Hand::Configuring(row) = &mut self.hand {
+            row.preview = solved;
+        }
+    }
+
+    /// How wide the inspector should be, from the state that decides it.
+    ///
+    /// Derived rather than stored so the four places that change the selection
+    /// do not each have to remember to open the sheet — the classic "caller
+    /// must call A before B", answered by not having a B.
+    pub(crate) fn inspector_target(&self) -> f32 {
+        let wanted = self.selected.is_some()
+            || (self.warnings_pinned
+                && !(self.solved.dangling.is_empty() && self.report.is_empty()));
+        if wanted {
+            luma_ui::sheet::WIDTH
+        } else {
+            0.0
         }
     }
 
@@ -234,7 +286,9 @@ impl Build {
                 .node(root)
                 .map(|node| self.sockets.sockets(node))
                 .unwrap_or_default(),
-            Holding::Tray { .. } => vec![luma_render::catalog::fixture_clamp()],
+            Holding::Tray { .. } | Holding::Fixture { .. } => {
+                vec![luma_render::catalog::fixture_clamp()]
+            }
         }
     }
 
@@ -295,6 +349,24 @@ impl Build {
     }
 }
 
+/// The row layout, in the words the commit speaks.
+///
+/// Two vocabularies exist because the preview is geometry and the commit is a
+/// request over the wire; this is the one place they meet, so neither has to
+/// know the other's spelling.
+///
+/// **Smell:** `luma_lib`'s `distribute` model already carries the *forward*
+/// conversion as `impl From<DistributeLayout> for Layout`. This is its inverse
+/// and belongs beside it as a second `From`, not here — it lives in the app
+/// only because `src-tauri` is another owner's tree this pass.
+fn layout_of(layout: luma_scene::distribute::Layout) -> DistributeLayout {
+    match layout {
+        luma_scene::distribute::Layout::Even => DistributeLayout::Even,
+        luma_scene::distribute::Layout::Spacing(metres) => DistributeLayout::Spacing { metres },
+        luma_scene::distribute::Layout::Span(t0, t1) => DistributeLayout::Span { from: t0, to: t1 },
+    }
+}
+
 /// What a placed node may be moved by.
 ///
 /// The design's rule as a type: *snapped pieces have no transform gizmo*. Only
@@ -336,6 +408,28 @@ impl Freedom {
     }
 }
 
+/// Where one body of a row sits, `u` metres along the face from its middle.
+///
+/// The face's own frame, in the host's: tangent forward, normal up — which is
+/// what makes "hanging under" and "standing on" the same call with a different
+/// socket, exactly as [`luma_render::face::HostFace`] describes.
+fn station_pose(
+    socket: &luma_scene::sockets::ResolvedSocket,
+    host: glam::DMat4,
+    u: f64,
+) -> glam::DMat4 {
+    let tangent = socket.tangent.normalize_or_zero();
+    let normal = socket.normal.normalize_or_zero();
+    let bitangent = normal.cross(tangent);
+    let local = glam::DMat4::from_cols(
+        tangent.extend(0.0),
+        normal.extend(0.0),
+        bitangent.extend(0.0),
+        (socket.position + tangent * u).extend(1.0),
+    );
+    host * local
+}
+
 /// Every node's world frame, from the solved venue's stored triples.
 fn poses(solved: &ResolvedVenue) -> HashMap<String, glam::DMat4> {
     solved
@@ -357,9 +451,17 @@ fn poses(solved: &ResolvedVenue) -> HashMap<String, glam::DMat4> {
 
 /// The stage tab. Almost stateless: what a builder is doing lives on the
 /// [`Build`] beside the picture, and this is the venue the tab dies with.
-#[derive(Debug)]
 pub(crate) struct StagePage {
     pub(crate) venue_name: String,
+    /// The add-element dialog's query. An editor is an entity — it owns a
+    /// caret, a selection and an undo history — so it lives on the page rather
+    /// than in [`hand::Hand`], which holds no state a window could focus.
+    pub(crate) search: Entity<luma_ui::text_input::TextInput>,
+    /// The focus the dialog traps while it is up.
+    pub(crate) focus: gpui::FocusHandle,
+    /// Where the node menu is open, if it is. On the page and not the hand:
+    /// a menu is chrome about the selection, not a thing the hand is doing.
+    pub(crate) menu: Option<Point<Pixels>>,
 }
 
 impl Luma {
@@ -378,7 +480,12 @@ impl Luma {
             cx.notify();
             return;
         }
-        let page = StagePage { venue_name };
+        let page = StagePage {
+            venue_name,
+            search: cx.new(|cx| luma_ui::text_input::TextInput::search("Search elements…", cx)),
+            focus: cx.focus_handle(),
+            menu: None,
+        };
         self.open_tab(
             target,
             move || crate::shell::Body::Stage(Box::new(page)),
@@ -471,28 +578,91 @@ impl Luma {
         .detach();
     }
 
-    /// Arm a palette row: from here the cursor carries a ghost.
-    pub(crate) fn stage_arm(&mut self, row: &PaletteRow, cx: &mut Context<Self>) {
-        let footing = hand::footing_for(row.catalog_ref, row.tower);
+    /// The inspector's width this frame, retargeted from the state that
+    /// decides it — see [`Build::inspector_target`].
+    pub(crate) fn stage_inspector_width(&mut self, window: &mut Window, cx: &App) -> Pixels {
         let Some(build) = self.build_mut() else {
-            return;
+            return px(0.0);
         };
-        build.palette_open = false;
-        build.hand = Hand::Holding(Held::new(Holding::Piece {
-            catalog_ref: row.catalog_ref.to_string(),
-            kind: NodeKind::Piece,
-            display_name: row.label.clone(),
-            footing,
-            params: BTreeMap::new(),
-        }));
+        let target = build.inspector_target();
+        build.inspector.retarget(target, cx);
+        build.inspector.eval(window)
+    }
+
+    /// Open the add-element dialog.
+    pub(crate) fn stage_open_chooser(&mut self, cx: &mut Context<Self>) {
+        if let Some(build) = self.build_mut() {
+            build.hand = Hand::Choosing(hand::Choosing::default());
+        }
+        // The library is asked once per opening rather than per keystroke: the
+        // dialog filters what it has, and forty rows is the whole index for a
+        // query this shallow.
+        self.stage_search_fixtures(String::new(), cx);
         cx.notify();
     }
 
-    /// Put the hand down without placing anything.
-    pub(crate) fn stage_cancel(&mut self, cx: &mut Context<Self>) {
+    /// Take a row out of the dialog and into the hand.
+    ///
+    /// A library fixture arrives without its mode or its measurements — the
+    /// definition is a file read — so the hand takes it immediately and the
+    /// two facts land when they land. What the hand *cannot* do until they do
+    /// is commit, which is what [`ConfigureView::ready`] gates.
+    pub(crate) fn stage_take(&mut self, what: Holding, cx: &mut Context<Self>) {
+        let path = match &what {
+            Holding::Fixture { path, .. } => Some(path.clone()),
+            _ => None,
+        };
         if let Some(build) = self.build_mut() {
-            build.hand = Hand::Empty;
-            build.palette_open = false;
+            build.hand = Hand::Placing(Held::new(what));
+        }
+        if let Some(path) = path {
+            let pending = self.library.fixture_definition(&path);
+            cx.spawn(async move |this, cx| {
+                let Ok(definition) = pending.await else {
+                    return;
+                };
+                this.update(cx, |this, cx| {
+                    let mode = definition.modes.first().map(|mode| mode.name.clone());
+                    let width = luma_lib::services::distribute::body_width_m(&definition);
+                    if let Some(build) = this.build_mut() {
+                        build.set_fixture_facts(mode, width);
+                        build.repreview();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    /// Open the node menu where the pointer is.
+    pub(crate) fn stage_open_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(crate::shell::Body::Stage(page)) = self.workspace.active_body_mut() {
+            page.menu = Some(at);
+        }
+        cx.notify();
+    }
+
+    /// Close the node menu.
+    pub(crate) fn stage_close_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(crate::shell::Body::Stage(page)) = self.workspace.active_body_mut() {
+            page.menu = None;
+        }
+        cx.notify();
+    }
+
+    /// `Escape`: one rung down the flow, then the selection.
+    pub(crate) fn stage_escape(&mut self, cx: &mut Context<Self>) {
+        self.stage_close_menu(cx);
+        if let Some(build) = self.build_mut() {
+            let was_idle = matches!(build.hand, Hand::Idle);
+            build.hand = std::mem::take(&mut build.hand).escape();
+            if was_idle {
+                build.selected = None;
+                build.warnings_pinned = false;
+            }
         }
         cx.notify();
     }
@@ -522,7 +692,7 @@ impl Luma {
             None,
             exclude.as_deref(),
         );
-        if let Hand::Holding(held) = &mut build.hand {
+        if let Hand::Placing(held) = &mut build.hand {
             match solved {
                 Some((landed, latch)) => {
                     held.landed = Some(landed);
@@ -568,10 +738,28 @@ impl Luma {
         if landed.refused.is_some() {
             return;
         }
+        // A library fixture reaches the room only through the configure
+        // popover — it is created as a *row*, and a row needs a face to lie
+        // along. Dropping one on the floor has no verb, so the gesture is not
+        // one: the ghost simply stays in the hand.
+        if matches!(held.what, Holding::Fixture { .. }) {
+            return;
+        }
         let what = held.what.clone();
-        build.hand = Hand::Empty;
+        // Place mode is sticky, and only for a catalog piece: that is a stamp,
+        // and an operator rigging a row of them should not have to walk back
+        // to the dialog between each. A tray fixture and a duplicate are one
+        // specific thing each — once placed there is no second one to hold.
+        build.hand = match &what {
+            Holding::Piece { .. } => Hand::Placing(Held::again(&what)),
+            Holding::Duplicate { .. } | Holding::Tray { .. } | Holding::Fixture { .. } => {
+                Hand::Idle
+            }
+        };
         let root = build.room.root().to_string();
         let pending: Verb = match (&what, &landed.how) {
+            // Refused above: a fixture is created as a row, never dropped.
+            (Holding::Fixture { .. }, _) => return,
             (
                 Holding::Tray { node, .. },
                 Landing::Socket {
@@ -665,16 +853,28 @@ impl Luma {
         &mut self,
         node: String,
         socket: String,
+        at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let holding = self
+        let feature = self
             .build_state()
-            .is_some_and(|build| build.hand.held().is_some());
-        if holding {
+            .and_then(|build| build.room.socket(&node, &socket))
+            .is_some_and(hand::is_feature);
+        if let Some(held) = self.build_state().and_then(|build| build.hand.held()) {
+            // A fixture meeting a face is a *row*, not one light: that is the
+            // gesture the whole configure surface exists for. Structure meeting
+            // the same face is still one piece — a truss lands where it is
+            // pointed.
+            if feature && held.what.kind() == NodeKind::Fixture {
+                let what = held.what.clone();
+                self.stage_configure(what, node, socket, at, cx);
+                return;
+            }
             self.stage_aim_socket(&node, &socket, cx);
             self.stage_drop(cx);
             return;
         }
+
         let Some(build) = self.build_mut() else {
             return;
         };
@@ -682,10 +882,8 @@ impl Luma {
         let length_m = reach
             .as_ref()
             .map_or(hand::STUB_LENGTH_M, |reach| reach.gap_m);
-        let label = build.label_of(&node);
         build.hand = Hand::Extending(Box::new(Extending {
             from_node: node,
-            from_node_label: label,
             from_socket: socket,
             reach,
             length_m,
@@ -717,7 +915,7 @@ impl Luma {
         let their_socket = run.from_socket.clone();
         let bridge = run.bridges().cloned();
         let params = BTreeMap::from([("span".to_string(), run.length_m)]);
-        build.hand = Hand::Empty;
+        build.hand = Hand::Idle;
         let library = &self.library;
         let attach = library.attach(
             &venue,
@@ -776,7 +974,7 @@ impl Luma {
             return;
         };
         let display_name = build.label_of(&root);
-        build.hand = Hand::Holding(Held::new(Holding::Duplicate {
+        build.hand = Hand::Placing(Held::new(Holding::Duplicate {
             root,
             display_name,
             flip: false,
@@ -786,7 +984,7 @@ impl Luma {
 
     /// Invert the handedness of the copy in hand.
     pub(crate) fn stage_flip(&mut self, cx: &mut Context<Self>) {
-        if let Some(Hand::Holding(held)) = self.build_mut().map(|build| &mut build.hand) {
+        if let Some(Hand::Placing(held)) = self.build_mut().map(|build| &mut build.hand) {
             if let Holding::Duplicate { flip, .. } = &mut held.what {
                 *flip = !*flip;
             }
@@ -848,153 +1046,186 @@ impl Luma {
         self.stage_verb(pending, cx);
     }
 
-    /// Open the distribution popup on one host feature.
-    pub(crate) fn stage_open_distribute(
+    /// Start fitting a row of `what` to one face.
+    ///
+    /// The preview is solved immediately rather than on the first edit, so the
+    /// popover opens over a picture that already answers "what would one look
+    /// like here" — which is the question the count is an adjustment to.
+    pub(crate) fn stage_configure(
         &mut self,
+        what: Holding,
         node: String,
         socket: String,
+        at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(build) = self.build_mut() {
-            build.distribute = Some(Distribute::new(node, socket));
-        }
-        self.stage_search_fixtures(String::new(), cx);
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        let host_label = build.label_of(&node);
+        build.hand = Hand::Configuring(Box::new(hand::Configuring {
+            what,
+            host_node: node,
+            host_label,
+            host_socket: socket,
+            at,
+            count: 1,
+            layout: luma_scene::distribute::Layout::Even,
+            preview: Ok(Vec::new()),
+        }));
+        build.repreview();
         cx.notify();
     }
 
-    /// Search the QLC+ library for the distribution popup.
-    pub(crate) fn stage_search_fixtures(&mut self, query: String, cx: &mut Context<Self>) {
+    /// Change how many bodies the row has, and re-solve it.
+    pub(crate) fn stage_set_count(&mut self, count: usize, cx: &mut Context<Self>) {
         if let Some(build) = self.build_mut() {
-            if let Some(popup) = build.distribute.as_mut() {
-                popup.query.clone_from(&query);
+            if let Hand::Configuring(row) = &mut build.hand {
+                row.count = count.max(1);
             }
+            build.repreview();
         }
-        let pending = self.library.search_fixtures(&query, 40);
-        cx.spawn(async move |this, cx| {
-            let found = pending.await;
-            this.update(cx, |this, cx| {
-                let found = match found {
-                    Ok(found) => found,
-                    // A library that will not answer is a state the popup has
-                    // to show: an empty list that means "no such fixture" and
-                    // one that means "the index never built" are the same
-                    // picture, and only one of them is the operator's problem.
-                    Err(error) => {
-                        if let Some(build) = this.build_mut() {
-                            build.report = vec![error.to_string()];
-                        }
-                        cx.notify();
-                        return;
-                    }
-                };
-                if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
-                    popup.results = found
-                        .into_iter()
-                        .map(|entry| {
-                            (
-                                format!("{} {}", entry.manufacturer, entry.model),
-                                entry.path,
-                            )
-                        })
-                        .collect();
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        cx.notify();
     }
 
-    /// Run the distribution the popup describes.
-    pub(crate) fn stage_distribute(&mut self, cx: &mut Context<Self>) {
+    /// Change how the row is spread, and re-solve it.
+    pub(crate) fn stage_set_layout(
+        &mut self,
+        layout: luma_scene::distribute::Layout,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(build) = self.build_mut() {
+            if let Hand::Configuring(row) = &mut build.hand {
+                row.layout = layout;
+            }
+            build.repreview();
+        }
+        cx.notify();
+    }
+
+    /// Grow the host to the length the fit failure asked for, then re-solve.
+    ///
+    /// The one press that answers a refusal, and it is a *preview* press: the
+    /// host really does get longer, because that is an edit to the room and
+    /// the room is where a truss's span lives — but the row itself is still
+    /// only previewed, so the operator sees the fit before committing to it.
+    pub(crate) fn stage_extend_host(&mut self, cx: &mut Context<Self>) {
         let Some(build) = self.build_state() else {
             return;
         };
         let venue = build.venue_id.clone();
-        let Some(popup) = build.distribute.as_ref() else {
+        let Some(row) = build.hand.configuring() else {
             return;
         };
-        let (Some(path), Some(mode)) = (popup.fixture_path.clone(), popup.mode_name.clone()) else {
+        let Err(luma_scene::distribute::Fit::TooLong { needed_m, .. }) = row.preview else {
             return;
         };
-        let host = (popup.host_node.clone(), popup.host_socket.clone());
-        let count = popup.count;
-        let layout = popup.layout;
-        let pending = self.library.distribute(
-            &venue,
-            Some((&host.0, &host.1)),
-            &path,
-            &mode,
-            count,
-            layout,
-            None,
-        );
-        cx.spawn(async move |this, cx| {
-            let report = pending.await;
-            this.update(cx, |this, cx| {
-                match report {
-                    Ok(report) => {
-                        if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
-                            popup.report = Some(report);
-                        }
-                    }
-                    // A distribution that never reached the command is not a
-                    // fit failure and must not read as one: the popup keeps its
-                    // last report and the refusal is said out loud.
-                    Err(error) => {
-                        if let Some(build) = this.build_mut() {
-                            build.report = vec![error.to_string()];
-                        }
-                    }
-                }
-                this.reload_stage(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// The fit failure's own fix: extend the host to the length it named, then
-    /// try the same distribution again.
-    pub(crate) fn stage_extend_and_retry(&mut self, cx: &mut Context<Self>) {
-        let Some(build) = self.build_state() else {
-            return;
-        };
-        let venue = build.venue_id.clone();
-        // Only the too-long refusal carries a fix this button can press: an
-        // overlap is answered by moving something, and which something is the
-        // operator's call.
-        let Some(DistributeRefusal::TooLong {
-            needed_m,
-            extend_node_id,
-            ..
-        }) = build
-            .distribute
-            .as_ref()
-            .and_then(|popup| popup.report.as_ref())
-            .and_then(|report| report.refusal.clone())
-        else {
-            return;
-        };
+        let host = row.host_node.clone();
         let pending = self.library.set_params(
             &venue,
-            &extend_node_id,
+            &host,
             BTreeMap::from([("span".to_string(), needed_m)]),
             None,
         );
         cx.spawn(async move |this, cx| {
             let _ = pending.await;
             this.update(cx, |this, cx| {
-                this.stage_distribute(cx);
+                this.reload_stage(cx);
             })
             .ok();
         })
         .detach();
     }
 
-    /// Place a duplicated subtree, root first, then every descendant against
-    /// the copy of its parent.
+    /// Commit the row the popover has been previewing.
+    pub(crate) fn stage_apply_row(&mut self, cx: &mut Context<Self>) {
+        let Some(build) = self.build_state() else {
+            return;
+        };
+        let venue = build.venue_id.clone();
+        let Some(row) = build.hand.configuring() else {
+            return;
+        };
+        // A refused row has no poses, and a partial distribution is not one.
+        if row.preview.is_err() {
+            return;
+        }
+        let Holding::Fixture { path, mode, .. } = &row.what else {
+            return;
+        };
+        let Some(mode) = mode.clone() else {
+            return;
+        };
+        let pending = self.library.distribute(
+            &venue,
+            Some((row.host_node.as_str(), row.host_socket.as_str())),
+            path,
+            &mode,
+            row.count,
+            layout_of(row.layout),
+            None,
+        );
+        if let Some(build) = self.build_mut() {
+            build.hand = Hand::Idle;
+            build.committing = true;
+        }
+        cx.spawn(async move |this, cx| {
+            let report = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    build.committing = false;
+                    build.report = match &report {
+                        Ok(report) => report.warnings.clone(),
+                        Err(error) => vec![error.to_string()],
+                    };
+                }
+                // The row's own report carries no venue, so the room is re-read
+                // rather than adopted — one more round trip, and the only verb
+                // that needs it.
+                this.reload_stage(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Search the fixture library for the add-element dialog.
+    pub(crate) fn stage_search_fixtures(&mut self, query: String, cx: &mut Context<Self>) {
+        let pending = self.library.search_fixtures(&query, 40);
+        cx.spawn(async move |this, cx| {
+            let found = pending.await;
+            this.update(cx, |this, cx| {
+                match found {
+                    Ok(found) => {
+                        if let Some(build) = this.build_mut() {
+                            build.fixtures = found
+                                .into_iter()
+                                .map(|entry| {
+                                    (
+                                        format!("{} {}", entry.manufacturer, entry.model),
+                                        entry.path,
+                                    )
+                                })
+                                .collect();
+                        }
+                    }
+                    // A library that will not answer is a state the dialog has
+                    // to show: an empty list meaning "no such fixture" and one
+                    // meaning "the index never built" are the same picture, and
+                    // only one of them is the operator's problem.
+                    Err(error) => {
+                        if let Some(build) = this.build_mut() {
+                            build.report = vec![error.to_string()];
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn stage_duplicate_commit(
         &mut self,
         venue: &str,
@@ -1180,18 +1411,34 @@ impl Build {
 /// mutable borrow of the workspace, and the builder lives beside the picture.
 /// Every field is also a *claim* the harness can read — see the module docs.
 pub(crate) struct StageView {
-    pub(crate) hand: String,
-    pub(crate) landing: Option<String>,
-    pub(crate) refusal: Option<String>,
-    pub(crate) measurement: Option<(String, String)>,
-    pub(crate) length_m: Option<f64>,
-    pub(crate) palette_open: bool,
+    /// The add-element dialog's keyboard cursor, when it is up.
+    pub(crate) choosing: Option<usize>,
+    /// Whether the sheet is *heading* open — what decides it takes clicks. A
+    /// leaving sheet is painted and untouchable (`luma_ui::sheet`).
+    pub(crate) inspector_open: bool,
     pub(crate) selected: Option<SelectedView>,
+    /// Unplaced fixtures, as dialog rows.
     pub(crate) tray: Vec<(String, String)>,
+    /// What the fixture library last answered with, as dialog rows.
+    pub(crate) fixtures: Vec<(String, String)>,
     pub(crate) dangling: Vec<String>,
     pub(crate) warnings: Vec<String>,
-    pub(crate) distribute: Option<DistributeView>,
-    pub(crate) faces: Vec<(String, String, String)>,
+    pub(crate) configuring: Option<ConfigureView>,
+}
+
+/// The row being fitted, as the popover draws it.
+pub(crate) struct ConfigureView {
+    pub(crate) host: String,
+    pub(crate) what: String,
+    pub(crate) at: Point<Pixels>,
+    pub(crate) count: usize,
+    pub(crate) even: bool,
+    /// How many bodies the preview placed, or why it placed none.
+    pub(crate) fits: Result<usize, String>,
+    /// The label of the one press that would make a refused row fit.
+    pub(crate) offer: Option<String>,
+    /// Whether the row can be committed — it fits and its mode has landed.
+    pub(crate) ready: bool,
 }
 
 /// The selected node, and the freedoms it actually has.
@@ -1205,28 +1452,12 @@ pub(crate) struct SelectedView {
     pub(crate) constraint: Option<String>,
     pub(crate) trim: f64,
     pub(crate) param: f64,
-    pub(crate) draft: Option<String>,
-}
-
-pub(crate) struct DistributeView {
-    pub(crate) host: String,
-    /// Whether the refusal carries a length the one-press fix can apply.
-    pub(crate) extendable: bool,
-    pub(crate) layout: &'static str,
-    pub(crate) fixture: Option<String>,
-    pub(crate) mode: Option<String>,
-    pub(crate) count: usize,
-    pub(crate) results: Vec<(String, String)>,
-    pub(crate) placed: Option<usize>,
-    pub(crate) fit: Option<String>,
 }
 
 impl Luma {
     /// The builder as the page draws it, or `None` when no room is up.
     pub(crate) fn stage_view(&self) -> Option<StageView> {
         let build = self.build_state()?;
-        let held = build.hand.held();
-        let run = build.hand.extending();
         let selected = build.selected.as_ref().map(|node| {
             let freedom = build.freedom_of(node);
             let param = |key: &str| {
@@ -1246,25 +1477,11 @@ impl Luma {
                 constraint: build.constraint_of(node),
                 trim: param("trim"),
                 param: freedom.param().map_or(0.0, param),
-                draft: build.trim_draft.clone(),
             }
         });
         Some(StageView {
-            hand: build.hand.readout(),
-            landing: held
-                .and_then(|h| h.landed.as_ref())
-                .map(hand::Landed::readout),
-            refusal: run
-                .and_then(Extending::refused)
-                .or_else(|| held.and_then(|h| h.landed.as_ref()?.refused.clone())),
-            measurement: run.and_then(|run| {
-                Some((
-                    run.measurement()?,
-                    hand::feet_and_inches(run.reach.as_ref()?.gap_m),
-                ))
-            }),
-            length_m: run.map(|run| run.length_m),
-            palette_open: build.palette_open,
+            choosing: build.hand.choosing().map(|c| c.cursor),
+            inspector_open: build.inspector.target() > 0.0,
             selected,
             tray: build
                 .solved
@@ -1277,6 +1494,7 @@ impl Luma {
                     )
                 })
                 .collect(),
+            fixtures: build.fixtures.clone(),
             dangling: build
                 .solved
                 .dangling
@@ -1284,683 +1502,847 @@ impl Luma {
                 .map(|d| format!("{} {}", build.label_of(&d.node_id), d.socket))
                 .collect(),
             warnings: build.report.clone(),
-            distribute: build.distribute.as_ref().map(|popup| DistributeView {
-                host: format!("{} {}", build.label_of(&popup.host_node), popup.host_socket),
-                layout: match popup.layout {
-                    DistributeLayout::Even => "even",
-                    DistributeLayout::Spacing { .. } => "spacing",
-                    DistributeLayout::Span { .. } => "span",
+            configuring: build.hand.configuring().map(|row| ConfigureView {
+                host: format!("{} {}", row.host_label, row.host_socket),
+                what: row.what.label().to_string(),
+                at: row.at,
+                count: row.count,
+                even: matches!(row.layout, luma_scene::distribute::Layout::Even),
+                fits: match &row.preview {
+                    Ok(stations) => Ok(stations.len()),
+                    Err(luma_scene::distribute::Fit::TooLong {
+                        needed_m,
+                        available_m,
+                    }) => Err(format!(
+                        "Needs {needed_m:.2} m; the face is {available_m:.2} m"
+                    )),
                 },
-                fixture: popup.fixture_path.clone(),
-                mode: popup.mode_name.clone(),
-                count: popup.count,
-                results: popup.results.clone(),
-                placed: popup
-                    .report
-                    .as_ref()
-                    .filter(|report| report.refusal.is_none())
-                    .map(|report| report.fixtures.len()),
-                fit: popup
-                    .report
-                    .as_ref()
-                    .and_then(|report| report.refusal.as_ref())
-                    .map(|refusal| match refusal {
-                        DistributeRefusal::TooLong { suggestion, .. }
-                        | DistributeRefusal::Overlap { suggestion, .. } => suggestion.clone(),
-                    }),
-                extendable: popup.report.as_ref().is_some_and(|report| {
-                    matches!(report.refusal, Some(DistributeRefusal::TooLong { .. }))
-                }),
+                // Named off the length it would set, not off a refusal's prose:
+                // the button says what pressing it does, and the line above it
+                // already says why it is there.
+                offer: match &row.preview {
+                    Err(luma_scene::distribute::Fit::TooLong { needed_m, .. }) => {
+                        Some(format!("Extend to {needed_m:.2} m"))
+                    }
+                    Ok(_) => None,
+                },
+                ready: row.preview.is_ok()
+                    && matches!(&row.what, Holding::Fixture { mode, .. } if mode.is_some()),
             }),
-            faces: build
-                .room
-                .open_sockets()
-                // A *feature*, not every host: a distribution runs along
-                // something, so the vocabulary is surfaces and edges. A bolt
-                // circle hosts structure and seats nothing.
-                .filter(|(_, socket)| hand::is_feature(socket))
-                .map(|(node, socket)| {
-                    (
-                        node.to_string(),
-                        socket.name.clone(),
-                        format!("{} {}", build.label_of(node), socket.name),
-                    )
-                })
-                .collect(),
         })
     }
 }
 
-/// The tab body: the tools, under the room.
+/// The tab body: the room, and whatever the hand is doing over it.
+///
+/// # Why nothing here is a panel
+///
+/// The room *is* the page. Every gesture the builder has is aimed at the
+/// picture, so a strip of chrome that takes height off the viewport is spending
+/// the one surface the work happens on. The page is therefore an overlay: a
+/// transparent box the size of the tab that paints no background and does not
+/// occlude, so a press that misses a control lands on the room — the only
+/// sensible thing for it to land on.
+///
+/// # One surface per state
+///
+/// Everything below is a `match` on [`hand::Hand`]. That is the whole reason
+/// the state machine swallowed the three booleans that used to sit beside it:
+/// a mode with no controls now draws none by construction, where before every
+/// flag brought a panel that had to remember to hide itself.
+///
+/// # The picture is the evidence
+///
+/// The readouts this page used to print — the hand, the landing, the gap, the
+/// refusal — were never *for* a person: the picture says all four, and says
+/// them where the work is. They are not published as text either. A hidden
+/// "Hand: holding X" node would be the same state label with its paint turned
+/// off, and a driver asserting on it would be asserting on a caption rather
+/// than on the thing. What carries them instead is the *picture's own* tree —
+/// the ghost, the station marks, the measurement and the beads are agent
+/// nodes where they are drawn, so a script and an eye read the same evidence
+/// at the same place. See [`build_layer`].
 pub(crate) fn stage_page(
     state: &StagePage,
     app: &Entity<Luma>,
     view: Option<&StageView>,
+    revealed: Pixels,
+    window: &Window,
+    cx: &App,
 ) -> AnyElement {
     let Some(view) = view else {
         return div()
             .size_full()
-            .bg(ladder::background())
-            .child(luma_ui::plate(
-                "The room is not up.".to_string(),
-                ladder::muted_foreground(),
-            ))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(float::empty_row("The room is not up."))
             .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
             .into_any_element();
     };
     div()
+        .absolute()
+        .inset_0()
+        .child(add_button(view, app))
+        .children(
+            view.choosing
+                .map(|cursor| chooser(state, view, cursor, app, window, cx)),
+        )
+        .children(view.configuring.as_ref().map(|row| configure(row, app)))
+        .children(state.menu.as_ref().map(|at| node_menu(*at, app)))
+        .child(inspector(view, app, revealed))
+        .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
+        .into_any_element()
+}
+
+/// Air between a floating control and the corner of the room it sits in.
+///
+/// Measured from the *picture*, not from the tab: the venue's own header row
+/// sits above the room, and chrome that floated over it would cover the one
+/// line naming what is being built.
+const INSET: f32 = 12.0;
+
+/// The builder's one resting affordance: add something.
+///
+/// A single button, because with nothing in the hand and nothing selected
+/// there is exactly one thing to do. Everything else in the builder is reached
+/// by pointing at the room — which is the point of a page whose subject is a
+/// picture.
+fn add_button(view: &StageView, app: &Entity<Luma>) -> AnyElement {
+    let open = app.clone();
+    let unresolved = view.dangling.len() + view.warnings.len();
+    let pin = app.clone();
+    let mut bar = div()
+        .absolute()
+        .top(px(crate::visualizer::HEADER_HEIGHT + INSET))
+        .left(px(INSET))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .occlude()
+        .child(
+            float::popover_card().p(px(4.0)).child(
+                float::btn("Add element", "stage-add")
+                    .id("stage-add")
+                    .child(
+                        Icon::new(IconName::Plus)
+                            .size(px(13.0))
+                            .text_color(ladder::foreground_alpha(0.7)),
+                    )
+                    .on_click(move |_, _, cx| {
+                        open.update(cx, |this, cx| this.stage_open_chooser(cx));
+                    })
+                    .agent_node(Role::Button, "Add element"),
+            ),
+        );
+    // The solve's complaints, as a count that opens the sheet. A number is all
+    // the room has space for; the sentences are what the inspector is for.
+    if unresolved > 0 {
+        bar = bar.child(
+            float::popover_card().p(px(4.0)).child(
+                float::btn("", "stage-warnings")
+                    .id("stage-warnings")
+                    .px(px(8.0))
+                    .child(float::badge(unresolved, ladder::status_warn().into()))
+                    .on_click(move |_, _, cx| {
+                        pin.update(cx, |this, cx| {
+                            if let Some(build) = this.build_mut() {
+                                build.warnings_pinned = !build.warnings_pinned;
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .agent_node(Role::Button, format!("Warnings {unresolved}")),
+            ),
+        );
+    }
+    bar.into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// The add-element dialog
+// ---------------------------------------------------------------------------
+
+/// How big the add-element card is. Fixed, for the reason every palette in the
+/// app is: a card that resized as the query narrowed would move the row under
+/// the pointer between one keystroke and the next.
+const CHOOSER_SIZE: luma_ui::dialog::morph::MorphSize = luma_ui::dialog::morph::MorphSize {
+    width: 640.0,
+    height: 420.0,
+};
+
+/// One row the dialog can offer, and what taking it puts in the hand.
+pub(crate) struct ChooserRow {
+    pub(crate) label: String,
+    pub(crate) section: &'static str,
+    pub(crate) take: Holding,
+}
+
+/// Every element this venue can be given, in one list.
+///
+/// Catalog pieces, the fixtures the patch has never placed, and the library —
+/// three provenances, one question ("what goes in next"), so one list. They
+/// were two menus and a search field before, which is three places to look for
+/// one answer.
+pub(crate) fn chooser_rows(view: &StageView) -> Vec<ChooserRow> {
+    let mut rows: Vec<ChooserRow> = palette_rows()
+        .into_iter()
+        .map(|row| ChooserRow {
+            label: row.label.clone(),
+            section: row.group.as_str(),
+            take: Holding::Piece {
+                catalog_ref: row.catalog_ref.to_string(),
+                kind: NodeKind::Piece,
+                display_name: row.label,
+                footing: hand::footing_for(row.catalog_ref, row.tower),
+                params: BTreeMap::new(),
+            },
+        })
+        .collect();
+    rows.extend(view.tray.iter().map(|(node, label)| ChooserRow {
+        label: label.clone(),
+        section: "Unplaced",
+        take: Holding::Tray {
+            node: node.clone(),
+            label: label.clone(),
+        },
+    }));
+    rows.extend(view.fixtures.iter().map(|(label, path)| ChooserRow {
+        label: label.clone(),
+        section: "Fixtures",
+        take: Holding::Fixture {
+            path: path.clone(),
+            label: label.clone(),
+            mode: None,
+            width_m: DEFAULT_FIXTURE_WIDTH_M,
+        },
+    }));
+    rows
+}
+
+/// The width a fixture is assumed to be until its definition lands. The same
+/// fallback `luma_lib`'s `body_width_m` uses, so an un-fetched preview and a
+/// fetched one differ only where the definition actually says something.
+const DEFAULT_FIXTURE_WIDTH_M: f64 = 0.3;
+
+/// Which rows a query leaves, in list order.
+pub(crate) fn chooser_matches(rows: &[ChooserRow], query: &str) -> Vec<usize> {
+    let needle = query.trim().to_lowercase();
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            needle.is_empty()
+                || row.label.to_lowercase().contains(&needle)
+                || row.section.to_lowercase().contains(&needle)
+        })
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// What the row under the keyboard is, at a size worth looking at.
+///
+/// A pane and not a tooltip, because choosing between two trusses is a
+/// comparison and a comparison wants one place the answer always appears. It
+/// is deliberately words rather than a rendered thumbnail: the catalog's
+/// meshes are loaded by the renderer for the *room*, and spinning one up per
+/// highlighted row would put a mesh load inside an arrow key.
+fn chooser_preview(row: Option<&ChooserRow>) -> Div {
+    let pane = div()
+        .w(px(CHOOSER_PREVIEW_W))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .p(px(16.0));
+    let Some(row) = row else {
+        return pane.child(float::empty_row("Nothing highlighted"));
+    };
+    let detail = match &row.take {
+        Holding::Piece { footing, .. } => footing.map_or_else(
+            || "Seats on its own underside".to_string(),
+            |footing| format!("Stands on {footing}"),
+        ),
+        Holding::Tray { .. } => "Patched, never placed".to_string(),
+        // The dialog never offers one — a duplicate comes off a selection.
+        Holding::Duplicate { .. } => "A copy of what is selected".to_string(),
+        Holding::Fixture { .. } => "Placed as a row along a face".to_string(),
+    };
+    pane.child(float::label(row.section.to_string()))
+        .child(
+            div()
+                .text_size(px(15.0))
+                .text_color(ladder::foreground())
+                .child(row.label.clone())
+                .agent_node(Role::Text, format!("Preview {}", row.label)),
+        )
+        .child(
+            div()
+                .text_size(px(11.5))
+                .text_color(ladder::foreground_alpha(0.5))
+                .child(detail),
+        )
+}
+
+/// How wide the dialog's preview pane is — a third of the card, so the list
+/// beside it still shows a full row without truncating.
+const CHOOSER_PREVIEW_W: f32 = 208.0;
+
+/// The add-element dialog: a search field, a preview, a sectioned list.
+fn chooser(
+    state: &StagePage,
+    view: &StageView,
+    cursor: usize,
+    app: &Entity<Luma>,
+    window: &Window,
+    cx: &App,
+) -> AnyElement {
+    let rows = chooser_rows(view);
+    let query = state.search.read(cx).text().to_string();
+    let shown = chooser_matches(&rows, &query);
+    let dismiss = app.clone();
+
+    let mut list = float::list().id("stage-chooser-list").overflow_y_scroll();
+    let mut section = "";
+    for (at, &index) in shown.iter().enumerate() {
+        let row = &rows[index];
+        if row.section != section {
+            section = row.section;
+            list = list.child(float::section_heading(section.to_string()));
+        }
+        let app = app.clone();
+        let take = row.take.clone();
+        let label = row.label.clone();
+        list = list.child(
+            float::menu_row(RowState::of(false, at == cursor), label.clone())
+                .id(gpui::SharedString::from(format!("choose:{index}")))
+                .child(label.clone())
+                .on_click(move |_, _, cx| {
+                    let take = take.clone();
+                    app.update(cx, |this, cx| this.stage_take(take, cx));
+                })
+                .agent_node(Role::Row, label),
+        );
+    }
+    if shown.is_empty() {
+        list = list.child(float::empty_row("Nothing matches"));
+    }
+
+    let keys = app.clone();
+    let taken: Vec<Holding> = shown.iter().map(|&at| rows[at].take.clone()).collect();
+    let body = div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(ladder::background())
-        .child(header(state, app, view))
-        .child(readout(view))
-        .child(run_controls(view, app))
+        .overflow_hidden()
+        .text_color(ladder::foreground())
+        // The list is walked from the frame, not from the field: the query is
+        // short and edited with backspace, so the arrows belong to the rows —
+        // the same call `luma_ui::float`'s pickers make.
+        .on_key_down(move |event, _, cx| {
+            let step: isize = match event.keystroke.key.as_str() {
+                "down" => 1,
+                "up" => -1,
+                "enter" => {
+                    let take = taken.get(cursor).cloned();
+                    keys.update(cx, |this, cx| {
+                        if let Some(take) = take {
+                            this.stage_take(take, cx);
+                        }
+                    });
+                    return;
+                }
+                _ => return,
+            };
+            let len = taken.len();
+            keys.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    if let Hand::Choosing(choosing) = &mut build.hand {
+                        // Wraps at both ends, so a list is a ring and neither
+                        // end is a dead key.
+                        choosing.cursor = if len == 0 {
+                            0
+                        } else {
+                            (choosing.cursor as isize + step).rem_euclid(len as isize) as usize
+                        };
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .child(
+            float::header_band().child(
+                float::field()
+                    .w_full()
+                    .child(state.search.clone())
+                    .agent_node(Role::Input, "Search elements"),
+            ),
+        )
         .child(
             div()
                 .flex_1()
                 .min_h_0()
                 .flex()
-                .child(tray(view, app))
-                .child(inspector(view, app)),
+                .flex_row()
+                .child(chooser_preview(shown.get(cursor).map(|&at| &rows[at])))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .border_l_1()
+                        .border_color(luma_ui::glass::hairline(0.06))
+                        .child(float::viewport().child(list)),
+                ),
         )
-        .children(
-            view.distribute
-                .as_ref()
-                .map(|popup| distribute_card(popup, app)),
+        .child(
+            float::footer_band()
+                .child(float::key_hint_pair(
+                    IconName::ArrowUp,
+                    IconName::ArrowDown,
+                    "Navigate",
+                ))
+                .child(float::key_hint_text("enter", "Take"))
+                .child(float::key_hint_text("esc", "Close")),
         )
-        .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
-        .into_any_element()
-}
-
-fn header(state: &StagePage, app: &Entity<Luma>, view: &StageView) -> AnyElement {
-    let action = |label: &'static str, run: fn(&mut Luma, &mut Context<Luma>)| {
-        let app = app.clone();
-        luma_ui::luma_button(label, Enabled::Yes)
-            .id(label)
-            .on_click(move |_, _, cx| {
-                app.update(cx, run);
-            })
-            .agent_node(Role::Button, label)
-    };
-    div()
-        .flex_shrink_0()
-        .px(px(18.0))
-        .py(px(10.0))
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .border_b_1()
-        .border_color(ladder::trim())
-        .child(luma_ui::silkscreen("STAGE BUILDER"))
-        .child(div().flex_1())
-        .child(palette_trigger(app, view))
-        .child(action("Duplicate", |this, cx| this.stage_duplicate(cx)))
-        .child(action("Flip", |this, cx| this.stage_flip(cx)))
-        .child(action("Detach", |this, cx| this.stage_detach(cx)))
-        .child(action("Cancel", |this, cx| this.stage_cancel(cx)))
-        .agent_node(Role::Row, format!("{} builder actions", state.venue_name))
-        .into_any_element()
-}
-
-/// The palette: catalog rows, grouped, each arming the hand.
-fn palette_trigger(app: &Entity<Luma>, view: &StageView) -> AnyElement {
-    let toggle = app.clone();
-    let mut trigger = luma_ui::luma_button("Palette", Enabled::Yes)
-        .id("stage-palette")
-        .on_click(move |_, _, cx| {
-            toggle.update(cx, |this, cx| {
-                if let Some(build) = this.build_mut() {
-                    build.palette_open = !build.palette_open;
-                }
-                cx.notify();
-            });
-        })
-        .agent_node(Role::Button, "Palette")
         .into_any_element();
-    if !view.palette_open {
-        return trigger;
+
+    luma_ui::dialog::Host {
+        id: "stage-chooser".into(),
+        viewport: window.viewport_size(),
+        focus: &state.focus,
+        focused: true,
+        label: "Add element dialog".into(),
+        scrim_dismiss: luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
+            dismiss.update(cx, |this, cx| this.stage_escape(cx));
+        })),
+        closing: None,
     }
-    let dismiss = app.clone();
-    let mut card = float::popover_card().w(px(240.0)).max_h(px(420.0));
-    for group in PaletteGroup::ALL {
-        let rows: Vec<PaletteRow> = palette_rows()
-            .into_iter()
-            .filter(|row| row.group == group)
-            .collect();
-        if rows.is_empty() {
-            continue;
-        }
-        card = card.child(float::section_heading(group.as_str()));
-        for row in rows {
-            let app = app.clone();
-            let label = row.label.clone();
-            card = card.child(
-                float::menu_row(RowState::Rest, label.clone())
-                    .id(gpui::SharedString::from(format!(
-                        "palette:{}:{}",
-                        row.catalog_ref, row.tower
-                    )))
-                    .child(label.clone())
-                    .on_click(move |_, _, cx| {
-                        let row = PaletteRow {
-                            catalog_ref: row.catalog_ref,
-                            label: row.label.clone(),
-                            group: row.group,
-                            tower: row.tower,
-                        };
-                        app.update(cx, |this, cx| this.stage_arm(&row, cx));
-                    })
-                    .agent_node(Role::Row, label),
-            );
-        }
-    }
-    trigger = div()
-        .relative()
-        .child(trigger)
-        .child(float::anchored_below(
-            "stage-palette-menu",
-            CONTROL_HEIGHT,
-            Dismiss::on_press_out(move |_, cx| {
-                dismiss.update(cx, |this, cx| {
-                    if let Some(build) = this.build_mut() {
-                        build.palette_open = false;
-                    }
-                    cx.notify();
-                });
-            }),
-            card.into_any_element(),
-        ))
-        .into_any_element();
-    trigger
+    .render(luma_ui::dialog::morph::fixed_card(
+        "Add element card",
+        CHOOSER_SIZE,
+        body,
+    ))
 }
 
-/// The claim strip: what is held, where it would land, why it would not.
-fn readout(view: &StageView) -> AnyElement {
-    let line = |text: String, color: gpui::Rgba| {
+// ---------------------------------------------------------------------------
+// Configure: a row being fitted to a face
+// ---------------------------------------------------------------------------
+
+/// The configure popover, hung at the point on the face that was clicked.
+///
+/// In the viewport and not a modal, because every control on it changes the
+/// picture behind it: the count and the layout are questions about what the
+/// room would look like, and a card that covered the room while asking them
+/// would be asking the operator to imagine the answer it is already drawing.
+fn configure(view: &ConfigureView, app: &Entity<Luma>) -> AnyElement {
+    let mut card = float::popover_card().w(px(260.0)).gap(px(8.0)).p(px(8.0));
+    card = card.child(float::label(view.what.clone())).child(
         div()
             .text_size(px(11.0))
-            .text_color(color)
-            .child(text.clone())
-            .agent_node(Role::Text, text)
-    };
-    div()
-        .flex_shrink_0()
-        .px(px(18.0))
-        .py(px(8.0))
-        .flex()
-        .flex_col()
-        .gap(px(2.0))
-        .border_b_1()
-        .border_color(ladder::trim())
-        .child(line(view.hand.clone(), ladder::foreground_90()))
-        .children(
-            view.landing
-                .clone()
-                .map(|text| line(text, ladder::muted_foreground())),
-        )
-        .children(view.measurement.clone().map(|(metres, feet)| {
-            div()
-                .flex()
-                .items_baseline()
-                .gap(px(6.0))
-                .child(line(metres, ladder::accent()))
-                .child(
-                    div()
-                        .text_size(px(9.0))
-                        .text_color(ladder::muted_foreground())
-                        .child(feet.clone())
-                        .agent_node(Role::Text, feet),
-                )
-                .into_any_element()
-        }))
-        .children(
-            view.refusal
-                .clone()
-                .map(|text| line(format!("Refused: {text}"), ladder::danger())),
-        )
-        .children(
-            view.warnings
-                .iter()
-                .map(|text| line(format!("Warning: {text}"), ladder::status_warn())),
-        )
-        .into_any_element()
-}
+            .text_color(ladder::foreground_alpha(0.45))
+            .child(view.host.clone())
+            .agent_node(Role::Text, format!("On {}", view.host)),
+    );
 
-/// The tray: fixtures the patch knows about that nothing has placed.
-fn tray(view: &StageView, app: &Entity<Luma>) -> AnyElement {
-    div()
-        .w(px(240.0))
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .border_r_1()
-        .border_color(ladder::trim())
-        .child(
-            div()
-                .px(px(12.0))
-                .py(px(8.0))
-                .child(luma_ui::silkscreen("TRAY")),
-        )
-        .child(
-            div()
-                .flex_1()
-                .overflow_y_scrollbar()
-                .children(view.tray.iter().map(|(node, label)| {
-                    let app = app.clone();
-                    let node = node.clone();
-                    let label_for_click = label.clone();
-                    div()
-                        .id(gpui::SharedString::from(format!("tray:{node}")))
-                        .px(px(12.0))
-                        .py(px(6.0))
-                        .text_size(px(11.0))
-                        .text_color(ladder::foreground_90())
-                        .hover(|row| row.bg(ladder::hover()))
-                        .child(label.clone())
-                        .on_click(move |_, _, cx| {
-                            let node = node.clone();
-                            let label = label_for_click.clone();
-                            app.update(cx, |this, cx| {
-                                if let Some(build) = this.build_mut() {
-                                    build.hand =
-                                        Hand::Holding(Held::new(Holding::Tray { node, label }));
-                                }
-                                cx.notify();
-                            });
-                        })
-                        .agent_node(Role::Row, label.clone())
-                }))
-                .when(view.tray.is_empty(), |list| {
-                    list.child(float::empty_row("Nothing unplaced"))
-                }),
-        )
-        .into_any_element()
-}
+    let set_count = app.clone();
+    card = card.child(float::arg_row(
+        "Count",
+        float::scrub(
+            "stage-count",
+            view.count as f64,
+            1.0,
+            MAX_COUNT,
+            1.0,
+            CONTROL_WIDTH,
+            move |value, _, cx| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let count = value.round().max(1.0) as usize;
+                set_count.update(cx, |this, cx| this.stage_set_count(count, cx));
+            },
+        ),
+    ));
 
-/// The inspector: what is selected, what freedom it has, and what the last
-/// solve is unhappy about.
-fn inspector(view: &StageView, app: &Entity<Luma>) -> AnyElement {
-    let mut column = div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .px(px(18.0))
-        .py(px(10.0))
-        // The feature list is as long as the room is complicated; without this
-        // the last rows are clipped and a hand cannot reach them.
-        .overflow_y_scrollbar();
-    match &view.selected {
-        None => {
-            column = column.child(float::empty_row("Nothing selected"));
-        }
-        Some(selected) => {
-            let claim = |text: String, color: gpui::Rgba| {
-                div()
-                    .text_size(px(10.0))
-                    .text_color(color)
-                    .child(text.clone())
-                    .agent_node(Role::Text, text)
-            };
-            column = column
-                .child(luma_ui::silkscreen(selected.label.clone()))
-                .child(claim(
-                    format!("Gizmo: {}", selected.freedom.as_str()),
-                    ladder::muted_foreground(),
-                ))
-                .children(
-                    selected
-                        .relation
-                        .clone()
-                        .map(|text| claim(text, ladder::muted_foreground())),
-                )
-                .children(
-                    selected
-                        .constraint
-                        .clone()
-                        .map(|text| claim(text, ladder::accent())),
-                );
-            if let Some(key) = selected.freedom.param() {
-                let nudge = |app: Entity<Luma>, label: &'static str, delta: f64| {
-                    let node = selected.node.clone();
-                    let value = selected.param + delta;
-                    luma_ui::luma_button(label, Enabled::Yes)
-                        .id(label)
-                        .on_click(move |_, _, cx| {
-                            let node = node.clone();
-                            app.update(cx, |this, cx| {
-                                this.stage_set_param(&node, key, value, cx);
-                            });
-                        })
-                        .agent_node(Role::Button, label)
-                };
-                let step = if key == "u" { 0.25 } else { 0.5 };
-                column = column.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .w(px(48.0))
-                                .text_size(px(10.0))
-                                .text_color(ladder::param_label())
-                                .child(key.to_uppercase()),
-                        )
-                        .child(claim(
-                            format!("{} {:.2}", key.to_uppercase(), selected.param),
-                            ladder::foreground_90(),
-                        ))
-                        .child(nudge(app.clone(), "Nudge back", -step))
-                        .child(nudge(app.clone(), "Nudge on", step)),
-                );
-            }
-            if selected.freedom == Freedom::Free {
-                let value = selected
-                    .draft
-                    .clone()
-                    .unwrap_or_else(|| format!("{:.2}", selected.trim));
-                let up = app.clone();
-                let down = app.clone();
-                let step = |app: Entity<Luma>, delta: f64, label: &'static str, trim: f64| {
-                    luma_ui::luma_button(label, Enabled::Yes)
-                        .id(label)
-                        .on_click(move |_, _, cx| {
-                            app.update(cx, |this, cx| {
-                                this.stage_set_trim((trim + delta).max(0.0), cx);
-                            });
-                        })
-                        .agent_node(Role::Button, label)
-                };
-                column = column.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .w(px(48.0))
-                                .text_size(px(10.0))
-                                .text_color(ladder::param_label())
-                                .child("TRIM"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(ladder::foreground_90())
-                                .child(format!("{value} m"))
-                                .agent_node(Role::Input, format!("Trim {value}")),
-                        )
-                        .child(step(down, -0.5, "Trim down", selected.trim))
-                        .child(step(up, 0.5, "Trim up", selected.trim)),
-                );
-            }
-        }
-    }
-    // The features first and the diagnostics under them: one is the next thing
-    // a hand does, the other is a report on what it already did.
-    column
-        .child(
-            div()
-                .mt(px(10.0))
-                .child(luma_ui::silkscreen("DISTRIBUTE ONTO"))
-                .children(view.faces.iter().take(24).map(|(node, socket, label)| {
-                    let app = app.clone();
-                    let node = node.clone();
-                    let socket = socket.clone();
-                    div()
-                        .id(gpui::SharedString::from(format!("face:{node}:{socket}")))
-                        .py(px(4.0))
-                        .text_size(px(10.0))
-                        .text_color(ladder::muted_foreground())
-                        .hover(|row| row.bg(ladder::hover()))
-                        .child(label.clone())
-                        .on_click(move |_, _, cx| {
-                            let (node, socket) = (node.clone(), socket.clone());
-                            app.update(cx, |this, cx| {
-                                this.stage_open_distribute(node, socket, cx);
-                            });
-                        })
-                        .agent_node(Role::Row, label.clone())
-                })),
-        )
-        .child(
-            div()
-                .mt(px(10.0))
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(ladder::muted_foreground())
-                        .child(format!("Dangling: {}", view.dangling.len()))
-                        .agent_node(Role::Text, format!("Dangling {}", view.dangling.len())),
-                )
-                .children(view.dangling.iter().map(|text| {
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(ladder::status_warn())
-                        .child(text.clone())
-                        .agent_node(Role::Text, format!("Dangling {text}"))
-                })),
-        )
-        .into_any_element()
-}
-
-/// The distribution popup: a fixture, a count, a layout, and the report.
-fn distribute_card(view: &DistributeView, app: &Entity<Luma>) -> AnyElement {
-    let mut card = float::popover_card()
-        .absolute()
-        .right(px(24.0))
-        .bottom(px(24.0))
-        .w(px(320.0))
-        .occlude()
-        .child(luma_ui::silkscreen(format!("DISTRIBUTE · {}", view.host)));
-    for (label, path) in view.results.iter().take(8) {
+    // Two of the three layouts: even always fits, a pitch is the one that can
+    // be refused, and the third is a pair of fractions that wants a handle on
+    // the picture rather than a cell in a card.
+    let mut track = float::segmented().w(px(CONTROL_WIDTH));
+    for (name, even) in [("Even", true), ("Spacing", false)] {
         let app = app.clone();
-        let path = path.clone();
-        let chosen = view.fixture.as_deref() == Some(path.as_str());
-        card = card.child(
-            float::menu_row(RowState::of(chosen, false), label.clone())
-                .id(gpui::SharedString::from(format!("fixture:{path}")))
-                .child(label.clone())
+        track = track.child(
+            float::segment(name, view.even == even, name)
+                .id(name)
                 .on_click(move |_, _, cx| {
-                    let path = path.clone();
-                    app.update(cx, |this, cx| {
-                        if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
-                            popup.fixture_path = Some(path.clone());
-                            popup.mode_name = None;
-                        }
-                        let pending = this.library.fixture_definition(&path);
-                        cx.spawn(async move |this, cx| {
-                            let mode = pending
-                                .await
-                                .ok()
-                                .and_then(|def| def.modes.first().map(|mode| mode.name.clone()));
-                            this.update(cx, |this, cx| {
-                                if let Some(popup) =
-                                    this.build_mut().and_then(|b| b.distribute.as_mut())
-                                {
-                                    popup.mode_name = mode;
-                                }
-                                cx.notify();
-                            })
-                            .ok();
-                        })
-                        .detach();
-                        cx.notify();
-                    });
+                    let layout = if even {
+                        luma_scene::distribute::Layout::Even
+                    } else {
+                        luma_scene::distribute::Layout::Spacing(DEFAULT_PITCH_M)
+                    };
+                    app.update(cx, |this, cx| this.stage_set_layout(layout, cx));
                 })
-                .agent_node(Role::Row, label.clone()),
+                .agent_node(Role::Toggle, name),
         );
     }
-    let count = |label: &'static str, delta: i64| {
-        let app = app.clone();
-        luma_ui::luma_button(label, Enabled::Yes)
-            .id(label)
-            .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| {
-                    if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
-                        popup.count = popup.count.saturating_add_signed(delta as isize).max(1);
-                    }
-                    cx.notify();
-                });
-            })
-            .agent_node(Role::Button, label)
-    };
-    let layout = {
-        // Two of the three layouts, because the third is a pair of fractions and
-        // wants a handle rather than a button. Even always fits; a pitch is the
-        // one that can be refused, which is what makes the fit failure a state
-        // a hand can reach.
-        let app = app.clone();
-        let label = if view.layout == "even" {
-            "Layout even"
-        } else {
-            "Layout spacing"
-        };
-        luma_ui::luma_button(label, Enabled::Yes)
-            .id("stage-layout")
-            .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| {
-                    if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
-                        popup.layout = match popup.layout {
-                            DistributeLayout::Even => DistributeLayout::Spacing { metres: 1.0 },
-                            _ => DistributeLayout::Even,
-                        };
-                    }
-                    cx.notify();
-                });
-            })
-            .agent_node(Role::Button, label)
-    };
-    let run = app.clone();
-    let retry = app.clone();
-    card = card
-        .child(layout)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(ladder::foreground_90())
-                        .child(format!("Count {}", view.count))
-                        .agent_node(Role::Text, format!("Count {}", view.count)),
-                )
-                .child(count("Fewer", -1))
-                .child(count("More", 1)),
-        )
-        .child({
-            let ready = view.fixture.is_some() && view.mode.is_some();
-            luma_ui::luma_button("Distribute", if ready { Enabled::Yes } else { Enabled::No })
-                .id("stage-distribute")
-                .on_click(move |_, _, cx| {
-                    run.update(cx, |this, cx| this.stage_distribute(cx));
-                })
-                .agent_node(Role::Button, "Distribute")
-                .agent_disabled(!ready)
-        });
-    if let Some(placed) = view.placed {
-        card = card.child(
-            div()
-                .text_size(px(10.0))
-                .text_color(ladder::status_ok())
-                .child(format!("Placed {placed} fixtures"))
-                .agent_node(Role::Text, format!("Placed {placed} fixtures")),
-        );
-    }
-    if let Some(fit) = &view.fit {
-        card = card.child(
-            div()
-                .text_size(px(10.0))
-                .text_color(ladder::status_warn())
-                .child(fit.clone())
-                .agent_node(Role::Text, fit.clone()),
-        );
-        if view.extendable {
+    card = card.child(float::arg_row("Layout", track));
+
+    // The fit, always — a row that fits says so as quietly as one that does
+    // not says why. Both sit directly above the button they qualify.
+    match &view.fits {
+        Ok(placed) => {
             card = card.child(
-                luma_ui::luma_button("Extend and retry", Enabled::Yes)
-                    .id("stage-extend-retry")
-                    .on_click(move |_, _, cx| {
-                        retry.update(cx, |this, cx| this.stage_extend_and_retry(cx));
-                    })
-                    .agent_node(Role::Button, "Extend and retry"),
+                div()
+                    .text_size(px(11.0))
+                    .text_color(ladder::foreground_alpha(0.45))
+                    .child(format!("{placed} will fit"))
+                    .agent_node(Role::Text, format!("{placed} will fit")),
             );
         }
+        Err(why) => {
+            card = card.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(ladder::status_warn())
+                    .child(why.clone())
+                    .agent_node(Role::Text, why.clone()),
+            );
+            if let Some(offer) = &view.offer {
+                let extend = app.clone();
+                card = card.child(
+                    float::btn(offer.clone(), "stage-extend")
+                        .id("stage-extend")
+                        .w_full()
+                        .on_click(move |_, _, cx| {
+                            extend.update(cx, |this, cx| this.stage_extend_host(cx));
+                        })
+                        .agent_node(Role::Button, offer.clone()),
+                );
+            }
+        }
     }
-    card.into_any_element()
+
+    let apply = app.clone();
+    let ready = view.ready;
+    card = card.child(
+        float::btn_primary("Place")
+            .id("stage-place-row")
+            .w_full()
+            .when(!ready, |b| b.opacity(float::INERT_OPACITY))
+            .on_click(move |_, _, cx| {
+                apply.update(cx, |this, cx| this.stage_apply_row(cx));
+            })
+            .agent_node(Role::Button, "Place")
+            .agent_disabled(!ready),
+    );
+
+    let close = app.clone();
+    float::anchored_at(
+        "stage-configure",
+        view.at,
+        Dismiss::on_press_out(move |_, cx| {
+            close.update(cx, |this, cx| this.stage_escape(cx));
+        }),
+        card.into_any_element(),
+    )
 }
 
-/// The length controls for a run in hand: type it, step it, commit it.
+/// The most bodies one gesture will seat on one face.
+const MAX_COUNT: f64 = 24.0;
+
+/// The pitch a spacing layout starts at, in metres.
+const DEFAULT_PITCH_M: f64 = 1.0;
+
+/// The width of a control inside the configure popover — the card, less both
+/// gutters.
+const CONTROL_WIDTH: f32 = 244.0;
+
+// ---------------------------------------------------------------------------
+// The selection
+// ---------------------------------------------------------------------------
+
+/// What a right-click on a placed node offers.
 ///
-/// They live in the page rather than over the picture because a length is a
-/// number, and a number wants a field beside its readout — the picture carries
-/// the line, the page carries the value.
-pub(crate) fn run_controls(view: &StageView, app: &Entity<Luma>) -> AnyElement {
-    let Some(length) = view.length_m else {
-        return div().into_any_element();
-    };
-    let step = |label: &'static str, delta: f64| {
-        let app = app.clone();
-        luma_ui::luma_button(label, Enabled::Yes)
-            .id(label)
-            .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| {
-                    this.stage_set_length((length + delta).max(hand::LENGTH_STEP_M), cx);
-                });
-            })
-            .agent_node(Role::Button, label)
-    };
-    let commit = app.clone();
-    let cancel = app.clone();
-    div()
-        .flex_shrink_0()
-        .px(px(18.0))
-        .py(px(6.0))
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .border_b_1()
-        .border_color(ladder::trim())
-        .child(
-            div()
-                .text_size(px(11.0))
-                .text_color(ladder::foreground_90())
-                .child(format!("Length {length:.2} m"))
-                .agent_node(Role::Text, format!("Length {length:.2} m")),
-        )
-        .child(step("Shorter", -hand::LENGTH_STEP_M))
-        .child(step("Longer", hand::LENGTH_STEP_M))
-        .child({
-            let refused = view.refusal.is_some();
-            luma_ui::luma_button(
-                "Place run",
-                if refused { Enabled::No } else { Enabled::Yes },
-            )
-            .id("stage-place-run")
-            .on_click(move |_, _, cx| {
-                commit.update(cx, |this, cx| this.stage_commit_run(cx));
-            })
-            .agent_node(Role::Button, "Place run")
-            .agent_disabled(refused)
+/// A menu and not a toolbar: these three act on *this* node, so they belong
+/// where the node is. A bar at the top of the screen carrying "Flip" while the
+/// thing it would flip is four hundred pixels away is a control that has lost
+/// its subject.
+fn node_menu(at: Point<Pixels>, app: &Entity<Luma>) -> AnyElement {
+    let (dup, flip, detach, close) = (app.clone(), app.clone(), app.clone(), app.clone());
+    luma_ui::menu::ContextMenu::new("stage-node-menu", at)
+        .item("Duplicate", move |_, cx| {
+            dup.update(cx, |this, cx| this.stage_duplicate(cx));
         })
-        .child(
-            luma_ui::luma_button("Cancel run", Enabled::Yes)
-                .id("stage-cancel-run")
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| this.stage_cancel(cx));
-                })
-                .agent_node(Role::Button, "Cancel run"),
-        )
+        .item("Flip", move |_, cx| {
+            flip.update(cx, |this, cx| this.stage_flip(cx));
+        })
+        .separator()
+        .destructive("Detach", move |_, cx| {
+            detach.update(cx, |this, cx| this.stage_detach(cx));
+        })
+        .render(move |_, cx| {
+            close.update(cx, |this, cx| this.stage_close_menu(cx));
+        })
+}
+
+/// The inspector: what is selected, what it may be moved by, and what the last
+/// solve is still unhappy about.
+///
+/// A [`luma_ui::sheet`] and not a panel, for that module's reason: it is read
+/// *while* working the room, so the room underneath keeps taking clicks the
+/// whole time it is up. It retargets rather than reopening when the selection
+/// changes.
+fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyElement {
+    if revealed <= px(0.0) {
+        return div().into_any_element();
+    }
+    let pad = px(luma_ui::sheet::PAD);
+    let mut column = div()
+        .id("stage-inspector-body")
+        .size_full()
+        .min_h_0()
+        .overflow_y_scrollbar()
+        .flex()
+        .flex_col()
+        .gap(px(14.0))
+        .p(pad);
+    if let Some(selected) = &view.selected {
+        column = column.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(ladder::foreground())
+                        .child(selected.label.clone())
+                        .agent_node(Role::Text, selected.label.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(ladder::foreground_alpha(0.5))
+                        .child(format!("Gizmo: {}", selected.freedom.as_str()))
+                        .agent_node(Role::Text, format!("Gizmo: {}", selected.freedom.as_str())),
+                ),
+        );
+        // The one editable freedom the joint admits, as one control. A bolted
+        // plate gets none, and gets no row rather than a disabled one.
+        let editable = selected.freedom.param().map_or_else(
+            || (selected.freedom == Freedom::Free).then_some(("trim", selected.trim, MAX_TRIM_M)),
+            |key| Some((key, selected.param, if key == "u" { 1.0 } else { 360.0 })),
+        );
+        if let Some((key, value, max)) = editable {
+            let app = app.clone();
+            let node = selected.node.clone();
+            let step = if key == "yaw" { 5.0 } else { 0.05 };
+            column = column.child(float::arg_row(
+                axis_title(key),
+                float::scrub(
+                    format!("stage-{key}"),
+                    value,
+                    0.0,
+                    max,
+                    step,
+                    luma_ui::sheet::CONTENT_WIDTH,
+                    move |value, _, cx| {
+                        let node = node.clone();
+                        app.update(cx, |this, cx| {
+                            if key == "trim" {
+                                this.stage_set_trim(value, cx);
+                            } else {
+                                this.stage_set_param(&node, key, value, cx);
+                            }
+                        });
+                    },
+                ),
+            ));
+        }
+        column = column
+            .children(selected.relation.clone().map(note))
+            .children(selected.constraint.clone().map(note));
+    }
+    // Warnings last: a selection is what the hand is about to do, a warning is
+    // a report on what it already did.
+    if !view.dangling.is_empty() || !view.warnings.is_empty() {
+        let mut block = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(float::label("Unresolved"));
+        for text in view.warnings.iter().chain(view.dangling.iter()) {
+            block = block.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(ladder::status_warn())
+                    .child(text.clone())
+                    .agent_node(Role::Row, text.clone()),
+            );
+        }
+        column = column.child(block);
+    }
+    luma_ui::sheet::Sheet {
+        label: "Stage inspector".into(),
+        width: luma_ui::sheet::WIDTH,
+        revealed,
+        interactive: view.inspector_open,
+    }
+    .render(column.into_any_element())
+}
+
+/// The highest a free placement may be scrubbed to, in metres — a rig's trim,
+/// not a building's.
+const MAX_TRIM_M: f64 = 8.0;
+
+/// A quiet line of prose in the inspector: what the graph says about the
+/// selection, in the graph's own words.
+fn note(text: String) -> AnyElement {
+    div()
+        .text_size(px(11.0))
+        .text_color(ladder::foreground_alpha(0.5))
+        .child(text.clone())
+        .agent_node(Role::Text, text)
         .into_any_element()
+}
+
+/// The word an editable freedom goes by in the inspector.
+///
+/// The graph's parameter keys are `u`, `yaw`, `trim` — the names the solver
+/// argues in. A person adjusting a light is sliding it, turning it or lifting
+/// it, so the row is titled for the gesture and the key stays in the model.
+fn axis_title(key: &str) -> &'static str {
+    match key {
+        "u" => "Slide",
+        "yaw" => "Turn",
+        _ => "Trim",
+    }
 }
 
 // ---------------------------------------------------------------------------
 // The layer over the picture
 // ---------------------------------------------------------------------------
+
+/// One thing the hand is doing, projected onto the picture.
+pub(crate) struct Mark {
+    pub(crate) at: Point<Pixels>,
+    pub(crate) label: String,
+    pub(crate) refused: bool,
+}
+
+/// Every placement the hand is currently proposing, in window pixels: the
+/// ghost under the cursor, or one per body of a row being fitted.
+///
+/// The element-layer twin of the ghosts [`install`] pushes at the renderer —
+/// same poses, same count, from the same state — because a preview drawn only
+/// in pixels has no evidence under a headless run, and the spec asks that a
+/// value change move these *before* Apply.
+pub(crate) fn marks(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)) -> Vec<Mark> {
+    let mut out = Vec::new();
+    if let Some(held) = build.hand.held() {
+        if let Some(landed) = &held.landed {
+            if let Some(at) = project(camera, size, landed.world.w_axis.truncate()) {
+                out.push(Mark {
+                    at,
+                    label: format!("Ghost {}", held.what.label()),
+                    refused: landed.refused.is_some(),
+                });
+            }
+        }
+    }
+    if let Some(row) = build.hand.configuring() {
+        if let Ok(stations) = &row.preview {
+            for (index, station) in stations.iter().enumerate() {
+                if let Some(at) = project(camera, size, station.w_axis.truncate()) {
+                    out.push(Mark {
+                        at,
+                        label: format!("Station {} {}", index + 1, row.what.label()),
+                        refused: false,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Where the gap label sits, and what it says.
+fn measurement_label(
+    build: &Build,
+    camera: &luma_scene::Camera,
+    size: (f32, f32),
+) -> Option<(Point<Pixels>, String, String)> {
+    let run = build.hand.extending()?;
+    let from = build.room.socket_world(&run.from_node, &run.from_socket)?;
+    build.room.socket(&run.from_node, &run.from_socket)?;
+    // The socket the run comes *out* of, not the middle of the line.
+    //
+    // A dimension belongs at the middle, and that is where this sat until the
+    // controls joined it: the midpoint is a function of the length, so dragging
+    // the length box slid the box out from under the pointer that was dragging
+    // it. The socket does not move while a run grows, which is the whole
+    // requirement for anchoring a control to it.
+    let at = project(camera, size, from)?;
+    Some((
+        at,
+        run.measurement()?,
+        hand::feet_and_inches(run.reach.as_ref()?.gap_m),
+    ))
+}
+
+/// A socket-layer point in window pixels, or `None` behind the camera or well
+/// off screen. The projection [`beads`] does, shared so a station and a socket
+/// cannot disagree about where the same metre is.
+fn project(
+    camera: &luma_scene::Camera,
+    size: (f32, f32),
+    at: glam::DVec3,
+) -> Option<Point<Pixels>> {
+    let (width, height) = size;
+    if width <= 1.0 || height <= 1.0 {
+        return None;
+    }
+    let world = coords::world_from_three(at.as_vec3());
+    let forward = (camera.target - camera.position()).normalize_or_zero();
+    if (world - camera.position()).dot(forward) <= 0.0 {
+        return None;
+    }
+    let ndc = camera.project(world, width / height);
+    if ndc.x.abs() > 1.2 || ndc.y.abs() > 1.2 {
+        return None;
+    }
+    Some(Point::new(
+        px((ndc.x * 0.5 + 0.5) * width),
+        px((1.0 - (ndc.y * 0.5 + 0.5)) * height),
+    ))
+}
+
+/// The widest a run may be scrubbed to, in metres. A bound rather than a
+/// limit: a scrub maps a box to a range, so the range is the control's scale,
+/// and a truss longer than this is asked for by number rather than swept to.
+const MAX_RUN_M: f64 = 12.0;
+
+/// How wide the run's length box is.
+const RUN_SCRUB_W: f32 = 84.0;
+
+/// The hit box a station mark carries, and the dot inside it.
+const MARK_HALF: f32 = 9.0;
+const STATION_DOT: f32 = 6.0;
+
+/// How big a preview body is drawn, as a fraction of the catalog block it
+/// borrows its shape from.
+///
+/// A stand-in: a library fixture has no mesh in this catalog, and loading one
+/// per preview frame to answer "roughly here, roughly this big" would be a
+/// download in a drag loop. The station marks on the element layer are the
+/// precise claim; this is the mass that makes a row read as a row.
+const STATION_GHOST_SCALE: f32 = 0.5;
+
+/// A socket nobody is aiming at: small enough to read as a mark on the room
+/// rather than as a control laid over it.
+const BEAD_QUIET: f32 = 5.0;
+
+/// A socket that would take what is in the hand, or has taken it.
+const BEAD_LIVE: f32 = 7.0;
 
 /// One socket, projected.
 pub(crate) struct Bead {
@@ -2072,16 +2454,20 @@ pub(crate) fn build_layer(
     // cannot start under a ghost, and it is not mounted at all when the hand
     // is empty (`luma_ui::pane`'s rule, applied to a layer).
     if build.hand.owns_pointer() {
-        let drop = app.clone();
-        let aim = app.clone();
         let camera = *camera;
         let (width, height) = size;
-        layer = layer.child(
-            div()
-                .id("stage-drop-surface")
-                .absolute()
-                .inset_0()
-                .occlude()
+        let mut surface = div()
+            .id("stage-drop-surface")
+            .absolute()
+            .inset_0()
+            .occlude();
+        // Handlers only while the pointer is what aims — see
+        // [`hand::Hand::aims_with_pointer`]. A run keeps the occluder and
+        // loses the listeners.
+        if build.hand.aims_with_pointer() {
+            let drop = app.clone();
+            let aim = app.clone();
+            surface = surface
                 .on_mouse_move(move |event, _, cx| {
                     let Some(world) =
                         cursor_world(&camera, origin, (width, height), event.position)
@@ -2098,19 +2484,28 @@ pub(crate) fn build_layer(
                         }
                         this.stage_drop(cx);
                     });
-                })
-                .agent_node(Role::Card, "Stage drop surface"),
-        );
+                });
+        }
+        layer = layer.child(surface.agent_node(Role::Card, "Stage drop surface"));
     }
+    // Beads first, then everything that sits over them. gpui hit-tests in paint
+    // order, so a control added before a bead is a control the bead swallows —
+    // which is exactly what the run's length box did from under one.
     for bead in beads(build, camera, size) {
         let app = app.clone();
         let hover = app.clone();
         let (node, socket) = (bead.node.clone(), bead.socket.clone());
         let (hover_node, hover_socket) = (node.clone(), socket.clone());
-        let colour = match bead.state {
-            SocketMarkState::Open => ladder::muted_foreground(),
-            SocketMarkState::Compatible => ladder::accent(),
-            SocketMarkState::Latched => ladder::foreground(),
+        let (menu, menu_node) = (app.clone(), node.clone());
+        // Quiet unless it is a candidate. An open socket is a fact about the
+        // room and there are dozens of them; a compatible one is an answer to
+        // what is in the hand, and the latched one is *the* answer. Size and
+        // value carry that ranking together, so the picture reads before any
+        // of it is named.
+        let (dot, colour, ring) = match bead.state {
+            SocketMarkState::Open => (BEAD_QUIET, ladder::foreground_alpha(0.34), 0.0),
+            SocketMarkState::Compatible => (BEAD_LIVE, ladder::accent().into(), 0.0),
+            SocketMarkState::Latched => (BEAD_LIVE, ladder::foreground().into(), 3.0),
         };
         let diameter = hand::SOCKET_MARK_PICK_PX * 2.0;
         layer = layer.child(
@@ -2126,13 +2521,22 @@ pub(crate) fn build_layer(
                 .justify_center()
                 .occlude()
                 .child(
-                    div()
-                        .w(px(7.0))
-                        .h(px(7.0))
-                        .rounded(px(3.5))
-                        .bg(colour)
-                        .border_1()
-                        .border_color(ladder::control_border()),
+                    // No border: a hairline around a 5px dot over a dark room
+                    // is most of the dot. The latched bead gets a halo instead
+                    // — light *around* the mark rather than a line closing it
+                    // in, which is what a thing being held looks like.
+                    div().w(px(dot)).h(px(dot)).rounded_full().bg(colour).when(
+                        ring > 0.0,
+                        |mark| {
+                            mark.shadow(vec![gpui::BoxShadow {
+                                color: ladder::foreground_alpha(0.35),
+                                offset: gpui::point(px(0.0), px(0.0)),
+                                blur_radius: px(ring),
+                                spread_radius: px(ring * 0.5),
+                                inset: false,
+                            }])
+                        },
+                    ),
                 )
                 // Aiming is screen-space; acceptance is not. A raised socket is
                 // metres away from wherever the cursor's ray meets the floor,
@@ -2147,11 +2551,114 @@ pub(crate) fn build_layer(
                     let (node, socket) = (hover_node.clone(), hover_socket.clone());
                     hover.update(cx, |this, cx| this.stage_aim_socket(&node, &socket, cx));
                 })
-                .on_click(move |_, _, cx| {
+                .on_click(move |event, _, cx| {
                     let (node, socket) = (node.clone(), socket.clone());
-                    app.update(cx, |this, cx| this.stage_socket_clicked(node, socket, cx));
+                    let at = event.position();
+                    app.update(cx, |this, cx| {
+                        this.stage_socket_clicked(node, socket, at, cx);
+                    });
+                })
+                .on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
+                    cx.stop_propagation();
+                    let (node, at) = (menu_node.clone(), event.position);
+                    menu.update(cx, |this, cx| {
+                        if let Some(build) = this.build_mut() {
+                            build.selected = Some(node);
+                        }
+                        this.stage_open_menu(at, cx);
+                    });
                 })
                 .agent_node(Role::Button, bead.label),
+        );
+    }
+    // What the hand is doing, where the hand is doing it. These are the
+    // builder's evidence — for an eye because they are drawn over the room,
+    // and for a driver because they are nodes. Neither reads a caption.
+    layer = layer.children(marks(build, camera, size).into_iter().map(|mark| {
+        div()
+            .absolute()
+            .left(mark.at.x - px(MARK_HALF))
+            .top(mark.at.y - px(MARK_HALF))
+            .w(px(MARK_HALF * 2.0))
+            .h(px(MARK_HALF * 2.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(STATION_DOT))
+                    .h(px(STATION_DOT))
+                    .rounded_full()
+                    .bg(if mark.refused {
+                        ladder::danger()
+                    } else {
+                        ladder::accent()
+                    }),
+            )
+            .agent_node(Role::Text, mark.label)
+    }));
+    // The run's own controls, on the line the renderer draws. A length is a
+    // property of *this* measurement, so the number and the press that commits
+    // it ride the thing they are about rather than a bar somewhere else — which
+    // is the same argument the configure popover makes about a face.
+    if let Some((at, metres, feet)) = measurement_label(build, camera, size) {
+        let refused = build
+            .hand
+            .extending()
+            .and_then(Extending::refused)
+            .is_some();
+        let length = build.hand.extending().map_or(0.0, |run| run.length_m);
+        let (set, commit) = (app.clone(), app.clone());
+        layer = layer.child(
+            div().absolute().left(at.x).top(at.y).occlude().child(
+                float::popover_card()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
+                    .p(px(4.0))
+                    .child(
+                        div()
+                            .pl(px(6.0))
+                            .flex()
+                            .items_baseline()
+                            .gap(px(5.0))
+                            .child(
+                                div()
+                                    .font_family(luma_ui::fonts::MONO)
+                                    .text_size(px(11.0))
+                                    .text_color(ladder::foreground())
+                                    .child(metres.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(9.5))
+                                    .text_color(ladder::foreground_alpha(0.45))
+                                    .child(feet.clone()),
+                            )
+                            .agent_node(Role::Text, format!("{metres} · {feet}")),
+                    )
+                    .child(float::scrub(
+                        "stage-length",
+                        length,
+                        hand::LENGTH_STEP_M,
+                        MAX_RUN_M,
+                        hand::LENGTH_STEP_M,
+                        RUN_SCRUB_W,
+                        move |metres, _, cx| {
+                            set.update(cx, |this, cx| this.stage_set_length(metres, cx));
+                        },
+                    ))
+                    .child(
+                        float::btn_primary("Place run")
+                            .id("stage-place-run")
+                            .when(refused, |b| b.opacity(float::INERT_OPACITY))
+                            .on_click(move |_, _, cx| {
+                                commit.update(cx, |this, cx| this.stage_commit_run(cx));
+                            })
+                            .agent_node(Role::Button, "Place run")
+                            .agent_disabled(refused),
+                    ),
+            ),
         );
     }
     layer.into_any_element()
@@ -2171,7 +2678,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
             if let Some(catalog_ref) = held.what.catalog_ref() {
                 if let Some(geometry) = geometry_of(catalog_ref, &build.sockets) {
                     let (pos, rot) = luma_scene::coords::data_pose_of_d(landed.world);
-                    out.ghost = Some(Ghost {
+                    out.ghosts.push(Ghost {
                         geometry,
                         pos: pos.map(|v| v as f32),
                         rot: rot.map(|v| v as f32),
@@ -2179,6 +2686,25 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                         refused: landed.refused.is_some(),
                     });
                 }
+            }
+        }
+    }
+    // Every body of a row being fitted, at the poses the band math just
+    // answered with. A refused row previews nothing — there are no stations to
+    // draw, which is itself the picture of "this will not fit".
+    if let Some(row) = build.hand.configuring() {
+        if let Ok(stations) = &row.preview {
+            for station in stations {
+                let (pos, rot) = luma_scene::coords::data_pose_of_d(*station);
+                out.ghosts.push(Ghost {
+                    geometry: luma_render::scene_desc::Geometry::Procedural(
+                        luma_render::catalog::default_params(luma_scene::catalog::Family::Corner),
+                    ),
+                    pos: pos.map(|v| v as f32),
+                    rot: rot.map(|v| v as f32),
+                    scale: STATION_GHOST_SCALE,
+                    refused: false,
+                });
             }
         }
     }
@@ -2212,7 +2738,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                         luma_scene::venue::SurfacePlacement::FLUSH,
                     );
                     let (pos, rot) = luma_scene::coords::data_pose_of_d(world);
-                    out.ghost = Some(Ghost {
+                    out.ghosts.push(Ghost {
                         geometry: luma_render::scene_desc::Geometry::Procedural(params),
                         pos: pos.map(|v| v as f32),
                         rot: rot.map(|v| v as f32),

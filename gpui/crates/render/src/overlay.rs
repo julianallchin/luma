@@ -58,6 +58,14 @@ const ACCENT: u32 = 0x6b_7d_ff;
 
 /// The builder's "no", on every affordance that can be refused at once — a
 /// refused ghost and its refused run are one answer, not two.
+/// How solid an accepted ghost is. High enough to read over a dark stage,
+/// low enough that the room behind it is still visible through it — a preview
+/// the operator has to hunt for is not one.
+const GHOST_ALPHA: f32 = 0.5;
+
+/// A refusal is drawn harder than an acceptance: it has to stop the hand.
+const GHOST_REFUSED_ALPHA: f32 = 0.65;
+
 const REFUSED: u32 = 0xff_3b_30;
 
 /// A socket bead's radius before the constant-screen-size factor. A quarter of
@@ -226,7 +234,7 @@ pub(crate) fn build(
         });
     }
 
-    if let Some(ghost) = &build.ghost {
+    for ghost in &build.ghosts {
         let root = to_world
             * three_pose_from_data(ghost.pos, ghost.rot)
             * Mat4::from_scale(Vec3::splat(ghost.scale));
@@ -242,7 +250,13 @@ pub(crate) fn build(
             color: hex_srgb(if ghost.refused { REFUSED } else { 0xff_ff_ff }),
             // The refusal is drawn *harder* than the acceptance: a placement
             // that will not commit has to stop the hand, not fade out of it.
-            opacity: if ghost.refused { 0.5 } else { 0.35 },
+            // Both are well clear of the room behind them — a ghost the
+            // operator has to hunt for over a dark stage is not a preview.
+            opacity: if ghost.refused {
+                GHOST_REFUSED_ALPHA
+            } else {
+                GHOST_ALPHA
+            },
             depth: OverlayDepth::Free,
         }));
     }
