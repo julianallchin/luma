@@ -44,7 +44,7 @@ use luma_scene::coords;
 use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
 use luma_ui::float::{self, Dismiss, RowState};
 use luma_ui::ladder;
-use luma_ui::node::{Instrument as _, Role};
+use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 use luma_ui::{Enabled, CONTROL_HEIGHT};
 
 use crate::library::{LibraryError, Rig};
@@ -238,21 +238,101 @@ impl Build {
         }
     }
 
-    /// Whether a node hangs off a joint rather than sitting on a surface — the
-    /// predicate that decides whether it gets a transform gizmo.
+    /// The relation one node was placed by, in the graph's own words.
     ///
-    /// The design's rule, stated once: *snapped pieces have no transform
-    /// gizmo*. A snapped piece's pose is not a pose, it is a relation, and a
-    /// widget offering three axes of freedom to something with none is a
-    /// widget that lies.
-    pub(crate) fn is_snapped(&self, node: &str) -> bool {
-        self.graph.edge(node).is_some_and(|edge| {
-            self.room
-                .socket(&edge.parent, &edge.their_socket)
-                .is_some_and(|socket| {
-                    socket.socket_type.kind() != luma_scene::sockets::SocketKind::Surface
-                })
-        })
+    /// The claim an `attach` makes, read back off the solved graph rather than
+    /// off the gesture that asked for it: a test that asserted the readout it
+    /// had just typed in would be restating a constant.
+    pub(crate) fn relation_of(&self, node: &str) -> Option<String> {
+        let edge = self.graph.edge(node)?;
+        Some(format!(
+            "Edge: {} {} on {} {}",
+            self.label_of(node),
+            edge.my_socket,
+            self.label_of(&edge.parent),
+            edge.their_socket
+        ))
+    }
+
+    /// What a far-end check on this node currently says.
+    pub(crate) fn constraint_of(&self, node: &str) -> Option<String> {
+        let check = self
+            .solved
+            .constraints
+            .iter()
+            .find(|check| check.node_id == node)?;
+        Some(format!(
+            "Constraint: {} {} meets {} {} — {}",
+            self.label_of(node),
+            check.my_socket,
+            self.label_of(&check.target_node),
+            check.target_socket,
+            check.status
+        ))
+    }
+
+    /// The freedom a placed node actually has, which is what the inspector may
+    /// offer and the gizmo may not.
+    ///
+    /// One reading of the joint, not a table: a socket already carries its own
+    /// roll freedom, and a surface joint is the only kind whose child is free
+    /// to be picked up and put down somewhere else.
+    pub(crate) fn freedom_of(&self, node: &str) -> Freedom {
+        let Some(edge) = self.graph.edge(node) else {
+            return Freedom::Unplaced;
+        };
+        let Some(host) = self.room.socket(&edge.parent, &edge.their_socket) else {
+            return Freedom::Unplaced;
+        };
+        match (host.socket_type.kind(), host.roll) {
+            (luma_scene::sockets::SocketKind::Surface, _) if edge.parent == self.room.root() => {
+                Freedom::Free
+            }
+            (luma_scene::sockets::SocketKind::Surface, _) => Freedom::Slide,
+            (_, luma_scene::sockets::RollFreedom::Fixed) => Freedom::Bolted,
+            _ => Freedom::Roll,
+        }
+    }
+}
+
+/// What a placed node may be moved by.
+///
+/// The design's rule as a type: *snapped pieces have no transform gizmo*. Only
+/// [`Freedom::Free`] gets one; the rest move in the one freedom their joint
+/// admits, and a widget offering three axes to a bolted plate would be a widget
+/// that lies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Freedom {
+    /// Nothing has placed it — it is in the tray.
+    Unplaced,
+    /// Seated on the venue's own floor or grid: the gizmo's one case.
+    Free,
+    /// Bolted onto a face — it slides along it, and nowhere else.
+    Slide,
+    /// A joint with a roll: a clamp's yaw, a hinge's angle.
+    Roll,
+    /// A bolt circle with no freedom at all. Dragging it drags the run.
+    Bolted,
+}
+
+impl Freedom {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Freedom::Unplaced => "unplaced",
+            Freedom::Free => "translate",
+            Freedom::Slide => "slide",
+            Freedom::Roll => "roll",
+            Freedom::Bolted => "none",
+        }
+    }
+
+    /// The parameter this freedom edits, when it edits one.
+    pub(crate) fn param(self) -> Option<&'static str> {
+        match self {
+            Freedom::Slide => Some("u"),
+            Freedom::Roll => Some("yaw"),
+            Freedom::Free | Freedom::Bolted | Freedom::Unplaced => None,
+        }
     }
 }
 
@@ -347,6 +427,10 @@ impl Luma {
                             if !report.ok {
                                 build.report.push("the placement was refused".to_string());
                             }
+                            // What the verb touched is what the inspector should
+                            // be about: a placement the operator just made is the
+                            // one they are about to trim, flip or detach.
+                            build.selected = Some(report.node_id.clone());
                         }
                         Err(error) => build.report = vec![error.to_string()],
                     }
@@ -729,6 +813,28 @@ impl Luma {
         self.stage_verb(pending, cx);
     }
 
+    /// Write one parameter of one node — the whole of what a joint's own
+    /// freedom can change. `yaw` lands on the edge, which is where a mate's
+    /// turn about the shared normal lives.
+    pub(crate) fn stage_set_param(
+        &mut self,
+        node: &str,
+        key: &str,
+        value: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(venue) = self.build_state().map(|build| build.venue_id.clone()) else {
+            return;
+        };
+        let pending = self.library.set_params(
+            &venue,
+            node,
+            BTreeMap::from([(key.to_string(), value)]),
+            None,
+        );
+        self.stage_verb(pending, cx);
+    }
+
     /// Detach the selected node. Its rows stay: it lands in the tray, which is
     /// the difference between unplaced and deleted.
     pub(crate) fn stage_detach(&mut self, cx: &mut Context<Self>) {
@@ -765,8 +871,22 @@ impl Luma {
         }
         let pending = self.library.search_fixtures(&query, 40);
         cx.spawn(async move |this, cx| {
-            let found = pending.await.unwrap_or_default();
+            let found = pending.await;
             this.update(cx, |this, cx| {
+                let found = match found {
+                    Ok(found) => found,
+                    // A library that will not answer is a state the popup has
+                    // to show: an empty list that means "no such fixture" and
+                    // one that means "the index never built" are the same
+                    // picture, and only one of them is the operator's problem.
+                    Err(error) => {
+                        if let Some(build) = this.build_mut() {
+                            build.report = vec![error.to_string()];
+                        }
+                        cx.notify();
+                        return;
+                    }
+                };
                 if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
                     popup.results = found
                         .into_iter()
@@ -812,8 +932,20 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let report = pending.await;
             this.update(cx, |this, cx| {
-                if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
-                    popup.report = report.ok();
+                match report {
+                    Ok(report) => {
+                        if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
+                            popup.report = Some(report);
+                        }
+                    }
+                    // A distribution that never reached the command is not a
+                    // fit failure and must not read as one: the popup keeps its
+                    // last report and the refusal is said out loud.
+                    Err(error) => {
+                        if let Some(build) = this.build_mut() {
+                            build.report = vec![error.to_string()];
+                        }
+                    }
                 }
                 this.reload_stage(cx);
                 cx.notify();
@@ -1046,16 +1178,21 @@ pub(crate) struct StageView {
 
 /// The selected node, and the freedoms it actually has.
 pub(crate) struct SelectedView {
+    pub(crate) node: String,
     pub(crate) label: String,
-    /// A snapped piece has no transform gizmo — it moves in its socket's roll
-    /// freedom and nowhere else.
-    pub(crate) snapped: bool,
+    /// The freedom the joint admits. A snapped piece has no transform gizmo —
+    /// it moves in this and nowhere else.
+    pub(crate) freedom: Freedom,
+    pub(crate) relation: Option<String>,
+    pub(crate) constraint: Option<String>,
     pub(crate) trim: f64,
+    pub(crate) param: f64,
     pub(crate) draft: Option<String>,
 }
 
 pub(crate) struct DistributeView {
     pub(crate) host: String,
+    pub(crate) layout: &'static str,
     pub(crate) fixture: Option<String>,
     pub(crate) mode: Option<String>,
     pub(crate) count: usize,
@@ -1070,17 +1207,27 @@ impl Luma {
         let build = self.build_state()?;
         let held = build.hand.held();
         let run = build.hand.extending();
-        let selected = build.selected.as_ref().map(|node| SelectedView {
-            label: build.label_of(node),
-            snapped: build.is_snapped(node),
-            trim: build
-                .solved
-                .nodes
-                .iter()
-                .find(|n| &n.id == node)
-                .and_then(|n| n.params.get("trim").copied())
-                .unwrap_or(0.0),
-            draft: build.trim_draft.clone(),
+        let selected = build.selected.as_ref().map(|node| {
+            let freedom = build.freedom_of(node);
+            let param = |key: &str| {
+                build
+                    .solved
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == node)
+                    .and_then(|n| n.params.get(key).copied())
+                    .unwrap_or(0.0)
+            };
+            SelectedView {
+                node: node.clone(),
+                label: build.label_of(node),
+                freedom,
+                relation: build.relation_of(node),
+                constraint: build.constraint_of(node),
+                trim: param("trim"),
+                param: freedom.param().map_or(0.0, param),
+                draft: build.trim_draft.clone(),
+            }
         });
         Some(StageView {
             hand: build.hand.readout(),
@@ -1119,6 +1266,11 @@ impl Luma {
             warnings: build.report.clone(),
             distribute: build.distribute.as_ref().map(|popup| DistributeView {
                 host: format!("{} {}", build.label_of(&popup.host_node), popup.host_socket),
+                layout: match popup.layout {
+                    DistributeLayout::Even => "even",
+                    DistributeLayout::Spacing { .. } => "spacing",
+                    DistributeLayout::Span { .. } => "span",
+                },
                 fixture: popup.fixture_path.clone(),
                 mode: popup.mode_name.clone(),
                 count: popup.count,
@@ -1137,7 +1289,10 @@ impl Luma {
             faces: build
                 .room
                 .open_sockets()
-                .filter(|(_, socket)| hand::can_host(socket))
+                // A *feature*, not every host: a distribution runs along
+                // something, so the vocabulary is surfaces and edges. A bolt
+                // circle hosts structure and seats nothing.
+                .filter(|(_, socket)| hand::is_feature(socket))
                 .map(|(node, socket)| {
                     (
                         node.to_string(),
@@ -1407,27 +1562,76 @@ fn inspector(view: &StageView, app: &Entity<Luma>) -> AnyElement {
         .flex_col()
         .gap(px(8.0))
         .px(px(18.0))
-        .py(px(10.0));
+        .py(px(10.0))
+        // The feature list is as long as the room is complicated; without this
+        // the last rows are clipped and a hand cannot reach them.
+        .overflow_y_scrollbar();
     match &view.selected {
         None => {
             column = column.child(float::empty_row("Nothing selected"));
         }
         Some(selected) => {
+            let claim = |text: String, color: gpui::Rgba| {
+                div()
+                    .text_size(px(10.0))
+                    .text_color(color)
+                    .child(text.clone())
+                    .agent_node(Role::Text, text)
+            };
             column = column
                 .child(luma_ui::silkscreen(selected.label.clone()))
-                .child({
-                    let text = if selected.snapped {
-                        "Snapped: roll freedom only, no transform gizmo".to_string()
-                    } else {
-                        "Free: transform gizmo".to_string()
-                    };
+                .child(claim(
+                    format!("Gizmo: {}", selected.freedom.as_str()),
+                    ladder::muted_foreground(),
+                ))
+                .children(
+                    selected
+                        .relation
+                        .clone()
+                        .map(|text| claim(text, ladder::muted_foreground())),
+                )
+                .children(
+                    selected
+                        .constraint
+                        .clone()
+                        .map(|text| claim(text, ladder::accent())),
+                );
+            if let Some(key) = selected.freedom.param() {
+                let nudge = |app: Entity<Luma>, label: &'static str, delta: f64| {
+                    let node = selected.node.clone();
+                    let value = selected.param + delta;
+                    luma_ui::luma_button(label, Enabled::Yes)
+                        .id(label)
+                        .on_click(move |_, _, cx| {
+                            let node = node.clone();
+                            app.update(cx, |this, cx| {
+                                this.stage_set_param(&node, key, value, cx);
+                            });
+                        })
+                        .agent_node(Role::Button, label)
+                };
+                let step = if key == "u" { 0.25 } else { 0.5 };
+                column = column.child(
                     div()
-                        .text_size(px(10.0))
-                        .text_color(ladder::muted_foreground())
-                        .child(text.clone())
-                        .agent_node(Role::Text, text)
-                });
-            if !selected.snapped {
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .w(px(48.0))
+                                .text_size(px(10.0))
+                                .text_color(ladder::param_label())
+                                .child(key.to_uppercase()),
+                        )
+                        .child(claim(
+                            format!("{} {:.2}", key.to_uppercase(), selected.param),
+                            ladder::foreground_90(),
+                        ))
+                        .child(nudge(app.clone(), "Nudge back", -step))
+                        .child(nudge(app.clone(), "Nudge on", step)),
+                );
+            }
+            if selected.freedom == Freedom::Free {
                 let value = selected
                     .draft
                     .clone()
@@ -1572,9 +1776,36 @@ fn distribute_card(view: &DistributeView, app: &Entity<Luma>) -> AnyElement {
             })
             .agent_node(Role::Button, label)
     };
+    let layout = {
+        // Two of the three layouts, because the third is a pair of fractions and
+        // wants a handle rather than a button. Even always fits; a pitch is the
+        // one that can be refused, which is what makes the fit failure a state
+        // a hand can reach.
+        let app = app.clone();
+        let label = if view.layout == "even" {
+            "Layout even"
+        } else {
+            "Layout spacing"
+        };
+        luma_ui::luma_button(label, Enabled::Yes)
+            .id("stage-layout")
+            .on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| {
+                    if let Some(popup) = this.build_mut().and_then(|b| b.distribute.as_mut()) {
+                        popup.layout = match popup.layout {
+                            DistributeLayout::Even => DistributeLayout::Spacing { metres: 1.0 },
+                            _ => DistributeLayout::Even,
+                        };
+                    }
+                    cx.notify();
+                });
+            })
+            .agent_node(Role::Button, label)
+    };
     let run = app.clone();
     let retry = app.clone();
     card = card
+        .child(layout)
         .child(
             div()
                 .flex()
@@ -1590,21 +1821,16 @@ fn distribute_card(view: &DistributeView, app: &Entity<Luma>) -> AnyElement {
                 .child(count("Fewer", -1))
                 .child(count("More", 1)),
         )
-        .child(
-            luma_ui::luma_button(
-                "Distribute",
-                if view.fixture.is_some() && view.mode.is_some() {
-                    Enabled::Yes
-                } else {
-                    Enabled::No
-                },
-            )
-            .id("stage-distribute")
-            .on_click(move |_, _, cx| {
-                run.update(cx, |this, cx| this.stage_distribute(cx));
-            })
-            .agent_node(Role::Button, "Distribute"),
-        );
+        .child({
+            let ready = view.fixture.is_some() && view.mode.is_some();
+            luma_ui::luma_button("Distribute", if ready { Enabled::Yes } else { Enabled::No })
+                .id("stage-distribute")
+                .on_click(move |_, _, cx| {
+                    run.update(cx, |this, cx| this.stage_distribute(cx));
+                })
+                .agent_node(Role::Button, "Distribute")
+                .agent_disabled(!ready)
+        });
     if let Some(placed) = view.placed {
         card = card.child(
             div()
@@ -1675,21 +1901,19 @@ pub(crate) fn run_controls(view: &StageView, app: &Entity<Luma>) -> AnyElement {
         )
         .child(step("Shorter", -hand::LENGTH_STEP_M))
         .child(step("Longer", hand::LENGTH_STEP_M))
-        .child(
+        .child({
+            let refused = view.refusal.is_some();
             luma_ui::luma_button(
                 "Place run",
-                if view.refusal.is_some() {
-                    Enabled::No
-                } else {
-                    Enabled::Yes
-                },
+                if refused { Enabled::No } else { Enabled::Yes },
             )
             .id("stage-place-run")
             .on_click(move |_, _, cx| {
                 commit.update(cx, |this, cx| this.stage_commit_run(cx));
             })
-            .agent_node(Role::Button, "Place run"),
-        )
+            .agent_node(Role::Button, "Place run")
+            .agent_disabled(refused)
+        })
         .child(
             luma_ui::luma_button("Cancel run", Enabled::Yes)
                 .id("stage-cancel-run")

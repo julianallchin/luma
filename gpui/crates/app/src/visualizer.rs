@@ -3044,7 +3044,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                 .collect()
         })
     };
-    let selected_piece_ids = {
+    let selected_piece_ids: Vec<String> = {
         let stage = state.stage.borrow();
         stage.displayed_pick.as_ref().map_or_else(Vec::new, |pick| {
             state
@@ -3054,6 +3054,17 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                 .filter_map(|target| match pick.object(*target) {
                     Some(EditorObject::StagePiece(id)) => Some(id.clone()),
                     _ => None,
+                })
+                // **No transform gizmo on snapped pieces.** The widget is drawn
+                // from this list (`luma_render::overlay::pivot`), so the rule is
+                // enforced where the widget is decided rather than beside it:
+                // a bolted piece's pose is a relation, and three axes of freedom
+                // over a relation is a widget that lies about what it can do.
+                .filter(|id| {
+                    state
+                        .build
+                        .as_ref()
+                        .is_none_or(|build| build.freedom_of(id) == crate::stage::Freedom::Free)
                 })
                 .collect()
         })

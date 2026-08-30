@@ -43,9 +43,9 @@
 //! host-side failures and the command name, and hands the seam's own error
 //! back untouched through [`LibraryError::command`].
 
-use std::collections::{BTreeMap, HashMap};
 #[cfg(feature = "agent")]
 use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -69,6 +69,7 @@ use luma_lib::dispatch::{
 };
 use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::agent_threads::AgentThread;
+use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
 use luma_lib::models::fixtures::{FixtureDefinition, FixtureEntry, PatchedFixture};
 use luma_lib::models::groups::FixtureGroup;
 use luma_lib::models::node_graph::{
@@ -81,7 +82,6 @@ use luma_lib::models::scores::{
 use luma_lib::models::selection::Selection;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImportResult};
 use luma_lib::models::universe::UniverseState;
-use luma_lib::models::distribute::{DistributeLayout, DistributeReport};
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue, VenueGraphRows};
 use luma_lib::models::venues::Venue;
 use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
@@ -541,6 +541,10 @@ pub struct Library {
     /// together at every one of those moments, and a screen reading them from
     /// separate places would be able to name the previous account.
     account: Arc<Mutex<Option<Account>>>,
+    /// Whether the QLC+ definition index has been built this process. See
+    /// [`Library::search_fixtures`], which is the only reader and the only
+    /// writer.
+    fixtures_indexed: Arc<std::sync::atomic::AtomicBool>,
     /// Why boot admitted the guest namespace despite finding credentials —
     /// see [`Library::lapsed`]. Fixed at open: it is a fact about how this
     /// process started, and signing in afterwards does not rewrite it.
@@ -726,6 +730,7 @@ impl Library {
         Ok(Self {
             services,
             account: Arc::new(Mutex::new(account)),
+            fixtures_indexed: Arc::default(),
             lapsed,
             runtime,
             import_progress: progress_tx,
@@ -2027,15 +2032,37 @@ impl Library {
 
     /// Every QLC+ definition matching `query`, for the distribution popup and
     /// the patch page's add dialog.
+    ///
+    /// The index is built on the way in. `search_fixtures` refuses on an
+    /// un-indexed state, and nothing in this binary had ever built one — so
+    /// rather than every caller remembering a warmup, the search is the thing
+    /// that cannot be asked before there is something to search. Building it is
+    /// a directory walk, so it happens once per process and not once per
+    /// keystroke.
     pub fn search_fixtures(
         &self,
         query: &str,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<FixtureEntry>, LibraryError>> + use<> {
-        self.call(
-            "search_fixtures",
-            json!({ "query": query, "offset": 0, "limit": limit }),
-        )
+        let services = self.services.clone();
+        let indexed = Arc::clone(&self.fixtures_indexed);
+        let args = json!({ "query": query, "offset": 0, "limit": limit });
+        let task = self.runtime.spawn(async move {
+            if !indexed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let built: Result<usize, LibraryError> =
+                    command(&services, "initialize_fixtures", &json!({})).await;
+                if built.is_err() {
+                    indexed.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
+                built?;
+            }
+            command(&services, "search_fixtures", &args).await
+        });
+        async move {
+            task.await.map_err(|error| {
+                LibraryError::at("search_fixtures", Cause::Cancelled(error.to_string()))
+            })?
+        }
     }
 
     /// One QLC+ definition, for its mode list.
@@ -2141,10 +2168,7 @@ impl Library {
         venue_id: &str,
         node_id: &str,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
-        self.call(
-            "detach",
-            json!({ "venueId": venue_id, "nodeId": node_id }),
-        )
+        self.call("detach", json!({ "venueId": venue_id, "nodeId": node_id }))
     }
 
     /// Write down a far end: this socket meets that one. A check, never an

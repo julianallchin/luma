@@ -38,7 +38,7 @@ use luma_scene::coords;
 use luma_scene::snap::{
     solve_snap, ScenePiece, SnapInput, SnapMatch, SnapSurface, ATTACH_THRESHOLD, DETACH_THRESHOLD,
 };
-use luma_scene::sockets::{Polarity, ResolvedSocket, SocketType};
+use luma_scene::sockets::{Polarity, ResolvedSocket, SocketKind, SocketType};
 use luma_scene::venue::{
     invert_placement, place_on, root_socket, NodeKind, NodeSockets, SurfacePlacement, VenueGraph,
     FLOOR_SOCKET,
@@ -56,6 +56,22 @@ pub(crate) const LENGTH_STEP_M: f64 = 0.5;
 
 /// What a ray that hit nothing leaves in front of the cursor.
 pub(crate) const STUB_LENGTH_M: f64 = 0.5;
+
+/// The floor grid, in metres — the ladder's third rung, and the reason it is
+/// called a grid rather than a plane.
+///
+/// A free placement on the venue's own floor lands on it, and a free yaw lands
+/// on [`GRID_YAW_DEG`]. Not decoration: structure is built out of pieces
+/// quantized to [`LENGTH_STEP_M`], so two things put down off the grid leave a
+/// gap between them that no piece can bridge, and "extend to the gap" would be
+/// refused for every gap in the room. Quantizing where a piece is *put down* is
+/// what makes the measured distances buildable. A snap onto a socket or a
+/// surface is not quantized — there the host decides, and the host is already
+/// wherever it is.
+pub(crate) const GRID_M: f64 = 0.5;
+
+/// The step a free placement's spin lands on, in degrees.
+pub(crate) const GRID_YAW_DEG: f64 = 15.0;
 
 /// The mesh key the held piece is registered under while it is in the air. It
 /// is not a node — it has no row yet — so it cannot be keyed by node id, and a
@@ -536,7 +552,19 @@ impl Room {
                 );
                 // Trim is the operator's, not the cursor's: a drop is on the
                 // surface, and flying it is an edit afterwards.
-                let seat = SurfacePlacement { trim: 0.0, ..seat };
+                let mut seat = SurfacePlacement { trim: 0.0, ..seat };
+                // The grid rung. Only the venue's own floor is quantized — a
+                // deck's top is a surface, and a surface is wherever the host
+                // put it.
+                if host_node == self.root {
+                    let step = GRID_YAW_DEG.to_radians();
+                    seat = SurfacePlacement {
+                        u: (seat.u / GRID_M).round() * GRID_M,
+                        v: (seat.v / GRID_M).round() * GRID_M,
+                        yaw: (seat.yaw / step).round() * step,
+                        trim: 0.0,
+                    };
+                }
                 let world = place_on(parent_world, &host, held, kind, seat);
                 let surface = (host_node != self.root || host_socket != FLOOR_SOCKET)
                     .then(|| (host_node, host_socket));
@@ -740,6 +768,20 @@ pub(crate) const TRUSS_STRAIGHT: &str = "truss/straight";
 /// while a piece is held.
 pub(crate) fn can_host(socket: &ResolvedSocket) -> bool {
     socket.socket_type.polarity().can_host() && socket.socket_type != SocketType::Grab
+}
+
+/// Whether a socket is something a row of fixtures can be spread along.
+///
+/// A truss face, a deck top or edge, the venue's own floor and grid — anything
+/// with a length and a normal. A truss end is a host, but it is a bolt circle:
+/// it takes one piece, at one place, and "eight of them along it" means
+/// nothing.
+pub(crate) fn is_feature(socket: &ResolvedSocket) -> bool {
+    can_host(socket)
+        && matches!(
+            socket.socket_type.kind(),
+            SocketKind::Surface | SocketKind::Edge
+        )
 }
 
 /// Whether any of a held piece's sockets could mate this host.
