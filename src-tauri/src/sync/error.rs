@@ -17,6 +17,9 @@ pub enum SyncError {
     NotFound { table: String, id: String },
     /// Authentication required or token expired
     AuthRequired,
+    /// The stored session was revoked by Supabase; only a sign-in can
+    /// replace it, so nothing here retries.
+    SessionRevoked,
     /// A remote tombstone was declined because the local row still owns
     /// authored state, durable history, local artifacts, or dependent rows.
     /// This is a decision, not a failure: retrying can only repeat it.
@@ -37,6 +40,7 @@ impl fmt::Display for SyncError {
             SyncError::MissingField(field) => write!(f, "missing field: {field}"),
             SyncError::NotFound { table, id } => write!(f, "{table} {id} not found"),
             SyncError::AuthRequired => write!(f, "authentication required"),
+            SyncError::SessionRevoked => write!(f, "session revoked; sign in again"),
             SyncError::RemoteDeleteRefused { table, id, reason } => write!(
                 f,
                 "remote tombstone for {table}.{id} requires an authored-state deletion: {reason}"
@@ -50,6 +54,16 @@ impl std::error::Error for SyncError {}
 impl From<sqlx::Error> for SyncError {
     fn from(e: sqlx::Error) -> Self {
         SyncError::Local(e.to_string())
+    }
+}
+
+impl From<crate::database::local::auth::AuthError> for SyncError {
+    fn from(error: crate::database::local::auth::AuthError) -> Self {
+        use crate::database::local::auth::AuthError;
+        match error {
+            AuthError::SessionRevoked => SyncError::SessionRevoked,
+            AuthError::Other(message) => SyncError::Local(message),
+        }
     }
 }
 

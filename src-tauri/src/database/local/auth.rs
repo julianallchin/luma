@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -14,6 +15,69 @@ const AUTHENTICATED_AUDIENCE: &str = "authenticated";
 const MAX_SESSION_JSON_BYTES: usize = 1_048_576;
 const MAX_ACCESS_TOKEN_BYTES: usize = 65_536;
 const REFRESH_WINDOW_SECONDS: i64 = 60;
+
+/// The stored session (by `session_sha256`) Supabase last refused to renew.
+///
+/// A refused family never recovers on its own — only a sign-in replaces the
+/// session bytes — so once one refresh has been refused, every later gate
+/// hit answers from here instead of presenting the spent token again. Held
+/// per process because that is the reach of a `SupabaseAuthServer`; another
+/// process learns the same answer on its own first attempt.
+static REVOKED_SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+/// Why [`get_current_auth`] could not hand out a token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthError {
+    /// The stored session no longer proves anyone to Supabase and never will
+    /// again: its refresh token was spent elsewhere or the session was
+    /// revoked. Retrying cannot help; only a sign-in replaces it.
+    SessionRevoked,
+    /// Anything else — local database, network, a malformed response.
+    Other(String),
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthError::SessionRevoked => f.write_str(
+                "the stored session was revoked by Supabase and needs a new sign-in",
+            ),
+            AuthError::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+
+impl From<String> for AuthError {
+    fn from(message: String) -> Self {
+        AuthError::Other(message)
+    }
+}
+
+impl From<AuthError> for String {
+    fn from(error: AuthError) -> Self {
+        error.to_string()
+    }
+}
+
+/// Why the auth server did not return a renewed session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RefreshError {
+    /// Supabase refused the family for good (`refresh_token_already_used`,
+    /// `refresh_token_not_found`, a revoked session).
+    Revoked(String),
+    /// Transient: the network, a server error, an unreadable body.
+    Failed(String),
+}
+
+impl From<RefreshError> for String {
+    fn from(error: RefreshError) -> Self {
+        match error {
+            RefreshError::Revoked(detail) | RefreshError::Failed(detail) => detail,
+        }
+    }
+}
 
 /// The only identity callers may use to scope or route local data. It is
 /// reconstructed from a host-only proof bound to the exact persisted token,
@@ -186,7 +250,6 @@ impl PrincipalProof {
 
 #[derive(Clone, Debug)]
 struct VerifiedSnapshot {
-    session_json: String,
     envelope: SessionEnvelope,
     proof: PrincipalProof,
 }
@@ -194,7 +257,7 @@ struct VerifiedSnapshot {
 #[async_trait]
 trait AuthServer: Send + Sync {
     async fn authenticated_user_id(&self, access_token: &str) -> Result<String, String>;
-    async fn refresh(&self, refresh_token: &str) -> Result<String, String>;
+    async fn refresh(&self, refresh_token: &str) -> Result<String, RefreshError>;
 }
 
 struct SupabaseAuthServer {
@@ -251,7 +314,7 @@ impl AuthServer for SupabaseAuthServer {
         Ok(user.id)
     }
 
-    async fn refresh(&self, refresh_token: &str) -> Result<String, String> {
+    async fn refresh(&self, refresh_token: &str) -> Result<String, RefreshError> {
         let response = self
             .client
             .post(format!(
@@ -263,23 +326,28 @@ impl AuthServer for SupabaseAuthServer {
             .json(&serde_json::json!({ "refresh_token": refresh_token }))
             .send()
             .await
-            .map_err(|error| format!("Supabase session refresh failed: {error}"))?;
+            .map_err(|error| RefreshError::Failed(format!("Supabase session refresh failed: {error}")))?;
 
         let status = response.status();
         if !status.is_success() {
             let detail = response.text().await.unwrap_or_default();
-            return Err(format!(
+            let message = format!(
                 "Supabase rejected the refresh token ({status}): {}",
                 bounded_response_detail(&detail)
-            ));
+            );
+            return Err(if refresh_refusal_is_final(status.as_u16(), &detail) {
+                RefreshError::Revoked(message)
+            } else {
+                RefreshError::Failed(message)
+            });
         }
 
-        let value: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|error| format!("Supabase returned an invalid refresh response: {error}"))?;
-        serde_json::to_string(&value)
-            .map_err(|error| format!("Failed to serialize refreshed session: {error}"))
+        let value: serde_json::Value = response.json().await.map_err(|error| {
+            RefreshError::Failed(format!("Supabase returned an invalid refresh response: {error}"))
+        })?;
+        serde_json::to_string(&value).map_err(|error| {
+            RefreshError::Failed(format!("Failed to serialize refreshed session: {error}"))
+        })
     }
 }
 
@@ -330,6 +398,23 @@ pub async fn initialize_auth_state_schema(pool: &SqlitePool) -> Result<(), Strin
         .commit()
         .await
         .map_err(|error| format!("Failed to commit auth state initialization: {error}"))
+}
+
+/// Whether a refresh refusal is the end of the session family rather than a
+/// bad moment. GoTrue names its reasons in `error_code`; the three below are
+/// the ones no retry can change. Everything else (5xx, rate limits, an
+/// unreadable body) stays retryable.
+fn refresh_refusal_is_final(status: u16, body: &str) -> bool {
+    if !matches!(status, 400 | 401 | 403) {
+        return false;
+    }
+    let code = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("error_code")?.as_str().map(str::to_owned));
+    matches!(
+        code.as_deref(),
+        Some("refresh_token_already_used" | "refresh_token_not_found" | "session_not_found")
+    )
 }
 
 /// Bring a headless host's app database to a usable admission state at
@@ -1055,15 +1140,18 @@ pub async fn load_current_account(pool: &SqlitePool) -> Result<Option<AuthAccoun
 /// venue access) takes its token from here, so the offline reads above can
 /// tolerate expiry without weakening server authorization.
 ///
-/// Refresh is
-/// serialized by StateDb's single connection and the old proof is compared
-/// before the new session can replace it.
-pub async fn get_current_auth(pool: &SqlitePool) -> Result<Option<VerifiedAuth>, String> {
+/// Supabase refresh tokens are single-use, so the refresh runs under the
+/// database's write lock: every process sharing this `StateDb` queues on it,
+/// the first through renews the token, and each follower re-reads and finds
+/// the renewed session rather than presenting the spent one. A refusal that
+/// is final is [`AuthError::SessionRevoked`], remembered so the gate stops
+/// asking until a sign-in replaces the session.
+pub async fn get_current_auth(pool: &SqlitePool) -> Result<Option<VerifiedAuth>, AuthError> {
     let server = SupabaseAuthServer::new()?;
     get_current_auth_with(pool, &server, unix_now()).await
 }
 
-pub async fn get_current_access_token(pool: &SqlitePool) -> Result<Option<String>, String> {
+pub async fn get_current_access_token(pool: &SqlitePool) -> Result<Option<String>, AuthError> {
     Ok(get_current_auth(pool).await?.map(|auth| auth.access_token))
 }
 
@@ -1164,17 +1252,31 @@ async fn get_current_auth_with(
     pool: &SqlitePool,
     server: &dyn AuthServer,
     now: i64,
-) -> Result<Option<VerifiedAuth>, String> {
+) -> Result<Option<VerifiedAuth>, AuthError> {
     let mut connection = pool
         .acquire()
         .await
         .map_err(|error| format!("Failed to read authenticated session: {error}"))?;
     let snapshot = load_verified_snapshot_for_connection(&mut connection, now, true).await?;
-    drop(connection);
-
     let Some(snapshot) = snapshot else {
         return Ok(None);
     };
+    if snapshot.proof.jwt_expires_at > now + REFRESH_WINDOW_SECONDS {
+        return Ok(Some(snapshot.auth()));
+    }
+    if is_revoked(&snapshot) {
+        return Err(AuthError::SessionRevoked);
+    }
+
+    // `BEGIN IMMEDIATE` takes SQLite's write lock now, not at the first
+    // write, so a second process refreshing the same session waits here and
+    // then sees what the first one stored.
+    let mut transaction = sqlx::Connection::begin_with(&mut *connection, "BEGIN IMMEDIATE")
+        .await
+        .map_err(|error| format!("Failed to lock the session for refresh: {error}"))?;
+    let snapshot = load_verified_snapshot_for_connection(&mut transaction, now, true)
+        .await?
+        .ok_or_else(|| "Authenticated session disappeared during refresh".to_string())?;
     if snapshot.proof.jwt_expires_at > now + REFRESH_WINDOW_SECONDS {
         return Ok(Some(snapshot.auth()));
     }
@@ -1183,29 +1285,43 @@ async fn get_current_auth_with(
         snapshot.envelope.refresh_token.as_deref().ok_or_else(|| {
             "Authenticated session is expiring and has no refresh token".to_string()
         })?;
-    let refreshed_json = server.refresh(refresh_token).await?;
+    let refreshed_json = match server.refresh(refresh_token).await {
+        Ok(json) => json,
+        Err(RefreshError::Revoked(detail)) => {
+            eprintln!("[auth] {detail}");
+            remember_revoked(&snapshot);
+            return Err(AuthError::SessionRevoked);
+        }
+        Err(RefreshError::Failed(detail)) => return Err(AuthError::Other(detail)),
+    };
     let validated = validate_session_with(&refreshed_json, server, now).await?;
     if validated.proof.user_id != snapshot.proof.user_id {
-        return Err(
+        return Err(AuthError::Other(
             "Supabase refresh changed the authenticated principal; session was not replaced".into(),
-        );
+        ));
     }
-
-    let mut connection = pool
-        .acquire()
+    replace_session_for_connection(&mut transaction, &validated).await?;
+    transaction
+        .commit()
         .await
-        .map_err(|error| format!("Failed to lock refreshed session: {error}"))?;
-    let current = load_verified_snapshot_for_connection(&mut connection, now, true)
-        .await?
-        .ok_or_else(|| "Authenticated session disappeared during refresh".to_string())?;
-    if current.session_json != snapshot.session_json || current.proof != snapshot.proof {
-        return Err("Authenticated session changed during refresh; retry the operation".into());
-    }
-    replace_session_for_connection(&mut connection, &validated).await?;
+        .map_err(|error| format!("Failed to store the refreshed session: {error}"))?;
     Ok(Some(VerifiedAuth {
         principal: validated.proof.principal(),
         access_token: validated.envelope.access_token,
     }))
+}
+
+fn is_revoked(snapshot: &VerifiedSnapshot) -> bool {
+    REVOKED_SESSION
+        .lock()
+        .map(|revoked| revoked.as_deref() == Some(snapshot.proof.session_sha256.as_str()))
+        .unwrap_or(false)
+}
+
+fn remember_revoked(snapshot: &VerifiedSnapshot) {
+    if let Ok(mut revoked) = REVOKED_SESSION.lock() {
+        *revoked = Some(snapshot.proof.session_sha256.clone());
+    }
 }
 
 impl VerifiedSnapshot {
@@ -1315,11 +1431,7 @@ async fn load_verified_snapshot_for_connection(
                         .into(),
                 );
             }
-            Ok(Some(VerifiedSnapshot {
-                session_json,
-                envelope,
-                proof,
-            }))
+            Ok(Some(VerifiedSnapshot { envelope, proof }))
         }
     }
 }
@@ -1710,13 +1822,15 @@ mod tests {
 
     struct FakeAuthServer {
         users: Mutex<HashMap<String, Result<String, String>>>,
-        refreshes: Mutex<HashMap<String, Result<String, String>>>,
+        refresh_calls: std::sync::atomic::AtomicUsize,
+        refreshes: Mutex<HashMap<String, Result<String, RefreshError>>>,
     }
 
     impl FakeAuthServer {
         fn new() -> Self {
             Self {
                 users: Mutex::new(HashMap::new()),
+                refresh_calls: std::sync::atomic::AtomicUsize::new(0),
                 refreshes: Mutex::new(HashMap::new()),
             }
         }
@@ -1732,6 +1846,13 @@ mod tests {
             self.users.lock().unwrap().insert(
                 token.to_string(),
                 Err("server rejected forged token".into()),
+            );
+        }
+
+        fn refuse_refresh(&self, refresh_token: &str) {
+            self.refreshes.lock().unwrap().insert(
+                refresh_token.to_string(),
+                Err(RefreshError::Revoked("refresh_token_already_used".into())),
             );
         }
 
@@ -1754,13 +1875,14 @@ mod tests {
                 .unwrap_or_else(|| Err("unexpected token".into()))
         }
 
-        async fn refresh(&self, refresh_token: &str) -> Result<String, String> {
+        async fn refresh(&self, refresh_token: &str) -> Result<String, RefreshError> {
+            self.refresh_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.refreshes
                 .lock()
                 .unwrap()
                 .get(refresh_token)
                 .cloned()
-                .unwrap_or_else(|| Err("unexpected refresh token".into()))
+                .unwrap_or_else(|| Err(RefreshError::Failed("unexpected refresh token".into())))
         }
     }
 
@@ -2129,6 +2251,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refused_refresh_is_final_and_asked_once() {
+        let pool = test_pool().await;
+        let server = FakeAuthServer::new();
+        let token = jwt("real", NOW + 30);
+        let session = session("real", &token, "spent-refresh");
+        server.accept(&token, "real");
+        server.refuse_refresh("spent-refresh");
+        install_with(&pool, &server, &session).await.unwrap();
+
+        let first = get_current_auth_with(&pool, &server, NOW).await;
+        assert_eq!(first, Err(AuthError::SessionRevoked));
+        let second = get_current_auth_with(&pool, &server, NOW).await;
+        assert_eq!(second, Err(AuthError::SessionRevoked));
+        assert_eq!(
+            server
+                .refresh_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a revoked family is never presented to Supabase again"
+        );
+
+        // The session bytes are untouched: sign-in replaces them, not the gate.
+        let stored = get_raw_session_item(&pool, SUPABASE_SESSION_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, session);
+    }
+
+    #[tokio::test]
     async fn startup_storage_read_refreshes_an_expired_proven_session() {
         let pool = test_pool().await;
         let server = FakeAuthServer::new();
@@ -2223,7 +2375,7 @@ mod tests {
             .await
             .err()
             .unwrap();
-        assert!(error.contains("changed the authenticated principal"));
+        assert!(error.to_string().contains("changed the authenticated principal"));
         assert_eq!(
             get_raw_session_item(&pool, SUPABASE_SESSION_KEY)
                 .await

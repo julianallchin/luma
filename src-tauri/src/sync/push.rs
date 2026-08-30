@@ -643,6 +643,13 @@ pub async fn run_sync_loop(
         {
             Ok(n) if n > 0 => println!("[sync] Pushed {n} ops"),
             Err(SyncError::AuthRequired) => {}
+            // The session is gone for good; the app needs a person to sign in.
+            // Say so once per backoff window rather than once per tick.
+            Err(SyncError::SessionRevoked) => {
+                eprintln!("[sync] Session revoked — sign in again to resume");
+                host.events.emit("session-revoked", ());
+                auth_backoff = Some(tokio::time::Instant::now() + Duration::from_secs(30));
+            }
             Err(SyncError::Api { status: 401, .. }) => {
                 auth_backoff = Some(tokio::time::Instant::now() + Duration::from_secs(30));
             }
@@ -719,7 +726,7 @@ async fn run_pull_cycle(
     let engine_auth = async {
         let auth = crate::database::local::auth::get_current_auth(state_pool)
             .await
-            .map_err(SyncError::Local)?
+            .map_err(SyncError::from)?
             .ok_or(SyncError::AuthRequired)?;
         Ok::<_, SyncError>((auth.access_token, auth.principal.user_id))
     };
@@ -759,7 +766,7 @@ async fn run_pull_cycle(
 async fn get_auth(state_pool: &SqlitePool) -> Result<(String, String), SyncError> {
     let auth = crate::database::local::auth::get_current_auth(state_pool)
         .await
-        .map_err(SyncError::Local)?
+        .map_err(SyncError::from)?
         .ok_or(SyncError::AuthRequired)?;
     Ok((auth.access_token, auth.principal.user_id))
 }

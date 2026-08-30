@@ -77,7 +77,7 @@ impl SyncEngine {
     pub(crate) async fn require_auth(&self) -> Result<(String, String), SyncError> {
         let auth = crate::database::local::auth::get_current_auth(&self.state_pool)
             .await
-            .map_err(SyncError::Local)?
+            .map_err(SyncError::from)?
             .ok_or(SyncError::AuthRequired)?;
         Ok((auth.access_token, auth.principal.user_id))
     }

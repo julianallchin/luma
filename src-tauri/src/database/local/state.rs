@@ -1,3 +1,4 @@
+use std::time::Duration;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     SqlitePool,
@@ -32,6 +33,10 @@ pub async fn init_state_db_at(app_dir: &Path) -> Result<StateDb, String> {
     let connect_options = SqliteConnectOptions::new()
         .filename(&db_path)
         .create_if_missing(true)
+        // A session refresh holds this database's write lock across two
+        // round-trips to Supabase (see `auth::get_current_auth`); a second
+        // process wanting to write waits for it rather than failing.
+        .busy_timeout(Duration::from_secs(30))
         .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()

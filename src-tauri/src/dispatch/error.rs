@@ -60,6 +60,16 @@ pub enum CommandError {
 
 /// Hand-written because `#[from]` cannot express it: `String` is not an
 /// `Error`, so thiserror will not derive the conversion.
+impl From<crate::database::local::auth::AuthError> for CommandError {
+    fn from(error: crate::database::local::auth::AuthError) -> Self {
+        use crate::database::local::auth::AuthError;
+        match error {
+            AuthError::SessionRevoked => Self::Unauthorized(error.to_string()),
+            AuthError::Other(message) => Self::Internal(message),
+        }
+    }
+}
+
 impl From<String> for CommandError {
     fn from(message: String) -> Self {
         Self::Internal(message)
