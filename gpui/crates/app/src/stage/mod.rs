@@ -683,13 +683,13 @@ impl Luma {
             .as_ref()
             .map_or(hand::STUB_LENGTH_M, |reach| reach.gap_m);
         let label = build.label_of(&node);
-        build.hand = Hand::Extending(Extending {
+        build.hand = Hand::Extending(Box::new(Extending {
             from_node: node,
             from_node_label: label,
             from_socket: socket,
             reach,
             length_m,
-        });
+        }));
         cx.notify();
     }
 
@@ -1237,11 +1237,11 @@ impl Luma {
             refusal: run
                 .and_then(Extending::refused)
                 .or_else(|| held.and_then(|h| h.landed.as_ref()?.refused.clone())),
-            measurement: run.map(|run| {
-                (
-                    run.measurement(),
-                    hand::feet_and_inches(run.reach.as_ref().map_or(run.length_m, |r| r.gap_m)),
-                )
+            measurement: run.and_then(|run| {
+                Some((
+                    run.measurement()?,
+                    hand::feet_and_inches(run.reach.as_ref()?.gap_m),
+                ))
             }),
             length_m: run.map(|run| run.length_m),
             palette_open: build.palette_open,
@@ -1353,7 +1353,7 @@ fn header(state: &StagePage, app: &Entity<Luma>, view: &StageView) -> AnyElement
         luma_ui::luma_button(label, Enabled::Yes)
             .id(label)
             .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| run(this, cx));
+                app.update(cx, run);
             })
             .agent_node(Role::Button, label)
     };
@@ -2071,7 +2071,9 @@ pub(crate) fn build_layer(
     }
     for bead in beads(build, camera, size) {
         let app = app.clone();
+        let hover = app.clone();
         let (node, socket) = (bead.node.clone(), bead.socket.clone());
+        let (hover_node, hover_socket) = (node.clone(), socket.clone());
         let colour = match bead.state {
             SocketMarkState::Open => ladder::muted_foreground(),
             SocketMarkState::Compatible => ladder::accent(),
@@ -2099,6 +2101,19 @@ pub(crate) fn build_layer(
                         .border_1()
                         .border_color(ladder::control_border()),
                 )
+                // Aiming is screen-space; acceptance is not. A raised socket is
+                // metres away from wherever the cursor's ray meets the floor,
+                // so pointing at a bead is the only way a hand can reach one —
+                // and the bead's own hitbox is the radius that decides, in
+                // pixels. What it then hands the ladder is the socket's *world*
+                // position, which is what the snap-out radius is measured in.
+                .on_hover(move |hovered, _, cx| {
+                    if !*hovered {
+                        return;
+                    }
+                    let (node, socket) = (hover_node.clone(), hover_socket.clone());
+                    hover.update(cx, |this, cx| this.stage_aim_socket(&node, &socket, cx));
+                })
                 .on_click(move |_, _, cx| {
                     let (node, socket) = (node.clone(), socket.clone());
                     app.update(cx, |this, cx| this.stage_socket_clicked(node, socket, cx));
@@ -2139,13 +2154,39 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
             let socket = build.room.socket(&run.from_node, &run.from_socket);
             let pose = build.room.pose(&run.from_node);
             if let (Some(socket), Some(pose)) = (socket, pose) {
+                let refused = run.refused().is_some();
                 let direction = pose.transform_vector3(socket.normal).normalize_or_zero();
                 let to = from + direction * run.length_m;
                 out.measure = Some(Measure {
                     from: point_of(from),
                     to: point_of(to),
-                    refused: run.refused().is_some(),
+                    refused,
                 });
+                // The run's own ghost, at the length being asked for. This is
+                // the design's red case: a length past the measured gap is one
+                // of the two hard errors, and the ghost is where it is said.
+                #[allow(clippy::cast_possible_truncation)]
+                let params = luma_render::scene_desc::Procedural::Truss {
+                    span: run.length_m as f32,
+                };
+                let held = luma_render::catalog::procedural_sockets(params);
+                if let Some(end) = held.iter().find(|s| s.name == "end_a") {
+                    let world = luma_scene::venue::place_on(
+                        pose,
+                        socket,
+                        end,
+                        NodeKind::Run,
+                        luma_scene::venue::SurfacePlacement::FLUSH,
+                    );
+                    let (pos, rot) = luma_scene::coords::data_pose_of_d(world);
+                    out.ghost = Some(Ghost {
+                        geometry: luma_render::scene_desc::Geometry::Procedural(params),
+                        pos: pos.map(|v| v as f32),
+                        rot: rot.map(|v| v as f32),
+                        scale: 1.0,
+                        refused,
+                    });
+                }
             }
         }
     }
