@@ -1123,6 +1123,78 @@ impl Visualizer {
         Viewfinder::new(FOV_Y_DEG, w / h).inset(Insets::vertical(0.0, toolbar))
     }
 
+    /// Frame the selection: target its centroid, dolly to a radius that fits
+    /// its spread. `F`, the way every 3D editor spells it.
+    ///
+    /// Anchors come from the displayed frame's pick snapshot — the same
+    /// answer a click gets — and are in the renderer's (three) space, so the
+    /// centroid crosses back through `world_from_three` before it becomes the
+    /// camera's target.
+    /// Empty the selection — the stage's escape reaches it here so the two
+    /// stores cannot disagree about "nothing".
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection.clear();
+    }
+
+    /// Replace the selection with one object — the headless pick's write.
+    pub(crate) fn select_object(&mut self, object: EditorObject) {
+        self.selection.click(object, false);
+    }
+
+    /// The pointer's ray through the stage pane, off the camera alone — the
+    /// aim a headless run has, where the displayed frame's own `PickSnapshot`
+    /// does not exist. World space, unit direction not guaranteed.
+    pub(crate) fn stage_pick_ray(&self, at: Point<Pixels>) -> Option<luma_scene::Ray> {
+        let pane = self.stage.borrow().pane;
+        let point = Vec2::new(
+            f32::from(at.x - pane.origin.x),
+            f32::from(at.y - pane.origin.y),
+        );
+        let viewport = Vec2::new(f32::from(pane.size.width), f32::from(pane.size.height));
+        if viewport.x <= 1.0 || viewport.y <= 1.0 {
+            return None;
+        }
+        let ndc = Vec2::new(
+            point.x / viewport.x * 2.0 - 1.0,
+            1.0 - point.y / viewport.y * 2.0,
+        );
+        Some(self.camera.ray(ndc, viewport.x / viewport.y))
+    }
+
+    pub(crate) fn focus_selection(&mut self) -> bool {
+        let centre;
+        let spread;
+        {
+            let stage = self.stage.borrow();
+            let Some(pick) = stage.displayed_pick.as_ref() else {
+                return false;
+            };
+            let points: Vec<Vec3> = self
+                .selection
+                .selected()
+                .iter()
+                .filter_map(|object| pick.anchors.get(object).copied())
+                .collect();
+            if points.is_empty() {
+                return false;
+            }
+            let sum: Vec3 = points.iter().copied().sum();
+            centre = sum / points.len() as f32;
+            spread = points
+                .iter()
+                .map(|p| p.distance(centre))
+                .fold(0.0f32, f32::max);
+        }
+        self.camera.target = coords::world_from_three(centre);
+        let (near, far) = self
+            .framing
+            .radius_bounds(opening_camera(&self.framing, &self.view_finder()).radius);
+        // Enough radius to see the whole spread plus a body's worth of room;
+        // a single small object gets a close, deliberate look.
+        self.camera.radius = (spread * 2.5 + 3.0).clamp(near, far);
+        true
+    }
+
     fn dolly(&mut self, factor: f32) {
         let (near, far) = self
             .framing

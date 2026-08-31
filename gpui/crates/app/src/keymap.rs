@@ -157,6 +157,11 @@ actions!(
         /// Delete the stage builder's selected subtree. Its fixtures are
         /// trayed, not destroyed.
         DeleteStageElement,
+        /// Open the stage builder's add-element dialog, caret in its search.
+        AddStageElement,
+        /// Frame the stage selection: put the camera's target on it and dolly
+        /// to a radius that fits it.
+        FocusStageSelection,
         /// Keep the track editor's view centred on the playhead.
         FollowPlayhead,
         /// Undo / redo the track editor's last edit.
@@ -263,6 +268,8 @@ pub(crate) fn init(cx: &mut App) {
         // letter carries.
         KeyBinding::new("w", GizmoTranslate, Some(&staging)),
         KeyBinding::new("e", GizmoRotate, Some(&staging)),
+        KeyBinding::new("a", AddStageElement, Some(&staging)),
+        KeyBinding::new("f", FocusStageSelection, Some(&staging)),
         KeyBinding::new("delete", DeleteStageElement, Some(&staging)),
         KeyBinding::new("backspace", DeleteStageElement, Some(&staging)),
         KeyBinding::new("secondary-1", SelectTab1, Some(&shell)),

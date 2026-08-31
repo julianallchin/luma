@@ -6,7 +6,7 @@
 //! are resolved against a mesh's measured bbox and a float32 rounding is
 //! already larger than the tolerance the golden vectors hold us to.
 
-use glam::{DVec3, Vec3};
+use glam::{DMat4, DVec3, Vec3};
 
 /// Renderer-space AABB (f32, Z-up). Empty is encoded as `min > max`, which
 /// makes [`Aabb::EMPTY`] absorb any point under [`Aabb::expand`].
@@ -224,4 +224,33 @@ mod obb_tests {
         assert!(!obb_intersects(bar, &world, unit(), &probe, 0.0));
         assert!(obb_intersects(bar, &DMat4::IDENTITY, unit(), &probe, 0.0));
     }
+}
+
+/// Where a ray enters an oriented box, if it does.
+///
+/// The ray is carried into the box's local frame and slab-tested there; the
+/// returned `t` is in the caller's (world) parameterisation only under a rigid
+/// pose, which is what every placed piece has. Used by the headless room pick
+/// — the harness's stand-in for the viewport's mesh BVH.
+#[must_use]
+pub fn ray_obb(origin: DVec3, dir: DVec3, bounds: DAabb, world: &DMat4) -> Option<f64> {
+    let inv = world.inverse();
+    let o = inv.transform_point3(origin);
+    let d = inv.transform_vector3(dir);
+    let mut enter = f64::NEG_INFINITY;
+    let mut exit = f64::INFINITY;
+    for axis in 0..3 {
+        let (o, d) = (o[axis], d[axis]);
+        let (lo, hi) = (bounds.min[axis], bounds.max[axis]);
+        if d.abs() < 1e-12 {
+            if o < lo || o > hi {
+                return None;
+            }
+            continue;
+        }
+        let (t1, t2) = ((lo - o) / d, (hi - o) / d);
+        enter = enter.max(t1.min(t2));
+        exit = exit.min(t1.max(t2));
+    }
+    (exit >= enter.max(0.0)).then(|| enter.max(0.0))
 }
