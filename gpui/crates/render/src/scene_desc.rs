@@ -117,6 +117,10 @@ pub struct Build {
     pub measure: Option<Measure>,
     /// Sockets worth pointing at while something is held.
     pub sockets: Vec<SocketMark>,
+    /// The piece the current landing would attach to, lit so the hand knows
+    /// what it is placing *onto* before it commits — the constraint-first
+    /// answer to "where is this going".
+    pub host: Option<String>,
 }
 
 /// A placement preview: the held piece's own geometry, at the pose the resolver

@@ -30,6 +30,7 @@
 //! carries the *claim*.
 
 pub(crate) mod hand;
+pub(crate) mod preview;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -724,6 +725,26 @@ impl Luma {
     }
 
     pub(crate) fn stage_open_chooser(&mut self, cx: &mut Context<Self>) {
+        // The preview pane's thumbnails render on their own thread; the first
+        // open kicks them off and this poll repaints as the files land.
+        preview::warm();
+        if !preview::all_ready() {
+            cx.spawn(async move |this, cx| {
+                for _ in 0..120 {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(250))
+                        .await;
+                    let done = preview::all_ready();
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        return;
+                    }
+                    if done {
+                        return;
+                    }
+                }
+            })
+            .detach();
+        }
         if let Some(build) = self.build_mut() {
             build.hand = Hand::Choosing(hand::Choosing::default());
         }
@@ -2094,7 +2115,16 @@ fn chooser_preview(row: Option<&ChooserRow>) -> Div {
         Holding::Duplicate { .. } => "A copy of what is selected".to_string(),
         Holding::Fixture { .. } => "Placed as a row along a face".to_string(),
     };
-    pane.child(float::label(row.section.to_string()))
+    let thumb = match &row.take {
+        Holding::Piece { catalog_ref, .. } => {
+            let path = preview::thumbnail_path(catalog_ref);
+            path.exists()
+                .then(|| gpui::img(path).w_full().rounded(px(6.0)).into_any_element())
+        }
+        _ => None,
+    };
+    pane.children(thumb)
+        .child(float::label(row.section.to_string()))
         .child(
             div()
                 .text_size(px(15.0))
@@ -2213,13 +2243,24 @@ fn chooser(
                 cx.notify();
             });
         })
-        .child(float::header_band().child(
-            float::field().w_full().child(fixture_library::search_field(
-                &state.library,
-                true,
-                true,
-            )),
-        ))
+        .child(
+            float::header_band()
+                .child(fixture_library::search_field(&state.library, true, true))
+                .child({
+                    let close = app.clone();
+                    float::key_cap_pressable(float::key_cap())
+                        .id("stage-chooser-close")
+                        .on_click(move |_, window, cx| {
+                            let focus = close.update(cx, |this, cx| {
+                                this.stage_escape(cx);
+                                this.focus.clone()
+                            });
+                            window.focus(&focus, cx);
+                        })
+                        .child("esc")
+                        .agent_node(Role::Button, "Close add element")
+                }),
+        )
         .child(
             div()
                 .flex_1()
@@ -3236,6 +3277,14 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
         // cursor is, but a piece that cannot go there is not previewed there —
         // the ghost disappearing *is* the refusal.
         if let Some(landed) = held.landed.as_ref().filter(|l| l.refused.is_none()) {
+            out.host = match &landed.how {
+                Landing::Socket { parent, .. } => Some(parent.clone()),
+                Landing::Free {
+                    surface: Some((node, _)),
+                    ..
+                } => Some(node.clone()),
+                Landing::Free { surface: None, .. } => None,
+            };
             for body in build.ghost_bodies(&held.what, landed) {
                 let (pos, rot) = luma_scene::coords::data_pose_of_d(body.world);
                 out.ghosts.push(Ghost {

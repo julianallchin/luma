@@ -66,6 +66,10 @@ const GHOST_ALPHA: f32 = 0.5;
 /// A refusal is drawn harder than an acceptance: it has to stop the hand.
 const GHOST_REFUSED_ALPHA: f32 = 0.65;
 
+/// How strongly the landing's host piece is washed in the accent while a
+/// ghost is standing on it. A hint, not a highlight — the ghost is the claim.
+const HOST_WASH: f32 = 0.14;
+
 const REFUSED: u32 = 0xff_3b_30;
 
 /// A socket bead's radius before the constant-screen-size factor. A quarter of
@@ -271,6 +275,25 @@ pub(crate) fn build(
     // painted in the order of how much they say about the *next* click. All
     // three ignore depth, so a joint behind a truss still reads.
     let build = &scene.editor.build;
+    // The host under the landing, washed in the accent: what the drop would
+    // attach *to*, said before the click says it.
+    if let Some(host) = &build.host {
+        if let Some(piece) = scene.pieces.iter().find(|p| &p.id == host) {
+            let model = to_world
+                * three_pose_from_data(piece.pos, piece.rot)
+                * Mat4::from_scale(Vec3::splat(piece.scale));
+            let draws = crate::frame::piece_draws(&piece.geometry, model, lib, bank, None)
+                .unwrap_or_default();
+            out.extend(draws.into_iter().map(|draw| Overlay {
+                mesh: draw.mesh,
+                model: draw.model,
+                lines: false,
+                color: hex_srgb(ACCENT),
+                opacity: HOST_WASH,
+                depth: OverlayDepth::Free,
+            }));
+        }
+    }
     for mark in &build.sockets {
         let pos = three_from_data(Vec3::from(mark.pos));
         let world = to_world.transform_point3(pos);
