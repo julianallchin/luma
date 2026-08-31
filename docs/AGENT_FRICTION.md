@@ -2,6 +2,11 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] `luma.venue.place(at=...)` anchors a deck by its corner but a truss by its centre, and `v` runs toward the house while world +y runs upstage — three sign/offset conventions the docstring never states; every builder rediscovers them with `tiles()`.
+- [2026-08-31] `place(on=<deck>, surface="top")` seats the child by its corner in a rotated frame, so `at=(0,0)` lands off the host — and a free-floating riser still `describe()`s as `on .top`. Workaround is free-place + `trim=`, which shouldn't be the ergonomic path.
+- [2026-08-31] `Placement.__repr__` dumps the entire venue `describe()` — one `print(place(...))` in a loop floods the cell output and truncates everything after it. A short handle repr would do.
+- [2026-08-31] the sandboxed luma-mcp kernel can't write to its own scratchpad dir, so there's no way to page long output through a file.
+- [2026-08-31] a stale luma-mcp binary reports `unknown venue host method "venue.catalog"` — version skew reads exactly like a missing verb; the error should say the server predates the method.
 - [2026-08-31] `cargo test --features pixel` from gpui/ says "none of the selected packages contains this feature" — the feature lives on gpui-agent, so it is `-p gpui-agent --features pixel --test app_pixel`, which the app_pixel main.rs doc comment does not say.
 - [2026-08-31] Runtime grew a `cloud` field and the env-gated real-data tests (visualizer_real_score_window, track_editor_real_budget) kept stale literals — they only compile under `--features pixel --tests`, so nothing caught it until a full test-target check.
 - [2026-08-30] The headless app suite is load-flaky when all 77 run in parallel: three consecutive full runs failed three different test sets (agent_chat, tracks browser, venue_builder), every one green in isolation. A suite that only convicts under contention needs either fewer default threads or per-test verdicts you can trust.
