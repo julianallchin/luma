@@ -123,7 +123,7 @@ const MIN_LABEL_CELLS: f64 = 4.0;
 /// docs for why it reads the way it does.
 const ORIENTATION: &str =
     "plan as the house sees it: columns run +x → −x (stage right → stage left), \
-     rows run +y → −y (upstage → house)";
+     rows run +y → −y (house → upstage)";
 
 // ---------------------------------------------------------------------------
 // what a node puts on the map

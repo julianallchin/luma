@@ -703,10 +703,16 @@ impl VenueGraph {
 /// per deck the room happens to contain.
 ///
 /// Its frame fixes what `(u, v)` mean on the floor: `+Z` is up, `+X` (the
-/// tangent) is **stage right**, and the bitangent `Z x X` is therefore
-/// **toward the house** — data space `-Y`. The apparent sign flip is the
-/// data-to-three mirror, not a choice; it is why `invert_placement` exists
-/// rather than a sign convention anyone has to remember.
+/// tangent) is **stage right**, and the bitangent `Z x X` is **upstage** —
+/// three space `-Z`, which is data space `-Y` and world `+Y`. So `+v` runs
+/// away from the audience and the house is at `-v`, the way the floor's own
+/// compass arrow points (`grid.wgsl`).
+///
+/// The sign is worth stating in all three spaces because the data-to-three
+/// swap is a *mirror* (see [`crate::coords`]): data `-Y` reads as world `+Y`,
+/// and a reader who assumes the two agree gets the room back to front. That
+/// mirror is why a stored pose comes back through `invert_placement` rather
+/// than through a sign convention anyone has to remember.
 #[cfg(test)]
 fn floor_socket() -> ResolvedSocket {
     root_socket(FLOOR_SOCKET).expect("the floor is a root socket")
@@ -1380,14 +1386,20 @@ fn place(
 /// The forward half of the pair whose inverse is [`invert_placement`], and the
 /// only place the mate is written:
 ///
-/// `parent_world . host_frame . T(u, v) . lift(trim) . Rz(yaw) . mate_suffix`
+/// `parent_world . host_frame . T(seat) . Rz(yaw) . mate_suffix`, where the
+/// seat is `(u, plan_v(v)) - centre_offset + lift(trim)`.
 ///
-/// `(u, v)` run in the host surface's own plane and `trim` runs along world up
-/// (see `trim_axis`), so the offset and the twist sit *between* the two
-/// frames — turning about the joint rather than about the piece's own origin.
-/// [`crate::snap`] calls this with [`SurfacePlacement::FLUSH`] for the bare
-/// mate it scores candidates over, so there is one copy of the arithmetic and
-/// the golden snap vectors pin it.
+/// `(u, v)` are the room's plan on the host surface — `+u` stage right, `+v`
+/// upstage, and the piece's **footprint centre** on the mark — while `trim`
+/// runs along world up (see [`centre_offset`], `trim_axis`). The offset and the
+/// twist sit *between* the two frames, so the twist is the joint's rather than
+/// the piece's own origin's.
+///
+/// `bounds` is the held node's box, from [`NodeSockets::bounds`]; `None` seats
+/// by the socket alone. [`crate::snap`] calls this with `None` and
+/// [`SurfacePlacement::FLUSH`] for the bare socket-on-socket mate it scores
+/// candidates over — there is one copy of the arithmetic and the golden snap
+/// vectors pin it.
 #[must_use]
 pub fn place_on(
     parent_world: DMat4,

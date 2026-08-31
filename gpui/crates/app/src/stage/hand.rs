@@ -511,7 +511,7 @@ impl Room {
             let Some(world) = poses.get(&node.id).copied() else {
                 continue;
             };
-            if let Some(bounds) = sockets.bounds(node) {
+            if let Some(bounds) = piece_bounds(sockets, node) {
                 boxes.insert(node.id.clone(), bounds);
             }
             let mut resolved = if node.id == root {
@@ -691,7 +691,6 @@ impl Room {
                     held_sockets,
                     &matched.held_socket,
                     kind,
-                    body,
                 )?;
                 Some((
                     Landed {
@@ -734,17 +733,7 @@ impl Room {
                 // plane. `invert_placement` is the inverse of the mate the
                 // resolver will perform, so what is written down is exactly
                 // what will be read back.
-                // The bare mate, `None` bounds: the slide below is measured
-                // from where the *held socket* lands, so this half must be the
-                // socket-on-socket seat whatever the piece's box says.
-                let flush = place_on(
-                    parent_world,
-                    &host,
-                    held,
-                    kind,
-                    None,
-                    SurfacePlacement::FLUSH,
-                );
+                let flush = place_on(parent_world, &host, held, kind, SurfacePlacement::FLUSH);
                 // The flush mate seats the held socket on the host socket; the
                 // cursor is where it should be instead, so the whole pose slides
                 // by the difference and `invert_placement` reads that slide back
@@ -756,7 +745,6 @@ impl Room {
                     &host,
                     held,
                     kind,
-                    body,
                 );
                 // Trim is the operator's, not the cursor's: a drop is on the
                 // surface, and flying it is an edit afterwards.
@@ -773,7 +761,7 @@ impl Room {
                         trim: 0.0,
                     };
                 }
-                let world = place_on(parent_world, &host, held, kind, body, seat);
+                let world = place_on(parent_world, &host, held, kind, seat);
                 let refused = self.refusal(body, world, &[Some(host_node.as_str()), exclude]);
                 let free_floor = host_node == self.root && host_socket == FLOOR_SOCKET;
                 let surface = (!free_floor).then_some((host_node, host_socket));
@@ -815,7 +803,6 @@ impl Room {
             held_sockets,
             &latch.held_socket,
             kind,
-            body,
         )?;
         Some(Landed {
             world,
@@ -852,7 +839,6 @@ impl Room {
         held_sockets: &[ResolvedSocket],
         my_socket: &str,
         kind: NodeKind,
-        bounds: Option<luma_scene::aabb::DAabb>,
     ) -> Option<DMat4> {
         let host = self.socket(parent, their_socket)?;
         let held = held_sockets.iter().find(|s| s.name == my_socket)?;
@@ -861,7 +847,6 @@ impl Room {
             host,
             held,
             kind,
-            bounds,
             SurfacePlacement::FLUSH,
         ))
     }
@@ -882,6 +867,25 @@ impl Room {
                     .dot(luma_scene::snap::WORLD_UP)
                     .total_cmp(&b.normal.dot(luma_scene::snap::WORLD_UP))
             })
+    }
+}
+
+/// One node's local bounds: the catalog's measurement for a mesh piece, the
+/// generator's arithmetic for a procedural one at this node's own parameters.
+/// A node with neither (a fixture, the root) has no box and no collisions.
+fn piece_bounds(
+    sockets: &VenueSockets,
+    node: &luma_scene::venue::Node,
+) -> Option<luma_scene::aabb::DAabb> {
+    let reference = node.catalog_ref.as_deref()?;
+    match luma_scene::catalog::piece(reference)?.geometry {
+        luma_scene::catalog::Geometry::Mesh { .. }
+        | luma_scene::catalog::Geometry::Assembly(_) => sockets.catalog().bounds(reference),
+        luma_scene::catalog::Geometry::Procedural(family) => {
+            Some(luma_render::catalog::procedural_bounds(
+                luma_render::catalog::node_params(family, &node.params),
+            ))
+        }
     }
 }
 
