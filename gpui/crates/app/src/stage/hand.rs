@@ -325,6 +325,12 @@ pub(crate) enum Holding {
         /// number `luma_lib`'s `body_width_m` gives the commit, so a row that
         /// previews as fitting cannot be refused for length on apply.
         width_m: f64,
+        /// The body's `[width, height, depth]` in metres, from the same
+        /// definition — the collision box a held light carries so it cannot
+        /// be pushed through structure. `None` until the definition lands,
+        /// which is also "no box yet": a refusal invented from a guessed size
+        /// would block placements the real body allows.
+        dims: Option<[f64; 3]>,
     },
 }
 
