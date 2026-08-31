@@ -273,6 +273,11 @@ fn geometry_of(catalog_ref: &str, params: &luma_scene::venue::Params) -> scene_d
         // A `catalog_ref` the catalog has dropped still names a mesh on disk,
         // and drawing it is better than drawing nothing: the four ripped truss
         // GLBs left the palette but not the venues that already used them.
+        // An assembly is named, not pathed: falling through to the mesh arm
+        // would send the renderer looking for a GLB called `assembly/...`.
+        Some(luma_scene::catalog::Geometry::Assembly(_)) => {
+            scene_desc::Geometry::Assembly(catalog_ref.to_string())
+        }
         _ => scene_desc::Geometry::mesh(catalog_ref.to_string()),
     }
 }

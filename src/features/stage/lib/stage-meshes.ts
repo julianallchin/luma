@@ -53,10 +53,11 @@ export function getStageMesh(id: string): CatalogPiece | null {
 /**
  * The GLB for a node's `catalogRef`, or `null` if there is nothing to draw.
  *
- * `null` has two causes and neither is an error: the catalog entry is
+ * `null` has three causes and none is an error: the catalog entry is
  * procedural (React has no truss generator, so generated truss is drawn by the
- * gpui builder), or the venue holds a mesh the catalog has since dropped and no
- * GLB ships for it.
+ * gpui builder), it is an assembly (several GLBs, which one URL cannot name —
+ * the gpui builder draws those too), or the venue holds a mesh the catalog has
+ * since dropped and no GLB ships for it.
  */
 export function catalogMeshUrl(catalogRef: string): string | null {
 	const piece = getStageMesh(catalogRef);

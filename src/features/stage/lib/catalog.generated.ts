@@ -94,6 +94,7 @@ export interface SocketDef {
 export type PieceKind =
 	| "cable_cover"
 	| "cdj"
+	| "dj_booth"
 	| "floor"
 	| "guardrail"
 	| "mixer"
@@ -111,7 +112,21 @@ export type PaletteGroup =
 /** Where a piece's shape comes from. Procedural families carry no parameters here. */
 export type Geometry =
 	| { kind: "mesh"; path: string }
-	| { kind: "procedural"; family: "truss" | "corner" | "hinge" };
+	| { kind: "procedural"; family: "truss" | "corner" | "hinge" }
+	| { kind: "assembly"; parts: AssemblyPart[] };
+
+/**
+ * One mesh inside an assembly. `plan` is `[across, depth]` in metres from the
+ * assembly's centre; a part's *height* is never authored — it stands either on
+ * the ground or on the top of the assembly's ground part, whose measured box
+ * supplies the number.
+ */
+export type AssemblyPart = {
+	mesh: string;
+	quarterTurns: number;
+	plan: [number, number];
+	rest: "ground" | "deck";
+};
 
 export interface CatalogPiece {
 	id: string;
@@ -185,7 +200,8 @@ export const SOCKET_ROLL: Record<SocketType, RollFreedom> = {
 		"kind": "free"
 	},
 	"floor_corner": {
-		"kind": "fixed"
+		"degrees": 90.0,
+		"kind": "steps"
 	},
 	"floor_edge": {
 		"kind": "fixed"
@@ -200,7 +216,8 @@ export const SOCKET_ROLL: Record<SocketType, RollFreedom> = {
 		"kind": "free"
 	},
 	"rail_end": {
-		"kind": "fixed"
+		"degrees": 5.0,
+		"kind": "steps"
 	},
 	"speaker_mount": {
 		"kind": "free"
@@ -212,7 +229,8 @@ export const SOCKET_ROLL: Record<SocketType, RollFreedom> = {
 		"kind": "free"
 	},
 	"truss_end": {
-		"kind": "fixed"
+		"degrees": 90.0,
+		"kind": "steps"
 	},
 	"truss_face": {
 		"kind": "free"
@@ -784,6 +802,90 @@ export const CATALOG: CatalogPiece[] = [
 					0.0
 				],
 				"type": "equipment_mount"
+			}
+		]
+	},
+	{
+		"displayName": "DJ Booth",
+		"geometry": {
+			"kind": "assembly",
+			"parts": [
+				{
+					"mesh": "stage_lab/stage_praticavel_2x1x1.glb",
+					"plan": [
+						0.0,
+						0.0
+					],
+					"quarterTurns": 0,
+					"rest": "ground"
+				},
+				{
+					"mesh": "stage_lab/mixer_djm_a9.glb",
+					"plan": [
+						0.0,
+						0.0
+					],
+					"quarterTurns": 1,
+					"rest": "deck"
+				},
+				{
+					"mesh": "stage_lab/cdj_3000x.glb",
+					"plan": [
+						0.0,
+						-0.415
+					],
+					"quarterTurns": 1,
+					"rest": "deck"
+				},
+				{
+					"mesh": "stage_lab/cdj_3000x.glb",
+					"plan": [
+						0.0,
+						0.415
+					],
+					"quarterTurns": 1,
+					"rest": "deck"
+				},
+				{
+					"mesh": "stage_lab/cdj_3000x.glb",
+					"plan": [
+						0.0,
+						-0.798
+					],
+					"quarterTurns": 1,
+					"rest": "deck"
+				},
+				{
+					"mesh": "stage_lab/cdj_3000x.glb",
+					"plan": [
+						0.0,
+						0.798
+					],
+					"quarterTurns": 1,
+					"rest": "deck"
+				}
+			]
+		},
+		"id": "assembly/dj_booth",
+		"kind": "dj_booth",
+		"paletteGroup": "Equipment",
+		"sockets": [
+			{
+				"anchor": "center",
+				"mode": "face",
+				"name": "grab",
+				"type": "grab"
+			},
+			{
+				"anchor": "bottom",
+				"mode": "face",
+				"name": "bottom",
+				"normal": [
+					0.0,
+					-1.0,
+					0.0
+				],
+				"type": "bottom_mount"
 			}
 		]
 	},

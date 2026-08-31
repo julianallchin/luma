@@ -256,6 +256,13 @@ pub(crate) fn build(
                 let bounds = crate::catalog::procedural_bounds(*params);
                 (bounds.min.as_vec3(), bounds.max.as_vec3())
             }
+            Geometry::Assembly(_) => {
+                let Ok(bounds) = crate::catalog::assembly_bounds(piece.geometry.parts(), lib)
+                else {
+                    continue;
+                };
+                (bounds.min.as_vec3(), bounds.max.as_vec3())
+            }
         };
         let extent = hi - lo;
         if extent.min_element() <= 0.0 {
@@ -629,13 +636,17 @@ pub(crate) fn pivot(scene: &Scene, lib: &mut Library, to_world: Mat4) -> Option<
 /// A procedural family has no loaded mesh to measure and answers with its
 /// origin, which is already where it is built from.
 fn footprint_centre(geometry: &Geometry, lib: &mut Library) -> Vec3 {
-    let Geometry::MeshPath(path) = geometry else {
-        return Vec3::ZERO;
+    let (lo, hi) = match geometry {
+        Geometry::MeshPath(path) => match lib.get(path) {
+            Ok(glb) => glb.bounds(),
+            Err(_) => return Vec3::ZERO,
+        },
+        Geometry::Assembly(_) => match crate::catalog::assembly_bounds(geometry.parts(), lib) {
+            Ok(b) => (b.min.as_vec3(), b.max.as_vec3()),
+            Err(_) => return Vec3::ZERO,
+        },
+        Geometry::Procedural(_) => return Vec3::ZERO,
     };
-    let Ok(glb) = lib.get(path) else {
-        return Vec3::ZERO;
-    };
-    let (lo, hi) = glb.bounds();
     Vec3::new(lo.x.midpoint(hi.x), lo.y, lo.z.midpoint(hi.z))
 }
 
