@@ -27,6 +27,32 @@ fn vs_main(
     return out;
 }
 
+// Downstage compass: an arrow on the floor pointing at the house (world −y),
+// drawn analytically like the grid lines so it needs no mesh and fades with
+// them. It exists because the facade's `v` axis and the tiles caption have
+// both lied about this direction; the floor itself is now the authority.
+// Sized and placed to survive both foreshortening from standing views and a
+// stage parked over the origin: it starts 8 m out on the open house floor.
+const ARROW_SHAFT_START_Y: f32 = -8.0;
+const ARROW_SHAFT_END_Y: f32 = -13.5;
+const ARROW_TIP_Y: f32 = -16.0;
+const ARROW_SHAFT_HALF_WIDTH: f32 = 0.3;
+const ARROW_HEAD_HALF_WIDTH: f32 = 1.5;
+
+fn arrow_mask(coord: vec2<f32>) -> f32 {
+    let fw = max(fwidth(coord.x), fwidth(coord.y));
+    // Shaft: axis-aligned bar on x=0 running downstage.
+    let shaft_x = ARROW_SHAFT_HALF_WIDTH - abs(coord.x);
+    let shaft_y = min(coord.y - ARROW_SHAFT_END_Y, ARROW_SHAFT_START_Y - coord.y);
+    let shaft = min(shaft_x, shaft_y);
+    // Head: isosceles triangle, base at the shaft end, tip further downstage.
+    let head_span = ARROW_SHAFT_END_Y - ARROW_TIP_Y;
+    let head_x = (coord.y - ARROW_TIP_Y) / head_span * ARROW_HEAD_HALF_WIDTH - abs(coord.x);
+    let head_y = min(coord.y - ARROW_TIP_Y, ARROW_SHAFT_END_Y - coord.y);
+    let head = min(head_x, head_y);
+    return smoothstep(-fw, fw, max(shaft, head));
+}
+
 fn grid_line(coord: vec2<f32>, size: f32, thickness: f32) -> f32 {
     let scaled = coord / size;
     let fw = fwidth(scaled);
@@ -49,6 +75,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Both cell and section colours are white today; the mix is kept so the
     // two can diverge without touching the call site.
     let color = vec3<f32>(1.0);
-    let alpha = max(minor * 0.01, major * 0.04) * fade * OPACITY;
+    // The compass is exempt from the grid's short fade: it must read from a
+    // camera framing the whole rig, which stands well past FADE_DISTANCE.
+    let arrow_fade = 1.0 - smoothstep(FADE_DISTANCE * 2.0, FADE_DISTANCE * 4.0, dist);
+    let arrow = arrow_mask(coord) * arrow_fade * 0.25;
+    let alpha = max(max(minor * 0.01, major * 0.04) * fade * OPACITY, arrow);
     return vec4<f32>(color, alpha);
 }
