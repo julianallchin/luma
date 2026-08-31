@@ -763,15 +763,6 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         app.key("escape");
         app.frames(4);
 
-        // The complaints print only when asked for: press the badge to pin
-        // them, read them, and unpin — the sheet on a selection is about the
-        // selection, and the badge is the resting claim.
-        const badge = app.snapshot().findAll({{ role: "button" }})
-            .map((n) => n.label).find((l) => l.startsWith("Warnings "));
-        press(badge);
-        const unresolved = rows().filter((l) => !resting.includes(l));
-        press(badge);
-
         select(0.3, 0.8);
         menu(socket("Truss · straight end_a"), "Detach");
         settle("the piece to leave the room", (s) =>
@@ -786,7 +777,7 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         app.type(app.snapshot().find({{ role: "input", label: "Search elements" }}), "Unpl");
         app.frames(8);
         const offered = rows().filter((l) => !resting.includes(l));
-        ({{ badge, unresolved, offered }})
+        ({{ offered }})
     "#
         ),
     );
@@ -795,19 +786,6 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         offered.iter().any(|row| row.contains("Truss")),
         "a detached piece did not come back as an unplaced row — it was deleted, not \
          detached\n{out:#}"
-    );
-    // The count in the room and the sentences in the sheet are the same solve
-    // read twice, so they have to agree.
-    let badge = out["badge"].as_str().unwrap_or_default();
-    let counted: usize = badge
-        .trim_start_matches("Warnings ")
-        .parse()
-        .unwrap_or_else(|_| panic!("no count in {badge:?}: {out:#}"));
-    assert_eq!(
-        strings(&out, "unresolved").len(),
-        counted,
-        "the room counted {counted} complaints and the sheet named a different \
-         number\n{out:#}"
     );
 }
 
@@ -903,15 +881,9 @@ fn detaching_is_not_a_refusal() {
         app.key("escape");
         app.frames(6);
 
-        const badge = () => {{
-            const found = app.snapshot().findAll({{ role: "button" }})
-                .map((n) => n.label).find((l) => l.startsWith("Warnings "));
-            return found === undefined ? 0 : Number(found.slice("Warnings ".length));
-        }};
-        // Every sentence the sheet is prepared to print, before and after.
+        // Every sentence the page is prepared to print, before and after.
         const complaints = () => app.snapshot().findAll({{ role: "row" }})
             .map((n) => n.label);
-        const beforeBadge = badge();
 
         select(0.3, 0.8);
         menu(socket("Truss · straight end_a"), "Detach");
@@ -919,17 +891,8 @@ fn detaching_is_not_a_refusal() {
             s.findAll({{ role: "button" }})
                 .filter((n) => n.label.startsWith("Socket Truss")).length === 0);
         app.frames(10);
-        // Pin the solve's complaints open with nothing selected, which is the
-        // one way to read them after a detach — the sheet does not stay open
-        // on a branch that has left the room.
-        const pin = app.snapshot().findAll({{ role: "button" }})
-            .find((n) => n.label.startsWith("Warnings "));
-        if (pin !== undefined) {{ app.click(pin); app.frames(6); }}
         ({{
-            beforeBadge,
-            afterBadge: badge(),
-            unresolved: complaints().filter((l) => !resting.includes(l)).length,
-            complaints: complaints(),
+            complaints: complaints().filter((l) => !resting.includes(l)),
             selected: app.snapshot().findAll({{ role: "slider" }})
                 .some((n) => n.label.startsWith("stage-trim = ")),
         }})
@@ -940,22 +903,6 @@ fn detaching_is_not_a_refusal() {
     assert!(
         !complaints.iter().any(|line| line.contains("refus")),
         "detaching reported itself as a refusal: {complaints:?}\n{out:#}"
-    );
-    // The count is the *solve's* and nothing else: it is exactly the sentences
-    // the sheet prints, and it went **down**, because a detached stick takes
-    // its own open ends out of the room with it. A verb that reported itself
-    // would have pushed it the other way.
-    let before = out["beforeBadge"].as_u64().unwrap_or_default();
-    let after = out["afterBadge"].as_u64().unwrap_or_default();
-    assert!(
-        before > after,
-        "the stick's ends were never counted, so the count proves nothing: \
-         {before} then {after}\n{out:#}"
-    );
-    assert_eq!(
-        out["unresolved"].as_u64(),
-        Some(after),
-        "the room counted {after} complaints and the sheet named a different number\n{out:#}"
     );
     assert_eq!(
         out["selected"], false,

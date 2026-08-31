@@ -650,7 +650,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // frames coming until it has. Frame-driven rather than timer-driven —
     // see `Popup::tick_close`.
     if let Some(page) = app.stage_page_for_tick() {
-        page.closing.tick_close();
+        let _ = page.closing.tick_close();
     }
     if app.overlay.tick_close() {
         window.request_animation_frame();
@@ -1056,9 +1056,6 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     // Read before the workspace is borrowed mutably: the builder lives beside
     // the picture, not in the tab, and its state is a projection either way.
     let stage_view = app.stage_view();
-    // Evaluated here because the tween lives on the builder beside the picture
-    // and only the shell holds it mutably — see `Build::inspector_target`.
-    let sheet = app.stage_inspector_width(window, cx);
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
@@ -1069,7 +1066,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         Body::Graph(state) => graph::graph(state, &entity).into_any_element(),
         Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
         Body::Stage(state) => {
-            stage::stage_page(state, &entity, stage_view.as_ref(), sheet, window).into_any_element()
+            stage::stage_page(state, &entity, stage_view.as_ref(), window).into_any_element()
         }
     };
     div()

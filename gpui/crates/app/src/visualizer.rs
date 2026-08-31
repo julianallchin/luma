@@ -1162,29 +1162,35 @@ impl Visualizer {
     }
 
     pub(crate) fn focus_selection(&mut self) -> bool {
-        let centre;
-        let spread;
+        let mut points: Vec<Vec3> = Vec::new();
         {
             let stage = self.stage.borrow();
-            let Some(pick) = stage.displayed_pick.as_ref() else {
-                return false;
-            };
-            let points: Vec<Vec3> = self
-                .selection
-                .selected()
-                .iter()
-                .filter_map(|object| pick.anchors.get(object).copied())
-                .collect();
-            if points.is_empty() {
-                return false;
+            let pick = stage.displayed_pick.as_ref();
+            for object in self.selection.selected() {
+                let (EditorObject::Fixture(id) | EditorObject::StagePiece(id)) = object;
+                // The room's own solve first — it exists with the renderer
+                // off — and the displayed frame's anchor as the fallback for
+                // anything the room does not pose.
+                if let Some(at) = self
+                    .build
+                    .as_ref()
+                    .and_then(|build| build.room_pose_point(id))
+                {
+                    points.push(at.as_vec3());
+                } else if let Some(at) = pick.and_then(|pick| pick.anchors.get(object)) {
+                    points.push(*at);
+                }
             }
-            let sum: Vec3 = points.iter().copied().sum();
-            centre = sum / points.len() as f32;
-            spread = points
-                .iter()
-                .map(|p| p.distance(centre))
-                .fold(0.0f32, f32::max);
         }
+        if points.is_empty() {
+            return false;
+        }
+        let sum: Vec3 = points.iter().copied().sum();
+        let centre = sum / points.len() as f32;
+        let spread = points
+            .iter()
+            .map(|p| p.distance(centre))
+            .fold(0.0f32, f32::max);
         self.camera.target = coords::world_from_three(centre);
         let (near, far) = self
             .framing
@@ -1465,10 +1471,7 @@ impl Visualizer {
             let primary = self.selection.primary().map(|object| match object {
                 EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
             });
-            if build.selected != primary {
-                build.selected = primary;
-                build.trim_draft = None;
-            }
+            build.select(primary);
         }
         None
     }
