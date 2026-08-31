@@ -63,8 +63,11 @@ change to the patch page tested by `visualizer_gizmo`, deferred deliberately.
 
 ## Validity is the solver's
 
-A landing that would pass a piece through placed structure is **refused** (red
-ghost, drop inert) before it can be committed. The test is OBB-vs-OBB
+A landing that would pass a piece through placed structure is **refused** — the
+ghost disappears and the drop is inert — before it can be committed. The
+vanished preview *is* the refusal: a piece that cannot go there is not shown
+there. (The extend run keeps its red ghost: its refusal is a measured length,
+and the measurement is the affordance being answered.) The test is OBB-vs-OBB
 (`luma_scene::aabb::obb_intersects`, 15-axis SAT) over per-piece local bounds:
 the catalog's measured GLB box for mesh pieces, `procedural_bounds` for
 generated ones. Contact is not collision — boxes shrink by 2 cm so flush mates

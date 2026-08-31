@@ -131,9 +131,10 @@ pub struct Ghost {
     pub rot: [f32; 3],
     /// Uniform scale, as [`Piece::scale`].
     pub scale: f32,
-    /// A placement the resolver would refuse — drawn red rather than white. The
-    /// ghost still shows where the cursor *is*, so the refusal reads as a
-    /// rejected position and not as a lost drag.
+    /// A ghost the resolver would refuse — drawn red rather than white. Only
+    /// the extend run raises it: its refusal is a length past a measured gap,
+    /// and the red ghost is the measurement answering. A refused *placement*
+    /// pushes no ghost at all — the preview vanishing is that refusal.
     pub refused: bool,
 }
 

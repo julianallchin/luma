@@ -610,7 +610,11 @@ fn rotate_rings(
             hex_srgb(0x00_ff_00),
             GizmoHandle::RotateAxis(Axis::Y),
         ),
-        (Vec3::ZERO, hex_srgb(0x00_00_ff), GizmoHandle::RotateAxis(Axis::Z)),
+        (
+            Vec3::ZERO,
+            hex_srgb(0x00_00_ff),
+            GizmoHandle::RotateAxis(Axis::Z),
+        ),
     ];
     // The screen ring's plane is normal to the view, so its basis is built from
     // the eye direction rather than from an axis.
@@ -618,7 +622,13 @@ fn rotate_rings(
     let u = n.cross(Vec3::Y).normalize_or(Vec3::X);
     let screen = Mat4::from_mat3(Mat3::from_cols(u, n.cross(u), n));
     axes.into_iter()
-        .map(|(rot, color, handle)| (Mat4::from_mat3(euler_xyz(rot.x, rot.y, rot.z)), color, handle))
+        .map(|(rot, color, handle)| {
+            (
+                Mat4::from_mat3(euler_xyz(rot.x, rot.y, rot.z)),
+                color,
+                handle,
+            )
+        })
         // Grey, three's `XYZE`: the screen ring is the one handle that is not
         // an axis, and yellow is the selection cage's colour — which is also
         // why yellow is what a *hovered* ring turns.
