@@ -159,6 +159,9 @@ actions!(
         DeleteStageElement,
         /// Open the stage builder's add-element dialog, caret in its search.
         AddStageElement,
+        /// Restore the stage graph a verb replaced / step forward again.
+        UndoStage,
+        RedoStage,
         /// Dolly the stage camera a step in / out — the wheel's verb on a key.
         ZoomStageIn,
         ZoomStageOut,
@@ -293,6 +296,8 @@ pub(crate) fn init(cx: &mut App) {
     chord(&mut bindings, "z", UndoClips, &editing);
     chord(&mut bindings, "shift-z", RedoClips, &editing);
     chord(&mut bindings, "z", UndoGraph, &graphing);
+    chord(&mut bindings, "z", UndoStage, &staging);
+    chord(&mut bindings, "shift-z", RedoStage, &staging);
     chord(&mut bindings, "shift-z", RedoGraph, &graphing);
     chord(&mut bindings, "e", SplitClips, &editing);
     chord(&mut bindings, "c", CopyClips, &editing);

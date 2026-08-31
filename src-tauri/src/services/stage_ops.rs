@@ -839,6 +839,92 @@ impl<'a> Stage<'a> {
         })
     }
 
+    /// Replace the venue's graph with a snapshot of itself — the undo stack's
+    /// one verb.
+    ///
+    /// The snapshot is rows a `get_venue_graph` (or any verb's round trip)
+    /// answered earlier: structure only. Patch rows are not part of it, so a
+    /// snapshot naming a fixture whose patch row has since been deleted is
+    /// refused whole — restoring half a fixture would be a node no page can
+    /// draw. One transaction: wipe every non-root node, lay the snapshot
+    /// down, re-solve.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] if the rows do not form a graph or a fixture
+    /// node's patch row is gone.
+    pub async fn restore(&self, rows: &VenueGraphRows) -> Result<ResolvedVenue> {
+        if rows.to_graph().is_none() {
+            return Err(StageError::Refused(
+                "the snapshot's rows do not form a graph".into(),
+            ));
+        }
+        let mut access = self.write().await?;
+        let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
+        for node in &rows.nodes {
+            if node.kind == "fixture" && !patch.iter().any(|row| row.id == node.id) {
+                return Err(StageError::Refused(format!(
+                    "`{}` is a fixture whose patch row is gone — the snapshot predates a patch \
+                     edit and cannot be restored",
+                    node.id
+                )));
+            }
+        }
+        let current = venue_graph::graph(&mut access).await?;
+        let root = current.root().to_string();
+        let standing: Vec<String> = current
+            .nodes()
+            .map(|node| node.id.clone())
+            .filter(|id| *id != root)
+            .collect();
+        drop(current);
+        venue_graph_db::delete_nodes(&mut access, &standing).await?;
+        for node in &rows.nodes {
+            if node.kind == "venue" {
+                continue;
+            }
+            venue_graph_db::insert_node_with_id(
+                &mut access,
+                &node.id,
+                &node.kind,
+                node.catalog_ref.as_deref(),
+                node.label.as_deref(),
+            )
+            .await?;
+            if let Some(params) = rows.params.get(&node.id) {
+                let params: BTreeMap<String, Option<f64>> = params
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Some(*value)))
+                    .collect();
+                venue_graph_db::set_params(&mut access, &node.id, &params).await?;
+            }
+        }
+        for edge in &rows.edges {
+            venue_graph_db::upsert_edge(
+                &mut access,
+                &edge.child_id,
+                &edge.parent_id,
+                &edge.my_socket,
+                &edge.their_socket,
+                edge.roll,
+            )
+            .await?;
+        }
+        for constraint in &rows.constraints {
+            venue_graph_db::upsert_constraint(
+                &mut access,
+                &constraint.node_id,
+                &constraint.my_socket,
+                &constraint.target_node,
+                &constraint.target_socket,
+            )
+            .await?;
+        }
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let out = ResolvedVenue::from(&solved);
+        venue_graph::commit_graph(access).await?;
+        Ok(out)
+    }
+
     /// A `catalog_ref` the catalog actually has.
     ///
     /// Without this a typo is *placed*: the node has no geometry, the solve

@@ -2444,6 +2444,20 @@ impl Library {
         )
     }
 
+    /// Replace the venue's graph with a snapshot of itself — the undo stack's
+    /// one verb. Structure only: a snapshot naming a fixture whose patch row
+    /// is gone is refused whole.
+    pub fn restore_graph(
+        &self,
+        venue_id: &str,
+        rows: &VenueGraphRows,
+    ) -> impl Future<Output = Result<ResolvedVenue, LibraryError>> + use<> {
+        self.call(
+            "restore_graph",
+            json!({ "venueId": venue_id, "rows": rows }),
+        )
+    }
+
     /// One command, one transaction: place, name, group and patch a row of
     /// fixtures along a host feature.
     #[allow(clippy::too_many_arguments)]

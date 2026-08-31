@@ -123,6 +123,17 @@ pub(crate) struct Build {
     /// not read back from the graph: the graph stores stations, not the rule
     /// that produced them.
     pub(crate) distribution_layout: luma_scene::distribute::Layout,
+    /// The graph as the library last answered it — the undo stack's currency.
+    /// Kept beside `graph` (its parsed form) because restoring means sending
+    /// rows back, and re-deriving rows from a parsed graph would be a second
+    /// spelling of the same table.
+    rows: luma_lib::models::venue_graph::VenueGraphRows,
+    /// Snapshots a structural verb replaced, oldest first. Burned whenever a
+    /// verb creates or deletes patch rows — a snapshot cannot restore half a
+    /// fixture, so it does not pretend to.
+    undo: Vec<luma_lib::models::venue_graph::VenueGraphRows>,
+    /// What undo stepped back over, for redo. Cleared by any new verb.
+    redo: Vec<luma_lib::models::venue_graph::VenueGraphRows>,
     /// The last verb's warnings, and its refusal if it had one.
     pub(crate) report: Vec<String>,
     /// A verb that has not come back yet. Placement is idempotent per gesture,
@@ -152,6 +163,9 @@ impl Build {
             trim_draft: None,
             distribution: Vec::new(),
             distribution_layout: luma_scene::distribute::Layout::Even,
+            rows: rig.rows.clone(),
+            undo: Vec::new(),
+            redo: Vec::new(),
             report: Vec::new(),
             committing: false,
         })
@@ -170,6 +184,7 @@ impl Build {
         self.room = Room::new(&graph, &self.sockets, poses(&rig.venue));
         self.graph = graph;
         self.solved = rig.venue.clone();
+        self.rows = rig.rows.clone();
         if self
             .selected
             .as_ref()
@@ -370,6 +385,23 @@ impl Build {
             .collect();
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
         out.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// File a snapshot a verb just replaced, and drop the redo branch — a new
+    /// edit after an undo is a new history.
+    pub(crate) fn remember(&mut self, snapshot: luma_lib::models::venue_graph::VenueGraphRows) {
+        self.undo.push(snapshot);
+        if self.undo.len() > UNDO_DEPTH {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// Burn both stacks: a verb created or deleted patch rows, and every
+    /// snapshot on either side would restore fixtures that cannot come back.
+    pub(crate) fn forget_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
     }
 
     /// The relation one node was placed by, in the graph's own words.
@@ -726,6 +758,8 @@ impl Luma {
             + 'static,
         cx: &mut Context<Self>,
     ) {
+        // What the verb is about to replace is what undo restores.
+        let snapshot = self.build_state().map(|build| build.rows.clone());
         if let Some(build) = self.build_mut() {
             build.committing = true;
         }
@@ -743,6 +777,9 @@ impl Luma {
                             // what it was asked to do. A refusal is the `Err`
                             // arm below and cannot arrive here at all.
                             build.report = report.warnings.clone();
+                            if let Some(snapshot) = snapshot {
+                                build.remember(snapshot);
+                            }
                             // What the verb touched is what the inspector
                             // should be about: the piece just placed is the one
                             // about to be trimmed, flipped or detached. A
@@ -1466,6 +1503,7 @@ impl Luma {
                             build.report = report.warnings.clone();
                             build.select(ids.last().cloned());
                             build.distribution = ids;
+                            build.forget_history();
                         }
                     }
                     Err(error) => {
@@ -1580,6 +1618,63 @@ impl Luma {
     /// Delete the selected node and everything hanging off it.
     ///
     /// Fixtures riding a deleted piece are trayed rather than destroyed —
+    /// Undo the last structural verb: restore the graph it replaced.
+    pub(crate) fn stage_undo(&mut self, cx: &mut Context<Self>) {
+        self.stage_time_travel(false, cx);
+    }
+
+    /// Step forward over the last undo.
+    pub(crate) fn stage_redo(&mut self, cx: &mut Context<Self>) {
+        self.stage_time_travel(true, cx);
+    }
+
+    /// Both directions are one move: pop a snapshot off one stack, park the
+    /// present on the other, and ask the library to make the snapshot the
+    /// room. A restore the server refuses burns both stacks — what they hold
+    /// no longer matches the venue, and a history that might half-apply is
+    /// worse than none.
+    fn stage_time_travel(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        if build.committing {
+            return;
+        }
+        let target = if forward {
+            build.redo.pop()
+        } else {
+            build.undo.pop()
+        };
+        let Some(target) = target else {
+            return;
+        };
+        let present = build.rows.clone();
+        if forward {
+            build.undo.push(present);
+        } else {
+            build.redo.push(present);
+        }
+        build.committing = true;
+        let venue = build.venue_id.clone();
+        let pending = self.library.restore_graph(&venue, &target);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    build.committing = false;
+                    if let Err(error) = &result {
+                        build.report = vec![error.to_string()];
+                        build.forget_history();
+                    }
+                }
+                this.reload_stage(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// deletion is creation's dual (`delete_subtree`), so the patch survives
     /// the structure it was hung on.
     pub(crate) fn stage_delete(&mut self, cx: &mut Context<Self>) {
@@ -1592,6 +1687,15 @@ impl Luma {
         let (Some(node), venue) = (build.selected.clone(), build.venue_id.clone()) else {
             return;
         };
+        let snapshot = build.rows.clone();
+        // Deleting a fixture takes its patch row with it, and a snapshot
+        // cannot bring that back — so it does not pretend to.
+        let took_fixtures = build.graph.subtree(&node).iter().any(|id| {
+            build
+                .graph
+                .node(id)
+                .is_some_and(|n| n.kind == luma_scene::venue::NodeKind::Fixture)
+        });
         let pending = self.library.delete_subtree(&venue, &node);
         if let Some(build) = self.build_mut() {
             build.committing = true;
@@ -1602,8 +1706,10 @@ impl Luma {
             this.update(cx, |this, cx| {
                 if let Some(build) = this.build_mut() {
                     build.committing = false;
-                    if let Err(error) = &result {
-                        build.report = vec![error.to_string()];
+                    match &result {
+                        Ok(_) if took_fixtures => build.forget_history(),
+                        Ok(_) => build.remember(snapshot),
+                        Err(error) => build.report = vec![error.to_string()],
                     }
                 }
                 this.reload_stage(cx);
@@ -1746,6 +1852,9 @@ impl Luma {
                         Ok(report) => report.warnings.clone(),
                         Err(error) => vec![error.to_string()],
                     };
+                    if report.is_ok() {
+                        build.forget_history();
+                    }
                 }
                 // The row's own report carries no venue, so the room is re-read
                 // rather than adopted — one more round trip, and the only verb
@@ -2704,6 +2813,9 @@ fn node_menu(menu_at: &NodeMenuAt, app: &Entity<Luma>) -> AnyElement {
 /// How wide the selection's in-scene card is, and how it keeps clear of the
 /// picture's edges. Beside the piece, never centred on it: the card is a
 /// caption, and a caption over its subject is a cover.
+/// How many verbs back the room remembers. Snapshots are a few hundred rows
+/// each; sixty of them is noise next to one waveform.
+const UNDO_DEPTH: usize = 64;
 const SELECTED_CARD_W: f32 = 190.0;
 /// Half the rotate pair's width, for centring it on the joint.
 const ROTATE_PAIR_HALF: f32 = 28.0;

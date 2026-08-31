@@ -580,6 +580,7 @@ commands! {
         layout: DistributeLayout,
     ) -> DistributeReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
+    stage::restore_graph(venue_id: String, rows: VenueGraphRows) -> ResolvedVenue;
     stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
     stage::venue_tiles(venue_id: String, cell_m: Option<f64>) -> String;
     stage::attach(
