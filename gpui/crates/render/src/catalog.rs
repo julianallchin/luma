@@ -556,23 +556,6 @@ impl NodeSockets for VenueSockets {
                 .is_some_and(|id| luma_scene::catalog::piece(id).is_some())
     }
 
-    /// The catalog's measurement for a mesh or an assembly, the generator's
-    /// arithmetic for a procedural piece at this node's own parameters. A
-    /// fixture and the root have no box: a fixture's `catalog_ref` is a patch
-    /// row, and the root is the room's frame rather than a thing in it.
-    fn bounds(&self, node: &Node) -> Option<DAabb> {
-        if node.kind == NodeKind::Fixture {
-            return None;
-        }
-        let catalog_ref = node.catalog_ref.as_deref()?;
-        match luma_scene::catalog::piece(catalog_ref)?.geometry {
-            Geometry::Mesh { .. } | Geometry::Assembly(_) => self.catalog.bounds(catalog_ref),
-            Geometry::Procedural(family) => {
-                Some(procedural_bounds(node_params(family, &node.params)))
-            }
-        }
-    }
-
     fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
         let Some(catalog_ref) = node.catalog_ref.as_deref() else {
             return Vec::new();

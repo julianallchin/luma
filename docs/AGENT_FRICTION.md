@@ -2,6 +2,8 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] `describe()` prints `at=` as the mesh *origin*, not the piece's middle: a 1x1 deck placed at `(0,0)` reads `at=(0.50, 0.50, 0.00)` and a dual-18 sub reads 0.65 off, so every "is it centred?" check looks like an anchoring bug when the socket is already dead centre.
+- [2026-08-31] data `+y` and world `+y` are opposite (`coords::world_from_data` negates y) and nothing in the agent-facing output says which space `at=` is in, so a coordinate read out of `describe()` and compared against a world constant like `FRONT_EYE` is silently front-to-back.
 - [2026-08-31] `luma.venue` has `pieces` but no `nodes`, and the AttributeError only lists the bindings *after* you guess wrong — the catalog verbs and the graph verbs use different nouns for the same rows.
 - [2026-08-31] Catalog pieces carry mesh sizes nowhere: sizing a new composite meant hand-parsing GLB accessor min/max in Python because no CLI dumps a mesh bbox, though `CatalogSockets` measures every one at startup.
 - [2026-08-31] `luma.venue.place(at=...)` anchors a deck by its corner but a truss by its centre, and `v` runs toward the house while world +y runs upstage — three sign/offset conventions the docstring never states; every builder rediscovers them with `tiles()`.

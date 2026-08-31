@@ -787,7 +787,12 @@ class Venue:
         label: str | None = None,
         **params: Any,
     ) -> Placement:
-        """Seat a catalog piece on a surface at `(u, v)`, metres from its middle.
+        """Seat a catalog piece on a surface at `(u, v)`, metres across it.
+
+        `+u` is stage right and `+v` is upstage, so the house is at `-v` — the
+        way the floor's own compass arrow points. The pair is a plan of the
+        room, and it reads the same on every surface: the floor, a deck top,
+        and the grid a flown piece hangs from all take the same `(u, v)`.
 
         With no `on`, the surface is the venue's own floor — the room's ground
         plane, which is where a rig starts. `on=<node>, surface="top"` seats it
