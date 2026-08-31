@@ -305,6 +305,30 @@ impl Build {
         }
     }
 
+    /// The held thing's local bounds, for the collision arm of a landing.
+    /// `None` — a fixture, an unfetched definition — collides with nothing.
+    fn held_bounds(&self) -> Option<luma_scene::aabb::DAabb> {
+        let held = self.hand.held()?;
+        match &held.what {
+            Holding::Piece {
+                catalog_ref,
+                params,
+                ..
+            } => match luma_scene::catalog::piece(catalog_ref)?.geometry {
+                luma_scene::catalog::Geometry::Mesh { .. } => {
+                    self.sockets.catalog().bounds(catalog_ref)
+                }
+                luma_scene::catalog::Geometry::Procedural(family) => {
+                    Some(luma_render::catalog::procedural_bounds(
+                        luma_render::catalog::node_params(family, &params_of(params)),
+                    ))
+                }
+            },
+            Holding::Duplicate { root, .. } => self.room.bounds_of(root),
+            Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
+        }
+    }
+
     /// The relation one node was placed by, in the graph's own words.
     ///
     /// The claim an `attach` makes, read back off the solved graph rather than
@@ -743,12 +767,19 @@ impl Luma {
         cx.notify();
     }
 
-    /// The cursor moved over the room while something is held.
-    pub(crate) fn stage_aim(&mut self, world: glam::DVec3, cx: &mut Context<Self>) {
+    /// The cursor moved over the room while something is held. `hit` is the
+    /// mesh face under it, when a rendered frame had one to give.
+    pub(crate) fn stage_aim(
+        &mut self,
+        world: glam::DVec3,
+        hit: Option<hand::SurfaceHit>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(build) = self.build_mut() else {
             return;
         };
         let held = build.held_sockets();
+        let body = build.held_bounds();
         let Some(hand::Held { what, latched, .. }) = build.hand.held() else {
             return;
         };
@@ -765,10 +796,12 @@ impl Luma {
             footing.as_deref(),
             world,
             latch.as_ref(),
-            None,
+            hit.as_ref(),
             exclude.as_deref(),
+            body,
         );
         if let Hand::Placing(held) = &mut build.hand {
+            held.cursor = Some((world, hit));
             match solved {
                 Some((landed, latch)) => {
                     held.landed = Some(landed);
@@ -783,6 +816,30 @@ impl Luma {
         cx.notify();
     }
 
+    /// Edit one parameter of the thing in the hand — the span scrub a held
+    /// truss offers. The landing re-solves from the remembered cursor, so the
+    /// ghost grows in place instead of waiting for the pointer to move.
+    pub(crate) fn stage_set_held_param(&mut self, key: &str, value: f64, cx: &mut Context<Self>) {
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        let Hand::Placing(held) = &mut build.hand else {
+            return;
+        };
+        let Holding::Piece { params, .. } = &mut held.what else {
+            return;
+        };
+        params.insert(key.to_string(), value);
+        // A changed parameter moves the sockets, so last frame's latch may
+        // describe a joint the piece no longer reaches.
+        held.latched = None;
+        let cursor = held.cursor.clone();
+        match cursor {
+            Some((world, hit)) => self.stage_aim(world, hit, cx),
+            None => cx.notify(),
+        }
+    }
+
     /// Aim at a named socket — what a press on a socket bead means. The bead
     /// *is* the aim: a projected point would put the ghost a pixel of camera
     /// error away from the joint it is naming.
@@ -793,7 +850,36 @@ impl Luma {
         let Some(at) = build.room.socket_world(node, socket) else {
             return;
         };
-        self.stage_aim(at, cx);
+        self.stage_aim(at, None, cx);
+    }
+
+    /// Aim the hand at whatever the pointer is over: the picture's own mesh
+    /// hit when a frame is up, the floor plane when none is.
+    pub(crate) fn stage_aim_from_pointer(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some((world, hit)) = self
+            .visualizer
+            .as_ref()
+            .and_then(|state| state.stage_cursor(at))
+        else {
+            return;
+        };
+        self.stage_aim(world, hit, cx);
+    }
+
+    /// A click on the room while the hand is placing: aim there, then commit.
+    ///
+    /// The viewport's release handler calls this for a *click* — a left drag
+    /// is the camera's, which is what makes an orbit available with a ghost
+    /// in the air.
+    pub(crate) fn stage_click_room(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if !self
+            .build_state()
+            .is_some_and(|build| build.hand.aims_with_pointer())
+        {
+            return;
+        }
+        self.stage_aim_from_pointer(at, cx);
+        self.stage_drop(at, cx);
     }
 
     /// Release: commit whatever the ghost is standing on.
@@ -1126,6 +1212,47 @@ impl Luma {
         self.stage_verb(pending, cx);
     }
 
+    /// Write dragged pieces' previewed poses into the graph.
+    ///
+    /// The gizmo previewed by writing the scene; a piece's position *lives* in
+    /// its joint, so the release inverts the mate — the same
+    /// [`luma_scene::venue::invert_placement`] the drop path uses — and writes
+    /// `(u, v, yaw, trim)` through the ordinary verb. The re-solve then hands
+    /// back the pose that was previewed, read out of the graph.
+    pub(crate) fn stage_commit_pose(&mut self, pieces: Vec<String>, cx: &mut Context<Self>) {
+        let Some(venue) = self.build_state().map(|build| build.venue_id.clone()) else {
+            return;
+        };
+        let jobs: Vec<_> = pieces
+            .iter()
+            .filter_map(|id| self.gizmo_seat(id).map(|params| (id.clone(), params)))
+            .collect();
+        for (node, params) in jobs {
+            let pending = self.library.set_params(&venue, &node, params, None);
+            self.stage_verb(pending, cx);
+        }
+    }
+
+    /// A dragged piece's previewed pose as the seat its joint would write.
+    fn gizmo_seat(&self, node: &str) -> Option<BTreeMap<String, f64>> {
+        let build = self.build_state()?;
+        let world = self.visualizer.as_ref()?.piece_pose_three(node)?;
+        let edge = build.graph.edge(node)?;
+        let host = build.room.socket(&edge.parent, &edge.their_socket)?;
+        let parent_world = build.room.pose(&edge.parent)?;
+        let data = build.graph.node(node)?;
+        let held_sockets = build.sockets.sockets(data);
+        let held = held_sockets.iter().find(|s| s.name == edge.my_socket)?;
+        let seat =
+            luma_scene::venue::invert_placement(world, parent_world, host, held, data.kind);
+        Some(BTreeMap::from([
+            ("u".to_string(), seat.u),
+            ("v".to_string(), seat.v),
+            ("trim".to_string(), seat.trim.max(0.0)),
+            ("yaw".to_string(), seat.yaw),
+        ]))
+    }
+
     /// Delete the selected node and everything hanging off it.
     ///
     /// Fixtures riding a deleted piece are trayed rather than destroyed —
@@ -1369,7 +1496,11 @@ impl Build {
     fn ghost_bodies(&self, what: &Holding, landed: &Landed) -> Vec<GhostBody> {
         use luma_render::scene_desc::Geometry;
         match what {
-            Holding::Piece { catalog_ref, .. } => geometry_of(catalog_ref)
+            Holding::Piece {
+                catalog_ref,
+                params,
+                ..
+            } => geometry_with(catalog_ref, params)
                 .map(|geometry| GhostBody {
                     geometry,
                     world: landed.world,
@@ -1959,6 +2090,13 @@ fn chooser(
             let step: isize = match event.keystroke.key.as_str() {
                 "down" => 1,
                 "up" => -1,
+                // Handled here as well as at the shell's rung, because the
+                // search field holds focus and a field taking typed text
+                // out-ranks the window's own Escape.
+                "escape" => {
+                    keys.update(cx, |this, cx| this.stage_escape(cx));
+                    return;
+                }
                 "enter" => {
                     let take = taken.get(cursor).cloned();
                     keys.update(cx, |this, cx| {
@@ -2024,7 +2162,7 @@ fn chooser(
         )
         .into_any_element();
 
-    luma_ui::dialog::Host {
+    let host = luma_ui::dialog::Host {
         id: "stage-chooser".into(),
         viewport: window.viewport_size(),
         focus: &state.focus,
@@ -2039,7 +2177,19 @@ fn chooser(
         "Add element card",
         CHOOSER_SIZE,
         body,
-    ))
+    ));
+    // Anchored to the *window*, not to the page: the stage tab lives inside
+    // the room's own box, and a card centred in that box sits off the
+    // screen's centre. The host is already sized to the whole viewport, so
+    // pinning its top-left to the window's is what centres it for real.
+    gpui::deferred(
+        gpui::anchored()
+            .position(gpui::point(px(0.0), px(0.0)))
+            .anchor(gpui::Anchor::TopLeft)
+            .child(host),
+    )
+    .priority(1)
+    .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -2625,26 +2775,6 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
     out
 }
 
-/// Where a window-space point meets the floor, in the socket layer's frame.
-///
-/// The builder's fallback target. A mesh raycast would be better over a deck,
-/// and is what the picture's own hit test does; this is the answer that exists
-/// with no rendered frame, which is the state a headless run is always in.
-fn cursor_world(
-    camera: &luma_scene::Camera,
-    origin: Point<Pixels>,
-    size: (f32, f32),
-    at: Point<Pixels>,
-) -> Option<glam::DVec3> {
-    let (width, height) = size;
-    if width <= 1.0 || height <= 1.0 {
-        return None;
-    }
-    let local = glam::Vec2::new(f32::from(at.x - origin.x), f32::from(at.y - origin.y));
-    let ndc = glam::Vec2::new(local.x / width * 2.0 - 1.0, 1.0 - local.y / height * 2.0);
-    hand::floor_point(&camera.ray(ndc, width / height))
-}
-
 /// The clickable half of the builder, laid over the viewport.
 ///
 /// It mounts whether or not the renderer is running, because the claims it
@@ -2656,45 +2786,35 @@ pub(crate) fn build_layer(
     camera: &luma_scene::Camera,
     origin: Point<Pixels>,
     size: (f32, f32),
+    wired: bool,
     app: &Entity<Luma>,
 ) -> AnyElement {
+    let _ = origin;
     use luma_render::scene_desc::SocketMarkState;
     let mut layer = div().absolute().inset_0();
-    // A held piece owns the pointer: the surface takes the press so an orbit
-    // cannot start under a ghost, and it is not mounted at all when the hand
-    // is empty (`luma_ui::pane`'s rule, applied to a layer).
+    // A held piece still *claims* the room — this card is the harness's
+    // evidence for what the hand is doing — but with a live viewport it does
+    // not take the pointer: the viewport's own listener routes a click to a
+    // placement and a drag to the camera, which is what makes an orbit
+    // available with a ghost in the air. With no viewport (`!wired`, the
+    // headless state) there is no listener, so the card carries the handlers
+    // itself and does not occlude — there is no camera gesture to protect.
     if build.hand.owns_pointer() {
-        let camera = *camera;
-        let (width, height) = size;
         let mut surface = div()
             .id("stage-drop-surface")
             .absolute()
-            .inset_0()
-            .occlude();
-        // Handlers only while the pointer is what aims — see
-        // [`hand::Hand::aims_with_pointer`]. A run keeps the occluder and
-        // loses the listeners.
-        if build.hand.aims_with_pointer() {
-            let drop = app.clone();
+            .inset_0();
+        if !wired && build.hand.aims_with_pointer() {
             let aim = app.clone();
+            let drop = app.clone();
             surface = surface
                 .on_mouse_move(move |event, _, cx| {
-                    let Some(world) =
-                        cursor_world(&camera, origin, (width, height), event.position)
-                    else {
-                        return;
-                    };
-                    aim.update(cx, |this, cx| this.stage_aim(world, cx));
+                    let at = event.position;
+                    aim.update(cx, |this, cx| this.stage_aim_from_pointer(at, cx));
                 })
                 .on_click(move |event, _, cx| {
-                    let screen = event.position();
-                    let at = cursor_world(&camera, origin, (width, height), screen);
-                    drop.update(cx, |this, cx| {
-                        if let Some(world) = at {
-                            this.stage_aim(world, cx);
-                        }
-                        this.stage_drop(screen, cx);
-                    });
+                    let at = event.position();
+                    drop.update(cx, |this, cx| this.stage_click_room(at, cx));
                 });
         }
         layer = layer.child(surface.agent_node(Role::Card, "Stage drop surface"));
@@ -2885,6 +3005,63 @@ pub(crate) fn build_layer(
             ),
         );
     }
+    // A held truss's one parameter, editable in the hand: the ghost is the
+    // preview and this is its dial. Top-centre, clear of the add button and
+    // the room the ghost is over.
+    if let Some(hand::Held {
+        what: Holding::Piece {
+            catalog_ref,
+            params,
+            ..
+        },
+        ..
+    }) = build.hand.held()
+    {
+        let truss = matches!(
+            luma_scene::catalog::piece(catalog_ref).map(|piece| piece.geometry),
+            Some(luma_scene::catalog::Geometry::Procedural(
+                luma_scene::catalog::Family::Truss
+            ))
+        );
+        if truss {
+            let span = params.get("span").copied().unwrap_or(f64::from(
+                luma_render::catalog::DEFAULT_TRUSS_SPAN_M,
+            ));
+            let set = app.clone();
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .top(px(crate::visualizer::HEADER_HEIGHT + INSET))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        float::popover_card()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .p(px(4.0))
+                            .occlude()
+                            .child(float::label("Span"))
+                            .child(float::scrub(
+                                "stage-held-span",
+                                span,
+                                hand::LENGTH_STEP_M,
+                                MAX_RUN_M,
+                                hand::LENGTH_STEP_M,
+                                RUN_SCRUB_W,
+                                move |value, _, cx| {
+                                    set.update(cx, |this, cx| {
+                                        this.stage_set_held_param("span", value, cx);
+                                    });
+                                },
+                            ))
+                            .agent_node(Role::Card, "Held span"),
+                    ),
+            );
+        }
+    }
     layer.into_any_element()
 }
 
@@ -3008,6 +3185,30 @@ fn geometry_of(catalog_ref: &str) -> Option<luma_render::scene_desc::Geometry> {
             luma_render::catalog::default_params(family),
         )),
     }
+}
+
+/// The geometry a *held* piece draws as, at its own parameters — a truss whose
+/// span was scrubbed ghosts at that span, not at the palette default.
+fn geometry_with(
+    catalog_ref: &str,
+    params: &BTreeMap<String, f64>,
+) -> Option<luma_render::scene_desc::Geometry> {
+    use luma_render::scene_desc::Geometry;
+    match luma_scene::catalog::piece(catalog_ref)?.geometry {
+        luma_scene::catalog::Geometry::Mesh { path } => Some(Geometry::mesh(path)),
+        luma_scene::catalog::Geometry::Procedural(family) => Some(Geometry::Procedural(
+            luma_render::catalog::node_params(family, &params_of(params)),
+        )),
+    }
+}
+
+/// A held piece's parameter map in the shape the generator reads.
+fn params_of(params: &BTreeMap<String, f64>) -> luma_scene::venue::Params {
+    let mut out = luma_scene::venue::Params::default();
+    for (key, value) in params {
+        out.set(key.clone(), *value);
+    }
+    out
 }
 
 #[cfg(test)]

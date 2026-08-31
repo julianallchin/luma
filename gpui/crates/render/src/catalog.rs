@@ -95,6 +95,37 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
         .collect()
 }
 
+/// A generated piece's local bounds — the procedural twin of the measurement
+/// [`CatalogSockets::load`] takes off a GLB, in the same authored local space
+/// (Y-up, a truss's span along X, origin at the centre).
+#[must_use]
+pub fn procedural_bounds(params: Procedural) -> DAabb {
+    use crate::truss::{Corner, Truss, OUTER_M, SQUARE_M};
+    use glam::DVec3;
+    let outer = f64::from(OUTER_M);
+    match params {
+        Procedural::Truss { span } => {
+            let half = f64::from(Truss::new(span).span_m()) / 2.0;
+            DAabb::new(
+                DVec3::new(-half, -outer, -outer),
+                DVec3::new(half, outer, outer),
+            )
+        }
+        Procedural::Corner { faces } => {
+            let _ = Corner::new(faces);
+            DAabb::new(DVec3::splat(-outer), DVec3::splat(outer))
+        }
+        Procedural::Hinge { .. } => {
+            // Two half-boxes on a pin: a box the whole swing stays inside.
+            let reach = f64::from(SQUARE_M);
+            DAabb::new(
+                DVec3::new(-reach, -outer, -reach),
+                DVec3::new(reach, outer, reach),
+            )
+        }
+    }
+}
+
 /// The name of the socket a generated piece lies down on.
 pub const SEAT_SOCKET: &str = "seat";
 

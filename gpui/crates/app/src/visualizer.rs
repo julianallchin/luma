@@ -67,8 +67,8 @@ use luma_render::{
 use luma_scene::{
     apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, hit_test_gizmo, snap_angle_15,
     Camera, ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Framing, GizmoHandle, GizmoMode,
-    Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, ObjectKind, PivotMode,
-    SceneGraph, Selection, SelectionTarget, Transform, TransformTarget, TriMesh, View, Viewfinder,
+    Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph,
+    Selection, Transform, TransformTarget, TriMesh, View, Viewfinder,
 };
 use luma_ui::node::{agent_paint_node, Instrument, Role};
 use luma_ui::{ladder, Enabled};
@@ -136,11 +136,14 @@ struct PickSnapshot {
     camera: Camera,
     graph: SceneGraph,
     meshes: Vec<Arc<TriMesh>>,
-    objects: Vec<Option<(EditorObject, SelectionTarget)>>,
-    canonical: HashMap<EditorObject, SelectionTarget>,
-    ordered: Vec<SelectionTarget>,
+    /// Frame node → the authored object it draws. Identity is the *authored
+    /// id*, never the node index: an index names whatever inherited the slot
+    /// after a re-solve, which is how deleting a piece used to leave the
+    /// selection pointing at some other object.
+    objects: Vec<Option<EditorObject>>,
+    ordered: Vec<EditorObject>,
     /// Where each object is, for the marquee to test against.
-    anchors: HashMap<SelectionTarget, Vec3>,
+    anchors: HashMap<EditorObject, Vec3>,
     /// The pivot the frame drew its gizmo on, carried over from
     /// [`luma_render::Frame::gizmo_pivot`] so a press tests the widget that is
     /// actually on screen.
@@ -179,8 +182,7 @@ impl PickSnapshot {
             })
             .collect();
         let mut graph = SceneGraph::new();
-        let mut objects = Vec::new();
-        let mut canonical = HashMap::new();
+        let mut objects: Vec<Option<EditorObject>> = Vec::new();
         let mut anchors = HashMap::new();
         let mut ordered = Vec::new();
         for draw in &frame.draws[..frame.draws.len().saturating_sub(frame.grid_draws)] {
@@ -201,25 +203,18 @@ impl PickSnapshot {
                 },
                 NodeFlags::DEFAULT,
             );
-            let kind = match object {
-                EditorObject::Fixture(_) => ObjectKind::Fixture,
-                EditorObject::StagePiece(_) => ObjectKind::StagePiece,
-            };
-            let canonical_target = *canonical.entry(object.clone()).or_insert_with(|| {
-                let target = SelectionTarget::new(kind, node);
-                ordered.push(target);
-                target
-            });
-            if canonical_target.node == node {
+            // First draw of an object is its anchor; every draw names it.
+            if !anchors.contains_key(&object) {
+                ordered.push(object.clone());
                 anchors.insert(
-                    canonical_target,
+                    object.clone(),
                     object_pose(scene, &object).map_or(translation, |pose| pose.anchor),
                 );
             }
             if objects.len() <= node.0 as usize {
                 objects.resize(node.0 as usize + 1, None);
             }
-            objects[node.0 as usize] = Some((object, canonical_target));
+            objects[node.0 as usize] = Some(object);
         }
         graph.update_world_transforms();
         Self {
@@ -227,7 +222,6 @@ impl PickSnapshot {
             graph,
             meshes,
             objects,
-            canonical,
             ordered,
             anchors,
             gizmo_pivot: frame.gizmo_pivot,
@@ -242,28 +236,22 @@ impl PickSnapshot {
         self.camera.ray(ndc, viewport.x / viewport.y.max(1.0))
     }
 
-    fn pick(&self, at: Vec2, viewport: Vec2) -> Option<SelectionTarget> {
+    fn pick(&self, at: Vec2, viewport: Vec2) -> Option<EditorObject> {
         self.graph
             .raycast(self.ray(at, viewport), Default::default(), self)
             .into_iter()
-            .find_map(|hit| self.objects.get(hit.node.0 as usize)?.as_ref().map(|v| v.1))
+            .find_map(|hit| self.objects.get(hit.node.0 as usize)?.clone())
     }
 
-    fn object(&self, target: SelectionTarget) -> Option<&EditorObject> {
-        self.canonical
-            .iter()
-            .find_map(|(object, candidate)| (*candidate == target).then_some(object))
-    }
-
-    fn marquee(&self, marquee: Marquee, viewport: Vec2) -> Vec<SelectionTarget> {
+    fn marquee(&self, marquee: Marquee, viewport: Vec2) -> Vec<EditorObject> {
         self.ordered
             .iter()
-            .filter(|target| {
+            .filter(|object| {
                 self.anchors
-                    .get(target)
+                    .get(*object)
                     .is_some_and(|anchor| marquee.contains_world(&self.camera, viewport, *anchor))
             })
-            .copied()
+            .cloned()
             .collect()
     }
 }
@@ -402,7 +390,7 @@ pub(crate) struct Visualizer {
     /// carries no delta.
     drag: Option<(Drag, Point<Pixels>)>,
     editor_drag: Option<EditorDrag>,
-    selection: Selection,
+    selection: Selection<EditorObject>,
     gizmo_mode: GizmoMode,
     /// The gizmo handle under the pointer, or the one being dragged — lit in
     /// the picture so the hand knows what it is about to grab. Recomputed on
@@ -597,6 +585,15 @@ struct IdleKey {
 /// Frames of unchanged inputs the temporal haze needs before its blue-noise
 /// integration is visually converged and the stage may rest.
 const SETTLE_FRAMES: u32 = 16;
+
+/// What a finished press owes the app — see [`Visualizer::editor_release`].
+pub(crate) enum ReleaseAct {
+    /// A click while the hand was placing: aim there and drop.
+    Place(Point<Pixels>),
+    /// A gizmo drag ended on these stage pieces: write their previewed poses
+    /// into the graph.
+    CommitPose(Vec<String>),
+}
 
 enum EditorDrag {
     ClickOrbit {
@@ -1033,6 +1030,14 @@ impl Visualizer {
         self.framing = scene.framing(&definitions);
         self.camera = opening_camera(&self.framing, &self.view_finder());
         self.owes_opening_pose = true;
+        // A selection names authored objects; a reloaded scene may no longer
+        // have some of them. Dropping the dead names here is what makes a
+        // deleted piece *deselected* rather than a slot for the next pick to
+        // misresolve.
+        self.selection.retain(|object| match object {
+            EditorObject::Fixture(id) => scene.fixtures.iter().any(|f| f.id.as_str() == id),
+            EditorObject::StagePiece(id) => scene.pieces.iter().any(|p| p.id.as_str() == id),
+        });
         let mut stage = self.stage.borrow_mut();
         stage.definitions = definitions;
         stage.scene = Some(scene);
@@ -1174,8 +1179,16 @@ impl Visualizer {
     fn editor_press(&mut self, point: Point<Pixels>, shift: bool) {
         let at = self.viewport_point(point);
         let viewport = self.viewport_size();
+        // A hand in the air owns the click's *meaning* (place, or nothing),
+        // and the gizmo must not intercept it — but the gesture is still a
+        // ClickOrbit, so a left drag mid-placement orbits the camera.
+        let placing = self
+            .build
+            .as_ref()
+            .is_some_and(|build| build.hand.owns_pointer());
         let stage = self.stage.borrow();
-        let Some(pick) = stage.displayed_pick.as_ref() else {
+        let Some(pick) = stage.displayed_pick.as_ref().filter(|_| !placing) else {
+            drop(stage);
             self.editor_drag = Some(EditorDrag::ClickOrbit {
                 gesture: ClickOrbit::new(at),
                 shift,
@@ -1195,18 +1208,26 @@ impl Visualizer {
                 pick.camera.position() - pivot,
                 self.gizmo_mode,
             ) {
+                // What the widget may actually grab: fixtures, and a piece
+                // whose joint leaves it free — a bolted piece's pose is a
+                // relation, and axes over a relation is a widget that lies.
+                let build = self.build.as_ref();
                 let originals: Vec<_> = self
                     .selection
                     .selected()
                     .iter()
-                    .filter(|target| target.kind == ObjectKind::Fixture)
-                    .filter_map(|target| {
-                        let object = pick.object(*target)?.clone();
+                    .filter(|object| match object {
+                        EditorObject::Fixture(_) => true,
+                        EditorObject::StagePiece(id) => build.is_some_and(|build| {
+                            build.freedom_of(id) == crate::stage::Freedom::Free
+                        }),
+                    })
+                    .filter_map(|object| {
                         let pose = stage
                             .scene
                             .as_ref()
-                            .and_then(|scene| object_pose(scene, &object))?;
-                        Some((object, pose.position, pose.rotation))
+                            .and_then(|scene| object_pose(scene, object))?;
+                        Some((object.clone(), pose.position, pose.rotation))
                     })
                     .collect();
                 // Nothing draggable under the widget is an orbit, not a drag
@@ -1304,18 +1325,35 @@ impl Visualizer {
         self.editor_drag = Some(interaction);
     }
 
-    fn editor_release(&mut self, point: Point<Pixels>) {
+    /// Ends the press. What comes back is the verb the release owes — a
+    /// placement click, or a pose commit for dragged pieces — which the
+    /// caller runs on [`Luma`], because writing the graph is a verb and not a
+    /// camera gesture.
+    fn editor_release(&mut self, point: Point<Pixels>) -> Option<ReleaseAct> {
         let at = self.viewport_point(point);
         let viewport = self.viewport_size();
         // A release ends the camera drag whatever else this function decides:
         // the selection paths below can bail before reaching the end.
         self.drag = None;
-        let Some(interaction) = self.editor_drag.take() else {
-            return;
-        };
+        let interaction = self.editor_drag.take()?;
+        // Only the placing hand's click is a drop. A run's controls are its
+        // own card, so a click on the room mid-extend aims nothing.
+        let placing = self
+            .build
+            .as_ref()
+            .is_some_and(|build| build.hand.aims_with_pointer());
+        let holding = self
+            .build
+            .as_ref()
+            .is_some_and(|build| build.hand.owns_pointer());
+        if let EditorDrag::ClickOrbit { ref gesture, .. } = interaction {
+            if gesture.clone().released() == ClickOrbitRelease::Click && holding {
+                return placing.then_some(ReleaseAct::Place(point));
+            }
+        }
         let stage = self.stage.borrow();
         let Some(pick) = stage.displayed_pick.as_ref() else {
-            return;
+            return None;
         };
         match interaction {
             EditorDrag::ClickOrbit { gesture, shift, .. }
@@ -1328,21 +1366,98 @@ impl Visualizer {
                 }
                 // The builder selects the *node*, not the render object: a
                 // subtree, a trim and a detach are all things the graph has
-                // names for, and a draw is not one of them.
+                // names for — and the render object's identity IS the node id,
+                // which is what lets the two agree by construction.
                 if let Some(build) = self.build.as_mut() {
-                    build.selected = self
-                        .selection
-                        .primary()
-                        .and_then(|target| pick.object(target))
-                        .map(|object| match object {
-                            EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
-                        });
+                    build.selected = self.selection.primary().map(|object| match object {
+                        EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
+                    });
                     build.trim_draft = None;
                 }
             }
             EditorDrag::Marquee(marquee) => self.selection.replace(pick.marquee(marquee, viewport)),
+            // A finished gizmo drag on stage pieces owes the graph its poses:
+            // the drag previewed by writing the scene, and the scene is not
+            // where a piece's position lives.
+            EditorDrag::Gizmo { originals, .. } => {
+                let pieces: Vec<String> = originals
+                    .iter()
+                    .filter_map(|(object, _, _)| match object {
+                        EditorObject::StagePiece(id) => Some(id.clone()),
+                        EditorObject::Fixture(_) => None,
+                    })
+                    .collect();
+                if !pieces.is_empty() {
+                    return Some(ReleaseAct::CommitPose(pieces));
+                }
+            }
             _ => {}
         }
+        None
+    }
+
+    /// One dragged piece's current *previewed* pose, in the socket layer's
+    /// frame — what the gizmo wrote into the scene, read back so the commit
+    /// inverts exactly what is on screen.
+    pub(crate) fn piece_pose_three(&self, id: &str) -> Option<glam::DMat4> {
+        let stage = self.stage.borrow();
+        let piece = stage
+            .scene
+            .as_ref()?
+            .pieces
+            .iter()
+            .find(|piece| piece.id == id)?;
+        Some(coords::three_pose_from_data(piece.pos, piece.rot).as_dmat4())
+    }
+
+    /// Where the pointer is aiming in the room, in the socket layer's frame:
+    /// the mesh face under it when a frame is on screen, the floor plane when
+    /// none is — which is the state a headless run is always in.
+    pub(crate) fn stage_cursor(
+        &self,
+        at: Point<Pixels>,
+    ) -> Option<(glam::DVec3, Option<crate::stage::hand::SurfaceHit>)> {
+        // The pane's own bounds, not the canvas's: the pane is laid out — and
+        // recorded — whether or not a renderer exists, and it is the surface
+        // the beads and marks are projected against, so aiming through it is
+        // what keeps a pointer and a bead talking about the same pixel.
+        let pane = self.stage.borrow().pane;
+        let point = Vec2::new(
+            f32::from(at.x - pane.origin.x),
+            f32::from(at.y - pane.origin.y),
+        );
+        let viewport = Vec2::new(f32::from(pane.size.width), f32::from(pane.size.height));
+        if viewport.x <= 1.0 || viewport.y <= 1.0 {
+            return None;
+        }
+        let stage = self.stage.borrow();
+        if let Some(pick) = stage.displayed_pick.as_ref() {
+            let ray = pick.ray(point, viewport);
+            let hit = pick
+                .graph
+                .raycast(ray, Default::default(), pick)
+                .into_iter()
+                .find_map(|hit| match pick.objects.get(hit.node.0 as usize)?.as_ref()? {
+                    EditorObject::StagePiece(id) => Some(crate::stage::hand::SurfaceHit {
+                        piece: id.clone(),
+                        point: coords::three_from_world(hit.point).as_dvec3(),
+                        normal: coords::three_from_world(hit.face_normal)
+                            .as_dvec3()
+                            .normalize_or_zero(),
+                    }),
+                    EditorObject::Fixture(_) => None,
+                });
+            if let Some(hit) = hit {
+                return Some((hit.point, Some(hit)));
+            }
+            return crate::stage::hand::floor_point(&ray).map(|world| (world, None));
+        }
+        let ndc = Vec2::new(
+            f32::from(point.x) / viewport.x * 2.0 - 1.0,
+            1.0 - f32::from(point.y) / viewport.y * 2.0,
+        );
+        crate::stage::hand::floor_point(&self.camera.ray(ndc, viewport.x / viewport.y))
+            .map(|world| (world, None))
     }
 
     fn apply_gizmo(
@@ -1452,34 +1567,32 @@ fn object_pose(scene: &scene_desc::Scene, object: &EditorObject) -> Option<Trans
 /// Write a world pose back to the stored triple — the inverse of
 /// [`object_pose`], through the same conversion.
 ///
-/// # Fixtures only, for now
-///
-/// A stage piece has no pose to write. Its pose is *derived* from where it is
-/// bolted — `(parent, sockets, u, v, yaw, trim)` — so committing a dragged
-/// world pose means inverting the mate with
-/// [`luma_scene::venue::invert_placement`] and calling `set_params`, and that
-/// inversion needs the parent's world frame and both sockets' geometry, which
-/// live behind the catalog this screen does not load. That, plus the
-/// roll-freedom drag that replaces the gizmo on a *snapped* piece entirely,
-/// is the builder — phase 4 of `docs/design/venue-graph.md`. Until it lands a
-/// piece is selectable and highlightable but the gizmo refuses to grab it,
-/// which is the honest state; a gizmo that accepted the drag and dropped it
-/// would be worse.
+/// For a stage piece this write is the drag's *preview* only: its pose is
+/// derived from its joint, so the release inverts the mate and writes the
+/// graph (`Luma::stage_commit_pose`), and the re-solve then overwrites what
+/// was previewed here with the same numbers read back.
 fn set_object_pose(
     scene: &mut scene_desc::Scene,
     object: &EditorObject,
     position: Vec3,
     rotation: Quat,
 ) {
-    let EditorObject::Fixture(id) = object else {
-        return;
-    };
     let (pos, rot) = coords::data_pose_of(
         to_world().inverse() * Mat4::from_rotation_translation(rotation, position),
     );
-    if let Some(object) = scene.fixtures.iter_mut().find(|object| &object.id == id) {
-        object.pos = pos;
-        object.rot = rot;
+    match object {
+        EditorObject::Fixture(id) => {
+            if let Some(object) = scene.fixtures.iter_mut().find(|object| &object.id == id) {
+                object.pos = pos;
+                object.rot = rot;
+            }
+        }
+        EditorObject::StagePiece(id) => {
+            if let Some(object) = scene.pieces.iter_mut().find(|object| &object.id == id) {
+                object.pos = pos;
+                object.rot = rot;
+            }
+        }
     }
 }
 
@@ -2271,6 +2384,9 @@ pub(crate) fn visualizer(
             &state.camera,
             pane.origin,
             (f32::from(pane.size.width), f32::from(pane.size.height)),
+            // With no GPU there is no canvas and no window listener, so the
+            // claim card is also the pointer's way in — the headless path.
+            state.gpu_enabled,
             app,
         )
     });
@@ -2769,7 +2885,7 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                             .selection
                             .selected()
                             .iter()
-                            .any(|target| target.kind == ObjectKind::Fixture)
+                            .any(|object| matches!(object, EditorObject::Fixture(_)))
                             || state
                                 .build
                                 .as_ref()
@@ -3172,37 +3288,27 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let haze_resolution = state.render_lab.haze_resolution;
     let grid_enabled = state.render_lab.grid_enabled;
     let debug_view = state.render_lab.debug_view;
-    let selected_fixture_ids = {
-        let stage = state.stage.borrow();
-        stage.displayed_pick.as_ref().map_or_else(Vec::new, |pick| {
-            // Overlay builder expects primary first; Selection keeps primary
-            // at the tail for deterministic shift-toggle reassignment.
-            state
-                .selection
-                .selected()
-                .iter()
-                .rev()
-                .filter_map(|target| match pick.object(*target) {
-                    Some(EditorObject::Fixture(id)) => Some(id.clone()),
-                    _ => None,
-                })
-                .collect()
+    // Overlay builder expects primary first; Selection keeps primary at the
+    // tail for deterministic shift-toggle reassignment.
+    let selected_fixture_ids: Vec<String> = state
+        .selection
+        .selected()
+        .iter()
+        .rev()
+        .filter_map(|object| match object {
+            EditorObject::Fixture(id) => Some(id.clone()),
+            EditorObject::StagePiece(_) => None,
         })
-    };
-    let selected_piece_ids: Vec<String> = {
-        let stage = state.stage.borrow();
-        stage.displayed_pick.as_ref().map_or_else(Vec::new, |pick| {
-            state
-                .selection
-                .selected()
-                .iter()
-                .filter_map(|target| match pick.object(*target) {
-                    Some(EditorObject::StagePiece(id)) => Some(id.clone()),
-                    _ => None,
-                })
-                .collect()
+        .collect();
+    let selected_piece_ids: Vec<String> = state
+        .selection
+        .selected()
+        .iter()
+        .filter_map(|object| match object {
+            EditorObject::StagePiece(id) => Some(id.clone()),
+            EditorObject::Fixture(_) => None,
         })
-    };
+        .collect();
     // **No transform gizmo on snapped pieces.** The widget is drawn from this
     // narrower list (`luma_render::overlay::pivot`), so the rule is enforced
     // where the widget is decided rather than beside it: a bolted piece's pose
@@ -3671,36 +3777,49 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         let held = event.pressed_button;
         let over = over_move.is_hovered(window);
         dragged.update(cx, |this, cx| {
-            let Some(state) = this.visualizer_mut() else {
-                return;
-            };
-            // The held button is the authority on whether a drag is live. Press
-            // and release bookkeeping can only ever agree with it, so a stale
-            // anchor cannot turn a hover into an orbit.
-            let Some(held) = held else {
-                state.drag = None;
-                // Nothing pressed: the move is a hover, and what it may be
-                // hovering is the gizmo.
-                let hover = over.then(|| state.hover_gizmo(at)).flatten();
-                if state.gizmo_hover != hover {
-                    state.gizmo_hover = hover;
-                    cx.notify();
+            let mut aim = false;
+            {
+                let Some(state) = this.visualizer_mut() else {
+                    return;
+                };
+                // The held button is the authority on whether a drag is live.
+                // Press and release bookkeeping can only ever agree with it,
+                // so a stale anchor cannot turn a hover into an orbit.
+                match held {
+                    None => {
+                        state.drag = None;
+                        // Nothing pressed: the move is a hover — over the
+                        // gizmo, or aiming the held ghost.
+                        let hover = over.then(|| state.hover_gizmo(at)).flatten();
+                        if state.gizmo_hover != hover {
+                            state.gizmo_hover = hover;
+                            cx.notify();
+                        }
+                        aim = over
+                            && state
+                                .build
+                                .as_ref()
+                                .is_some_and(|build| build.hand.aims_with_pointer());
+                    }
+                    Some(MouseButton::Left) => {
+                        if state.editor_drag.is_some() {
+                            state.editor_moved(at);
+                            cx.notify();
+                        }
+                    }
+                    Some(_) => {
+                        if let Some((drag, was)) = state.drag {
+                            state.drag = Some((drag, at));
+                            state.dragged(at - was);
+                            cx.notify();
+                        }
+                    }
                 }
-                return;
-            };
-            if held == MouseButton::Left {
-                if state.editor_drag.is_some() {
-                    state.editor_moved(at);
-                    cx.notify();
-                }
-                return;
             }
-            let Some((drag, was)) = state.drag else {
-                return;
-            };
-            state.drag = Some((drag, at));
-            state.dragged(at - was);
-            cx.notify();
+            if aim {
+                this.stage_aim_from_pointer(at, cx);
+                cx.notify();
+            }
         });
     });
 
@@ -3710,13 +3829,19 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
             return;
         }
         released.update(cx, |this, cx| {
+            let mut place = None;
             if let Some(state) = this.visualizer_mut() {
                 if event.button == MouseButton::Left {
-                    state.editor_release(event.position);
+                    place = state.editor_release(event.position);
                 } else {
                     state.drag = None;
                 }
                 cx.notify();
+            }
+            match place {
+                Some(ReleaseAct::Place(at)) => this.stage_click_room(at, cx),
+                Some(ReleaseAct::CommitPose(pieces)) => this.stage_commit_pose(pieces, cx),
+                None => {}
             }
         });
     });

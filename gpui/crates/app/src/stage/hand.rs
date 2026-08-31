@@ -36,7 +36,7 @@ use glam::{DMat4, DVec3};
 use luma_render::catalog::{VenueSockets, BASE_SOCKET, SEAT_SOCKET};
 use luma_scene::coords;
 use luma_scene::snap::{
-    solve_snap, ScenePiece, SnapInput, SnapMatch, SnapSurface, ATTACH_THRESHOLD, DETACH_THRESHOLD,
+    solve_snap, ScenePiece, SnapInput, SnapMatch, ATTACH_THRESHOLD, DETACH_THRESHOLD,
 };
 use luma_scene::sockets::{Polarity, ResolvedSocket, SocketKind, SocketType};
 use luma_scene::venue::{
@@ -76,6 +76,10 @@ pub(crate) const GRID_M: f64 = 0.5;
 
 /// The step a free placement's spin lands on, in degrees.
 pub(crate) const GRID_YAW_DEG: f64 = 15.0;
+
+/// How parallel a socket's normal must be to a hit face's before the hit
+/// counts as being *on* that socket's face.
+const FACE_ALIGNED: f64 = 0.8;
 
 /// The mesh key the held piece is registered under while it is in the air. It
 /// is not a node — it has no row yet — so it cannot be keyed by node id, and a
@@ -189,6 +193,18 @@ impl Hand {
     }
 }
 
+/// What the pointer's ray met in the picture: a piece's face, named by the
+/// piece and given in the socket layer's world space. The viewport raycast
+/// produces it; [`Room::land`] resolves it to the *named* face socket under
+/// it, so a landing found by pointing is committed by the same verb as one
+/// found by a bead.
+#[derive(Debug, Clone)]
+pub(crate) struct SurfaceHit {
+    pub(crate) piece: String,
+    pub(crate) point: DVec3,
+    pub(crate) normal: DVec3,
+}
+
 /// A piece in the air, and where it would land.
 #[derive(Debug)]
 pub(crate) struct Held {
@@ -199,6 +215,10 @@ pub(crate) struct Held {
     pub(crate) latched: Option<SnapMatch>,
     /// The last solved landing. `None` until the cursor has moved once.
     pub(crate) landed: Option<Landed>,
+    /// Where the last aim came from, kept so an edit to the held piece's own
+    /// parameters (a span scrub) can re-solve the landing without waiting for
+    /// the pointer to move again.
+    pub(crate) cursor: Option<(DVec3, Option<SurfaceHit>)>,
 }
 
 /// The add-element dialog's own state.
@@ -249,6 +269,7 @@ impl Held {
             what,
             latched: None,
             landed: None,
+            cursor: None,
         }
     }
 
@@ -431,7 +452,16 @@ pub(crate) struct Room {
     poses: HashMap<String, DMat4>,
     sockets: HashMap<String, Vec<ResolvedSocket>>,
     pieces: Vec<ScenePiece>,
+    /// Each placed piece's local bounds, for the collision test. Fixtures and
+    /// the root have none — a light clamped to a truss is not what stops a
+    /// truss going through a wall.
+    boxes: HashMap<String, luma_scene::aabb::DAabb>,
 }
+
+/// Contact is not collision: both boxes shrink by this before the overlap
+/// test, so a piece mated flush on a face stays legal and a piece *through*
+/// another does not.
+const COLLISION_CLEARANCE_M: f64 = 0.02;
 
 impl Room {
     /// Project a solved graph into the search's own shape.
@@ -448,10 +478,14 @@ impl Room {
         let root = graph.root().to_string();
         let mut by_node: HashMap<String, Vec<ResolvedSocket>> = HashMap::new();
         let mut pieces = Vec::new();
+        let mut boxes = HashMap::new();
         for node in graph.nodes() {
             let Some(world) = poses.get(&node.id).copied() else {
                 continue;
             };
+            if let Some(bounds) = piece_bounds(sockets, node) {
+                boxes.insert(node.id.clone(), bounds);
+            }
             let mut resolved = if node.id == root {
                 Vec::new()
             } else {
@@ -476,7 +510,32 @@ impl Room {
             poses,
             sockets: by_node,
             pieces,
+            boxes,
         }
+    }
+
+    /// One placed piece's local bounds, when it has any.
+    pub(crate) fn bounds_of(&self, node: &str) -> Option<luma_scene::aabb::DAabb> {
+        self.boxes.get(node).copied()
+    }
+
+    /// The first placed piece a body at `world` would pass through, skipping
+    /// the pieces named — the host a landing mates (contact by construction)
+    /// and the piece being moved.
+    fn collision(
+        &self,
+        body: luma_scene::aabb::DAabb,
+        world: DMat4,
+        skip: &[Option<&str>],
+    ) -> Option<&str> {
+        self.boxes.iter().find_map(|(id, other)| {
+            if skip.iter().any(|name| *name == Some(id.as_str())) {
+                return None;
+            }
+            let pose = self.poses.get(id)?;
+            luma_scene::aabb::obb_intersects(body, &world, *other, pose, COLLISION_CLEARANCE_M)
+                .then_some(id.as_str())
+        })
     }
 
     pub(crate) fn root(&self) -> &str {
@@ -512,11 +571,41 @@ impl Room {
             .filter(|(_, s)| s.socket_type != SocketType::Grab)
     }
 
+    /// The named face socket under a viewport hit: the closest hosting
+    /// surface socket on the hit piece whose plane the hit lies in.
+    ///
+    /// A *named* socket, deliberately: the solver can seat on a virtual
+    /// surface, but a virtual surface cannot be written down — the graph's
+    /// edges name sockets — so resolving the hit to the authored socket here
+    /// is what lets a landing found by pointing be committed by the same verb
+    /// as one found by a bead.
+    fn face_socket_for(&self, hit: &SurfaceHit) -> Option<(String, String)> {
+        let pose = self.pose(&hit.piece)?;
+        let inverse = pose.inverse();
+        let local_point = inverse.transform_point3(hit.point);
+        let local_normal = inverse.transform_vector3(hit.normal).normalize_or_zero();
+        self.sockets_of(&hit.piece)
+            .iter()
+            .filter(|socket| {
+                socket.socket_type.kind() == SocketKind::Surface
+                    && socket.socket_type.polarity().can_host()
+            })
+            // The face the hit is *on*, not merely the nearest: a hit on a
+            // side face must not seat the piece on the top.
+            .filter(|socket| socket.normal.normalize_or_zero().dot(local_normal) > FACE_ALIGNED)
+            .min_by(|a, b| {
+                a.position
+                    .distance(local_point)
+                    .total_cmp(&b.position.distance(local_point))
+            })
+            .map(|socket| (hit.piece.clone(), socket.name.clone()))
+    }
+
     /// Solve the ladder for a held piece.
     ///
     /// `latched` is last frame's joint; supplying it is what makes the snap
-    /// hysteretic. `surface` is the hit under the cursor when the caller has
-    /// one — the raycast lives outside the solver so the solver stays pure
+    /// hysteretic. `surface` is the mesh hit under the cursor when the caller
+    /// has one — the raycast lives outside the solver so the solver stays pure
     /// math, and outside this too so that a builder with no rendered frame
     /// still snaps to sockets and to the floor.
     #[allow(clippy::too_many_arguments)]
@@ -527,13 +616,14 @@ impl Room {
         footing: Option<&str>,
         cursor: DVec3,
         latched: Option<&SnapMatch>,
-        surface: Option<&SnapSurface>,
+        surface: Option<&SurfaceHit>,
         exclude: Option<&str>,
+        body: Option<luma_scene::aabb::DAabb>,
     ) -> Option<(Landed, Option<SnapMatch>)> {
         // The latch first: a joint that has taken hold keeps the ghost until
         // the cursor leaves the wider radius, whatever the search would say.
         if let Some(latch) = latched {
-            if let Some(landed) = self.hold(latch, held_sockets, kind, cursor) {
+            if let Some(landed) = self.hold(latch, held_sockets, kind, cursor, exclude, body) {
                 return Some((landed, Some(latch.clone())));
             }
         }
@@ -551,7 +641,7 @@ impl Room {
             pieces: &self.pieces,
             exclude_id: exclude,
             shift_held: false,
-            surface,
+            surface: None,
             lookup_sockets: &lookup,
         });
 
@@ -574,7 +664,7 @@ impl Room {
                             their_socket: matched.host_socket.clone(),
                             yaw: 0.0,
                         },
-                        refused: None,
+                        refused: self.refusal(body, world, &[Some(parent.as_str()), exclude]),
                     },
                     Some(matched.clone()),
                 ))
@@ -589,9 +679,16 @@ impl Room {
                         .or_else(|| Self::seat_socket(held_sockets).map(|s| s.name.as_str()))
                 })?;
                 let held = held_sockets.iter().find(|s| s.name == footing)?;
+                // The face under the pointer, then the floor. The discrete
+                // pass answers only within its attach radius, so the ray is
+                // what lets a piece land anywhere on a face rather than only
+                // near its named centre.
                 let (host_node, host_socket) = match (&result.matched, &result.parent_id) {
                     (Some(m), Some(parent)) => (parent.clone(), m.host_socket.clone()),
-                    _ => (self.root.clone(), FLOOR_SOCKET.to_string()),
+                    _ => surface
+                        .filter(|hit| exclude != Some(hit.piece.as_str()))
+                        .and_then(|hit| self.face_socket_for(hit))
+                        .unwrap_or_else(|| (self.root.clone(), FLOOR_SOCKET.to_string())),
                 };
                 let host = self.socket(&host_node, &host_socket)?.clone();
                 let parent_world = self.pose(&host_node)?;
@@ -628,6 +725,7 @@ impl Room {
                     };
                 }
                 let world = place_on(parent_world, &host, held, kind, seat);
+                let refused = self.refusal(body, world, &[Some(host_node.as_str()), exclude]);
                 let free_floor = host_node == self.root && host_socket == FLOOR_SOCKET;
                 let surface = (!free_floor).then_some((host_node, host_socket));
                 Some((
@@ -638,7 +736,7 @@ impl Room {
                             my_socket: held.name.clone(),
                             seat,
                         },
-                        refused: None,
+                        refused,
                     },
                     None,
                 ))
@@ -654,6 +752,8 @@ impl Room {
         held_sockets: &[ResolvedSocket],
         kind: NodeKind,
         cursor: DVec3,
+        exclude: Option<&str>,
+        body: Option<luma_scene::aabb::DAabb>,
     ) -> Option<Landed> {
         let parent = latch.host_id.as_deref()?;
         let at = self.socket_world(parent, &latch.host_socket)?;
@@ -675,8 +775,22 @@ impl Room {
                 their_socket: latch.host_socket.clone(),
                 yaw: 0.0,
             },
-            refused: None,
+            refused: self.refusal(body, world, &[Some(parent), exclude]),
         })
+    }
+
+    /// The collision arm of every landing: `Some(reason)` when the body at
+    /// `world` passes through a placed piece that is neither its host nor
+    /// itself.
+    fn refusal(
+        &self,
+        body: Option<luma_scene::aabb::DAabb>,
+        world: DMat4,
+        skip: &[Option<&str>],
+    ) -> Option<String> {
+        let body = body?;
+        self.collision(body, world, skip)
+            .map(|_| "would pass through structure".to_string())
     }
 
     /// The world pose of one named pair, mated flush — the same arithmetic the
@@ -716,6 +830,24 @@ impl Room {
                     .dot(luma_scene::snap::WORLD_UP)
                     .total_cmp(&b.normal.dot(luma_scene::snap::WORLD_UP))
             })
+    }
+}
+
+/// One node's local bounds: the catalog's measurement for a mesh piece, the
+/// generator's arithmetic for a procedural one at this node's own parameters.
+/// A node with neither (a fixture, the root) has no box and no collisions.
+fn piece_bounds(
+    sockets: &VenueSockets,
+    node: &luma_scene::venue::Node,
+) -> Option<luma_scene::aabb::DAabb> {
+    let reference = node.catalog_ref.as_deref()?;
+    match luma_scene::catalog::piece(reference)?.geometry {
+        luma_scene::catalog::Geometry::Mesh { .. } => sockets.catalog().bounds(reference),
+        luma_scene::catalog::Geometry::Procedural(family) => {
+            Some(luma_render::catalog::procedural_bounds(
+                luma_render::catalog::node_params(family, &node.params),
+            ))
+        }
     }
 }
 

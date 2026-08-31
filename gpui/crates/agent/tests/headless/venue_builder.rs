@@ -48,6 +48,8 @@ const OPEN: &str = r#"
     nav.stage("Test Venue");
     nav.expand();
     app.frames(6);
+    until("the builder", (s) =>
+        s.findAll({ role: "button", label: "Add element" }).length > 0);
 
     // Every readout the builder prints, as plain strings.
     // What the picture says. The builder publishes no state labels — the spec
@@ -154,6 +156,10 @@ const OPEN: &str = r#"
     };
     const sockets = () => app.snapshot().findAll({ role: "button" })
         .filter((n) => n.label.startsWith("Socket "));
+    // Shrink the held truss to a stub with its own span scrub: a landing that
+    // would pass through placed structure is refused now, and most of these
+    // rooms have a deck in the middle.
+    const shorten = () => { sweep("stage-held-span", 0.03); app.frames(2); };
     const socket = (suffix) => {
         const found = sockets().find((n) => n.label.endsWith(suffix));
         if (found === undefined) {
@@ -363,9 +369,10 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
         &format!(
             r#"{OPEN}
         arm("Truss · straight");
-        dropAt(0.34, 0.72);
-        arm("Truss · straight");
-        dropAt(0.66, 0.72);
+        shorten();
+        dropAt(0.3, 0.8);
+        // Place mode is sticky: the second stick keeps the shortened span.
+        dropAt(0.7, 0.8);
         app.key("escape");
         app.frames(4);
 
@@ -390,6 +397,11 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
         if (measured === null) {{
             throw new Error("no end measured a gap: " + sockets().map((n) => n.label).join(", "));
         }}
+        // Back to rest first: in a run every bead is on screen and the two
+        // sticks share their labels, so a suffix match could grab the wrong
+        // stick's end — at rest only the selected stick's beads remain.
+        app.key("escape");
+        app.frames(4);
         tap(socket(measured.socket.slice("Socket ".length)));
         const started = one("Gap: ");
 
@@ -467,7 +479,7 @@ fn trim_lifts_a_free_placement() {
         &format!(
             r#"{OPEN}
         arm("Truss · straight");
-        dropAt(0.5, 0.7);
+        dropAt(0.15, 0.82);
         // Still stamping: place mode is sticky, so the sheet the placement
         // selected is *withheld* rather than slid over the room the next click
         // is aimed at.
@@ -581,7 +593,7 @@ fn a_fixture_on_a_face_previews_a_row_and_places_all_of_it() {
             r#"{OPEN}
         // A stick on the floor, so there is a face to hang a row along.
         arm("Truss · straight");
-        dropAt(0.5, 0.72);
+        dropAt(0.5, 0.35);
         app.key("escape");
         app.frames(4);
         const patched = () => {{
@@ -632,7 +644,7 @@ fn a_row_that_will_not_fit_is_refused_and_the_offer_makes_it_fit() {
         &format!(
             r#"{OPEN}
         arm("Truss · straight");
-        dropAt(0.5, 0.72);
+        dropAt(0.5, 0.35);
         app.key("escape");
         app.frames(4);
         const patched = () => {{
@@ -720,7 +732,8 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         const resting = rows();
 
         arm("Truss · straight");
-        dropAt(0.5, 0.7);
+        shorten();
+        dropAt(0.3, 0.8);
         app.key("escape");
         app.frames(4);
 
@@ -788,7 +801,7 @@ fn a_socket_facing_nothing_still_builds_a_stub_at_the_length_asked_for() {
         // One stick alone in the room: every end of it faces nothing, so the
         // ray has nothing to measure and this is the case under test.
         arm("Truss · straight");
-        dropAt(0.5, 0.72);
+        dropAt(0.15, 0.82);
         app.key("escape");
         app.frames(4);
 
@@ -857,7 +870,8 @@ fn detaching_is_not_a_refusal() {
         // before anything is built.
         const resting = app.snapshot().findAll({{ role: "row" }}).map((n) => n.label);
         arm("Truss · straight");
-        dropAt(0.5, 0.7);
+        shorten();
+        dropAt(0.3, 0.8);
         app.key("escape");
         app.frames(6);
 
@@ -944,11 +958,12 @@ fn an_empty_venue_takes_the_first_piece_from_the_button_alone() {
         const pieces = () => sockets().filter((n) => !n.label.includes(":venue "));
         const empty = pieces().length;
         arm("Truss · straight");
-        dropAt(0.42, 0.7);
+        shorten();
+        dropAt(0.25, 0.72);
         // Place mode is sticky. No second trip through the dialog.
         const dialog = app.snapshot()
             .findAll({{ role: "input", label: "Search elements" }}).length;
-        dropAt(0.58, 0.7);
+        dropAt(0.75, 0.72);
         // Read while the hand still stamps: at rest the room only beads the
         // selected piece, and this claim is about both.
         const ends = pieces().map((n) => n.label);
@@ -968,11 +983,12 @@ fn an_empty_venue_takes_the_first_piece_from_the_button_alone() {
         Some(0),
         "the dialog came back between two placements\n{out:#}"
     );
-    // Two sticks, each bringing its own pair of ends: the second landed from
-    // the hand the first left there. Counted by the end rather than by the
-    // label, because two of the same piece answer to the same name.
+    // Two sticks: the second landed from the hand the first left there.
+    // Counted by a *face*, one per stick — an end can be consumed by a mate
+    // (two sticks that landed close enough bolt end-to-end) or culled at the
+    // screen's edge, and either would miscount the pieces.
     let ends = strings(&out, "ends");
-    let placed = ends.iter().filter(|label| label.ends_with("end_a")).count();
+    let placed = ends.iter().filter(|label| label.ends_with("face_-y")).count();
     assert_eq!(
         placed, 2,
         "the second click did not place a second piece: {ends:?}\n{out:#}"

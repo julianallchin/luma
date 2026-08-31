@@ -327,6 +327,21 @@ impl Luma {
         if self.add_fixtures_back(cx) {
             return;
         }
+        // The stage builder's hand — and its node menu — are floats over the
+        // room on the same rung as the shell's own menus, handled here so
+        // Escape reaches them wherever focus happens to be.
+        let stage_menu = matches!(
+            self.workspace.active_body(),
+            Some(Body::Stage(page)) if page.menu.is_some()
+        );
+        if stage_menu
+            || self
+                .build_state()
+                .is_some_and(|build| !matches!(build.hand, crate::stage::hand::Hand::Idle))
+        {
+            self.stage_escape(cx);
+            return;
+        }
         match self.overlay.as_open() {
             Some(Overlay::Venues(_)) if self.sidebar.is_none() => {}
             Some(_) => self.close_overlay(cx),

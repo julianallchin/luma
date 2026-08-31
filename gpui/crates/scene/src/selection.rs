@@ -1,64 +1,60 @@
-//! Editor selection, independent of venue ids and UI state.
+//! Editor selection, generic over the id the editor names things by.
 //!
-//! A [`SelectionTarget`] combines a graph node with its editor domain. The
-//! domain is needed only for the legacy cross-type rule: a plain fixture click
-//! drops stage-piece selection and vice versa, while shift-click can keep both.
-
-use crate::NodeId;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum ObjectKind {
-    Fixture,
-    StagePiece,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct SelectionTarget {
-    pub kind: ObjectKind,
-    pub node: NodeId,
-}
-
-impl SelectionTarget {
-    #[must_use]
-    pub const fn new(kind: ObjectKind, node: NodeId) -> Self {
-        Self { kind, node }
-    }
-}
+//! The contract is the stage editor's click grammar — plain click replaces,
+//! shift-click toggles, the tail is primary — and nothing else. The element
+//! type is the caller's *stable identity* (the app uses its authored object
+//! ids), which is what makes a selection survive a re-solve: an index into a
+//! frame would name whatever inherited the slot.
 
 /// Ordered multi-selection. The tail is the primary selection.
 ///
 /// Keeping insertion order makes primary reassignment deterministic when a
 /// shift-click toggles the current primary off.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Selection {
-    selected: Vec<SelectionTarget>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Selection<T> {
+    selected: Vec<T>,
 }
 
-impl Selection {
+impl<T> Default for Selection<T> {
+    fn default() -> Self {
+        Self {
+            selected: Vec::new(),
+        }
+    }
+}
+
+impl<T: PartialEq + Clone> Selection<T> {
     #[must_use]
-    pub fn selected(&self) -> &[SelectionTarget] {
+    pub fn selected(&self) -> &[T] {
         &self.selected
     }
 
     #[must_use]
-    pub fn primary(&self) -> Option<SelectionTarget> {
-        self.selected.last().copied()
+    pub fn primary(&self) -> Option<&T> {
+        self.selected.last()
     }
 
     #[must_use]
-    pub fn contains(&self, target: SelectionTarget) -> bool {
-        self.selected.contains(&target)
+    pub fn contains(&self, target: &T) -> bool {
+        self.selected.contains(target)
     }
 
     pub fn clear(&mut self) {
         self.selected.clear();
     }
 
+    /// Drop everything the scene no longer has an object for. Called when a
+    /// scene reloads, so a deleted piece cannot leave a name behind that the
+    /// next pick resolves to something else.
+    pub fn retain(&mut self, keep: impl Fn(&T) -> bool) {
+        self.selected.retain(|target| keep(target));
+    }
+
     /// Apply the stage editor's click contract.
     ///
-    /// Plain click replaces the complete mixed selection. Shift-click toggles
-    /// one target without clearing objects of the other kind.
-    pub fn click(&mut self, target: SelectionTarget, shift: bool) {
+    /// Plain click replaces the complete selection. Shift-click toggles one
+    /// target.
+    pub fn click(&mut self, target: T, shift: bool) {
         if !shift {
             self.selected.clear();
             self.selected.push(target);
@@ -73,7 +69,7 @@ impl Selection {
 
     /// Replace the selection with a marquee result, retaining the input order
     /// and ignoring duplicates. The final distinct target becomes primary.
-    pub fn replace(&mut self, targets: impl IntoIterator<Item = SelectionTarget>) {
+    pub fn replace(&mut self, targets: impl IntoIterator<Item = T>) {
         self.selected.clear();
         for target in targets {
             if !self.selected.contains(&target) {
@@ -87,53 +83,53 @@ impl Selection {
 mod tests {
     use super::*;
 
-    fn fixture(id: u32) -> SelectionTarget {
-        SelectionTarget::new(ObjectKind::Fixture, NodeId(id))
-    }
-
-    fn piece(id: u32) -> SelectionTarget {
-        SelectionTarget::new(ObjectKind::StagePiece, NodeId(id))
+    #[test]
+    fn plain_click_replaces_the_whole_selection() {
+        let mut selection = Selection::default();
+        selection.click("a", true);
+        selection.click("b", true);
+        selection.click("c", false);
+        assert_eq!(selection.selected(), &["c"]);
+        assert_eq!(selection.primary(), Some(&"c"));
     }
 
     #[test]
-    fn plain_click_replaces_and_clears_cross_type_selection() {
+    fn shift_click_toggles() {
         let mut selection = Selection::default();
-        selection.click(fixture(1), true);
-        selection.click(piece(2), true);
-        selection.click(fixture(3), false);
-        assert_eq!(selection.selected(), &[fixture(3)]);
-        assert_eq!(selection.primary(), Some(fixture(3)));
-    }
-
-    #[test]
-    fn shift_click_toggles_without_clearing_the_other_type() {
-        let mut selection = Selection::default();
-        selection.click(fixture(1), true);
-        selection.click(piece(2), true);
-        selection.click(fixture(1), true);
-        assert_eq!(selection.selected(), &[piece(2)]);
-        selection.click(fixture(1), true);
-        assert_eq!(selection.selected(), &[piece(2), fixture(1)]);
-        assert_eq!(selection.primary(), Some(fixture(1)));
+        selection.click("a", true);
+        selection.click("b", true);
+        selection.click("a", true);
+        assert_eq!(selection.selected(), &["b"]);
+        selection.click("a", true);
+        assert_eq!(selection.selected(), &["b", "a"]);
+        assert_eq!(selection.primary(), Some(&"a"));
     }
 
     #[test]
     fn removing_the_primary_reveals_the_previous_insertion() {
         let mut selection = Selection::default();
-        for target in [fixture(1), piece(2), fixture(3)] {
+        for target in ["a", "b", "c"] {
             selection.click(target, true);
         }
-        selection.click(fixture(3), true);
-        assert_eq!(selection.primary(), Some(piece(2)));
+        selection.click("c", true);
+        assert_eq!(selection.primary(), Some(&"b"));
     }
 
     #[test]
     fn marquee_replacement_is_ordered_and_deduplicated() {
         let mut selection = Selection::default();
-        selection.replace([fixture(1), piece(2), fixture(1), fixture(3)]);
-        assert_eq!(selection.selected(), &[fixture(1), piece(2), fixture(3)]);
-        assert_eq!(selection.primary(), Some(fixture(3)));
+        selection.replace(["a", "b", "a", "c"]);
+        assert_eq!(selection.selected(), &["a", "b", "c"]);
+        assert_eq!(selection.primary(), Some(&"c"));
         selection.replace([]);
         assert_eq!(selection.primary(), None);
+    }
+
+    #[test]
+    fn retain_drops_what_the_scene_lost() {
+        let mut selection = Selection::default();
+        selection.replace(["a", "b", "c"]);
+        selection.retain(|t| *t != "b");
+        assert_eq!(selection.selected(), &["a", "c"]);
     }
 }
