@@ -139,6 +139,19 @@ const OPEN: &str = r#"
         app.click(node, { restale: "match" });
         app.frames(4);
     };
+    // Click-select a placed piece at a fraction of the room, or at a window
+    // point. Escape empties the selection now, so a test that wants a piece's
+    // beads or its sheet back selects it the way a person does: by clicking
+    // it. The at-rest room surface routes the press through `Room::pick`.
+    const selectAt = (x, y) => {
+        app.drag({ x, y }, { dx: 1, dy: 0 }, { steps: 2 });
+        app.frames(6);
+    };
+    const select = (fx, fy) => {
+        const room = app.snapshot().find({ role: "card", label: "Stage room" });
+        selectAt(room.bounds.x + room.bounds.width * fx,
+                 room.bounds.y + room.bounds.height * fy);
+    };
     // Sweep a value box to a fraction of its own range. Dragged from a *point*,
     // not from the node: the box writes its value into its label, so a node
     // re-resolved by label mid-drag is one that no longer exists.
@@ -316,11 +329,16 @@ fn a_truss_dropped_on_a_deck_corner_bolts_to_it() {
             throw new Error("no deck corner bead: " + sockets().map((n) => n.label).join(", "));
         }}
         const landing = one("Landing: ");
+        const at = {{ x: bead.bounds.x + bead.bounds.width / 2,
+                      y: bead.bounds.y + bead.bounds.height / 2 }};
         tap(bead);
         // Place mode is sticky and the sheet waits for the hand, so the
-        // relation is read once the stamping has stopped.
+        // relation is read once the stamping has stopped — and escape empties
+        // the selection, so the bolted stick is clicked back into it. It rose
+        // out of the corner, so the click aims a little above the bead.
         app.key("escape");
         app.frames(4);
+        selectAt(at.x, at.y - 40);
         settle("the placement to land", (s) =>
             s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("Edge: ")));
         app.frames(8);
@@ -375,6 +393,8 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
         dropAt(0.7, 0.8);
         app.key("escape");
         app.frames(4);
+        // Escape emptied the selection; the second stick's beads are wanted.
+        select(0.7, 0.8);
 
         // The end that faces the other stick. Both were seated the same way
         // up, so the ray out of one end meets structure and the rest meet
@@ -402,6 +422,7 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
         // stick's end — at rest only the selected stick's beads remain.
         app.key("escape");
         app.frames(4);
+        select(0.7, 0.8);
         tap(socket(measured.socket.slice("Socket ".length)));
         const started = one("Gap: ");
 
@@ -487,6 +508,7 @@ fn trim_lifts_a_free_placement() {
             .some((n) => n.label.startsWith("stage-trim = "));
         app.key("escape");
         app.frames(6);
+        select(0.15, 0.82);
         const gizmo = gizmoModes();
         const resting = scrub("stage-trim");
         // Swept to the middle of the box's own travel rather than to a number
@@ -539,9 +561,13 @@ fn duplicate_and_flip_place_a_copy_on_the_opposite_corner() {
         &format!(
             r#"{OPEN}
         arm("Truss · straight");
-        tap(socket("corner_fl"));
+        const fl = socket("corner_fl");
+        const flAt = {{ x: fl.bounds.x + fl.bounds.width / 2,
+                        y: fl.bounds.y + fl.bounds.height / 2 }};
+        tap(fl);
         app.key("escape");
         app.frames(4);
+        selectAt(flAt.x, flAt.y - 40);
         settle("the first wing", (s) =>
             s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("Edge: ")));
         app.frames(8);
@@ -746,6 +772,7 @@ fn detaching_returns_a_piece_to_unplaced_and_the_open_ends_are_reported() {
         const unresolved = rows().filter((l) => !resting.includes(l));
         press(badge);
 
+        select(0.3, 0.8);
         menu(socket("Truss · straight end_a"), "Detach");
         settle("the piece to leave the room", (s) =>
             s.findAll({{ role: "button" }})
@@ -804,6 +831,7 @@ fn a_socket_facing_nothing_still_builds_a_stub_at_the_length_asked_for() {
         dropAt(0.15, 0.82);
         app.key("escape");
         app.frames(4);
+        select(0.15, 0.82);
 
         tap(socket("Truss · straight end_b"));
         app.frames(6);
@@ -885,6 +913,7 @@ fn detaching_is_not_a_refusal() {
             .map((n) => n.label);
         const beforeBadge = badge();
 
+        select(0.3, 0.8);
         menu(socket("Truss · straight end_a"), "Detach");
         settle("the piece to leave the room", (s) =>
             s.findAll({{ role: "button" }})

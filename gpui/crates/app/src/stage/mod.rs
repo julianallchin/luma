@@ -368,6 +368,11 @@ impl Build {
     /// sitting free on the venue's own floor has axes to drag, so a snapped
     /// piece — or nothing selected at all — is a state the Translate/Rotate
     /// track does not apply to, and a control that does not apply is not drawn.
+    /// See [`Room::pick`]. Ray in the socket layer's world space.
+    pub(crate) fn room_pick(&self, origin: glam::DVec3, dir: glam::DVec3) -> Option<String> {
+        self.room.pick(origin, dir)
+    }
+
     pub(crate) fn gizmo_offered(&self) -> bool {
         self.selected
             .as_ref()
@@ -504,6 +509,10 @@ pub(crate) struct StagePage {
     /// Where the node menu is open, if it is. On the page and not the hand:
     /// a menu is chrome about the selection, not a thing the hand is doing.
     pub(crate) menu: Option<Point<Pixels>>,
+    /// The add-element dialog's exit. The hand decides *whether* the dialog is
+    /// up ([`Hand::Choosing`]); this only buys the card its leaving frames —
+    /// see [`luma_ui::dialog::Popup`].
+    pub(crate) closing: luma_ui::dialog::Popup<()>,
 }
 
 impl Luma {
@@ -529,6 +538,7 @@ impl Luma {
             }),
             focus: cx.focus_handle(),
             menu: None,
+            closing: luma_ui::dialog::Popup::default(),
         };
         self.open_tab(
             target,
@@ -642,9 +652,29 @@ impl Luma {
     }
 
     /// Open the add-element dialog.
+    /// Open the chooser and put the caret in its search field — the button's
+    /// and the `A` key's shared path. Search-first is the whole dialog: it
+    /// opens ready to be typed at.
+    pub(crate) fn stage_open_chooser_focused(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage_open_chooser(cx);
+        if let Some(page) = self.stage_page_mut() {
+            let field = page.library.field().clone();
+            let handle = gpui::Focusable::focus_handle(field.read(cx), cx);
+            window.focus(&handle, cx);
+        }
+    }
+
     pub(crate) fn stage_open_chooser(&mut self, cx: &mut Context<Self>) {
         if let Some(build) = self.build_mut() {
             build.hand = Hand::Choosing(hand::Choosing::default());
+        }
+        if let Some(page) = self.stage_page_mut() {
+            page.closing.finish_close();
+            page.closing.open(());
         }
         // Opened on a fresh question. A dialog that came back holding the last
         // search would be answering one nobody asked — and the field is the
@@ -661,6 +691,12 @@ impl Luma {
     /// The stage tab the dialog belongs to — the active one, because the hand
     /// it arms is the one beside the picture and there is only ever one of
     /// those.
+    /// The stage page wherever it lives, for the shell's per-frame popup
+    /// reap — the exit must finish even if another tab has focus.
+    pub(crate) fn stage_page_for_tick(&mut self) -> Option<&mut StagePage> {
+        self.stage_page_mut()
+    }
+
     fn stage_page_mut(&mut self) -> Option<&mut StagePage> {
         match self.workspace.active_body_mut()? {
             crate::shell::Body::Stage(page) => Some(page),
@@ -708,6 +744,9 @@ impl Luma {
     /// two facts land when they land. What the hand *cannot* do until they do
     /// is commit, which is what [`ConfigureView::ready`] gates.
     pub(crate) fn stage_take(&mut self, what: Holding, cx: &mut Context<Self>) {
+        if let Some(page) = self.stage_page_mut() {
+            page.closing.begin_close(cx);
+        }
         let path = match &what {
             Holding::Fixture { path, .. } => Some(path.clone()),
             _ => None,
@@ -754,14 +793,52 @@ impl Luma {
     }
 
     /// `Escape`: one rung down the flow, then the selection.
+    /// Select whatever placed piece is under `at` — the headless twin of the
+    /// viewport click, writing the same two stores the same way.
+    pub(crate) fn stage_pick_at(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer_mut() else {
+            return;
+        };
+        let Some(ray) = state.stage_pick_ray(at) else {
+            return;
+        };
+        let origin = luma_scene::coords::three_from_world(ray.origin).as_dvec3();
+        let dir = luma_scene::coords::three_from_world(ray.dir)
+            .as_dvec3()
+            .normalize_or_zero();
+        let picked = state
+            .build
+            .as_ref()
+            .and_then(|build| build.room_pick(origin, dir));
+        match picked.clone() {
+            Some(id) => state.select_object(luma_render::frame::EditorObject::StagePiece(id)),
+            None => state.clear_selection(),
+        }
+        if let Some(build) = state.build.as_mut() {
+            build.selected = picked;
+            build.trim_draft = None;
+        }
+        cx.notify();
+    }
+
     pub(crate) fn stage_escape(&mut self, cx: &mut Context<Self>) {
         self.stage_close_menu(cx);
+        let mut was_choosing = false;
         if let Some(build) = self.build_mut() {
-            let was_idle = matches!(build.hand, Hand::Idle);
+            was_choosing = matches!(build.hand, Hand::Choosing(_));
             build.hand = std::mem::take(&mut build.hand).escape();
-            if was_idle {
-                build.selected = None;
-                build.warnings_pinned = false;
+            // Escape empties the hand *and* the head: whatever mode it left,
+            // nothing stays selected — coming out of place mode with the last
+            // selection still lit read as the editor holding a grudge.
+            build.selected = None;
+            build.warnings_pinned = false;
+        }
+        if let Some(state) = self.visualizer_mut() {
+            state.clear_selection();
+        }
+        if was_choosing {
+            if let Some(page) = self.stage_page_mut() {
+                page.closing.begin_close(cx);
             }
         }
         cx.notify();
@@ -1827,8 +1904,8 @@ pub(crate) fn stage_page(
         .inset_0()
         .child(add_button(view, app))
         .children(
-            view.choosing
-                .map(|cursor| chooser(state, view, cursor, app, window)),
+            (view.choosing.is_some() || state.closing.is_closing())
+                .then(|| chooser(state, view, view.choosing.unwrap_or(0), app, window)),
         )
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
         .children(state.menu.as_ref().map(|at| node_menu(*at, app)))
@@ -1863,19 +1940,22 @@ fn add_button(view: &StageView, app: &Entity<Luma>) -> AnyElement {
         .gap(px(6.0))
         .occlude()
         .child(
-            float::popover_card().p(px(4.0)).child(
-                float::btn("Add element", "stage-add")
-                    .id("stage-add")
-                    .child(
-                        Icon::new(IconName::Plus)
-                            .size(px(13.0))
-                            .text_color(ladder::foreground_alpha(0.7)),
-                    )
-                    .on_click(move |_, _, cx| {
-                        open.update(cx, |this, cx| this.stage_open_chooser(cx));
-                    })
-                    .agent_node(Role::Button, "Add element"),
-            ),
+            float::popover_card()
+                .p(px(4.0))
+                .child(
+                    float::btn("Add element", "stage-add")
+                        .id("stage-add")
+                        .child(
+                            Icon::new(IconName::Plus)
+                                .size(px(13.0))
+                                .text_color(ladder::foreground_alpha(0.7)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            open.update(cx, |this, cx| this.stage_open_chooser_focused(window, cx));
+                        })
+                        .agent_node(Role::Button, "Add element"),
+                )
+                .child(float::key_hint_text("A", "")),
         );
     // The solve's complaints, as a count that opens the sheet. A number is all
     // the room has space for; the sentences are what the inspector is for.
@@ -2063,9 +2143,13 @@ fn chooser(
             float::menu_row(RowState::of(false, index == cursor), label.clone())
                 .id(gpui::SharedString::from(format!("choose:{index}")))
                 .child(label.clone())
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     let take = take.clone();
                     app.update(cx, |this, cx| this.stage_take(take, cx));
+                    // The field held focus; the dialog it lived in is gone.
+                    // Unfocused-anywhere is the resting state every stage key
+                    // routes from — a dangling handle would eat them all.
+                    window.blur();
                 })
                 .agent_node(Role::Row, label),
         );
@@ -2085,7 +2169,7 @@ fn chooser(
         // The list is walked from the frame, not from the field: the query is
         // short and edited with backspace, so the arrows belong to the rows —
         // the same call `luma_ui::float`'s pickers make.
-        .on_key_down(move |event, _, cx| {
+        .on_key_down(move |event, window, cx| {
             let step: isize = match event.keystroke.key.as_str() {
                 "down" => 1,
                 "up" => -1,
@@ -2094,6 +2178,7 @@ fn chooser(
                 // out-ranks the window's own Escape.
                 "escape" => {
                     keys.update(cx, |this, cx| this.stage_escape(cx));
+                    window.blur();
                     return;
                 }
                 "enter" => {
@@ -2103,6 +2188,7 @@ fn chooser(
                             this.stage_take(take, cx);
                         }
                     });
+                    window.blur();
                     return;
                 }
                 _ => return,
@@ -2167,10 +2253,11 @@ fn chooser(
         focus: &state.focus,
         focused: true,
         label: "Add element dialog".into(),
-        scrim_dismiss: luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |_, cx| {
+        scrim_dismiss: luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |window, cx| {
             dismiss.update(cx, |this, cx| this.stage_escape(cx));
+            window.blur();
         })),
-        closing: None,
+        closing: state.closing.closing_since(),
     }
     .render(luma_ui::dialog::morph::fixed_card(
         "Add element card",
@@ -2814,6 +2901,22 @@ pub(crate) fn build_layer(
                 });
         }
         layer = layer.child(surface.agent_node(Role::Card, "Stage drop surface"));
+    } else if !wired && matches!(build.hand, Hand::Idle) {
+        // The headless twin of the viewport's click-to-select: with no canvas
+        // there is no listener, so the room at rest is a surface a press can
+        // pick a piece off (`Room::pick`). Behind the beads, like the canvas.
+        let pick = app.clone();
+        layer = layer.child(
+            div()
+                .id("stage-room-surface")
+                .absolute()
+                .inset_0()
+                .on_click(move |event, _, cx| {
+                    let at = event.position();
+                    pick.update(cx, |this, cx| this.stage_pick_at(at, cx));
+                })
+                .agent_node(Role::Card, "Stage room"),
+        );
     }
     // Beads first, then everything that sits over them. gpui hit-tests in paint
     // order, so a control added before a bead is a control the bead swallows —
@@ -2846,7 +2949,11 @@ pub(crate) fn build_layer(
                 .flex()
                 .items_center()
                 .justify_center()
-                .occlude()
+                // Not `occlude`: a bead owns the press, but the wheel is the
+                // camera's everywhere. While placing, beads pepper the whole
+                // structure — full occlusion made zoom dead over exactly the
+                // thing being looked at.
+                .block_mouse_except_scroll()
                 .child(
                     // No border: a hairline around a 5px dot over a dark room
                     // is most of the dot. The latched bead gets a halo instead

@@ -464,6 +464,28 @@ pub(crate) struct Room {
 const COLLISION_CLEARANCE_M: f64 = 0.02;
 
 impl Room {
+    /// The nearest placed piece under a ray, by its collision box.
+    ///
+    /// The headless twin of the viewport's mesh raycast: the harness has no
+    /// rendered frame to pick against, and the boxes the collision test
+    /// already keeps are the same truth at lower resolution. Ray in the socket
+    /// layer's world space.
+    pub(crate) fn pick(&self, origin: glam::DVec3, dir: glam::DVec3) -> Option<String> {
+        let mut best: Option<(f64, &String)> = None;
+        for (node, bounds) in &self.boxes {
+            let Some(pose) = self.poses.get(node) else {
+                continue;
+            };
+            let Some(t) = luma_scene::aabb::ray_obb(origin, dir, *bounds, pose) else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(nearest, _)| t < *nearest) {
+                best = Some((t, node));
+            }
+        }
+        best.map(|(_, node)| node.clone())
+    }
+
     /// Project a solved graph into the search's own shape.
     ///
     /// The root's two synthesized surfaces (`floor` and `rig`) are added by

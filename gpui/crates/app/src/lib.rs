@@ -461,6 +461,18 @@ impl Render for Luma {
             )
             .on_action(cx.listener(|this, _: &keymap::CancelBuild, _, cx| this.stage_escape(cx)))
             .on_action(
+                cx.listener(|this, _: &keymap::AddStageElement, window, cx| {
+                    this.stage_open_chooser_focused(window, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &keymap::FocusStageSelection, _, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    if state.focus_selection() {
+                        cx.notify();
+                    }
+                }
+            }))
+            .on_action(
                 cx.listener(|this, _: &keymap::DeleteStageElement, _, cx| this.stage_delete(cx)),
             )
             .on_action(cx.listener(|this, _: &keymap::GizmoTranslate, _, cx| {

@@ -334,10 +334,15 @@ impl Luma {
             self.workspace.active_body(),
             Some(Body::Stage(page)) if page.menu.is_some()
         );
+        let stage_up = matches!(self.workspace.active_body(), Some(Body::Stage(_)));
         if stage_menu
             || self
                 .build_state()
                 .is_some_and(|build| !matches!(build.hand, crate::stage::hand::Hand::Idle))
+            || (stage_up
+                && self
+                    .build_state()
+                    .is_some_and(|build| build.selected.is_some()))
         {
             self.stage_escape(cx);
             return;
@@ -644,6 +649,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // Reap a dismissed dialog once its out-animation has played, and keep
     // frames coming until it has. Frame-driven rather than timer-driven —
     // see `Popup::tick_close`.
+    if let Some(page) = app.stage_page_for_tick() {
+        page.closing.tick_close();
+    }
     if app.overlay.tick_close() {
         window.request_animation_frame();
     }
