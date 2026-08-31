@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] Runtime grew a `cloud` field and the env-gated real-data tests (visualizer_real_score_window, track_editor_real_budget) kept stale literals — they only compile under `--features pixel --tests`, so nothing caught it until a full test-target check.
 - [2026-08-30] The headless app suite is load-flaky when all 77 run in parallel: three consecutive full runs failed three different test sets (agent_chat, tracks browser, venue_builder), every one green in isolation. A suite that only convicts under contention needs either fewer default threads or per-test verdicts you can trust.
 - [2026-08-30] visualizer_gizmo pixel tests had drifted dead — they clicked role "button" for a Translate/Rotate pair that B4 turned into toggles, and the pixel feature gate means nobody ran them; a role rename needs a grep of the pixel suite too.
 - [2026-08-30] Composite `pending_ops.record_id`s were joined with `:` on an invariant nobody wrote down — only the *last* key column may contain one — and `decode_record_id` returned a short `Vec` that `zip` then silently truncated into a `WHERE` clause matching every row sharing the prefix. A delete that widens itself is not the failure mode you want from a string split.
