@@ -39,7 +39,10 @@ const ARROW_TIP_Y: f32 = -16.0;
 const ARROW_SHAFT_HALF_WIDTH: f32 = 0.3;
 const ARROW_HEAD_HALF_WIDTH: f32 = 1.5;
 
-fn arrow_mask(coord: vec2<f32>) -> f32 {
+fn arrow_mask(world_coord: vec2<f32>) -> f32 {
+    // House = world +y (facade +v, through the data mirror — see coords.rs).
+    // The glyph is authored pointing −y below, so mirror the sample instead.
+    let coord = vec2<f32>(world_coord.x, -world_coord.y);
     let fw = max(fwidth(coord.x), fwidth(coord.y));
     // Shaft: axis-aligned bar on x=0 running downstage.
     let shaft_x = ARROW_SHAFT_HALF_WIDTH - abs(coord.x);
