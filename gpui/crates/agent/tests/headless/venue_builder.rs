@@ -970,7 +970,10 @@ fn an_empty_venue_takes_the_first_piece_from_the_button_alone() {
     // (two sticks that landed close enough bolt end-to-end) or culled at the
     // screen's edge, and either would miscount the pieces.
     let ends = strings(&out, "ends");
-    let placed = ends.iter().filter(|label| label.ends_with("face_-y")).count();
+    let placed = ends
+        .iter()
+        .filter(|label| label.ends_with("face_-y"))
+        .count();
     assert_eq!(
         placed, 2,
         "the second click did not place a second piece: {ends:?}\n{out:#}"
@@ -1025,5 +1028,42 @@ fn a_fixture_dropped_on_the_floor_opens_the_row_popover_where_it_landed() {
     assert!(
         out["previewed"].as_u64().unwrap_or_default() > 0,
         "the row previewed no bodies at all\n{out:#}"
+    );
+}
+
+/// `A` opens the dialog, escape closes it, `A` must open it again — the
+/// escape *binding* outruns the field's own key handler, and a close path
+/// that forgets to reseat focus leaves it on the unmounted field, where every
+/// later keystroke dies silently.
+#[test]
+fn a_escape_a_reopens_the_dialog() {
+    let mut harness = harness("venue-builder-scratch-aesca");
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        const dialogUp = () =>
+            app.snapshot().findAll({{ role: "input", label: "Search elements" }}).length > 0;
+        app.key("a");
+        until("first open", dialogUp);
+        app.key("escape");
+        app.frames(12);
+        const closed = !dialogUp();
+        app.key("a");
+        app.frames(12);
+        const reopened = dialogUp();
+        ({{ closed, reopened }})
+    "#
+        ),
+    );
+    assert_eq!(
+        out["closed"],
+        serde_json::json!(true),
+        "esc did not close\n{out:#}"
+    );
+    assert_eq!(
+        out["reopened"],
+        serde_json::json!(true),
+        "A did not reopen\n{out:#}"
     );
 }

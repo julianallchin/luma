@@ -459,7 +459,16 @@ impl Render for Luma {
             .on_action(
                 cx.listener(|this, _: &keymap::DuplicateSubtree, _, cx| this.stage_duplicate(cx)),
             )
-            .on_action(cx.listener(|this, _: &keymap::CancelBuild, _, cx| this.stage_escape(cx)))
+            .on_action(cx.listener(|this, _: &keymap::CancelBuild, window, cx| {
+                this.stage_escape(cx);
+                // Escape can land while the chooser's field holds focus — the
+                // binding outruns the field's own key handler — and the field
+                // unmounts with the dialog. Focus left on an unmounted element
+                // eats every later keystroke, `A` included, until a click
+                // reseats it; hand the keyboard back to the tab instead.
+                let focus = this.focus.clone();
+                window.focus(&focus, cx);
+            }))
             .on_action(
                 cx.listener(|this, _: &keymap::AddStageElement, window, cx| {
                     this.stage_open_chooser_focused(window, cx);

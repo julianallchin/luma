@@ -181,7 +181,12 @@ impl Build {
     /// Reaches into whichever state is holding it, because the definition may
     /// land after the operator has already carried the fixture onto a face —
     /// the read is async and the hand does not wait for it.
-    pub(crate) fn set_fixture_facts(&mut self, mode: Option<String>, width: f64) {
+    pub(crate) fn set_fixture_facts(
+        &mut self,
+        mode: Option<String>,
+        width: f64,
+        body: Option<[f64; 3]>,
+    ) {
         let what = match &mut self.hand {
             Hand::Placing(held) => &mut held.what,
             Hand::Configuring(row) => &mut row.what,
@@ -190,11 +195,13 @@ impl Build {
         if let Holding::Fixture {
             mode: slot,
             width_m,
+            dims,
             ..
         } = what
         {
             *slot = mode;
             *width_m = width;
+            *dims = body;
         }
     }
 
@@ -301,6 +308,20 @@ impl Build {
                 }
             },
             Holding::Duplicate { root, .. } => self.room.bounds_of(root),
+            // A held light collides by its housing box once the definition
+            // has said how big that is — which is what stops a bar being
+            // pushed through the gaps in a lattice the mesh raycast sees
+            // straight through. Symmetric about the clamp: close enough for a
+            // housing, and it needs no axis convention.
+            Holding::Fixture {
+                dims: Some(dims), ..
+            } => {
+                let half = glam::DVec3::new(dims[0], dims[1].max(dims[2]), dims[2]) * 0.5;
+                Some(luma_scene::aabb::DAabb {
+                    min: -half,
+                    max: half,
+                })
+            }
             Holding::Unplaced { .. } | Holding::Fixture { .. } => None,
         }
     }
@@ -379,6 +400,15 @@ impl Build {
         let node = self.selected.as_ref()?;
 
         let freedom = self.freedom_of(node);
+        let family = self
+            .graph
+            .node(node)
+            .and_then(|n| n.catalog_ref.as_deref())
+            .and_then(luma_scene::catalog::piece)
+            .and_then(|piece| match piece.geometry {
+                luma_scene::catalog::Geometry::Procedural(family) => Some(family),
+                luma_scene::catalog::Geometry::Mesh { .. } => None,
+            });
         let param = |key: &str| {
             self.solved
                 .nodes
@@ -406,35 +436,42 @@ impl Build {
                 Some(key) => param(key),
                 None => 0.0,
             },
-            span: self
-                .solved
-                .nodes
-                .iter()
-                .find(|n| &n.id == node)
-                .and_then(|n| n.params.get("span").copied()),
-            angle: {
-                let hinge = self
-                    .graph
-                    .node(node)
-                    .and_then(|n| n.catalog_ref.as_deref())
-                    .and_then(luma_scene::catalog::piece)
-                    .is_some_and(|piece| {
-                        matches!(
-                            piece.geometry,
-                            luma_scene::catalog::Geometry::Procedural(
-                                luma_scene::catalog::Family::Hinge
-                            )
-                        )
-                    });
-                hinge.then(|| {
-                    self.solved
-                        .nodes
-                        .iter()
-                        .find(|n| &n.id == node)
-                        .and_then(|n| n.params.get("angle").copied())
-                        .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
+            span: {
+                let stored = self
+                    .solved
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == node)
+                    .and_then(|n| n.params.get("span").copied());
+                // A straight truss placed without an explicit span is at the
+                // generator's default — the length is still its to change,
+                // so the row shows the default rather than nothing.
+                stored.or_else(|| {
+                    (family == Some(luma_scene::catalog::Family::Truss))
+                        .then(|| f64::from(luma_render::catalog::DEFAULT_TRUSS_SPAN_M))
                 })
             },
+            angle: (family == Some(luma_scene::catalog::Family::Hinge)).then(|| {
+                self.solved
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == node)
+                    .and_then(|n| n.params.get("angle").copied())
+                    .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
+            }),
+            family,
+            roll_step: self
+                .graph
+                .edge(node)
+                .and_then(|edge| self.room.socket(&edge.parent, &edge.their_socket))
+                .map_or(5.0, |host| match host.roll {
+                    luma_scene::sockets::RollFreedom::Steps(degrees) => degrees,
+                    _ => 5.0,
+                }),
+            joint: self
+                .graph
+                .edge(node)
+                .and_then(|edge| self.room.socket_world(&edge.parent, &edge.their_socket)),
         })
     }
 
@@ -839,8 +876,19 @@ impl Luma {
                 this.update(cx, |this, cx| {
                     let mode = definition.modes.first().map(|mode| mode.name.clone());
                     let width = luma_lib::services::distribute::body_width_m(&definition);
+                    // Millimetres in the file, metres in the room — the same
+                    // fallback the renderer's `dimensions_m` uses, so the
+                    // collision box is the drawn housing's box.
+                    let body = definition
+                        .physical
+                        .as_ref()
+                        .and_then(|p| p.dimensions.as_ref())
+                        .map(|d| {
+                            let axis = |v: f32| if v > 0.0 { f64::from(v) / 1000.0 } else { 0.3 };
+                            [axis(d.width), axis(d.height), axis(d.depth)]
+                        });
                     if let Some(build) = this.build_mut() {
-                        build.set_fixture_facts(mode, width);
+                        build.set_fixture_facts(mode, width, body);
                         build.repreview();
                     }
                     cx.notify();
@@ -1636,6 +1684,9 @@ impl Luma {
 /// One body a held thing would put in the room, ready to be drawn.
 struct GhostBody {
     geometry: luma_render::scene_desc::Geometry,
+    /// The definition key when the body is a light — the overlay draws the
+    /// housing itself and keeps `geometry` as the not-yet-loaded fallback.
+    fixture: Option<String>,
     world: glam::DMat4,
     scale: f32,
 }
@@ -1672,6 +1723,7 @@ impl Build {
             } => geometry_with(catalog_ref, params)
                 .map(|geometry| GhostBody {
                     geometry,
+                    fixture: None,
                     world: landed.world,
                     scale: 1.0,
                 })
@@ -1685,6 +1737,10 @@ impl Build {
                 geometry: Geometry::Procedural(luma_render::catalog::default_params(
                     luma_scene::catalog::Family::Corner,
                 )),
+                fixture: match what {
+                    Holding::Fixture { path, .. } => Some(path.clone()),
+                    _ => None,
+                },
                 world: landed.world,
                 scale: STATION_GHOST_SCALE,
             }],
@@ -1754,6 +1810,7 @@ impl Build {
                     });
                 Some(GhostBody {
                     geometry,
+                    fixture: None,
                     world: pose.world,
                     scale: if pose.catalog_ref.is_some() {
                         1.0
@@ -1840,6 +1897,21 @@ pub(crate) struct SelectedView {
     pub(crate) span: Option<f64>,
     /// A hinge's deflection, in degrees — its own "what it is" row.
     pub(crate) angle: Option<f64>,
+    /// The generator family, for the pieces that are generated. What gates
+    /// the rows only structure earns: trim is "how high it flies", and only
+    /// the truss family flies — a guardrail offered a trim scrub is a
+    /// guardrail the card claims can hover.
+    pub(crate) family: Option<luma_scene::catalog::Family>,
+    /// The turn this joint's roll lands on, in degrees — `Steps(90)` for a
+    /// corner on a bolt circle, `Steps(5)` for a rail at its post, a fine
+    /// default for a free clamp. What the rotate buttons step by and the yaw
+    /// scrub snaps to, read off the joint rather than restated per control.
+    pub(crate) roll_step: f64,
+    /// Where the joint is, in the socket layer's world — the host socket's
+    /// position. Rotation happens *here*, so this is where the rotate
+    /// controls sit; drawn anywhere else they claim a pivot the solver does
+    /// not use.
+    pub(crate) joint: Option<glam::DVec3>,
 }
 
 impl Luma {
@@ -2076,6 +2148,7 @@ pub(crate) fn chooser_rows(view: &StageView, library: &FixtureLibrary) -> Vec<Ch
                 label,
                 mode: None,
                 width_m: DEFAULT_FIXTURE_WIDTH_M,
+                dims: None,
             },
         }
     }));
@@ -2525,6 +2598,15 @@ fn node_menu(menu_at: &NodeMenuAt, app: &Entity<Luma>) -> AnyElement {
 /// picture's edges. Beside the piece, never centred on it: the card is a
 /// caption, and a caption over its subject is a cover.
 const SELECTED_CARD_W: f32 = 190.0;
+/// Half the rotate pair's width, for centring it on the joint.
+const ROTATE_PAIR_HALF: f32 = 28.0;
+/// How far below the joint the rotate pair hangs, in pixels — clear of the
+/// bead drawn on the same socket.
+const ROTATE_PAIR_GAP: f32 = 14.0;
+/// A control on the selection card fits inside it: the card's width less its
+/// own padding. [`CONTROL_WIDTH`] belongs to the configure popover, which is
+/// wider — a scrub cut to that size overhung this card by a third.
+const SELECTED_CARD_CONTROL_W: f32 = SELECTED_CARD_W - 16.0;
 const SELECTED_CARD_GAP: f32 = 26.0;
 const SELECTED_CARD_CLEAR: f32 = 170.0;
 
@@ -3000,18 +3082,24 @@ pub(crate) fn build_layer(
                 );
                 let editable = selected.freedom.param().map_or_else(
                     || {
-                        (selected.freedom == Freedom::Free).then_some((
-                            "trim",
-                            selected.trim,
-                            MAX_TRIM_M,
-                        ))
+                        // Trim is "how high it flies", and only the truss
+                        // family flies — a free-standing guardrail or speaker
+                        // offered a trim scrub is a card claiming it can hover.
+                        (selected.freedom == Freedom::Free && selected.family.is_some())
+                            .then_some(("trim", selected.trim, MAX_TRIM_M))
                     },
                     |key| Some((key, selected.param, if key == "u" { 1.0 } else { 360.0 })),
                 );
                 if let Some((key, value, max)) = editable {
                     let app = app.clone();
                     let node = selected.node.clone();
-                    let step = if key == "yaw" { 5.0 } else { 0.05 };
+                    // The joint says what a turn lands on: 90° at a bolt
+                    // circle, 5° at a rail post.
+                    let step = if key == "yaw" {
+                        selected.roll_step
+                    } else {
+                        0.05
+                    };
                     card = card.child(float::field_row(
                         axis_title(key),
                         float::scrub(
@@ -3020,7 +3108,7 @@ pub(crate) fn build_layer(
                             0.0,
                             max,
                             step,
-                            CONTROL_WIDTH,
+                            SELECTED_CARD_CONTROL_W,
                             move |value, _, cx| {
                                 let node = node.clone();
                                 app.update(cx, |this, cx| {
@@ -3047,7 +3135,7 @@ pub(crate) fn build_layer(
                             0.0,
                             180.0,
                             5.0,
-                            CONTROL_WIDTH,
+                            SELECTED_CARD_CONTROL_W,
                             move |value, _, cx| {
                                 let node = node.clone();
                                 app.update(cx, |this, cx| {
@@ -3068,7 +3156,7 @@ pub(crate) fn build_layer(
                             hand::LENGTH_STEP_M,
                             MAX_RUN_M,
                             hand::LENGTH_STEP_M,
-                            CONTROL_WIDTH,
+                            SELECTED_CARD_CONTROL_W,
                             move |value, _, cx| {
                                 let node = node.clone();
                                 app.update(cx, |this, cx| {
@@ -3096,6 +3184,57 @@ pub(crate) fn build_layer(
                         .child(card)
                         .agent_node(Role::Card, "Selection card"),
                 );
+            }
+            // The joint's turn, at the joint. A rolled piece rotates about
+            // the socket it is mated by, so the two step buttons sit on that
+            // socket — a control drawn anywhere else claims a pivot the
+            // solver does not use. The step is the joint's own: a quarter at
+            // a bolt circle, five degrees at a rail post.
+            if selected.freedom == Freedom::Roll {
+                if let Some(at) = selected
+                    .joint
+                    .and_then(|joint| project(camera, size, joint))
+                {
+                    let mut pair = div()
+                        .absolute()
+                        .left(px(
+                            (f32::from(at.x) - ROTATE_PAIR_HALF).clamp(INSET, size.0 - INSET)
+                        ))
+                        .top(px((f32::from(at.y) + ROTATE_PAIR_GAP).clamp(
+                            crate::visualizer::HEADER_HEIGHT + INSET,
+                            size.1 - INSET,
+                        )))
+                        .flex()
+                        .flex_row()
+                        .gap(px(6.0))
+                        .occlude();
+                    for (glyph, direction) in [("⟲", 1.0), ("⟳", -1.0)] {
+                        let app = app.clone();
+                        let node = selected.node.clone();
+                        let turned = selected.param + direction * selected.roll_step;
+                        pair = pair.child(
+                            float::key_cap_pressable(float::key_cap())
+                                .child(glyph)
+                                .id(gpui::ElementId::Name(
+                                    format!("stage-rotate-{direction}").into(),
+                                ))
+                                .on_click(move |_, _, cx| {
+                                    let node = node.clone();
+                                    app.update(cx, |this, cx| {
+                                        this.stage_set_param(&node, "yaw", turned.to_radians(), cx);
+                                    });
+                                })
+                                .agent_node(
+                                    Role::Button,
+                                    format!(
+                                        "Rotate {}",
+                                        if direction > 0.0 { "ccw" } else { "cw" }
+                                    ),
+                                ),
+                        );
+                    }
+                    layer = layer.child(pair);
+                }
             }
         }
     }
@@ -3289,6 +3428,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                 let (pos, rot) = luma_scene::coords::data_pose_of_d(body.world);
                 out.ghosts.push(Ghost {
                     geometry: body.geometry,
+                    fixture: body.fixture,
                     pos: pos.map(|v| v as f32),
                     rot: rot.map(|v| v as f32),
                     scale: body.scale,
@@ -3308,6 +3448,10 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                     geometry: luma_render::scene_desc::Geometry::Procedural(
                         luma_render::catalog::default_params(luma_scene::catalog::Family::Corner),
                     ),
+                    fixture: match &row.what {
+                        Holding::Fixture { path, .. } => Some(path.clone()),
+                        _ => None,
+                    },
                     pos: pos.map(|v| v as f32),
                     rot: rot.map(|v| v as f32),
                     scale: STATION_GHOST_SCALE,
@@ -3348,6 +3492,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                     let (pos, rot) = luma_scene::coords::data_pose_of_d(world);
                     out.ghosts.push(Ghost {
                         geometry: luma_render::scene_desc::Geometry::Procedural(params),
+                        fixture: None,
                         pos: pos.map(|v| v as f32),
                         rot: rot.map(|v| v as f32),
                         scale: 1.0,
