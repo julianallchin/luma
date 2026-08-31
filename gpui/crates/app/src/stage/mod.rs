@@ -324,7 +324,8 @@ impl Build {
                 params,
                 ..
             } => match luma_scene::catalog::piece(catalog_ref)?.geometry {
-                luma_scene::catalog::Geometry::Mesh { .. } => {
+                luma_scene::catalog::Geometry::Mesh { .. }
+                | luma_scene::catalog::Geometry::Assembly(_) => {
                     self.sockets.catalog().bounds(catalog_ref)
                 }
                 luma_scene::catalog::Geometry::Procedural(family) => {
@@ -487,7 +488,8 @@ impl Build {
             .and_then(luma_scene::catalog::piece)
             .and_then(|piece| match piece.geometry {
                 luma_scene::catalog::Geometry::Procedural(family) => Some(family),
-                luma_scene::catalog::Geometry::Mesh { .. } => None,
+                luma_scene::catalog::Geometry::Mesh { .. }
+                | luma_scene::catalog::Geometry::Assembly(_) => None,
             });
         let param = |key: &str| {
             self.solved
@@ -1606,7 +1608,14 @@ impl Luma {
         let data = build.graph.node(node)?;
         let held_sockets = build.sockets.sockets(data);
         let held = held_sockets.iter().find(|s| s.name == edge.my_socket)?;
-        let seat = luma_scene::venue::invert_placement(world, parent_world, host, held, data.kind);
+        let seat = luma_scene::venue::invert_placement(
+            world,
+            parent_world,
+            host,
+            held,
+            data.kind,
+            build.sockets.bounds(data),
+        );
         Some(BTreeMap::from([
             ("u".to_string(), seat.u),
             ("v".to_string(), seat.v),
@@ -3767,11 +3776,14 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                 };
                 let held = luma_render::catalog::procedural_sockets(params);
                 if let Some(end) = held.iter().find(|s| s.name == "end_a") {
+                    // A run bolts end to end: the host is a fitting, not an
+                    // extent, so there is no footprint for `bounds` to centre.
                     let world = luma_scene::venue::place_on(
                         pose,
                         socket,
                         end,
                         NodeKind::Run,
+                        None,
                         luma_scene::venue::SurfacePlacement::FLUSH,
                     );
                     let (pos, rot) = luma_scene::coords::data_pose_of_d(world);
@@ -3846,6 +3858,9 @@ fn geometry_of(catalog_ref: &str) -> Option<luma_render::scene_desc::Geometry> {
         luma_scene::catalog::Geometry::Procedural(family) => Some(Geometry::Procedural(
             luma_render::catalog::default_params(family),
         )),
+        luma_scene::catalog::Geometry::Assembly(_) => {
+            Some(Geometry::Assembly(catalog_ref.to_string()))
+        }
     }
 }
 
@@ -3861,6 +3876,11 @@ fn geometry_with(
         luma_scene::catalog::Geometry::Procedural(family) => Some(Geometry::Procedural(
             luma_render::catalog::node_params(family, &params_of(params)),
         )),
+        // An assembly has no parameters to hold at, so the palette default and
+        // the held shape are the same shape.
+        luma_scene::catalog::Geometry::Assembly(_) => {
+            Some(Geometry::Assembly(catalog_ref.to_string()))
+        }
     }
 }
 

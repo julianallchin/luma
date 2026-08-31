@@ -15,7 +15,7 @@
 //!
 //! Run `cargo test -p luma-scene` after editing the catalog.
 
-use luma_scene::catalog::{pieces, Geometry, PaletteGroup, Piece};
+use luma_scene::catalog::{pieces, Geometry, PaletteGroup, Piece, Rest};
 use luma_scene::sockets::{BboxAnchor, RollFreedom, SocketDef, SocketKind, SocketType};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -84,6 +84,21 @@ fn geometry(g: Geometry) -> Value {
         Geometry::Procedural(family) => {
             json!({ "kind": "procedural", "family": family.as_str() })
         }
+        Geometry::Assembly(parts) => json!({
+            "kind": "assembly",
+            "parts": parts
+                .iter()
+                .map(|part| json!({
+                    "mesh": part.mesh,
+                    "quarterTurns": part.quarter_turns,
+                    "plan": [part.plan.x, part.plan.y],
+                    "rest": match part.rest {
+                        Rest::Ground => "ground",
+                        Rest::Deck => "deck",
+                    },
+                }))
+                .collect::<Vec<_>>(),
+        }),
     }
 }
 
@@ -168,7 +183,21 @@ export type PaletteGroup ={palette_groups};
 /** Where a piece's shape comes from. Procedural families carry no parameters here. */
 export type Geometry =
 	| {{ kind: "mesh"; path: string }}
-	| {{ kind: "procedural"; family: "truss" | "corner" | "hinge" }};
+	| {{ kind: "procedural"; family: "truss" | "corner" | "hinge" }}
+	| {{ kind: "assembly"; parts: AssemblyPart[] }};
+
+/**
+ * One mesh inside an assembly. `plan` is `[across, depth]` in metres from the
+ * assembly's centre; a part's *height* is never authored — it stands either on
+ * the ground or on the top of the assembly's ground part, whose measured box
+ * supplies the number.
+ */
+export type AssemblyPart = {{
+	mesh: string;
+	quarterTurns: number;
+	plan: [number, number];
+	rest: "ground" | "deck";
+}};
 
 export interface CatalogPiece {{
 	id: string;

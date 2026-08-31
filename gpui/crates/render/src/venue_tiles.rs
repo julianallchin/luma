@@ -201,7 +201,7 @@ impl Mark {
                 glyph: CORNER,
                 footprint: Footprint::Point(origin_of(pose)),
             },
-            Geometry::Mesh { .. } => {
+            Geometry::Mesh { .. } | Geometry::Assembly(_) => {
                 let hull = hull_of(pose, catalog.bounds(catalog_ref));
                 let (layer, glyph) = mesh_glyph(piece.kind, &hull);
                 Self {
@@ -265,6 +265,7 @@ fn mesh_glyph(kind: PieceKind, hull: &[DVec2]) -> (Layer, char) {
         PieceKind::Speaker => (Layer::Equipment, 'S'),
         PieceKind::Cdj => (Layer::Equipment, 'C'),
         PieceKind::Mixer => (Layer::Equipment, 'M'),
+        PieceKind::DjBooth => (Layer::Equipment, 'B'),
         PieceKind::Stand => (Layer::Equipment, 't'),
         PieceKind::CableCover => (Layer::Equipment, '_'),
     }

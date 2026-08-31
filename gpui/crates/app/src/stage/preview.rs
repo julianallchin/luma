@@ -19,9 +19,10 @@ use luma_render::scene_desc::{CameraPose, Editor, Geometry, Piece, RenderSetting
 pub(crate) fn thumbnail_path(catalog_ref: &str) -> PathBuf {
     std::env::temp_dir()
         // Versioned: the files are content-addressed by catalog ref alone, so
-        // a style change (the matte, the framing) has to move the whole
+        // a style change (the matte, the framing) or a new geometry kind has
+        // to move the whole
         // directory or every machine keeps its old opaque renders forever.
-        .join("luma-piece-previews-v2")
+        .join("luma-piece-previews-v3")
         .join(format!("{}.png", catalog_ref.replace(['/', ' '], "_")))
 }
 
@@ -66,6 +67,7 @@ fn render_all() {
             luma_scene::catalog::Geometry::Procedural(family) => {
                 Geometry::Procedural(luma_render::catalog::default_params(family))
             }
+            luma_scene::catalog::Geometry::Assembly(_) => Geometry::Assembly(piece.id.to_string()),
         };
         // The piece's own extent, for a camera that frames anything from a
         // cable ramp to a three-metre stick the same way.
@@ -77,6 +79,12 @@ fn render_all() {
             Geometry::Procedural(params) => {
                 let bounds = luma_render::catalog::procedural_bounds(*params);
                 (bounds.min.as_vec3(), bounds.max.as_vec3())
+            }
+            Geometry::Assembly(_) => {
+                match luma_render::catalog::assembly_bounds(geometry.parts(), &mut library) {
+                    Ok(bounds) => (bounds.min.as_vec3(), bounds.max.as_vec3()),
+                    Err(_) => continue,
+                }
             }
         };
         let centre = (lo + hi) * 0.5;

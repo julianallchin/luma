@@ -546,12 +546,29 @@ pub enum Geometry {
     MeshPath(String),
     /// A generated family and its parameters.
     Procedural(Procedural),
+    /// Several authored meshes bolted together, named by the catalog id of the
+    /// assembly that lists them. A *reference*, like `MeshPath`, rather than an
+    /// inlined part list: the parts are catalog-fixed, not per-node, so
+    /// copying them into every scene description would be a second copy to
+    /// keep true.
+    Assembly(String),
 }
 
 impl Geometry {
     /// An authored mesh at a path under `resources/meshes/`.
     pub fn mesh(path: impl Into<String>) -> Self {
         Self::MeshPath(path.into())
+    }
+
+    /// The parts of an assembly, or an empty slice for anything else.
+    #[must_use]
+    pub fn parts(&self) -> &'static [luma_scene::catalog::Part] {
+        match self {
+            Self::Assembly(id) => {
+                luma_scene::catalog::piece(id).map_or(&[], |piece| piece.geometry.parts())
+            }
+            _ => &[],
+        }
     }
 }
 
@@ -704,6 +721,13 @@ impl Piece {
         match &self.geometry {
             Geometry::MeshPath(_) => self.scale.abs().max(0.25),
             Geometry::Procedural(p) => self.scale.abs() * p.half_extent_m(),
+            // An assembly's parts are catalog-fixed, so unlike a lone mesh its
+            // real size is knowable without loading anything: the widest part
+            // offset plus a part's own reach. A booth framed as a 0.25 m box
+            // would sit half out of shot.
+            Geometry::Assembly(_) => {
+                self.scale.abs() * crate::catalog::assembly_half_extent(self.geometry.parts())
+            }
         }
     }
 }

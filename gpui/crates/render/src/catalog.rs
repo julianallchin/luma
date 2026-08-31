@@ -14,9 +14,9 @@
 use crate::assets::Library;
 use crate::scene_desc::Procedural;
 use crate::truss::{Corner, Face, FaceSet};
-use glam::DVec3;
+use glam::{DVec3, Mat4, Vec3};
 use luma_scene::aabb::DAabb;
-use luma_scene::catalog::{pieces, Family, Geometry, Piece};
+use luma_scene::catalog::{pieces, Family, Geometry, Part, Piece, Rest};
 use luma_scene::snap::SocketLookup;
 use luma_scene::sockets::{resolve_socket, ResolvedSocket, SocketType};
 use luma_scene::venue::{Node, NodeKind, NodeSockets, Params};
@@ -225,6 +225,147 @@ pub fn face_socket_name(face: Face) -> String {
     format!("face_{}", face.as_str())
 }
 
+// ---------------------------------------------------------------------------
+// Assemblies
+// ---------------------------------------------------------------------------
+
+/// One part of an assembly, resolved: which GLB, and where it stands in the
+/// assembly's own local space.
+#[derive(Clone, Debug)]
+pub struct Placement {
+    /// Mesh path under the mesh root.
+    pub mesh: &'static str,
+    /// Part-local to assembly-local.
+    pub transform: Mat4,
+}
+
+/// Lay an assembly out against the GLBs its parts name.
+///
+/// The **one** place the layout rule lives, so a booth's draws, its collision
+/// box, its selection cage and its palette thumbnail cannot disagree about
+/// where a player sits. Each part is turned, then slid until its bbox centre
+/// lands on its authored plan offset and its underside lands on the surface it
+/// rests on — the ground at `y = 0`, or the measured top of the ground part.
+///
+/// # Errors
+/// Propagates the asset library's failure to load a part's GLB.
+///
+/// # Panics
+/// Debug-only, on an assembly with no [`Rest::Ground`] part: the deck height
+/// every other part stands on would have nothing to come from.
+pub fn assembly_placements(
+    parts: &[Part],
+    library: &mut Library,
+) -> anyhow::Result<Vec<Placement>> {
+    // Measured, turned bounds per part, in the order the parts are authored.
+    let mut turned = Vec::with_capacity(parts.len());
+    for part in parts {
+        let (lo, hi) = library.get(part.mesh)?.bounds();
+        turned.push(turn_bounds(lo, hi, part.quarter_turns));
+    }
+    let deck_top = parts
+        .iter()
+        .zip(&turned)
+        .find(|(p, _)| p.rest == Rest::Ground)
+        .map_or(0.0, |(_, (lo, hi))| hi.y - lo.y);
+    debug_assert!(
+        parts.iter().any(|p| p.rest == Rest::Ground),
+        "an assembly needs a part on the ground for the rest to stand on"
+    );
+
+    Ok(parts
+        .iter()
+        .zip(&turned)
+        .map(|(part, (lo, hi))| {
+            let base = match part.rest {
+                Rest::Ground => 0.0,
+                Rest::Deck => deck_top,
+            };
+            let centre = (*lo + *hi) * 0.5;
+            let slide = Vec3::new(
+                part.plan.x as f32 - centre.x,
+                base - lo.y,
+                part.plan.y as f32 - centre.z,
+            );
+            Placement {
+                mesh: part.mesh,
+                transform: Mat4::from_translation(slide)
+                    * Mat4::from_rotation_y(quarter_turn_radians(part.quarter_turns)),
+            }
+        })
+        .collect())
+}
+
+/// An assembly's own local bounds: the union of its laid-out parts, which is
+/// the box the operator sees and therefore the box it collides by. Measuring
+/// only the deck was the old floating-gear bug in the other direction.
+///
+/// # Errors
+/// As [`assembly_placements`].
+pub fn assembly_bounds(parts: &[Part], library: &mut Library) -> anyhow::Result<DAabb> {
+    let placements = assembly_placements(parts, library)?;
+    let mut lo = Vec3::splat(f32::INFINITY);
+    let mut hi = Vec3::splat(f32::NEG_INFINITY);
+    for (part, placement) in parts.iter().zip(&placements) {
+        let (plo, phi) = library.get(part.mesh)?.bounds();
+        for corner in corners(plo, phi) {
+            let p = placement.transform.transform_point3(corner);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+    }
+    Ok(DAabb::new(lo.as_dvec3(), hi.as_dvec3()))
+}
+
+/// How far an assembly reaches from its own origin, from the authored plan
+/// offsets alone.
+///
+/// Deliberately not the measured union: [`crate::scene_desc::Piece`] cannot
+/// open a GLB, which is the same reason a lone mesh falls back to its scale
+/// there. Half a metre stands in for the outermost part's own half-width, so
+/// the answer errs wide — a camera that frames a little too much beats one
+/// that cuts the booth in half.
+#[must_use]
+pub fn assembly_half_extent(parts: &[Part]) -> f32 {
+    const PART_REACH_M: f32 = 0.5;
+    parts
+        .iter()
+        .map(|p| p.plan.abs().max_element() as f32)
+        .fold(0.0_f32, f32::max)
+        + PART_REACH_M
+}
+
+fn quarter_turn_radians(quarter_turns: i8) -> f32 {
+    f32::from(quarter_turns) * std::f32::consts::FRAC_PI_2
+}
+
+/// A local bbox after `quarter_turns` about `+Y`. Quarter turns keep a box
+/// axis-aligned, so this stays a box rather than widening to a hull.
+fn turn_bounds(lo: Vec3, hi: Vec3, quarter_turns: i8) -> (Vec3, Vec3) {
+    let turn = Mat4::from_rotation_y(quarter_turn_radians(quarter_turns));
+    let mut out_lo = Vec3::splat(f32::INFINITY);
+    let mut out_hi = Vec3::splat(f32::NEG_INFINITY);
+    for corner in corners(lo, hi) {
+        let p = turn.transform_point3(corner);
+        out_lo = out_lo.min(p);
+        out_hi = out_hi.max(p);
+    }
+    (out_lo, out_hi)
+}
+
+fn corners(lo: Vec3, hi: Vec3) -> [Vec3; 8] {
+    [
+        Vec3::new(lo.x, lo.y, lo.z),
+        Vec3::new(hi.x, lo.y, lo.z),
+        Vec3::new(lo.x, hi.y, lo.z),
+        Vec3::new(hi.x, hi.y, lo.z),
+        Vec3::new(lo.x, lo.y, hi.z),
+        Vec3::new(hi.x, lo.y, hi.z),
+        Vec3::new(lo.x, hi.y, hi.z),
+        Vec3::new(hi.x, hi.y, hi.z),
+    ]
+}
+
 /// Every catalog piece's sockets, resolved once.
 ///
 /// Eager rather than lazy because [`SocketLookup`] hands out borrowed slices:
@@ -283,9 +424,17 @@ fn resolve(
 ) -> anyhow::Result<(Vec<ResolvedSocket>, Option<DAabb>)> {
     match piece.geometry {
         Geometry::Procedural(family) => Ok((procedural_sockets(default_params(family)), None)),
-        Geometry::Mesh { path } => {
-            let (lo, hi) = library.get(path)?.bounds();
-            let bbox = DAabb::new(lo.as_dvec3(), hi.as_dvec3());
+        // Both measured, and measured the same way: an assembly's box is the
+        // union of its laid-out parts, so its authored sockets anchor against
+        // what the operator sees rather than against its biggest part.
+        Geometry::Mesh { .. } | Geometry::Assembly(_) => {
+            let bbox = if let Geometry::Assembly(parts) = piece.geometry {
+                assembly_bounds(parts, library)?
+            } else {
+                let (lo, hi) = library.get(piece.id)?.bounds();
+                DAabb::new(lo.as_dvec3(), hi.as_dvec3())
+            };
+            let path = piece.id;
             anyhow::ensure!(
                 bbox.size().max_element() > 0.0,
                 "{path}: measured an empty bounding box"
@@ -407,6 +556,23 @@ impl NodeSockets for VenueSockets {
                 .is_some_and(|id| luma_scene::catalog::piece(id).is_some())
     }
 
+    /// The catalog's measurement for a mesh or an assembly, the generator's
+    /// arithmetic for a procedural piece at this node's own parameters. A
+    /// fixture and the root have no box: a fixture's `catalog_ref` is a patch
+    /// row, and the root is the room's frame rather than a thing in it.
+    fn bounds(&self, node: &Node) -> Option<DAabb> {
+        if node.kind == NodeKind::Fixture {
+            return None;
+        }
+        let catalog_ref = node.catalog_ref.as_deref()?;
+        match luma_scene::catalog::piece(catalog_ref)?.geometry {
+            Geometry::Mesh { .. } | Geometry::Assembly(_) => self.catalog.bounds(catalog_ref),
+            Geometry::Procedural(family) => {
+                Some(procedural_bounds(node_params(family, &node.params)))
+            }
+        }
+    }
+
     fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
         let Some(catalog_ref) = node.catalog_ref.as_deref() else {
             return Vec::new();
@@ -420,7 +586,11 @@ impl NodeSockets for VenueSockets {
             Some(Geometry::Procedural(family)) => {
                 procedural_sockets(node_params(family, &node.params))
             }
-            Some(Geometry::Mesh { .. }) => self.catalog.sockets(catalog_ref).to_vec(),
+            // Both measured: an assembly's authored sockets resolve against
+            // its union box exactly as a lone mesh's resolve against its own.
+            Some(Geometry::Mesh { .. } | Geometry::Assembly(_)) => {
+                self.catalog.sockets(catalog_ref).to_vec()
+            }
             // A venue outlives a catalog: the four ripped truss GLBs left the
             // palette, and rows naming them did not. Such a piece keeps an
             // origin to hang by, so its pose survives; the resolver reports it
@@ -495,7 +665,7 @@ mod tests {
                             + mount_faces(params).len()
                             + footings(params).len()
                     }
-                    Geometry::Mesh { .. } => unreachable!(),
+                    Geometry::Mesh { .. } | Geometry::Assembly(_) => unreachable!(),
                 }
             } else {
                 piece.sockets.len()

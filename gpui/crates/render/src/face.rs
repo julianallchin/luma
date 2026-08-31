@@ -76,13 +76,15 @@ fn extent_along(sockets: &VenueSockets, node: &Node, tangent: DVec3) -> Feature 
         Some(Geometry::Procedural(family)) => {
             procedural_feature(node_params(family, &node.params), tangent)
         }
-        Some(Geometry::Mesh { .. }) => match sockets.catalog().bounds(catalog_ref) {
-            Some(bbox) => {
-                let size = bbox.size();
-                Feature::bounded(project(size, tangent), None)
+        Some(Geometry::Mesh { .. } | Geometry::Assembly(_)) => {
+            match sockets.catalog().bounds(catalog_ref) {
+                Some(bbox) => {
+                    let size = bbox.size();
+                    Feature::bounded(project(size, tangent), None)
+                }
+                None => Feature::unbounded(),
             }
-            None => Feature::unbounded(),
-        },
+        }
         None => Feature::unbounded(),
     }
 }

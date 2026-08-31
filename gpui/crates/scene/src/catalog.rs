@@ -8,7 +8,7 @@
 //! `tests/binding.rs`; editing that file by hand is a merge conflict waiting to
 //! happen.
 //!
-//! # Two ways a piece has geometry
+//! # Three ways a piece has geometry
 //!
 //! - **A GLB.** Decks, speakers, CDJs, rails, covers — real products, ripped
 //!   from real models. Their sockets are *authored*, against the mesh's
@@ -20,13 +20,18 @@
 //!   procedural pieces carry **no** [`SocketDef`]s: `luma_render::catalog`
 //!   turns their end frames into sockets directly.
 //!
+//! - **An assembly.** Several GLBs bolted together at fixed relative places
+//!   and handled as one piece — the DJ booth is a deck with a mixer and four
+//!   players standing on it. Its parts are *placements*, not a scene graph:
+//!   see [`Part`] for why the vocabulary stops where it does.
+//!
 //! The four ripped truss GLBs the palette used to carry are gone from here for
 //! that reason (the files stay on disk; render goldens still compare against
 //! them). They were imperial products — 1.22 m and 1.83 m spans, a Q30 at
 //! 254 mm — and only mated each other by luck of modelling.
 
 use crate::sockets::{BboxAnchor, SocketDef, SocketMode, SocketType};
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 use std::sync::LazyLock;
 
 // ---------------------------------------------------------------------------
@@ -62,6 +67,7 @@ pub enum PieceKind {
     Speaker,
     Cdj,
     Mixer,
+    DjBooth,
     Guardrail,
     Stand,
     CableCover,
@@ -75,6 +81,7 @@ impl PieceKind {
             PieceKind::Speaker => "speaker",
             PieceKind::Cdj => "cdj",
             PieceKind::Mixer => "mixer",
+            PieceKind::DjBooth => "dj_booth",
             PieceKind::Guardrail => "guardrail",
             PieceKind::Stand => "stand",
             PieceKind::CableCover => "cable_cover",
@@ -114,7 +121,7 @@ impl PaletteGroup {
 }
 
 /// Where a piece's shape comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Geometry {
     /// A bundled GLB, at `path` relative to the mesh root. Always equal to the
     /// piece's [`Piece::id`] — see `mesh_id_is_its_path`.
@@ -126,6 +133,9 @@ pub enum Geometry {
     /// to keep in step. The catalog names the family; `luma_render::catalog`
     /// supplies the palette default and the geometry.
     Procedural(Family),
+    /// Several bundled GLBs at fixed relative places, placed and selected as
+    /// one. See [`Part`].
+    Assembly(&'static [Part]),
 }
 
 /// The generated piece families. Every one is truss today, and every one mates
@@ -156,6 +166,7 @@ impl Geometry {
         match self {
             Geometry::Mesh { .. } => "mesh",
             Geometry::Procedural(_) => "procedural",
+            Geometry::Assembly(_) => "assembly",
         }
     }
 
@@ -163,6 +174,16 @@ impl Geometry {
     /// therefore whether [`Piece::sockets`] is empty by design.
     pub fn is_procedural(self) -> bool {
         matches!(self, Geometry::Procedural(_))
+    }
+
+    /// The parts of an assembly, or an empty slice for a piece that is one
+    /// shape.
+    #[must_use]
+    pub fn parts(self) -> &'static [Part] {
+        match self {
+            Geometry::Assembly(parts) => parts,
+            _ => &[],
+        }
     }
 }
 
@@ -179,6 +200,107 @@ pub struct Piece {
     /// whose sockets come from the generator's end frames instead.
     pub sockets: Vec<SocketDef>,
 }
+
+// ---------------------------------------------------------------------------
+// Assemblies
+// ---------------------------------------------------------------------------
+
+/// Which surface a [`Part`] rests its underside on.
+///
+/// Two values, and deliberately not a parent index: an assembly here is a
+/// thing standing on a thing, and a general nesting vocabulary would be a
+/// scene graph invented for one piece. The second assembly that genuinely
+/// stacks three deep is the one that earns more.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rest {
+    /// The floor the assembly stands on: the part's bbox bottom at `y = 0`.
+    Ground,
+    /// The top of the assembly's [`Rest::Ground`] part — the tabletop.
+    Deck,
+}
+
+/// One GLB inside an [`Geometry::Assembly`], and where it sits.
+///
+/// **No heights.** A part says which surface it stands on, never how high that
+/// surface is: the deck's own measured bbox supplies that, exactly as an
+/// authored socket takes its anchor from measurement rather than a transcribed
+/// number. Transcribing 1.01 m here would be the same bug as authoring a
+/// socket at a literal coordinate — right until somebody re-exports the mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Part {
+    /// Mesh path relative to the mesh root.
+    pub mesh: &'static str,
+    /// Quarter-turns about `+Y` applied to the part before placement, for a
+    /// part whose mesh is modelled across the axis the assembly runs along.
+    pub quarter_turns: i8,
+    /// Where the part's own bbox centre lands in plan, relative to the
+    /// assembly's centre — `(x, z)` in the assembly's own local space. A
+    /// piece-local axis, deliberately not a stage one: an assembly has no
+    /// opinion about which way a room faces.
+    pub plan: DVec2,
+    /// What its underside sits on.
+    pub rest: Rest,
+}
+
+impl Part {
+    const fn new(mesh: &'static str, plan: DVec2, rest: Rest) -> Self {
+        Self {
+            mesh,
+            quarter_turns: 0,
+            plan,
+            rest,
+        }
+    }
+
+    const fn turned(mut self, quarter_turns: i8) -> Self {
+        self.quarter_turns = quarter_turns;
+        self
+    }
+}
+
+/// Clear air between two adjacent units on the booth's top.
+const BOOTH_GAP_M: f64 = 0.04;
+
+/// Measured widths of the units the booth stands up, so their spacing is a
+/// sum rather than five transcribed positions kept consistent with each other
+/// by hand. Only the pitch along the run is authored — depth and height stay
+/// measurements, because only the run has slack to distribute.
+const MIXER_W_M: f64 = 0.407;
+const CDJ_W_M: f64 = 0.343;
+
+/// Mixer dead centre, a player either side of it, another outboard of each.
+/// Computed from the two widths and the gap, so "move the players apart" is
+/// one number rather than four positions.
+const CDJ_INNER_M: f64 = (MIXER_W_M + CDJ_W_M) / 2.0 + BOOTH_GAP_M;
+const CDJ_OUTER_M: f64 = CDJ_INNER_M + CDJ_W_M + BOOTH_GAP_M;
+
+/// The quarter-turn that lays a unit's control face along the booth's run.
+///
+/// The deck is modelled with its 2 m axis on `Z` and the players with their
+/// width on `X`, so one of the two has to turn for a row of players to run the
+/// length of the deck. Turning the *players* rather than the deck is what
+/// keeps the booth landing in a room exactly as the bare deck it is made of
+/// lands — the assembly introduces no orientation of its own.
+const BOOTH_UNIT_TURN: i8 = 1;
+
+/// The DJ booth: a 2 x 1 m deck — already a metre tall as modelled, which is
+/// standing height — wearing a mixer and four players.
+///
+/// Authored centred on the origin in plan, so the piece's footprint centre
+/// *is* its origin and its footing socket is symmetric: the booth is
+/// indifferent to which way a room calls upstage.
+static DJ_BOOTH_PARTS: &[Part] = &[
+    Part::new(DECK_2X1, DVec2::ZERO, Rest::Ground),
+    Part::new(MIXER, DVec2::ZERO, Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(0.0, -CDJ_INNER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(0.0, CDJ_INNER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(0.0, -CDJ_OUTER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
+    Part::new(CDJ, DVec2::new(0.0, CDJ_OUTER_M), Rest::Deck).turned(BOOTH_UNIT_TURN),
+];
+
+const DECK_2X1: &str = "stage_lab/stage_praticavel_2x1x1.glb";
+const CDJ: &str = "stage_lab/cdj_3000x.glb";
+const MIXER: &str = "stage_lab/mixer_djm_a9.glb";
 
 // ---------------------------------------------------------------------------
 // Socket sets
@@ -357,13 +479,7 @@ fn build() -> Vec<Piece> {
             floor_sockets(),
         ),
         // Same socket topology as the 1×1; the bbox does the size scaling.
-        mesh(
-            "stage_lab/stage_praticavel_2x1x1.glb",
-            Floor,
-            "Stage Deck 2×1m",
-            Stage,
-            floor_sockets(),
-        ),
+        mesh(DECK_2X1, Floor, "Stage Deck 2×1m", Stage, floor_sockets()),
         procedural("truss/straight", "Truss · straight", Family::Truss),
         procedural("truss/corner", "Truss · corner box", Family::Corner),
         procedural("truss/hinge", "Truss · hinge", Family::Hinge),
@@ -378,8 +494,19 @@ fn build() -> Vec<Piece> {
             Accessories,
             stand_sockets(),
         ),
-        equipment("stage_lab/cdj_3000x.glb", Cdj, "CDJ-3000"),
-        equipment("stage_lab/mixer_djm_a9.glb", Mixer, "DJM-A9 Mixer"),
+        equipment(CDJ, Cdj, "CDJ-3000"),
+        equipment(MIXER, Mixer, "DJM-A9 Mixer"),
+        Piece {
+            id: "assembly/dj_booth",
+            kind: DjBooth,
+            display_name: "DJ Booth",
+            palette_group: Equipment,
+            geometry: Geometry::Assembly(DJ_BOOTH_PARTS),
+            // One held socket and nothing hosted: the booth already carries
+            // its own gear, and its top is a surface a *player* stands on, not
+            // one the palette should let a second mixer onto.
+            sockets: mount_sockets("bottom", SocketType::BottomMount),
+        },
         mesh(
             "stage_lab/guardrail.glb",
             Guardrail,
@@ -448,6 +575,44 @@ mod tests {
             assert_eq!(grabs, 1, "{}: wants exactly one grab socket", p.id);
             let names: HashSet<&str> = p.sockets.iter().map(|s| s.name.as_str()).collect();
             assert_eq!(names.len(), p.sockets.len(), "{}: duplicate socket", p.id);
+        }
+    }
+
+    /// An assembly stands on exactly one part, and every other part stands on
+    /// that one. Two ground parts would make "the deck height" ambiguous, and
+    /// none would make it nothing.
+    #[test]
+    fn an_assembly_has_exactly_one_ground_part() {
+        for p in pieces() {
+            let parts = p.geometry.parts();
+            if parts.is_empty() {
+                continue;
+            }
+            let ground = parts.iter().filter(|p| p.rest == Rest::Ground).count();
+            assert_eq!(ground, 1, "{}: wants exactly one ground part", p.id);
+        }
+    }
+
+    /// A part names a mesh the catalog also ships as a piece of its own, so a
+    /// booth cannot drift onto a GLB nothing else in the palette uses.
+    #[test]
+    fn assembly_parts_name_catalog_meshes() {
+        let meshes: HashSet<&str> = pieces()
+            .iter()
+            .filter_map(|p| match p.geometry {
+                Geometry::Mesh { path } => Some(path),
+                _ => None,
+            })
+            .collect();
+        for p in pieces() {
+            for part in p.geometry.parts() {
+                assert!(
+                    meshes.contains(part.mesh),
+                    "{}: {} is not a catalog mesh",
+                    p.id,
+                    part.mesh
+                );
+            }
         }
     }
 

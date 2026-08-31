@@ -304,6 +304,22 @@ pub(crate) fn piece_draws(
                 editor_object,
             }]
         }
+        // Each part is the mesh case again, at the layout's transform. Every
+        // draw carries the same `editor_object`, which is the whole of what
+        // makes a booth one thing to click, select and drag.
+        Geometry::Assembly(_) => {
+            let mut draws = Vec::new();
+            for placement in crate::catalog::assembly_placements(geometry.parts(), lib)? {
+                draws.extend(piece_draws(
+                    &Geometry::MeshPath(placement.mesh.to_string()),
+                    root * placement.transform,
+                    lib,
+                    bank,
+                    editor_object.clone(),
+                )?);
+            }
+            draws
+        }
     })
 }
 
