@@ -77,6 +77,10 @@ const SOCKET_RADIUS: f32 = 0.025;
 /// selection is a fact about what is already there, not a preview.
 const SELECTED_PIECE_ALPHA: f32 = 0.3;
 
+/// How much of a bead survives being occluded: the x-ray copy's share of the
+/// visible copy's alpha.
+const BEAD_XRAY: f32 = 0.35;
+
 /// Half-length of a measure end tick, before the same factor.
 const TICK_RADIUS: f32 = 0.06;
 
@@ -260,19 +264,28 @@ pub(crate) fn build(
             SocketMarkState::Compatible => (ACCENT, 0.9),
             SocketMarkState::Latched => (0xff_ff_ff, 1.0),
         };
-        out.push(Overlay {
-            mesh: bank.insert("::socket-bead".to_string(), || octahedron(SOCKET_RADIUS)),
-            // Squashed along the joint's own normal, so the bead reads as a
-            // face on the piece rather than as a free-floating handle.
-            model: to_world
-                * Mat4::from_translation(pos)
-                * Mat4::from_mat3(basis_from_up(three_from_data(Vec3::from(mark.normal))))
-                * Mat4::from_scale(scale * Vec3::new(1.0, 0.6, 1.0)),
-            lines: false,
-            color: hex_srgb(color),
-            opacity,
-            depth: OverlayDepth::Free,
-        });
+        let model = to_world
+            * Mat4::from_translation(pos)
+            * Mat4::from_mat3(basis_from_up(three_from_data(Vec3::from(mark.normal))))
+            * Mat4::from_scale(scale * Vec3::new(1.0, 0.6, 1.0));
+        // Twice: solid where the joint is visible, faint through what hides
+        // it. A bead at full strength through a wall reads as *on* the wall;
+        // no bead at all loses the joint the moment the camera dips.
+        for (depth, alpha) in [
+            (OverlayDepth::Tested, opacity),
+            (OverlayDepth::Free, opacity * BEAD_XRAY),
+        ] {
+            out.push(Overlay {
+                mesh: bank.insert("::socket-bead".to_string(), || octahedron(SOCKET_RADIUS)),
+                // Squashed along the joint's own normal, so the bead reads as
+                // a face on the piece rather than as a free-floating handle.
+                model,
+                lines: false,
+                color: hex_srgb(color),
+                opacity: alpha,
+                depth,
+            });
+        }
     }
 
     for ghost in &build.ghosts {
