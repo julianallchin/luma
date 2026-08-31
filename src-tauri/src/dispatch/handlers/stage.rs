@@ -51,6 +51,20 @@ pub async fn get_resolved_venue(
     Ok(stage(services, &venue_id).resolved().await?)
 }
 
+/// Replace the venue's graph with a snapshot of itself — undo's one verb.
+/// Structure only: patch rows are not part of a snapshot, and one that names
+/// a fixture whose patch row is gone is refused whole.
+///
+/// # Errors
+/// Refused if the rows do not form a graph or a fixture's patch row is gone.
+pub async fn restore_graph(
+    services: &AppServices,
+    venue_id: String,
+    rows: VenueGraphRows,
+) -> Result<ResolvedVenue, CommandError> {
+    Ok(stage(services, &venue_id).restore(&rows).await?)
+}
+
 /// The venue as a top-down text map — the "Gauntlet view".
 ///
 /// `cell_m` is metres per character; the drawer clamps it, so no value refuses.
@@ -1018,6 +1032,65 @@ mod tests {
         assert!(
             message.contains(needle),
             "`{message}` does not mention `{needle}`"
+        );
+    }
+
+    /// Restore replaces the graph with an earlier snapshot of itself: the
+    /// piece placed after the snapshot is gone, the one placed before stays.
+    #[tokio::test]
+    async fn restore_returns_the_graph_to_its_snapshot() {
+        let (_dir, services, venue) = room().await;
+        let first = dispatch(
+            &services,
+            "place_free",
+            &serde_json::json!({
+                "venueId": venue, "kind": "run", "catalogRef": "truss/straight",
+                "label": null, "surfaceNodeId": null, "surfaceSocket": null,
+                "mySocket": null, "u": 0.0, "v": 0.0, "yaw": null, "trim": null,
+                "params": null,
+            }),
+        )
+        .await
+        .unwrap();
+        let first_id = first["nodeId"].as_str().unwrap().to_string();
+        let snapshot = dispatch(
+            &services,
+            "get_venue_graph",
+            &serde_json::json!({"venueId": venue}),
+        )
+        .await
+        .unwrap();
+        let second = dispatch(
+            &services,
+            "place_free",
+            &serde_json::json!({
+                "venueId": venue, "kind": "run", "catalogRef": "truss/straight",
+                "label": null, "surfaceNodeId": null, "surfaceSocket": null,
+                "mySocket": null, "u": 2.0, "v": 2.0, "yaw": null, "trim": null,
+                "params": null,
+            }),
+        )
+        .await
+        .unwrap();
+        let second_id = second["nodeId"].as_str().unwrap().to_string();
+
+        let restored = dispatch(
+            &services,
+            "restore_graph",
+            &serde_json::json!({"venueId": venue, "rows": snapshot}),
+        )
+        .await
+        .unwrap();
+        let ids: Vec<&str> = restored["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&first_id.as_str()), "{restored}");
+        assert!(
+            !ids.contains(&second_id.as_str()),
+            "the later piece survived the restore"
         );
     }
 

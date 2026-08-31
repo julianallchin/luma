@@ -474,6 +474,8 @@ impl Render for Luma {
                     this.stage_open_chooser_focused(window, cx);
                 }),
             )
+            .on_action(cx.listener(|this, _: &keymap::UndoStage, _, cx| this.stage_undo(cx)))
+            .on_action(cx.listener(|this, _: &keymap::RedoStage, _, cx| this.stage_redo(cx)))
             .on_action(cx.listener(|this, _: &keymap::ZoomStageIn, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     state.dolly(crate::visualizer::DOLLY_IN);

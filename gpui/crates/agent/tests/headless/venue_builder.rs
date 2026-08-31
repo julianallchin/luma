@@ -1067,3 +1067,46 @@ fn a_escape_a_reopens_the_dialog() {
         "A did not reopen\n{out:#}"
     );
 }
+
+/// ⌘Z restores the graph a placement replaced, and ⇧⌘Z brings it back.
+#[test]
+fn undo_takes_a_placement_back_and_redo_replays_it() {
+    let mut harness = harness("venue-builder-undo");
+    let out = exec(
+        &mut harness,
+        &format!(
+            r#"{OPEN}
+        const was = sockets().length;
+        arm("Truss · straight");
+        dropAt(0.5, 0.35);
+        app.key("escape");
+        app.frames(4);
+        // Beads at rest belong to the selection, so "is the piece there" is
+        // asked by selecting where it was dropped and counting its beads —
+        // re-asked each poll, because the verbs are asynchronous and the room
+        // only changes when their round trip lands.
+        const there = () => {{
+            select(0.5, 0.35);
+            return sockets().length;
+        }};
+        settle("the placement to land", () => there() > 0);
+        app.key("escape");
+        app.frames(4);
+        app.action("luma::UndoStage");
+        settle("the placement to unwind", () => there() === 0);
+        app.action("luma::RedoStage");
+        settle("the piece to come back", () => there() > 0);
+        ({{ was, back: sockets().length }})
+    "#
+        ),
+    );
+    assert_eq!(
+        out["was"],
+        serde_json::json!(0),
+        "beads at rest with nothing selected\n{out:#}"
+    );
+    assert!(
+        out["back"].as_u64().unwrap() > 0,
+        "redo did not bring the piece back\n{out:#}"
+    );
+}
