@@ -284,11 +284,13 @@ const QUARTER_POLAR: f32 = 55.0 * std::f32::consts::PI / 180.0;
 
 /// Where the audience is, as a world-space offset from the framing target.
 ///
-/// This is the one place the "front" of a stage is defined. It is the three.js
-/// camera the web opened at, `(0, 1, 3)`, brought into world space — its
-/// magnitude is meaningless (a fitted distance replaces it), only the direction
-/// and the resulting azimuth/polar carry over.
-const FRONT_EYE: Vec3 = Vec3::new(0.0, -3.0, 1.0);
+/// This is the one place the "front" of a stage is defined. The crowd is at
+/// facade `+v`, which the data mirror (`coords::world_from_data`, `(x, -y, z)`)
+/// puts at world `+y` — so the eye offset must be `+y`, or every "audience"
+/// picture is shot from behind the stage. The magnitude is meaningless (a
+/// fitted distance replaces it); only the direction and the resulting
+/// azimuth/polar carry.
+const FRONT_EYE: Vec3 = Vec3::new(0.0, 3.0, 1.0);
 
 /// The same elevation, half a turn round: what [`View::Dj`] falls back to.
 fn reversed(direction: Vec3) -> Vec3 {
