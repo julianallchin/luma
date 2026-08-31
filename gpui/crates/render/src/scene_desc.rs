@@ -129,6 +129,11 @@ pub struct Build {
 pub struct Ghost {
     /// The held piece's shape, drawn flat rather than lit.
     pub geometry: Geometry,
+    /// When the held thing is a light: its definition key, so the overlay can
+    /// draw the *housing* the commit will draw ([`crate::frame`]'s
+    /// `housing_draws`) instead of standing `geometry` in for it. `geometry`
+    /// stays the fallback for a definition the catalogue has not loaded.
+    pub fixture: Option<String>,
     /// Data-space position.
     pub pos: [f32; 3],
     /// Data-space Euler triple.
@@ -205,6 +210,10 @@ pub struct RenderSettings {
     pub sun: Option<DirectionalLight>,
     /// Whether the fading editor ground grid is drawn.
     pub show_grid: bool,
+    /// Whether the venue's 200 m ground plane is drawn. Off for renders whose
+    /// subject is a single piece (the palette thumbnails), on everywhere a
+    /// room is the subject.
+    pub show_floor: bool,
     /// Renderer diagnostic output. `Pbr` is the authored display path.
     pub debug_view: DebugView,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
@@ -391,6 +400,7 @@ impl RenderSettings {
             },
             sun: None,
             show_grid: false,
+            show_floor: true,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
@@ -413,6 +423,7 @@ impl RenderSettings {
             },
             sun: Some(DirectionalLight::EDITOR),
             show_grid: true,
+            show_floor: true,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
@@ -470,6 +481,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 haze: wire.haze.ok_or_else(|| D::Error::missing_field("haze"))?,
                 sun: wire.sun,
                 show_grid: wire.show_grid.unwrap_or(false),
+                show_floor: true,
                 debug_view: wire.debug_view,
                 // Absent means the constructors' default, which is on — only
                 // the legacy branch below pins it off, and that pin has its

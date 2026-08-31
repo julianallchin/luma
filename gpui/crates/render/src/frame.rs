@@ -307,6 +307,86 @@ pub(crate) fn piece_draws(
     })
 }
 
+/// The draws of one fixture *housing* at `base` — the body alone, no pixel
+/// quads, face lights or cones. One implementation shared by the frame
+/// builder's fixture pass and the overlay's placement ghost, so a held light
+/// previews exactly the body its commit will draw — the ghost used to stand a
+/// scaled truss corner in for every fixture, which said "something is held"
+/// and lied about what.
+///
+/// A procedural bar is its dimension box, turned the quarter onto the mount
+/// normal the frame builder documents; a modelled kind is its bundled mesh at
+/// the definition's physical dimensions; a definition that is neither draws
+/// nothing, exactly as the room would.
+///
+/// # Errors
+/// Fails if the model kind's bundled mesh is missing from the asset library.
+pub(crate) fn housing_draws(
+    def: &Definition,
+    fixture_path: &str,
+    base: Mat4,
+    lib: &mut Library,
+    bank: &mut Bank,
+    editor_object: Option<EditorObject>,
+) -> anyhow::Result<Vec<Draw>> {
+    if is_procedural(def) {
+        let dims = def.dimensions_m();
+        let body = bank.insert(format!("::bar-body:{fixture_path}"), || {
+            box_mesh(Vec3::from(dims))
+        });
+        return Ok(vec![Draw {
+            mesh: body,
+            textures: MaterialTextures::default(),
+            model: base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            material: Material {
+                base_color: hex_srgb(0x05_05_05),
+                ..Material::default()
+            },
+            editor_object,
+        }]);
+    }
+    let Some(kind) = model_kind(def) else {
+        return Ok(Vec::new());
+    };
+    let mesh_rel = format!("qlc/{}", kind.mesh());
+    let glb = lib.get(&mesh_rel)?;
+    // Per-axis scale to the definition's physical dimensions, measured on
+    // the unscaled mesh exactly as `applyPhysicalDimensionScaling` does.
+    let extents = {
+        let (lo, hi) = glb.bounds();
+        hi - lo
+    };
+    let desired = Vec3::from(def.dimensions_m());
+    let axis = |d: f32, e: f32| if e > 0.0 { d / e } else { 1.0 };
+    let scale = Vec3::new(
+        axis(desired.x, extents.x),
+        axis(desired.y, extents.y),
+        axis(desired.z, extents.z),
+    );
+    let worlds = glb.world_matrices(base * Mat4::from_scale(scale), &HashMap::new());
+    let mut draws = Vec::new();
+    for (node, world) in glb.nodes.iter().zip(&worlds) {
+        for &p in &node.primitives {
+            // Every fixture body is forced near-black so only beams and
+            // emissives read (`static-fixture.tsx`). `setRGB` is in the
+            // linear working space, so no sRGB decode here.
+            draws.push(glb_draw(
+                bank,
+                &mesh_rel,
+                glb,
+                p,
+                *world,
+                |m| Material {
+                    base_color: Vec3::splat(0.08),
+                    ..m
+                },
+                editor_object.clone(),
+            ));
+        }
+    }
+    Ok(draws)
+}
+
 /// Intern one glTF primitive's geometry and base-colour texture, and emit the
 /// draw that references them. `material` is the caller's chance to override the
 /// asset's own constants (the near-black fixture housing).
@@ -530,21 +610,23 @@ pub fn build_with(
     // need no per-vertex conversion.
     let to_world = Mat4::from_mat3(r);
     let floor = bank.insert("::floor".into(), || plane_mesh(200.0, 200.0));
-    draws.push(Draw {
-        mesh: floor,
-        textures: MaterialTextures::default(),
-        model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
-        material: Material {
-            base_color: hex_srgb(0x03_03_03),
-            metallic: 0.0,
-            roughness: 0.95,
-            emissive: Vec3::ZERO,
-            normal_scale: 1.0,
-            occlusion_strength: 1.0,
-            flat_shading: false,
-        },
-        editor_object: None,
-    });
+    if scene.render.show_floor {
+        draws.push(Draw {
+            mesh: floor,
+            textures: MaterialTextures::default(),
+            model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            material: Material {
+                base_color: hex_srgb(0x03_03_03),
+                metallic: 0.0,
+                roughness: 0.95,
+                emissive: Vec3::ZERO,
+                normal_scale: 1.0,
+                occlusion_strength: 1.0,
+                flat_shading: false,
+            },
+            editor_object: None,
+        });
+    }
 
     // --- global haze density ----------------------------------------------
     // Scaled by the strongest hazer's dimmer, with a 0.3 floor.
@@ -577,23 +659,18 @@ pub fn build_with(
             // than as a second rest axis in `beam_direction`. Everything below
             // (body, pixel quads, cone origins) hangs off the turned frame, so
             // the emitters and the beam cannot disagree.
+            draws.extend(housing_draws(
+                def,
+                &fixture.fixture_path,
+                base,
+                lib,
+                &mut bank,
+                Some(EditorObject::Fixture(fixture.id.clone())),
+            )?);
             let base = base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
             let head_count = def.head_count(&fixture.mode_name).max(1);
             let pixels = pixel_positions(def, head_count);
             let dims = def.dimensions_m();
-            let body = bank.insert(format!("::bar-body:{}", fixture.fixture_path), || {
-                box_mesh(Vec3::from(dims))
-            });
-            draws.push(Draw {
-                mesh: body,
-                textures: MaterialTextures::default(),
-                model: base,
-                material: Material {
-                    base_color: hex_srgb(0x05_05_05),
-                    ..Material::default()
-                },
-                editor_object: Some(EditorObject::Fixture(fixture.id.clone())),
-            });
 
             let pixels_per_head = pixels.len() as f32 / head_count as f32;
             let (layout_w, layout_h) = layout_of(def, head_count);
@@ -663,11 +740,22 @@ pub fn build_with(
         };
         let head_state = state(&fixture.id, 0).unwrap_or(DARK);
         let intensity = strobe_gate(head_state, time, 20.0);
+        // The body itself is `housing_draws`' — one implementation for the
+        // room and the placement ghost.
+        draws.extend(housing_draws(
+            def,
+            &fixture.fixture_path,
+            base,
+            lib,
+            &mut bank,
+            Some(EditorObject::Fixture(fixture.id.clone())),
+        )?);
         let mesh_rel = format!("qlc/{}", kind.mesh());
         let glb = lib.get(&mesh_rel)?;
 
         // Per-axis scale to the definition's physical dimensions, measured on
-        // the unscaled mesh exactly as `applyPhysicalDimensionScaling` does.
+        // the unscaled mesh exactly as `applyPhysicalDimensionScaling` does —
+        // recomputed here only to seat the face light on the scaled head.
         let extents = {
             let (lo, hi) = glb.bounds();
             hi - lo
@@ -683,26 +771,6 @@ pub fn build_with(
         // Pan/tilt do not move the mesh here: the goldens pin `speed = 0`, and
         // `static-fixture.tsx` freezes articulation when speed is zero.
         let worlds = glb.world_matrices(base * Mat4::from_scale(scale), &HashMap::new());
-
-        for (node, world) in glb.nodes.iter().zip(&worlds) {
-            for &p in &node.primitives {
-                // Every fixture body is forced near-black so only beams and
-                // emissives read (`static-fixture.tsx`). `setRGB` is in the
-                // linear working space, so no sRGB decode here.
-                draws.push(glb_draw(
-                    &mut bank,
-                    &mesh_rel,
-                    glb,
-                    p,
-                    *world,
-                    |m| Material {
-                        base_color: Vec3::splat(0.08),
-                        ..m
-                    },
-                    Some(EditorObject::Fixture(fixture.id.clone())),
-                ));
-            }
-        }
 
         if kind.emits_beam() {
             // Face light, parented to `head` when the mesh has one.

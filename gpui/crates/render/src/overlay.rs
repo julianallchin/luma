@@ -219,9 +219,17 @@ pub(crate) fn build(
         let mesh = bank.insert(format!("::cage:{}", fixture.fixture_path), || {
             box_wireframe(size)
         });
+        // A procedural bar's body is drawn a quarter turn onto the mount
+        // normal (see the bar branch in `build_frame_with`); its cage turns
+        // with it or it wears a box for a body it does not have.
+        let turned = if crate::luminaire::is_procedural(def) {
+            Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
+        } else {
+            Mat4::IDENTITY
+        };
         out.push(Overlay {
             mesh,
-            model: to_world * three_pose_from_data(fixture.pos, fixture.rot),
+            model: to_world * three_pose_from_data(fixture.pos, fixture.rot) * turned,
             lines: true,
             color: hex_srgb(if i == 0 { 0xff_ff_00 } else { 0xb8_b8_46 }),
             opacity: 1.0,
@@ -333,9 +341,18 @@ pub(crate) fn build(
             * Mat4::from_scale(Vec3::splat(ghost.scale));
         // A ghost whose asset will not load draws nothing: the same missing
         // mesh is already absent from the room, and a placement preview is not
-        // worth failing a frame over.
-        let draws =
-            crate::frame::piece_draws(&ghost.geometry, root, lib, bank, None).unwrap_or_default();
+        // worth failing a frame over. A held *light* draws its housing — the
+        // same body the commit will draw — and falls back to `geometry` while
+        // its definition is still loading.
+        let housing = ghost
+            .fixture
+            .as_deref()
+            .and_then(|path| Some((path, definitions.get(path)?)));
+        let draws = match housing {
+            Some((path, def)) => crate::frame::housing_draws(def, path, root, lib, bank, None),
+            None => crate::frame::piece_draws(&ghost.geometry, root, lib, bank, None),
+        }
+        .unwrap_or_default();
         out.extend(draws.into_iter().map(|draw| Overlay {
             mesh: draw.mesh,
             model: draw.model,
