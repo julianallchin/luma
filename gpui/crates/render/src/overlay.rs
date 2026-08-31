@@ -226,28 +226,44 @@ pub(crate) fn build(
     }
 
     // --- selected stage pieces ---------------------------------------------
-    // A piece has no physical-dimensions block to cage, so the selection is
-    // said by drawing the piece itself again, unlit, in the cage's own colour
-    // — a tint that reads through the room the way the ghost does. Every
-    // selected piece gets it, snapped or free: selection and grab-ability are
-    // two facts, and this is the first one.
-    for id in &scene.editor.selected_piece_ids {
+    // The same wireframe cage a fixture wears, at the piece's own bounds —
+    // one selection language for everything in the room. Measured mesh bounds
+    // for catalog pieces, the generator's envelope for procedural ones.
+    for (i, id) in scene.editor.selected_piece_ids.iter().enumerate() {
         let Some(piece) = scene.pieces.iter().find(|p| &p.id == id) else {
             continue;
         };
+        let (lo, hi) = match &piece.geometry {
+            Geometry::MeshPath(path) => {
+                let Ok(glb) = lib.get(path) else {
+                    continue;
+                };
+                glb.bounds()
+            }
+            Geometry::Procedural(params) => {
+                let bounds = crate::catalog::procedural_bounds(*params);
+                (bounds.min.as_vec3(), bounds.max.as_vec3())
+            }
+        };
+        let extent = hi - lo;
+        if extent.min_element() <= 0.0 {
+            continue;
+        }
+        let mesh = bank.insert(format!("::piece-cage:{:?}", piece.geometry), || {
+            box_wireframe(extent)
+        });
         let model = to_world
             * three_pose_from_data(piece.pos, piece.rot)
-            * Mat4::from_scale(Vec3::splat(piece.scale));
-        let draws =
-            crate::frame::piece_draws(&piece.geometry, model, lib, bank, None).unwrap_or_default();
-        out.extend(draws.into_iter().map(|draw| Overlay {
-            mesh: draw.mesh,
-            model: draw.model,
-            lines: false,
-            color: hex_srgb(0xff_ff_00),
-            opacity: SELECTED_PIECE_ALPHA,
-            depth: OverlayDepth::Free,
-        }));
+            * Mat4::from_scale(Vec3::splat(piece.scale))
+            * Mat4::from_translation((lo + hi) * 0.5);
+        out.push(Overlay {
+            mesh,
+            model,
+            lines: true,
+            color: hex_srgb(if i == 0 { 0xff_ff_00 } else { 0xb8_b8_46 }),
+            opacity: 1.0,
+            depth: OverlayDepth::Tested,
+        });
     }
 
     // --- builder affordances -----------------------------------------------

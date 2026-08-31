@@ -34,8 +34,7 @@ pub(crate) mod hand;
 use std::collections::{BTreeMap, HashMap};
 
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, App, Context, Div, Entity, Pixels, Point, Window};
-use gpui_component::scroll::ScrollableElement as _;
+use gpui::{div, px, AnyElement, Context, Div, Entity, Pixels, Point, Window};
 use gpui_component::{Icon, IconName};
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
@@ -108,13 +107,9 @@ pub(crate) struct Build {
     sockets: VenueSockets,
     /// The selected node — a venue-graph id, not a render object.
     pub(crate) selected: Option<String>,
-    /// How much of the inspector sheet is on screen. The one place "is the
-    /// inspector up" lives — see [`luma_ui::pane::PaneWidth`]; its target is
-    /// *derived* from the selection by [`Build::inspector_target`], so a
-    /// selection made anywhere cannot forget to open the sheet.
-    pub(crate) inspector: luma_ui::pane::PaneWidth,
-    /// The operator asked to see the solve's complaints with nothing selected.
-    pub(crate) warnings_pinned: bool,
+    /// Where the selection card is parked, in the socket layer's world space.
+    /// Written only by [`Build::select`].
+    pub(crate) card_anchor: Option<glam::DVec3>,
     /// The trim field's draft text. Held as typed so a half-entered number is
     /// not rounded under the operator's caret.
     pub(crate) trim_draft: Option<String>,
@@ -143,8 +138,7 @@ impl Build {
             hand: Hand::default(),
             sockets,
             selected: None,
-            inspector: luma_ui::pane::PaneWidth::new(0.0),
-            warnings_pinned: false,
+            card_anchor: None,
             trim_draft: None,
             report: Vec::new(),
             committing: false,
@@ -246,25 +240,6 @@ impl Build {
     /// Derived rather than stored so the four places that change the selection
     /// do not each have to remember to open the sheet — the classic "caller
     /// must call A before B", answered by not having a B.
-    pub(crate) fn inspector_target(&self) -> f32 {
-        // Not while the hand owns the pointer. Place mode is *sticky*, so a
-        // stamped piece selects itself and the sheet would slide over the room
-        // between two clicks of a row of the same thing — covering the surface
-        // the second click was aimed at. Withholding the selection instead
-        // would leave the piece just placed with no way to be inspected at all;
-        // the sheet is what waits, and it opens the moment the hand is put
-        // down.
-        let wanted = !self.hand.owns_pointer()
-            && (self.selected.is_some()
-                || (self.warnings_pinned
-                    && !(self.solved.dangling.is_empty() && self.report.is_empty())));
-        if wanted {
-            luma_ui::sheet::WIDTH
-        } else {
-            0.0
-        }
-    }
-
     /// The label a node answers to in the readouts.
     pub(crate) fn label_of(&self, node: &str) -> String {
         self.solved
@@ -371,6 +346,72 @@ impl Build {
     /// See [`Room::pick`]. Ray in the socket layer's world space.
     pub(crate) fn room_pick(&self, origin: glam::DVec3, dir: glam::DVec3) -> Option<String> {
         self.room.pick(origin, dir)
+    }
+
+    /// A node's position in the socket layer's world space, for whoever needs
+    /// a point to aim a camera at.
+    pub(crate) fn room_pose_point(&self, node: &str) -> Option<glam::DVec3> {
+        self.room.pose(node).map(|pose| pose.w_axis.truncate())
+    }
+
+    /// The one writer of `selected`. Freezes where the selection card sits —
+    /// the piece's position at selection time — so a trim or span drag moves
+    /// the piece and not the control being dragged. Re-selecting the same
+    /// node is a no-op for the same reason: every verb re-adopts the room,
+    /// and an adopt mid-scrub that re-anchored the card would put the jitter
+    /// back.
+    pub(crate) fn select(&mut self, node: Option<String>) {
+        if self.selected == node {
+            return;
+        }
+        self.card_anchor = node
+            .as_ref()
+            .and_then(|node| self.room.pose(node))
+            .map(|pose| pose.w_axis.truncate());
+        self.selected = node;
+        self.trim_draft = None;
+    }
+
+    /// The selected node as the page draws it — label, freedoms, relation.
+    /// One projection shared by the tab view and the in-scene card.
+    pub(crate) fn selected_view(&self) -> Option<SelectedView> {
+        let node = self.selected.as_ref()?;
+
+        let freedom = self.freedom_of(node);
+        let param = |key: &str| {
+            self.solved
+                .nodes
+                .iter()
+                .find(|n| &n.id == node)
+                .and_then(|n| n.params.get(key).copied())
+                .unwrap_or(0.0)
+        };
+        Some(SelectedView {
+            node: node.clone(),
+            label: self.label_of(node),
+            freedom,
+            relation: self.relation_of(node),
+            constraint: self.constraint_of(node),
+            trim: param("trim"),
+            // `yaw` is the one freedom that is not a node param: a mate's
+            // turn about the shared normal lives on the *edge*, and it is
+            // radians there and degrees on this sheet. Reading it out of
+            // `params` found nothing and drew every joint at zero.
+            param: match freedom.param() {
+                Some("yaw") => self
+                    .graph
+                    .edge(node)
+                    .map_or(0.0, |edge| edge.roll.to_degrees().rem_euclid(360.0)),
+                Some(key) => param(key),
+                None => 0.0,
+            },
+            span: self
+                .solved
+                .nodes
+                .iter()
+                .find(|n| &n.id == node)
+                .and_then(|n| n.params.get("span").copied()),
+        })
     }
 
     pub(crate) fn gizmo_offered(&self) -> bool {
@@ -598,8 +639,8 @@ impl Luma {
                             // sheet open on a detached wing is a sheet about
                             // nothing, and `Unplaced` is exactly what `detach`
                             // was asked for.
-                            build.selected =
-                                report.outcome.is_placed().then(|| report.node_id.clone());
+                            build
+                                .select(report.outcome.is_placed().then(|| report.node_id.clone()));
                         }
                         Err(error) => build.report = vec![error.to_string()],
                     }
@@ -638,17 +679,6 @@ impl Luma {
             .ok();
         })
         .detach();
-    }
-
-    /// The inspector's width this frame, retargeted from the state that
-    /// decides it — see [`Build::inspector_target`].
-    pub(crate) fn stage_inspector_width(&mut self, window: &mut Window, cx: &App) -> Pixels {
-        let Some(build) = self.build_mut() else {
-            return px(0.0);
-        };
-        let target = build.inspector_target();
-        build.inspector.retarget(target, cx);
-        build.inspector.eval(window)
     }
 
     /// Open the add-element dialog.
@@ -815,8 +845,7 @@ impl Luma {
             None => state.clear_selection(),
         }
         if let Some(build) = state.build.as_mut() {
-            build.selected = picked;
-            build.trim_draft = None;
+            build.select(picked);
         }
         cx.notify();
     }
@@ -830,8 +859,7 @@ impl Luma {
             // Escape empties the hand *and* the head: whatever mode it left,
             // nothing stays selected — coming out of place mode with the last
             // selection still lit read as the editor holding a grudge.
-            build.selected = None;
-            build.warnings_pinned = false;
+            build.select(None);
         }
         if let Some(state) = self.visualizer_mut() {
             state.clear_selection();
@@ -1347,7 +1375,7 @@ impl Luma {
         let pending = self.library.delete_subtree(&venue, &node);
         if let Some(build) = self.build_mut() {
             build.committing = true;
-            build.selected = None;
+            build.select(None);
         }
         cx.spawn(async move |this, cx| {
             let result = pending.await;
@@ -1705,19 +1733,9 @@ impl Build {
 pub(crate) struct StageView {
     /// The add-element dialog's keyboard cursor, when it is up.
     pub(crate) choosing: Option<usize>,
-    /// Whether the sheet is *heading* open — what decides it takes clicks. A
-    /// leaving sheet is painted and untouchable (`luma_ui::sheet`).
-    pub(crate) inspector_open: bool,
     pub(crate) selected: Option<SelectedView>,
     /// Unplaced fixtures, as dialog rows.
     pub(crate) unplaced: Vec<(String, String)>,
-    pub(crate) dangling: Vec<String>,
-    pub(crate) warnings: Vec<String>,
-    /// Whether the operator asked to see the complaints. The inspector prints
-    /// them only when this is set — the badge by the add button is the quiet
-    /// resting claim, and the sheet on an ordinary selection stays about the
-    /// selection.
-    pub(crate) warnings_pinned: bool,
     pub(crate) configuring: Option<ConfigureView>,
 }
 
@@ -1761,47 +1779,9 @@ impl Luma {
     /// The builder as the page draws it, or `None` when no room is up.
     pub(crate) fn stage_view(&self) -> Option<StageView> {
         let build = self.build_state()?;
-        let selected = build.selected.as_ref().map(|node| {
-            let freedom = build.freedom_of(node);
-            let param = |key: &str| {
-                build
-                    .solved
-                    .nodes
-                    .iter()
-                    .find(|n| &n.id == node)
-                    .and_then(|n| n.params.get(key).copied())
-                    .unwrap_or(0.0)
-            };
-            SelectedView {
-                node: node.clone(),
-                label: build.label_of(node),
-                freedom,
-                relation: build.relation_of(node),
-                constraint: build.constraint_of(node),
-                trim: param("trim"),
-                // `yaw` is the one freedom that is not a node param: a mate's
-                // turn about the shared normal lives on the *edge*, and it is
-                // radians there and degrees on this sheet. Reading it out of
-                // `params` found nothing and drew every joint at zero.
-                param: match freedom.param() {
-                    Some("yaw") => build
-                        .graph
-                        .edge(node)
-                        .map_or(0.0, |edge| edge.roll.to_degrees().rem_euclid(360.0)),
-                    Some(key) => param(key),
-                    None => 0.0,
-                },
-                span: build
-                    .solved
-                    .nodes
-                    .iter()
-                    .find(|n| &n.id == node)
-                    .and_then(|n| n.params.get("span").copied()),
-            }
-        });
+        let selected = build.selected_view();
         Some(StageView {
             choosing: build.hand.choosing().map(|c| c.cursor),
-            inspector_open: build.inspector.target() > 0.0,
             selected,
             unplaced: build
                 .solved
@@ -1814,14 +1794,6 @@ impl Luma {
                     )
                 })
                 .collect(),
-            dangling: build
-                .solved
-                .dangling
-                .iter()
-                .map(|d| format!("{} {}", build.label_of(&d.node_id), d.socket))
-                .collect(),
-            warnings: build.report.clone(),
-            warnings_pinned: build.warnings_pinned,
             configuring: build.hand.configuring().map(|row| ConfigureView {
                 host: format!("{} {}", row.host_label, row.host_socket),
                 what: row.what.label().to_string(),
@@ -1886,7 +1858,6 @@ pub(crate) fn stage_page(
     state: &StagePage,
     app: &Entity<Luma>,
     view: Option<&StageView>,
-    revealed: Pixels,
     window: &Window,
 ) -> AnyElement {
     let Some(view) = view else {
@@ -1902,14 +1873,13 @@ pub(crate) fn stage_page(
     div()
         .absolute()
         .inset_0()
-        .child(add_button(view, app))
+        .child(add_button(app))
         .children(
             (view.choosing.is_some() || state.closing.is_closing())
                 .then(|| chooser(state, view, view.choosing.unwrap_or(0), app, window)),
         )
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
         .children(state.menu.as_ref().map(|at| node_menu(*at, app)))
-        .child(inspector(view, app, revealed))
         .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
         .into_any_element()
 }
@@ -1927,11 +1897,9 @@ const INSET: f32 = 12.0;
 /// there is exactly one thing to do. Everything else in the builder is reached
 /// by pointing at the room — which is the point of a page whose subject is a
 /// picture.
-fn add_button(view: &StageView, app: &Entity<Luma>) -> AnyElement {
+fn add_button(app: &Entity<Luma>) -> AnyElement {
     let open = app.clone();
-    let unresolved = view.dangling.len() + view.warnings.len();
-    let pin = app.clone();
-    let mut bar = div()
+    let bar = div()
         .absolute()
         .top(px(crate::visualizer::HEADER_HEIGHT + INSET))
         .left(px(INSET))
@@ -1941,6 +1909,9 @@ fn add_button(view: &StageView, app: &Entity<Luma>) -> AnyElement {
         .occlude()
         .child(
             float::popover_card()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
                 .p(px(4.0))
                 .child(
                     float::btn("Add element", "stage-add")
@@ -1957,27 +1928,6 @@ fn add_button(view: &StageView, app: &Entity<Luma>) -> AnyElement {
                 )
                 .child(float::key_hint_text("A", "")),
         );
-    // The solve's complaints, as a count that opens the sheet. A number is all
-    // the room has space for; the sentences are what the inspector is for.
-    if unresolved > 0 {
-        bar = bar.child(
-            float::popover_card().p(px(4.0)).child(
-                float::btn("", "stage-warnings")
-                    .id("stage-warnings")
-                    .px(px(8.0))
-                    .child(float::badge(unresolved, ladder::status_warn().into()))
-                    .on_click(move |_, _, cx| {
-                        pin.update(cx, |this, cx| {
-                            if let Some(build) = this.build_mut() {
-                                build.warnings_pinned = !build.warnings_pinned;
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .agent_node(Role::Button, format!("Warnings {unresolved}")),
-            ),
-        );
-    }
     bar.into_any_element()
 }
 
@@ -2145,11 +2095,15 @@ fn chooser(
                 .child(label.clone())
                 .on_click(move |_, window, cx| {
                     let take = take.clone();
-                    app.update(cx, |this, cx| this.stage_take(take, cx));
                     // The field held focus; the dialog it lived in is gone.
-                    // Unfocused-anywhere is the resting state every stage key
-                    // routes from — a dangling handle would eat them all.
-                    window.blur();
+                    // Focus goes back to the tab, where the stage's own keys
+                    // (W/E/A/F, escape) route from — a dangling handle would
+                    // eat them all, and bare blur leaves them just as dead.
+                    let focus = app.update(cx, |this, cx| {
+                        this.stage_take(take, cx);
+                        this.focus.clone()
+                    });
+                    window.focus(&focus, cx);
                 })
                 .agent_node(Role::Row, label),
         );
@@ -2177,18 +2131,22 @@ fn chooser(
                 // search field holds focus and a field taking typed text
                 // out-ranks the window's own Escape.
                 "escape" => {
-                    keys.update(cx, |this, cx| this.stage_escape(cx));
-                    window.blur();
+                    let focus = keys.update(cx, |this, cx| {
+                        this.stage_escape(cx);
+                        this.focus.clone()
+                    });
+                    window.focus(&focus, cx);
                     return;
                 }
                 "enter" => {
                     let take = taken.get(cursor).cloned();
-                    keys.update(cx, |this, cx| {
+                    let focus = keys.update(cx, |this, cx| {
                         if let Some(take) = take {
                             this.stage_take(take, cx);
                         }
+                        this.focus.clone()
                     });
-                    window.blur();
+                    window.focus(&focus, cx);
                     return;
                 }
                 _ => return,
@@ -2254,8 +2212,11 @@ fn chooser(
         focused: true,
         label: "Add element dialog".into(),
         scrim_dismiss: luma_ui::dialog::ScrimDismiss::Enabled(Box::new(move |window, cx| {
-            dismiss.update(cx, |this, cx| this.stage_escape(cx));
-            window.blur();
+            let focus = dismiss.update(cx, |this, cx| {
+                this.stage_escape(cx);
+                this.focus.clone()
+            });
+            window.focus(&focus, cx);
         })),
         closing: state.closing.closing_since(),
     }
@@ -2456,122 +2417,12 @@ fn node_menu(at: Point<Pixels>, app: &Entity<Luma>) -> AnyElement {
 /// *while* working the room, so the room underneath keeps taking clicks the
 /// whole time it is up. It retargets rather than reopening when the selection
 /// changes.
-fn inspector(view: &StageView, app: &Entity<Luma>, revealed: Pixels) -> AnyElement {
-    if revealed <= px(0.0) {
-        return div().into_any_element();
-    }
-    let pad = px(luma_ui::sheet::PAD);
-    let mut column = div()
-        .id("stage-inspector-body")
-        .size_full()
-        .min_h_0()
-        .overflow_y_scrollbar()
-        .flex()
-        .flex_col()
-        .gap(px(14.0))
-        .p(pad);
-    if let Some(selected) = &view.selected {
-        // The label, and nothing beside it naming the widget the selection
-        // would get. Whether a gizmo applies is said by the gizmo being there
-        // (`Build::gizmo_offered`) and by which control this sheet offers
-        // below — a caption spelling the freedom out is a label for state.
-        column = column.child(
-            div()
-                .text_size(px(13.0))
-                .text_color(ladder::foreground())
-                .child(selected.label.clone())
-                .agent_node(Role::Text, selected.label.clone()),
-        );
-        // The one editable freedom the joint admits, as one control. A bolted
-        // plate gets none, and gets no row rather than a disabled one.
-        let editable = selected.freedom.param().map_or_else(
-            || (selected.freedom == Freedom::Free).then_some(("trim", selected.trim, MAX_TRIM_M)),
-            |key| Some((key, selected.param, if key == "u" { 1.0 } else { 360.0 })),
-        );
-        if let Some((key, value, max)) = editable {
-            let app = app.clone();
-            let node = selected.node.clone();
-            let step = if key == "yaw" { 5.0 } else { 0.05 };
-            column = column.child(float::field_row(
-                axis_title(key),
-                float::scrub(
-                    format!("stage-{key}"),
-                    value,
-                    0.0,
-                    max,
-                    step,
-                    luma_ui::sheet::CONTENT_WIDTH,
-                    move |value, _, cx| {
-                        let node = node.clone();
-                        app.update(cx, |this, cx| {
-                            if key == "trim" {
-                                this.stage_set_trim(value, cx);
-                            } else if key == "yaw" {
-                                // Degrees on the sheet, radians in the graph —
-                                // and `set_params` puts this one on the edge.
-                                this.stage_set_param(&node, key, value.to_radians(), cx);
-                            } else {
-                                this.stage_set_param(&node, key, value, cx);
-                            }
-                        });
-                    },
-                ),
-            ));
-        }
-        if let Some(span) = selected.span {
-            let app = app.clone();
-            let node = selected.node.clone();
-            column = column.child(float::field_row(
-                "Span",
-                float::scrub(
-                    "stage-span",
-                    span,
-                    hand::LENGTH_STEP_M,
-                    MAX_RUN_M,
-                    hand::LENGTH_STEP_M,
-                    luma_ui::sheet::CONTENT_WIDTH,
-                    move |value, _, cx| {
-                        let node = node.clone();
-                        app.update(cx, |this, cx| {
-                            this.stage_set_param(&node, "span", value, cx)
-                        });
-                    },
-                ),
-            ));
-        }
-        column = column
-            .children(selected.relation.clone().map(note))
-            .children(selected.constraint.clone().map(note));
-    }
-    // Warnings last, and only when asked for: the badge by the add button is
-    // the resting claim, and pressing it is what pins the sentences here. A
-    // sheet that dumped them beside every selection would make selecting a
-    // thing mean reading a report about everything else.
-    if view.warnings_pinned && (!view.dangling.is_empty() || !view.warnings.is_empty()) {
-        let mut block = div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(float::label("Unresolved"));
-        for text in view.warnings.iter().chain(view.dangling.iter()) {
-            block = block.child(
-                div()
-                    .text_size(px(11.5))
-                    .text_color(ladder::status_warn())
-                    .child(text.clone())
-                    .agent_node(Role::Row, text.clone()),
-            );
-        }
-        column = column.child(block);
-    }
-    luma_ui::sheet::Sheet {
-        label: "Stage inspector".into(),
-        width: luma_ui::sheet::WIDTH,
-        revealed,
-        interactive: view.inspector_open,
-    }
-    .render(column.into_any_element())
-}
+/// How wide the selection's in-scene card is, and how it keeps clear of the
+/// picture's edges. Beside the piece, never centred on it: the card is a
+/// caption, and a caption over its subject is a cover.
+const SELECTED_CARD_W: f32 = 190.0;
+const SELECTED_CARD_GAP: f32 = 26.0;
+const SELECTED_CARD_CLEAR: f32 = 170.0;
 
 /// The highest a free placement may be scrubbed to, in metres — a rig's trim,
 /// not a building's.
@@ -2997,13 +2848,124 @@ pub(crate) fn build_layer(
                     let (node, at) = (menu_node.clone(), event.position);
                     menu.update(cx, |this, cx| {
                         if let Some(build) = this.build_mut() {
-                            build.selected = Some(node);
+                            build.select(Some(node));
                         }
                         this.stage_open_menu(at, cx);
                     });
                 })
                 .agent_node(Role::Button, bead.label),
         );
+    }
+    // The selection's own card, drawn beside the thing it is about. The
+    // sheet this replaces took a column off the room to say the same four
+    // facts; the room is the page, so the facts sit next to their subject.
+    if matches!(build.hand, Hand::Idle) {
+        if let Some(selected) = build.selected_view() {
+            {
+                // Beside the piece when the piece is on screen; pinned inside
+                // the frame when it is not. A trim drag can lift the subject
+                // out of view, and a control that unmounted mid-drag would
+                // take the drag with it.
+                let at = build
+                    .card_anchor
+                    .or_else(|| {
+                        build
+                            .room
+                            .pose(&selected.node)
+                            .map(|pose| pose.w_axis.truncate())
+                    })
+                    .and_then(|anchor| project(camera, size, anchor))
+                    .unwrap_or_else(|| Point::new(px(size.0 * 0.5), px(size.1 * 0.5)));
+                let mut card = float::popover_card()
+                    .w(px(SELECTED_CARD_W))
+                    .gap(px(6.0))
+                    .p(px(8.0));
+                card = card.child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(ladder::foreground())
+                        .child(selected.label.clone())
+                        .agent_node(Role::Text, selected.label.clone()),
+                );
+                let editable = selected.freedom.param().map_or_else(
+                    || {
+                        (selected.freedom == Freedom::Free).then_some((
+                            "trim",
+                            selected.trim,
+                            MAX_TRIM_M,
+                        ))
+                    },
+                    |key| Some((key, selected.param, if key == "u" { 1.0 } else { 360.0 })),
+                );
+                if let Some((key, value, max)) = editable {
+                    let app = app.clone();
+                    let node = selected.node.clone();
+                    let step = if key == "yaw" { 5.0 } else { 0.05 };
+                    card = card.child(float::field_row(
+                        axis_title(key),
+                        float::scrub(
+                            format!("stage-{key}"),
+                            value,
+                            0.0,
+                            max,
+                            step,
+                            CONTROL_WIDTH,
+                            move |value, _, cx| {
+                                let node = node.clone();
+                                app.update(cx, |this, cx| {
+                                    if key == "trim" {
+                                        this.stage_set_trim(value, cx);
+                                    } else if key == "yaw" {
+                                        this.stage_set_param(&node, key, value.to_radians(), cx);
+                                    } else {
+                                        this.stage_set_param(&node, key, value, cx);
+                                    }
+                                });
+                            },
+                        ),
+                    ));
+                }
+                if let Some(span) = selected.span {
+                    let app = app.clone();
+                    let node = selected.node.clone();
+                    card = card.child(float::field_row(
+                        "Span",
+                        float::scrub(
+                            "stage-span",
+                            span,
+                            hand::LENGTH_STEP_M,
+                            MAX_RUN_M,
+                            hand::LENGTH_STEP_M,
+                            CONTROL_WIDTH,
+                            move |value, _, cx| {
+                                let node = node.clone();
+                                app.update(cx, |this, cx| {
+                                    this.stage_set_param(&node, "span", value, cx);
+                                });
+                            },
+                        ),
+                    ));
+                }
+                card = card
+                    .children(selected.relation.clone().map(note))
+                    .children(selected.constraint.clone().map(note));
+                let left = px((f32::from(at.x) + SELECTED_CARD_GAP)
+                    .min(size.0 - SELECTED_CARD_W - INSET)
+                    .max(INSET));
+                let top = px(f32::from(at.y)
+                    .min(size.1 - SELECTED_CARD_CLEAR)
+                    .max(crate::visualizer::HEADER_HEIGHT + INSET));
+                layer = layer.child(
+                    div()
+                        .absolute()
+                        .left(left)
+                        .top(top)
+                        .occlude()
+                        .child(card)
+                        .agent_node(Role::Card, "Selection card"),
+                );
+            }
+        }
     }
     // What the hand is doing, where the hand is doing it. These are the
     // builder's evidence — for an eye because they are drawn over the room,
@@ -3042,7 +3004,7 @@ pub(crate) fn build_layer(
         // in the tree said so — the button reports its bounds and its
         // enablement either way. Anchored to the socket until that would hide
         // it, and pushed left exactly as far as it must be.
-        let reachable = size.0 - build.inspector_target() - INSET;
+        let reachable = size.0 - INSET;
         let left = px(f32::from(at.x).min(reachable - RUN_CARD_W).max(INSET));
         let refused = build
             .hand
@@ -3255,6 +3217,23 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
             }
         }
     }
+    // The selected piece's own dimension: a run at rest wears the measure the
+    // extend flow draws, along its span — the "[ 3.0 m ]" the picture owes a
+    // selected stick without a sheet to print it in.
+    if out.measure.is_none() {
+        if let (Hand::Idle, Some(node)) = (&build.hand, build.selected.as_ref()) {
+            if let (Some(from), Some(to)) = (
+                build.room.socket_world(node, "end_a"),
+                build.room.socket_world(node, "end_b"),
+            ) {
+                out.measure = Some(Measure {
+                    from: point_of(from),
+                    to: point_of(to),
+                    refused: false,
+                });
+            }
+        }
+    }
     let held = build.held_sockets();
     out.sockets = build
         .room
@@ -3342,8 +3321,7 @@ mod tests {
             hand: super::Hand::Idle,
             sockets,
             selected: None,
-            inspector: luma_ui::pane::PaneWidth::new(0.0),
-            warnings_pinned: false,
+            card_anchor: None,
             trim_draft: None,
             report: Vec::new(),
             committing: false,
