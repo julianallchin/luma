@@ -93,6 +93,7 @@ fn harness() -> Harness {
             reduced_motion: true,
             motion_scale: 1.0,
             stage_gpu: None,
+            cloud: false,
         },
         ..Config::default()
     };
@@ -149,9 +150,8 @@ fn open_the_stage(harness: &mut Harness) {
             // actually works at — and the volumetric march is fill-bound, so
             // measuring at the opening distance measures a different scene.
             for (let press = 0; press < {zoom}; press += 1) {{
-                const button = app.snapshot().find({{ role: "button", label: "Zoom In" }});
-                if (!button) throw new Error("the stage has no Zoom In button");
-                app.click(button, {{ restale: "match" }});
+                app.scroll(app.snapshot().find({{ role: "card", label: "Stage" }}),
+                    {{ dy: -200 }});
                 app.frames(1, {{ waitMs: 16 }});
             }}
             app.frames(10, {{ waitMs: 60 }});
@@ -299,9 +299,8 @@ fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
                 // would make every number below a measurement of nothing, and
                 // this button calls `dolly` by construction.
                 const zoomIn = () => {{
-                    const b = app.snapshot().find({{ role: "button", label: "Zoom In" }});
-                    if (!b) throw new Error("the stage has no Zoom In button");
-                    return b;
+                    app.scroll(app.snapshot().find({{ role: "card", label: "Stage" }}),
+                        {{ dy: -200 }});
                 }};
                 const reading = (step, phase) => ({{
                     step,
@@ -343,7 +342,7 @@ fn zooming_into_the_beams_while_playing_reports_where_the_frame_goes() {
                     // Several presses per burst so one step is a real change of
                     // distance, not a nudge inside the same cluster cell.
                     for (let press = 0; press < 4; press += 1) {{
-                        app.click(zoomIn(), {{ restale: "match" }});
+                        zoomIn();
                     }}
                     steps.push(reading(step, "moving"));
                     steps.push(settled(step));

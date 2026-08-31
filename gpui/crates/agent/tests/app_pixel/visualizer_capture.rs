@@ -148,7 +148,10 @@ fn capture() {
     run(
         &mut harness,
         r#"
-            for (let i = 0; i < 25; i++) { nav.step("Zoom In", "button", "Zoom In"); }
+            for (let i = 0; i < 8; i++) {
+                app.scroll(app.snapshot().find({ role: "card", label: "Stage" }), { dy: -200 });
+                app.frames(1);
+            }
             app.frames(6, { waitMs: 30 });
         "#,
     );

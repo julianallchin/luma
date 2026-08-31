@@ -465,6 +465,18 @@ impl Render for Luma {
                     this.stage_open_chooser_focused(window, cx);
                 }),
             )
+            .on_action(cx.listener(|this, _: &keymap::ZoomStageIn, _, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.dolly(crate::visualizer::DOLLY_IN);
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &keymap::ZoomStageOut, _, cx| {
+                if let Some(state) = this.visualizer_mut() {
+                    state.dolly(crate::visualizer::DOLLY_OUT);
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &keymap::FocusStageSelection, _, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     if state.focus_selection() {

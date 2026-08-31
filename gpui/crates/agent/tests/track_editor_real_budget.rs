@@ -73,6 +73,7 @@ fn harness() -> Harness {
             reduced_motion: true,
             motion_scale: 1.0,
             stage_gpu: None,
+            cloud: false,
         },
         ..Config::default()
     };
