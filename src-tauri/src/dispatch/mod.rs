@@ -573,6 +573,12 @@ commands! {
         layout: DistributeLayout,
         label_prefix: Option<String>,
     ) -> DistributeReport;
+    distribute::redistribute(
+        venue_id: String,
+        member_node_id: String,
+        count: usize,
+        layout: DistributeLayout,
+    ) -> DistributeReport;
     stage::get_venue_graph(venue_id: String) -> VenueGraphRows;
     stage::get_resolved_venue(venue_id: String) -> ResolvedVenue;
     stage::venue_tiles(venue_id: String, cell_m: Option<f64>) -> String;

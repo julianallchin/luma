@@ -114,6 +114,15 @@ pub(crate) struct Build {
     /// The trim field's draft text. Held as typed so a half-entered number is
     /// not rounded under the operator's caret.
     pub(crate) trim_draft: Option<String>,
+    /// The distribution the selection belongs to: every fixture of the same
+    /// model chained on the same host face, ordered along it. Filled by the
+    /// click that selected a member, emptied with the selection — the card
+    /// edits the row as one thing when there is more than one of them.
+    pub(crate) distribution: Vec<String>,
+    /// The layout the row's controls re-run `distribute` with. Client state,
+    /// not read back from the graph: the graph stores stations, not the rule
+    /// that produced them.
+    pub(crate) distribution_layout: luma_scene::distribute::Layout,
     /// The last verb's warnings, and its refusal if it had one.
     pub(crate) report: Vec<String>,
     /// A verb that has not come back yet. Placement is idempotent per gesture,
@@ -141,6 +150,8 @@ impl Build {
             selected: None,
             card_anchor: None,
             trim_draft: None,
+            distribution: Vec::new(),
+            distribution_layout: luma_scene::distribute::Layout::Even,
             report: Vec::new(),
             committing: false,
         })
@@ -326,6 +337,41 @@ impl Build {
         }
     }
 
+    /// Every fixture in the same distribution as `node` — the fixtures of one
+    /// model chained on the same host face — ordered along the face.
+    ///
+    /// Derived, never stored: the graph keeps stations, and "the row" is a
+    /// reading of them, so there is no row id to go stale when a fixture is
+    /// deleted by hand. `path_of` answers a node's definition key; it is a
+    /// closure because the scene that knows it lives beside this state, not
+    /// in it.
+    pub(crate) fn distribution_of(
+        &self,
+        node: &str,
+        path_of: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<String> {
+        let Some(edge) = self.graph.edge(node) else {
+            return Vec::new();
+        };
+        let Some(path) = path_of(node) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(f64, String)> = self
+            .graph
+            .nodes()
+            .filter(|sibling| sibling.kind == luma_scene::venue::NodeKind::Fixture)
+            .filter(|sibling| {
+                self.graph.edge(&sibling.id).is_some_and(|joint| {
+                    joint.parent == edge.parent && joint.their_socket == edge.their_socket
+                })
+            })
+            .filter(|sibling| path_of(&sibling.id).as_deref() == Some(path.as_str()))
+            .map(|sibling| (sibling.params.get("u", 0.0), sibling.id.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.into_iter().map(|(_, id)| id).collect()
+    }
+
     /// The relation one node was placed by, in the graph's own words.
     ///
     /// The claim an `attach` makes, read back off the solved graph rather than
@@ -392,6 +438,8 @@ impl Build {
             .map(|pose| pose.w_axis.truncate());
         self.selected = node;
         self.trim_draft = None;
+        // The row follows the selection: whoever expands it fills it back in.
+        self.distribution.clear();
     }
 
     /// The selected node as the page draws it — label, freedoms, relation.
@@ -1374,6 +1422,65 @@ impl Luma {
             }
         }
         cx.notify();
+    }
+
+    /// Re-lay the selected fixture's row at a new count or layout.
+    ///
+    /// The verb derives the row from the member server-side and answers with
+    /// the new fixtures; the selection moves onto them, because the old ids
+    /// no longer exist. A count that does not fit is an `Err` and rolls back
+    /// to the row that did — the report line says why.
+    pub(crate) fn stage_redistribute(
+        &mut self,
+        member: String,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(build) = self.build_mut() else {
+            return;
+        };
+        if build.committing {
+            return;
+        }
+        build.committing = true;
+        let venue = build.venue_id.clone();
+        let layout =
+            luma_lib::models::distribute::DistributeLayout::from(build.distribution_layout);
+        let pending = self.library.redistribute(&venue, &member, count, layout);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                match &result {
+                    Ok(report) => {
+                        let ids: Vec<String> =
+                            report.fixtures.iter().map(|f| f.id.clone()).collect();
+                        if let Some(state) = this.visualizer_mut() {
+                            state.replace_selection(
+                                ids.iter()
+                                    .cloned()
+                                    .map(luma_render::frame::EditorObject::Fixture),
+                            );
+                        }
+                        if let Some(build) = this.build_mut() {
+                            build.committing = false;
+                            build.report = report.warnings.clone();
+                            build.select(ids.last().cloned());
+                            build.distribution = ids;
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(build) = this.build_mut() {
+                            build.committing = false;
+                            build.report = vec![error.to_string()];
+                        }
+                    }
+                }
+                this.reload_stage(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Trim: how high a free placement flies. Children follow, because the
@@ -3080,6 +3187,72 @@ pub(crate) fn build_layer(
                         .child(selected.label.clone())
                         .agent_node(Role::Text, selected.label.clone()),
                 );
+                // A fixture clicked out of a row selected the row, and the row
+                // is what this card edits: count and layout re-run the same
+                // `distribute` the configure popover committed, live.
+                if build.distribution.len() > 1 && build.distribution.contains(&selected.node) {
+                    let n = build.distribution.len();
+                    card = card.child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(ladder::foreground_alpha(0.45))
+                            .child(format!("Row of {n}"))
+                            .agent_node(Role::Text, format!("Row of {n}")),
+                    );
+                    let member = selected.node.clone();
+                    let set_count = app.clone();
+                    card = card.child(float::field_row(
+                        "Count",
+                        float::scrub(
+                            "stage-row-count",
+                            n as f64,
+                            1.0,
+                            MAX_COUNT,
+                            1.0,
+                            SELECTED_CARD_CONTROL_W,
+                            move |value, _, cx| {
+                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                                let count = value.round().max(1.0) as usize;
+                                if count != n {
+                                    let member = member.clone();
+                                    set_count.update(cx, |this, cx| {
+                                        this.stage_redistribute(member, count, cx);
+                                    });
+                                }
+                            },
+                        ),
+                    ));
+                    let even_now = matches!(
+                        build.distribution_layout,
+                        luma_scene::distribute::Layout::Even
+                    );
+                    let mut track = float::segmented().w(px(SELECTED_CARD_CONTROL_W));
+                    for (name, even) in [("Even", true), ("Spacing", false)] {
+                        let app = app.clone();
+                        let member = selected.node.clone();
+                        track = track.child(
+                            float::segment(name, even_now == even, name)
+                                .id(gpui::ElementId::Name(format!("row-layout-{name}").into()))
+                                .on_click(move |_, _, cx| {
+                                    let member = member.clone();
+                                    app.update(cx, |this, cx| {
+                                        if let Some(build) = this.build_mut() {
+                                            build.distribution_layout = if even {
+                                                luma_scene::distribute::Layout::Even
+                                            } else {
+                                                luma_scene::distribute::Layout::Spacing(
+                                                    DEFAULT_PITCH_M,
+                                                )
+                                            };
+                                        }
+                                        this.stage_redistribute(member, n, cx);
+                                    });
+                                })
+                                .agent_node(Role::Toggle, format!("Row {name}")),
+                        );
+                    }
+                    card = card.child(float::field_row("Layout", track));
+                }
                 let editable = selected.freedom.param().map_or_else(
                     || {
                         // Trim is "how high it flies", and only the truss
@@ -3614,6 +3787,8 @@ mod tests {
             selected: None,
             card_anchor: None,
             trim_draft: None,
+            distribution: Vec::new(),
+            distribution_layout: luma_scene::distribute::Layout::Even,
             report: Vec::new(),
             committing: false,
         }

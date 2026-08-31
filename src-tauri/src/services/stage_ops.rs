@@ -740,6 +740,105 @@ impl<'a> Stage<'a> {
         })
     }
 
+    /// Re-lay an existing row of fixtures at a new count or layout.
+    ///
+    /// `member_node_id` names *any* fixture of the row; the row is derived —
+    /// every fixture of the same model chained on the same host face — never
+    /// stored, so there is no row id to go stale. One transaction: the old
+    /// fixtures leave, [`distribute_service::distribute`] lays the new ones,
+    /// and a count that no longer fits rolls the whole thing back — the row
+    /// you had is the row you keep.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] if the member is not a placed fixture, or the
+    /// new count does not fit the face.
+    pub async fn redistribute(
+        &self,
+        member_node_id: &str,
+        count: usize,
+        layout: DistributeLayout,
+    ) -> Result<Distributed> {
+        let mut access = self.write().await?;
+        require_in_venue(&mut access, &[member_node_id]).await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let Some(edge) = graph.edge(member_node_id).cloned() else {
+            return Err(StageError::Refused(format!(
+                "`{member_node_id}` is not placed on anything"
+            )));
+        };
+        if graph.node(member_node_id).map(|node| node.kind) != Some(NodeKind::Fixture) {
+            return Err(StageError::Refused(
+                "only a fixture's row can be redistributed".into(),
+            ));
+        }
+        let rows = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
+        let Some(member) = rows.iter().find(|row| row.id == member_node_id) else {
+            return Err(StageError::NotFound(format!(
+                "`{member_node_id}` has no patch row"
+            )));
+        };
+        let (path, mode) = (member.fixture_path.clone(), member.mode_name.clone());
+        let siblings: Vec<String> = graph
+            .nodes()
+            .filter(|node| node.kind == NodeKind::Fixture)
+            .filter(|node| {
+                graph.edge(&node.id).is_some_and(|sibling| {
+                    sibling.parent == edge.parent && sibling.their_socket == edge.their_socket
+                })
+            })
+            .filter(|node| {
+                rows.iter()
+                    .any(|row| row.id == node.id && row.fixture_path == path)
+            })
+            .map(|node| node.id.clone())
+            .collect();
+        let host_node = (edge.parent != graph.root()).then_some(edge.parent.clone());
+        drop(graph);
+        for id in &siblings {
+            fixture_create::delete(&mut access, id).await?;
+        }
+        let report = distribute_service::distribute(
+            &mut access,
+            self.fixtures_root,
+            distribute_service::Request {
+                host_node: host_node.as_deref(),
+                host_socket: Some(&edge.their_socket),
+                fixture_path: &path,
+                mode_name: &mode,
+                count,
+                layout: layout.into(),
+                label_prefix: None,
+            },
+        )
+        .await
+        .map_err(StageError::Refused)?;
+        // A refusal after the deletes must not commit them: erroring here is
+        // what rolls the transaction back to the row that fit.
+        if let Some(refusal) = &report.refusal {
+            return Err(StageError::Refused(match refusal {
+                distribute_service::Refusal::TooLong(fit) => format!(
+                    "{count} do not fit: the face would need {:.2} m and has {:.2} m",
+                    fit.needed_m, fit.available_m
+                ),
+                distribute_service::Refusal::Overlap { held_by, .. } => format!(
+                    "the new row would overlap {}",
+                    held_by
+                        .iter()
+                        .map(|occupied| occupied.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }));
+        }
+        let patch = crate::database::local::fixtures::get_patched_fixtures(&mut access).await?;
+        venue_graph::commit_graph(access).await?;
+        crate::services::groups::invalidate_venue_fixture_cache();
+        Ok(Distributed {
+            report: report.into(),
+            patch,
+        })
+    }
+
     /// A `catalog_ref` the catalog actually has.
     ///
     /// Without this a typo is *placed*: the node has no geometry, the solve
