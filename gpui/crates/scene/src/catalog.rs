@@ -267,6 +267,9 @@ fn guardrail_sockets() -> Vec<SocketDef> {
             .offset(DVec3::new(x, 0.0, 0.0))
             .normal(normal)
             .tangent(DVec3::Z)
+            // A rail stands up: chaining by either end keeps its feet down.
+            // The Face flip turned a same-name end mate upside down.
+            .mode(SocketMode::Upright)
     };
     vec![
         grab(),
@@ -284,6 +287,9 @@ fn cable_cover_sockets() -> Vec<SocketDef> {
             .offset(DVec3::new(0.0, 0.0, z))
             .normal(normal)
             .tangent(DVec3::X)
+            // Same physics as a rail end: the cover lies on the floor and a
+            // same-name chain must not flip it over.
+            .mode(SocketMode::Upright)
     };
     let inset = CABLE_COVER_END_INSET_M;
     vec![
