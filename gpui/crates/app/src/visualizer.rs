@@ -1132,6 +1132,12 @@ impl Visualizer {
     /// camera's target.
     /// Empty the selection — the stage's escape reaches it here so the two
     /// stores cannot disagree about "nothing".
+    /// Replace the selection outright — the redistribute round trip lands new
+    /// fixture ids and the old ones no longer exist to keep.
+    pub(crate) fn replace_selection(&mut self, targets: impl IntoIterator<Item = EditorObject>) {
+        self.selection.replace(targets);
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.selection.clear();
     }
@@ -1414,6 +1420,9 @@ impl Visualizer {
         // the selection paths below can bail before reaching the end.
         self.drag = None;
         let interaction = self.editor_drag.take()?;
+        // Set only by a plain click on a fixture — the gesture that selects a
+        // row. See the expansion at the tail.
+        let mut clicked_fixture: Option<String> = None;
         // Only the placing hand's click is a drop. A run's controls are its
         // own card, so a click on the room mid-extend aims nothing.
         let placing = self
@@ -1438,6 +1447,11 @@ impl Visualizer {
                 if gesture.released() == ClickOrbitRelease::Click =>
             {
                 if let Some(target) = pick.pick(at, viewport) {
+                    if !shift {
+                        if let EditorObject::Fixture(id) = &target {
+                            clicked_fixture = Some(id.clone());
+                        }
+                    }
                     self.selection.click(target, shift);
                 } else if !shift {
                     self.selection.clear();
@@ -1467,11 +1481,47 @@ impl Visualizer {
         // agree by construction. After *every* gesture that can move the
         // selection — click and marquee alike — so the builder never holds a
         // second, staler answer to "what is selected".
+        // A fixture clicked out of a row selects the row: the fixtures of one
+        // model chained on the same face are one thing to a rigger, and the
+        // card that follows edits them as one. A marquee is deliberate
+        // multi-select and is left exactly as swept.
+        let expanded: Vec<String> = clicked_fixture
+            .as_deref()
+            .map(|id| {
+                let stage = self.stage.borrow();
+                let path_of = |node: &str| {
+                    stage.scene.as_ref().and_then(|scene| {
+                        scene
+                            .fixtures
+                            .iter()
+                            .find(|fixture| fixture.id == node)
+                            .map(|fixture| fixture.fixture_path.clone())
+                    })
+                };
+                self.build
+                    .as_ref()
+                    .map(|build| build.distribution_of(id, &path_of))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        if expanded.len() > 1 {
+            if let Some(primary) = clicked_fixture.clone() {
+                let mut ordered: Vec<String> = expanded
+                    .iter()
+                    .filter(|id| **id != primary)
+                    .cloned()
+                    .collect();
+                ordered.push(primary);
+                self.selection
+                    .replace(ordered.into_iter().map(EditorObject::Fixture));
+            }
+        }
         if let Some(build) = self.build.as_mut() {
             let primary = self.selection.primary().map(|object| match object {
                 EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
             });
             build.select(primary);
+            build.distribution = expanded;
         }
         None
     }

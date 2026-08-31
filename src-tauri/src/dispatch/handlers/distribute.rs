@@ -53,6 +53,30 @@ pub async fn distribute(
     Ok(distributed.report)
 }
 
+/// Re-lay an existing row of fixtures at a new count or layout.
+///
+/// `member_node_id` names any fixture of the row; the row is derived — every
+/// fixture of the same model on the same host face. One transaction: a count
+/// that no longer fits rolls back to the row that did.
+///
+/// # Errors
+/// As [`distribute`], plus a member that is not a placed fixture.
+pub async fn redistribute(
+    services: &AppServices,
+    venue_id: String,
+    member_node_id: String,
+    count: usize,
+    layout: DistributeLayout,
+) -> Result<DistributeReport, CommandError> {
+    let distributed = Stage::new(&services.db.0, &services.fixtures_root, &venue_id)
+        .redistribute(&member_node_id, count, layout)
+        .await?;
+    if let Some(artnet) = services.artnet.as_ref() {
+        artnet.update_patch(distributed.patch);
+    }
+    Ok(distributed.report)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -416,6 +440,66 @@ mod tests {
             json!("tooLong"),
             "a deck is not forty movers long"
         );
+    }
+
+    /// Redistribute re-lays the row the member belongs to: the old fixtures
+    /// leave, the new count arrives, and a count that does not fit rolls the
+    /// whole thing back to the row that did.
+    #[tokio::test]
+    async fn redistribute_relays_the_row_and_a_misfit_rolls_back() {
+        let (_dir, services, venue) = room().await;
+        let run = truss(&services, &venue, 4.0).await;
+        let placed = spread(&services, &venue, &run, "face_-y", 3, even())
+            .await
+            .unwrap();
+        let old: Vec<String> = placed["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(old.len(), 3);
+
+        let relaid = dispatch(
+            &services,
+            "redistribute",
+            &json!({
+                "venueId": venue,
+                "memberNodeId": old[0],
+                "count": 5,
+                "layout": even(),
+            }),
+        )
+        .await
+        .unwrap();
+        let new: Vec<String> = relaid["fixtures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(new.len(), 5, "{relaid}");
+        assert!(
+            new.iter().all(|id| !old.contains(id)),
+            "the old rows were re-laid, not kept"
+        );
+        assert_eq!(patch(&services, &venue).await.len(), 5);
+
+        // Forty movers do not fit a four-metre stick: the verb refuses and
+        // the five that fit are still there.
+        let refused = dispatch(
+            &services,
+            "redistribute",
+            &json!({
+                "venueId": venue,
+                "memberNodeId": new[0],
+                "count": 40,
+                "layout": even(),
+            }),
+        )
+        .await;
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(patch(&services, &venue).await.len(), 5);
     }
 
     /// The floor is a plane: no ends, so nothing overruns it however many are

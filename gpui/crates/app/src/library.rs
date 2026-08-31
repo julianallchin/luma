@@ -2476,6 +2476,27 @@ impl Library {
         )
     }
 
+    /// Re-lay the row `member_node_id` belongs to at a new count or layout.
+    /// The row is derived server-side; a count that does not fit rolls back
+    /// to the row that did.
+    pub fn redistribute(
+        &self,
+        venue_id: &str,
+        member_node_id: &str,
+        count: usize,
+        layout: DistributeLayout,
+    ) -> impl Future<Output = Result<DistributeReport, LibraryError>> + use<> {
+        self.call(
+            "redistribute",
+            json!({
+                "venueId": venue_id,
+                "memberNodeId": member_node_id,
+                "count": count,
+                "layout": layout,
+            }),
+        )
+    }
+
     /// The installed scene evaluated at one absolute track time, or `None`
     /// when no scene is installed.
     ///
