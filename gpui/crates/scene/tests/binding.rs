@@ -143,7 +143,7 @@ export type RollFreedom =
 export type BboxAnchor ={anchors};
 
 /** How two mating sockets meet — see `sockets.ts`. */
-export type SocketMode = "face" | "edge";
+export type SocketMode = "face" | "edge" | "upright";
 
 export type Vec3Tuple = [number, number, number];
 

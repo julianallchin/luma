@@ -645,23 +645,35 @@ impl VenueGraph {
     /// Every id is a node's: the walk follows edges, and an edge names a node
     /// ([`Self::insert_placed`]).
     #[must_use]
+    /// Every parent precedes its children — a contract, not an accident:
+    /// `duplicate` replays this list as one `attach` per node and each step
+    /// names its parent's *copy*, so a child arriving before its parent would
+    /// be silently skipped. (It was: the first version returned ids in sort
+    /// order, and a chain whose minted ids happened to sort against the tree
+    /// copied only its alphabetical prefix.)
     pub fn subtree(&self, id: &str) -> Vec<String> {
-        let mut out = BTreeSet::new();
-        out.insert(id.to_string());
-        // Fixed-point over a bounded set: a graph this deep is a few hundred
-        // nodes, and the alternative is a child index that has to be kept true.
-        loop {
-            let grown: Vec<String> = self
+        let mut out = vec![id.to_string()];
+        let mut seen: BTreeSet<String> = BTreeSet::from([id.to_string()]);
+        // BFS over a bounded set: a graph this deep is a few hundred nodes,
+        // and the alternative is a child index that has to be kept true.
+        // Siblings come out in id order so the walk is deterministic.
+        let mut cursor = 0;
+        while cursor < out.len() {
+            let parent = out[cursor].clone();
+            let mut grown: Vec<String> = self
                 .edges
                 .iter()
-                .filter(|(child, edge)| out.contains(&edge.parent) && !out.contains(*child))
+                .filter(|(child, edge)| edge.parent == parent && !seen.contains(child.as_str()))
                 .map(|(child, _)| child.clone())
                 .collect();
-            if grown.is_empty() {
-                return out.into_iter().collect();
+            grown.sort();
+            for child in grown {
+                seen.insert(child.clone());
+                out.push(child);
             }
-            out.extend(grown);
+            cursor += 1;
         }
+        out
     }
 
     /// One node's socket by name, with the root's synthesized floor.
@@ -1384,11 +1396,28 @@ pub fn place_on(
     kind: NodeKind,
     placement: SurfacePlacement,
 ) -> DMat4 {
-    let host_world = parent_world * socket_frame(host);
+    // An Upright mate is framed by each piece's own up on *both* sides: a
+    // rail's `end_b` frame is tangent-framed upside down (z=+X, x=Z makes
+    // y=-Y), so a flip composed out of tangent frames flips the chain over on
+    // exactly one of the two ends, whichever way the flip turns.
+    let host_frame = if held.mode == SocketMode::Upright {
+        socket_frame_upright(host)
+    } else {
+        socket_frame(host)
+    };
+    let host_world = parent_world * host_frame;
     let lift = trim_axis(host_world) * placement.trim;
+    // The joint's hinge: `z` (the normal) for a face or an edge, but an
+    // upright joint articulates about its own vertical — `y` in the upright
+    // frame — the way a crowd barrier bends at a post.
+    let turn = if held.mode == SocketMode::Upright {
+        DMat4::from_rotation_y(placement.yaw)
+    } else {
+        DMat4::from_rotation_z(placement.yaw)
+    };
     host_world
         * DMat4::from_translation(DVec3::new(placement.u, placement.v, 0.0) + lift)
-        * DMat4::from_rotation_z(placement.yaw)
+        * turn
         * mate_suffix(kind, host_world, held)
 }
 
@@ -1422,10 +1451,14 @@ fn head_turn(node: &Node) -> DMat4 {
 /// [`SocketMode::Face`] opposes the two normals (face-to-face contact);
 /// [`SocketMode::Edge`] keeps the host's orientation and only translates —
 /// two decks butted along an edge both stay upright.
+/// [`SocketMode::Upright`] also opposes the normals, but by a half turn about
+/// the joint frame's own vertical — a guardrail chained by either end keeps
+/// its feet down, where the Face flip turned a same-name end mate over.
 fn flip_for(mode: SocketMode) -> DMat4 {
     match mode {
         SocketMode::Edge => DMat4::IDENTITY,
         SocketMode::Face => DMat4::from_rotation_x(std::f64::consts::PI),
+        SocketMode::Upright => DMat4::from_rotation_y(std::f64::consts::PI),
     }
 }
 
@@ -1491,11 +1524,49 @@ const VERTICAL_HOST_EPSILON: f64 = 1e-9;
 fn mate_suffix(kind: NodeKind, host_world: DMat4, held: &ResolvedSocket) -> DMat4 {
     if kind == NodeKind::Fixture {
         DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2)
+    } else if held.mode == SocketMode::Upright {
+        // Both sides upright-framed — see `place_on` — so the half turn about
+        // the joint's vertical opposes the normals and keeps feet down by
+        // construction, whichever ends met.
+        flip_for(held.mode) * socket_frame_upright(held).inverse()
     } else if hangs_under(host_world) {
         socket_frame(held).inverse()
     } else {
         flip_for(held.mode) * socket_frame(held).inverse()
     }
+}
+
+/// A socket's frame built from its piece's own up rather than its authored
+/// tangent: `+Z` the normal, `+Y` the piece's local up re-orthogonalized
+/// against it, `+X` completing the right-handed set. The frame
+/// [`SocketMode::Upright`] mates compose out of — both halves of the joint
+/// agree on which way is up, so no end is special.
+fn socket_frame_upright(socket: &ResolvedSocket) -> DMat4 {
+    let up = DVec3::Y;
+    // The hinge of an upright joint is vertical, so its normal is horizontal
+    // by construction — flatten it. A deck's edge socket authors no normal
+    // and inherits a diagonal one from its bbox anchor; taken literally it
+    // laid the rail on the deck.
+    let flat = |v: DVec3| (v - up * v.dot(up)).normalize_or_zero();
+    let mut z = flat(socket.normal);
+    // A vertical normal (a deck edge inherits `+Y` from its top-face anchor)
+    // says nothing about which way is out; the bbox-derived `outward` does.
+    if z.length_squared() < 0.5 {
+        z = flat(socket.outward);
+    }
+    // Nothing horizontal at all: fall back to the authored tangent frame,
+    // which is all the information there is.
+    if z.length_squared() < 0.5 {
+        return socket_frame(socket);
+    }
+    let y = up;
+    let x = y.cross(z).normalize_or_zero();
+    DMat4::from_cols(
+        x.extend(0.0),
+        y.extend(0.0),
+        z.extend(0.0),
+        socket.position.extend(1.0),
+    )
 }
 
 /// Whether a host surface is one a piece hangs *under* rather than stands *on*.
@@ -3113,8 +3184,11 @@ mod tests {
         );
     }
 
+    /// A truss end admits exactly the quarter turn its square section allows:
+    /// a requested roll lands on the nearest quarter, with a warning saying
+    /// what was applied.
     #[test]
-    fn a_bolted_joint_ignores_a_requested_roll() {
+    fn a_quarter_turn_joint_lands_a_roll_on_the_nearest_quarter() {
         let mut graph = VenueGraph::new(root());
         let mut a = node("a", NodeKind::Run, "truss");
         a.params = on_floor(0.0, 0.0, 0.0);
@@ -3145,9 +3219,12 @@ mod tests {
             )
             .unwrap();
         let resolved = resolve(&graph, &table());
+        // 1 rad ≈ 57° asks for more than half a quarter: the joint answers
+        // with the quarter itself.
         assert!(matches!(
             resolved.placement("b").warnings.as_slice(),
-            [Warning::RollClamped { applied, .. }] if applied.abs() < f64::EPSILON
+            [Warning::RollClamped { applied, .. }]
+                if (applied - std::f64::consts::FRAC_PI_2).abs() < 1e-9
         ));
     }
 
@@ -3174,5 +3251,122 @@ mod tests {
         }
         assert_eq!(graph.subtree("a"), ["a", "b", "c"]);
         assert_eq!(graph.subtree("c"), ["c"]);
+    }
+
+    /// Parents precede children whatever the ids sort as — `duplicate` replays
+    /// this list one attach at a time and each step names its parent's copy,
+    /// so a child sorted ahead of its parent used to be silently skipped.
+    #[test]
+    fn subtree_orders_parents_before_children_not_alphabetically() {
+        let mut graph = VenueGraph::new(root());
+        // The chain z -> m -> a: exactly backwards in sort order.
+        for id in ["z", "m", "a"] {
+            graph.insert(node(id, NodeKind::Stage, "deck"));
+        }
+        graph.attach("z", floor_edge(0.0), &table()).unwrap();
+        for (child, parent) in [("m", "z"), ("a", "m")] {
+            graph
+                .attach(
+                    child,
+                    Edge {
+                        parent: parent.into(),
+                        my_socket: "edge_left".into(),
+                        their_socket: "edge_right".into(),
+                        roll: 0.0,
+                    },
+                    &table(),
+                )
+                .unwrap();
+        }
+        assert_eq!(graph.subtree("z"), ["z", "m", "a"]);
+    }
+
+    /// A rail chained by *either* end keeps its feet down. Rail ends mate in
+    /// [`SocketMode::Upright`]: the flip is about the joint's own vertical,
+    /// where the Face flip's turn about the horizontal tangent landed every
+    /// same-name end mate upside down (and 1.1 m in the air, riding its own
+    /// height through the flip).
+    #[test]
+    fn a_rail_chained_on_either_end_keeps_its_feet_down() {
+        use crate::aabb::DAabb;
+        use crate::sockets::{resolve_socket, BboxAnchor, SocketDef, SocketMode, SocketType};
+        use glam::{DMat4, DVec3};
+        let bbox = DAabb {
+            min: DVec3::new(-1.05, 0.0, -0.4),
+            max: DVec3::new(1.05, 1.1, 0.4),
+        };
+        let end = |name: &str, anchor, x: f64, normal| {
+            resolve_socket(
+                &SocketDef::new(name, SocketType::RailEnd, anchor)
+                    .offset(DVec3::new(x, 0.0, 0.0))
+                    .normal(normal)
+                    .tangent(DVec3::Z)
+                    .mode(SocketMode::Upright),
+                &bbox,
+            )
+        };
+        let a = end("end_a", BboxAnchor::Left, 0.012, DVec3::NEG_X);
+        let b = end("end_b", BboxAnchor::Right, -0.012, DVec3::X);
+        for (host, held, side, why) in [
+            (&a, &b, -1.0, "held end_b onto host end_a"),
+            (&a, &a, -1.0, "held end_a onto host end_a"),
+            (&b, &a, 1.0, "held end_a onto host end_b"),
+            (&b, &b, 1.0, "held end_b onto host end_b"),
+        ] {
+            let w = place_on(
+                DMat4::IDENTITY,
+                host,
+                held,
+                NodeKind::Piece,
+                SurfacePlacement::FLUSH,
+            );
+            let up = w.y_axis.truncate();
+            assert!(up.dot(DVec3::Y) > 0.99, "{why}: up went {up:?}");
+            let origin = w.w_axis.truncate();
+            assert!(
+                origin.x * side > 1.0 && origin.y.abs() < 1e-9,
+                "{why}: origin {origin:?} is not on the ground past the host's x={side} end"
+            );
+        }
+    }
+    /// A rail end butted to a deck edge stands beside the deck, upright —
+    /// not planked onto it or turned into the air.
+    #[test]
+    fn a_rail_on_a_deck_edge_stands_upright_beside_it() {
+        use crate::aabb::DAabb;
+        use crate::sockets::{resolve_socket, BboxAnchor, SocketDef, SocketMode, SocketType};
+        use glam::{DMat4, DVec3};
+        let deck = DAabb {
+            min: DVec3::new(-1.0, 0.0, -0.5),
+            max: DVec3::new(1.0, 0.4, 0.5),
+        };
+        let edge = resolve_socket(
+            &SocketDef::new("edge_left", SocketType::FloorEdge, BboxAnchor::TopLeft)
+                .tangent(DVec3::Z)
+                .mode(SocketMode::Edge),
+            &deck,
+        );
+        let rail = DAabb {
+            min: DVec3::new(-1.05, 0.0, -0.4),
+            max: DVec3::new(1.05, 1.1, 0.4),
+        };
+        let end = resolve_socket(
+            &SocketDef::new("end_b", SocketType::RailEnd, BboxAnchor::Right)
+                .offset(DVec3::new(-0.012, 0.0, 0.0))
+                .normal(DVec3::X)
+                .tangent(DVec3::Z)
+                .mode(SocketMode::Upright),
+            &rail,
+        );
+        let w = place_on(
+            DMat4::IDENTITY,
+            &edge,
+            &end,
+            NodeKind::Piece,
+            SurfacePlacement::FLUSH,
+        );
+        let up = w.y_axis.truncate();
+        assert!(up.dot(DVec3::Y) > 0.99, "rail up went {up:?}");
+        assert!(w.w_axis.y.abs() < 0.45, "rail floated to y={}", w.w_axis.y);
     }
 }

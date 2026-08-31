@@ -212,14 +212,16 @@ impl SocketType {
     pub fn roll(self) -> RollFreedom {
         use SocketType::*;
         match self {
-            // A truss bolts to a plate on a fixed bolt circle. The section is
-            // square, so the geometry would admit `Steps(90.0)`; whether the
-            // builder offers that quarter turn is a phase-4 UX call, and until
-            // it does, claiming the freedom would be a lie about what the
-            // editor can express.
-            TrussEnd | FloorCorner => RollFreedom::Fixed,
+            // A truss bolts to a plate on a fixed bolt circle; the section is
+            // square, so the joint admits exactly the quarter turn.
+            TrussEnd | FloorCorner => RollFreedom::Steps(90.0),
+            // A rail chain articulates at its posts — a crowd barrier bends
+            // around a corner a few degrees at a time. The turn is about the
+            // joint's *vertical* (its mode is `SocketMode::Upright`), not
+            // about the rail's own axis.
+            RailEnd => RollFreedom::Steps(5.0),
             // Edge joints are tangent-aligned by construction.
-            FloorEdge | RailEnd | CableEnd => RollFreedom::Fixed,
+            FloorEdge | CableEnd => RollFreedom::Fixed,
             // Anything resting on a plane may yaw about its normal.
             Grab | FloorTop | TrussFace | StandTop | Ground | BottomMount | StandBottom
             | SpeakerMount | EquipmentMount => RollFreedom::Free,
@@ -412,6 +414,12 @@ pub fn resolve_anchor(anchor: BboxAnchor, bbox: &DAabb) -> DVec3 {
 /// How two compatible sockets meet.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum SocketMode {
+    /// The two normals oppose by a half turn about the joint frame's own
+    /// **vertical**, so the held piece keeps its feet down. The end-to-end
+    /// mate for pieces that stand up — a guardrail chained by either end, a
+    /// cable cover butted to another — where the Face flip's turn about the
+    /// (horizontal) tangent would land a same-name end mate upside down.
+    Upright,
     /// The two normals **oppose** (face-to-face contact) — a down-facing
     /// `SpeakerMount` lands on an up-facing `StandTop`. The held piece is
     /// rotated 180° about the host socket's tangent.
@@ -432,6 +440,7 @@ impl SocketMode {
         match self {
             SocketMode::Face => "face",
             SocketMode::Edge => "edge",
+            SocketMode::Upright => "upright",
         }
     }
 
@@ -439,6 +448,7 @@ impl SocketMode {
         match name {
             "face" => Some(SocketMode::Face),
             "edge" => Some(SocketMode::Edge),
+            "upright" => Some(SocketMode::Upright),
             _ => None,
         }
     }

@@ -73,7 +73,7 @@ export type BboxAnchor =
 	| "bottom_back_right";
 
 /** How two mating sockets meet — see `sockets.ts`. */
-export type SocketMode = "face" | "edge";
+export type SocketMode = "face" | "edge" | "upright";
 
 export type Vec3Tuple = [number, number, number];
 
@@ -816,7 +816,7 @@ export const CATALOG: CatalogPiece[] = [
 			},
 			{
 				"anchor": "left",
-				"mode": "face",
+				"mode": "upright",
 				"name": "end_a",
 				"normal": [
 					-1.0,
@@ -837,7 +837,7 @@ export const CATALOG: CatalogPiece[] = [
 			},
 			{
 				"anchor": "right",
-				"mode": "face",
+				"mode": "upright",
 				"name": "end_b",
 				"normal": [
 					1.0,
@@ -887,7 +887,7 @@ export const CATALOG: CatalogPiece[] = [
 			},
 			{
 				"anchor": "front",
-				"mode": "face",
+				"mode": "upright",
 				"name": "end_front",
 				"normal": [
 					0.0,
@@ -908,7 +908,7 @@ export const CATALOG: CatalogPiece[] = [
 			},
 			{
 				"anchor": "back",
-				"mode": "face",
+				"mode": "upright",
 				"name": "end_back",
 				"normal": [
 					0.0,
