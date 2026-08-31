@@ -2,12 +2,13 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] the `overhead` view renders on a fixed frame sized to nothing in particular: a rig 8 m across simply is not in it, so the one view you would reach for to check a plan comes back an empty grid, and there is no way to ask it to frame the content.
+- [2026-08-31] pieces placed near the camera fall outside the `front`/`audience` frame entirely, so a marker placed *in order to be verified* renders invisible and reads as "the placement failed" rather than "the camera cannot see it".
+- [2026-08-31] a free-floating riser still `describe()`s as `on .top`, so a piece that lost its host reads as attached.
 - [2026-08-31] `describe()` prints `at=` as the mesh *origin*, not the piece's middle: a 1x1 deck placed at `(0,0)` reads `at=(0.50, 0.50, 0.00)` and a dual-18 sub reads 0.65 off, so every "is it centred?" check looks like an anchoring bug when the socket is already dead centre.
 - [2026-08-31] data `+y` and world `+y` are opposite (`coords::world_from_data` negates y) and nothing in the agent-facing output says which space `at=` is in, so a coordinate read out of `describe()` and compared against a world constant like `FRONT_EYE` is silently front-to-back.
 - [2026-08-31] `luma.venue` has `pieces` but no `nodes`, and the AttributeError only lists the bindings *after* you guess wrong — the catalog verbs and the graph verbs use different nouns for the same rows.
 - [2026-08-31] Catalog pieces carry mesh sizes nowhere: sizing a new composite meant hand-parsing GLB accessor min/max in Python because no CLI dumps a mesh bbox, though `CatalogSockets` measures every one at startup.
-- [2026-08-31] `luma.venue.place(at=...)` anchors a deck by its corner but a truss by its centre, and `v` runs toward the house while world +y runs upstage — three sign/offset conventions the docstring never states; every builder rediscovers them with `tiles()`.
-- [2026-08-31] `place(on=<deck>, surface="top")` seats the child by its corner in a rotated frame, so `at=(0,0)` lands off the host — and a free-floating riser still `describe()`s as `on .top`. Workaround is free-place + `trim=`, which shouldn't be the ergonomic path.
 - [2026-08-31] `Placement.__repr__` dumps the entire venue `describe()` — one `print(place(...))` in a loop floods the cell output and truncates everything after it. A short handle repr would do.
 - [2026-08-31] the sandboxed luma-mcp kernel can't write to its own scratchpad dir, so there's no way to page long output through a file.
 - [2026-08-31] a stale luma-mcp binary reports `unknown venue host method "venue.catalog"` — version skew reads exactly like a missing verb; the error should say the server predates the method.

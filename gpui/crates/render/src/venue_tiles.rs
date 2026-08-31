@@ -24,6 +24,10 @@
 //! stage left on the right — the audience's own left and right, because the
 //! performer faces them. The header says so on every map, so a map pasted into
 //! a transcript carries its own convention.
+//!
+//! A free placement's `v` runs *against* data `y`
+//! (`luma_scene::venue::place_on`): `+v` is toward the house, so a piece
+//! written at `v = 8` reads eight metres **below** the origin on this map.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -123,7 +127,7 @@ const MIN_LABEL_CELLS: f64 = 4.0;
 /// docs for why it reads the way it does.
 const ORIENTATION: &str =
     "plan as the house sees it: columns run +x → −x (stage right → stage left), \
-     rows run +y → −y (house → upstage)";
+     rows run +y → −y (upstage → house)";
 
 // ---------------------------------------------------------------------------
 // what a node puts on the map

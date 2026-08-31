@@ -703,16 +703,16 @@ impl VenueGraph {
 /// per deck the room happens to contain.
 ///
 /// Its frame fixes what `(u, v)` mean on the floor: `+Z` is up, `+X` (the
-/// tangent) is **stage right**, and the bitangent `Z x X` is **upstage** —
-/// three space `-Z`, which is data space `-Y` and world `+Y`. So `+v` runs
-/// away from the audience and the house is at `-v`, the way the floor's own
-/// compass arrow points (`grid.wgsl`).
+/// tangent) is **stage right**, and the bitangent `Z x X` is therefore
+/// **toward the house** — three space `-Z`, which is data space `-Y`
+/// (`fixture_kinematics::StageDirection::House`). So `+v` runs out over the
+/// crowd and upstage is at `-v`.
 ///
-/// The sign is worth stating in all three spaces because the data-to-three
-/// swap is a *mirror* (see [`crate::coords`]): data `-Y` reads as world `+Y`,
-/// and a reader who assumes the two agree gets the room back to front. That
-/// mirror is why a stored pose comes back through `invert_placement` rather
-/// than through a sign convention anyone has to remember.
+/// Worth naming in both spaces because the data-to-three swap is a *mirror*
+/// (see [`crate::coords`]), so a sign read in one space and checked in the
+/// other comes out back to front. That mirror is also why a stored pose comes
+/// back through [`invert_placement`] rather than through a sign convention
+/// anyone has to remember.
 #[cfg(test)]
 fn floor_socket() -> ResolvedSocket {
     root_socket(FLOOR_SOCKET).expect("the floor is a root socket")
