@@ -159,6 +159,9 @@ actions!(
         DeleteStageElement,
         /// Open the stage builder's add-element dialog, caret in its search.
         AddStageElement,
+        /// Dolly the stage camera a step in / out — the wheel's verb on a key.
+        ZoomStageIn,
+        ZoomStageOut,
         /// Frame the stage selection: put the camera's target on it and dolly
         /// to a radius that fits it.
         FocusStageSelection,
@@ -228,6 +231,9 @@ pub(crate) fn init(cx: &mut App) {
     // The stage builder's letters and its delete, excluded from the
     // add-element dialog's search field like every other typed character.
     let staging = format!("{} && !{}", context::STAGE, context::TEXT_INPUT);
+    // The room's own keys, wherever the room is on screen — and excluded from
+    // fields for the usual reason: `=` and `-` are characters.
+    let viewing = format!("{} && !{}", context::VISUALIZER, context::TEXT_INPUT);
     let mut bindings = vec![
         KeyBinding::new("space", PlayPause, Some(&editing)),
         KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
@@ -269,6 +275,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("w", GizmoTranslate, Some(&staging)),
         KeyBinding::new("e", GizmoRotate, Some(&staging)),
         KeyBinding::new("a", AddStageElement, Some(&staging)),
+        KeyBinding::new("=", ZoomStageIn, Some(&viewing)),
+        KeyBinding::new("-", ZoomStageOut, Some(&viewing)),
         KeyBinding::new("f", FocusStageSelection, Some(&staging)),
         KeyBinding::new("delete", DeleteStageElement, Some(&staging)),
         KeyBinding::new("backspace", DeleteStageElement, Some(&staging)),

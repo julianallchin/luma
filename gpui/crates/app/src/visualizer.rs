@@ -111,8 +111,8 @@ const ZOOM_SPEED: f32 = 0.5;
 const ZOOM_BASE: f32 = 0.95;
 
 /// The web toolbar's two zoom buttons are `dollyBy(0.8)` / `dollyBy(1.25)`.
-const DOLLY_IN: f32 = 0.8;
-const DOLLY_OUT: f32 = 1.25;
+pub(crate) const DOLLY_IN: f32 = 0.8;
+pub(crate) const DOLLY_OUT: f32 = 1.25;
 
 /// What the pointer is doing to the camera.
 ///
@@ -1201,7 +1201,7 @@ impl Visualizer {
         true
     }
 
-    fn dolly(&mut self, factor: f32) {
+    pub(crate) fn dolly(&mut self, factor: f32) {
         let (near, far) = self
             .framing
             .radius_bounds(opening_camera(&self.framing, &self.view_finder()).radius);
@@ -2906,20 +2906,6 @@ fn clock_readout(library: &Library) -> Div {
 /// opaque square uppercase slabs beside a translucent rounded popover would be
 /// two design languages in one tab.
 fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
-    let zoom = |label: &'static str, factor: f32| {
-        let app = app.clone();
-        luma_ui::float::btn(label, label)
-            .id(label)
-            .on_click(move |_, _, cx| {
-                app.update(cx, |this, cx| {
-                    if let Some(state) = this.visualizer_mut() {
-                        state.dolly(factor);
-                    }
-                    cx.notify();
-                });
-            })
-            .agent_node(Role::Button, label)
-    };
     let current = state.gizmo_mode;
     let mode = |label: &'static str, mode: GizmoMode| {
         let app = app.clone();
@@ -2954,7 +2940,8 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     // (see [`listen`]), and the row is air either side of it.
                     .occlude()
                     // The two gizmo modes are one choice, so they share one
-                    // track; the two zooms are two verbs and stay two buttons.
+                    // track. Zoom is the wheel's (and `=`/`-`), not a button's
+                    // — a camera verb with a pointer gesture needs no chrome.
                     //
                     // And the track is drawn exactly where the widget is. A
                     // selected fixture always wears one; a piece wears one only
@@ -2979,9 +2966,7 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                                     .child(mode("Rotate", GizmoMode::Rotate)),
                             )
                         },
-                    )
-                    .child(zoom("Zoom In", DOLLY_IN))
-                    .child(zoom("Zoom Out", DOLLY_OUT)),
+                    ),
             )
         })
 }

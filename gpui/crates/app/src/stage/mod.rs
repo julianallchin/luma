@@ -411,6 +411,29 @@ impl Build {
                 .iter()
                 .find(|n| &n.id == node)
                 .and_then(|n| n.params.get("span").copied()),
+            angle: {
+                let hinge = self
+                    .graph
+                    .node(node)
+                    .and_then(|n| n.catalog_ref.as_deref())
+                    .and_then(luma_scene::catalog::piece)
+                    .is_some_and(|piece| {
+                        matches!(
+                            piece.geometry,
+                            luma_scene::catalog::Geometry::Procedural(
+                                luma_scene::catalog::Family::Hinge
+                            )
+                        )
+                    });
+                hinge.then(|| {
+                    self.solved
+                        .nodes
+                        .iter()
+                        .find(|n| &n.id == node)
+                        .and_then(|n| n.params.get("angle").copied())
+                        .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
+                })
+            },
         })
     }
 
@@ -547,9 +570,11 @@ pub(crate) struct StagePage {
     pub(crate) library: FixtureLibrary,
     /// The focus the dialog traps while it is up.
     pub(crate) focus: gpui::FocusHandle,
-    /// Where the node menu is open, if it is. On the page and not the hand:
-    /// a menu is chrome about the selection, not a thing the hand is doing.
-    pub(crate) menu: Option<Point<Pixels>>,
+    /// Where the node menu is open, if it is — and which bead opened it, so
+    /// the menu can offer that socket's own verbs. On the page and not the
+    /// hand: a menu is chrome about the selection, not a thing the hand is
+    /// doing.
+    pub(crate) menu: Option<NodeMenuAt>,
     /// The add-element dialog's exit. The hand decides *whether* the dialog is
     /// up ([`Hand::Choosing`]); this only buys the card its leaving frames —
     /// see [`luma_ui::dialog::Popup`].
@@ -807,9 +832,15 @@ impl Luma {
     }
 
     /// Open the node menu where the pointer is.
-    pub(crate) fn stage_open_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(crate) fn stage_open_menu(
+        &mut self,
+        at: Point<Pixels>,
+        node: String,
+        socket: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(crate::shell::Body::Stage(page)) = self.workspace.active_body_mut() {
-            page.menu = Some(at);
+            page.menu = Some(NodeMenuAt { at, node, socket });
         }
         cx.notify();
     }
@@ -1166,6 +1197,19 @@ impl Luma {
             return;
         }
 
+        // At rest a bead is an aiming affordance and a menu anchor. Placing
+        // starts only in the add-element dialog, and a run starts only from
+        // the bead's own menu — a bare click that armed a whole mode was the
+        // "what is this Place run thing" surprise.
+    }
+
+    /// Start measuring a run out of `socket` — the node menu's "Extend run".
+    pub(crate) fn stage_extend_from(
+        &mut self,
+        node: String,
+        socket: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(build) = self.build_mut() else {
             return;
         };
@@ -1773,6 +1817,8 @@ pub(crate) struct SelectedView {
     /// still the thing whose length the operator came here to change ("place
     /// it, then configure it inline").
     pub(crate) span: Option<f64>,
+    /// A hinge's deflection, in degrees — its own "what it is" row.
+    pub(crate) angle: Option<f64>,
 }
 
 impl Luma {
@@ -1879,7 +1925,7 @@ pub(crate) fn stage_page(
                 .then(|| chooser(state, view, view.choosing.unwrap_or(0), app, window)),
         )
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
-        .children(state.menu.as_ref().map(|at| node_menu(*at, app)))
+        .children(state.menu.as_ref().map(|menu| node_menu(menu, app)))
         .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
         .into_any_element()
 }
@@ -2383,7 +2429,14 @@ const CONTROL_WIDTH: f32 = 244.0;
 /// where the node is. A bar at the top of the screen carrying "Flip" while the
 /// thing it would flip is four hundred pixels away is a control that has lost
 /// its subject.
-fn node_menu(at: Point<Pixels>, app: &Entity<Luma>) -> AnyElement {
+/// The bead the node menu was opened from, and where.
+pub(crate) struct NodeMenuAt {
+    pub(crate) at: Point<Pixels>,
+    pub(crate) node: String,
+    pub(crate) socket: Option<String>,
+}
+
+fn node_menu(menu_at: &NodeMenuAt, app: &Entity<Luma>) -> AnyElement {
     let (dup, flip, detach, delete, close) = (
         app.clone(),
         app.clone(),
@@ -2391,23 +2444,33 @@ fn node_menu(at: Point<Pixels>, app: &Entity<Luma>) -> AnyElement {
         app.clone(),
         app.clone(),
     );
-    luma_ui::menu::ContextMenu::new("stage-node-menu", at)
-        .item("Duplicate", move |_, cx| {
-            dup.update(cx, |this, cx| this.stage_duplicate(cx));
-        })
-        .item("Flip", move |_, cx| {
-            flip.update(cx, |this, cx| this.stage_flip(cx));
-        })
-        .separator()
-        .destructive("Detach", move |_, cx| {
-            detach.update(cx, |this, cx| this.stage_detach(cx));
-        })
-        .destructive("Delete", move |_, cx| {
-            delete.update(cx, |this, cx| this.stage_delete(cx));
-        })
-        .render(move |_, cx| {
-            close.update(cx, |this, cx| this.stage_close_menu(cx));
-        })
+    let mut menu = luma_ui::menu::ContextMenu::new("stage-node-menu", menu_at.at);
+    if let Some(socket) = menu_at.socket.clone() {
+        let extend = app.clone();
+        let node = menu_at.node.clone();
+        menu = menu
+            .item("Extend run", move |_, cx| {
+                let (node, socket) = (node.clone(), socket.clone());
+                extend.update(cx, |this, cx| this.stage_extend_from(node, socket, cx));
+            })
+            .separator();
+    }
+    menu.item("Duplicate", move |_, cx| {
+        dup.update(cx, |this, cx| this.stage_duplicate(cx));
+    })
+    .item("Flip", move |_, cx| {
+        flip.update(cx, |this, cx| this.stage_flip(cx));
+    })
+    .separator()
+    .destructive("Detach", move |_, cx| {
+        detach.update(cx, |this, cx| this.stage_detach(cx));
+    })
+    .destructive("Delete", move |_, cx| {
+        delete.update(cx, |this, cx| this.stage_delete(cx));
+    })
+    .render(move |_, cx| {
+        close.update(cx, |this, cx| this.stage_close_menu(cx));
+    })
 }
 
 /// The inspector: what is selected, what it may be moved by, and what the last
@@ -2665,6 +2728,12 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
     }
     let aspect = width / height;
     let held = build.held_sockets();
+    let held_kind = build
+        .hand
+        .held()
+        .map_or(luma_scene::venue::NodeKind::Fixture, |held| {
+            held.what.kind()
+        });
     let latched = build
         .hand
         .held()
@@ -2692,7 +2761,7 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
             .is_some_and(|m| m.host_id.as_deref() == Some(node) && m.host_socket == socket.name)
         {
             SocketMarkState::Latched
-        } else if !held.is_empty() && hand::compatible(socket, &held) {
+        } else if !held.is_empty() && hand::compatible(socket, &held, held_kind) {
             SocketMarkState::Compatible
         } else {
             SocketMarkState::Open
@@ -2777,7 +2846,7 @@ pub(crate) fn build_layer(
         let hover = app.clone();
         let (node, socket) = (bead.node.clone(), bead.socket.clone());
         let (hover_node, hover_socket) = (node.clone(), socket.clone());
-        let (menu, menu_node) = (app.clone(), node.clone());
+        let (menu, menu_node, menu_socket) = (app.clone(), node.clone(), socket.clone());
         // Quiet unless it is a candidate. An open socket is a fact about the
         // room and there are dozens of them; a compatible one is an answer to
         // what is in the hand, and the latched one is *the* answer. Size and
@@ -2845,12 +2914,13 @@ pub(crate) fn build_layer(
                 })
                 .on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
                     cx.stop_propagation();
-                    let (node, at) = (menu_node.clone(), event.position);
+                    let (node, socket, at) =
+                        (menu_node.clone(), menu_socket.clone(), event.position);
                     menu.update(cx, |this, cx| {
                         if let Some(build) = this.build_mut() {
-                            build.select(Some(node));
+                            build.select(Some(node.clone()));
                         }
-                        this.stage_open_menu(at, cx);
+                        this.stage_open_menu(at, node, Some(socket), cx);
                     });
                 })
                 .agent_node(Role::Button, bead.label),
@@ -2920,6 +2990,27 @@ pub(crate) fn build_layer(
                                     } else {
                                         this.stage_set_param(&node, key, value, cx);
                                     }
+                                });
+                            },
+                        ),
+                    ));
+                }
+                if let Some(angle) = selected.angle {
+                    let app = app.clone();
+                    let node = selected.node.clone();
+                    card = card.child(float::field_row(
+                        "Angle",
+                        float::scrub(
+                            "stage-angle",
+                            angle,
+                            0.0,
+                            180.0,
+                            5.0,
+                            CONTROL_WIDTH,
+                            move |value, _, cx| {
+                                let node = node.clone();
+                                app.update(cx, |this, cx| {
+                                    this.stage_set_param(&node, "angle", value, cx);
                                 });
                             },
                         ),
@@ -3235,6 +3326,12 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
         }
     }
     let held = build.held_sockets();
+    let held_kind = build
+        .hand
+        .held()
+        .map_or(luma_scene::venue::NodeKind::Fixture, |held| {
+            held.what.kind()
+        });
     out.sockets = build
         .room
         .open_sockets()
@@ -3245,7 +3342,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
             Some(SocketMark {
                 pos: point_of(at),
                 normal: point_of(pose.transform_vector3(socket.normal).normalize_or_zero()),
-                state: if !held.is_empty() && hand::compatible(socket, &held) {
+                state: if !held.is_empty() && hand::compatible(socket, &held, held_kind) {
                     luma_render::scene_desc::SocketMarkState::Compatible
                 } else {
                     luma_render::scene_desc::SocketMarkState::Open

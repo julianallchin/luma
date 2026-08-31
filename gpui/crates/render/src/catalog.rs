@@ -115,13 +115,29 @@ pub fn procedural_bounds(params: Procedural) -> DAabb {
             let _ = Corner::new(faces);
             DAabb::new(DVec3::splat(-outer), DVec3::splat(outer))
         }
-        Procedural::Hinge { .. } => {
-            // Two half-boxes on a pin: a box the whole swing stays inside.
-            let reach = f64::from(SQUARE_M);
-            DAabb::new(
-                DVec3::new(-reach, -outer, -reach),
-                DVec3::new(reach, outer, reach),
-            )
+        Procedural::Hinge { angle } => {
+            // The fixed leaf's box, unioned with the swinging leaf's box
+            // carried through the same turn the mesh applies (`Hinge::turn`
+            // about the pin at the `-Z` edge). The angle changes the
+            // envelope, so the envelope is computed from it — the old
+            // fixed-size box was wrong at every angle but 90°.
+            let angle = f64::from(crate::truss::Hinge::new(angle).angle_deg()).to_radians();
+            let pin = glam::DVec3::new(0.0, 0.0, -outer);
+            let turn = glam::DMat4::from_translation(pin)
+                * glam::DMat4::from_rotation_y(angle)
+                * glam::DMat4::from_translation(-pin);
+            let mut lo = DVec3::new(-outer, -outer, -outer);
+            let mut hi = DVec3::new(0.0, outer, outer);
+            for x in [0.0, outer] {
+                for y in [-outer, outer] {
+                    for z in [-outer, outer] {
+                        let p = turn.transform_point3(glam::DVec3::new(x, y, z));
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
+                }
+            }
+            DAabb::new(lo, hi)
         }
     }
 }

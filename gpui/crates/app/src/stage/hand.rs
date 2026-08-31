@@ -601,7 +601,7 @@ impl Room {
     /// edges name sockets — so resolving the hit to the authored socket here
     /// is what lets a landing found by pointing be committed by the same verb
     /// as one found by a bead.
-    fn face_socket_for(&self, hit: &SurfaceHit) -> Option<(String, String)> {
+    fn face_socket_for(&self, hit: &SurfaceHit, kind: NodeKind) -> Option<(String, String)> {
         let pose = self.pose(&hit.piece)?;
         let inverse = pose.inverse();
         let local_point = inverse.transform_point3(hit.point);
@@ -611,6 +611,7 @@ impl Room {
             .filter(|socket| {
                 socket.socket_type.kind() == SocketKind::Surface
                     && socket.socket_type.polarity().can_host()
+                    && (kind == NodeKind::Fixture || socket.socket_type != SocketType::TrussFace)
             })
             // The face the hit is *on*, not merely the nearest: a hit on a
             // side face must not seat the piece on the top.
@@ -652,7 +653,15 @@ impl Room {
 
         let mut lookup = HashMap::new();
         for (node, list) in &self.sockets {
-            lookup.insert(node.clone(), list.clone());
+            let list = if kind == NodeKind::Fixture {
+                list.clone()
+            } else {
+                list.iter()
+                    .filter(|socket| socket.socket_type != SocketType::TrussFace)
+                    .cloned()
+                    .collect()
+            };
+            lookup.insert(node.clone(), list);
         }
         lookup.insert(HELD_ID.to_string(), held_sockets.to_vec());
 
@@ -709,7 +718,7 @@ impl Room {
                     (Some(m), Some(parent)) => (parent.clone(), m.host_socket.clone()),
                     _ => surface
                         .filter(|hit| exclude != Some(hit.piece.as_str()))
-                        .and_then(|hit| self.face_socket_for(hit))
+                        .and_then(|hit| self.face_socket_for(hit, kind))
                         .unwrap_or_else(|| (self.root.clone(), FLOOR_SOCKET.to_string())),
                 };
                 let host = self.socket(&host_node, &host_socket)?.clone();
@@ -940,7 +949,13 @@ pub(crate) fn is_feature(socket: &ResolvedSocket) -> bool {
 }
 
 /// Whether any of a held piece's sockets could mate this host.
-pub(crate) fn compatible(host: &ResolvedSocket, held: &[ResolvedSocket]) -> bool {
+pub(crate) fn compatible(host: &ResolvedSocket, held: &[ResolvedSocket], kind: NodeKind) -> bool {
+    // A truss face is where a rig hangs — clamps only. Structure joins
+    // structure at ends, corners and decks; a stick T-boned into another
+    // stick's side is a joint no coupler makes.
+    if kind != NodeKind::Fixture && host.socket_type == SocketType::TrussFace {
+        return false;
+    }
     held.iter().any(|s| {
         s.socket_type.mates(host.socket_type) && s.socket_type.polarity() != Polarity::Female
     })

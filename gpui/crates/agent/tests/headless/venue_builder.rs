@@ -400,19 +400,25 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
         // up, so the ray out of one end meets structure and the rest meet
         // nothing — the widest gap is that one, and which end it is is a fact
         // about the room rather than something this script may assume.
+        // The candidate ends, read at rest where only the selected stick's
+        // beads are on screen — mid-run every bead in the room shows and two
+        // same-catalog sticks share their labels, so each measurement starts
+        // from rest and comes back to it.
+        const ends = sockets().filter((n) => n.label.includes("end_"))
+            .map((n) => n.label);
         let measured = null;
-        for (const bead of sockets().filter((n) => n.label.includes("end_"))) {{
-            tap(bead);
+        for (const label of ends) {{
+            menu(socket(label.slice("Socket ".length)), "Extend run");
             const gap = one("Gap: ");
             if (gap !== undefined) {{
                 const metres = Number(gap.slice(5, gap.indexOf(" m")));
                 if (measured === null || metres > measured.metres) {{
-                    measured = {{ socket: bead.label, gap, metres }};
+                    measured = {{ socket: label, gap, metres }};
                 }}
             }}
-            // No escape between beads: clicking the next socket starts its
-            // own run directly, and staying in a run keeps every bead on
-            // screen — at rest the room only beads the selected piece.
+            app.key("escape");
+            app.frames(4);
+            select(0.7, 0.8);
         }}
         if (measured === null) {{
             throw new Error("no end measured a gap: " + sockets().map((n) => n.label).join(", "));
@@ -423,7 +429,7 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
         app.key("escape");
         app.frames(4);
         select(0.7, 0.8);
-        tap(socket(measured.socket.slice("Socket ".length)));
+        menu(socket(measured.socket.slice("Socket ".length)), "Extend run");
         const started = one("Gap: ");
 
         // Past the gap: refused, and the commit is unreachable.
@@ -811,7 +817,7 @@ fn a_socket_facing_nothing_still_builds_a_stub_at_the_length_asked_for() {
         app.frames(4);
         select(0.15, 0.82);
 
-        tap(socket("Truss · straight end_b"));
+        menu(socket("Truss · straight end_b"), "Extend run");
         app.frames(6);
         // No gap, because there is nothing out there to have one with.
         const gap = one("Gap: ");
