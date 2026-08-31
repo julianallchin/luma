@@ -1364,16 +1364,6 @@ impl Visualizer {
                 } else if !shift {
                     self.selection.clear();
                 }
-                // The builder selects the *node*, not the render object: a
-                // subtree, a trim and a detach are all things the graph has
-                // names for — and the render object's identity IS the node id,
-                // which is what lets the two agree by construction.
-                if let Some(build) = self.build.as_mut() {
-                    build.selected = self.selection.primary().map(|object| match object {
-                        EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
-                    });
-                    build.trim_draft = None;
-                }
             }
             EditorDrag::Marquee(marquee) => self.selection.replace(pick.marquee(marquee, viewport)),
             // A finished gizmo drag on stage pieces owes the graph its poses:
@@ -1392,6 +1382,21 @@ impl Visualizer {
                 }
             }
             _ => {}
+        }
+        // The builder selects the *node*, not the render object: a subtree, a
+        // trim and a detach are all things the graph has names for — and the
+        // render object's identity IS the node id, which is what lets the two
+        // agree by construction. After *every* gesture that can move the
+        // selection — click and marquee alike — so the builder never holds a
+        // second, staler answer to "what is selected".
+        if let Some(build) = self.build.as_mut() {
+            let primary = self.selection.primary().map(|object| match object {
+                EditorObject::Fixture(id) | EditorObject::StagePiece(id) => id.clone(),
+            });
+            if build.selected != primary {
+                build.selected = primary;
+                build.trim_draft = None;
+            }
         }
         None
     }
@@ -1437,16 +1442,18 @@ impl Visualizer {
                 .graph
                 .raycast(ray, Default::default(), pick)
                 .into_iter()
-                .find_map(|hit| match pick.objects.get(hit.node.0 as usize)?.as_ref()? {
-                    EditorObject::StagePiece(id) => Some(crate::stage::hand::SurfaceHit {
-                        piece: id.clone(),
-                        point: coords::three_from_world(hit.point).as_dvec3(),
-                        normal: coords::three_from_world(hit.face_normal)
-                            .as_dvec3()
-                            .normalize_or_zero(),
-                    }),
-                    EditorObject::Fixture(_) => None,
-                });
+                .find_map(
+                    |hit| match pick.objects.get(hit.node.0 as usize)?.as_ref()? {
+                        EditorObject::StagePiece(id) => Some(crate::stage::hand::SurfaceHit {
+                            piece: id.clone(),
+                            point: coords::three_from_world(hit.point).as_dvec3(),
+                            normal: coords::three_from_world(hit.face_normal)
+                                .as_dvec3()
+                                .normalize_or_zero(),
+                        }),
+                        EditorObject::Fixture(_) => None,
+                    },
+                );
             if let Some(hit) = hit {
                 return Some((hit.point, Some(hit)));
             }

@@ -1243,8 +1243,7 @@ impl Luma {
         let data = build.graph.node(node)?;
         let held_sockets = build.sockets.sockets(data);
         let held = held_sockets.iter().find(|s| s.name == edge.my_socket)?;
-        let seat =
-            luma_scene::venue::invert_placement(world, parent_world, host, held, data.kind);
+        let seat = luma_scene::venue::invert_placement(world, parent_world, host, held, data.kind);
         Some(BTreeMap::from([
             ("u".to_string(), seat.u),
             ("v".to_string(), seat.v),
@@ -2536,13 +2535,13 @@ pub(crate) struct Mark {
 pub(crate) fn marks(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)) -> Vec<Mark> {
     let mut out = Vec::new();
     if let Some(held) = build.hand.held() {
-        if let Some(landed) = &held.landed {
+        if let Some(landed) = held.landed.as_ref().filter(|l| l.refused.is_none()) {
             for body in build.ghost_bodies(&held.what, landed) {
                 if let Some(at) = project(camera, size, body.world.w_axis.truncate()) {
                     out.push(Mark {
                         at,
                         label: format!("Ghost {}", held.what.label()),
-                        refused: landed.refused.is_some(),
+                        refused: false,
                     });
                 }
             }
@@ -2800,10 +2799,7 @@ pub(crate) fn build_layer(
     // headless state) there is no listener, so the card carries the handlers
     // itself and does not occlude — there is no camera gesture to protect.
     if build.hand.owns_pointer() {
-        let mut surface = div()
-            .id("stage-drop-surface")
-            .absolute()
-            .inset_0();
+        let mut surface = div().id("stage-drop-surface").absolute().inset_0();
         if !wired && build.hand.aims_with_pointer() {
             let aim = app.clone();
             let drop = app.clone();
@@ -3024,9 +3020,10 @@ pub(crate) fn build_layer(
             ))
         );
         if truss {
-            let span = params.get("span").copied().unwrap_or(f64::from(
-                luma_render::catalog::DEFAULT_TRUSS_SPAN_M,
-            ));
+            let span = params
+                .get("span")
+                .copied()
+                .unwrap_or(f64::from(luma_render::catalog::DEFAULT_TRUSS_SPAN_M));
             let set = app.clone();
             layer = layer.child(
                 div()
@@ -3075,7 +3072,10 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
     use luma_render::scene_desc::{Build as SceneBuild, Ghost, Measure, SocketMark};
     let mut out = SceneBuild::default();
     if let Some(held) = build.hand.held() {
-        if let Some(landed) = &held.landed {
+        // A refused landing draws nothing: the hand still knows where the
+        // cursor is, but a piece that cannot go there is not previewed there —
+        // the ghost disappearing *is* the refusal.
+        if let Some(landed) = held.landed.as_ref().filter(|l| l.refused.is_none()) {
             for body in build.ghost_bodies(&held.what, landed) {
                 let (pos, rot) = luma_scene::coords::data_pose_of_d(body.world);
                 out.ghosts.push(Ghost {
@@ -3083,7 +3083,7 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
                     pos: pos.map(|v| v as f32),
                     rot: rot.map(|v| v as f32),
                     scale: body.scale,
-                    refused: landed.refused.is_some(),
+                    refused: false,
                 });
             }
         }
