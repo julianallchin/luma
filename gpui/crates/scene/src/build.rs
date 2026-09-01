@@ -85,15 +85,20 @@ pub fn quantize_length(metres: f64) -> f64 {
     (metres / MODULE_M).round().max(1.0) * MODULE_M
 }
 
-/// The nearest legal hinge deflection: whole [`HINGE_STEP_DEG`] steps, clamped
-/// to ±[`HINGE_LIMIT_DEG`]. Signed — the sign is the right-hand rule about the
-/// stated axis.
+/// The nearest legal hinge deflection: whole [`HINGE_STEP_DEG`] steps. Signed —
+/// the sign is the right-hand rule about the stated axis.
+///
+/// **Snapping only.** A turn past ±[`HINGE_LIMIT_DEG`] is not a step to round
+/// to the nearest of, it is a turn this joint cannot make, and [`compile`]
+/// refuses it ([`Refusal::TurnTooFar`]) before anything reaches here. Clamping
+/// it built a right angle when a hundred and twenty was asked for and called
+/// that an announcement.
 #[must_use]
 pub fn quantize_hinge(degrees: f64) -> f64 {
     if !degrees.is_finite() {
         return 0.0;
     }
-    ((degrees / HINGE_STEP_DEG).round() * HINGE_STEP_DEG).clamp(-HINGE_LIMIT_DEG, HINGE_LIMIT_DEG)
+    (degrees / HINGE_STEP_DEG).round() * HINGE_STEP_DEG
 }
 
 // ---------------------------------------------------------------------------
@@ -896,6 +901,19 @@ pub fn compile<S: NodeSockets + ?Sized>(
             got: "angle= alone",
         });
     }
+    // One range rule, over every joint that turns. Off-step is snapped and
+    // announced; past the limit is a turn no joint here makes, and the design's
+    // answer to that is a refusal with the fix in it — a hinge that quietly
+    // built a right angle for a hundred and twenty degrees was announcing a
+    // shape nobody asked for.
+    if let Some(angle) = request.angle {
+        if !angle.is_finite() || angle.abs() > HINGE_LIMIT_DEG {
+            return Err(Refusal::TurnTooFar {
+                wanted: angle,
+                limit: HINGE_LIMIT_DEG,
+            });
+        }
+    }
     let mut announce = Vec::new();
     let params = piece_params(piece, request, &mut announce);
 
@@ -1599,12 +1617,6 @@ fn articulated_roll(
             joint: host.socket_type.as_str(),
         });
     };
-    if !angle.is_finite() || angle.abs() > HINGE_LIMIT_DEG {
-        return Err(Refusal::TurnTooFar {
-            wanted: angle,
-            limit: HINGE_LIMIT_DEG,
-        });
-    }
     let turned = (angle / step).round() * step;
     if (turned - angle).abs() > 1e-9 {
         announce.push(format!(
@@ -2336,11 +2348,50 @@ mod tests {
     }
 
     #[test]
-    fn hinge_angles_snap_and_clamp() {
+    fn hinge_angles_snap_to_whole_steps_and_nothing_else() {
         assert!((quantize_hinge(31.0) - 30.0).abs() < 1e-12);
         assert!((quantize_hinge(-33.0) + 35.0).abs() < 1e-12);
-        assert!((quantize_hinge(120.0) - 90.0).abs() < 1e-12);
-        assert!((quantize_hinge(-120.0) + 90.0).abs() < 1e-12);
+        // No clamp: a turn past the limit is refused upstream, and rounding it
+        // to the limit here would be this function deciding the shape.
+        assert!((quantize_hinge(120.0) - 120.0).abs() < 1e-12);
+        assert!((quantize_hinge(-120.0) + 120.0).abs() < 1e-12);
+    }
+
+    /// A hinge asked past a quarter turn used to build a right angle and
+    /// *announce* it, which is a shape nobody asked for reported as a courtesy.
+    /// Snapping is for legal steps; a turn the joint cannot make is a refusal,
+    /// and it is the same refusal a rail post gives.
+    #[test]
+    fn a_turn_past_the_limit_is_refused_rather_than_quietly_squared_off() {
+        let supply = Meshes::shipped();
+        let graph = room();
+        let solved = resolve(&graph, &supply);
+        let scene = Scene::new(&graph, &solved, &supply);
+        let refused = compile(
+            &scene,
+            &Request {
+                axis: Some([0.0, 0.0, 1.0]),
+                angle: Some(120.0),
+                ..request("hinge")
+            },
+        )
+        .expect_err("a hinge does not fold past a quarter turn");
+        let said = refused.to_string();
+        assert!(said.contains("angle=120deg"), "{said}");
+        assert!(said.contains("+-90deg"), "{said}");
+        assert!(said.contains("chain another piece"), "{said}");
+        // The legal end of the range still compiles as far as the geometry.
+        assert!(!matches!(
+            compile(
+                &scene,
+                &Request {
+                    axis: Some([0.0, 0.0, 1.0]),
+                    angle: Some(90.0),
+                    ..request("hinge")
+                },
+            ),
+            Err(Refusal::TurnTooFar { .. })
+        ));
     }
 
     /// The sign convention, asserted rather than argued: a positive angle about
