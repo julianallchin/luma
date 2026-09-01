@@ -70,6 +70,7 @@ fn frame() -> Frame {
         wash: 0.0,
         gobo: 0,
         gobo_rotation: 0.31,
+        haze_gain: 1.0,
     }];
     frame.haze_density = 0.65;
     frame

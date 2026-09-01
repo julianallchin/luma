@@ -70,6 +70,15 @@ pub(crate) fn fixture_shadow_matrix(light: &FixtureCone) -> Mat4 {
 /// resident is only evicted by a challenger clearly better than it — without
 /// that margin two cones of nearly equal priority trade the slot every frame
 /// and their shadows flicker.
+///
+/// A cone that does not scatter is not a beam — it is a soft area source, and
+/// the only one so far is a house downlight. Those are excluded outright
+/// rather than ranked. A shadow map is a *hard* shadow, which is the wrong
+/// picture of a diffuser to begin with, and there are dozens of them against
+/// [`MAX_FIXTURE_SHADOWS`] slots: whichever few won would cast and the rest
+/// would not, so the floor came out blotched with shadows that belonged to an
+/// arbitrary subset of identical lamps. Worse, they were winning those slots
+/// off the show's own beams, which is the one thing the cap exists to protect.
 pub(crate) fn assign_shadow_slots(
     cones: &[FixtureCone],
     eye: Vec3,
@@ -89,6 +98,7 @@ pub(crate) fn assign_shadow_slots(
     let mut ranked: Vec<(usize, f32)> = cones
         .iter()
         .enumerate()
+        .filter(|(_, cone)| cone.haze_gain > 0.0)
         .map(|(index, cone)| (index, priority(cone)))
         .filter(|(_, score)| *score > 0.0)
         .collect();
@@ -251,6 +261,7 @@ mod tests {
                 wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
+                haze_gain: 1.0,
             })
             .collect();
 
@@ -289,6 +300,7 @@ mod tests {
             wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
+            haze_gain: 1.0,
         };
         let eye = Vec3::new(0.0, -12.0, 0.0);
 

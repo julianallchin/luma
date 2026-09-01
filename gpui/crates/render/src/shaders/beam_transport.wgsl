@@ -36,10 +36,13 @@ struct LightRest {
     // Shadow-map layer for this cone, or negative when it has none. Must match
     // `scene_bindings.wgsl` — the two shaders read the same buffer.
     shadow_slot: f32,
-    // Three scalars, not a `vec3`: a `vec3` member would take its own 16-byte
+    // How much of this cone scatters in the medium: one for a lensed fixture,
+    // zero for a source that is not a beam (a house downlight). Rides in what
+    // used to be the first pad word.
+    haze_gain: f32,
+    // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
     // alignment and push the struct to 80 bytes, disagreeing with the Rust
     // stride. Scalars keep it at 64.
-    _pad0: f32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -257,10 +260,18 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
 /// multiplied by sigma. Returns zero when the ray misses the light's
 /// cone∩ball, or the span it does cross is occluded by geometry.
 fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
+    // A source that does not scatter leaves before the sphere test. House
+    // downlights reach every pixel in the room, so this is the first branch,
+    // not a factor folded into the radiance at the end.
+    let haze_gain = light_rest[li].haze_gain;
+    if haze_gain <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+
     let ray_dir = ray.dir;
     let hit_dist = ray.hit_dist;
     let near_clamp = haze.tuning.z;
-    let beam_gain = haze.tuning.w;
+    let beam_gain = haze.tuning.w * haze_gain;
 
     let core = light_core[li];
     let oc = haze.camera_pos.xyz - core.position;

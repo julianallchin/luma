@@ -30,6 +30,7 @@
 #![allow(clippy::too_many_lines)]
 
 pub mod assets;
+pub mod atmosphere;
 pub(crate) mod cables;
 pub mod catalog;
 pub mod coords;
@@ -38,6 +39,7 @@ pub mod face;
 pub mod frame;
 mod gpu;
 mod haze_field;
+pub mod house;
 pub mod image_out;
 pub mod light_index;
 pub mod luminaire;

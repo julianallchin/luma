@@ -233,7 +233,7 @@ impl Luma {
                         .map(|(path, def)| (path.clone(), stage_render::definition(def)))
                         .collect();
                     let mut scene = crate::visualizer::scene(&rig, &definitions);
-                    scene.render = luma_render::scene_desc::RenderSettings::editor_lit(
+                    scene.render = luma_render::scene_desc::RenderSettings::object_lit(
                         crate::visualizer::FOV_Y_DEG,
                         luma_render::LIVE_HAZE_RESOLUTION,
                     );

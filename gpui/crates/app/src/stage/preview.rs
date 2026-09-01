@@ -97,7 +97,7 @@ fn render_all() {
         // diverges exactly where the background shows through, and the
         // divergence is the transparency.
         let scene_with = |background: [f32; 3]| {
-            let mut render = RenderSettings::editor_lit(50.0, 0.5);
+            let mut render = RenderSettings::object_lit(50.0, 0.5);
             render.show_grid = false;
             // No medium: the composite pass attenuates the clear colour by
             // Beer-Lambert over the *far plane* — with haze on, any

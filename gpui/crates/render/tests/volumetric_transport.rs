@@ -57,6 +57,7 @@ fn light(gobo: u32) -> FixtureCone {
         wash: 0.0,
         gobo,
         gobo_rotation: 0.31,
+        haze_gain: 1.0,
     }
 }
 
@@ -212,6 +213,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
             wash: 0.0,
             gobo: (index as u32) % descriptor.light.gobo_modulus,
             gobo_rotation: descriptor.light.gobo_rotation,
+            haze_gain: 1.0,
         });
     }
     frame

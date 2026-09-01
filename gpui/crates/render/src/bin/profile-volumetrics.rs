@@ -1174,6 +1174,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         ambient: base.ambient,
         environment: base.environment.clone(),
         directional: base.directional,
+        sky: base.sky,
         haze_density: base.haze_density,
         haze_steps: base.haze_steps,
         haze_resolution: base.haze_resolution,
@@ -1195,6 +1196,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
             wash: 0.0,
             gobo: (index % 3) as u32,
             gobo_rotation: 0.31,
+            haze_gain: 1.0,
         });
     }
     frame
