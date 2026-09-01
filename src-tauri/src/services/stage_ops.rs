@@ -32,6 +32,7 @@ use std::path::Path;
 use glam::{DMat4, DVec3};
 use luma_render::catalog::VenueSockets;
 use luma_render::venue_tiles::TileMap;
+use luma_scene::build;
 use luma_scene::sockets::{ResolvedSocket, SocketType};
 use luma_scene::venue::{
     root_socket, Constraint, Edge, Node, NodeKind, NodeSockets as _, Params,
@@ -52,10 +53,9 @@ use crate::venue_graph;
 // Vocabulary shared with the builder
 // ---------------------------------------------------------------------------
 
-/// The step a truss span is quantized to, in metres. The generator quantizes to
-/// whole panels of its own; this is the step the *builder* offers, and the
-/// design doc names it.
-pub const LENGTH_STEP_M: f64 = 0.5;
+/// The step a truss span is quantized to, in metres — the structural module the
+/// whole authoring surface is on, named once in [`luma_scene::build`].
+pub const LENGTH_STEP_M: f64 = luma_scene::build::MODULE_M;
 
 /// What an extend whose ray met nothing puts in front of the socket.
 pub const STUB_LENGTH_M: f64 = 0.5;
@@ -1137,6 +1137,597 @@ impl<'a> Stage<'a> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The authoring surface: chains, queries, drafts
+// ---------------------------------------------------------------------------
+
+/// What one chain op did: the node it made, where it landed, and the end the
+/// next op grows from.
+///
+/// The **actual** landing, not the request echoed back — that is the whole of
+/// what stops drift accumulating across a chain (`docs/design/venue-authoring-api.md`).
+pub struct Built {
+    pub node_id: String,
+    pub at: build::Footprint,
+    pub tip: Option<build::Tip>,
+    /// What was snapped, in words. Empty when nothing was.
+    pub announce: Vec<String>,
+    pub report: PlacementReport,
+}
+
+/// One node as the query side reports it.
+///
+/// Every field is legal input to a write verb, which is the contract that makes
+/// read → edit → verify a round trip: `at` goes back into `place(at=)`, `face`
+/// into `face=`, a tip's direction into `end=` or `direction=`.
+pub struct NodeView {
+    pub id: String,
+    pub kind: String,
+    pub catalog_ref: Option<String>,
+    /// The catalog's short name for the piece, where it still has one.
+    pub short: Option<String>,
+    pub label: Option<String>,
+    /// The node it is bolted to, or `None` for a piece on the room itself.
+    pub host: Option<String>,
+    pub at: build::Footprint,
+    /// The outward normal of the face it sits on — for a light, the beam it
+    /// leaves at rest.
+    pub face: Option<[f64; 3]>,
+    pub tips: Vec<build::Tip>,
+}
+
+/// Which nodes a query is about.
+///
+/// Absent fields do not narrow, so the empty filter is "everything placed".
+#[derive(Default)]
+pub struct Filter {
+    pub ids: Vec<String>,
+    pub kind: Option<String>,
+    /// A glob against the label: `*`, `?`, and literals.
+    pub label: Option<String>,
+    /// Only what hangs off this node, at any depth.
+    pub on: Option<String>,
+    /// `(u_min, v_min, u_max, v_max)` in the facade frame, against the
+    /// footprint centre.
+    pub region: Option<[f64; 4]>,
+}
+
+impl Filter {
+    fn matches(&self, view: &NodeView, under: Option<&std::collections::BTreeSet<String>>) -> bool {
+        if !self.ids.is_empty() && !self.ids.iter().any(|id| *id == view.id) {
+            return false;
+        }
+        if let Some(kind) = &self.kind {
+            if view.kind != *kind {
+                return false;
+            }
+        }
+        if let Some(pattern) = &self.label {
+            let label = view.label.as_deref().unwrap_or_default();
+            if !glob_matches(pattern, label) {
+                return false;
+            }
+        }
+        if let Some(under) = under {
+            if !under.contains(&view.id) {
+                return false;
+            }
+        }
+        if let Some([u0, v0, u1, v1]) = self.region {
+            let (u, v) = (view.at.at[0], view.at.at[1]);
+            if u < u0.min(u1) || u > u0.max(u1) || v < v0.min(v1) || v > v0.max(v1) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// `*` and `?` against a label. Written here rather than pulled in because a
+/// glob crate for two metacharacters is a dependency for a `match`.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    fn walk(p: &[char], t: &[char]) -> bool {
+        match p.first() {
+            None => t.is_empty(),
+            Some('*') => walk(&p[1..], t) || (!t.is_empty() && walk(p, &t[1..])),
+            Some('?') => !t.is_empty() && walk(&p[1..], &t[1..]),
+            Some(c) => t.first() == Some(c) && walk(&p[1..], &t[1..]),
+        }
+    }
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    walk(&p, &t)
+}
+
+/// Where a head is asked to point.
+pub enum AimTarget {
+    /// Along a facade direction.
+    Direction([f64; 3]),
+    /// At a facade point — each head gets its own direction from its own
+    /// position, which is what makes "all of them at the drum riser" one call.
+    At([f64; 3]),
+}
+
+/// Read every placed node as the query side sees it.
+fn views(
+    graph: &VenueGraph,
+    solved: &Solved,
+    supply: &VenueSockets,
+    filter: &Filter,
+) -> Vec<NodeView> {
+    let scene = build::Scene::new(graph, solved, supply);
+    let under = filter.on.as_deref().map(|root| {
+        graph
+            .subtree(root)
+            .into_iter()
+            .filter(|id| id != root)
+            .collect::<std::collections::BTreeSet<String>>()
+    });
+    graph
+        .nodes()
+        .filter(|node| node.kind != NodeKind::Venue)
+        .filter_map(|node| {
+            let at = scene.footprint(&node.id).or_else(|| {
+                // A node with no measurable box still has a place; reporting it
+                // with a zero size beats leaving a light out of `nodes()`.
+                Some(build::Footprint::of(
+                    &scene.world(&node.id)?,
+                    luma_scene::aabb::DAabb::new(glam::DVec3::ZERO, glam::DVec3::ZERO),
+                ))
+            })?;
+            Some(NodeView {
+                id: node.id.clone(),
+                kind: node.kind.as_str().to_string(),
+                catalog_ref: node.catalog_ref.clone(),
+                short: node
+                    .catalog_ref
+                    .as_deref()
+                    .and_then(luma_scene::catalog::piece)
+                    .map(|p| p.short.to_string()),
+                label: node.label.clone(),
+                host: graph.edge(&node.id).map(|e| e.parent.clone()),
+                at,
+                face: scene.mounted_face(&node.id),
+                tips: scene.tips(&node.id),
+            })
+        })
+        .filter(|view| filter.matches(view, under.as_ref()))
+        .collect()
+}
+
+/// A scratch venue a component function is executed against.
+///
+/// The same verbs as a real one, over an in-memory graph and no database: a
+/// draft is *buildable* rather than *stored*, so previewing a portal costs
+/// nothing and stamping it seven times is seven copies of rows the venue's own
+/// verbs made. The function stays the source of truth — see the design doc's
+/// convergence note on `Geometry::Assembly`.
+pub struct Draft {
+    graph: VenueGraph,
+    solved: luma_scene::venue::ResolvedVenue,
+    next: usize,
+    /// Rows of lights the draft recorded but did not patch: a fixture is a
+    /// patch row and a draft has no patch. Replayed by [`Stage::stamp`] against
+    /// the copies, which is the only moment there is a venue to address them in.
+    pending: Vec<PendingRow>,
+}
+
+/// One `distribute` a draft recorded for its stamp to replay.
+pub struct PendingRow {
+    pub host: String,
+    pub face: [f64; 3],
+    pub fixture_path: String,
+    pub mode_name: String,
+    pub count: usize,
+    pub layout: DistributeLayout,
+    pub label_prefix: Option<String>,
+}
+
+/// The id the scratch graph's own root carries. Never persisted — a stamp
+/// copies the root's *children*, and the root itself is the draft's floor.
+const DRAFT_ROOT: &str = "draft";
+
+impl Draft {
+    /// An empty scratch venue.
+    #[must_use]
+    pub fn new(supply: &VenueSockets) -> Draft {
+        let graph = VenueGraph::new(Node {
+            id: DRAFT_ROOT.to_string(),
+            kind: NodeKind::Venue,
+            catalog_ref: None,
+            label: Some("draft".into()),
+            params: Params::default(),
+        });
+        let solved = luma_scene::venue::resolve(&graph, supply);
+        Draft {
+            graph,
+            solved,
+            next: 0,
+            pending: Vec::new(),
+        }
+    }
+
+    /// One chain op against the scratch graph.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] carrying the compiler's own message.
+    pub fn chain(&mut self, supply: &VenueSockets, request: &build::Request) -> Result<Built> {
+        let plan = build::compile(
+            &build::Scene::new(&self.graph, &self.solved, supply),
+            request,
+        )
+        .map_err(|refusal| StageError::Refused(refusal.to_string()))?;
+        self.next += 1;
+        let node_id = format!("d{}", self.next);
+        plan.apply(&mut self.graph, &node_id, supply)
+            .map_err(|error| StageError::Refused(error.to_string()))?;
+        self.solved = luma_scene::venue::resolve(&self.graph, supply);
+        Ok(Built {
+            node_id: node_id.clone(),
+            at: plan.at,
+            tip: plan.tip_at(&node_id),
+            announce: plan.announce.clone(),
+            report: PlacementReport::of(&node_id, &self.solved),
+        })
+    }
+
+    /// Record a row of lights for the stamp to lay.
+    pub fn record(&mut self, row: PendingRow) {
+        self.pending.push(row);
+    }
+
+    /// Every node the query side can see.
+    #[must_use]
+    pub fn nodes(&self, supply: &VenueSockets, filter: &Filter) -> Vec<NodeView> {
+        views(&self.graph, &self.solved, supply, filter)
+    }
+
+    /// The draft's own span, in the facade frame.
+    #[must_use]
+    pub fn extent(&self, supply: &VenueSockets, filter: &Filter) -> Option<build::Extent> {
+        let scene = build::Scene::new(&self.graph, &self.solved, supply);
+        scene.extent(
+            self.nodes(supply, filter)
+                .iter()
+                .map(|view| view.id.as_str())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The tree as text, in the same shape a venue prints.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let mut out = describe(&self.graph, &ResolvedVenue::from(&self.solved));
+        for row in &self.pending {
+            out.push_str(&format!(
+                "pending: {} x {} on {} facing ({:.2}, {:.2}, {:.2})\n",
+                row.count, row.fixture_path, row.host, row.face[0], row.face[1], row.face[2]
+            ));
+        }
+        out
+    }
+
+    /// The solve, for a render or a report.
+    #[must_use]
+    pub fn resolved(&self) -> ResolvedVenue {
+        ResolvedVenue::from(&self.solved)
+    }
+
+    /// Whether anything has been built into it.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.next == 0
+    }
+}
+
+impl<'a> Stage<'a> {
+    /// One chain op against this venue.
+    ///
+    /// The whole of the new build surface: a free `place` and a chained `add`
+    /// are the same request with and without a tip. What it writes is what
+    /// [`luma_scene::build::compile`] planned — the rows, in the order the plan
+    /// implies, with a re-rolled joint before the piece that chose its exit.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] carrying the compiler's message: an impossible
+    /// turn with the legal alternatives, a collision naming the blocker, a
+    /// piece the catalog does not have.
+    pub async fn chain(&self, request: &build::Request) -> Result<Built> {
+        let mut access = self.write().await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        let (plan, parent_edge) = {
+            let graph = venue_graph::graph(&mut access).await?;
+            let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+            let plan = build::compile(&build::Scene::new(&graph, &solved, supply), request)
+                .map_err(|refusal| StageError::Refused(refusal.to_string()))?;
+            let parent_edge = graph.edge(&plan.edge.parent).cloned();
+            (plan, parent_edge)
+        };
+
+        // The joint whose exit this piece chose is re-rolled *first*: the child
+        // mates the face that roll moved.
+        if let (Some(roll), Some(edge)) = (plan.parent_roll, parent_edge) {
+            if (edge.roll - roll).abs() > f64::EPSILON {
+                venue_graph_db::upsert_edge(
+                    &mut access,
+                    &plan.edge.parent,
+                    &edge.parent,
+                    &edge.my_socket,
+                    &edge.their_socket,
+                    roll,
+                )
+                .await?;
+            }
+        }
+        let node_id = self
+            .insert(
+                &mut access,
+                plan.kind.as_str(),
+                Some(&plan.catalog_ref),
+                plan.label.as_deref(),
+                plan.params.clone(),
+            )
+            .await?;
+        self.check_and_write(&mut access, &node_id, plan.edge.clone())
+            .await?;
+        if let Some((mine, target_node, target_socket)) = plan.constraint.clone() {
+            venue_graph_db::upsert_constraint(
+                &mut access,
+                &node_id,
+                &mine,
+                &target_node,
+                &target_socket,
+            )
+            .await?;
+        }
+        let report = self.report(access, &node_id).await?;
+        Ok(Built {
+            node_id: node_id.clone(),
+            at: plan.at,
+            tip: plan.tip_at(&node_id),
+            announce: plan.announce.clone(),
+            report,
+        })
+    }
+
+    /// Every node a filter names, as the query side reports them.
+    ///
+    /// # Errors
+    /// As [`Self::resolved`].
+    pub async fn nodes(&self, filter: &Filter) -> Result<Vec<NodeView>> {
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        Ok(views(&graph, &solved, supply, filter))
+    }
+
+    /// The facade-frame span of everything a filter names.
+    ///
+    /// # Errors
+    /// As [`Self::resolved`].
+    pub async fn extent(&self, filter: &Filter) -> Result<Option<build::Extent>> {
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        let ids: Vec<String> = views(&graph, &solved, supply, filter)
+            .into_iter()
+            .map(|view| view.id)
+            .collect();
+        let scene = build::Scene::new(&graph, &solved, supply);
+        Ok(scene.extent(ids.iter().map(String::as_str)))
+    }
+
+    /// One node's free end, by the direction it faces.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] when the node has no free end, or several and
+    /// none was named — the message lists them as vectors.
+    pub async fn tip(&self, node_id: &str, end: Option<[f64; 3]>) -> Result<build::Tip> {
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        build::Scene::new(&graph, &solved, supply)
+            .tip(node_id, end.map(glam::DVec3::from))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
+    /// The socket a face vector names on a host — the lowering every verb that
+    /// takes `face=` goes through.
+    ///
+    /// `None` is the venue itself, whose two faces are the floor and the grid.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] listing the faces the host does have.
+    pub async fn face_socket(&self, node_id: Option<&str>, face: [f64; 3]) -> Result<String> {
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        let node = node_id.map_or_else(|| graph.root().to_string(), str::to_string);
+        build::Scene::new(&graph, &solved, supply)
+            .face(&node, glam::DVec3::from(face))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
+    /// Point heads: along one direction, or at one point.
+    ///
+    /// Aiming is separate from mounting. A head rests along the normal of the
+    /// face it hangs from; this turns it off that normal, and the turn is a
+    /// parameter of the fixture, so the stored pose, the beam and the arrows
+    /// all move together. The pan/tilt are solved per head from its own mount
+    /// frame — `at=` on two flanking wings is two different turns from one
+    /// stated intent.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] if nothing named is a placed fixture.
+    pub async fn aim(&self, nodes: &[String], target: &AimTarget) -> Result<Vec<String>> {
+        let mut access = self.write().await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let mut aimed = Vec::new();
+        for id in nodes {
+            let Some(pose) = solved.pose(id) else {
+                continue;
+            };
+            if pose.kind != NodeKind::Fixture {
+                continue;
+            }
+            // The pose already carries the head's current turn, so the mount
+            // frame is read back off the *host* rather than off the fixture.
+            let (position, basis) = mount_frame(&solved, id);
+            let mount = fixture_kinematics::Mount::from_frame(position, basis);
+            let direction = match target {
+                AimTarget::Direction(d) => data_from_facade(*d),
+                AimTarget::At(p) => (data_from_facade(*p) - position).normalize_or_zero(),
+            };
+            let art = fixture_kinematics::aim_at(&mount, direction);
+            let (pan, tilt) = (f64::from(art.pan_rad()), f64::from(art.tilt_rad()));
+            venue_graph_db::set_params(
+                &mut access,
+                id,
+                &BTreeMap::from([
+                    ("pan".to_string(), Some(pan)),
+                    ("tilt".to_string(), Some(tilt)),
+                ]),
+            )
+            .await?;
+            aimed.push(id.clone());
+        }
+        if aimed.is_empty() {
+            return Err(StageError::Refused(
+                "nothing there is a placed fixture to aim".into(),
+            ));
+        }
+        venue_graph::commit_graph(access).await?;
+        Ok(aimed)
+    }
+
+    /// Copy a draft's whole content into this venue at `at`, turned by `yaw`.
+    ///
+    /// `duplicate` pointed at a scratch graph: the copies arrive as ordinary
+    /// rows every other verb can edit, and the *function* that drew the draft
+    /// stays the source of truth. Each top-level piece takes the stamp's own
+    /// plan offset and turn; everything under it is copied unchanged, because
+    /// it is already positioned relative to its parent.
+    ///
+    /// # Errors
+    /// As [`Self::attach`], for any joint a copy cannot make.
+    pub async fn stamp(
+        &self,
+        draft: &Draft,
+        at: [f64; 2],
+        yaw: f64,
+        trim: f64,
+    ) -> Result<Vec<String>> {
+        let mut access = self.write().await?;
+        let root = venue_graph_db::root_id(&mut access)
+            .await?
+            .ok_or_else(|| StageError::NotFound("this venue has no graph root".into()))?;
+        let (sin, cos) = yaw.sin_cos();
+        let mut minted: HashMap<String, String> = HashMap::new();
+        let mut top = Vec::new();
+        for id in draft.graph.subtree(DRAFT_ROOT).into_iter().skip(1) {
+            let (Some(node), Some(edge)) = (draft.graph.node(&id), draft.graph.edge(&id)) else {
+                continue;
+            };
+            let on_floor = edge.parent == DRAFT_ROOT;
+            let parent = if on_floor {
+                root.clone()
+            } else {
+                match minted.get(&edge.parent) {
+                    Some(copy) => copy.clone(),
+                    None => continue,
+                }
+            };
+            let mut params: BTreeMap<String, f64> = node
+                .params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            if on_floor {
+                let (u, v) = (
+                    params.get("u").copied().unwrap_or(0.0),
+                    params.get("v").copied().unwrap_or(0.0),
+                );
+                params.insert("u".into(), at[0] + u * cos - v * sin);
+                params.insert("v".into(), at[1] + u * sin + v * cos);
+                let lift = params.get("trim").copied().unwrap_or(0.0);
+                params.insert("trim".into(), lift + trim);
+            }
+            let copy = self
+                .insert(
+                    &mut access,
+                    node.kind.as_str(),
+                    node.catalog_ref.as_deref(),
+                    node.label.as_deref(),
+                    params,
+                )
+                .await?;
+            self.check_and_write(
+                &mut access,
+                &copy,
+                Edge {
+                    parent,
+                    my_socket: edge.my_socket.clone(),
+                    their_socket: edge.their_socket.clone(),
+                    roll: if on_floor { edge.roll + yaw } else { edge.roll },
+                },
+            )
+            .await?;
+            if on_floor {
+                top.push(copy.clone());
+            }
+            minted.insert(id, copy);
+        }
+        venue_graph::commit_graph(access).await?;
+        // The lights the draft recorded, laid against the copies. Separate
+        // transactions because `distribute` owns its own, and a stamp whose
+        // structure landed and whose row did not is visible in `describe()`
+        // where a silent rollback would not be.
+        for row in &draft.pending {
+            let Some(host) = minted.get(&row.host) else {
+                continue;
+            };
+            let socket = self.face_socket(Some(host), row.face).await?;
+            self.distribute(
+                Some(host),
+                Some(&socket),
+                &row.fixture_path,
+                &row.mode_name,
+                row.count,
+                row.layout,
+                row.label_prefix.as_deref(),
+            )
+            .await?;
+        }
+        Ok(top)
+    }
+}
+
+/// The frame a head hangs in, before its own turn: the host socket's world
+/// pose, read in data space.
+///
+/// Read off the *parent* rather than off the fixture's own pose, because the
+/// solve bakes the head's rest aim into that pose ([`luma_scene::venue`]'s
+/// `head_turn`) — aiming against it would compound every previous aim.
+fn mount_frame(solved: &Solved, id: &str) -> (glam::Vec3, glam::Mat3) {
+    let pose = solved.pose(id).expect("caller checked the pose exists");
+    let (position, basis) = pose.data_basis();
+    let (pan, tilt) = (pose.params.get("pan", 0.0), pose.params.get("tilt", 0.0));
+    let turn = fixture_kinematics::articulation_basis_d(pan, tilt);
+    (position.as_vec3(), (basis * turn.inverse()).as_mat3())
+}
+
+/// A facade `(u, v, z)` vector as the data-space vector the kinematics speak.
+///
+/// Facade is world space (Z-up, house at `+y`) and data space mirrors it in `y`
+/// — `luma_scene::coords::world_from_data` is its own inverse.
+fn data_from_facade(v: [f64; 3]) -> glam::Vec3 {
+    luma_scene::coords::world_from_data(glam::Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
+}
+
 /// What a distribution left behind: the report the caller shows, and the patch
 /// as it now stands.
 ///
@@ -1393,10 +1984,28 @@ fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
     // Where each node ended up, for the half of a verb's effect a tree of
     // relations cannot state. Array members are keyed `<id>#<n>` and never
     // match a graph node, so they are simply absent here.
+    // Reported in the **facade frame** the build surface states intent in —
+    // `+u` stage right, `+v` toward the crowd, `+z` up — not in the data space
+    // the rows are stored in. The two mirror in `y`, so a tree that printed the
+    // stored triple unlabelled put every upstage piece downstage for a reader
+    // checking it against the vocabulary they had just built with.
     let poses: BTreeMap<&str, ([f64; 3], f64)> = solved
         .nodes
         .iter()
-        .map(|node| (node.id.as_str(), (node.position, node.rotation[2])))
+        .map(|node| {
+            let at = luma_scene::coords::world_from_data(glam::Vec3::new(
+                node.position[0] as f32,
+                node.position[1] as f32,
+                node.position[2] as f32,
+            ));
+            (
+                node.id.as_str(),
+                (
+                    [f64::from(at.x), f64::from(at.y), f64::from(at.z)],
+                    -node.rotation[2],
+                ),
+            )
+        })
         .collect();
     let beams: BTreeMap<&str, &'static str> = solved
         .nodes
@@ -1419,7 +2028,9 @@ fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
     }
 
     let root = graph.root();
-    let mut out = format!("{root}  venue\n");
+    let mut out = format!(
+        "{root}  venue   at=(u, v, z) metres: +u stage right, +v toward the crowd, +z up\n"
+    );
     write_branch(graph, &placed, &poses, &beams, &children, root, 1, &mut out);
 
     out.push_str("\nunplaced:");
@@ -1535,9 +2146,9 @@ fn write_branch(
         // cannot otherwise say. A face is only "underneath" for a piece the
         // right way up, and nothing else here would ever tell a reader that
         // the row it just hung is looking at the roof.
-        if let Some(([x, y, z], heading)) = poses.get(id) {
+        if let Some(([u, v, z], heading)) = poses.get(id) {
             line.push_str(&format!(
-                "  at=({x:.2}, {y:.2}, {z:.2})  heading={:.0}deg",
+                "  at=({u:.2}, {v:.2}, {z:.2})  heading={:.0}deg",
                 heading.to_degrees()
             ));
         }

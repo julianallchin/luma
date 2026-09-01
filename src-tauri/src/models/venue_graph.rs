@@ -491,9 +491,17 @@ pub struct StageCatalog {
 #[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CatalogPiece {
-    /// What `catalog_ref` holds.
+    /// The short name the authoring surface names this piece by — `truss`,
+    /// `guardrail`, `deck`. The **primary** id a caller types.
+    pub short: String,
+    /// What `catalog_ref` holds — the storage key, and an alias a caller may
+    /// still type.
     pub catalog_ref: String,
     pub name: String,
+    /// Metres along the piece's own axes: `(along, across, up)`. For a
+    /// generated piece this is its **default** size; only `along` moves with
+    /// `span`.
+    pub size: [f64; 3],
     /// Palette section: `Stage`, `Trusses`, `Speakers`, ...
     pub group: String,
     /// Snap taxonomy: `floor`, `truss`, `speaker`, `cdj`, ...
@@ -549,8 +557,15 @@ impl StageCatalog {
                     params: Params::default(),
                 };
                 CatalogPiece {
+                    short: piece.short.to_string(),
                     catalog_ref: piece.id.to_string(),
                     name: piece.display_name.to_string(),
+                    // The socket layer is Y-up, so a piece's own `(x, y, z)`
+                    // box reads out as `(along, across, up)`.
+                    size: supply.bounds(&probe).map_or([0.0; 3], |b| {
+                        let s = b.size();
+                        [s.x, s.z, s.y]
+                    }),
                     group: piece.palette_group.as_str().to_string(),
                     piece_kind: piece.kind.as_str().to_string(),
                     procedural: piece.geometry.is_procedural(),
@@ -582,7 +597,7 @@ impl StageCatalog {
                 luma_scene::venue::FLOOR_SOCKET.to_string(),
                 luma_scene::venue::RIG_SOCKET.to_string(),
             ],
-            length_step_m: crate::services::stage_ops::LENGTH_STEP_M,
+            length_step_m: luma_scene::build::MODULE_M,
             pieces,
         }
     }

@@ -192,6 +192,13 @@ pub struct Piece {
     /// Stable identity, and what the database stores. For a GLB piece this is
     /// its mesh path.
     pub id: &'static str,
+    /// The short name the authoring surface names this piece by — `"truss"`,
+    /// `"guardrail"`, `"deck"`.
+    ///
+    /// The *primary* id for a person or an agent; [`Self::id`] is the storage
+    /// key and reads as an alias. Both resolve through [`find`], so a venue row
+    /// written before short names existed still names a piece.
+    pub short: &'static str,
     pub kind: PieceKind,
     pub display_name: &'static str,
     pub palette_group: PaletteGroup,
@@ -432,37 +439,42 @@ fn build() -> Vec<Piece> {
     use PieceKind::*;
 
     let mesh = |id: &'static str,
+                short: &'static str,
                 kind: PieceKind,
                 display_name: &'static str,
                 palette_group: PaletteGroup,
                 sockets: Vec<SocketDef>| Piece {
         id,
+        short,
         kind,
         display_name,
         palette_group,
         geometry: Geometry::Mesh { path: id },
         sockets,
     };
-    let speaker = |id, name| {
+    let speaker = |id, short, name| {
         mesh(
             id,
+            short,
             Speaker,
             name,
             Speakers,
             mount_sockets("mount", SocketType::SpeakerMount),
         )
     };
-    let equipment = |id, kind, name| {
+    let equipment = |id, short, kind, name| {
         mesh(
             id,
+            short,
             kind,
             name,
             Equipment,
             mount_sockets("mount", SocketType::EquipmentMount),
         )
     };
-    let procedural = |id, display_name, family| Piece {
+    let procedural = |id, short, display_name, family| Piece {
         id,
+        short,
         kind: Truss,
         display_name,
         palette_group: Trusses,
@@ -473,31 +485,54 @@ fn build() -> Vec<Piece> {
     vec![
         mesh(
             "stage_lab/stage_praticavel_1x1.glb",
+            "deck_1x1",
             Floor,
             "Stage Deck 1×1m",
             Stage,
             floor_sockets(),
         ),
         // Same socket topology as the 1×1; the bbox does the size scaling.
-        mesh(DECK_2X1, Floor, "Stage Deck 2×1m", Stage, floor_sockets()),
-        procedural("truss/straight", "Truss · straight", Family::Truss),
-        procedural("truss/corner", "Truss · corner box", Family::Corner),
-        procedural("truss/hinge", "Truss · hinge", Family::Hinge),
-        speaker("stage_lab/speaker_dbr15.glb", "Yamaha DBR15"),
-        speaker("stage_lab/speaker_dual18sub.glb", "Dual 18\" Sub"),
-        speaker("stage_lab/speaker_event_212a.glb", "Event 212A"),
-        speaker("stage_lab/speaker_jbl_vtx_v20.glb", "JBL VTX V20"),
+        mesh(
+            DECK_2X1,
+            "deck",
+            Floor,
+            "Stage Deck 2×1m",
+            Stage,
+            floor_sockets(),
+        ),
+        procedural("truss/straight", "truss", "Truss · straight", Family::Truss),
+        procedural(
+            "truss/corner",
+            "corner",
+            "Truss · corner box",
+            Family::Corner,
+        ),
+        procedural("truss/hinge", "hinge", "Truss · hinge", Family::Hinge),
+        speaker("stage_lab/speaker_dbr15.glb", "dbr15", "Yamaha DBR15"),
+        speaker("stage_lab/speaker_dual18sub.glb", "sub18", "Dual 18\" Sub"),
+        speaker(
+            "stage_lab/speaker_event_212a.glb",
+            "event212a",
+            "Event 212A",
+        ),
+        speaker(
+            "stage_lab/speaker_jbl_vtx_v20.glb",
+            "vtx_v20",
+            "JBL VTX V20",
+        ),
         mesh(
             "stage_lab/speaker_stand.glb",
+            "speaker_stand",
             Stand,
             "Speaker Stand",
             Accessories,
             stand_sockets(),
         ),
-        equipment(CDJ, Cdj, "CDJ-3000"),
-        equipment(MIXER, Mixer, "DJM-A9 Mixer"),
+        equipment(CDJ, "cdj", Cdj, "CDJ-3000"),
+        equipment(MIXER, "mixer", Mixer, "DJM-A9 Mixer"),
         Piece {
             id: "assembly/dj_booth",
+            short: "dj_booth",
             kind: DjBooth,
             display_name: "DJ Booth",
             palette_group: Equipment,
@@ -509,6 +544,7 @@ fn build() -> Vec<Piece> {
         },
         mesh(
             "stage_lab/guardrail.glb",
+            "guardrail",
             Guardrail,
             "Guardrail",
             Accessories,
@@ -516,6 +552,7 @@ fn build() -> Vec<Piece> {
         ),
         mesh(
             "stage_lab/cable_cover.glb",
+            "cable_cover",
             CableCover,
             "Cable Cover",
             Accessories,
@@ -537,6 +574,29 @@ pub fn piece(id: &str) -> Option<&'static Piece> {
     pieces().iter().find(|p| p.id == id)
 }
 
+/// The piece a *caller* named: its short name, its stored id, or its display
+/// name, case-insensitively.
+///
+/// One entry point for every surface a person or an agent types a piece into,
+/// so `"truss"`, `"truss/straight"` and `"Truss · straight"` cannot come to mean
+/// three different things. [`piece`] stays the exact-id lookup the loader and
+/// the renderer use — they hold a stored key, not a name.
+#[must_use]
+pub fn find(name: &str) -> Option<&'static Piece> {
+    let wanted = name.trim();
+    pieces()
+        .iter()
+        .find(|p| p.short == wanted || p.id == wanted)
+        .or_else(|| {
+            let lower = wanted.to_lowercase();
+            pieces().iter().find(|p| {
+                p.short.eq_ignore_ascii_case(&lower)
+                    || p.id.eq_ignore_ascii_case(&lower)
+                    || p.display_name.to_lowercase() == lower
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +606,20 @@ mod tests {
     fn ids_are_unique() {
         let ids: HashSet<&str> = pieces().iter().map(|p| p.id).collect();
         assert_eq!(ids.len(), pieces().len());
+    }
+
+    /// Short names are the primary vocabulary, so they have to be as unique as
+    /// the storage ids and they have to resolve back to the same piece.
+    #[test]
+    fn short_names_are_unique_and_resolve() {
+        let shorts: HashSet<&str> = pieces().iter().map(|p| p.short).collect();
+        assert_eq!(shorts.len(), pieces().len());
+        for p in pieces() {
+            assert_eq!(find(p.short).map(|f| f.id), Some(p.id));
+            assert_eq!(find(p.id).map(|f| f.id), Some(p.id));
+            assert_eq!(find(p.display_name).map(|f| f.id), Some(p.id));
+        }
+        assert!(find("no such piece").is_none());
     }
 
     #[test]

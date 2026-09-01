@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::{DMat4, DVec3};
 
 use crate::coords;
-use crate::sockets::{ResolvedSocket, RollFreedom, SocketMode, SocketType};
+use crate::sockets::{ResolvedSocket, RollFreedom, SocketKind, SocketMode, SocketType};
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -230,6 +230,20 @@ pub trait NodeSockets {
     fn is_known(&self, node: &Node) -> bool {
         let _ = node;
         true
+    }
+
+    /// `node`'s box in its own local frame, or `None` where the supply cannot
+    /// measure one.
+    ///
+    /// The second thing a piece has besides sockets, and the reason `collisions`
+    /// and `span_exceeds` were absent from [`Placement`]: a mate point says
+    /// where a piece is bolted, and only a box says what it fills. Optional
+    /// rather than required because a fixture is drawn from the patch and a
+    /// dropped catalog entry has nothing left to measure — "unknown" is an
+    /// answer the authoring layer can act on, where a guessed box is not.
+    fn bounds(&self, node: &Node) -> Option<crate::aabb::DAabb> {
+        let _ = node;
+        None
     }
 }
 
@@ -1430,7 +1444,7 @@ pub fn place_on(
     host_world
         * DMat4::from_translation(DVec3::new(placement.u, placement.v, 0.0) + lift)
         * turn
-        * mate_suffix(kind, host_world, held)
+        * mate_suffix(kind, host_world, host, held)
 }
 
 /// A fixture's rest aim as a turn on its own mount frame, or nothing.
@@ -1530,10 +1544,15 @@ const VERTICAL_HOST_EPSILON: f64 = 1e-9;
 /// The two differ by exactly a half turn, which is the sign error the design
 /// doc's audit found three copies of.
 ///
-/// A piece on a **down-facing** host *hangs* rather than turning over: see
-/// [`hangs_under`]. A fixture is unaffected — it has no up of its own, only a
-/// beam, and the beam is the host normal either way.
-fn mate_suffix(kind: NodeKind, host_world: DMat4, held: &ResolvedSocket) -> DMat4 {
+/// A piece resting on a **down-facing surface** *hangs* rather than turning
+/// over: see [`hangs_under`]. A fixture is unaffected — it has no up of its own,
+/// only a beam, and the beam is the host normal either way.
+fn mate_suffix(
+    kind: NodeKind,
+    host_world: DMat4,
+    host: &ResolvedSocket,
+    held: &ResolvedSocket,
+) -> DMat4 {
     if kind == NodeKind::Fixture {
         DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2)
     } else if held.mode == SocketMode::Upright {
@@ -1541,7 +1560,7 @@ fn mate_suffix(kind: NodeKind, host_world: DMat4, held: &ResolvedSocket) -> DMat
         // the joint's vertical opposes the normals and keeps feet down by
         // construction, whichever ends met.
         flip_for(held.mode) * socket_frame_upright(held).inverse()
-    } else if hangs_under(host_world) {
+    } else if hangs_under(host_world) && host.socket_type.kind() == SocketKind::Surface {
         socket_frame(held).inverse()
     } else {
         flip_for(held.mode) * socket_frame(held).inverse()
@@ -1595,6 +1614,11 @@ fn socket_frame_upright(socket: &ResolvedSocket) -> DMat4 {
 /// Asked of the host's **world** frame, not its local normal: "faces down" is a
 /// fact about the room, and the same `face_-y` is the underside of a stick
 /// lying flat and the side of one stood on end.
+///
+/// Restricted to [`SocketKind::Surface`] joints at the call site, and it has to
+/// be: a **bolt** opposes its two ends by definition, so a truss end that
+/// happens to face down is still a truss end. Without that gate a run built
+/// downward out of a joint grew back up through the piece it left.
 ///
 /// A fixture is excluded at the call site rather than here: it has no up to
 /// preserve, and its beam *is* the host normal by construction. There is no
@@ -1822,7 +1846,7 @@ pub fn invert_placement(
     // `world = parent_world · host_frame · T · Rz · mate`, so
     // `T · Rz = (parent_world · host_frame)⁻¹ · world · mate⁻¹`.
     let host_world = parent_world * socket_frame(host);
-    let seat = host_world.inverse() * world * mate_suffix(kind, host_world, held).inverse();
+    let seat = host_world.inverse() * world * mate_suffix(kind, host_world, host, held).inverse();
     let offset = seat.w_axis.truncate();
     // The offset is `u·x̂ + v·ŷ + trim·up`, with `up` the host frame's view of
     // world up. Its `z` component is trim's alone, because `x̂` and `ŷ` have

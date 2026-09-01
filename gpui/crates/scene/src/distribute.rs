@@ -96,6 +96,14 @@ pub enum Layout {
     /// clamped rather than refused — a dragged handle produces both, and
     /// neither is a mistake anybody can act on.
     Span(f64, f64),
+    /// Packed body to body, the band centred `metres` from the feature's
+    /// **middle** — the fourth thing a caller can hold fixed, and the one that
+    /// makes "this light, here" a distribution rather than a second verb.
+    ///
+    /// Signed, because the middle is the origin the whole module measures from:
+    /// `At(0.0)` is dead centre and `At(-2.0)` is two metres toward the
+    /// feature's negative-tangent end.
+    At(f64),
 }
 
 /// Why a distribution will not fit.
@@ -149,6 +157,9 @@ pub fn offsets(
 
     let pitch = match layout {
         Layout::Spacing(spacing) => spacing.abs(),
+        // Packed: `At` fixes where the band sits, so the only thing left for it
+        // to derive is nothing at all.
+        Layout::At(_) => width,
         // The outer bodies keep a half-width margin, so what the interior
         // divides is the segment minus one whole body.
         Layout::Even | Layout::Span(_, _) if count > 1 => {
@@ -161,7 +172,24 @@ pub fn offsets(
     // segment itself, and for `Spacing` is the short band a long truss carries
     // in its middle rather than against one end.
     let extent = (count - 1) as f64 * pitch + width;
-    let first = segment_start + (segment_length - extent) / 2.0 + width / 2.0;
+    let centre = match layout {
+        Layout::At(metres) if metres.is_finite() => metres,
+        Layout::At(_) => 0.0,
+        _ => segment_start + segment_length / 2.0,
+    };
+    let first = centre - extent / 2.0 + width / 2.0;
+    // An `At` band can sit inside a feature it still overruns, because the
+    // caller chose where rather than how much. That is the one fit question the
+    // band-versus-segment test above cannot ask.
+    if let (Layout::At(_), Some(length)) = (layout, feature.length_m) {
+        let reach = (centre.abs() + extent / 2.0) * 2.0;
+        if reach > length + FIT_EPSILON_M {
+            return Err(Fit::TooLong {
+                needed_m: feature.buildable(reach),
+                available_m: length,
+            });
+        }
+    }
     Ok((0..count).map(|i| first + pitch * i as f64).collect())
 }
 
@@ -178,6 +206,10 @@ fn segment(length: f64, layout: Layout) -> (f64, f64) {
             let (lo, hi) = fractions(t0, t1);
             (lo * length - length / 2.0, (hi - lo) * length)
         }
+        // The band *is* the segment: `At` says where it goes, and the fit test
+        // below is then "does that land on the host", which is the only way an
+        // `At` can be too long.
+        Layout::At(_) => (-length / 2.0, length),
     }
 }
 
@@ -203,7 +235,7 @@ fn band_length(layout: Layout, count: usize, width: f64) -> f64 {
     match layout {
         // `Even` and `Span` derive their pitch from the segment, so their band
         // *is* the segment as long as the bodies themselves fit in it.
-        Layout::Even | Layout::Span(_, _) => count as f64 * width,
+        Layout::Even | Layout::Span(_, _) | Layout::At(_) => count as f64 * width,
         Layout::Spacing(spacing) => (count - 1) as f64 * spacing.abs() + width,
     }
 }
@@ -216,7 +248,7 @@ fn band_length(layout: Layout, count: usize, width: f64) -> f64 {
 fn too_long(feature: Feature, layout: Layout, band: f64) -> Fit {
     let available = feature.length_m.unwrap_or(f64::INFINITY);
     let whole = match layout {
-        Layout::Even | Layout::Spacing(_) => band,
+        Layout::Even | Layout::Spacing(_) | Layout::At(_) => band,
         Layout::Span(t0, t1) => {
             let (lo, hi) = fractions(t0, t1);
             if hi - lo > 0.0 {
@@ -420,5 +452,29 @@ mod tests {
     fn spacing_under_the_body_width_still_fits_by_its_band() {
         let row = offsets(Feature::bounded(1.0, PANEL), Layout::Spacing(0.1), 6, 0.3).unwrap();
         assert_eq!(row.len(), 6);
+    }
+
+    /// `At` is the one layout that fixes *where* rather than how much: one body,
+    /// on the mark, measured from the feature's middle.
+    #[test]
+    fn at_puts_one_body_on_the_mark() {
+        let row = offsets(Feature::bounded(8.0, None), Layout::At(2.0), 1, BODY).unwrap();
+        assert_eq!(row.len(), 1);
+        assert!((row[0] - 2.0).abs() < 1e-12, "{row:?}");
+        let centre = offsets(Feature::bounded(8.0, None), Layout::At(0.0), 1, BODY).unwrap();
+        assert!(centre[0].abs() < 1e-12);
+        // Negative is the other way along the same tangent.
+        let back = offsets(Feature::bounded(8.0, None), Layout::At(-3.0), 1, BODY).unwrap();
+        assert!((back[0] + 3.0).abs() < 1e-12);
+    }
+
+    /// A mark past the end of the host is a refusal, not a clamp — the same
+    /// answer every other layout gives, for the same reason.
+    #[test]
+    fn at_refuses_a_mark_off_the_end() {
+        assert!(offsets(Feature::bounded(4.0, None), Layout::At(3.9), 1, BODY).is_err());
+        assert!(offsets(Feature::bounded(4.0, None), Layout::At(-3.9), 1, BODY).is_err());
+        // Nothing overruns the floor.
+        assert!(offsets(Feature::unbounded(), Layout::At(100.0), 1, BODY).is_ok());
     }
 }
