@@ -654,6 +654,25 @@ impl VenueGraph {
         self.edges.remove(child);
     }
 
+    /// Drop a node, everything hanging off it, and every check either end of it
+    /// held.
+    ///
+    /// [`Self::detach`]'s harder sibling: a detached branch is still in the
+    /// room and comes back if it is re-attached, and this one is gone. The root
+    /// is the room itself and is never removed.
+    pub fn remove(&mut self, id: &str) {
+        if id == self.root {
+            return;
+        }
+        for gone in self.subtree(id) {
+            self.nodes.remove(&gone);
+            self.edges.remove(&gone);
+            self.constraints
+                .retain(|check| check.node != gone && check.target_node != gone);
+            self.warnings.retain(|warning| warning.node != gone);
+        }
+    }
+
     /// `id` and everything hanging off it, in id order. Includes `id` itself.
     ///
     /// Every id is a node's: the walk follows edges, and an edge names a node

@@ -498,9 +498,14 @@ pub struct CatalogPiece {
     /// still type.
     pub catalog_ref: String,
     pub name: String,
-    /// Metres along the piece's own axes: `(along, across, up)`. For a
-    /// generated piece this is its **default** size; only `along` moves with
-    /// `span`.
+    /// The box the piece fills **as `place` lays it with no `direction=`**, in
+    /// facade axes: `(u, v, z)`, metres. For a generated piece this is its
+    /// default; `length=` moves the axis it runs along.
+    ///
+    /// Not the piece's own `(x, y, z)`: a mesh is modelled in whatever frame
+    /// its author chose and the seat turns it, so a catalog that printed the
+    /// asset's box told three agents a deck was 1 m across the stage when
+    /// `place` gives it 2.
     pub size: [f64; 3],
     /// Palette section: `Stage`, `Trusses`, `Speakers`, ...
     pub group: String,
@@ -534,6 +539,28 @@ pub struct CatalogSocket {
     pub feature: bool,
 }
 
+/// The box one piece fills in facade axes, seated on the floor the way a bare
+/// `place` seats it.
+///
+/// Solved by the authoring layer itself — see
+/// [`luma_scene::build::resting_footprint`] — because the printed dimensions
+/// and the placed ones have to be one computation. A piece with no resting pose
+/// (a truss stands on its ends) reads its own box out along its own axes.
+fn placed_size(
+    supply: &luma_render::catalog::VenueSockets,
+    probe: &luma_scene::venue::Node,
+) -> [f64; 3] {
+    use luma_scene::venue::NodeSockets as _;
+
+    if let Some(print) = luma_scene::build::resting_footprint(supply, probe) {
+        return print.size;
+    }
+    supply.bounds(probe).map_or([0.0; 3], |b| {
+        let s = b.size();
+        [s.x, s.z, s.y]
+    })
+}
+
 impl StageCatalog {
     /// Every piece the palette offers, resolved against `supply`.
     ///
@@ -560,12 +587,7 @@ impl StageCatalog {
                     short: piece.short.to_string(),
                     catalog_ref: piece.id.to_string(),
                     name: piece.display_name.to_string(),
-                    // The socket layer is Y-up, so a piece's own `(x, y, z)`
-                    // box reads out as `(along, across, up)`.
-                    size: supply.bounds(&probe).map_or([0.0; 3], |b| {
-                        let s = b.size();
-                        [s.x, s.z, s.y]
-                    }),
+                    size: placed_size(supply, &probe),
                     group: piece.palette_group.as_str().to_string(),
                     piece_kind: piece.kind.as_str().to_string(),
                     procedural: piece.geometry.is_procedural(),
