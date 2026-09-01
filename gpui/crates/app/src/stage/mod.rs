@@ -4062,6 +4062,9 @@ mod tests {
         Build {
             venue_id: "venue".into(),
             room: Room::new(&graph, &sockets, HashMap::new()),
+            rows: luma_lib::models::venue_graph::VenueGraphRows::default(),
+            undo: Vec::new(),
+            redo: Vec::new(),
             graph,
             solved: luma_lib::models::venue_graph::ResolvedVenue::default(),
             hand: super::Hand::Idle,
