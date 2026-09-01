@@ -148,6 +148,7 @@ struct CompositeUniform {
     inv_view_proj: [[f32; 4]; 4],
     params: [f32; 4],
     depth: [f32; 4],
+    background: [f32; 4],
 }
 
 #[repr(C)]
@@ -3335,6 +3336,7 @@ impl Renderer {
                 haze_density * Transport::EXTINCTION,
                 0.0,
             ],
+            background: frame.clear_color.extend(1.0).to_array(),
         };
         let composite_buf = self.storage(
             &mut encoder,
@@ -3791,7 +3793,7 @@ mod tests {
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
         assert_eq!(std::mem::size_of::<Globals>(), 368);
         assert_eq!(std::mem::size_of::<HazeUniform>(), 176);
-        assert_eq!(std::mem::size_of::<CompositeUniform>(), 96);
+        assert_eq!(std::mem::size_of::<CompositeUniform>(), 112);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 64);
         assert_eq!(std::mem::size_of::<FixtureShadowMatrix>(), 80);

@@ -24,6 +24,12 @@ pub type Definitions = std::collections::BTreeMap<String, Definition>;
 /// Shader cap shared by fixture surface lighting and volumetric transport.
 pub const MAX_FIXTURE_CONES: usize = 512;
 
+/// Edge length of the ground quad, metres. Its rim has to fall past the
+/// composite's horizon dissolve — that is what makes the floor read as
+/// unbounded — while its corners stay inside the camera's far plane, or the
+/// rim is merely replaced by a far-plane arc.
+const FLOOR_EXTENT_M: f32 = 2000.0;
+
 /// One uploadable triangle list.
 pub struct MeshData {
     /// Stable identity of this immutable mesh inside the asset/procedural bank.
@@ -641,12 +647,19 @@ pub fn build_with(
     let mut fixture_cones = Vec::new();
 
     // --- floor -------------------------------------------------------------
-    // `<mesh rotation={[-PI/2,0,0]}><planeGeometry args={[200,200]}/>`. Model
-    // space stays three-space throughout: every model matrix below is
+    // Model space stays three-space throughout: every model matrix below is
     // `to_world · (whatever three.js composed)`, so mesh data and local offsets
     // need no per-vertex conversion.
+    //
+    // The quad reads as unbounded because the composite dissolves surfaces into
+    // the background between `HORIZON_NEAR_M` and `HORIZON_FAR_M`
+    // (`composite.wgsl`); the half-extent only has to outrun that band by
+    // enough that no rim survives a grazing view. It is *not* the room's
+    // extent — nothing measures the venue from it.
     let to_world = Mat4::from_mat3(r);
-    let floor = bank.insert("::floor".into(), || plane_mesh(200.0, 200.0));
+    let floor = bank.insert("::floor".into(), || {
+        plane_mesh(FLOOR_EXTENT_M, FLOOR_EXTENT_M)
+    });
     if scene.render.show_floor {
         draws.push(Draw {
             mesh: floor,

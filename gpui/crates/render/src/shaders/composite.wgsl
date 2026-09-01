@@ -9,7 +9,34 @@ struct Composite {
     params: vec4<f32>,
     // xy: camera near/far planes, z: mean extinction sigma in 1/metres.
     depth: vec4<f32>,
+    // rgb: the frame's clear colour, i.e. what a pixel with no geometry and no
+    // visible environment shows.
+    background: vec4<f32>,
 };
+
+// The horizon dissolve. Surfaces wash into the background across this band of
+// view depth, so the ground quad has no rim to see: nothing in a venue stands
+// this far out, and the quad's own extent (`FLOOR_EXTENT_M`, frame.rs) is
+// past the far end.
+const HORIZON_NEAR_M: f32 = 100.0;
+const HORIZON_FAR_M: f32 = 700.0;
+// Weight toward the far end, so the band opens gently and a far truss is
+// still a truss where the ground under it has begun to go.
+const HORIZON_BIAS: f32 = 1.5;
+
+/// How much of the background has taken over at this depth.
+///
+/// The ramp is written in *inverse* depth. A ground plane's height above the
+/// horizon line falls as 1/depth, so a band in 1/depth is a band of fixed
+/// height in pixels — the same ramp seen from a standing eye and from a camera
+/// thirty metres up. Written in metres it is not: perspective packs the whole
+/// of it into the last few rows of a standing view, and the horizon comes back
+/// as the hard line this exists to remove.
+fn horizon_dissolve(depth: f32) -> f32 {
+    let span = 1.0 - HORIZON_NEAR_M / HORIZON_FAR_M;
+    let t = saturate((1.0 - HORIZON_NEAR_M / max(depth, 1e-3)) / span);
+    return pow(t, HORIZON_BIAS);
+}
 
 @group(0) @binding(0) var<uniform> cfg: Composite;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
@@ -123,6 +150,32 @@ fn agx(color_in: vec3<f32>) -> vec3<f32> {
     return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+/// What stands behind the geometry along this pixel's ray: the environment
+/// probe when one is meant to be seen, otherwise the frame's clear colour.
+/// The horizon dissolve and the empty-pixel sky are the same question asked
+/// twice, so they read it from here rather than each resolving it.
+fn background_radiance(uv: vec2<f32>) -> vec3<f32> {
+    if environment_params.visible < 0.5 {
+        return cfg.background.rgb;
+    }
+    let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let near_h = cfg.inv_view_proj * vec4<f32>(ndc_xy, 1.0, 1.0);
+    let far_h = cfg.inv_view_proj * vec4<f32>(ndc_xy, 0.0, 1.0);
+    let near_world = near_h.xyz / near_h.w;
+    let far_world = far_h.xyz / far_h.w;
+    var direction = normalize(far_world - near_world);
+    let c = cos(environment_params.rotation);
+    let s = sin(environment_params.rotation);
+    direction = vec3<f32>(
+        c * direction.x - s * direction.y,
+        s * direction.x + c * direction.y,
+        direction.z,
+    );
+    direction = vec3<f32>(direction.x, direction.z, -direction.y);
+    return textureSampleLevel(environment_specular, environment_sampler, direction, 0.0).rgb
+        * environment_params.intensity;
+}
+
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(frag.xy);
@@ -138,23 +191,12 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // Subframe weights sum to 1, so the accumulated target is already a mean —
     // nothing here rescales it.
     let raw_depth = textureLoad(depth_tex, coord, 0);
+    let background = background_radiance(uv);
     if raw_depth <= 0.0 && environment_params.visible > 0.5 {
-        let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-        let near_h = cfg.inv_view_proj * vec4<f32>(ndc_xy, 1.0, 1.0);
-        let far_h = cfg.inv_view_proj * vec4<f32>(ndc_xy, 0.0, 1.0);
-        let near_world = near_h.xyz / near_h.w;
-        let far_world = far_h.xyz / far_h.w;
-        var direction = normalize(far_world - near_world);
-        let c = cos(environment_params.rotation);
-        let s = sin(environment_params.rotation);
-        direction = vec3<f32>(
-            c * direction.x - s * direction.y,
-            s * direction.x + c * direction.y,
-            direction.z,
-        );
-        direction = vec3<f32>(direction.x, direction.z, -direction.y);
-        scene = textureSampleLevel(environment_specular, environment_sampler, direction, 0.0).rgb
-            * environment_params.intensity;
+        // Only where the probe is meant to be seen: everywhere else the target
+        // already holds the clear colour, resolved with whatever coverage the
+        // silhouette had, and overwriting it would flatten that edge.
+        scene = background;
     }
     let depth = linear_view_depth(raw_depth);
     let debug = u32(cfg.params.w + 0.5);
@@ -171,6 +213,13 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let haze = upsample_haze(uv, depth);
     if debug == 7u {
         return vec4<f32>(agx(haze), 1.0);
+    }
+    // Applied before the medium, so a dissolving surface and the background it
+    // dissolves into are attenuated by the same fog. Surfaces only: an empty
+    // pixel is already the background, and mixing it again would discard the
+    // partial coverage a silhouette resolved into it.
+    if raw_depth > 0.0 {
+        scene = mix(scene, background, horizon_dissolve(depth));
     }
     // Beer-Lambert over the camera path, with the same sigma the haze pass
     // integrates in-scatter against. Surface radiance decays exactly as the
