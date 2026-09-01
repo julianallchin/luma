@@ -185,7 +185,7 @@ impl PickSnapshot {
         let mut objects: Vec<Option<EditorObject>> = Vec::new();
         let mut anchors = HashMap::new();
         let mut ordered = Vec::new();
-        for draw in &frame.draws[..frame.draws.len().saturating_sub(frame.grid_draws)] {
+        for draw in &frame.draws[..frame.draws.len().saturating_sub(frame.transparent.len())] {
             let Some(object) = draw.editor_object.clone() else {
                 continue;
             };

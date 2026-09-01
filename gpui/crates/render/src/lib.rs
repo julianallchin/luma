@@ -30,6 +30,7 @@
 #![allow(clippy::too_many_lines)]
 
 pub mod assets;
+pub(crate) mod cables;
 pub mod catalog;
 pub mod coords;
 mod environment;

@@ -214,6 +214,10 @@ pub struct RenderSettings {
     /// subject is a single piece (the palette thumbnails), on everywhere a
     /// room is the subject.
     pub show_floor: bool,
+    /// Whether flown pieces are drawn hanging on rigging cables. Room chrome,
+    /// like the two above: off for a render whose subject is one piece, on
+    /// wherever the subject is a rig.
+    pub show_cables: bool,
     /// Renderer diagnostic output. `Pbr` is the authored display path.
     pub debug_view: DebugView,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
@@ -401,6 +405,7 @@ impl RenderSettings {
             sun: None,
             show_grid: false,
             show_floor: true,
+            show_cables: true,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
@@ -424,6 +429,7 @@ impl RenderSettings {
             sun: Some(DirectionalLight::EDITOR),
             show_grid: true,
             show_floor: true,
+            show_cables: true,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
@@ -448,6 +454,8 @@ struct RenderSettingsWire {
     sun: Option<DirectionalLight>,
     #[serde(default)]
     show_grid: Option<bool>,
+    #[serde(default)]
+    show_cables: Option<bool>,
     #[serde(default)]
     debug_view: DebugView,
     #[serde(default)]
@@ -482,6 +490,11 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 sun: wire.sun,
                 show_grid: wire.show_grid.unwrap_or(false),
                 show_floor: true,
+                // The tracked contract images predate rigging cables and are
+                // about materials and beams, not about rooms. Absent means off
+                // at this boundary, on in every constructor — the same split
+                // `fixture_surface_lighting` is held at, for the same reason.
+                show_cables: wire.show_cables.unwrap_or(false),
                 debug_view: wire.debug_view,
                 // Absent means the constructors' default, which is on — only
                 // the legacy branch below pins it off, and that pin has its
@@ -509,6 +522,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         // The legacy catalogue predates surface fixture lighting. Keeping it
         // off at this compatibility boundary preserves those captured inputs;
         // every new interactive preset enables the path.
+        settings.show_cables = wire.show_cables.unwrap_or(false);
         settings.fixture_surface_lighting = wire.fixture_surface_lighting.unwrap_or(false);
         settings.fixture_shadows = wire.fixture_shadows.unwrap_or(false);
         settings.cluster_debug = wire.cluster_debug;

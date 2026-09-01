@@ -560,7 +560,7 @@ fn profile_case(
     let mut frame = frame_with_lights(base, cones);
     multiply_geometry(&mut frame, geometry_copies);
     frame.fixture_shadows = fixture_shadows;
-    let opaque_draws = frame.draws.len() - frame.grid_draws;
+    let opaque_draws = frame.draws.len() - frame.transparent.len();
     let shadowed_fixtures = usize::from(fixture_shadows) * cones.min(128);
     if fixture_shadows {
         anyhow::ensure!(
@@ -1109,7 +1109,7 @@ fn multiply_geometry(frame: &mut luma_render::Frame, copies: usize) {
     if copies == 0 {
         return;
     }
-    let opaque = frame.draws.len() - frame.grid_draws;
+    let opaque = frame.draws.len() - frame.transparent.len();
     let copy_of = |draw: &luma_render::frame::Draw| luma_render::frame::Draw {
         mesh: draw.mesh,
         model: draw.model,
@@ -1161,7 +1161,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
                 editor_object: draw.editor_object.clone(),
             })
             .collect(),
-        grid_draws: base.grid_draws,
+        transparent: base.transparent.clone(),
         gizmo_pivot: base.gizmo_pivot,
         overlays: Vec::new(),
         point_lights: base.point_lights.clone(),
