@@ -94,6 +94,7 @@ use luma_lib::services::group_derivation::FixtureRole;
 use luma_lib::services::track_edits::{TrackClip, TrackEditResult};
 use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
+use luma_render::scene_desc::VenueEnvironment;
 
 #[cfg(feature = "agent")]
 #[derive(Clone, Debug, Default)]
@@ -1085,6 +1086,23 @@ impl Library {
             }
             result
         }
+    }
+
+    /// Write one venue's lighting environment: what kind of room it is and how
+    /// far up its one dial is.
+    ///
+    /// Not a graph verb — nothing moves — so it answers with nothing and the
+    /// caller re-reads the rig, which is where the environment arrives from in
+    /// the first place ([`Rig::environment`]).
+    pub fn set_venue_environment(
+        &self,
+        venue_id: &str,
+        environment: VenueEnvironment,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "set_venue_environment",
+            json!({ "venueId": venue_id, "environment": environment }),
+        )
     }
 
     /// Create a venue and return the durable row written by the catalog.
@@ -2142,6 +2160,7 @@ impl Library {
     /// would be a screen that knew the second call depends on the first.
     pub fn venue_rig(&self, venue_id: &str) -> impl Future<Output = Result<Rig, LibraryError>> {
         let services = self.services.clone();
+        let venue_id = venue_id.to_string();
         let venue = json!({ "venueId": venue_id });
         let task = self.runtime.spawn(async move {
             let fixtures: Vec<PatchedFixture> =
@@ -2149,6 +2168,13 @@ impl Library {
             let venue_graph: ResolvedVenue =
                 command(&services, "get_resolved_venue", &venue).await?;
             let rows: VenueGraphRows = command(&services, "get_venue_graph", &venue).await?;
+            // The room's own lighting, fetched with its geometry: a rig and
+            // the environment it stands in are one picture, and a viewport
+            // that adopted the pieces before the light would draw a frame of
+            // the wrong room.
+            let environment = command::<Venue>(&services, "get_venue", &json!({ "id": venue_id }))
+                .await?
+                .environment;
             let mut definitions = HashMap::new();
             for path in fixtures
                 .iter()
@@ -2168,6 +2194,7 @@ impl Library {
                 venue: venue_graph,
                 definitions,
                 rows,
+                environment,
             })
         });
         async move {
@@ -2929,6 +2956,9 @@ pub struct Rig {
     /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
     /// absent rather than an error.
     pub definitions: HashMap<String, FixtureDefinition>,
+    /// What kind of room this is and how far up its one dial is — the venue's
+    /// own truth, and the only thing that says how the picture is lit.
+    pub environment: VenueEnvironment,
     /// The graph as rows — `(parent, my_socket, their_socket, params)`.
     ///
     /// [`Self::venue`] is the same graph *solved*, and a solve throws the
