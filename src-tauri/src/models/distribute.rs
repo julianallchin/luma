@@ -25,8 +25,8 @@ pub enum DistributeLayout {
     Even,
     /// A fixed centre-to-centre pitch, in metres, centred on the face.
     Spacing { metres: f64 },
-    /// Evenly across the fraction `from..to` of the face, `0` at its
-    /// negative-tangent end.
+    /// Evenly across the window `from..to`, in **metres off the face's
+    /// middle** — the same origin `At` and `alongM` use.
     Span { from: f64, to: f64 },
     /// Packed body to body, centred `metres` from the face's **middle** —
     /// signed, so `-2.0` is two metres toward the face's negative-tangent end.

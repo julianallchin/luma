@@ -38,7 +38,7 @@ use crate::models::distribute::DistributeLayout;
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups;
-use crate::services::stage_ops::{Stage, StageError};
+use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::services::track_edits::TrackScope;
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
 use crate::storage::StorageRoot;
@@ -57,6 +57,13 @@ pub struct VenueHost {
     /// The score that lights the room, when the thread has one. Without it the
     /// rig is drawn on the editor's work light alone — geometry, no beams.
     lighting: Option<TrackScope>,
+    /// The scratch graphs open in this cell, by id.
+    ///
+    /// In memory and cell-scoped on purpose: a draft is a *component function
+    /// being run somewhere that is not the venue yet*, so it has no rows, no
+    /// undo entry and nothing to clean up if the cell dies. Stamping is the
+    /// only moment it becomes a venue's business.
+    drafts: std::sync::Mutex<std::collections::HashMap<String, Draft>>,
 }
 
 impl VenueHost {
@@ -77,6 +84,7 @@ impl VenueHost {
             workspace,
             venue_id,
             lighting,
+            drafts: std::sync::Mutex::default(),
         }
     }
 
@@ -129,8 +137,43 @@ impl VenueHost {
         };
         drop(access);
 
+        self.shoot(
+            geometry,
+            Shoot {
+                view,
+                time,
+                state,
+                aim_arrows: request.aim_arrows,
+                size: (width, height),
+                bare: false,
+            },
+        )
+        .await
+    }
+
+    /// One frame of whatever geometry it is handed.
+    ///
+    /// Shared by the venue camera and the draft camera so a preview cannot come
+    /// out looking like a different renderer: a draft is the *same* room math
+    /// with nothing in it but the draft.
+    async fn shoot(&self, geometry: VenueGeometry, shot: Shoot) -> Result<Value, HostCallError> {
+        let Shoot {
+            view,
+            time,
+            state,
+            aim_arrows,
+            size: (width, height),
+            bare,
+        } = shot;
         let (mut scene, definitions) = geometry.scene();
-        scene.aim_arrows = request.aim_arrows;
+        scene.aim_arrows = aim_arrows;
+        if bare {
+            // A draft is looked at for its shape. The floor and its grid are
+            // the *room's* furniture, and a component being previewed is not in
+            // a room yet.
+            scene.render.show_grid = false;
+            scene.render.show_floor = false;
+        }
         let booth = geometry.booth();
         let meshes_root = stage_render::meshes_root(Some(&self.resource_root));
 
@@ -336,11 +379,63 @@ impl VenueHost {
     /// Nothing republishes the Art-Net patch here: a cell has no live output,
     /// and the desktop app re-reads the patch when the venue reloads.
     async fn distribute(&self, request: DistributeRequest) -> Result<Value, HostCallError> {
+        // A draft has no patch, so a row it asks for is *recorded* and laid at
+        // the stamp — the first moment there is a universe to address it in.
+        if let Some(draft_id) = request.draft_id.as_deref() {
+            let face = request.face.ok_or_else(|| {
+                HostCallError::new(
+                    "invalid_argument",
+                    "a row in a draft is hung on a face vector",
+                )
+            })?;
+            let host = request.host_node_id.clone().ok_or_else(|| {
+                HostCallError::new(
+                    "invalid_argument",
+                    "a row in a draft hangs on a piece the draft built",
+                )
+            })?;
+            let supply = self.supply()?;
+            let mut drafts = self.drafts();
+            let draft = Self::draft_mut(&mut drafts, draft_id)?;
+            // Refuse a face the host does not have *now*, rather than at the
+            // stamp: the caller is standing in front of the piece it just
+            // built, and that is where the fix is cheapest.
+            draft.face(supply, &host, face)?;
+            draft.record(crate::services::stage_ops::PendingRow {
+                host,
+                face,
+                fixture_path: request.fixture_path.clone(),
+                mode_name: request.mode_name.clone(),
+                count: request.count,
+                layout: request.layout,
+                label_prefix: request.label_prefix.clone(),
+            });
+            return Ok(json!({
+                "report": {
+                    "fixtures": [],
+                    "refusal": Value::Null,
+                    "warnings": [
+                        "recorded in the draft — the row is patched when the draft is stamped"
+                    ],
+                    "dangling": [],
+                    "unplaced": [],
+                },
+                "describe": draft.describe(),
+            }));
+        }
+        let socket = match (request.face, request.host_socket.clone()) {
+            (Some(face), _) => Some(
+                self.stage()
+                    .face_socket(request.host_node_id.as_deref(), face)
+                    .await?,
+            ),
+            (None, named) => named,
+        };
         let distributed = self
             .stage()
             .distribute(
                 request.host_node_id.as_deref(),
-                request.host_socket.as_deref(),
+                socket.as_deref(),
                 &request.fixture_path,
                 &request.mode_name,
                 request.count,
@@ -350,6 +445,211 @@ impl VenueHost {
             .await?;
         Ok(json!({
             "report": distributed.report,
+            "describe": self.stage().describe().await?,
+        }))
+    }
+
+    // -- the authoring surface -------------------------------------------
+
+    /// One `place` or `add` — against the venue, or against a draft.
+    ///
+    /// The two paths differ only in where the rows land, which is why the
+    /// compiler is one function: a draft that built differently from the venue
+    /// would make a preview a lie.
+    async fn chain(&self, request: ChainRequest) -> Result<Value, HostCallError> {
+        let plan = request.compile()?;
+        if let Some(draft_id) = request.draft_id.as_deref() {
+            let supply = self.supply()?;
+            let mut drafts = self.drafts();
+            let draft = Self::draft_mut(&mut drafts, draft_id)?;
+            let built = draft.chain(supply, &plan)?;
+            let text = draft.describe();
+            return Ok(built_json(&built, &text));
+        }
+        let built = self.stage().chain(&plan).await?;
+        let text = self.stage().describe().await?;
+        Ok(built_json(&built, &text))
+    }
+
+    /// Every node a filter names, in the facade frame.
+    async fn query(&self, request: QueryRequest) -> Result<Value, HostCallError> {
+        let filter = request.filter();
+        let nodes = match request.draft_id.as_deref() {
+            Some(id) => {
+                let supply = self.supply()?;
+                let drafts = self.drafts();
+                Self::draft(&drafts, id)?.nodes(supply, &filter)
+            }
+            None => self.stage().nodes(&filter).await?,
+        };
+        Ok(json!({ "nodes": nodes.iter().map(node_json).collect::<Vec<_>>() }))
+    }
+
+    /// The span and centre of everything a filter names — the "is it centred"
+    /// check in one call.
+    async fn extent(&self, request: QueryRequest) -> Result<Value, HostCallError> {
+        let filter = request.filter();
+        let extent = match request.draft_id.as_deref() {
+            Some(id) => {
+                let supply = self.supply()?;
+                let drafts = self.drafts();
+                Self::draft(&drafts, id)?.extent(supply, &filter)
+            }
+            None => self.stage().extent(&filter).await?,
+        };
+        Ok(json!({ "extent": extent.map(extent_json) }))
+    }
+
+    /// A cursor on an existing node's free end.
+    ///
+    /// The node's own row comes back with it, because a cursor *is* a node
+    /// handle: handing back the end without the piece would make the caller ask
+    /// twice for one thing.
+    async fn tip(&self, request: TipRequest) -> Result<Value, HostCallError> {
+        let end = request.end;
+        let filter = Filter {
+            ids: vec![request.node_id.clone()],
+            ..Filter::default()
+        };
+        if let Some(id) = request.draft_id.as_deref() {
+            let supply = self.supply()?;
+            let drafts = self.drafts();
+            let draft = Self::draft(&drafts, id)?;
+            let tip = draft.tip(supply, &request.node_id, end)?;
+            let node = draft.nodes(supply, &filter);
+            return Ok(json!({
+                "tip": tip_json(&tip),
+                "node": node.first().map(node_json),
+            }));
+        }
+        let tip = self.stage().tip(&request.node_id, end).await?;
+        let node = self.stage().nodes(&filter).await?;
+        Ok(json!({
+            "tip": tip_json(&tip),
+            "node": node.first().map(node_json),
+        }))
+    }
+
+    /// Point heads: along a direction, or at a point.
+    async fn aim_at(&self, request: AimRequest) -> Result<Value, HostCallError> {
+        let target = match (request.direction, request.at) {
+            (Some(direction), None) => AimTarget::Direction(direction),
+            (None, Some(at)) => AimTarget::At(at),
+            _ => {
+                return Err(HostCallError::new(
+                    "invalid_argument",
+                    "aim takes a direction= or an at=, and exactly one of them",
+                ))
+            }
+        };
+        let aimed = self.stage().aim(&request.nodes, &target).await?;
+        Ok(json!({
+            "aimed": aimed,
+            "describe": self.stage().describe().await?,
+        }))
+    }
+
+    // -- drafts ----------------------------------------------------------
+
+    /// The geometry supply, resolved once per process.
+    fn supply(&self) -> Result<&'static luma_render::catalog::VenueSockets, HostCallError> {
+        crate::venue_graph::sockets(&self.resource_root)
+            .map_err(|error| HostCallError::new("internal", error))
+    }
+
+    fn drafts(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, Draft>> {
+        // A poisoned lock means a previous call panicked mid-edit; the drafts
+        // are still readable and a cell that cannot preview is worse than one
+        // that previews a graph a panic left alone.
+        self.drafts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn draft<'d>(
+        drafts: &'d std::collections::HashMap<String, Draft>,
+        id: &str,
+    ) -> Result<&'d Draft, HostCallError> {
+        drafts.get(id).ok_or_else(|| {
+            HostCallError::new("not_found", format!("no draft `{id}` is open in this cell"))
+        })
+    }
+
+    fn draft_mut<'d>(
+        drafts: &'d mut std::collections::HashMap<String, Draft>,
+        id: &str,
+    ) -> Result<&'d mut Draft, HostCallError> {
+        drafts.get_mut(id).ok_or_else(|| {
+            HostCallError::new("not_found", format!("no draft `{id}` is open in this cell"))
+        })
+    }
+
+    fn draft_create(&self) -> Result<Value, HostCallError> {
+        let supply = self.supply()?;
+        let id = format!("draft-{}", uuid::Uuid::new_v4());
+        self.drafts().insert(id.clone(), Draft::new(supply));
+        Ok(json!({ "draftId": id }))
+    }
+
+    fn draft_discard(&self, request: DraftRequest) -> Result<Value, HostCallError> {
+        self.drafts().remove(&request.draft_id);
+        Ok(json!({}))
+    }
+
+    fn draft_describe(&self, request: DraftRequest) -> Result<Value, HostCallError> {
+        let drafts = self.drafts();
+        Ok(json!({ "text": Self::draft(&drafts, &request.draft_id)?.describe() }))
+    }
+
+    /// A picture of the draft alone: the same render path, framed on nothing
+    /// but what the component built.
+    async fn draft_render(&self, request: DraftRenderRequest) -> Result<Value, HostCallError> {
+        let view = View::from_str(&request.view)
+            .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
+        let width = clamp_dimension("width", request.width)?;
+        let height = clamp_dimension("height", request.height)?;
+        let venue = {
+            let drafts = self.drafts();
+            let draft = Self::draft(&drafts, &request.draft_id)?;
+            if draft.is_empty() {
+                return Err(HostCallError::new(
+                    "invalid_venue",
+                    "this draft is empty, so there is nothing to render",
+                ));
+            }
+            draft.solved().clone()
+        };
+        // No patch and no definitions: a draft holds structure, and the lights
+        // it recorded are laid at the stamp, which is the first moment there is
+        // a universe to address them in.
+        let geometry = VenueGeometry {
+            fixtures: Vec::new(),
+            venue,
+            definitions: std::collections::HashMap::new(),
+        };
+        self.shoot(
+            geometry,
+            Shoot {
+                view,
+                time: 0.0,
+                state: None,
+                aim_arrows: false,
+                size: (width, height),
+                bare: true,
+            },
+        )
+        .await
+    }
+
+    /// Copy a draft into the venue.
+    async fn stamp(&self, request: StampRequest) -> Result<Value, HostCallError> {
+        let nodes = {
+            let drafts = self.drafts();
+            let draft = Self::draft(&drafts, &request.draft_id)?;
+            self.stage()
+                .stamp(draft, request.at, request.yaw, request.trim)
+                .await?
+        };
+        Ok(json!({
+            "nodes": nodes,
             "describe": self.stage().describe().await?,
         }))
     }
@@ -464,6 +764,16 @@ impl HostCallHandler for VenueHost {
                     "venue.remove" => self.remove(decode(payload)?).await,
                     "venue.params" => self.params(decode(payload)?).await,
                     "venue.distribute" => self.distribute(decode(payload)?).await,
+                    "venue.chain" => self.chain(decode(payload)?).await,
+                    "venue.query" => self.query(decode(payload)?).await,
+                    "venue.extent" => self.extent(decode(payload)?).await,
+                    "venue.tip" => self.tip(decode(payload)?).await,
+                    "venue.aim" => self.aim_at(decode(payload)?).await,
+                    "venue.stamp" => self.stamp(decode(payload)?).await,
+                    "venue.draft.create" => self.draft_create(),
+                    "venue.draft.discard" => self.draft_discard(decode(payload)?),
+                    "venue.draft.describe" => self.draft_describe(decode(payload)?),
+                    "venue.draft.render" => self.draft_render(decode(payload)?).await,
                     _ => Err(HostCallError::new(
                         "unknown_method",
                         format!("unknown venue host method {method:?}"),
@@ -586,13 +896,214 @@ struct ParamsRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DistributeRequest {
+    draft_id: Option<String>,
     host_node_id: Option<String>,
+    /// The face as a **vector**, which is the vocabulary the build surface
+    /// states intent in. Beam is the mount normal, so this is also where the
+    /// row points at rest.
+    face: Option<[f64; 3]>,
+    /// The face by name — the older, lower layer, still how the gpui page and
+    /// an existing script spell it.
     host_socket: Option<String>,
     fixture_path: String,
     mode_name: String,
     count: usize,
     layout: DistributeLayout,
     label_prefix: Option<String>,
+}
+
+/// What one frame is of, beside the geometry itself.
+struct Shoot {
+    view: View,
+    time: f32,
+    state: Option<UniverseState>,
+    aim_arrows: bool,
+    size: (u32, u32),
+    /// Draw the piece and nothing else — no floor, no grid. What a draft is
+    /// previewed through.
+    bare: bool,
+}
+
+/// One `place` or `add`, as the wire carries it.
+///
+/// One shape for both verbs, because they build the same piece: `from` present
+/// is an `add` growing off a tip, absent is a `place` anchored by its footprint
+/// centre. Everything else — the direction, the joint, the length — is common,
+/// and splitting them would put the quantization in two places.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChainRequest {
+    /// The scratch graph to build in, or the venue itself.
+    draft_id: Option<String>,
+    piece: String,
+    /// A cursor handed back by an earlier call, round-tripped verbatim — which
+    /// is how the caller names an end without ever naming a socket.
+    from: Option<WireTip>,
+    at: Option<[f64; 2]>,
+    on: Option<String>,
+    face: Option<[f64; 3]>,
+    direction: Option<[f64; 3]>,
+    axis: Option<[f64; 3]>,
+    angle: Option<f64>,
+    length: Option<f64>,
+    to: Option<String>,
+    #[serde(default)]
+    trim: f64,
+    label: Option<String>,
+}
+
+/// A cursor on one free end, as the wire carries it.
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WireTip {
+    node: String,
+    socket: String,
+    direction: [f64; 3],
+    at: [f64; 3],
+}
+
+impl ChainRequest {
+    fn compile(&self) -> Result<luma_scene::build::Request, HostCallError> {
+        Ok(luma_scene::build::Request {
+            piece: self.piece.clone(),
+            from: self.from.as_ref().map(|tip| luma_scene::build::Tip {
+                node: tip.node.clone(),
+                socket: tip.socket.clone(),
+                direction: tip.direction,
+                at: tip.at,
+            }),
+            at: self.at,
+            on: self.on.clone(),
+            face: self.face,
+            direction: self.direction,
+            axis: self.axis,
+            angle: self.angle,
+            length: self.length,
+            to: self.to.clone(),
+            trim: self.trim,
+            label: self.label.clone(),
+        })
+    }
+}
+
+/// Which nodes a read is about. The empty filter is everything placed.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct QueryRequest {
+    draft_id: Option<String>,
+    #[serde(default)]
+    ids: Vec<String>,
+    kind: Option<String>,
+    label: Option<String>,
+    on: Option<String>,
+    region: Option<[f64; 4]>,
+}
+
+impl QueryRequest {
+    fn filter(&self) -> Filter {
+        Filter {
+            ids: self.ids.clone(),
+            kind: self.kind.clone(),
+            label: self.label.clone(),
+            on: self.on.clone(),
+            region: self.region,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TipRequest {
+    draft_id: Option<String>,
+    node_id: String,
+    /// The direction the wanted end faces. Absent picks the only free end, or
+    /// refuses listing them.
+    end: Option<[f64; 3]>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AimRequest {
+    nodes: Vec<String>,
+    direction: Option<[f64; 3]>,
+    at: Option<[f64; 3]>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftRequest {
+    draft_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftRenderRequest {
+    draft_id: String,
+    view: String,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StampRequest {
+    draft_id: String,
+    at: [f64; 2],
+    /// Radians about world up, as every angle on this boundary is.
+    #[serde(default)]
+    yaw: f64,
+    #[serde(default)]
+    trim: f64,
+}
+
+/// One chain op's answer: what was built, where it landed, and the end the next
+/// op grows from.
+fn built_json(built: &crate::services::stage_ops::Built, describe: &str) -> Value {
+    json!({
+        "node": built.node_id,
+        "at": built.at.at,
+        "z": built.at.z,
+        "size": built.at.size,
+        "tip": built.tip.as_ref().map(tip_json),
+        "announce": built.announce,
+        "placement": built.report,
+        "describe": describe,
+    })
+}
+
+fn tip_json(tip: &luma_scene::build::Tip) -> Value {
+    json!({
+        "node": tip.node,
+        "socket": tip.socket,
+        "direction": tip.direction,
+        "at": tip.at,
+    })
+}
+
+fn node_json(view: &crate::services::stage_ops::NodeView) -> Value {
+    json!({
+        "id": view.id,
+        "kind": view.kind,
+        "catalogRef": view.catalog_ref,
+        "short": view.short,
+        "label": view.label,
+        "host": view.host,
+        "at": view.at.at,
+        "z": view.at.z,
+        "size": view.at.size,
+        "face": view.face,
+        "tips": view.tips.iter().map(tip_json).collect::<Vec<_>>(),
+    })
+}
+
+fn extent_json(extent: luma_scene::build::Extent) -> Value {
+    json!({
+        "count": extent.count,
+        "min": extent.min,
+        "max": extent.max,
+        "centre": extent.centre,
+        "size": extent.size,
+    })
 }
 
 /// The one lowering of a stage refusal into a host-call error.

@@ -1224,35 +1224,33 @@ async fn a_python_program_builds_a_rig_from_an_empty_venue() {
             r#"
 catalog = luma.venue.catalog()
 
-# A deck on the room's floor, and a tower up out of each of its front corners.
-deck = luma.venue.place(DECK, at=(0.0, 0.0), label="Deck")
-left = luma.venue.extend(deck, "corner_fl", 3.0)
-right = luma.venue.extend(deck, "corner_fr", 3.0)
+# A portal, stated as a chain: a tower up, a corner, the beam across, a corner,
+# a tower back down. Nothing here names a socket and nothing does arithmetic
+# against a pose — the cursor carries the truth forward.
+t = luma.venue.place("truss", at=(-5.5, 0.0), length=8, direction=(0, 0, 1),
+                     label="left leg")
+t = t.add("corner")
+beam = t = t.add("truss", length=11, direction=(1, 0, 0), label="beam")
+t = t.add("corner")
+right = t.add("truss", length=8, direction=(0, 0, -1), label="right leg")
 
-# Two sticks lying on the floor with their ends facing each other, so there is
-# a measured gap in the room to bridge and to overrun.
-a = luma.venue.place(TRUSS, at=(-3.0, 3.0), span=2.0, label="A")
-b = luma.venue.place(TRUSS, at=(3.0, 3.0), span=2.0, label="B")
-gap = luma.venue.reach(a, "end_b")
+# Movers under the beam, hung by pointing at the face rather than naming it.
+row = luma.venue.distribute(MOVER, 6, on=beam, face=(0, 0, -1), mode=MODE,
+                            label="wash")
 
-# Movers on the downstage face of each tower. `distribute` is the only way a
-# fixture is ever created.
-rows = [
-    luma.venue.distribute(tower, "face_-z", MOVER, 2, mode=MODE, label=name)
-    for tower, name in ((left, "left"), (right, "right"))
-]
+portal = luma.venue.extent(luma.venue.nodes())
+legs = luma.venue.nodes(label="*leg")
 
 (
     len(catalog.pieces) > 0,
-    deck.placed and left.placed and right.placed,
-    None if gap is None else round(gap.gap_m, 2),
-    [r.ok for r in rows],
+    round(beam.size[0], 2),
+    abs(portal.centre[0]) < 0.5,
+    round(right.at[0] - beam.at[0], 2) > 0,
+    row.ok and len(row.fixtures) == 6,
+    len(legs),
     len(luma.venue.unplaced()),
-    sorted(f"{d.node_id}.{d.socket}" for d in luma.venue.dangling()).count(a.node_id + ".end_b"),
 )
 "#
-            .replace("DECK", &format!("{DECK:?}"))
-            .replace("TRUSS", &format!("{TRUSS:?}"))
             .replace("MOVER", &format!("{MOVER:?}"))
             .replace("MODE", &format!("{MOVER_MODE:?}"))
             .as_str(),
@@ -1261,7 +1259,7 @@ rows = [
     expect_ok(&out, "build the rig");
     let repr = out.repr.clone().unwrap_or_default();
     assert!(
-        repr.starts_with("(True, True, 4.0, [True, True], 0, 1)"),
+        repr.starts_with("(True, 11.0, True, True, True, 2, 0)"),
         "the rig did not come out as asked: {repr}\n{}",
         out.stdout
     );
@@ -1275,14 +1273,15 @@ rows = [
             &venue_id,
             "tree = luma.venue.describe()\n\
              plan = luma.venue.tiles()\n\
-             (tree.count('  run  truss/straight'), tree.count('fixture'), \
-              'unplaced: none' in tree, len(plan.splitlines()) > 3)",
+             (tree.count('truss/straight'), tree.count('fixture'), \
+              'unplaced: none' in tree, len(plan.splitlines()) > 3, \
+              '+v toward the crowd' in tree)",
         )
         .await;
     expect_ok(&out, "describe the rig");
     assert_eq!(
         out.repr.as_deref(),
-        Some("(2, 4, True, True)"),
+        Some("(3, 6, True, True, True)"),
         "{}",
         out.stdout
     );
@@ -1317,38 +1316,98 @@ def beam(node_id, tree):
     line = [l for l in tree.splitlines() if node_id in l][0]
     return line.rsplit("beam=", 1)[1].split()[0]
 
-# The same face of the same stick, once standing on the floor and once hung
-# from the rig plane. A piece hangs under a down-facing surface rather than
-# turning over, so `face_-y` is its underside either way and both rows of
-# heads point at the floor.
-standing = luma.venue.place(TRUSS, at=(-4.0, 0.0), span=2.0, trim=3.0)
-# No `socket=`: the catalog picks the footing, which is the path a caller
-# actually takes and the one that used to stand the stick on its end.
-hanging = luma.venue.place(TRUSS, at=(4.0, 0.0), span=2.0,
-                           surface="rig", trim=6.0)
-on_floor = luma.venue.distribute(standing, "face_-y", head.path, 1, mode=head.mode(18))
-flown = luma.venue.distribute(hanging, "face_-y", head.path, 1, mode=head.mode(18))
+# The same stick, once standing on the floor and once hung from the grid — the
+# grid is the room's other face and is named by pointing at it. A piece hangs
+# *under* a down-facing surface rather than turning over, so its underside is
+# its underside either way and both rows point at the floor.
+standing = luma.venue.place("truss", at=(-4.0, 0.0), length=2.0, trim=3.0)
+hanging = luma.venue.place("truss", at=(4.0, 0.0), length=2.0,
+                           face=(0, 0, -1), trim=6.0)
+on_floor = luma.venue.distribute(head.path, 1, on=standing, face=(0, 0, -1),
+                                 mode=head.mode(18))
+flown = luma.venue.distribute(head.path, 1, on=hanging, face=(0, 0, -1),
+                              mode=head.mode(18))
 
 tree = luma.venue.describe()
 rest = (beam(on_floor.fixtures[0].node_id, tree),
         beam(flown.fixtures[0].node_id, tree))
 
-# An aim turns the word, and it turns it about the *mount*: 90 degrees of tilt
-# off a head resting straight down swings it out level. Which way round it
-# goes is the face's own tangent, not a stage direction the caller chose —
-# which is exactly why the beam word, and not the angle, is the check.
-aimed = luma.venue.aim(flown.fixtures[0], tilt=90.0)
-(rest, beam(flown.fixtures[0].node_id, aimed.describe()))
-"#
-            .replace("TRUSS", &format!("{TRUSS:?}")),
+# An aim is stated, not dialled: point it at the crowd and read the word back.
+luma.venue.aim(flown.fixtures[0], direction=(0, 1, 0))
+(rest, beam(flown.fixtures[0].node_id, luma.venue.describe()))
+"#,
         )
         .await;
     expect_ok(&out, "beam words");
     let repr = out.repr.clone().unwrap_or_default();
     assert_eq!(
-        repr, "(('down', 'down'), 'upstage')",
+        repr, "(('down', 'down'), 'house')",
         "the beam word did not follow the mount or the aim: {repr}\n{}",
         out.stdout
+    );
+
+    f.service.shutdown_all();
+}
+
+/// A component is a function over the same verbs, run somewhere that is not the
+/// venue yet — and stamping it is copies, not a second kind of node.
+///
+/// The whole draft path end to end: the scratch graph never touches the room,
+/// both previews answer, and seven stamps are seven rows every other verb can
+/// edit. The lights the component asked for are recorded and patched at the
+/// stamp, because a draft has no patch to address them in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_draft_previews_a_component_and_stamps_copies_of_it() {
+    let Some(f) = Fixture::new("venue drafts").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            &r#"
+def portal(s, width=11, height=8):
+    t = s.place("truss", at=(-width / 2, 0), length=height, direction=(0, 0, 1))
+    t = t.add("corner")
+    beam = t = t.add("truss", length=width, direction=(1, 0, 0))
+    t = t.add("corner")
+    t.add("truss", length=height, direction=(0, 0, -1))
+    s.distribute(MOVER, 4, on=beam, face=(0, 0, -1), mode=MODE)
+
+gate = luma.venue.draft(portal, width=11)
+
+# The venue is untouched while the draft is being looked at.
+untouched = len(luma.venue.nodes()) == 0
+span = gate.extent
+preview = gate.render(width=320, height=180)
+
+# Three stamps, six metres apart. Each one is ordinary rows.
+for i in range(3):
+    luma.venue.stamp(gate, at=(0.0, 4.0 + 6.0 * i))
+
+rig = luma.venue.extent(luma.venue.nodes())
+rows = luma.venue.nodes(kind="fixture")
+(untouched, span.count, round(span.size[0], 1), round(rig.size[1], 1),
+ len(rows), len(luma.venue.unplaced()))
+"#
+            .replace("MOVER", &format!("{MOVER:?}"))
+            .replace("MODE", &format!("{MOVER_MODE:?}")),
+        )
+        .await;
+    expect_ok(&out, "draft and stamp");
+    let repr = out.repr.clone().unwrap_or_default();
+    // Five pieces in the draft; three portals twelve metres apart in v; and a
+    // row of four heads under each.
+    assert!(
+        repr.starts_with("(True, 5, 11.7, 12.3,"),
+        "the draft did not preview as asked: {repr}\n{}",
+        out.stdout
+    );
+    assert!(
+        repr.ends_with(", 12, 0)"),
+        "the stamps did not land: {repr}"
     );
 
     f.service.shutdown_all();
@@ -1369,7 +1428,7 @@ async fn a_piece_the_catalog_does_not_have_is_refused() {
             &thread,
             &venue_id,
             "try:\n\
-            \x20   luma.venue.place(\"deck\", at=(0, 0))\n\
+            \x20   luma.venue.place(\"trusss\", at=(0, 0))\n\
             \x20   refusal = None\n\
              except luma.VenueRefused as error:\n\
             \x20   refusal = str(error)\n\
@@ -1379,7 +1438,7 @@ async fn a_piece_the_catalog_does_not_have_is_refused() {
     expect_ok(&out, "unknown piece");
     let repr = out.repr.clone().unwrap_or_default();
     assert!(
-        repr.contains("is not in the catalog") && repr.contains("stage_praticavel"),
+        repr.contains("neither a catalog piece nor a fixture") && repr.contains("truss"),
         "the refusal did not name what the catalog has: {repr}"
     );
     // Nothing was written: an empty room describes as root plus its two
@@ -1492,21 +1551,21 @@ async fn the_library_names_a_head_and_an_aim_points_it() {
 found = luma.venue.fixtures("rogue r2 spot")
 head = found[0]
 
-# A tower out of a deck, and a row of that head under it.
-deck = luma.venue.place(DECK, at=(0.0, 0.0))
-tower = luma.venue.extend(deck, "corner_fl", 3.0)
-row = luma.venue.distribute(tower, "face_-z", head.path, 4, mode=head.mode(18))
+# A tower, and a row of that head down its downstage face.
+tower = luma.venue.place("truss", at=(-3.0, -2.0), length=3.0, direction=(0, 0, 1))
+row = luma.venue.distribute(head, 4, on=tower, face=(0, 1, 0), mode=head.mode(18))
 along = [f.along_m for f in row.fixtures]
 
-# Point the first one out over the room. `aim` takes the report, not an id.
-aimed = luma.venue.aim(row.fixtures[0], pan=-30.0, tilt=45.0)
-line = [l for l in aimed.describe().splitlines() if row.fixtures[0].node_id in l][0]
+# Point the whole row at one place in the room. Each head gets its own turn,
+# solved from where that head actually hangs.
+aimed = luma.venue.aim(row.fixtures, at=(0.0, 6.0, 0.0))
+tree = luma.venue.describe()
+line = [l for l in tree.splitlines() if row.fixtures[0].node_id in l][0]
 
 # The row comes back in face order, which is what indexing it means.
 (head.path, head.moves, head.mode(18), row.ok, along == sorted(along),
- "pan=-30deg" in line, "tilt=45deg" in line)
-"#
-            .replace("DECK", &format!("{DECK:?}")),
+ len(aimed) == 4, "beam=house" in line)
+"#,
         )
         .await;
     expect_ok(&out, "library and aim");
@@ -1537,8 +1596,8 @@ async fn an_extend_past_the_measured_gap_is_refused() {
             &thread,
             &venue_id,
             &r#"
-a = luma.venue.place(TRUSS, at=(-3.0, 0.0), span=2.0, label="A")
-b = luma.venue.place(TRUSS, at=(3.0, 0.0), span=2.0, label="B")
+a = luma.venue.place("truss", at=(-3.0, 0.0), length=2.0, label="A")
+b = luma.venue.place("truss", at=(3.0, 0.0), length=2.0, label="B")
 gap = luma.venue.reach(a, "end_b").gap_m
 before = luma.venue.describe()
 try:
@@ -1547,8 +1606,7 @@ try:
 except luma.VenueRefused as error:
     refusal = str(error)
 (gap, refusal, luma.venue.describe() == before)
-"#
-            .replace("TRUSS", &format!("{TRUSS:?}")),
+"#,
         )
         .await;
     expect_ok(&out, "refused extend");

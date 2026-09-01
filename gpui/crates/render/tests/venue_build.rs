@@ -196,6 +196,36 @@ fn a_portal_closes_where_it_was_asked_to() {
     close(extent.size[2], 8.0 + 2.0 * 0.17, "portal height");
 }
 
+/// `on=` reframes `at=` into the host's own plane, and the query side answers
+/// absolutely — the two readings agree on the floor, which is where almost
+/// every placement happens, and differ exactly where a caller means them to.
+#[test]
+fn a_host_reframes_the_mark_into_its_own_plane() {
+    let mut room = Room::new();
+    let (deck, _) = room.expect(Request {
+        piece: "deck".into(),
+        at: Some([0.0, -2.0]),
+        ..Request::default()
+    });
+    let (cdj, _) = room.expect(Request {
+        piece: "cdj".into(),
+        on: Some(deck.clone()),
+        at: Some([0.5, 0.0]),
+        ..Request::default()
+    });
+    let scene = room.scene();
+    let on_deck = scene.footprint(&cdj).expect("placed");
+    // Half a metre across the deck, and the deck is two metres upstage.
+    close(on_deck.at[0], 0.5, "u on the deck");
+    close(on_deck.at[1], -2.0, "v follows the deck");
+    // And it is standing on the deck rather than through it.
+    let deck_print = scene.footprint(&deck).expect("placed");
+    assert!(
+        on_deck.z - on_deck.size[2] / 2.0 > deck_print.z,
+        "{on_deck:?} vs {deck_print:?}"
+    );
+}
+
 /// Contract sentence 3, measured: a positive hinge angle turns the run
 /// counterclockwise about `+axis`. Stage right, hinged `+30` about up, leaves
 /// toward the crowd.
