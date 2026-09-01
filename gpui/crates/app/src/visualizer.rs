@@ -1069,12 +1069,19 @@ impl Visualizer {
         match self.build.as_mut() {
             Some(build) => build.adopt(&rig),
             None => {
-                self.build =
-                    luma_render::catalog::VenueSockets::load(stage_render::meshes_root(None))
-                        .ok()
-                        .and_then(|sockets| {
-                            crate::stage::Build::new(&self.venue_id, &rig, sockets)
-                        });
+                // The same supply the backend solves with, fixture bundle
+                // included: a builder that could not measure a housing would
+                // preview every light half-buried in the truss it is being
+                // dropped on.
+                let fixtures_root = crate::library::fixtures_root().ok();
+                self.build = luma_render::catalog::VenueSockets::load(
+                    stage_render::meshes_root(fixtures_root.as_deref()),
+                    std::sync::Arc::new(luma_lib::venue_graph::BundledFixtures(
+                        fixtures_root.unwrap_or_default(),
+                    )),
+                )
+                .ok()
+                .and_then(|sockets| crate::stage::Build::new(&self.venue_id, &rig, sockets));
             }
         }
         // No early return for an empty rig. A venue with nothing in it is

@@ -224,7 +224,11 @@ pub async fn distribute(
     // out, so a bolt plate is refused as the wrong joint rather than reported
     // as a face that is too short. Same rule the resolver enforces at
     // `attach` — `SocketType::mates`, not a second reading of it.
-    let clamp = luma_render::catalog::fixture_clamp();
+    // Only the socket's *name* and *type* are wanted here — what it mates
+    // with, and what the edge is called. The standoff belongs to the housing
+    // and reaches the pose through the node's own supply lookup, so this
+    // probe deliberately asks for none.
+    let clamp = luma_render::catalog::fixture_clamp(0.0);
     if !clamp.socket_type.mates(face.socket.socket_type) {
         return Err(EdgeError::Polarity {
             held: clamp.socket_type,
@@ -321,7 +325,7 @@ pub async fn distribute(
         let node = Node {
             id: fixture.id.clone(),
             kind: NodeKind::Fixture,
-            catalog_ref: Some(fixture.id.clone()),
+            catalog_ref: Some(request.fixture_path.to_string()),
             label: fixture.label.clone(),
             params: BTreeMap::from([
                 ("u".to_string(), *station),
@@ -594,7 +598,7 @@ async fn group_paths(
     access: &mut VenueAccess<'_, Write>,
     fixtures_root: &Path,
 ) -> Result<BTreeMap<String, Vec<String>>, String> {
-    let tree = derive_groups(&group_service::venue_facts(fixtures_root, access).await?);
+    let tree = derive_groups(&group_service::solve(fixtures_root, access).await?.facts);
     let mut deepest: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for group in &tree.groups {
         for member in &group.members {

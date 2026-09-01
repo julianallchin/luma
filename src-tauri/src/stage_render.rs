@@ -785,6 +785,16 @@ pub fn meshes_root(fixtures_root: Option<&Path>) -> PathBuf {
 }
 
 /// A fixture path that stays inside the fixtures root, or nothing.
+///
+/// Public as [`confined_path`] because the socket supply resolves a fixture's
+/// housing off the same path this guards, and two copies of "is this path
+/// safe" is one copy too many.
+#[must_use]
+pub fn confined_path(path: &str) -> Option<&Path> {
+    confined(path)
+}
+
+/// A fixture path that stays inside the fixtures root, or nothing.
 fn confined(path: &str) -> Option<&Path> {
     let relative = Path::new(path);
     let escapes = relative.components().any(|component| {

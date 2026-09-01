@@ -405,14 +405,22 @@ pub(crate) fn housing_draws(
     bank: &mut Bank,
     editor_object: Option<EditorObject>,
 ) -> anyhow::Result<Vec<Draw>> {
-    if is_procedural(def) {
+    // A bar, and anything the mesh table has no answer for. Drawing the stated
+    // box is not a guess — the dimensions are the definition's own — and it is
+    // the only alternative to a fixture with arrows, a cone and no body, which
+    // is what an unrecognised `Type` used to get.
+    let Some(kind) = model_kind(def).filter(|_| !is_procedural(def)) else {
         let dims = def.dimensions_m();
-        let body = bank.insert(format!("::bar-body:{fixture_path}"), || {
+        let body = bank.insert(format!("::housing-box:{fixture_path}"), || {
             box_mesh(Vec3::from(dims))
         });
         return Ok(vec![Draw {
             mesh: body,
             textures: MaterialTextures::default(),
+            // The quarter turn puts the box's *depth* along the mount axis, so
+            // its front face lands on the mount normal — the beam — and its
+            // back face `depth / 2` above the origin, which is where
+            // `catalog::clamp_standoff` puts the clamp.
             model: base * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
             material: Material {
                 base_color: hex_srgb(0x05_05_05),
@@ -420,9 +428,6 @@ pub(crate) fn housing_draws(
             },
             editor_object,
         }]);
-    }
-    let Some(kind) = model_kind(def) else {
-        return Ok(Vec::new());
     };
     let mesh_rel = format!("qlc/{}", kind.mesh());
     let glb = lib.get(&mesh_rel)?;

@@ -156,6 +156,18 @@ pub enum ModelKind {
 }
 
 impl ModelKind {
+    /// Every kind, so a caller that has to touch each bundled mesh — measuring
+    /// them for [`crate::catalog::clamp_standoff`] — cannot miss one when a
+    /// seventh is added.
+    pub const ALL: [Self; 6] = [
+        Self::Par,
+        Self::MovingHead,
+        Self::Scanner,
+        Self::Strobe,
+        Self::Hazer,
+        Self::Smoke,
+    ];
+
     /// Relative path under `resources/meshes/qlc/`.
     #[must_use]
     pub fn mesh(self) -> &'static str {
@@ -236,23 +248,44 @@ pub fn beam_direction(def: Option<&Definition>, rot: [f32; 3], position: Option<
 }
 
 /// LED bars and matrices are drawn from their layout rather than from a mesh.
+///
+/// Fuzzy for the same reason [`model_kind`] is: `Type` is free text a bundle
+/// author wrote, and the two exact strings QLC+ happens to ship are not the
+/// whole of what a bar is called. A definition that matched neither the exact
+/// pair here nor any arm of `model_kind` drew **no body at all** — arrows and a
+/// cone leaving nothing — which is also how a housing buried in a truss looks,
+/// so one bug hid the other.
 #[must_use]
 pub fn is_procedural(def: &Definition) -> bool {
-    def.kind == "LED Bar (Pixels)" || def.kind == "LED Bar (Beams)"
+    if def.kind == "LED Bar (Pixels)" || def.kind == "LED Bar (Beams)" {
+        return true;
+    }
+    let lower = def.kind.to_lowercase();
+    (lower.contains("bar") || lower.contains("matrix") || lower.contains("pixel"))
+        && model_kind_exact(def).is_none()
+}
+
+/// The exact half of [`model_kind`]'s table, so [`is_procedural`] can ask
+/// "is this already a modelled kind by name" without the fuzzy arms — which
+/// would claim a "LED Bar" for `Par` on the substring alone.
+fn model_kind_exact(def: &Definition) -> Option<ModelKind> {
+    match def.kind.as_str() {
+        "Color Changer" | "Dimmer" => Some(ModelKind::Par),
+        "Moving Head" => Some(ModelKind::MovingHead),
+        "Scanner" => Some(ModelKind::Scanner),
+        "Strobe" => Some(ModelKind::Strobe),
+        "Hazer" => Some(ModelKind::Hazer),
+        "Smoke" => Some(ModelKind::Smoke),
+        _ => None,
+    }
 }
 
 /// Which bundled mesh a definition's `Type` selects. Port of
 /// `getModelForFixture`, exact-match first and then the same fuzzy fallbacks.
 #[must_use]
 pub fn model_kind(def: &Definition) -> Option<ModelKind> {
-    match def.kind.as_str() {
-        "Color Changer" | "Dimmer" => return Some(ModelKind::Par),
-        "Moving Head" => return Some(ModelKind::MovingHead),
-        "Scanner" => return Some(ModelKind::Scanner),
-        "Strobe" => return Some(ModelKind::Strobe),
-        "Hazer" => return Some(ModelKind::Hazer),
-        "Smoke" => return Some(ModelKind::Smoke),
-        _ => {}
+    if let Some(exact) = model_kind_exact(def) {
+        return Some(exact);
     }
     let lower = def.kind.to_lowercase();
     if lower.contains("moving") || lower.contains("head") {
@@ -275,6 +308,37 @@ pub fn model_kind(def: &Definition) -> Option<ModelKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn typed(kind: &str) -> Definition {
+        Definition {
+            kind: kind.into(),
+            modes: Vec::new(),
+            physical: None,
+        }
+    }
+
+    /// No definition is bodyless. `Type` is free text a bundle author wrote,
+    /// so a bar-ish name that is none of the exact strings still has to reach
+    /// a body — and the fuzzy arm must not steal a par on the way.
+    #[test]
+    fn a_bar_by_any_name_is_procedural_and_nothing_else_is() {
+        for kind in [
+            "LED Bar (Pixels)",
+            "LED Bar (Beams)",
+            "LED Bar 12x30W RGBW",
+            "Pixel Matrix",
+        ] {
+            assert!(is_procedural(&typed(kind)), "{kind} draws as a bar");
+        }
+        for kind in ["Color Changer", "Moving Head", "Par 64", "Laser"] {
+            assert!(!is_procedural(&typed(kind)), "{kind} is not a bar");
+        }
+        // The two ways a fixture reaches a body, and every definition takes
+        // one of them: a bar draws its box, everything else draws a mesh —
+        // or, with no mesh kind, the box as well (`frame::housing_draws`).
+        assert_eq!(model_kind(&typed("Par 64")), Some(ModelKind::Par));
+        assert_eq!(model_kind(&typed("Laser")), None);
+    }
 
     /// The reference point the whole concentration curve is anchored on.
     #[test]

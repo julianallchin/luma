@@ -12,7 +12,8 @@
 //! socket frame and needs no conversion.
 
 use crate::assets::Library;
-use crate::scene_desc::Procedural;
+use crate::luminaire::{is_procedural, model_kind, ModelKind};
+use crate::scene_desc::{Definition, Procedural};
 use crate::truss::{Face, FaceSet};
 use glam::{DVec3, Mat4, Vec3};
 use luma_scene::aabb::DAabb;
@@ -21,6 +22,7 @@ use luma_scene::snap::SocketLookup;
 use luma_scene::sockets::{resolve_socket, ResolvedSocket, SocketType};
 use luma_scene::venue::{Node, NodeKind, NodeSockets, Params};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// Palette default span for the straight truss, in metres. Quantized to whole
 /// panels by [`crate::truss::Truss::new`].
@@ -539,16 +541,34 @@ pub fn face_set_bits(faces: FaceSet) -> f64 {
 /// cannot use that answer, and this is the wrapper that supplies the difference.
 pub struct VenueSockets {
     catalog: CatalogSockets,
+    housings: Housings,
 }
 
 impl VenueSockets {
-    /// Resolve the catalog once, against the GLBs under `meshes_root`.
+    /// Resolve the catalog once, against the GLBs under `meshes_root`, with
+    /// `definitions` as the answer to "what is this fixture".
+    ///
+    /// The fixture bundle is a second library and a second parser, neither of
+    /// which belongs here, so it arrives as a lookup. It is not optional: a
+    /// supply that cannot say how tall a light is places every light wrong, and
+    /// wrong-by-default is what buried sixty percent of every yoke inside the
+    /// truss it hung from. [`NoFixtures`] is the honest way to say a caller has
+    /// no lights to place.
     ///
     /// # Errors
-    /// As [`CatalogSockets::load`].
-    pub fn load(meshes_root: impl Into<std::path::PathBuf>) -> anyhow::Result<Self> {
+    /// As [`CatalogSockets::load`], plus the bundled fixture meshes: a housing
+    /// whose mesh is missing cannot be measured, and a clamp guessed at the
+    /// origin is the bug this exists to close.
+    pub fn load(
+        meshes_root: impl Into<std::path::PathBuf>,
+        definitions: Arc<dyn FixtureDefinitions>,
+    ) -> anyhow::Result<Self> {
+        let meshes_root = meshes_root.into();
+        let mut library = Library::new(meshes_root.clone());
+        let housings = Housings::measure(&mut library, definitions)?;
         Ok(Self {
             catalog: CatalogSockets::load(meshes_root)?,
+            housings,
         })
     }
 
@@ -557,6 +577,170 @@ impl VenueSockets {
     pub fn catalog(&self) -> &CatalogSockets {
         &self.catalog
     }
+}
+
+/// What a fixture *is*, keyed the way a fixture node names it: by the bundle
+/// path its patch row carries.
+///
+/// The one thing the socket supply cannot work out for itself. Parsing a QLC+
+/// bundle is the app's job and reading a venue's patch needs a database, so the
+/// two meet here as a lookup rather than as a dependency.
+pub trait FixtureDefinitions: Send + Sync {
+    /// The definition `fixture_path` names, or `None` when the bundle no longer
+    /// has it — a venue outlives a fixture library.
+    fn definition(&self, fixture_path: &str) -> Option<Definition>;
+}
+
+/// A supply for a caller with no fixture bundle at all: every fixture is
+/// unknown, and unknown is said out loud rather than guessed at.
+///
+/// Placing a light against this puts its clamp at its own origin, which is
+/// where a light with no stated size has to hang. Use it for a room of pieces,
+/// not for a rig.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoFixtures;
+
+impl FixtureDefinitions for NoFixtures {
+    fn definition(&self, _fixture_path: &str) -> Option<Definition> {
+        None
+    }
+}
+
+/// A supply that answers every fixture path with one stated housing.
+///
+/// Not a shortcut past [`FixtureDefinitions`] — a statement. A caller with no
+/// bundle (a golden rig, a room previewed away from its library) still has to
+/// say what its lights are shaped like, and saying "they are all this one" out
+/// loud beats hanging every one of them by its pivot.
+///
+/// [`Self::stock_head`] is the housing both venue-pose goldens are pinned
+/// against, stated here once so the two crates that rebuild that rig cannot
+/// state it differently.
+pub struct StatedHousing(pub Definition);
+
+impl StatedHousing {
+    /// A 300 x 500 x 300 mm moving head.
+    #[must_use]
+    pub fn stock_head() -> Self {
+        Self(Definition {
+            kind: "Moving Head".into(),
+            modes: Vec::new(),
+            physical: Some(crate::scene_desc::Physical {
+                dimensions: Some(crate::scene_desc::Dimensions {
+                    width: 300.0,
+                    height: 500.0,
+                    depth: 300.0,
+                }),
+                layout: None,
+                lens: None,
+            }),
+        })
+    }
+}
+
+impl FixtureDefinitions for StatedHousing {
+    fn definition(&self, _fixture_path: &str) -> Option<Definition> {
+        Some(self.0.clone())
+    }
+}
+
+/// Where a fixture's housing ends, so the clamp can be put there.
+///
+/// A fixture's node origin is its **pivot** — the point a head pans and tilts
+/// about, which is what the bundled meshes are authored around — and that is
+/// nowhere near the top of the body: `moving_head.glb` carries 60% of its
+/// height above its own origin. The clamp plane is that top, in metres above
+/// the origin, and it is the whole of what makes a light hang *off* a truss
+/// rather than through it.
+///
+/// The six bundled meshes are measured once, beside the catalog's own
+/// measurement and out of the same [`Library`]; the per-definition answer is
+/// memoized by bundle path, because a venue solve asks it once per light per
+/// read and reopening a GLB for it would be the one thing that makes the solve
+/// not free.
+struct Housings {
+    /// Each model kind's mesh, in its own authored space, keyed by mesh file.
+    meshes: HashMap<&'static str, DAabb>,
+    definitions: Arc<dyn FixtureDefinitions>,
+    standoffs: RwLock<HashMap<String, f64>>,
+}
+
+impl Housings {
+    fn measure(
+        library: &mut Library,
+        definitions: Arc<dyn FixtureDefinitions>,
+    ) -> anyhow::Result<Self> {
+        let mut meshes = HashMap::new();
+        for kind in ModelKind::ALL {
+            let relative = format!("qlc/{}", kind.mesh());
+            let (lo, hi) = library.get(&relative)?.bounds();
+            let bbox = DAabb::new(lo.as_dvec3(), hi.as_dvec3());
+            anyhow::ensure!(
+                bbox.size().y > 0.0,
+                "{relative}: measured no height, so a clamp cannot be put on it"
+            );
+            meshes.insert(kind.mesh(), bbox);
+        }
+        Ok(Self {
+            meshes,
+            definitions,
+            standoffs: RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// How far above its own origin `fixture_path`'s clamp sits, in metres.
+    fn standoff(&self, fixture_path: &str) -> f64 {
+        if let Some(known) = self
+            .standoffs
+            .read()
+            .ok()
+            .and_then(|memo| memo.get(fixture_path).copied())
+        {
+            return known;
+        }
+        let answer = self
+            .definitions
+            .definition(fixture_path)
+            .map_or(0.0, |def| self.measure_definition(&def));
+        if let Ok(mut memo) = self.standoffs.write() {
+            memo.insert(fixture_path.to_string(), answer);
+        }
+        answer
+    }
+
+    fn measure_definition(&self, def: &Definition) -> f64 {
+        clamp_standoff(def, |kind| self.meshes.get(kind.mesh()).copied())
+    }
+}
+
+/// The clamp plane of one definition: how far its housing reaches above its own
+/// origin, given a way to measure the bundled meshes.
+///
+/// The single definition of "where does this body stop", shared by the socket
+/// supply that hangs the light and by the frame builder that draws it. Two
+/// answers here is a rig whose bodies do not touch the truss they are bolted
+/// to.
+///
+/// A **modelled** kind is its mesh's `+Y` extent, scaled the way
+/// `housing_draws` scales the mesh itself — to the definition's physical
+/// height. Everything else is drawn as its dimension box turned onto the mount
+/// normal, so its clamp is half its depth: the box is centred on the origin, so
+/// its back face is `depth / 2` above it.
+#[must_use]
+pub fn clamp_standoff(def: &Definition, mesh: impl Fn(ModelKind) -> Option<DAabb>) -> f64 {
+    let dims = def.dimensions_m();
+    let half_depth = f64::from(dims[2]) / 2.0;
+    if is_procedural(def) {
+        return half_depth;
+    }
+    let Some(bbox) = model_kind(def).and_then(mesh) else {
+        return half_depth;
+    };
+    let extent = bbox.size().y;
+    if extent <= 0.0 {
+        return 0.0;
+    }
+    bbox.max.y / extent * f64::from(dims[1])
 }
 
 impl NodeSockets for VenueSockets {
@@ -597,7 +781,7 @@ impl NodeSockets for VenueSockets {
         // A fixture's `catalog_ref` is a `fixtures` row id, not a piece: it
         // hangs off its host's socket and needs only one of its own to hang by.
         if node.kind == NodeKind::Fixture {
-            return vec![fixture_clamp()];
+            return vec![fixture_clamp(self.housings.standoff(catalog_ref))];
         }
         match luma_scene::catalog::piece(catalog_ref).map(|p| p.geometry) {
             Some(Geometry::Procedural(family)) => {
@@ -637,19 +821,27 @@ pub fn origin_mount() -> ResolvedSocket {
 /// The name of the socket [`origin_mount`] declares.
 pub const ORIGIN_SOCKET: &str = "origin";
 
-/// The one socket every fixture has: the clamp, on its underside.
+/// The one socket every fixture has: the clamp, `standoff` metres above its
+/// own origin, facing up.
 ///
-/// A fixture is not a catalog piece — it is a row in the patch — and its
-/// housing geometry is the QLC+ definition's business, not the snap solver's.
-/// One `EquipmentMount` at the origin is the whole of what placing it needs,
-/// and [`luma_scene::venue`] turns the *host* socket's normal into the beam.
+/// A fixture is not a catalog piece — it is a row in the patch — so this is the
+/// whole of its geometry as far as placing it goes. Two things are load-bearing
+/// about the frame:
+///
+/// - the **normal is `+Y`**, which is where a clamp points: at the surface it
+///   grips. The beam is the other way, and it stays the other way because a
+///   face mate opposes the two normals — which is exactly the half turn that
+///   used to be written out by hand in `mate_suffix`.
+/// - the **position is not the origin**. A fixture's origin is its pivot, not
+///   its top; see [`clamp_standoff`]. Placing by the origin hung every housing
+///   through the truss instead of under it.
 #[must_use]
-pub fn fixture_clamp() -> ResolvedSocket {
+pub fn fixture_clamp(standoff: f64) -> ResolvedSocket {
     ResolvedSocket::from_frame(
         FIXTURE_CLAMP_SOCKET,
         SocketType::EquipmentMount,
-        DVec3::ZERO,
-        DVec3::NEG_Y,
+        DVec3::Y * standoff,
+        DVec3::Y,
         DVec3::X,
     )
 }

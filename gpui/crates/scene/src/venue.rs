@@ -169,8 +169,13 @@ pub struct Node {
     /// Stable identity, and what an edge names.
     pub id: String,
     pub kind: NodeKind,
-    /// What geometry this node has: a catalog piece id for structure, a
-    /// `fixtures` row id for a [`NodeKind::Fixture`]. `None` on the root.
+    /// What geometry this node has: a catalog piece id for structure, the
+    /// fixture bundle path for a [`NodeKind::Fixture`]. `None` on the root.
+    ///
+    /// One meaning for every kind — *the thing that says what shape this is* —
+    /// which is what lets a socket supply answer for a light without knowing
+    /// the patch it came from. A fixture used to carry its own row id here,
+    /// which the [`Self::id`] already is.
     pub catalog_ref: Option<String>,
     pub label: Option<String>,
     pub params: Params,
@@ -1419,20 +1424,20 @@ fn place(
 /// The forward half of the pair whose inverse is [`invert_placement`], and the
 /// only place the mate is written:
 ///
-/// `parent_world . host_frame . T(seat) . Rz(yaw) . mate_suffix`, where the
-/// seat is `(u, plan_v(v)) - centre_offset + lift(trim)`.
+/// `parent_world . host_frame . T(u, v, 0) . T(lift) . Rz(yaw) . mate_suffix`
 ///
 /// `(u, v)` are the room's plan on the host surface — `+u` stage right, `+v`
-/// upstage, and the piece's **footprint centre** on the mark — while `trim`
-/// runs along world up (see `trim_axis`). The offset and the
-/// twist sit *between* the two frames, so the twist is the joint's rather than
-/// the piece's own origin's.
+/// upstage — while `trim` runs along world up (see `trim_axis`). The offset and
+/// the twist sit *between* the two frames, so the twist is the joint's rather
+/// than the piece's own origin's.
 ///
-/// `bounds` is the held node's box, from [`NodeSockets::bounds`]; `None` seats
-/// by the socket alone. [`crate::snap`] calls this with `None` and
-/// [`SurfacePlacement::FLUSH`] for the bare socket-on-socket mate it scores
-/// candidates over — there is one copy of the arithmetic and the golden snap
-/// vectors pin it.
+/// Nothing here knows the held node's *box*. This lands the held **socket** on
+/// the seat, which is all a mate is; seating a piece by its footprint centre
+/// instead is [`crate::build`]'s job, and it does it by solving `(u, v)`
+/// backwards from the pose this returns. That is why a piece whose held socket
+/// is not at its own origin — a fixture's clamp, which sits on top of its
+/// housing — lands correctly with no box: the offset is in the socket, and
+/// the mate honours it.
 #[must_use]
 pub fn place_on(
     parent_world: DMat4,
@@ -1552,34 +1557,35 @@ const VERTICAL_HOST_EPSILON: f64 = 1e-9;
 /// A **piece** lands mesh-first: its held socket goes onto the host socket, the
 /// two normals opposing (or not, in edge mode).
 ///
-/// A **fixture** lands beam-first — *beam = mount normal*. It has no mesh pose
-/// of its own: its rest direction is the outward normal of the socket it hangs
-/// from, and its stored convention (`Mount`, `scene_desc::Fixture`) is a frame
-/// whose `-Y` here — `-Z` once in data space — is that direction. `Rx(-90°)` is
-/// the turn that takes the host socket frame's `+Z` onto it, and it is the
-/// whole of what makes a floor light point up and an under-truss light point
-/// down with no per-fixture-type rest axis.
-///
-/// The two differ by exactly a half turn, which is the sign error the design
-/// doc's audit found three copies of.
+/// A **fixture** lands the same way, and that is the point: *beam = mount
+/// normal* falls out of the ordinary face mate rather than being written here.
+/// Its clamp socket faces `+Y` (see `luma_render::catalog::fixture_clamp`), so
+/// opposing the normals turns the fixture's `-Y` — `-Z` once in data space,
+/// the rest direction its stored `Mount` means — onto the host normal, and a
+/// floor light points up while an under-truss light points down with no
+/// per-fixture-type rest axis. The half turn used to be spelled `Rx(-90°)`
+/// here, which also threw away the clamp's *position* and hung every housing
+/// through the surface it was bolted to.
 ///
 /// A piece resting on a **down-facing surface** *hangs* rather than turning
-/// over: see [`hangs_under`]. A fixture is unaffected — it has no up of its own,
-/// only a beam, and the beam is the host normal either way.
+/// over: see [`hangs_under`]. A fixture is exempt — it has no up of its own,
+/// only a beam, and the beam is the host normal either way, so it keeps the
+/// flip on a grid exactly as it has it on a deck.
 fn mate_suffix(
     kind: NodeKind,
     host_world: DMat4,
     host: &ResolvedSocket,
     held: &ResolvedSocket,
 ) -> DMat4 {
-    if kind == NodeKind::Fixture {
-        DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2)
-    } else if held.mode == SocketMode::Upright {
+    if held.mode == SocketMode::Upright {
         // Both sides upright-framed — see `place_on` — so the half turn about
         // the joint's vertical opposes the normals and keeps feet down by
         // construction, whichever ends met.
         flip_for(held.mode) * socket_frame_upright(held).inverse()
-    } else if hangs_under(host_world) && host.socket_type.kind() == SocketKind::Surface {
+    } else if kind != NodeKind::Fixture
+        && hangs_under(host_world)
+        && host.socket_type.kind() == SocketKind::Surface
+    {
         socket_frame(held).inverse()
     } else {
         flip_for(held.mode) * socket_frame(held).inverse()
@@ -1996,14 +2002,21 @@ mod tests {
         ]
     }
 
+    /// A light, as the real supply shapes one: a single clamp facing `+Y` — at
+    /// the surface it grips — a housing's worth above its own pivot. The
+    /// standoff is what keeps the body out of the truss; the `+Y` normal is
+    /// what turns the beam the other way, by the ordinary face mate.
     fn mover() -> Vec<ResolvedSocket> {
         vec![socket(
             "clamp",
             SocketType::EquipmentMount,
-            DVec3::new(0.0, -0.1, 0.0),
-            DVec3::NEG_Y,
+            DVec3::new(0.0, MOVER_STANDOFF, 0.0),
+            DVec3::Y,
         )]
     }
+
+    /// How far `mover`'s clamp stands off its origin.
+    const MOVER_STANDOFF: f64 = 0.1;
 
     fn table() -> Table {
         Table::default()
@@ -2562,12 +2575,18 @@ mod tests {
             .unwrap();
         let resolved = resolve(&graph, &table());
         let pose = resolved.pose("light").unwrap();
-        let (_, rot) = pose.data_basis();
+        let (position, rot) = pose.data_basis();
         // `Mount::normal()` is `rotation * REST_AXIS`, and `REST_AXIS` is -Z.
         let normal = rot * DVec3::NEG_Z;
         assert!(
             normal.abs_diff_eq(DVec3::Z, 1e-12),
             "a floor light points {normal:?}, wanted +Z (up)"
+        );
+        // And it stands on the floor rather than half through it: the clamp is
+        // the far end of the housing, so the pivot is a housing above the mark.
+        assert!(
+            (position.z - MOVER_STANDOFF).abs() < 1e-12,
+            "at {position:?}"
         );
     }
 
@@ -2652,8 +2671,13 @@ mod tests {
             "a flown light points {:?}",
             rot * DVec3::NEG_Z
         );
-        // `trim` still lifts: the grid's normal is down, so the mount rises.
-        assert!((position.z - 6.0).abs() < 1e-12, "at {position:?}");
+        // `trim` still lifts: the grid's normal is down, so the mount rises —
+        // and the pivot then hangs a housing *below* the plane the clamp grips,
+        // which is the difference between a light on a truss and a light in it.
+        assert!(
+            (position.z - (6.0 - MOVER_STANDOFF)).abs() < 1e-12,
+            "at {position:?}"
+        );
     }
 
     #[test]
