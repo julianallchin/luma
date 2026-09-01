@@ -230,8 +230,18 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // Beer-Lambert over the camera path, with the same sigma the haze pass
     // integrates in-scatter against. Surface radiance decays exactly as the
     // medium's own glow builds, so everything converges to one fog colour with
-    // distance — geometry never silhouettes against the sky through the haze.
-    let display = agx(scene * exp(-cfg.depth.z * depth) + haze);
+    // distance — geometry never silhouettes against the clear colour through
+    // the haze.
+    //
+    // One, under a sky. The medium is a hazer's: it fills a room, not a world,
+    // and `depth` at an empty pixel is the far plane — two kilometres of haze
+    // nobody put there, at a mean free path of seventy metres. That takes an
+    // atmosphere to black, which is how an open-air venue came back with no
+    // sky in it at all. What the air does over a real kilometre is already in
+    // the sky's own transmittance tables, and the horizon dissolve above still
+    // carries the ground into it.
+    let medium = select(exp(-cfg.depth.z * depth), 1.0, sky.sun.w > 0.5);
+    let display = agx(scene * medium + haze);
     return vec4<f32>(display + sky_dither(display, frag.xy), 1.0);
 }
 
