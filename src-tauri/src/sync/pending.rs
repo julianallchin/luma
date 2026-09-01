@@ -44,6 +44,13 @@ pub struct PendingOp {
 
 /// Enqueue an upsert operation. If one is already queued for the same
 /// (principal, table, record, op_type), the payload is replaced.
+///
+/// Re-enqueueing the *same* payload keeps the retry state. The dirty sweep
+/// re-offers every unsynced row every ten seconds, so resetting `attempts`
+/// unconditionally means a row that can never be delivered is retried forever:
+/// its counter is zeroed faster than the backoff can grow, and the queue's
+/// dead-letter predicate is unreachable. A changed payload is a different
+/// operation and does start over.
 pub async fn enqueue_upsert(
     pool: &SqlitePool,
     user_id: &str,
@@ -79,9 +86,12 @@ pub async fn enqueue_upsert(
            AND admission.active_uid = ?
          ON CONFLICT(principal_key, table_name, record_id, op_type) DO UPDATE SET
            payload_json = excluded.payload_json,
-           attempts = 0,
-           last_error = NULL,
-           next_retry_at = CURRENT_TIMESTAMP",
+           attempts = CASE WHEN pending_ops.payload_json IS excluded.payload_json
+                           THEN pending_ops.attempts ELSE 0 END,
+           last_error = CASE WHEN pending_ops.payload_json IS excluded.payload_json
+                             THEN pending_ops.last_error ELSE NULL END,
+           next_retry_at = CASE WHEN pending_ops.payload_json IS excluded.payload_json
+                                THEN pending_ops.next_retry_at ELSE CURRENT_TIMESTAMP END",
     )
     .bind(table_name)
     .bind(record_id)
@@ -310,8 +320,15 @@ async fn enqueue_pending_on(
          WHERE pending_ops.payload_json = excluded.payload_json
            AND pending_ops.conflict_key = excluded.conflict_key"
     } else {
+        // Same retry-state rule as `enqueue_upsert`: identical content is the
+        // same operation and keeps its backoff, new content starts over.
         "payload_json = excluded.payload_json, conflict_key = excluded.conflict_key,
-         attempts = 0, last_error = NULL, next_retry_at = CURRENT_TIMESTAMP"
+         attempts = CASE WHEN pending_ops.payload_json IS excluded.payload_json
+                         THEN pending_ops.attempts ELSE 0 END,
+         last_error = CASE WHEN pending_ops.payload_json IS excluded.payload_json
+                           THEN pending_ops.last_error ELSE NULL END,
+         next_retry_at = CASE WHEN pending_ops.payload_json IS excluded.payload_json
+                              THEN pending_ops.next_retry_at ELSE CURRENT_TIMESTAMP END"
     };
     let sql = format!(
         "INSERT INTO pending_ops

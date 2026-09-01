@@ -54,6 +54,23 @@ pub async fn flush_pending_with_integrator(
     let mut flushed = 0;
 
     for op in &ops {
+        // A queued upsert only means anything while the row it copies still
+        // exists. Delete the row and its `sync_delete_*` trigger enqueues a
+        // tombstone under a *different* `op_type`, so the queue's uniqueness
+        // key cannot retract the upsert that precedes it — the pair is left
+        // for the flush to resolve. Resolve it here, before the remote call:
+        // pushing the upsert would resurrect the row server-side, and marking
+        // it synced afterwards would fail (there is nothing to mark), so the
+        // op would be reflushed every cycle forever. The tombstone queued
+        // behind it is the successor state and needs no help from us.
+        if op.op_type == "upsert" && !local_row_present(pool, op).await? {
+            eprintln!(
+                "[sync] dropping upsert {}.{}: the row was deleted locally; its tombstone supersedes it",
+                op.table_name, op.record_id
+            );
+            pending::remove_op(pool, op).await?;
+            continue;
+        }
         eprintln!(
             "[sync] push {} {}.{} (attempt {})",
             op.op_type, op.table_name, op.record_id, op.attempts
@@ -63,7 +80,22 @@ pub async fn flush_pending_with_integrator(
                 if op.op_type == "upsert" {
                     // Mark synced first so if remove_op fails the record is
                     // at least marked clean and won't be re-pushed.
-                    mark_synced(pool, op, &admitted_user_id).await?;
+                    match mark_synced(pool, op, &admitted_user_id).await? {
+                        MarkOutcome::Marked | MarkOutcome::Gone => {}
+                        // The delivery succeeded but the local row will not
+                        // accept the receipt. That is this op's problem, not
+                        // the batch's: everything sorted after it is still
+                        // deliverable, so it takes the same failure path a
+                        // remote refusal takes and eventually dead-letters.
+                        MarkOutcome::Refused(reason) => {
+                            eprintln!(
+                                "[sync] delivered {}.{} but could not mark it synced: {reason}",
+                                op.table_name, op.record_id
+                            );
+                            pending::record_failure(pool, op, op.attempts + 1, &reason).await?;
+                            continue;
+                        }
+                    }
                 }
                 pending::remove_op(pool, op).await?;
                 flushed += 1;
@@ -520,20 +552,81 @@ pub(super) async fn apply_archive_receipt(
     Ok(())
 }
 
+/// Whether the local row a queued operation names is still there.
+///
+/// Ground truth for whether an upsert still has anything to say. Registry
+/// problems answer `true`: they are the push path's own errors to report, and
+/// this predicate must not turn one into a silent drop.
+async fn local_row_present(pool: &SqlitePool, op: &PendingOp) -> Result<bool, SyncError> {
+    let Some(table) = registry::get_table(&op.table_name) else {
+        return Ok(true);
+    };
+    let Some(pk_values) = table.decode_record_id(&op.record_id) else {
+        return Ok(true);
+    };
+    row_is_present(pool, table, &pk_values).await
+}
+
+/// Whether the row those primary-key values name exists at all.
+async fn row_is_present(
+    pool: &SqlitePool,
+    table: &registry::TableMeta,
+    pk_values: &[&str],
+) -> Result<bool, SyncError> {
+    row_exists(
+        pool,
+        &format!("SELECT 1 FROM {} WHERE {}", table.name, table.pk_where()),
+        pk_values,
+        &[],
+    )
+    .await
+}
+
+/// `SELECT 1` over `sql`, binding `pk_values` then `extra`.
+async fn row_exists(
+    pool: &SqlitePool,
+    sql: &str,
+    pk_values: &[&str],
+    extra: &[&str],
+) -> Result<bool, SyncError> {
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.to_owned()));
+    for value in pk_values.iter().chain(extra) {
+        query = query.bind(*value);
+    }
+    Ok(query.fetch_optional(pool).await?.is_some())
+}
+
+/// What happened when a delivered upsert tried to clear its local dirty flag.
+enum MarkOutcome {
+    /// The row is clean; the op is done.
+    Marked,
+    /// The row is no longer there. Nothing to mark, nothing to retry — the
+    /// tombstone its delete enqueued is the successor state.
+    Gone,
+    /// The row is there but this principal may not write it, or write
+    /// admission closed underneath the remote call. Retryable, per-op.
+    Refused(String),
+}
+
 /// Mark a record as synced using TableMeta-derived SQL.
+///
+/// # Errors
+/// Only for a local database failure. A row that cannot take the receipt is an
+/// outcome, not an error: the three reasons it can happen are distinguishable
+/// and the caller has to treat them differently.
 async fn mark_synced(
     pool: &SqlitePool,
     op: &PendingOp,
     admitted_user_id: &str,
-) -> Result<(), SyncError> {
+) -> Result<MarkOutcome, SyncError> {
     let Some(table) = registry::get_table(&op.table_name) else {
-        return Err(SyncError::Parse(format!(
+        return Ok(MarkOutcome::Refused(format!(
             "table {:?} is not registered for relational sync",
             op.table_name
         )));
     };
     if !table.has_principal() {
-        return Err(SyncError::Local(format!(
+        return Ok(MarkOutcome::Refused(format!(
             "sync table {:?} has no principal column",
             op.table_name
         )));
@@ -555,25 +648,48 @@ async fn mark_synced(
          )",
         table.mark_synced_sql()
     );
-    let pk_values = table.decode_record_id(&op.record_id).ok_or_else(|| {
-        SyncError::Parse(format!(
+    let Some(pk_values) = table.decode_record_id(&op.record_id) else {
+        return Ok(MarkOutcome::Refused(format!(
             "queued operation {}.{} does not name every primary-key column",
             op.table_name, op.record_id
-        ))
-    })?;
+        )));
+    };
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     for val in &pk_values {
         query = query.bind(*val);
     }
     query = query.bind(admitted_user_id).bind(admitted_user_id);
     let result = query.execute(pool).await?;
-    if result.rows_affected() != 1 {
-        return Err(SyncError::Local(format!(
-            "refusing to mark {}.{} synced: the row is not owned by the active app principal",
+    if result.rows_affected() == 1 {
+        return Ok(MarkOutcome::Marked);
+    }
+
+    // Zero rows conflates three different situations, and the caller's
+    // response to each is different: drop the op, retry it, or stop. Ask which
+    // guard actually failed rather than naming the most alarming one.
+    if !row_is_present(pool, table, &pk_values).await? {
+        return Ok(MarkOutcome::Gone);
+    }
+    if !row_exists(
+        pool,
+        &format!(
+            "SELECT 1 FROM {} WHERE {} AND {principal_guard}",
+            table.name,
+            table.pk_where()
+        ),
+        &pk_values,
+        &[admitted_user_id],
+    )
+    .await?
+    {
+        return Ok(MarkOutcome::Refused(format!(
+            "{}.{} is not owned by the active app principal",
             op.table_name, op.record_id
         )));
     }
-    Ok(())
+    Ok(MarkOutcome::Refused(format!(
+        "app-database write admission is no longer open for {admitted_user_id}"
+    )))
 }
 
 /// Background sync loop: push dirty every 10s, full pull+files every 60s.

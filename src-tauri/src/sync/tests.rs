@@ -1741,34 +1741,48 @@ mod tests {
         assert_eq!(synced_at, None);
     }
 
+    /// A row this principal may not mark clean is one op's problem, not the
+    /// batch's. Before, the refusal escaped the loop with `?`: nothing recorded
+    /// a failure, nothing incremented attempts, and every op sorted after it —
+    /// thousands, on a real queue — was unreachable for as long as the row
+    /// stayed.
     #[tokio::test]
     async fn alice_cannot_mark_bobs_local_row_synced() {
         let pool = test_pool().await;
         authenticate(&pool, "alice").await;
-        sqlx::query(
-            "INSERT INTO venues (id, uid, name, role, updated_at)
-             VALUES ('shared-id', 'bob', 'Bob value', 'owner', '2026-01-01T00:00:00Z')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pending::enqueue_upsert(
-            &pool,
-            "alice",
-            "venues",
-            "shared-id",
-            r#"{"id":"shared-id","uid":"alice","name":"Alice payload"}"#,
-            "id",
-        )
-        .await
-        .unwrap();
+        for (id, uid, name) in [
+            ("shared-id", "bob", "Bob value"),
+            ("z-alice-id", "alice", "Alice value"),
+        ] {
+            sqlx::query(
+                "INSERT INTO venues (id, uid, name, role, updated_at)
+                 VALUES (?, ?, ?, 'owner', '2026-01-01T00:00:00Z')",
+            )
+            .bind(id)
+            .bind(uid)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for id in ["shared-id", "z-alice-id"] {
+            pending::enqueue_upsert(
+                &pool,
+                "alice",
+                "venues",
+                id,
+                &format!(r#"{{"id":"{id}","uid":"alice","name":"Alice payload"}}"#),
+                "id",
+            )
+            .await
+            .unwrap();
+        }
 
         let remote = MockRemoteClient::new();
-        let error = push::flush_pending(&pool, &pool, &remote)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("not owned"), "{error}");
-        assert_eq!(remote.upsert_count(), 1);
+        let flushed = push::flush_pending(&pool, &pool, &remote).await.unwrap();
+
+        assert_eq!(flushed, 1, "the op behind the refusal still went out");
+        assert_eq!(remote.upsert_count(), 2);
         assert_eq!(
             sqlx::query_scalar::<_, Option<String>>(
                 "SELECT synced_at FROM venues WHERE id = 'shared-id'",
@@ -1779,6 +1793,197 @@ mod tests {
             None
         );
         assert_eq!(pending::count_pending(&pool).await.unwrap(), 1);
+        let failed = pending::list_failed(&pool).await.unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].record_id, "shared-id");
+        assert_eq!(failed[0].attempts, 1, "a refusal counts toward dead-letter");
+        assert!(
+            failed[0]
+                .last_error
+                .as_deref()
+                .is_some_and(|message| message.contains("not owned")),
+            "{:?}",
+            failed[0].last_error,
+        );
+    }
+
+    /// The wedge this all came from: a row created, queued, then deleted 21
+    /// seconds later. The tombstone lands under a different `op_type`, so the
+    /// queue's uniqueness key cannot retract the upsert in front of it, and
+    /// pushing that upsert resurrected the row server-side every cycle while
+    /// `mark_synced` refused a receipt no row was left to take.
+    #[tokio::test]
+    async fn a_queued_upsert_whose_row_is_gone_is_dropped_and_the_batch_continues() {
+        let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
+        sqlx::query(
+            "INSERT INTO venues (id, uid, name, role, updated_at)
+             VALUES ('v-live', 'u-1', 'Still here', 'owner', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for id in ["a-v-gone", "v-live"] {
+            pending::enqueue_upsert(
+                &pool,
+                "u-1",
+                "venues",
+                id,
+                &format!(r#"{{"id":"{id}","uid":"u-1","name":"Whatever"}}"#),
+                "id",
+            )
+            .await
+            .unwrap();
+        }
+        // The tombstone the delete trigger would have left behind.
+        sqlx::query(
+            "INSERT INTO pending_ops (principal_key, op_type, table_name, record_id, conflict_key)
+             VALUES ('signed-in:u-1', 'delete', 'venues', 'a-v-gone', 'id')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let remote = MockRemoteClient::new();
+        let flushed = push::flush_pending(&pool, &pool, &remote).await.unwrap();
+
+        assert_eq!(flushed, 2, "the tombstone and the live row both went out");
+        assert_eq!(pending::count_pending(&pool).await.unwrap(), 0);
+        assert!(
+            pending::list_failed(&pool).await.unwrap().is_empty(),
+            "dropping a superseded upsert is not a failure",
+        );
+        let pushed = remote.upserted.lock().unwrap().clone();
+        assert!(
+            !pushed
+                .iter()
+                .any(|(_, payload)| payload["id"] == json!("a-v-gone")),
+            "the deleted row was never resurrected: {pushed:?}",
+        );
+        assert!(
+            pushed
+                .iter()
+                .any(|(_, payload)| payload.get("deleted_at").is_some()),
+            "its tombstone is what reached the remote: {pushed:?}",
+        );
+    }
+
+    /// Deleting a venue node retracts the upsert still queued for it. The
+    /// tombstone the `sync_delete_*` trigger enqueues is the successor state,
+    /// and the pair must not cost a remote round trip.
+    #[tokio::test]
+    async fn deleting_a_row_retracts_the_upsert_still_queued_for_it() {
+        let (_directory, pool) = migrated_pool().await;
+        crate::database::local::auth::initialize_auth_state_schema(&pool)
+            .await
+            .unwrap();
+        authenticate(&pool, "alice").await;
+        seed_venue_graph(&pool).await;
+        crate::sync::orchestrator::enqueue_dirty(&pool, "alice")
+            .await
+            .unwrap();
+
+        sqlx::query("DELETE FROM venue_node_params WHERE node_id = 'run-1' AND key = 'span'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let record_id = format!("run-1{}span", registry::RECORD_ID_SEPARATOR);
+        let queued: Vec<String> = sqlx::query_scalar(
+            "SELECT op_type FROM pending_ops
+             WHERE table_name = 'venue_node_params' AND record_id = ? ORDER BY op_type",
+        )
+        .bind(&record_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            queued,
+            vec!["delete".to_owned(), "upsert".to_owned()],
+            "the trigger cannot retract the upsert; the flush has to",
+        );
+
+        let remote = MockRemoteClient::new();
+        push::flush_pending(&pool, &pool, &remote).await.unwrap();
+
+        let pushed = remote.upserted.lock().unwrap().clone();
+        assert!(
+            !pushed
+                .iter()
+                .any(|(table, payload)| table == "venue_node_params"
+                    && payload.get("deleted_at").is_none()),
+            "the span was never pushed as a live row: {pushed:?}",
+        );
+        assert!(
+            pushed
+                .iter()
+                .any(|(table, payload)| table == "venue_node_params"
+                    && payload.get("deleted_at").is_some()),
+            "only its tombstone went out: {pushed:?}",
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM pending_ops WHERE table_name = 'venue_node_params'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0,
+            "neither half of the pair is left behind",
+        );
+    }
+
+    /// The dirty sweep re-offers every unsynced row every ten seconds. If that
+    /// zeroed `attempts`, backoff never grew and the dead-letter threshold was
+    /// unreachable for catalog rows — the audit's T2.1.
+    #[tokio::test]
+    async fn re_enqueueing_an_unchanged_payload_keeps_its_retry_state() {
+        let pool = test_pool().await;
+        authenticate(&pool, "u-1").await;
+        let payload = r#"{"id":"abc-123","uid":"u-1","name":"First"}"#;
+        pending::enqueue_upsert(&pool, "u-1", "venues", "abc-123", payload, "id")
+            .await
+            .unwrap();
+        let ops = pending::fetch_ready_ops(&pool, "signed-in:u-1")
+            .await
+            .unwrap();
+        pending::record_failure(&pool, &ops[0], 3, "boom")
+            .await
+            .unwrap();
+
+        pending::enqueue_upsert(&pool, "u-1", "venues", "abc-123", payload, "id")
+            .await
+            .unwrap();
+        let failed = pending::list_failed(&pool).await.unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].attempts, 3, "the same op keeps its counter");
+        assert_eq!(failed[0].last_error.as_deref(), Some("boom"));
+        assert!(
+            pending::fetch_ready_ops(&pool, "signed-in:u-1")
+                .await
+                .unwrap()
+                .is_empty(),
+            "and its backoff",
+        );
+
+        // New content is a new operation and starts over.
+        pending::enqueue_upsert(
+            &pool,
+            "u-1",
+            "venues",
+            "abc-123",
+            r#"{"id":"abc-123","uid":"u-1","name":"Second"}"#,
+            "id",
+        )
+        .await
+        .unwrap();
+        assert!(pending::list_failed(&pool).await.unwrap().is_empty());
+        assert_eq!(
+            pending::fetch_ready_ops(&pool, "signed-in:u-1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
