@@ -100,7 +100,7 @@ pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
 /// (Y-up, a truss's span along X, origin at the centre).
 #[must_use]
 pub fn procedural_bounds(params: Procedural) -> DAabb {
-    use crate::truss::{Corner, Truss, OUTER_M, SQUARE_M};
+    use crate::truss::{Corner, Truss, OUTER_M};
     use glam::DVec3;
     let outer = f64::from(OUTER_M);
     match params {

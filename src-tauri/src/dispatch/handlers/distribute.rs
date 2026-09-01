@@ -349,9 +349,10 @@ mod tests {
     }
 
     /// A span narrows the segment; the same count then sits inside that half of
-    /// the truss rather than across all of it.
+    /// the truss rather than across all of it. The window is metres off the
+    /// face's middle, like every other number on this surface.
     #[tokio::test]
-    async fn a_span_lays_the_row_inside_its_fraction() {
+    async fn a_span_lays_the_row_inside_its_window() {
         let (_dir, services, venue) = room().await;
         let run = truss(&services, &venue, 4.0).await;
         let report = spread(
@@ -360,7 +361,7 @@ mod tests {
             &run,
             "face_-y",
             4,
-            json!({ "kind": "span", "from": 0.5, "to": 1.0 }),
+            json!({ "kind": "span", "from": 0.0, "to": 2.0 }),
         )
         .await
         .unwrap();
@@ -781,10 +782,10 @@ mod tests {
         let (_dir, services, venue) = room().await;
         let run = truss(&services, &venue, 4.0).await;
 
-        let far = spread(&services, &venue, &run, "face_-y", 2, span(0.6, 1.0))
+        let far = spread(&services, &venue, &run, "face_-y", 2, span(0.4, 2.0))
             .await
             .unwrap();
-        let near = spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+        let near = spread(&services, &venue, &run, "face_-y", 2, span(-2.0, -0.4))
             .await
             .unwrap();
         assert_eq!(near["refusal"], json!(null), "{near}");
@@ -819,7 +820,7 @@ mod tests {
     async fn the_earlier_row_is_re_addressed_by_the_later_one() {
         let (_dir, services, venue) = room().await;
         let run = truss(&services, &venue, 4.0).await;
-        let far = spread(&services, &venue, &run, "face_-y", 2, span(0.6, 1.0))
+        let far = spread(&services, &venue, &run, "face_-y", 2, span(0.4, 2.0))
             .await
             .unwrap();
         let ids: Vec<&str> = far["fixtures"]
@@ -830,7 +831,7 @@ mod tests {
             .collect();
         assert_eq!(addresses_of(&services, &venue, &ids).await, [1, 19]);
 
-        spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+        spread(&services, &venue, &run, "face_-y", 2, span(-2.0, -0.4))
             .await
             .unwrap();
         assert_eq!(
@@ -846,7 +847,7 @@ mod tests {
     async fn a_pinned_address_survives_a_later_row() {
         let (_dir, services, venue) = room().await;
         let run = truss(&services, &venue, 4.0).await;
-        let far = spread(&services, &venue, &run, "face_-y", 1, span(0.8, 1.0))
+        let far = spread(&services, &venue, &run, "face_-y", 1, span(1.2, 2.0))
             .await
             .unwrap();
         let pinned = far["fixtures"][0]["id"].as_str().unwrap().to_string();
@@ -858,7 +859,7 @@ mod tests {
         .await
         .unwrap();
 
-        spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+        spread(&services, &venue, &run, "face_-y", 2, span(-2.0, -0.4))
             .await
             .unwrap();
         assert_eq!(addresses_of(&services, &venue, &[&pinned]).await, [200]);
@@ -911,10 +912,10 @@ mod tests {
     async fn two_rows_that_clear_each_other_are_both_admitted() {
         let (_dir, services, venue) = room().await;
         let run = truss(&services, &venue, 4.0).await;
-        spread(&services, &venue, &run, "face_-y", 2, span(0.6, 1.0))
+        spread(&services, &venue, &run, "face_-y", 2, span(0.4, 2.0))
             .await
             .unwrap();
-        let near = spread(&services, &venue, &run, "face_-y", 2, span(0.0, 0.4))
+        let near = spread(&services, &venue, &run, "face_-y", 2, span(-2.0, -0.4))
             .await
             .unwrap();
         assert_eq!(near["refusal"], json!(null), "{near}");

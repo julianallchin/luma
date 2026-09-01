@@ -28,7 +28,11 @@ from luma_exec.host_errors import LumaHostCallError  # noqa: E402
 from luma_exec.host_errors import VenueRefused  # noqa: E402
 from luma_exec.venue import (  # noqa: E402
     Catalog,
+    Cursor,
     Distribution,
+    Draft,
+    Extent,
+    NodeInfo,
     Placement,
     Venue,
     VenueHostUnavailableError,
@@ -240,11 +244,13 @@ CATALOG = {
     "lengthStepM": 0.5,
     "pieces": [
         {
+            "short": "truss",
             "catalogRef": "truss/straight",
             "name": "Truss",
             "group": "Trusses",
             "pieceKind": "truss",
             "procedural": True,
+            "size": [3.0, 0.34, 0.34],
             "sockets": [
                 {
                     "name": "grab",
@@ -268,9 +274,60 @@ CATALOG = {
                     "feature": True,
                 },
             ],
-        }
+        },
+        {
+            "short": "corner",
+            "catalogRef": "truss/corner",
+            "name": "Corner",
+            "group": "Trusses",
+            "pieceKind": "truss",
+            "procedural": True,
+            "size": [0.34, 0.34, 0.34],
+            "sockets": [],
+        },
     ],
 }
+
+
+def tip_row(node_id: str, direction: Any = (1.0, 0.0, 0.0)) -> dict[str, Any]:
+    return {
+        "node": node_id,
+        "socket": "end_b",
+        "direction": list(direction),
+        "at": [1.5, 0.0, 0.0],
+    }
+
+
+def node_row(node_id: str, **overrides: Any) -> dict[str, Any]:
+    row = {
+        "id": node_id,
+        "kind": "run",
+        "catalogRef": "truss/straight",
+        "short": "truss",
+        "label": None,
+        "host": "root",
+        "at": [1.0, 2.0],
+        "z": 0.17,
+        "size": [3.0, 0.34, 0.34],
+        "face": [0.0, 0.0, 1.0],
+        "tips": [tip_row(node_id)],
+    }
+    row.update(overrides)
+    return row
+
+
+def chained(node_id: str, payload: Any) -> dict[str, Any]:
+    """The host's answer to one chain op: what landed, and the end left over."""
+    return {
+        "node": node_id,
+        "at": payload.get("at") or [0.0, 0.0],
+        "z": 0.17,
+        "size": [3.0, 0.34, 0.34],
+        "tip": tip_row(node_id),
+        "announce": [],
+        "placement": placement(node_id)["placement"],
+        "describe": "root  venue\n",
+    }
 
 
 def placement(node_id: str = "n-1", tree: str = "root  venue\n") -> dict[str, Any]:
@@ -301,6 +358,7 @@ class BuildHost:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.refuse: str | None = None
+        self.built = 0
 
     def __call__(self, method: str, payload: Any) -> Any:
         self.calls.append((method, payload))
@@ -329,6 +387,41 @@ class BuildHost:
             }
         if method == "venue.describe":
             return {"text": "root  venue\n"}
+        if method == "venue.chain":
+            self.built += 1
+            return chained(f"n-{self.built}", payload)
+        if method == "venue.query":
+            return {"nodes": [node_row("n-1"), node_row("n-2", label="wing_left")]}
+        if method == "venue.extent":
+            return {
+                "extent": {
+                    "count": 2,
+                    "min": [-5.5, -0.2, 0.0],
+                    "max": [5.5, 0.2, 8.0],
+                    "centre": [0.0, 0.0, 4.0],
+                    "size": [11.0, 0.4, 8.0],
+                }
+            }
+        if method == "venue.tip":
+            return {"tip": tip_row("n-1"), "node": node_row("n-1")}
+        if method == "venue.aim":
+            return {"aimed": list(payload["nodes"]), "describe": "root  venue\n"}
+        if method == "venue.stamp":
+            return {"nodes": ["s-1"], "describe": "root  venue\n"}
+        if method == "venue.draft.create":
+            return {"draftId": "draft-1"}
+        if method == "venue.draft.discard":
+            return {}
+        if method == "venue.draft.describe":
+            return {"text": "draft  venue\n"}
+        if method == "venue.draft.render":
+            return {
+                "artifactRel": "outputs/stage-draft.png",
+                "width": 960,
+                "height": 540,
+                "view": "front",
+                "t": 0.0,
+            }
         if method == "venue.open":
             return {
                 "unplaced": [
@@ -397,14 +490,22 @@ class BuildTests(unittest.TestCase):
     def test_the_catalog_is_the_hosts_answer_not_a_python_list(self) -> None:
         catalog = self.venue.catalog()
         self.assertIsInstance(catalog, Catalog)
-        self.assertIn("end_a", catalog.sockets("truss/straight"))
-        self.assertEqual(catalog.length_step_m, 0.5)
-        # The printable form is what an agent reads; it names every mating
-        # socket and hides the grab, which nothing can be bolted to.
+        self.assertEqual(catalog.module_m, 0.5)
+        # Short names are the primary vocabulary; the stored id is an alias
+        # that still resolves.
+        self.assertEqual(catalog["truss"].name, "truss")
+        self.assertEqual(catalog["truss/straight"].name, "truss")
+        self.assertEqual(catalog["truss"].size, (3.0, 0.34, 0.34))
+        self.assertTrue(catalog["truss"].sized)
+        self.assertIn("truss", catalog)
+        # The printable page names pieces and sizes and does **not** steer a
+        # reader toward socket names — those are the older layer's vocabulary.
         text = str(catalog)
-        self.assertIn("truss/straight", text)
-        self.assertIn("end_a(n)", text)
-        self.assertNotIn("grab", text)
+        self.assertIn("truss", text)
+        self.assertIn("3.00 x 0.34 x 0.34", text)
+        self.assertNotIn("end_a", text)
+        # Sockets are still reachable for `attach`/`extend`.
+        self.assertIn("end_a", catalog.sockets("truss"))
 
     def test_unplaced_and_dangling_are_read_live(self) -> None:
         """Not the cell's binding snapshot: a build script asks after it has
@@ -423,22 +524,23 @@ class BuildTests(unittest.TestCase):
 
     # -- writes ---------------------------------------------------------
 
-    def test_place_sends_uv_and_radians_and_keeps_extra_params(self) -> None:
-        self.venue.place("truss/straight", at=(1.5, -2.0), yaw=90.0, span=4.0)
-        payload = self.host.last("venue.place")
-        self.assertEqual((payload["u"], payload["v"]), (1.5, -2.0))
-        self.assertAlmostEqual(payload["yaw"], math.pi / 2)
-        self.assertEqual(payload["params"], {"span": 4.0})
-        # Nothing named means the catalog decides both the surface and the
-        # footing — that is what keeps socket names out of the caller's head.
-        self.assertIsNone(payload["surfaceNodeId"])
-        self.assertIsNone(payload["mySocket"])
+    def test_place_states_intent_in_the_facade_frame(self) -> None:
+        self.venue.place("truss", at=(1.5, -2.0), length=4.0, direction=(0, 0, 1))
+        payload = self.host.last("venue.chain")
+        self.assertEqual(payload["at"], [1.5, -2.0])
+        self.assertEqual(payload["length"], 4.0)
+        self.assertEqual(payload["direction"], [0.0, 0.0, 1.0])
+        # Nothing else is invented on the way: no socket, no surface, no yaw.
+        self.assertIsNone(payload["from"])
+        self.assertIsNone(payload["on"])
+        self.assertIsNone(payload["face"])
 
-    def test_a_placement_can_be_passed_straight_back_as_a_node(self) -> None:
-        deck = self.venue.place("truss/straight")
-        self.assertIsInstance(deck, Placement)
+    def test_a_cursor_is_also_a_node_handle(self) -> None:
+        deck = self.venue.place("truss")
+        self.assertIsInstance(deck, Cursor)
+        self.assertEqual(deck.size, (3.0, 0.34, 0.34))
         self.venue.attach("truss/straight", to=deck, socket="end_a")
-        self.assertEqual(self.host.last("venue.attach")["parentId"], deck.node_id)
+        self.assertEqual(self.host.last("venue.attach")["parentId"], deck.id)
 
     def test_extend_without_a_length_asks_for_the_measured_gap(self) -> None:
         self.venue.extend("run-1", "end_b")
@@ -490,33 +592,177 @@ class BuildTests(unittest.TestCase):
     # -- distribute ------------------------------------------------------
 
     def test_distribute_layouts_are_the_tagged_union_the_host_decodes(self) -> None:
-        self.venue.distribute("run-1", "face_-y", "a.qxf", 4, mode="8-Channel")
-        self.assertEqual(self.host.last("venue.distribute")["layout"], {"kind": "even"})
+        self.venue.distribute("a.qxf", 4, on="run-1", face=(0, -1, 0), mode="8-Channel")
+        payload = self.host.last("venue.distribute")
+        self.assertEqual(payload["layout"], {"kind": "even"})
+        # The face is a vector, and the socket name never appears.
+        self.assertEqual(payload["face"], [0.0, -1.0, 0.0])
+        self.assertIsNone(payload["hostSocket"])
         self.venue.distribute(
-            "run-1", "face_-y", "a.qxf", 4, mode="8-Channel", layout="spacing", spacing_m=0.75
+            "a.qxf", 4, on="run-1", face=(0, -1, 0), mode="8-Channel", spacing_m=0.75
         )
         self.assertEqual(
             self.host.last("venue.distribute")["layout"],
             {"kind": "spacing", "metres": 0.75},
         )
+        # A span is metres from midspan, like every other number here.
         self.venue.distribute(
-            "run-1", "face_-y", "a.qxf", 4, mode="8-Channel", layout="span", span=(0.1, 0.9)
+            "a.qxf", 4, on="run-1", face=(0, -1, 0), mode="8-Channel", span=(-4, 4)
         )
         self.assertEqual(
             self.host.last("venue.distribute")["layout"],
-            {"kind": "span", "from": 0.1, "to": 0.9},
+            {"kind": "span", "from": -4.0, "to": 4.0},
         )
+        # One mark on a stick host is signed metres from its middle.
+        self.venue.distribute("a.qxf", 1, on="run-1", face=(0, -1, 0), mode="8-Channel", at=2.0)
+        self.assertEqual(
+            self.host.last("venue.distribute")["layout"], {"kind": "at", "metres": 2.0}
+        )
+
+    def test_two_ways_along_one_face_is_refused_before_the_host_sees_it(self) -> None:
+        with self.assertRaises(LumaHostCallError):
+            self.venue.distribute(
+                "a.qxf", 4, on="run-1", face=(0, -1, 0), mode="m", span=(-1, 1), spacing_m=0.5
+            )
 
     def test_a_distributed_row_hands_back_nodes_the_next_verb_takes(self) -> None:
         """The row a `distribute` reports is aimable without a dictionary
         lookup: every verb that names a node takes what another verb returned."""
-        row = self.venue.distribute("run-1", "face_-y", "a.qxf", 2, mode="8-Channel")
+        row = self.venue.distribute("a.qxf", 2, on="run-1", face=(0, -1, 0), mode="8-Channel")
         head = row.fixtures[0]
         self.assertEqual(head.node_id, "fix-1")
         self.assertEqual((head.universe, head.address), (1, 1))
         self.assertEqual(head.group_path, ("wash", "left wing"))
         self.venue.aim(head, tilt=30)
         self.assertEqual(self.host.last("venue.params")["nodeId"], "fix-1")
+
+    # -- the cursor grammar ----------------------------------------------
+
+    def test_a_chain_carries_its_own_tip_forward(self) -> None:
+        """The whole point of a cursor: each step hands back the *actual* end,
+        so the next step needs no arithmetic and drift cannot accumulate."""
+        t = self.venue.place("truss", at=(-5.5, 0), length=8, direction=(0, 0, 1))
+        t = t.add("corner")
+        t = t.add("truss", length=11, direction=(1, 0, 0))
+        payloads = [p for name, p in self.host.calls if name == "venue.chain"]
+        self.assertEqual(len(payloads), 3)
+        # The corner grew from the tower's end, and the beam from the corner's —
+        # each `from` is the tip the previous answer carried.
+        self.assertEqual(payloads[1]["from"]["node"], "n-1")
+        self.assertEqual(payloads[2]["from"]["node"], "n-2")
+        self.assertEqual(payloads[2]["direction"], [1.0, 0.0, 0.0])
+        self.assertEqual(t.id, "n-3")
+
+    def test_a_hinge_takes_an_axis_and_an_angle_in_degrees(self) -> None:
+        g = self.venue.place("truss", at=(0, 8))
+        g.add("hinge", axis=(0, 0, 1), angle=30)
+        payload = self.host.last("venue.chain")
+        self.assertEqual(payload["axis"], [0.0, 0.0, 1.0])
+        self.assertEqual(payload["angle"], 30.0)
+        # An angle is not a direction and the two never share a field.
+        self.assertIsNone(payload["direction"])
+
+    def test_a_cursor_with_no_single_end_says_so_rather_than_guessing(self) -> None:
+        response = chained("n-9", {"at": [0.0, 0.0]})
+        response["tip"] = None
+        cursor = Cursor(response, self.venue)
+        with self.assertRaises(LumaHostCallError):
+            cursor.add("truss")
+
+    def test_a_tip_is_grabbed_by_direction_not_by_name(self) -> None:
+        top = self.venue.tip("tower-1", end=(0, 0, 1))
+        self.assertEqual(self.host.last("venue.tip")["end"], [0.0, 0.0, 1.0])
+        self.assertIsInstance(top, Cursor)
+        # And it is a node handle as well as a cursor.
+        self.assertEqual(top.size, (3.0, 0.34, 0.34))
+        top.add("corner")
+        self.assertEqual(self.host.last("venue.chain")["from"]["node"], "n-1")
+
+    def test_toward_resolves_to_a_unit_vector_against_the_host(self) -> None:
+        """One stated intent, resolved where the verb knows what it is measuring
+        from. Only the resolved vector reaches the graph."""
+        self.venue.distribute(
+            "a.qxf", 4, on="n-1", face=self.venue.toward((1.0, 12.0)), mode="m"
+        )
+        face = self.host.last("venue.distribute")["face"]
+        # The host node sits at (1, 2); the target is straight out at v=12.
+        self.assertAlmostEqual(face[0], 0.0, places=6)
+        self.assertAlmostEqual(face[1], 1.0, places=3)
+
+    def test_toward_with_nothing_to_measure_from_is_refused(self) -> None:
+        with self.assertRaises(LumaHostCallError):
+            self.venue.place("truss", direction=self.venue.toward((0, 5)))
+
+    # -- the read side ---------------------------------------------------
+
+    def test_nodes_come_back_in_the_frame_the_caller_builds_in(self) -> None:
+        found = self.venue.nodes(kind="run", label="wing_*")
+        payload = self.host.last("venue.query")
+        self.assertEqual((payload["kind"], payload["label"]), ("run", "wing_*"))
+        self.assertIsInstance(found[0], NodeInfo)
+        self.assertEqual(found[0].at, (1.0, 2.0))
+        self.assertEqual(found[0].piece, "truss")
+        self.assertEqual(found[0].face, (0.0, 0.0, 1.0))
+        # A returned node feeds straight back into any verb that names one.
+        self.venue.detach(found[0])
+        self.assertEqual(self.host.last("venue.detach")["nodeId"], "n-1")
+
+    def test_extent_answers_the_is_it_centred_question(self) -> None:
+        span = self.venue.extent(kind="tower")
+        self.assertIsInstance(span, Extent)
+        self.assertEqual(span.centre, (0.0, 0.0, 4.0))
+        self.assertEqual(span.size, (11.0, 0.4, 8.0))
+        # A selection of handles is the same question asked of a list.
+        self.venue.extent(self.venue.nodes())
+        self.assertEqual(self.host.last("venue.extent")["ids"], ["n-1", "n-2"])
+
+    def test_aim_takes_a_direction_or_a_point_but_not_both(self) -> None:
+        self.venue.aim(["fix-1", "fix-2"], direction=(0, 1, -0.5))
+        payload = self.host.last("venue.aim")
+        self.assertEqual(payload["nodes"], ["fix-1", "fix-2"])
+        self.assertEqual(payload["direction"], [0.0, 1.0, -0.5])
+        self.venue.aim("fix-1", at=(0, 8, 0))
+        self.assertEqual(self.host.last("venue.aim")["at"], [0.0, 8.0, 0.0])
+        with self.assertRaises(LumaHostCallError):
+            self.venue.aim("fix-1", direction=(0, 1, 0), at=(0, 8, 0))
+
+    # -- drafts ----------------------------------------------------------
+
+    def test_a_draft_runs_the_component_against_a_scratch_graph(self) -> None:
+        def portal(s: Any, width: float = 11.0) -> None:
+            t = s.place("truss", at=(-width / 2, 0), length=8, direction=(0, 0, 1))
+            t = t.add("corner")
+            beam = t.add("truss", length=width, direction=(1, 0, 0))
+            s.distribute("a.qxf", 8, on=beam, face=(0, 1, 0), mode="m")
+
+        gate = self.venue.draft(portal, width=11)
+        self.assertIsInstance(gate, Draft)
+        # Every call inside the function carried the draft, so the venue was
+        # never touched.
+        for name, payload in self.host.calls:
+            if name in ("venue.chain", "venue.distribute"):
+                self.assertEqual(payload["draftId"], "draft-1", name)
+        self.assertEqual(self.host.last("venue.chain")["at"], None)
+
+    def test_a_draft_previews_both_ways_and_stamps_as_copies(self) -> None:
+        gate = self.venue.draft()
+        self.assertIn("draft", gate.describe())
+        self.assertEqual(gate.extent.count, 2)
+        shot = gate.render()
+        self.assertEqual(shot.artifact_rel, "outputs/stage-draft.png")
+        nodes = self.venue.stamp(gate, at=(0, 5), yaw=90.0)
+        payload = self.host.last("venue.stamp")
+        self.assertEqual(payload["at"], [0.0, 5.0])
+        self.assertAlmostEqual(payload["yaw"], math.pi / 2)
+        self.assertEqual(nodes, ("s-1",))
+
+    def test_a_component_that_raises_leaves_no_draft_open(self) -> None:
+        def broken(_s: Any) -> None:
+            raise ValueError("nope")
+
+        with self.assertRaises(ValueError):
+            self.venue.draft(broken)
+        self.assertEqual(self.host.last("venue.draft.discard")["draftId"], "draft-1")
 
     # -- the library -----------------------------------------------------
 
@@ -559,10 +805,10 @@ class BuildTests(unittest.TestCase):
             self.assertAlmostEqual(params[key], math.pi / 2, msg=key)
         self.assertEqual(params["u"], 1.0)
 
-    def test_a_layout_that_needs_a_number_refuses_before_the_host_sees_it(self) -> None:
-        for kwargs in ({"layout": "spacing"}, {"layout": "span"}, {"layout": "wat"}):
+    def test_a_malformed_span_refuses_before_the_host_sees_it(self) -> None:
+        for kwargs in ({"span": (1.0,)}, {"span": (1.0, 2.0, 3.0)}, {"at": float("nan")}):
             with self.assertRaises(LumaHostCallError):
-                self.venue.distribute("run-1", "f", "a.qxf", 2, mode="m", **kwargs)
+                self.venue.distribute("a.qxf", 2, on="run-1", face=(0, -1, 0), mode="m", **kwargs)
         self.assertEqual(self.host.calls, [])
 
     def test_a_row_that_does_not_fit_is_a_report_not_an_exception(self) -> None:
@@ -587,7 +833,7 @@ class BuildTests(unittest.TestCase):
             }
 
         venue = Venue(record(), host_call=refused, workspace=self.workspace)
-        row = venue.distribute("run-1", "face_-y", "a.qxf", 12, mode="8-Channel")
+        row = venue.distribute("a.qxf", 12, on="run-1", face=(0, -1, 0), mode="8-Channel")
         self.assertIsInstance(row, Distribution)
         self.assertFalse(row.ok)
         self.assertEqual(row.needed_m, 4.0)
@@ -602,7 +848,7 @@ class BuildTests(unittest.TestCase):
             venue.describe,
             venue.dangling,
             venue.unplaced,
-            lambda: venue.place("truss/straight"),
+            lambda: venue.place("truss"),
             lambda: venue.detach("n"),
         ):
             with self.assertRaises(VenueHostUnavailableError):

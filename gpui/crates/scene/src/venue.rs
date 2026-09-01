@@ -1405,7 +1405,7 @@ fn place(
 ///
 /// `(u, v)` are the room's plan on the host surface — `+u` stage right, `+v`
 /// upstage, and the piece's **footprint centre** on the mark — while `trim`
-/// runs along world up (see [`centre_offset`], `trim_axis`). The offset and the
+/// runs along world up (see `trim_axis`). The offset and the
 /// twist sit *between* the two frames, so the twist is the joint's rather than
 /// the piece's own origin's.
 ///

@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] `cargo build -p luma-mcp` is a lie: luma-mcp is a *bin target* of the `luma` package, not a package of its own, so the documented invocation fails with "did not match any packages" while a stale binary sits in `target/debug/luma-mcp` looking freshly built. `cargo build --bin luma-mcp` is the one that works.
 - [2026-08-31] `Scene.camera` is the one thing in `luma-render` still held in three space (Y-up) while every piece, pose and doc comment around it is world Z-up, and a camera authored in the wrong one renders a *black frame* rather than a wrong angle — indistinguishable from the other reason an offscreen probe comes back black, which is that `RenderSettings::editor_lit` leaves haze on at a 0.3 density floor and fogs out a rig that has no fixtures to clear it.
 - [2026-08-31] the `overhead` view renders on a fixed frame sized to nothing in particular: a rig 8 m across simply is not in it, so the one view you would reach for to check a plan comes back an empty grid, and there is no way to ask it to frame the content.
 - [2026-08-31] pieces placed near the camera fall outside the `front`/`audience` frame entirely, so a marker placed *in order to be verified* renders invisible and reads as "the placement failed" rather than "the camera cannot see it".

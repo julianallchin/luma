@@ -44,61 +44,126 @@ pulled inside the track rather than refused.
 Building
 --------
 
-The same object carries the build verbs. They are the stage page's gestures in
-words — there are no coordinates in the vocabulary except `(u, v)` on a surface
-and metres for a length or a trim, and there is no `set_position`.
+The same object carries the build verbs. You state **intent in the venue
+frame**, and the room answers with what it actually built.
 
-**Start by reading the two vocabularies.** Nothing below can be guessed: a piece
-is named by a catalog id and a light by a library path, and both lists are the
-catalog's own, not this module's::
+    +u = stage right      +v = toward the crowd      +z = up
+    upstage is -v. Angles in degrees, lengths in metres.
+    Structure comes in 0.5 m modules. Speakers, players and other
+    endpoints are exempt — nothing chains off them.
 
-    print(luma.venue.catalog())        # every piece, with its sockets
-    print(luma.venue.fixtures("spot")) # every head that answers "spot"
+Five rules, and every one of them is enforced rather than advised:
 
-Then build::
+1. `at=` is the footprint **centre**, in plan, everywhere. A free `place`
+   anchors by centre; `add` grows from a tip. Same piece, two verbs.
+2. `v.tip(node, end=vector)` grabs a cursor on any existing node's free end.
+   `end` is a direction, not a name.
+3. A hinge's sign is the right-hand rule: positive is counterclockwise about
+   `+axis`. `angle` is in 5 degree steps, ±90; 0 is a straight coupler.
+4. `direction=` is an exit direction and `axis=` is a rotation axis. They are
+   different parameters and a wrong-kind error says which was expected.
+5. 1-D `at=` on a stick host is signed metres from **midspan** — `at=0` is
+   the middle, negative is the other way along it.
 
-    deck  = luma.venue.place("stage_lab/stage_praticavel_2x1x1.glb", at=(0, 2))
-    left  = luma.venue.extend(deck, "corner_fl", 4.0)
-    print(luma.venue.describe())
+There are **no socket names on this surface**. Vectors are how you name faces
+and ends. There are no shape verbs either: a box, a circle, a spiral are your
+own Python loops over these primitives.
+
+A chain::
+
+    t = v.place("truss", at=(-5.5, 5), length=8, direction=(0, 0, 1))  # tower
+    t = t.add("corner")
+    t = t.add("truss", length=11, direction=(1, 0, 0))   # names the corner's exit
+    t = t.add("corner")
+    t = t.add("truss", length=8, direction=(0, 0, -1))
+
+    g = v.place("guardrail", at=(0, 8))
+    g = g.add("hinge", axis=(0, 0, 1), angle=30)
+    g = g.add("guardrail")               # follows the hinge; needs no direction
+
+Every `place` and `add` returns a **cursor**, which is also a node handle
+(`.id`, `.at`, `.size`, `.face`) — so it feeds every other verb. The cursor is
+the *actual* tip: an off-module length is snapped and announced rather than
+refused (`c.announce`), and because the return value is always the truth, drift
+never accumulates down a chain.
+
+Three things refuse, each carrying its own fix: a turn the joint cannot make
+(listing the legal directions as vectors), a collision (naming the blocking
+node), and a piece the catalog does not have.
+
+Hosting and lights::
+
+    v.place("dbr15", on=stage, at=(4, -1))
+    v.distribute("ledbeam", on=beam, count=8, face=(0, 1, 0))   # crowd face
+    v.distribute("spiider", on=beam, count=6, span=(-4, 4))     # metres from midspan
+    v.place("pointe", on=beam, at=2.0, face=(0, 0, -1))
+    v.aim(heads, direction=(0, 1, -0.5))       # or v.aim(heads, at=(0, 8, 0))
+
+`on=` reframes `at=` into the host's own frame: 2-D `(u, v)` on a deck top, 1-D
+signed metres from midspan on a stick. `face=` is a **vector** mapped to the
+piece's nearest mounting face, and beam is the mount normal — so choosing the
+face is choosing where the light points at rest. `v.toward(point_or_node)` is
+accepted anywhere a direction is, and resolves per host, so two flanking wings
+each get their own inward vector out of one stated intent.
+
+Reading the room
+----------------
+
+The read side is an equal partner, and every field it hands back is legal input
+to a write verb::
+
+    v.nodes(kind="run", label="wing_*")   # -> .id .label .kind .at .size .face .tips
+    v.extent(v.nodes(kind="tower"))       # -> span and centre in u/v: "is it centred?"
+    print(v.describe())                   # the tree, with facade coordinates
+    print(v.tiles())                      # the plan as a text map
+    v.catalog()["guardrail"].size         # machine-readable dimensions
+
+Drafts
+------
+
+A component is a function over the same verbs, run somewhere that is not the
+venue yet::
+
+    def portal(s, width=11, height=8):
+        t = s.place("truss", at=(-width / 2, 0), length=height, direction=(0, 0, 1))
+        t = t.add("corner")
+        beam = t = t.add("truss", length=width, direction=(1, 0, 0))
+        t = t.add("corner")
+        t.add("truss", length=height, direction=(0, 0, -1))
+        s.distribute("ledbeam", on=beam, count=8, face=(0, 1, 0))
+
+    gate = v.draft(portal, width=11)   # runs on a scratch graph; venue untouched
+    gate.render()                      # visual preview, isolated
+    print(gate.extent)                 # textual preview
+    for i in range(7):
+        v.stamp(gate, at=(0, 5 + 6 * i))
 
 Reading this surface
 --------------------
 
 Everything that *asks the room* is a verb and takes parentheses: `render()`,
-`tiles()`, `catalog()`, `fixtures()`, `describe()`, `dangling()`, `unplaced()`,
-`reach()`, and the build verbs below. Everything that is already *in your hand*
-is a plain attribute and takes none — `venue.views`, `placement.placed`,
-`placement.node_id`, `distribution.ok`, `distribution.message`,
-`distribution.needed_m`, `distribution.fixtures`, `head.path`, `head.modes`.
-A machine-extracted listing of this module will show several of the second kind
-as if they were the first; they are properties, and calling one returns the
-value's `__call__` error rather than the value.
+`tiles()`, `catalog()`, `fixtures()`, `describe()`, `nodes()`, `extent()`,
+`tip()`, `dangling()`, `unplaced()`, and the build verbs. Everything already
+*in your hand* is a plain attribute — `venue.views`, `cursor.at`,
+`cursor.size`, `placement.placed`, `distribution.ok`, `head.path`. A
+machine-extracted listing of this module shows several of the second kind as if
+they were the first; they are properties.
 
-Angles are **degrees** everywhere on this surface — `yaw`, `roll`, `pan`,
-`tilt` — and lengths are metres. There is no other unit.
+Angles are **degrees** everywhere on this surface and lengths are metres. There
+is no other unit.
 
-`describe()` is the check channel and it is the only one. Every verb hands you
-the fresh tree, and every line on it carries `at=(x, y, z)` in metres,
-`heading=` in degrees, and — on a fixture — `beam=<word>`. A verb returning
-`placed` means the graph accepted it, not that it is the shape you asked for;
-the tree is where that second question is answered.
+`describe()` is the tree channel: every line carries `at=(u, v, z)` in the same
+frame you build in, `heading=` in degrees, and — on a fixture — `beam=<word>`.
+A verb reporting `placed` means the graph accepted it, not that it is the shape
+you asked for; `nodes()`, `extent()` and the tree are where that is answered.
 
-Every verb returns a `Placement` — the resolver's own report, with the fresh
-`describe()` on it — so a program reads its own effect without a second call.
-The only exception a verb raises is `luma.VenueRefused`, carrying the
-resolver's message verbatim.
+The older, lower layer
+----------------------
 
-A fixture's rest direction is the outward normal of the socket it hangs from —
-hung under a truss it points down, clamped to the downstage face it points at
-the house — so the usual way to aim a rig is to hang it on the right face.
-`aim` is for the rest: it turns one head off that normal, in degrees, and the
-turn is a parameter of the fixture, so the stored pose, the beam and the aim
-arrows all move together.
-
-    heads = luma.venue.fixtures("rogue spot")     # what can be distributed
-    row   = luma.venue.distribute(bar, "face_-y", heads[0].path, 6,
-                                  mode=heads[0].modes[0].name)
-    luma.venue.aim(row.fixtures[0], tilt=30)
+`attach(piece, to=node, socket="end_b")`, `extend(node, "corner_fl", 4.0)` and
+`reach()` still work and still take socket names. They are the layer the cursor
+grammar compiles onto, not a second way to build — reach for them only when you
+are reading a rig somebody else built through `dangling()`.
 """
 
 from __future__ import annotations
@@ -208,9 +273,301 @@ def _node(value: Any) -> str:
     )
 
 
+def _along(at: Any) -> float:
+    """A 1-D `at=` on a stick host: signed metres from midspan.
+
+    A pair is accepted and its first number taken, so a caller that reached for
+    the 2-D spelling on a one-dimensional host is not stopped by punctuation.
+    """
+    if isinstance(at, (list, tuple)):
+        return _finite("at", at[0])
+    return _finite("at", at)
+
+
+def _near(wanted: str, names: Mapping[str, str]) -> str:
+    """The catalog names closest to a miss, as a phrase to append to a refusal.
+
+    A shared prefix of three characters, which is what a typo usually leaves
+    intact. Empty when nothing is close: a suggestion that is not one is worse
+    than none.
+    """
+    stem = str(wanted).lower()[:3]
+    close = sorted({short for key, short in names.items() if key.startswith(stem)})
+    return "" if not close else f"; did you mean {', '.join(close[:3])}?"
+
+
 def _params(params: Mapping[str, Any]) -> dict[str, float]:
     """Keyword parameters as the graph's own map of floats."""
     return {str(key): _finite(str(key), value) for key, value in params.items()}
+
+
+class Toward:
+    """A direction stated as a *place* rather than as a vector.
+
+    Accepted anywhere a direction is, and resolved **per host**: one
+    `toward(centre)` on two flanking wings is two different inward vectors,
+    because each is measured from where that wing actually is. What reaches the
+    graph is always the resolved vector — the intent is not stored.
+    """
+
+    __slots__ = ("target",)
+
+    def __init__(self, target: Any) -> None:
+        #: A point `(u, v)` or `(u, v, z)`, or anything with an `.at` — a node
+        #: handle, a cursor, a query result.
+        self.target = target
+
+    def __repr__(self) -> str:
+        return f"<toward {self.target!r}>"
+
+
+def _point3(name: str, value: Any) -> list[float]:
+    """A `(u, v)` or `(u, v, z)` out of whatever the caller is holding.
+
+    A bare pair is a point in plan, at ground level. A node, a cursor or a query
+    result is its footprint centre, which is exactly the number the read side
+    hands back — so `toward(some_truss)` needs no unpacking at the call site.
+    """
+    at = getattr(value, "at", None)
+    if at is not None and not isinstance(value, (list, tuple)):
+        z = float(getattr(value, "z", 0.0) or 0.0)
+        return [_finite(name, at[0]), _finite(name, at[1]), z]
+    if isinstance(value, Mapping):
+        at = value.get("at")
+        if at is not None:
+            return [
+                _finite(name, at[0]),
+                _finite(name, at[1]),
+                float(value.get("z") or 0.0),
+            ]
+    if isinstance(value, (list, tuple)) and len(value) in (2, 3):
+        return [
+            _finite(name, value[0]),
+            _finite(name, value[1]),
+            _finite(name, value[2]) if len(value) == 3 else 0.0,
+        ]
+    raise LumaHostCallError(
+        "invalid_argument",
+        f"{name} must be (u, v), (u, v, z) or something with an .at, not {value!r}",
+    )
+
+
+def _vector(name: str, value: Any, *, origin: Sequence[float] | None = None) -> list[float]:
+    """A facade direction `(u, v, z)`.
+
+    A `Toward` is resolved here, against the `origin` the calling verb knows —
+    the host's own centre, or the tip the chain is growing from. A caller that
+    passes one where no origin is available is told so rather than given a
+    vector measured from nowhere.
+    """
+    if isinstance(value, Toward):
+        if origin is None:
+            raise LumaHostCallError(
+                "invalid_argument",
+                f"{name}=toward(...) needs something to measure from — state it on a "
+                "verb that names a host, or pass a plain (u, v, z)",
+            )
+        target = _point3(f"{name} target", value.target)
+        delta = [target[i] - float(origin[i]) for i in range(3)]
+        length = math.sqrt(sum(c * c for c in delta))
+        if length < 1e-9:
+            raise LumaHostCallError(
+                "invalid_argument", f"{name}=toward(...) points at where it already is"
+            )
+        return [c / length for c in delta]
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        return [_finite(f"{name}[{i}]", value[i]) for i in range(3)]
+    raise LumaHostCallError(
+        "invalid_argument",
+        f"{name} must be a direction (u, v, z) or v.toward(...), not {value!r}",
+    )
+
+
+class Tip:
+    """One free end of a piece: where a chain can grow, and which way.
+
+    Handed back by every `place`/`add` and by `v.tip(node, end=...)`, and passed
+    straight back in — you never construct one. `direction` and `at` are facade
+    vectors you can read, compare and state elsewhere.
+    """
+
+    __slots__ = ("node_id", "direction", "at", "_row")
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = dict(row)
+        self.node_id = str(row["node"])
+        #: Unit facade vector the end faces.
+        self.direction = tuple(float(c) for c in row["direction"])
+        #: Where the end is, facade metres.
+        self.at = tuple(float(c) for c in row["at"])
+
+    def wire(self) -> dict[str, Any]:
+        """The row the host handed over, round-tripped verbatim."""
+        return dict(self._row)
+
+    def __repr__(self) -> str:
+        d = self.direction
+        return f"<tip of {self.node_id} facing ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f})>"
+
+
+class NodeInfo:
+    """One node as the read side reports it, in the frame you build in.
+
+    Every field here is legal input to a write verb, which is what makes
+    read → edit → verify a round trip: `.at` goes back into `place(at=)`,
+    `.face` into `face=`, a tip's `.direction` into `end=` or `direction=`.
+    """
+
+    __slots__ = (
+        "id", "kind", "piece", "catalog_ref", "label", "host", "at", "z", "size",
+        "face", "tips",
+    )
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.id = str(row["id"])
+        self.kind = str(row["kind"])
+        #: The catalog's short name — `truss`, `deck`, `guardrail`.
+        self.piece = row.get("short")
+        self.catalog_ref = row.get("catalogRef")
+        self.label = row.get("label")
+        #: The node it is bolted to, or `None` for a piece on the room itself.
+        self.host = row.get("host")
+        #: Footprint centre in plan, facade metres.
+        self.at = tuple(float(c) for c in row["at"])
+        #: Centre height, facade metres.
+        self.z = float(row["z"])
+        #: How far it reaches on `(u, v, z)`, facade metres.
+        self.size = tuple(float(c) for c in row["size"])
+        #: The outward normal of the face it sits on. On a light, the beam it
+        #: leaves at rest.
+        self.face = None if row.get("face") is None else tuple(float(c) for c in row["face"])
+        self.tips = tuple(Tip(t) for t in row.get("tips") or ())
+
+    @property
+    def node_id(self) -> str:
+        """The same id, under the name every verb's `node` argument takes."""
+        return self.id
+
+    def __repr__(self) -> str:
+        name = self.label or self.piece or self.kind
+        return (
+            f"<{name} {self.id} at ({self.at[0]:.2f}, {self.at[1]:.2f}, {self.z:.2f}) "
+            f"{self.size[0]:.2f}x{self.size[1]:.2f}x{self.size[2]:.2f}>"
+        )
+
+
+class Extent:
+    """The span and centre of a set of nodes — the one-line "is it centred".
+
+    `centre` against zero says whether the rig sits on the room's midline;
+    `size` against the room says whether it fits.
+    """
+
+    __slots__ = ("count", "min", "max", "centre", "size")
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.count = int(row["count"])
+        self.min = tuple(float(c) for c in row["min"])
+        self.max = tuple(float(c) for c in row["max"])
+        self.centre = tuple(float(c) for c in row["centre"])
+        self.size = tuple(float(c) for c in row["size"])
+
+    def __repr__(self) -> str:
+        return (
+            f"<extent of {self.count}: u {self.min[0]:.2f}..{self.max[0]:.2f}  "
+            f"v {self.min[1]:.2f}..{self.max[1]:.2f}  z {self.min[2]:.2f}..{self.max[2]:.2f}  "
+            f"centre ({self.centre[0]:.2f}, {self.centre[1]:.2f})>"
+        )
+
+    def __str__(self) -> str:
+        return repr(self)
+
+
+class Cursor:
+    """A piece that was just built, and the end the next one grows from.
+
+    Two things in one, on purpose: it is a **node handle** (`.id`, `.at`,
+    `.size`, `.face`) that every other verb accepts, and it is a **cursor**
+    whose `.add()` continues the chain. That is why a chain reads as
+    `t = t.add(...)` — each step hands you the truth about what now exists.
+
+    `.at`, `.z` and `.size` are what was **built**, not what was asked for. If a
+    length was snapped to the module or a mark could not be taken exactly,
+    `.announce` says so in words; it is empty when nothing was.
+    """
+
+    __slots__ = ("id", "at", "z", "size", "announce", "_tip", "_owner", "_draft", "_placement")
+
+    def __init__(
+        self,
+        response: Mapping[str, Any],
+        owner: "Venue",
+        draft: str | None = None,
+    ) -> None:
+        self.id = str(response["node"])
+        self.at = tuple(float(c) for c in response["at"])
+        self.z = float(response["z"])
+        self.size = tuple(float(c) for c in response["size"])
+        self.announce = tuple(str(line) for line in response.get("announce") or ())
+        self._tip = None if response.get("tip") is None else Tip(response["tip"])
+        self._owner = owner
+        # Which graph this piece is in. A cursor carries it so `.add()` keeps
+        # building where the chain started — a draft cursor that continued into
+        # the venue would be the one way a preview could touch the room.
+        self._draft = draft
+        self._placement = Placement(response)
+
+    @property
+    def node_id(self) -> str:
+        return self.id
+
+    @property
+    def tip(self) -> Tip | None:
+        """The free end a chain continues from, or `None` where the piece left
+        several open and no one of them is *the* next one (a four-way block)."""
+        return self._tip
+
+    @property
+    def placement(self) -> Placement:
+        """The resolver's own report for this node — warnings, open ends."""
+        return self._placement
+
+    def add(self, piece: str, **kwargs: Any) -> "Cursor":
+        """Bolt the next piece onto this one's free end.
+
+        Takes everything `place` does except `at=` and `on=`: the joint decides
+        where it goes. `direction=` names the way out — required after a corner,
+        which is how a corner's exit face gets chosen, and refused when it
+        contradicts a joint that has already decided (a straight run leaves the
+        way it points).
+
+        `add("corner")` and `add("hinge", axis=, angle=)` are joints in their
+        own right, so a turn is a chain element rather than a hidden parameter.
+
+        Raises `luma.VenueRefused` for a turn no joint here makes (the message
+        lists the ones it does, as vectors) and for a collision (naming the
+        node in the way).
+        """
+        if self._tip is None:
+            raise LumaHostCallError(
+                "invalid_argument",
+                f"`{self.id}` left no single free end to continue from; "
+                "grab one with v.tip(node, end=(u, v, z))",
+            )
+        return self._owner._chain(piece, tip=self._tip, draft=self._draft, **kwargs)
+
+    def describe(self) -> str:
+        return self._placement.describe()
+
+    def __repr__(self) -> str:
+        said = f" — {'; '.join(self.announce)}" if self.announce else ""
+        return (
+            f"<{self.id} at ({self.at[0]:.2f}, {self.at[1]:.2f}, {self.z:.2f}) "
+            f"{self.size[0]:.2f}x{self.size[1]:.2f}x{self.size[2]:.2f}{said}>"
+        )
+
+    def __str__(self) -> str:
+        return repr(self)
 
 
 class OpenSocket:
@@ -300,9 +657,9 @@ class Placement:
                  "constraints", "_tree")
 
     def __init__(self, response: Mapping[str, Any]) -> None:
-        report = response["placement"]
+        report = response.get("placement") or {"nodeId": response.get("node", "")}
         self.node_id = str(report["nodeId"])
-        self.outcome = str(report["outcome"])
+        self.outcome = str(report.get("outcome") or "placed")
         self.parent_id = report.get("parentId")
         self.warnings = tuple(str(w) for w in report.get("warnings") or ())
         self.dangling = tuple(OpenSocket(d) for d in report.get("dangling") or ())
@@ -458,72 +815,126 @@ class Library(tuple):
         return "\n".join(str(entry) for entry in self)
 
 
+class CatalogPiece:
+    """One placeable piece: what to call it, and how big it is.
+
+    `name` is what you pass to `place` — the short one. `size` is metres along
+    the piece's own axes, `(along, across, up)`, so a caller can lay out a rig
+    without guessing; for a piece the catalog marks `sized`, `along` is the
+    `length=` you choose and this is only its default.
+    """
+
+    __slots__ = ("name", "catalog_ref", "display_name", "group", "piece_kind", "sized", "size", "_row")
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self._row = row
+        #: The short name `place` takes.
+        self.name = str(row.get("short") or row["catalogRef"])
+        #: The stored id, and an alias `place` also takes.
+        self.catalog_ref = str(row["catalogRef"])
+        self.display_name = str(row["name"])
+        self.group = str(row["group"])
+        #: Snap taxonomy: `floor`, `truss`, `speaker`, ...
+        self.piece_kind = str(row["pieceKind"])
+        #: Whether its length is yours to choose (`length=` on `place`/`add`).
+        self.sized = bool(row.get("procedural"))
+        self.size = tuple(float(c) for c in row.get("size") or (0.0, 0.0, 0.0))
+
+    def sockets(self) -> tuple[str, ...]:
+        """Socket names, for the older `attach`/`extend` layer. The cursor
+        grammar never needs these."""
+        return tuple(str(s["name"]) for s in self._row.get("sockets") or ())
+
+    def __repr__(self) -> str:
+        length = "  length=" if self.sized else ""
+        return (
+            f"<{self.name}{length}  {self.display_name}  "
+            f"{self.size[0]:.2f}x{self.size[1]:.2f}x{self.size[2]:.2f} m>"
+        )
+
+
 class Catalog:
-    """The placeable vocabulary: node kinds, the venue's own surfaces, and every
-    catalog piece with the sockets a verb will accept on it.
+    """The structural vocabulary: every piece you can `place`, and how big it is.
 
     Read it before naming anything structural. It is the catalog's own answer,
     resolved against the shipped meshes — not a list maintained in Python.
 
-    `str(catalog)` is the page to read; `pieces` is the same entries as plain
-    records, `piece(ref)` is one of them, and `sockets(ref)` is the socket names
-    a verb will take on it.
+        print(luma.venue.catalog())
+        luma.venue.catalog()["guardrail"].size      # (along, across, up), metres
 
-    Structure only. The *lights* are a different vocabulary and a different
-    question — "which head, in which mode" rather than "which piece, on which
-    socket" — and they come from `luma.venue.fixtures()`, which is what
-    `distribute`'s `fixture` and `mode` arguments are named out of.
+    Structure only. The *lights* are the other vocabulary and the other question
+    — "which head, in which mode" rather than "which piece, how long" — and they
+    come from `luma.venue.fixtures()`.
     """
 
-    __slots__ = ("kinds", "root_sockets", "length_step_m", "pieces")
+    __slots__ = ("kinds", "root_sockets", "module_m", "pieces", "_by_name")
 
     def __init__(self, row: Mapping[str, Any]) -> None:
         self.kinds = tuple(str(k) for k in row.get("kinds") or ())
         self.root_sockets = tuple(str(k) for k in row.get("rootSockets") or ())
-        self.length_step_m = float(row.get("lengthStepM") or 0.0)
+        #: The structural module every length snaps to, metres.
+        self.module_m = float(row.get("lengthStepM") or 0.0)
         self.pieces = tuple(row.get("pieces") or ())
+        self._by_name: dict[str, CatalogPiece] = {}
+        for entry in self.pieces:
+            piece = CatalogPiece(entry)
+            for key in (piece.name, piece.catalog_ref, piece.display_name):
+                self._by_name[key.lower()] = piece
 
-    def piece(self, catalog_ref: str) -> Mapping[str, Any]:
-        """One entry, by the id `place`/`attach` take."""
-        for piece in self.pieces:
-            if piece["catalogRef"] == catalog_ref:
-                return piece
-        raise KeyError(catalog_ref)
+    def __getitem__(self, name: str) -> CatalogPiece:
+        """One piece, by short name, stored id or display name."""
+        try:
+            return self._by_name[str(name).lower()]
+        except KeyError:
+            raise KeyError(
+                f"{name!r} is not a catalog piece; try one of "
+                + ", ".join(sorted({p.name for p in self._by_name.values()}))
+            ) from None
 
-    def sockets(self, catalog_ref: str) -> tuple[str, ...]:
-        """Every socket name on one piece, mating sockets and footings alike."""
-        return tuple(s["name"] for s in self.piece(catalog_ref)["sockets"])
+    def __contains__(self, name: object) -> bool:
+        return str(name).lower() in self._by_name
+
+    def __iter__(self) -> Iterator[CatalogPiece]:
+        seen: set[str] = set()
+        for piece in self._by_name.values():
+            if piece.name not in seen:
+                seen.add(piece.name)
+                yield piece
+
+    def piece(self, name: str) -> Mapping[str, Any]:
+        """The raw catalog row, for a caller working at the socket layer."""
+        return self[name]._row
+
+    def sockets(self, name: str) -> tuple[str, ...]:
+        """Socket names on one piece — the older `attach`/`extend` layer."""
+        return self[name].sockets()
+
+    @property
+    def length_step_m(self) -> float:
+        """The module, under the name the older surface called it."""
+        return self.module_m
 
     def __str__(self) -> str:
         lines = [
-            f"kinds: {', '.join(self.kinds)}",
-            f"venue surfaces: {', '.join(self.root_sockets)}",
-            f"lengths step {self.length_step_m:g} m",
+            f"structure comes in {self.module_m:g} m modules; "
+            "speakers, players and other endpoints are exempt",
+            f"node kinds: {', '.join(self.kinds)}",
             "",
-            "  <piece>  <name>  [sockets]",
-            "  socket(m) is only ever held, (f) only ever a host, (n) either;",
-            "  socket* is a face — the kind `distribute` spreads a row along.",
-            "  span= marks a piece whose length you choose, in metres; every",
-            "  other piece is a fixed mesh and comes only in the size listed.",
+            "  <name>  <what it is>  <along x across x up, metres>",
+            "  length= marks a piece whose length you choose; every other is a",
+            "  fixed mesh and comes in the one size listed.",
             "",
         ]
-        # Grouped by palette section rather than merely *runs* of one: the
-        # catalog's own order interleaves sections, and a reader who saw
-        # "Accessories" once and moved on missed half of it.
-        sections: dict[str, list[Any]] = {}
-        for piece in self.pieces:
-            sections.setdefault(str(piece["group"]), []).append(piece)
+        sections: dict[str, list[CatalogPiece]] = {}
+        for piece in self:
+            sections.setdefault(piece.group, []).append(piece)
         for group, pieces in sections.items():
-            lines.append(f"{group}")
+            lines.append(group)
             for piece in pieces:
-                names = " ".join(
-                    f"{s['name']}({s['polarity'][0]}){'*' if s['feature'] else ''}"
-                    for s in piece["sockets"]
-                    if s["joint"] != "grab"
-                )
-                span = "  span=" if piece["procedural"] else ""
+                length = "  length=" if piece.sized else ""
                 lines.append(
-                    f"  {piece['catalogRef']}{span}  {piece['name']}  [{names}]"
+                    f"  {piece.name}{length}  {piece.display_name}  "
+                    f"{piece.size[0]:.2f} x {piece.size[1]:.2f} x {piece.size[2]:.2f}"
                 )
         return "\n".join(lines)
 
@@ -534,7 +945,7 @@ class Catalog:
 class Venue:
     """The venue binding record, with the host's camera attached."""
 
-    __slots__ = ("_values", "_host_call", "_figures", "_workspace")
+    __slots__ = ("_values", "_host_call", "_figures", "_workspace", "_cache")
 
     def __init__(
         self,
@@ -548,6 +959,9 @@ class Venue:
         object.__setattr__(self, "_host_call", host_call)
         object.__setattr__(self, "_figures", figures)
         object.__setattr__(self, "_workspace", Path(workspace))
+        #: Per-cell reads that never change under us: the catalog's vocabulary,
+        #: the library page a bare fixture name resolved to.
+        object.__setattr__(self, "_cache", {})
 
     # -- the binding record ---------------------------------------------
 
@@ -773,80 +1187,336 @@ class Venue:
         row = response.get("reach")
         return None if row is None else Reach(row)
 
+    # -- the build surface -----------------------------------------------
+
+    def toward(self, target: Any) -> Toward:
+        """A direction stated as a place: "point at that".
+
+        Accepted anywhere a direction vector is — `face=`, `direction=` — and
+        resolved against whatever the verb is measuring from, so one
+        `toward(dj_booth)` on two flanking wings is two inward vectors. Only the
+        resolved vector reaches the graph.
+
+            v.distribute("spiider", on=left, count=4, face=v.toward((0, 6)))
+        """
+        return Toward(target)
+
+    def _pieces(self) -> dict[str, str]:
+        """Every catalog name that can be `place`d, mapped to its short name.
+
+        Read once per cell and cached: `place` has to know whether it was handed
+        a structural piece or a light, and the catalog is the only thing that
+        can say. Two vocabularies, one verb — because "put that there" is one
+        thought.
+        """
+        cache = object.__getattribute__(self, "_cache")
+        if "pieces" not in cache:
+            catalog = self.catalog()
+            names: dict[str, str] = {}
+            for piece in catalog.pieces:
+                short = str(piece.get("short") or piece["catalogRef"])
+                for key in (short, str(piece["catalogRef"]), str(piece["name"])):
+                    names[key.lower()] = short
+            cache["pieces"] = names
+        return cache["pieces"]
+
+    def _chain(
+        self,
+        piece: str,
+        *,
+        tip: Tip | None = None,
+        at: Any = None,
+        on: Any = None,
+        face: Any = None,
+        direction: Any = None,
+        axis: Any = None,
+        angle: float | None = None,
+        length: float | None = None,
+        to: Any = None,
+        trim: float = 0.0,
+        label: str | None = None,
+        draft: str | None = None,
+    ) -> Cursor:
+        """One `place` or `add`. The single lowering both verbs go through."""
+        origin = list(tip.at) if tip is not None else None
+        payload: dict[str, Any] = {
+            "draftId": draft,
+            "piece": str(piece),
+            "from": None if tip is None else tip.wire(),
+            "at": None if at is None else [_finite("at[0]", at[0]), _finite("at[1]", at[1])],
+            "on": None if on is None else _node(on),
+            "face": None if face is None else _vector("face", face, origin=origin),
+            "direction": (
+                None if direction is None else _vector("direction", direction, origin=origin)
+            ),
+            "axis": None if axis is None else _vector("axis", axis),
+            "angle": None if angle is None else _finite("angle", angle),
+            "length": None if length is None else _finite("length", length),
+            "to": None if to is None else _node(to),
+            "trim": _finite("trim", trim),
+            "label": None if label is None else str(label),
+        }
+        return Cursor(self._verb("venue.chain", payload), self, draft)
+
     def place(
         self,
         piece: str,
         *,
-        at: Sequence[float] | None = None,
+        at: Any = None,
         on: Any = None,
-        surface: str | None = None,
-        socket: str | None = None,
-        kind: str = "piece",
-        yaw: float = 0.0,
+        face: Any = None,
+        direction: Any = None,
+        axis: Any = None,
+        angle: float | None = None,
+        length: float | None = None,
+        to: Any = None,
         trim: float = 0.0,
         label: str | None = None,
-        **params: Any,
-    ) -> Placement:
-        """Seat a catalog piece on a surface at `(u, v)`, metres across it.
+        mode: str | None = None,
+        draft: str | None = None,
+    ) -> Any:
+        """Put one thing in the room, anchored by its footprint **centre**.
 
-        `+u` is stage right and `+v` runs **toward the crowd**, so upstage is
-        at `-v`: a riser behind the band is at negative `v`, a barricade in
-        front of it at positive. The pair is a plan of the room, and it reads
-        the same on every surface — the floor, a deck top, and the grid a flown
-        piece hangs from all take the same `(u, v)`.
+        `piece` is a catalog short name (`"truss"`, `"deck"`, `"guardrail"` —
+        read `catalog()`) or a light (a library path, or a search term matched
+        against `fixtures()`). Structure comes back as a `Cursor` you can chain
+        off; a light comes back as a `Distribution` of one.
 
-        With no `on`, the surface is the venue's own floor — the room's ground
-        plane, which is where a rig starts. `on=<node>, surface="top"` seats it
-        on a deck instead; `surface="rig"` is the same plane as the floor facing
-        *down*, which is what a flown piece hangs from.
+            v.place("truss", at=(-5.5, 5), length=8, direction=(0, 0, 1))
+            v.place("deck", at=(0, -2))
+            v.place("dbr15", on=stage, at=(4, -1))
+            v.place("pointe", on=beam, at=2.0, face=(0, 0, -1))
 
-        `trim` is how high it flies, in metres, and it carries the whole subtree
-        with it. `yaw` is degrees about the surface normal. `socket` names the
-        piece's own footing; leaving it out lets the catalog pick the underside,
-        which is what makes "put a deck on the floor" not require knowing that a
-        deck's underside is spelled `bottom` and a stick's is spelled `seat`.
+        `at=` is the footprint centre in plan: `(u, v)` metres, `+u` stage
+        right, `+v` toward the crowd. **With `on=`** it is reframed into the
+        host: 2-D `(u, v)` across a deck top, and a single signed number on a
+        stick, metres from midspan, `0` being the middle.
 
-        Extra keywords are graph parameters — `span` for a generated stick,
-        `count`/`span` for an array. Only a piece the catalog marks `span=` has
-        a length you choose; every other entry is a fixed mesh and comes in the
-        one size the catalog lists, so an 8 m deck is decks bolted end to end,
-        not a parameter.
+        `direction=` is the way the piece runs — `(0, 0, 1)` stands a truss on
+        end as a tower, `(1, 0, 0)` lays it along stage right. `length=` is
+        metres and snaps to the 0.5 m module; the cursor's `.announce` says so
+        when it did. `trim=` is how high it flies and carries everything bolted
+        to it.
 
-        `kind` is one of `catalog().kinds` and says what the node *is* to the
-        solve, not what it looks like: `piece` (the default, anything in the
-        catalog), `stage` (a deck — a surface other things stand on), `run` (a
-        horizontal truss), `tower` (a vertical one), `array` (`count` copies
-        spread over `span`). Naming it wrong places the geometry correctly and
-        files it under the wrong noun, which is what `describe()` and the
-        derived groups then read back.
+        `face=` is a **vector** mapped to the host's nearest mounting face.
+        Beam is the mount normal, so on a light this is also where it points at
+        rest — `face=(0, 1, 0)` looks at the crowd, `(0, 0, -1)` looks down.
 
-        There is no pitch or rake in this vocabulary. `yaw` turns about the
-        surface normal and that is the only angle a placement has, so a wing
-        raked 45° out of the vertical is built as a piece bolted to a joint
-        that already turns — not as an angle on a flat placement.
-
-        Raises `VenueRefused` if nothing on the piece can rest on a surface,
-        and if `piece` is not a catalog entry.
+        Raises `luma.VenueRefused` for a name the catalog does not have (the
+        message names the near ones), a turn no joint makes (listing the legal
+        directions), and a collision (naming the node in the way).
         """
-        u, v = (0.0, 0.0) if at is None else (float(at[0]), float(at[1]))
-        return Placement(
-            self._verb(
-                "venue.place",
-                {
-                    "kind": str(kind),
-                    "catalogRef": str(piece),
-                    "label": None if label is None else str(label),
-                    "surfaceNodeId": None if on is None else _node(on),
-                    "surfaceSocket": None if surface is None else str(surface),
-                    "mySocket": None if socket is None else str(socket),
-                    "u": _finite("at[0]", u),
-                    "v": _finite("at[1]", v),
-                    "yaw": math.radians(_finite("yaw", yaw)),
-                    "trim": _finite("trim", trim),
-                    "params": _params(params),
-                },
+        if str(piece).lower() in self._pieces():
+            return self._chain(
+                piece,
+                at=at,
+                on=on,
+                face=face,
+                direction=direction,
+                axis=axis,
+                angle=angle,
+                length=length,
+                to=to,
+                trim=trim,
+                label=label,
+                draft=draft,
             )
+        # Not structure: a light, and a light is always a row of one on a host
+        # face — there is no bare insert and no self-authored pose.
+        along = 0.0 if at is None else _along(at)
+        try:
+            return self.distribute(
+                piece,
+                1,
+                on=on,
+                face=face,
+                mode=mode,
+                at=along,
+                label=label,
+                draft=draft,
+            )
+        except LumaHostCallError as error:
+            if error.code != "invalid_argument" or "no fixture in the library" not in str(error):
+                raise
+            # A name in neither vocabulary is almost always a typo in the one
+            # the caller meant, so the refusal names both rather than the half
+            # this branch happened to be standing in.
+            raise VenueRefused(
+                f"{piece!r} is neither a catalog piece nor a fixture in the library"
+                + _near(piece, self._pieces())
+                + " — read catalog() for pieces and fixtures() for heads"
+            ) from None
+
+    def tip(self, node: Any, *, end: Any = None, draft: str | None = None) -> Cursor:
+        """Grab a cursor on an existing node's free end.
+
+        `end` is the **direction** that end faces, not a name: `(0, 0, 1)` is
+        the top of a tower, `(1, 0, 0)` the stage-right end of a run. Omit it
+        where the piece has only one end open.
+
+            top = v.tip(tower, end=(0, 0, 1))
+            top.add("corner")
+
+        Raises `luma.VenueRefused` when nothing is open, and when several are
+        and none was named — the message lists them as vectors.
+        """
+        response = self._verb(
+            "venue.tip",
+            {
+                "draftId": draft,
+                "nodeId": _node(node),
+                "end": None if end is None else _vector("end", end),
+            },
         )
+        row = response.get("node") or {}
+        return Cursor(
+            {
+                "node": _node(node),
+                "at": row.get("at") or [0.0, 0.0],
+                "z": row.get("z") or 0.0,
+                "size": row.get("size") or [0.0, 0.0, 0.0],
+                "tip": response["tip"],
+                "announce": [],
+            },
+            self,
+            draft,
+        )
+
+    def nodes(
+        self,
+        *,
+        kind: str | None = None,
+        label: str | None = None,
+        on: Any = None,
+        region: Sequence[float] | None = None,
+        ids: Sequence[Any] | None = None,
+        draft: str | None = None,
+    ) -> tuple[NodeInfo, ...]:
+        """Every placed node a filter names, in the frame you build in.
+
+        No filter is the whole room. `kind` is one of `catalog().kinds`,
+        `label` is a glob (`"wing_*"`), `on` narrows to what hangs off one node
+        at any depth, and `region` is `(u_min, v_min, u_max, v_max)` against the
+        footprint centre.
+
+            for tower in v.nodes(kind="tower"):
+                print(tower.id, tower.at, tower.size)
+
+        Every field comes back in facade metres and is legal input to a write
+        verb, so read → edit → verify round-trips without arithmetic in between.
+        """
+        response = self._verb(
+            "venue.query",
+            {
+                "draftId": draft,
+                "ids": [] if ids is None else [_node(i) for i in ids],
+                "kind": None if kind is None else str(kind),
+                "label": None if label is None else str(label),
+                "on": None if on is None else _node(on),
+                "region": None if region is None else [_finite("region", r) for r in region],
+            },
+        )
+        return tuple(NodeInfo(row) for row in response["nodes"])
+
+    def extent(
+        self,
+        selection: Any = None,
+        *,
+        kind: str | None = None,
+        label: str | None = None,
+        on: Any = None,
+        region: Sequence[float] | None = None,
+        draft: str | None = None,
+    ) -> Extent | None:
+        """The span and centre of everything named — the "is it centred" check.
+
+            print(v.extent(kind="tower"))
+            print(v.extent(v.nodes(label="portal_*")))
+
+        `selection` is a node, a list of them, or anything `nodes()` returned;
+        the keyword filters are the same as `nodes()`. `None` back means nothing
+        matched.
+        """
+        ids: list[str] = []
+        if selection is not None:
+            items = selection if isinstance(selection, (list, tuple, set)) else [selection]
+            ids = [_node(item) for item in items]
+        response = self._verb(
+            "venue.extent",
+            {
+                "draftId": draft,
+                "ids": ids,
+                "kind": None if kind is None else str(kind),
+                "label": None if label is None else str(label),
+                "on": None if on is None else _node(on),
+                "region": None if region is None else [_finite("region", r) for r in region],
+            },
+        )
+        row = response.get("extent")
+        return None if row is None else Extent(row)
+
+    def draft(self, fn: Callable[..., Any] | None = None, /, **params: Any) -> "Draft":
+        """Run a component function against a scratch graph. The venue is not
+        touched.
+
+            def portal(s, width=11, height=8):
+                t = s.place("truss", at=(-width / 2, 0), length=height,
+                            direction=(0, 0, 1))
+                t = t.add("corner")
+                beam = t = t.add("truss", length=width, direction=(1, 0, 0))
+                t = t.add("corner")
+                t.add("truss", length=height, direction=(0, 0, -1))
+                s.distribute("ledbeam", on=beam, count=8, face=(0, 1, 0))
+
+            gate = v.draft(portal, width=11)
+            gate.render()          # look at it
+            print(gate.extent)     # measure it
+            v.stamp(gate, at=(0, 5))
+
+        Same verbs inside: anything buildable in a venue is draftable. Lights
+        are *recorded* rather than patched — a draft has no patch — and laid
+        when it is stamped, so a draft renders as structure.
+
+        `v.draft()` with no function hands back an empty draft to build into by
+        hand.
+        """
+        draft = Draft(self, str(self._verb("venue.draft.create", {})["draftId"]))
+        if fn is not None:
+            try:
+                fn(draft, **params)
+            except BaseException:
+                draft.discard()
+                raise
+        return draft
+
+    def stamp(
+        self,
+        draft: "Draft",
+        *,
+        at: Sequence[float] = (0.0, 0.0),
+        yaw: float = 0.0,
+        trim: float = 0.0,
+    ) -> tuple[str, ...]:
+        """Copy a draft into the venue at `at`, turned by `yaw` degrees.
+
+        The copies are ordinary rows every other verb can edit — the *function*
+        stays the source of truth, so a change to the component is a re-run and
+        re-stamp rather than an edit to seven copies. Returns the ids of the
+        pieces that landed on the room's own floor.
+
+            for i in range(7):
+                v.stamp(gate, at=(0, 5 + 6 * i))
+        """
+        response = self._verb(
+            "venue.stamp",
+            {
+                "draftId": draft.id,
+                "at": [_finite("at[0]", at[0]), _finite("at[1]", at[1])],
+                "yaw": math.radians(_finite("yaw", yaw)),
+                "trim": _finite("trim", trim),
+            },
+        )
+        return tuple(str(node) for node in response["nodes"])
 
     def attach(
         self,
@@ -977,36 +1647,50 @@ class Venue:
 
     def aim(
         self,
-        fixture: Any,
+        selection: Any,
         *,
+        direction: Any = None,
+        at: Any = None,
         pan: float | None = None,
         tilt: float | None = None,
-    ) -> Placement:
-        """Point one head, in degrees off the direction it rests in.
+    ) -> Any:
+        """Point heads. Aiming is separate from mounting.
 
-        A fixture rests along the outward normal of the socket it hangs from —
-        under a truss it points down, on the downstage face it points at the
-        house — so the first way to aim a rig is to hang it on the right face.
-        This is the second way, for the head that has to look somewhere its
-        mount does not: `tilt` swings the beam away from that normal, `pan`
-        turns it about the normal, and zero of each is rest.
+        A head rests along the outward normal of the face it hangs from — under
+        a truss it points down, on the downstage face it looks at the house — so
+        the first way to aim a rig is to hang it on the right face. This is the
+        second way.
 
-            luma.venue.aim(head, tilt=35)            # off the truss, into the room
-            luma.venue.aim(head, pan=-20, tilt=35)   # and around to stage left
+            v.aim(heads, direction=(0, 1, -0.5))   # out over the crowd, angled down
+            v.aim(heads, at=(0, 8, 0))             # at one point in the room
+            v.aim(heads, at=dj_booth)              # at a node's own centre
 
-        Both are parameters of the fixture, not of the structure, so the stored
-        pose, the beam, a POV camera and `render()`'s aim arrows all move
-        together, and duplicating a wing with `flip=True` mirrors the pan with
-        the rest of the handedness. Omitting one leaves it where it was, so
-        `aim(head, tilt=20)` does not silently un-pan the head.
+        `selection` is one fixture, a list of them, or a `Distribution`'s
+        `.fixtures`. `direction=` gives them all the same beam; `at=` gives each
+        its own, solved from where that head actually is — which is why two
+        flanking wings converge from one call.
 
-        `pan` turns about the rest direction, so which way round the room a
-        given sign points depends on the face the head hangs from — there
-        is no stage-absolute answer to quote here. Set it, then read that
-        head's `beam=` word back off `describe()`: that word *is*
-        stage-absolute (`down`, `house`, `stage-left`) and is the check
-        this verb is meant to be verified through.
+        `pan=` / `tilt=` are the lower layer, in degrees off the rest direction,
+        and they set the graph's own parameters directly. Reach for them when
+        you want a relative nudge rather than a stated aim.
+
+        The turn is a parameter of the fixture, so the stored pose, the beam,
+        a POV camera and `render()`'s arrows all move together.
         """
+        items = selection if isinstance(selection, (list, tuple, set)) else [selection]
+        nodes = [_node(item) for item in items]
+        if direction is not None or at is not None:
+            if direction is not None and at is not None:
+                raise LumaHostCallError(
+                    "invalid_argument", "aim takes a direction= or an at=, not both"
+                )
+            payload: dict[str, Any] = {"nodes": nodes, "direction": None, "at": None}
+            if direction is not None:
+                payload["direction"] = _vector("direction", direction)
+            else:
+                payload["at"] = _point3("at", at)
+            response = self._verb("venue.aim", payload)
+            return tuple(str(node) for node in response["aimed"])
         angles: dict[str, Any] = {}
         if pan is not None:
             angles["pan"] = pan
@@ -1014,9 +1698,13 @@ class Venue:
             angles["tilt"] = tilt
         if not angles:
             raise LumaHostCallError(
-                "invalid_argument", "aim needs a pan, a tilt, or both"
+                "invalid_argument",
+                "aim needs a direction=, an at=, or a pan= / tilt= in degrees",
             )
-        return self._set_params(fixture, angles, None)
+        last: Any = None
+        for node in nodes:
+            last = self._set_params(node, angles, None)
+        return last
 
     #: Every parameter quoted in degrees at this surface and held in radians in
     #: the graph. `yaw` turns a joint and lives on the edge; `pan` and `tilt`
@@ -1043,91 +1731,119 @@ class Venue:
             )
         )
 
+    def _head(self, fixture: Any, mode: str | None) -> tuple[str, str]:
+        """A library path and a mode name out of whatever the caller named.
+
+        A `LibraryFixture` from `fixtures()` is exact. A path is taken as given.
+        Anything else is **searched**, and the first match wins — which is what
+        makes `distribute("ledbeam", ...)` work at all, and why pinning the head
+        matters as soon as the choice does:
+
+            head = v.fixtures("robe spiider")[0]
+            v.distribute(head, on=beam, count=6, face=(0, 0, -1))
+        """
+        path = getattr(fixture, "path", None)
+        if isinstance(path, str):
+            modes = getattr(fixture, "modes", ())
+            return path, str(mode or (modes[0].name if modes else ""))
+        name = str(fixture)
+        if mode is not None and ("/" in name or name.endswith(".qxf")):
+            return name, str(mode)
+        cache = object.__getattribute__(self, "_cache").setdefault("heads", {})
+        if name not in cache:
+            found = self.fixtures(name, limit=1)
+            if not found:
+                raise LumaHostCallError(
+                    "invalid_argument",
+                    f"no fixture in the library answers to {name!r} — search "
+                    "`fixtures()` for one",
+                )
+            cache[name] = found[0]
+        head = cache[name]
+        return head.path, str(mode or (head.modes[0].name if head.modes else ""))
+
     def distribute(
         self,
-        host: Any,
-        socket: str,
-        fixture: str,
-        count: int,
+        fixture: Any,
+        count: int = 1,
         *,
-        mode: str,
-        layout: str = "even",
-        spacing_m: float | None = None,
+        on: Any = None,
+        face: Any = None,
+        mode: str | None = None,
+        at: Any = None,
         span: Sequence[float] | None = None,
+        spacing_m: float | None = None,
         label: str | None = None,
+        draft: str | None = None,
     ) -> Distribution:
-        """Place, name, group and patch a row of `count` fixtures along one face.
+        """Hang, name, group and patch a row of `count` lights along one face.
 
-        The only way a fixture is created with a position — there is no bare
-        insert and no self-authored pose, so a light in the room is always a
-        light on something.
+        The only way a fixture is created with a position: a light in the room
+        is always a light on something.
 
-        `host` of `None` is the venue root, whose two faces are `floor` and
-        `rig`; on a truss the faces are `face_-y`, `face_+y`, `face_-z` and
-        `face_+z`. Beam is the mount normal, so the face *is* the aim, and
-        `face_-y` is a stick's underside wherever that stick ended up: a piece
-        hangs *under* a down-facing surface rather than turning over, so one
-        flown from the `rig` plane has the same underside it had on the floor.
+            v.distribute("ledbeam", on=beam, count=8, face=(0, 1, 0))
+            v.distribute("spiider", on=beam, count=6, span=(-4, 4))
+            v.distribute(head, on=None, count=4, face=(0, 0, -1))   # off the grid
 
-        Read the beam back anyway. Every fixture line in `describe()` ends in
-        `beam=<word>` — `down`, `house`, `stage-left` — and that word is what
-        the light is actually doing, which is the one check a face name and a
-        tree of parents cannot give you.
+        `on=` is the host — `None` is the room itself, whose two faces are the
+        floor (`face=(0, 0, 1)`) and the grid above it (`face=(0, 0, -1)`).
+        `face=` is a **vector**, mapped to the host's nearest mounting face, and
+        beam is the mount normal — so the face you name is where the row points
+        at rest. Read it back: every fixture line in `describe()` ends in
+        `beam=<word>`, and that word is what the light is actually doing.
 
-        `layout` is `"even"` (the whole face), `"spacing"` with `spacing_m` (a
-        fixed centre-to-centre pitch), or `"span"` with `span=(from, to)` as
-        fractions of the face.
+        Where along the face, in **metres from midspan**, positive one way and
+        negative the other:
 
-        The result's `fixtures` are in **face order**, the order they hang
-        along the face, each carrying the `along_m` it sits at — so a fan or a
-        per-position offset indexes the row rather than guessing it. Their
-        *labels* are numbered by the naming rule, which is a different order.
-
-        `label` renames those *fixtures* — it is the prefix the minted names
-        are numbered off — and it is **not** a group name.
-        `render(highlight=...)` takes a group selection expression, and the
-        group each head landed in is on the head itself:
-        `row.fixtures[0].group_path[-1]` is the name to highlight. The
-        derivation picked it from the fixture's role and where it hangs, not
-        from anything named here.
+        - nothing  — evenly across the whole face;
+        - `span=(a, b)` — evenly across that window, clipped to the face;
+        - `spacing_m=` — a fixed centre-to-centre pitch, centred;
+        - `at=` — one mark, which is what `place(light, on=..., at=...)` uses.
 
         A row that does not fit is **not** an error: the result has `ok` false
-        and `needed_m`, the length that would make the same call succeed. Only
-        `spacing` and `span` can fail to fit; `"even"` divides whatever face it
-        is given and always fits, so a program that only ever calls the default
-        needs no retry path.
+        and `needed_m`, the length that would make the same call succeed.
+
+        Inside a draft the row is *recorded* rather than patched — a draft has
+        no patch — and laid when the draft is stamped.
         """
-        if layout == "even":
-            plan: dict[str, Any] = {"kind": "even"}
-        elif layout == "spacing":
-            if spacing_m is None:
+        chosen = [k for k, v in (("at", at), ("span", span), ("spacing_m", spacing_m)) if v is not None]
+        if len(chosen) > 1:
+            raise LumaHostCallError(
+                "invalid_argument",
+                f"a row sits one way along its face; {' and '.join(chosen)} is two",
+            )
+        if at is not None:
+            plan: dict[str, Any] = {"kind": "at", "metres": _along(at)}
+        elif span is not None:
+            if len(span) != 2:
                 raise LumaHostCallError(
-                    "invalid_argument", "layout='spacing' needs spacing_m"
-                )
-            plan = {"kind": "spacing", "metres": _finite("spacing_m", spacing_m)}
-        elif layout == "span":
-            if span is None or len(span) != 2:
-                raise LumaHostCallError(
-                    "invalid_argument", "layout='span' needs span=(from, to)"
+                    "invalid_argument", "span=(from_m, to_m), metres from midspan"
                 )
             plan = {
                 "kind": "span",
                 "from": _finite("span[0]", span[0]),
                 "to": _finite("span[1]", span[1]),
             }
+        elif spacing_m is not None:
+            plan = {"kind": "spacing", "metres": _finite("spacing_m", spacing_m)}
         else:
-            raise LumaHostCallError(
-                "invalid_argument",
-                f"layout must be 'even', 'spacing' or 'span', not {layout!r}",
-            )
+            plan = {"kind": "even"}
+        origin = None
+        if on is not None and isinstance(face, Toward):
+            found = self.nodes(ids=[on], draft=draft)
+            if found:
+                origin = [found[0].at[0], found[0].at[1], found[0].z]
+        path, mode_name = self._head(fixture, mode)
         return Distribution(
             self._verb(
                 "venue.distribute",
                 {
-                    "hostNodeId": None if host is None else _node(host),
-                    "hostSocket": None if socket is None else str(socket),
-                    "fixturePath": str(fixture),
-                    "modeName": str(mode),
+                    "draftId": draft,
+                    "hostNodeId": None if on is None else _node(on),
+                    "face": None if face is None else _vector("face", face, origin=origin),
+                    "hostSocket": None,
+                    "fixturePath": path,
+                    "modeName": mode_name,
                     "count": int(count),
                     "layout": plan,
                     "labelPrefix": None if label is None else str(label),
@@ -1142,3 +1858,109 @@ class Venue:
         except Exception:  # noqa: BLE001 - an unavailable name is not an error here
             name = None
         return f"<Venue {name!r}>" if name else "<Venue>"
+
+
+class Draft:
+    """A component being built somewhere that is not the venue yet.
+
+    Handed back by `v.draft(fn, **params)`. It carries the same build verbs as
+    the venue — `place`, `distribute`, `tip`, `nodes`, `extent` — over a scratch
+    graph with no rows and no patch, so previewing costs nothing and stamping it
+    seven times is seven copies the venue's own verbs made.
+
+        gate = v.draft(portal, width=11)
+        gate.render()              # a picture of the piece alone
+        print(gate.extent)         # its span and centre
+        print(gate.describe())     # its tree
+        v.stamp(gate, at=(0, 5))
+
+    Lights are recorded, not patched: a draft renders as structure, and the rows
+    are laid against the copies when it is stamped.
+    """
+
+    __slots__ = ("id", "_venue")
+
+    def __init__(self, venue: Venue, draft_id: str) -> None:
+        self.id = draft_id
+        self._venue = venue
+
+    # -- building, in the venue's own vocabulary --------------------------
+
+    def place(self, piece: str, **kwargs: Any) -> Any:
+        """As `luma.venue.place`, against the scratch graph."""
+        return self._venue.place(piece, draft=self.id, **kwargs)
+
+    def distribute(self, fixture: Any, count: int = 1, **kwargs: Any) -> Distribution:
+        """As `luma.venue.distribute`. The row is recorded and laid at the stamp."""
+        return self._venue.distribute(fixture, count, draft=self.id, **kwargs)
+
+    def tip(self, node: Any, **kwargs: Any) -> Cursor:
+        """As `luma.venue.tip`, on a piece this draft built."""
+        return self._venue.tip(node, draft=self.id, **kwargs)
+
+    def nodes(self, **kwargs: Any) -> tuple[NodeInfo, ...]:
+        """As `luma.venue.nodes`, over the draft alone."""
+        return self._venue.nodes(draft=self.id, **kwargs)
+
+    # -- previewing --------------------------------------------------------
+
+    @property
+    def extent(self) -> Extent | None:
+        """The draft's span and centre — the textual preview.
+
+        An attribute rather than a verb because a draft is small and finished:
+        there is nothing to narrow, and `gate.extent` is the whole question.
+        """
+        return self._venue.extent(draft=self.id)
+
+    def describe(self) -> str:
+        """The draft's tree, in the shape `luma.venue.describe()` prints, with
+        any recorded rows of lights listed under it."""
+        return str(self._venue._verb("venue.draft.describe", {"draftId": self.id})["text"])
+
+    def render(
+        self,
+        *,
+        view: str = DEFAULT_VIEW,
+        width: int = DEFAULT_WIDTH,
+        height: int = DEFAULT_HEIGHT,
+    ) -> StageImage:
+        """A picture of the draft alone: no room, no floor, no grid.
+
+        The same renderer the venue camera uses, framed on nothing but what the
+        component built — so a preview and the stamped rig cannot look like two
+        different pieces. Structure only; the lights arrive at the stamp.
+        """
+        response = self._venue._verb(
+            "venue.draft.render",
+            {
+                "draftId": self.id,
+                "view": str(view),
+                "width": _pixels("width", width),
+                "height": _pixels("height", height),
+            },
+        )
+        shot = StageImage(
+            view=str(response["view"]),
+            t=float(response["t"]),
+            width=int(response["width"]),
+            height=int(response["height"]),
+            artifact_rel=str(response["artifactRel"]),
+            workspace=object.__getattribute__(self._venue, "_workspace"),
+        )
+        figures = object.__getattribute__(self._venue, "_figures")
+        if figures is not None:
+            figures.register(shot.artifact_rel, shot.width, shot.height)
+        return shot
+
+    def discard(self) -> None:
+        """Drop the scratch graph. Nothing in the venue is touched either way —
+        a draft that is never discarded simply goes when the cell does."""
+        self._venue._verb("venue.draft.discard", {"draftId": self.id})
+
+    def __repr__(self) -> str:
+        return f"<Draft {self.id}>"
+
+    def __str__(self) -> str:
+        span = self.extent
+        return f"{self!r}\n{span}\n{self.describe()}"

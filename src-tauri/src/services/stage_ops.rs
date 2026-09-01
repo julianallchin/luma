@@ -1394,6 +1394,32 @@ impl Draft {
         )
     }
 
+    /// The socket a face vector names on one of the draft's own nodes.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] listing the faces the host does have.
+    pub fn face(&self, supply: &VenueSockets, node_id: &str, face: [f64; 3]) -> Result<String> {
+        build::Scene::new(&self.graph, &self.solved, supply)
+            .face(node_id, glam::DVec3::from(face))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
+    /// One node's free end, by the direction it faces.
+    ///
+    /// # Errors
+    /// [`StageError::Refused`] when there is no free end, or several and none
+    /// was named.
+    pub fn tip(
+        &self,
+        supply: &VenueSockets,
+        node_id: &str,
+        end: Option<[f64; 3]>,
+    ) -> Result<build::Tip> {
+        build::Scene::new(&self.graph, &self.solved, supply)
+            .tip(node_id, end.map(glam::DVec3::from))
+            .map_err(|refusal| StageError::Refused(refusal.to_string()))
+    }
+
     /// The tree as text, in the same shape a venue prints.
     #[must_use]
     pub fn describe(&self) -> String {
@@ -1407,7 +1433,13 @@ impl Draft {
         out
     }
 
-    /// The solve, for a render or a report.
+    /// The solve itself — what a render draws.
+    #[must_use]
+    pub fn solved(&self) -> &luma_scene::venue::ResolvedVenue {
+        &self.solved
+    }
+
+    /// The solve as the wire carries it, for a report.
     #[must_use]
     pub fn resolved(&self) -> ResolvedVenue {
         ResolvedVenue::from(&self.solved)

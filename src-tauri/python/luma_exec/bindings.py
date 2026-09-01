@@ -85,6 +85,23 @@ MMAP_THRESHOLD_BYTES = 4 << 20
 RECORD_REPR_ITEM_LIMIT = 8
 
 
+#: The frame every `luma.venue` verb states intent in, printed at the top of
+#: `luma.catalog()` whenever a venue is in scope.
+#:
+#: Verbatim from `docs/design/venue-authoring-api.md`. It sits in the header
+#: rather than only in a docstring because it is the one thing a builder has to
+#: know *before* reading any verb: a rig built in the wrong frame is a rig built
+#: back to front, and no amount of per-verb prose recovers that.
+VENUE_FRAME_CONTRACT = (
+    "",
+    "venue frame (every luma.venue verb states intent in it):",
+    "  +u = stage right, +v = toward the crowd, +z = up. Upstage is -v.",
+    "  Angles in degrees. Lengths in metres.",
+    "  0.5 m structural module. Speakers / CDJs / equipment are exempt —",
+    "  they are endpoints; nothing chains off them.",
+)
+
+
 class LumaBindingError(RuntimeError):
     """The manifest is malformed or an artifact does not match its declaration."""
 
@@ -667,6 +684,8 @@ class LumaNamespace(LumaRecord):
             scope_bits.append(f"window={window.get('start_s')}..{window.get('end_s')}s")
         if scope_bits:
             header.append("scope: " + "  ".join(scope_bits))
+        if scope.get("venue_id"):
+            header.extend(VENUE_FRAME_CONTRACT)
 
         available: list[str] = []
         unavailable: list[str] = []

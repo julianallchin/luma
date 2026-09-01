@@ -930,23 +930,40 @@ fn free_placement<S: NodeSockets + ?Sized>(
     let parent_world = scene
         .world(&parent)
         .ok_or_else(|| Refusal::UnknownNode(parent.clone()))?;
-    let host_name = match request.face {
-        Some(face) => scene.face(&parent, DVec3::from(face))?,
-        None if parent == scene.graph.root() => FLOOR_SOCKET.to_string(),
-        None => scene.face(&parent, DVec3::Z)?,
+    // Which face, and which footing, are one question: a deck's top and its
+    // four corners all face up, and only one of them is a joint a CDJ has a
+    // half of. Choosing the face without asking what is being put on it is how
+    // "put the player on the riser" became "nothing can be mounted here".
+    let held = held_sockets(scene, probe);
+    let wanted_face = match request.face {
+        Some(face) => three_from_facade(DVec3::from(face)).normalize_or_zero(),
+        None if parent == scene.graph.root() => three_from_facade(DVec3::Z),
+        None => three_from_facade(DVec3::Z),
     };
-    let host = host_socket(scene, &parent, &host_name)?;
+    let faces: Vec<(ResolvedSocket, DVec3)> = scene
+        .world_sockets(&parent)
+        .into_iter()
+        .filter(|(s, _, _)| s.socket_type.polarity().can_host())
+        .filter(|(s, _, _)| s.socket_type != SocketType::Grab)
+        .map(|(s, _, normal)| (s, normal))
+        .collect();
+    let host = faces
+        .iter()
+        .filter(|(s, _)| held.iter().any(|h| h.socket_type.mates(s.socket_type)))
+        .max_by(|a, b| a.1.dot(wanted_face).total_cmp(&b.1.dot(wanted_face)))
+        .map(|(s, _)| s.clone())
+        .ok_or_else(|| Refusal::NoFace {
+            node: parent.clone(),
+            offered: faces
+                .iter()
+                .map(|(_, n)| facade_from_three(*n).to_array())
+                .collect(),
+        })?;
 
-    let candidates: Vec<ResolvedSocket> = held_sockets(scene, probe)
+    let candidates: Vec<ResolvedSocket> = held
         .into_iter()
         .filter(|s| s.socket_type.mates(host.socket_type))
         .collect();
-    if candidates.is_empty() {
-        return Err(Refusal::NoFace {
-            node: parent.clone(),
-            offered: Vec::new(),
-        });
-    }
 
     let host_world = parent_world * socket_world(&host);
     let host_normal = host_world.z_axis.truncate().normalize_or_zero();
@@ -994,9 +1011,15 @@ fn free_placement<S: NodeSockets + ?Sized>(
         });
     }
 
-    // `at` is the footprint centre, so the seat is solved *backwards* from
-    // where the box ends up rather than from where the socket lands. Placing
+    // `at` is the footprint **centre**, so the seat is solved backwards from
+    // where the box ends up rather than from where the socket lands — placing
     // by the socket is what put a tower half a module off its mark.
+    //
+    // Measured in the **host surface's own plane**, which is what `on=`
+    // reframing means: `(u, v)` on a deck top is across that deck. On the
+    // venue's floor the host plane's axes *are* the facade axes, so the
+    // overwhelmingly common case reads absolutely and the two never disagree
+    // where anyone can see it.
     let bounds = scene
         .sockets
         .bounds(probe)
@@ -1008,12 +1031,21 @@ fn free_placement<S: NodeSockets + ?Sized>(
         trim: request.trim,
     };
     let at_origin = place_on(parent_world, &host, &held, probe.kind, seat);
-    let centre0 = Footprint::of(&at_origin, bounds);
-    let target = request.at.unwrap_or([centre0.at[0], centre0.at[1]]);
-    let delta = DVec3::new(target[0] - centre0.at[0], target[1] - centre0.at[1], 0.0);
-    let delta = three_from_facade(delta);
-    // `u` and `v` run along the host frame's own tangent and bitangent, so the
-    // correction is that vector read in the host frame.
+    let centre0 = Footprint::of(&at_origin, bounds).at;
+    // The host's own mark is where its `(u, v)` start, and the axes stay the
+    // **facade's**: `+u` is stage right on the floor, on a deck top and on a
+    // grid alike. A host's authored tangent is a modelling detail — a deck's
+    // happens to run toward the crowd — and letting it turn the caller's plan a
+    // quarter turn is exactly the invisible frame this API exists to kill.
+    let mark = facade_from_three(host_world.w_axis.truncate());
+    let target = request
+        .at
+        .map_or(centre0, |at| [mark.x + at[0], mark.y + at[1]]);
+    let delta = three_from_facade(DVec3::new(
+        target[0] - centre0[0],
+        target[1] - centre0[1],
+        0.0,
+    ));
     let in_host = host_world.inverse().transform_vector3(delta);
     let placement = SurfacePlacement {
         u: in_host.x,
@@ -1023,11 +1055,11 @@ fn free_placement<S: NodeSockets + ?Sized>(
     };
     let world = place_on(parent_world, &host, &held, probe.kind, placement);
     let landed = Footprint::of(&world, bounds);
-    if let Some(asked) = request.at {
-        let off = (landed.at[0] - asked[0]).hypot(landed.at[1] - asked[1]);
+    if request.at.is_some() {
+        let off = (landed.at[0] - target[0]).hypot(landed.at[1] - target[1]);
         if off > 1e-3 {
             announce.push(format!(
-                "the surface could not take the mark exactly: centred at ({:.2}, {:.2})",
+                "the surface could not take that mark: centred at ({:.2}, {:.2})",
                 landed.at[0], landed.at[1]
             ));
         }

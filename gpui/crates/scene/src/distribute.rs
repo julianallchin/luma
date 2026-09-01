@@ -17,8 +17,9 @@
 //!   inside the face rather than half off it;
 //! - [`Layout::Spacing`] fixes the *pitch* and derives the band, centred on the
 //!   segment;
-//! - [`Layout::Span`] narrows the segment to a fraction of the feature and is
-//!   then [`Layout::Even`] within it.
+//! - [`Layout::Span`] narrows the segment to a window of the feature, in metres
+//!   off its middle, and is then [`Layout::Even`] within it;
+//! - [`Layout::At`] fixes the band's *centre* and packs the bodies.
 //!
 //! — so there is one fit test and one centring rule, not three.
 //!
@@ -91,10 +92,13 @@ pub enum Layout {
     Even,
     /// A fixed centre-to-centre pitch, the band centred on the feature.
     Spacing(f64),
-    /// Evenly across the fraction `t0..t1` of the feature, `0` at the feature's
-    /// negative-tangent end. Reversed or out-of-range fractions are ordered and
-    /// clamped rather than refused — a dragged handle produces both, and
-    /// neither is a mistake anybody can act on.
+    /// Evenly across the window `a..b`, in **metres off the feature's middle**
+    /// — the same origin every other number in this module is measured from, so
+    /// `Span(-4.0, 4.0)` is the middle eight metres whatever the host's length.
+    ///
+    /// Reversed bounds are ordered and out-of-range ones are clamped to the
+    /// feature rather than refused: a dragged handle produces both, and neither
+    /// is a mistake anybody can act on.
     Span(f64, f64),
     /// Packed body to body, the band centred `metres` from the feature's
     /// **middle** — the fourth thing a caller can hold fixed, and the one that
@@ -147,9 +151,14 @@ pub fn offsets(
     // segment, so nothing below needs a second branch for the floor and every
     // layout keeps meaning what it means there.
     let band = band_length(layout, count, width);
-    let (segment_start, segment_length) = match feature.length_m {
-        Some(length) => segment(length, layout),
-        None => (-band / 2.0, band),
+    let (segment_start, segment_length) = match (feature.length_m, layout) {
+        (Some(length), _) => segment(length, layout),
+        // Nothing overruns a plane, so a window on one is exactly the window.
+        (None, Layout::Span(a, b)) => {
+            let (lo, hi) = ordered(a, b);
+            (lo, hi - lo)
+        }
+        (None, _) => (-band / 2.0, band),
     };
     if band > segment_length + FIT_EPSILON_M {
         return Err(too_long(feature, layout, band));
@@ -202,9 +211,11 @@ const FIT_EPSILON_M: f64 = 1e-9;
 fn segment(length: f64, layout: Layout) -> (f64, f64) {
     match layout {
         Layout::Even | Layout::Spacing(_) => (-length / 2.0, length),
-        Layout::Span(t0, t1) => {
-            let (lo, hi) = fractions(t0, t1);
-            (lo * length - length / 2.0, (hi - lo) * length)
+        Layout::Span(a, b) => {
+            let (lo, hi) = ordered(a, b);
+            let half = length / 2.0;
+            let (lo, hi) = (lo.clamp(-half, half), hi.clamp(-half, half));
+            (lo, hi - lo)
         }
         // The band *is* the segment: `At` says where it goes, and the fit test
         // below is then "does that land on the host", which is the only way an
@@ -213,16 +224,10 @@ fn segment(length: f64, layout: Layout) -> (f64, f64) {
     }
 }
 
-/// A span's two fractions, ordered and clamped into `0..=1`.
-fn fractions(t0: f64, t1: f64) -> (f64, f64) {
-    let clamp = |t: f64| {
-        if t.is_finite() {
-            t.clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    };
-    let (a, b) = (clamp(t0), clamp(t1));
+/// A window's two bounds, in order, with a non-finite one read as the middle.
+fn ordered(a: f64, b: f64) -> (f64, f64) {
+    let keep = |t: f64| if t.is_finite() { t } else { 0.0 };
+    let (a, b) = (keep(a), keep(b));
     if a <= b {
         (a, b)
     } else {
@@ -242,20 +247,16 @@ fn band_length(layout: Layout, count: usize, width: f64) -> f64 {
 
 /// The refusal: how long the whole feature would have to be for this band.
 ///
-/// A `Span` distribution asked for a fraction of the feature, so its need is
-/// scaled back up by that fraction — extending a truss to the band's length
-/// would not help when the caller only offered it a quarter of the truss.
+/// A `Span` names a window in metres, so lengthening the host only helps while
+/// the window is still hanging off the end of it — past that the fix is a wider
+/// window, and the number reported is the length that at least stops clipping.
 fn too_long(feature: Feature, layout: Layout, band: f64) -> Fit {
     let available = feature.length_m.unwrap_or(f64::INFINITY);
     let whole = match layout {
         Layout::Even | Layout::Spacing(_) | Layout::At(_) => band,
-        Layout::Span(t0, t1) => {
-            let (lo, hi) = fractions(t0, t1);
-            if hi - lo > 0.0 {
-                band / (hi - lo)
-            } else {
-                f64::INFINITY
-            }
+        Layout::Span(a, b) => {
+            let (lo, hi) = ordered(a, b);
+            (2.0 * lo.abs().max(hi.abs())).max(band)
         }
     };
     Fit::TooLong {
@@ -281,7 +282,7 @@ mod tests {
     /// rather than a literal is what keeps this a measurement.
     #[test]
     fn every_layout_centres_its_row_inside_the_feature() {
-        for layout in [Layout::Even, Layout::Spacing(0.4), Layout::Span(0.0, 1.0)] {
+        for layout in [Layout::Even, Layout::Spacing(0.4), Layout::Span(-2.0, 2.0)] {
             for count in 1..=8 {
                 let row = spread(4.0, layout, count).expect("four metres holds eight bodies");
                 assert_eq!(row.len(), count);
@@ -304,7 +305,7 @@ mod tests {
 
     #[test]
     fn one_body_sits_in_the_middle() {
-        for layout in [Layout::Even, Layout::Spacing(0.6), Layout::Span(0.0, 1.0)] {
+        for layout in [Layout::Even, Layout::Spacing(0.6), Layout::Span(-2.0, 2.0)] {
             let row = spread(4.0, layout, 1).unwrap();
             assert!(
                 row[0].abs() < 1e-9,
@@ -349,18 +350,30 @@ mod tests {
     /// A span is the same rule over a sub-segment: the row's midpoint moves to
     /// the sub-segment's midpoint, not the feature's.
     #[test]
-    fn a_span_lays_out_inside_its_fraction() {
-        let row = spread(4.0, Layout::Span(0.5, 1.0), 3).unwrap();
+    fn a_span_lays_out_inside_its_window() {
+        // The outer half of a four-metre face: metres off the middle, like
+        // every other number here.
+        let row = spread(4.0, Layout::Span(0.0, 2.0), 3).unwrap();
         let midpoint = (row[0] + row[2]) / 2.0;
         assert!((midpoint - 1.0).abs() < 1e-9, "{row:?}");
         assert!(row[0] >= 0.0 - 1e-9 && row[2] <= 2.0 + 1e-9, "{row:?}");
     }
 
+    /// A window wider than the host is clipped to it rather than refused: the
+    /// caller asked for "as much of the middle as there is".
+    #[test]
+    fn a_span_wider_than_the_feature_is_the_feature() {
+        assert_eq!(
+            spread(4.0, Layout::Span(-50.0, 50.0), 4).unwrap(),
+            spread(4.0, Layout::Even, 4).unwrap()
+        );
+    }
+
     #[test]
     fn a_reversed_span_is_the_span_it_names() {
         assert_eq!(
-            spread(4.0, Layout::Span(1.0, 0.5), 3).unwrap(),
-            spread(4.0, Layout::Span(0.5, 1.0), 3).unwrap()
+            spread(4.0, Layout::Span(2.0, 0.0), 3).unwrap(),
+            spread(4.0, Layout::Span(0.0, 2.0), 3).unwrap()
         );
     }
 
@@ -377,7 +390,10 @@ mod tests {
     /// count rather than for the one somebody picked.
     #[test]
     fn the_stated_need_is_what_makes_the_call_succeed() {
-        for layout in [Layout::Even, Layout::Spacing(0.7), Layout::Span(0.25, 0.75)] {
+        // `Span` is deliberately absent: its window is metres rather than a
+        // fraction, so a host that grew would still offer the same window and
+        // the property this sweeps for is not one it claims.
+        for layout in [Layout::Even, Layout::Spacing(0.7)] {
             for count in 2..=12 {
                 let short = Feature::bounded(1.0, PANEL);
                 let Err(Fit::TooLong {
@@ -425,16 +441,15 @@ mod tests {
     /// A span asked for a quarter of the feature, so extending it to the band's
     /// own length would still leave the band overrunning that quarter.
     #[test]
-    fn a_spans_need_is_scaled_back_to_the_whole_feature() {
-        let Err(Fit::TooLong { needed_m, .. }) = offsets(
-            Feature::bounded(2.0, None),
-            Layout::Span(0.0, 0.25),
-            4,
-            0.25,
-        ) else {
-            panic!("four 0.25 m bodies do not fit in half a metre");
+    fn a_span_hanging_off_the_end_asks_for_the_length_that_holds_it() {
+        // A window from 1 m to 3 m off the middle needs a six-metre face to be
+        // fully on the host at all.
+        let Err(Fit::TooLong { needed_m, .. }) =
+            offsets(Feature::bounded(2.0, None), Layout::Span(1.0, 3.0), 4, 0.25)
+        else {
+            panic!("the window hangs off a two-metre face");
         };
-        assert!((needed_m - 4.0).abs() < 1e-9, "{needed_m}");
+        assert!((needed_m - 6.0).abs() < 1e-9, "{needed_m}");
     }
 
     /// The floor is a plane. Nothing overruns it, at any count or pitch.
