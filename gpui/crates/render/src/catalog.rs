@@ -13,7 +13,7 @@
 
 use crate::assets::Library;
 use crate::scene_desc::Procedural;
-use crate::truss::{Corner, Face, FaceSet};
+use crate::truss::{Face, FaceSet};
 use glam::{DVec3, Mat4, Vec3};
 use luma_scene::aabb::DAabb;
 use luma_scene::catalog::{pieces, Family, Geometry, Part, Piece, Rest};
@@ -60,30 +60,43 @@ pub fn default_params(family: Family) -> Procedural {
 /// different face because a sibling was opened.
 #[must_use]
 pub fn procedural_sockets(params: Procedural) -> Vec<ResolvedSocket> {
-    let names: Vec<String> = match params {
+    // Name and frame together: which faces a family offers and where they are
+    // is one decision per face, and splitting it into two parallel lists is
+    // how the two came to disagree.
+    let ends: Vec<(String, crate::truss::EndFrame)> = match params {
+        // **Every plate, not only the ways.** All six faces of a block are
+        // plated (`Corner::plates`) — an open one merely adds a coupler — and a
+        // plate is exactly what a stick bolts to. Naming only the ways left a
+        // corner with one free socket the moment it was itself mounted, so
+        // "put the next run on *that* face" had no face to point at.
+        Procedural::Corner { .. } => Face::ALL
+            .into_iter()
+            .map(|face| (face_socket_name(face), face.frame()))
+            .collect(),
         // The two ends of a stick, named as the ripped truss GLBs named them,
         // so a venue built before the generator landed still reads.
-        Procedural::Truss { .. } => vec!["end_a".into(), "end_b".into()],
-        Procedural::Corner { faces } => Corner::new(faces)
-            .faces()
-            .iter()
-            .map(face_socket_name)
-            .collect(),
-        Procedural::Hinge { .. } => vec!["leaf_fixed".into(), "leaf_swinging".into()],
+        Procedural::Truss { .. } | Procedural::Hinge { .. } => {
+            let names: Vec<String> = if matches!(params, Procedural::Truss { .. }) {
+                vec!["end_a".into(), "end_b".into()]
+            } else {
+                vec!["leaf_fixed".into(), "leaf_swinging".into()]
+            };
+            let frames = params.end_frames();
+            debug_assert_eq!(
+                names.len(),
+                frames.len(),
+                "socket names and end frames must agree; both walk the generator's face order"
+            );
+            names.into_iter().zip(frames).collect()
+        }
     };
-    let frames = params.end_frames();
-    debug_assert_eq!(
-        names.len(),
-        frames.len(),
-        "socket names and end frames must agree; both walk the generator's face order"
-    );
 
     let grab =
         ResolvedSocket::from_frame("grab", SocketType::Grab, DVec3::ZERO, DVec3::Y, DVec3::X);
     std::iter::once(grab)
-        .chain(names.iter().zip(frames).map(|(name, f)| {
+        .chain(ends.into_iter().map(|(name, f)| {
             ResolvedSocket::from_frame(
-                name,
+                &name,
                 SocketType::TrussEnd,
                 f.position.as_dvec3(),
                 f.normal.as_dvec3(),
@@ -660,14 +673,17 @@ mod tests {
         for piece in pieces() {
             let resolved = sockets.sockets(piece.id);
             let want = if piece.geometry.is_procedural() {
-                // grab + one per open face + the stick's four mount sides.
+                // grab + one bolt face per face the family offers + the
+                // stick's four mount sides + its footings. A block offers all
+                // six of its plates; a stick and a hinge offer their ends.
                 match piece.geometry {
                     Geometry::Procedural(f) => {
                         let params = default_params(f);
-                        params.end_frames().len()
-                            + 1
-                            + mount_faces(params).len()
-                            + footings(params).len()
+                        let bolt_faces = match f {
+                            Family::Corner => Face::ALL.len(),
+                            Family::Truss | Family::Hinge => params.end_frames().len(),
+                        };
+                        bolt_faces + 1 + mount_faces(params).len() + footings(params).len()
                     }
                     Geometry::Mesh { .. } | Geometry::Assembly(_) => unreachable!(),
                 }
@@ -708,13 +724,27 @@ mod tests {
         );
     }
 
+    /// A block offers all six of its plates, whichever of them are open ways.
+    /// Its ways are where the lattice runs through; every face is still a
+    /// plate, and a plate is what the next stick bolts to — so which face a
+    /// run leaves on is a thing the pointer can choose.
     #[test]
-    fn corner_socket_names_follow_the_open_faces() {
-        let sockets = procedural_sockets(Procedural::Corner {
-            faces: FaceSet::of([Face::NegX, Face::PosY, Face::PosZ]),
-        });
-        let names: Vec<&str> = sockets.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["grab", "face_-x", "face_+y", "face_+z", "seat"]);
+    fn a_corner_offers_every_plate_not_only_its_ways() {
+        let names = |faces| -> Vec<String> {
+            procedural_sockets(Procedural::Corner { faces })
+                .iter()
+                .map(|s| s.name.clone())
+                .collect()
+        };
+        let all = [
+            "grab", "face_-x", "face_+x", "face_-y", "face_+y", "face_-z", "face_+z", "seat",
+        ];
+        assert_eq!(
+            names(FaceSet::of([Face::NegX, Face::PosY, Face::PosZ])),
+            all
+        );
+        // The ways change the mesh, never the faces on offer.
+        assert_eq!(names(FaceSet::THROUGH), all);
     }
 
     /// Two generated pieces mate through the same socket vocabulary the GLB

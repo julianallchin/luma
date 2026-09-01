@@ -148,9 +148,13 @@ on the downstage truss" is not expressible.
   inline edit, then place mode, then nothing held. **No empty game objects** — the
   parent piece *is* the group.
 - **Nothing on screen is a label for state.** No "Hand:", no socket list, no
-  "distribute onto …". The host is whatever the cursor is over; beads, the
-  measurement gizmo and the ghost are the indicators, and they are drawn *in the
-  picture*. Controls may live in the 3D view — `scene_desc::Editor` and
+  "distribute onto …". The host is whatever the cursor is over, chosen by the
+  pointer's own pixel; the ghost, the one mark on the joint it has latched and
+  the measurement gizmo are the indicators, and they are drawn *in the picture*.
+  At rest the selected piece wears dots on its open sockets — that is where a
+  run is begun. Socket marks are *positions*, never a second pick system: they
+  are not nudged off their socket and they do not aim by name.
+  Controls may live in the 3D view — `scene_desc::Editor` and
   `render/src/overlay.rs` are extended to carry them rather than a chrome panel
   growing a mirror of the scene. The standard is clean, elegant, minimal: if the
   picture can show it, no label also says it, and a control that does not apply to

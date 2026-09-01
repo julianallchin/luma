@@ -23,10 +23,17 @@ no longer has. Selection survives a re-solve exactly when the object does.
 
 `PickSnapshot` (the BVH over the displayed frame) answers every "what is under
 the pointer" question: click select, marquee anchors, gizmo grab, hover, and
-the placement ray (`Visualizer::stage_cursor`). The element layer's beads are
-*aiming affordances for named sockets*, not a second pick system — their
-hitboxes exist because a raised socket is metres from where the cursor's ray
-lands, never because the room is otherwise unclickable.
+the placement ray (`Visualizer::stage_cursor`).
+
+**Which socket a gesture means is decided in pixels.** `solve_snap` scores host
+sockets by their distance from the pointer *on screen*, with depth as the
+tiebreak between two on one pixel (`luma_scene::snap::Aim`, `ATTACH_PX` /
+`DETACH_PX`); the mate itself stays world-space. Scoring it in metres made
+adjacent deck corners 0.7 m apart a coin toss that the 0.8 m detach radius then
+welded shut. The element layer's socket marks are *positions*, not a second
+pick system: they are never nudged off their socket, they never aim by name,
+and a press on one is a press on the room at that pixel. Their one own gesture
+is the joint's context menu.
 
 A face hit resolves to the piece's **named** face socket
 (`Room::face_socket_for`), because the graph's edges name sockets: a landing
@@ -87,5 +94,8 @@ bug, and it will pass every logic test while looking broken.
 ## Affordances live with their depth
 
 In-scene marks are depth-tested with a faint x-ray pass (beads), so occlusion
-reads truthfully without losing the joint. Chrome that is *about the window*
+reads truthfully without losing the joint. While a piece is held there is
+exactly **one** — the joint the ghost has latched. A field of dots over every
+open socket says nothing the ghost is not already saying, and it made the
+pointer dodge two dozen hitboxes to reach the room. Chrome that is *about the window*
 (the add-element dialog) anchors to the window, not to the page's box.

@@ -1604,6 +1604,19 @@ impl Visualizer {
         Some(coords::three_pose_from_data(piece.pos, piece.rot).as_dmat4())
     }
 
+    /// The eye the room is being drawn through — and therefore the one the
+    /// builder projects sockets with, so a mark and a pointer are talking
+    /// about the same pixel.
+    pub(crate) fn camera(&self) -> Camera {
+        self.camera
+    }
+
+    /// The viewport's own laid-out bounds. Laid out — and recorded — whether
+    /// or not a renderer exists, which is what a headless aim depends on.
+    pub(crate) fn stage_pane(&self) -> Bounds<Pixels> {
+        self.stage.borrow().pane
+    }
+
     /// Where the pointer is aiming in the room, in the socket layer's frame:
     /// the mesh face under it when a frame is on screen, the floor plane when
     /// none is — which is the state a headless run is always in.

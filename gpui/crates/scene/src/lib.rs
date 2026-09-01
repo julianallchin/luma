@@ -55,7 +55,7 @@ pub use graph::{
     MaterialHandle, MeshHandle, Node, NodeContent, NodeFlags, NodeId, SceneGraph, Transform,
 };
 pub use selection::Selection;
-pub use snap::{solve_snap, ScenePiece, SnapInput, SnapMatch, SnapResult, SnapSurface};
+pub use snap::{solve_snap, Aim, ScenePiece, SnapInput, SnapMatch, SnapResult, SnapSurface};
 pub use sockets::{
     BboxAnchor, Polarity, ResolvedSocket, RollFreedom, SocketDef, SocketKind, SocketMode,
     SocketType,
