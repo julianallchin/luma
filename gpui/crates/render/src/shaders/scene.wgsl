@@ -191,10 +191,17 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     // texel's depth error reaches.
     //
     // Faded in as the light comes down rather than applied throughout: every
-    // captured frame this renderer is held to was lit from above thirty-five
-    // degrees, where the constant they were tuned with is already right, and a
-    // bias that moved under them would be a change of contract dressed as a
-    // fix. `dir_to_light.z` is the sun's own elevation — world Z is up.
+    // captured frame this renderer is held to is lit by `DirectionalLight`'s
+    // editor key, whose elevation is `z = 0.768`, and the constant they were
+    // tuned with is already right there. A bias that moved under them would be
+    // a change of contract dressed as a fix, so the ramp closes *below* that
+    // key and the tracked images cannot see it. Everything under it can: a sun
+    // at thirty degrees over a ground plane that runs to the horizon rippled
+    // the far half of every open-air frame with concentric acne, because at a
+    // tenth of this correction a hundred-and-eighty-metre cascade's texel is
+    // wider than the depth it is comparing.
+    //
+    // `dir_to_light.z` is the sun's own elevation — world Z is up.
     let matrix = globals.light_view_proj[cascade];
     let texel = globals.params.y;
     let radius = clamp(globals.dir_color.w, 0.0, 3.0);
@@ -205,7 +212,7 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
         2.0 * texel / max(length(vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x)), 1e-6);
     let cos_nl = clamp(dot(n, globals.dir_to_light.xyz), 0.0, 1.0);
     let tangent = clamp(sqrt(1.0 - cos_nl * cos_nl) / max(cos_nl, 0.02), 1.0, 200.0);
-    let low_sun = 1.0 - smoothstep(0.30, 0.55, globals.dir_to_light.z);
+    let low_sun = 1.0 - smoothstep(0.40, 0.75, globals.dir_to_light.z);
     let grazing = max(0.01, world_texel * 0.35 * tangent);
     let biased = world + n * mix(0.01, grazing, low_sun);
     let clip = globals.light_view_proj[cascade] * vec4<f32>(biased, 1.0);
