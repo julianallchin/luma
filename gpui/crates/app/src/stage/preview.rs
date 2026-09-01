@@ -107,6 +107,9 @@ fn render_all() {
             // The subject alone: the venue's 200 m ground plane would read as
             // a horizon in a 300-pixel card.
             render.show_floor = false;
+            // Nor is a card a room: a piece the palette shows at head height
+            // is not flown, it is just posed for the picture.
+            render.show_cables = false;
             render.environment.background = background;
             Scene {
                 id: format!("preview-{}", piece.id),

@@ -860,6 +860,7 @@ pub struct Gpu {
     /// format.
     composite_pipelines: [wgpu::RenderPipeline; 2],
     grid_pipeline: wgpu::RenderPipeline,
+    cable_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`overlay_pipeline_index`]: the two output formats crossed
     /// with two topologies and two depth behaviours.
     overlay_pipelines: [wgpu::RenderPipeline; 8],
@@ -1218,6 +1219,11 @@ impl Gpu {
             "grid",
             &format!("{bindings}{}", include_str!("shaders/grid.wgsl")),
         );
+        let cable_module = shader(
+            &device,
+            "cables",
+            &format!("{bindings}{}", include_str!("shaders/cables.wgsl")),
+        );
 
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1301,6 +1307,7 @@ impl Gpu {
         });
 
         let grid_vertex_layout = vertex_layout.clone();
+        let cable_vertex_layout = vertex_layout.clone();
         // The fixture shadow pass binds only what its vertex stage reads:
         // per-map globals, the instance table, and the mesh-bucketed caster
         // index list. Borrowing the full scene layout meant one material
@@ -1480,6 +1487,39 @@ impl Gpu {
             cache: None,
         });
 
+        // The grid's own state, with the grid's shader swapped out: both are
+        // transparent scene-space affordances that test depth and never write
+        // it, and a second blend or depth choice here would be a second answer
+        // to the same question.
+        let cable_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cables"),
+            layout: Some(&scene_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &cable_module,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(cable_vertex_layout)],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cable_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(depth_state(false)),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
         let overlay_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("overlay"),
             entries: &[
@@ -1647,6 +1687,7 @@ impl Gpu {
             temporal_pipeline,
             composite_pipelines,
             grid_pipeline,
+            cable_pipeline,
             overlay_pipelines,
             hard_shadow_sampler,
             shadow_sampler,
@@ -2679,7 +2720,7 @@ impl Renderer {
                 )
             })
             .collect();
-        let opaque = frame.draws.len() - frame.grid_draws;
+        let opaque = frame.draws.len() - frame.transparent.len();
         let caster_hash = fixture_shadow_caster_hash(frame, opaque);
         let fixture_shadow_keys: Vec<_> = fixture_shadow_matrices
             .iter()
@@ -3074,9 +3115,12 @@ impl Renderer {
                 pass.set_bind_group(2, &environment_bg, &[]);
                 pass.set_bind_group(3, &cluster_bg, &[]);
                 draw_range(&mut pass, &all_opaque, true);
-                if frame.grid_draws > 0 {
-                    pass.set_pipeline(&self.gpu.grid_pipeline);
-                    draw_range(&mut pass, &transparent, true);
+                for (slot, kind) in frame.transparent.iter().enumerate() {
+                    pass.set_pipeline(match kind {
+                        crate::frame::Transparent::Grid => &self.gpu.grid_pipeline,
+                        crate::frame::Transparent::Cables => &self.gpu.cable_pipeline,
+                    });
+                    draw_range(&mut pass, &transparent[slot..=slot], true);
                 }
             }
         }
@@ -4147,7 +4191,7 @@ mod tests {
                 textures: MaterialTextures::default(),
                 editor_object: None,
             }],
-            grid_draws: 0,
+            transparent: Vec::new(),
             gizmo_pivot: None,
             overlays: Vec::new(),
             point_lights: Vec::new(),
@@ -4233,7 +4277,7 @@ mod tests {
             meshes: vec![mesh],
             images: Vec::new(),
             draws,
-            grid_draws: 0,
+            transparent: Vec::new(),
             gizmo_pivot: None,
             overlays: vec![Overlay {
                 mesh: 0,

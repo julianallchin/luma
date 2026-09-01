@@ -163,17 +163,32 @@ pub struct EnvironmentImage {
     pub visible: bool,
 }
 
+/// Which pipeline paints one transparent draw.
+///
+/// Declared in paint order: the grid lies on the floor and the cables hang in
+/// the room over it, so a cable blends over a grid line rather than under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transparent {
+    /// The fading editor ground grid, `shaders/grid.wgsl`.
+    Grid,
+    /// Rigging cables, `shaders/cables.wgsl`.
+    Cables,
+}
+
 /// Everything one output frame needs, resolved to world space.
 pub struct Frame {
     /// Deduplicated geometry referenced by [`Draw::mesh`].
     pub meshes: Vec<MeshData>,
     /// Deduplicated material images referenced by [`Draw::textures`].
     pub images: Vec<Texture>,
-    /// Opaque draws first, then the trailing `grid_draws` transparent ones.
-    /// Depth-only passes take the opaque prefix; the grid never writes depth.
+    /// Opaque draws first, then one draw per entry of `transparent`, in that
+    /// order. Depth-only passes take the opaque prefix; nothing in the tail
+    /// writes depth.
     pub draws: Vec<Draw>,
-    /// Count of trailing `Grid`-material draws in `draws` (0 or 1 today).
-    pub grid_draws: usize,
+    /// The pipeline each trailing transparent draw is painted with, in paint
+    /// order. One list rather than a count per kind: a second count is a
+    /// second definition of where the opaque prefix ends.
+    pub transparent: Vec<Transparent>,
     /// Editor affordances, in paint order, after every lit draw.
     pub overlays: Vec<Overlay>,
     /// World point the transform gizmo in `overlays` stands on, if one is
@@ -246,6 +261,12 @@ pub(crate) struct Bank {
 }
 
 impl Bank {
+    /// The interned geometry, for a caller that needs to measure what it just
+    /// built rather than draw it.
+    pub(crate) fn meshes(&self) -> &[MeshData] {
+        &self.meshes
+    }
+
     pub(crate) fn insert(&mut self, key: String, build: impl FnOnce() -> MeshData) -> usize {
         let identity = key.clone();
         intern(&mut self.meshes, &mut self.mesh_keys, key, || {
@@ -819,6 +840,7 @@ pub fn build_with(
     }
 
     // --- stage pieces ------------------------------------------------------
+    let mut bodies = crate::cables::Bodies::default();
     for piece in &scene.pieces {
         // Attached pieces arrive already flattened into world poses (see
         // `flatten_pieces` app-side), so a piece's pose here is never relative
@@ -827,7 +849,12 @@ pub fn build_with(
             * three_pose_from_data(piece.pos, piece.rot)
             * Mat4::from_scale(Vec3::splat(piece.scale));
         let object = Some(EditorObject::StagePiece(piece.id.clone()));
+        let placed = draws.len();
         draws.extend(piece_draws(&piece.geometry, root, lib, &mut bank, object)?);
+        // Measured off the draws rather than the catalog: an assembly's real
+        // extent is its parts at their layout transforms, which is exactly
+        // what was just built.
+        bodies.add(&draws[placed..], bank.meshes());
     }
 
     let camera = Camera {
@@ -836,16 +863,31 @@ pub fn build_with(
         fov_y_deg: scene.render.fov,
     };
 
-    // The fading grid is an editor affordance, independent of environment
-    // lighting, and transparent — hence the tail slot after every opaque draw.
-    let grid_draws = usize::from(scene.render.show_grid);
+    // The grid and the cables are transparent, so they trail every opaque
+    // draw, in the paint order `Transparent` declares.
+    let mut transparent = Vec::new();
     if scene.render.show_grid {
+        transparent.push(Transparent::Grid);
         draws.push(Draw {
             mesh: floor,
             textures: MaterialTextures::default(),
             model: to_world
                 * Mat4::from_translation(Vec3::new(0.0, 0.002, 0.0))
                 * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            material: Material::default(),
+            editor_object: None,
+        });
+    }
+    if let Some(cables) = scene.render.show_cables.then(|| bodies.mesh()).flatten() {
+        transparent.push(Transparent::Cables);
+        // World space, hence the identity model: the drops were solved from
+        // the pieces' world boxes, and posing them back through a piece's
+        // frame would be a round trip with nothing at the far end.
+        let mesh = bank.insert(cables.key.clone(), || cables);
+        draws.push(Draw {
+            mesh,
+            textures: MaterialTextures::default(),
+            model: Mat4::IDENTITY,
             material: Material::default(),
             editor_object: None,
         });
@@ -888,7 +930,7 @@ pub fn build_with(
         meshes: bank.meshes,
         images: bank.images,
         draws,
-        grid_draws,
+        transparent,
         gizmo_pivot,
         point_lights,
         fixture_cones,
