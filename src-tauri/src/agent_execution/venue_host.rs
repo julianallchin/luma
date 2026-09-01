@@ -448,10 +448,22 @@ impl VenueHost {
         self.placed(report).await
     }
 
-    /// Delete a node and everything structural under it. Its fixtures are
+    /// Delete nodes and everything structural under them. Their fixtures are
     /// trayed, not deleted — the same rule the page's context menu follows.
-    async fn remove(&self, request: NodeRequest) -> Result<Value, HostCallError> {
-        self.stage().delete_subtree(&request.node_id).await?;
+    ///
+    /// A node that is not there is **satisfied**: removing a subtree removes
+    /// everything under it, so a caller holding a list of ids from before is
+    /// naming nodes that have already reached the state it asked for. Erroring
+    /// on those would make "delete these six" a call nobody can write.
+    async fn remove(&self, request: RemoveRequest) -> Result<Value, HostCallError> {
+        for node_id in &request.node_ids {
+            match self.stage().delete_subtree(node_id).await {
+                Ok(_) => {}
+                Err(StageError::Refused(message)) if message.contains("not in this venue") => {}
+                Err(StageError::NotFound(_)) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(json!({ "describe": self.stage().describe().await? }))
     }
 
@@ -491,7 +503,7 @@ impl VenueHost {
             // stamp: the caller is standing in front of the piece it just
             // built, and that is where the fix is cheapest.
             draft.face(supply, &host, face)?;
-            draft.record(crate::services::stage_ops::PendingRow {
+            let row = draft.record(crate::services::stage_ops::PendingRow {
                 host,
                 face,
                 fixture_path: request.fixture_path.clone(),
@@ -499,9 +511,11 @@ impl VenueHost {
                 count: request.count,
                 layout: request.layout,
                 label_prefix: request.label_prefix.clone(),
+                aim: None,
             });
             return Ok(json!({
                 "report": {
+                    "draftRow": row,
                     "fixtures": [],
                     "refusal": Value::Null,
                     "warnings": [
@@ -510,7 +524,7 @@ impl VenueHost {
                     "dangling": [],
                     "unplaced": [],
                 },
-                "describe": draft.describe(),
+                "describe": draft.describe(supply),
             }));
         }
         let socket = match (request.face, request.host_socket.clone()) {
@@ -553,7 +567,7 @@ impl VenueHost {
             let mut drafts = self.drafts();
             let draft = Self::draft_mut(&mut drafts, draft_id)?;
             let built = draft.chain(supply, &plan)?;
-            let text = draft.describe();
+            let text = draft.describe(supply);
             return Ok(built_json(&built, &text));
         }
         let built = self.stage().chain(&plan).await?;
@@ -598,7 +612,7 @@ impl VenueHost {
     async fn tip(&self, request: TipRequest) -> Result<Value, HostCallError> {
         let end = request.end;
         let filter = Filter {
-            ids: vec![request.node_id.clone()],
+            ids: Some(vec![request.node_id.clone()]),
             ..Filter::default()
         };
         if let Some(id) = request.draft_id.as_deref() {
@@ -684,9 +698,57 @@ impl VenueHost {
         Ok(json!({}))
     }
 
+    /// Point a row of lights a draft recorded. See
+    /// [`crate::services::stage_ops::PendingRow::aim`].
+    fn draft_aim(&self, request: DraftAimRequest) -> Result<Value, HostCallError> {
+        let target = match (request.direction, request.at) {
+            (Some(direction), None) => AimTarget::Direction(direction),
+            (None, Some(at)) => AimTarget::At(at),
+            _ => {
+                return Err(HostCallError::new(
+                    "invalid_argument",
+                    "aim takes a direction= or an at=, and exactly one of them",
+                ))
+            }
+        };
+        let mut drafts = self.drafts();
+        let draft = Self::draft_mut(&mut drafts, &request.draft_id)?;
+        for row in &request.rows {
+            draft.aim(
+                *row,
+                match target {
+                    AimTarget::Direction(d) => AimTarget::Direction(d),
+                    AimTarget::At(p) => AimTarget::At(p),
+                },
+            )?;
+        }
+        Ok(json!({ "aimed": request.rows.len() }))
+    }
+
+    /// Drop a piece and everything on it from a draft.
+    fn draft_remove(&self, request: DraftNodesRequest) -> Result<Value, HostCallError> {
+        let supply = self.supply()?;
+        let mut drafts = self.drafts();
+        let draft = Self::draft_mut(&mut drafts, &request.draft_id)?;
+        for node_id in &request.node_ids {
+            draft.remove(supply, node_id);
+        }
+        Ok(json!({ "text": draft.describe(supply) }))
+    }
+
+    /// Edit one of a draft's own nodes.
+    fn draft_params(&self, request: DraftParamsRequest) -> Result<Value, HostCallError> {
+        let supply = self.supply()?;
+        let mut drafts = self.drafts();
+        let draft = Self::draft_mut(&mut drafts, &request.draft_id)?;
+        draft.set_params(supply, &request.node_id, &request.params)?;
+        Ok(json!({ "text": draft.describe(supply) }))
+    }
+
     fn draft_describe(&self, request: DraftRequest) -> Result<Value, HostCallError> {
         let drafts = self.drafts();
-        Ok(json!({ "text": Self::draft(&drafts, &request.draft_id)?.describe() }))
+        let supply = self.supply()?;
+        Ok(json!({ "text": Self::draft(&drafts, &request.draft_id)?.describe(supply) }))
     }
 
     /// A picture of the draft alone: the same render path, framed on nothing
@@ -867,6 +929,9 @@ impl HostCallHandler for VenueHost {
                     "venue.draft.create" => self.draft_create(),
                     "venue.draft.discard" => self.draft_discard(decode(payload)?),
                     "venue.draft.describe" => self.draft_describe(decode(payload)?),
+                    "venue.draft.aim" => self.draft_aim(decode(payload)?),
+                    "venue.draft.remove" => self.draft_remove(decode(payload)?),
+                    "venue.draft.params" => self.draft_params(decode(payload)?),
                     "venue.draft.render" => self.draft_render(decode(payload)?).await,
                     _ => Err(HostCallError::new(
                         "unknown_method",
@@ -1045,6 +1110,14 @@ struct NodeRequest {
     node_id: String,
 }
 
+/// The nodes a `remove` names. A list, because a removal is a *goal state* and
+/// the goal is usually a selection.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoveRequest {
+    node_ids: Vec<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReachRequest {
@@ -1210,8 +1283,10 @@ impl ChainRequest {
 #[serde(rename_all = "camelCase")]
 struct QueryRequest {
     draft_id: Option<String>,
+    /// The nodes named outright. Absent narrows nothing; **present and empty**
+    /// is a selection of nothing, and answers with nothing.
     #[serde(default)]
-    ids: Vec<String>,
+    ids: Option<Vec<String>>,
     kind: Option<String>,
     label: Option<String>,
     on: Option<String>,
@@ -1252,6 +1327,32 @@ struct AimRequest {
 #[serde(rename_all = "camelCase")]
 struct DraftRequest {
     draft_id: String,
+}
+
+/// A recorded row of lights, and where it is asked to point.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftAimRequest {
+    draft_id: String,
+    /// Indexes handed back by the draft's own `distribute`.
+    rows: Vec<usize>,
+    direction: Option<[f64; 3]>,
+    at: Option<[f64; 3]>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftNodesRequest {
+    draft_id: String,
+    node_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftParamsRequest {
+    draft_id: String,
+    node_id: String,
+    params: std::collections::BTreeMap<String, f64>,
 }
 
 #[derive(Deserialize)]

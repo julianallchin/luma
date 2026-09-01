@@ -239,7 +239,12 @@ impl<'a> Stage<'a> {
         let mut access = self.read().await?;
         let graph = venue_graph::graph(&mut access).await?;
         let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
-        Ok(describe(&graph, &ResolvedVenue::from(&solved)))
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        Ok(describe(
+            &graph,
+            &ResolvedVenue::from(&solved),
+            &build::Scene::new(&graph, &solved, supply),
+        ))
     }
 
     /// Cast along an open socket's outward normal and report the first
@@ -1181,9 +1186,15 @@ pub struct NodeView {
 /// Absent fields do not narrow, so the empty filter is "everything placed".
 #[derive(Default)]
 pub struct Filter {
-    pub ids: Vec<String>,
+    /// The nodes named outright. `None` narrows nothing; `Some(empty)` is an
+    /// explicitly empty selection and matches **nothing** — a caller that
+    /// selected no nodes asked about no nodes, and answering with the whole
+    /// venue is how a rig gets measured against a span it does not have.
+    pub ids: Option<Vec<String>>,
     pub kind: Option<String>,
-    /// A glob against the label: `*`, `?`, and literals.
+    /// A glob against the label: `*`, `?`, and literals. A bare name with no
+    /// metacharacter also matches the numbered children a `distribute` mints
+    /// from it — `"wash"` finds `wash 1` … `wash 8`.
     pub label: Option<String>,
     /// Only what hangs off this node, at any depth.
     pub on: Option<String>,
@@ -1194,8 +1205,10 @@ pub struct Filter {
 
 impl Filter {
     fn matches(&self, view: &NodeView, under: Option<&std::collections::BTreeSet<String>>) -> bool {
-        if !self.ids.is_empty() && !self.ids.iter().any(|id| *id == view.id) {
-            return false;
+        if let Some(ids) = &self.ids {
+            if !ids.iter().any(|id| *id == view.id) {
+                return false;
+            }
         }
         if let Some(kind) = &self.kind {
             if view.kind != *kind {
@@ -1204,7 +1217,7 @@ impl Filter {
         }
         if let Some(pattern) = &self.label {
             let label = view.label.as_deref().unwrap_or_default();
-            if !glob_matches(pattern, label) {
+            if !label_matches(pattern, label) {
                 return false;
             }
         }
@@ -1221,6 +1234,27 @@ impl Filter {
         }
         true
     }
+}
+
+/// A label filter against one label.
+///
+/// A glob is a glob. A **bare** name — no metacharacter — also matches the
+/// numbered children a row mints from it, because `distribute(label="wash")`
+/// names eight fixtures `wash 1` … `wash 8` and nobody who asked for "wash"
+/// meant the one node that is spelled exactly that and does not exist.
+fn label_matches(pattern: &str, label: &str) -> bool {
+    if glob_matches(pattern, label) {
+        return true;
+    }
+    if pattern.contains(['*', '?']) {
+        return false;
+    }
+    let rest = label.to_lowercase();
+    let Some(rest) = rest.strip_prefix(&pattern.to_lowercase()) else {
+        return false;
+    };
+    let rest = rest.trim_start_matches([' ', '_', '-']);
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
 }
 
 /// `*` and `?` against a label. Written here rather than pulled in because a
@@ -1321,6 +1355,13 @@ pub struct PendingRow {
     pub count: usize,
     pub layout: DistributeLayout,
     pub label_prefix: Option<String>,
+    /// Where the row is asked to point, once it exists.
+    ///
+    /// A draft has no fixtures to aim — its lights are rows on paper until the
+    /// stamp — so an aim is recorded against the row and applied to the heads
+    /// the stamp lays. Without it a component with pointed heads could not be
+    /// authored as a component, which is most of what a component is for.
+    pub aim: Option<AimTarget>,
 }
 
 /// The id the scratch graph's own root carries. Never persisted — a stamp
@@ -1371,9 +1412,64 @@ impl Draft {
         })
     }
 
-    /// Record a row of lights for the stamp to lay.
-    pub fn record(&mut self, row: PendingRow) {
+    /// Record a row of lights for the stamp to lay, and answer with the index
+    /// the caller aims it by.
+    pub fn record(&mut self, row: PendingRow) -> usize {
         self.pending.push(row);
+        self.pending.len() - 1
+    }
+
+    /// Point one recorded row. See [`PendingRow::aim`].
+    ///
+    /// # Errors
+    /// [`StageError::NotFound`] for a row this draft never recorded.
+    pub fn aim(&mut self, row: usize, target: AimTarget) -> Result<()> {
+        let count = self.pending.len();
+        let pending = self.pending.get_mut(row).ok_or_else(|| {
+            StageError::NotFound(format!(
+                "this draft has {count} rows of lights, so there is no row {row} to aim"
+            ))
+        })?;
+        pending.aim = Some(target);
+        Ok(())
+    }
+
+    /// Drop a piece and everything on it from the scratch graph.
+    ///
+    /// Rows of lights recorded against anything that went are dropped with it —
+    /// a stamp cannot hang a light on a piece the draft no longer has.
+    pub fn remove(&mut self, supply: &VenueSockets, node_id: &str) {
+        let gone: std::collections::BTreeSet<String> =
+            self.graph.subtree(node_id).into_iter().collect();
+        self.graph.remove(node_id);
+        self.pending.retain(|row| !gone.contains(&row.host));
+        self.solved = luma_scene::venue::resolve(&self.graph, supply);
+    }
+
+    /// Merge parameters into one of the draft's nodes and re-solve.
+    ///
+    /// # Errors
+    /// [`StageError::NotFound`] for a node the draft never built.
+    pub fn set_params(
+        &mut self,
+        supply: &VenueSockets,
+        node_id: &str,
+        params: &BTreeMap<String, f64>,
+    ) -> Result<()> {
+        let node = self
+            .graph
+            .node(node_id)
+            .ok_or_else(|| StageError::NotFound(format!("`{node_id}` is not in this draft")))?;
+        let mut updated = node.clone();
+        for (key, value) in params {
+            updated.params.set(key.clone(), *value);
+        }
+        match self.graph.edge(node_id).cloned() {
+            Some(edge) => self.graph.insert_placed(updated, edge),
+            None => self.graph.insert(updated),
+        }
+        self.solved = luma_scene::venue::resolve(&self.graph, supply);
+        Ok(())
     }
 
     /// Every node the query side can see.
@@ -1422,8 +1518,12 @@ impl Draft {
 
     /// The tree as text, in the same shape a venue prints.
     #[must_use]
-    pub fn describe(&self) -> String {
-        let mut out = describe(&self.graph, &ResolvedVenue::from(&self.solved));
+    pub fn describe(&self, supply: &VenueSockets) -> String {
+        let mut out = describe(
+            &self.graph,
+            &ResolvedVenue::from(&self.solved),
+            &build::Scene::new(&self.graph, &self.solved, supply),
+        );
         for row in &self.pending {
             out.push_str(&format!(
                 "pending: {} x {} on {} facing ({:.2}, {:.2}, {:.2})\n",
@@ -1723,16 +1823,27 @@ impl<'a> Stage<'a> {
                 continue;
             };
             let socket = self.face_socket(Some(host), row.face).await?;
-            self.distribute(
-                Some(host),
-                Some(&socket),
-                &row.fixture_path,
-                &row.mode_name,
-                row.count,
-                row.layout,
-                row.label_prefix.as_deref(),
-            )
-            .await?;
+            let laid = self
+                .distribute(
+                    Some(host),
+                    Some(&socket),
+                    &row.fixture_path,
+                    &row.mode_name,
+                    row.count,
+                    row.layout,
+                    row.label_prefix.as_deref(),
+                )
+                .await?;
+            // The recorded aim, applied to the heads this stamp laid — each
+            // solved from where *this* copy is, so one `at=` in the component
+            // converges from every stamp of it rather than from the first.
+            if let Some(target) = &row.aim {
+                let heads: Vec<String> =
+                    laid.report.fixtures.iter().map(|f| f.id.clone()).collect();
+                if !heads.is_empty() {
+                    self.aim(&heads, target).await?;
+                }
+            }
         }
         Ok(top)
     }
@@ -2007,7 +2118,11 @@ fn cast(
 /// Everything the solve left open is appended in the resolver's own words, via
 /// the same [`ResolvedVenue`] projection every other surface reads, so a
 /// warning reads identically here and on a placement report.
-fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
+fn describe<S: luma_scene::venue::NodeSockets + ?Sized>(
+    graph: &VenueGraph,
+    solved: &ResolvedVenue,
+    scene: &build::Scene<'_, S>,
+) -> String {
     let placed: std::collections::HashSet<&str> =
         solved.nodes.iter().map(|node| node.id.as_str()).collect();
     // Which way each light points, as the one stage word `StageDirection`
@@ -2021,22 +2136,31 @@ fn describe(graph: &VenueGraph, solved: &ResolvedVenue) -> String {
     // the rows are stored in. The two mirror in `y`, so a tree that printed the
     // stored triple unlabelled put every upstage piece downstage for a reader
     // checking it against the vocabulary they had just built with.
+    //
+    // And it is the **footprint centre**, the same number `nodes()` hands back
+    // and `place(at=)` takes, not the mesh origin: this is the channel a
+    // program verifies itself through, and two answers to "where is it" is
+    // exactly the thing that channel exists to rule out.
     let poses: BTreeMap<&str, ([f64; 3], f64)> = solved
         .nodes
         .iter()
         .map(|node| {
-            let at = luma_scene::coords::world_from_data(glam::Vec3::new(
-                node.position[0] as f32,
-                node.position[1] as f32,
-                node.position[2] as f32,
-            ));
-            (
-                node.id.as_str(),
-                (
-                    [f64::from(at.x), f64::from(at.y), f64::from(at.z)],
-                    -node.rotation[2],
-                ),
-            )
+            let at = scene.footprint(&node.id).map_or_else(
+                || {
+                    let origin = luma_scene::coords::world_from_data(glam::Vec3::new(
+                        node.position[0] as f32,
+                        node.position[1] as f32,
+                        node.position[2] as f32,
+                    ));
+                    [
+                        f64::from(origin.x),
+                        f64::from(origin.y),
+                        f64::from(origin.z),
+                    ]
+                },
+                |print| [print.at[0], print.at[1], print.z],
+            );
+            (node.id.as_str(), (at, -node.rotation[2]))
         })
         .collect();
     let beams: BTreeMap<&str, &'static str> = solved

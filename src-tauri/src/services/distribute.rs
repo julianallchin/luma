@@ -165,6 +165,10 @@ pub struct Report {
     pub refusal: Option<Refusal>,
     /// Whatever the solve had to decide, once the row was placed.
     pub warnings: Vec<NodeWarning>,
+    /// What the *layout* decided for the caller, in words: a window clipped to
+    /// the face, ends held half a body inside it. The row is placed either way
+    /// — this is the difference between what was asked and what hangs there.
+    pub announce: Vec<String>,
     /// Open structural sockets left in the venue, as the resolver reports them.
     pub dangling: Vec<DanglingSocket>,
     /// Subtrees the solve could not reach — the tray, and anything detached.
@@ -180,6 +184,7 @@ impl Report {
             fixtures: Vec::new(),
             refusal: Some(refusal),
             warnings: Vec::new(),
+            announce: Vec::new(),
             dangling: Vec::new(),
             unplaced: Vec::new(),
         }
@@ -429,10 +434,41 @@ pub async fn distribute(
             .collect(),
         refusal: None,
         warnings: solved.warnings().to_vec(),
+        announce: laid_where(request.layout, &stations, width),
         dangling: solved.dangling().to_vec(),
         unplaced: solved.unplaced().to_vec(),
     })
 }
+
+/// What a `span=` window turned into, where it turned into something else.
+///
+/// Two things move a row inside the window it named and neither is visible in
+/// the result: the window is clipped to the face it is on, and a fixture is
+/// placed by its **centre**, so each end holds half a body inside. Both are
+/// right; both are also a rig half a metre narrower than the one that was
+/// asked for, and the design's rule for that is to build it and say so.
+fn laid_where(layout: Layout, stations: &[f64], width_m: f64) -> Vec<String> {
+    let Layout::Span(a, b) = layout else {
+        return Vec::new();
+    };
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    let (Some(first), Some(last)) = (stations.first(), stations.last()) else {
+        return Vec::new();
+    };
+    if (first - lo).abs() < LAYOUT_EPSILON_M && (hi - last).abs() < LAYOUT_EPSILON_M {
+        return Vec::new();
+    }
+    vec![format!(
+        "span=({lo:.2}, {hi:.2}) laid out from {first:.2} m to {last:.2} m: a fixture is \
+         placed by its centre and keeps half its {width_m:.2} m body inside the window, and \
+         the window itself is clipped to the face"
+    )]
+}
+
+/// How far a laid row may sit from the window it named before it is worth
+/// saying so. Half a centimetre: a builder cares about the half-metre a body
+/// width costs and not about float drift.
+const LAYOUT_EPSILON_M: f64 = 5e-3;
 
 /// Slack, in metres, below which two bodies count as merely touching rather
 /// than overlapping. A row laid flush against another is a rig somebody built
