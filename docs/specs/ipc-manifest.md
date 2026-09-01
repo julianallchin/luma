@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**220 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
+**221 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -45,9 +45,9 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `src-tauri/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
-| `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
+| `venues` | 9 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **220** | |
+| **total** | **221** | |
 
 ## Commands
 
@@ -429,6 +429,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `get_or_create_share_code` | `venueId: String` | `String` |
 | `join_venue` | `code: String` | `Venue` |
 | `leave_venue` | `venueId: String` | `()` |
+| `set_venue_environment` | `venueId: String`<br>`environment: VenueEnvironment` | `()` |
 
 ### `waveforms`
 

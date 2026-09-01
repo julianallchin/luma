@@ -1,3 +1,4 @@
+use luma_render::scene_desc::VenueEnvironment;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use ts_rs::TS;
@@ -24,6 +25,21 @@ pub struct Venue {
     pub mixer_port: Option<String>,
     #[sqlx(rename = "mixer_mapping_json")]
     pub mixer_mapping_json: Option<String>,
+    /// What kind of room this is and how far up its one dial is.
+    ///
+    /// Venue truth, at the tier of the name: every picture of this venue — the
+    /// editor viewport, an agent's offscreen frame — is taken under it, and
+    /// `luma_render::house` is the only place it becomes light.
+    ///
+    /// Stored as the type's own JSON (`sqlx(try_from)` decodes it, and the
+    /// decode is total — see that type's `From<String>`), so the column, the
+    /// wire and `luma.venue.environment()` are one string. Local-only: it is
+    /// absent from `sync::registry`'s `venues` columns.
+    #[sqlx(try_from = "String")]
+    #[ts(
+        type = "{ mode: \"indoor\", houseLevel: number } | { mode: \"outdoor\", sunElevationDeg: number }"
+    )]
+    pub environment: VenueEnvironment,
     #[sqlx(rename = "created_at")]
     pub created_at: String,
     #[sqlx(rename = "updated_at")]

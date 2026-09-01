@@ -2,9 +2,10 @@ use uuid::Uuid;
 
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venues::Venue;
+use luma_render::scene_desc::VenueEnvironment;
 
 const VENUE_COLUMNS: &str =
-    "id, uid, name, description, share_code, role, controller_port, mixer_port, mixer_mapping_json, created_at, updated_at";
+    "id, uid, name, description, share_code, role, controller_port, mixer_port, mixer_mapping_json, environment, created_at, updated_at";
 
 /// Fetch a single venue by ID
 pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, String> {
@@ -17,7 +18,7 @@ pub async fn get_venue(access: &mut impl AuthorizedVenue) -> Result<Venue, Strin
                     ELSE 'member'
                 END AS role,
                 venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
-                venue.created_at, venue.updated_at
+                venue.environment, venue.created_at, venue.updated_at
          FROM venues venue
          CROSS JOIN auth_write_admission admission
          WHERE venue.id = ? AND admission.singleton = 1",
@@ -41,7 +42,7 @@ pub async fn list_venues(pool: &sqlx::SqlitePool) -> Result<Vec<Venue>, String> 
                     ELSE 'member'
                 END AS role,
                 venue.controller_port, venue.mixer_port, venue.mixer_mapping_json,
-                venue.created_at, venue.updated_at
+                venue.environment, venue.created_at, venue.updated_at
          FROM venues venue
          CROSS JOIN auth_write_admission admission
          WHERE admission.singleton = 1
@@ -346,6 +347,32 @@ pub async fn set_controller_port(
         .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to set controller port: {}", e))?;
+    Ok(())
+}
+
+/// Set this venue's lighting environment (local-only, not synced).
+///
+/// One write for both modes, because the value is one closed enum: switching a
+/// room from indoor to outdoor and moving its one dial are the same edit, and a
+/// pair of setters would let a caller write a mode without the scalar that mode
+/// needs.
+///
+/// The `venues_updated_at` trigger clears `synced_at` on any venue write, so
+/// this dirties the row and costs one push of the *remote* columns even though
+/// the environment itself never leaves the machine. Same as
+/// [`set_controller_port`]; not worth a trigger exemption until something
+/// writes it per frame.
+pub async fn set_environment(
+    access: &mut VenueAccess<'_, Write>,
+    environment: VenueEnvironment,
+) -> Result<(), String> {
+    let venue_id = access.venue_id().to_string();
+    sqlx::query("UPDATE venues SET environment = ? WHERE id = ?")
+        .bind(environment.to_record())
+        .bind(venue_id)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| format!("Failed to set venue environment: {e}"))?;
     Ok(())
 }
 
