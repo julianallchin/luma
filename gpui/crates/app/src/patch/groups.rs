@@ -16,7 +16,26 @@ use luma_ui::node::{Instrument as _, Role};
 use super::Patch;
 
 pub(super) fn groups(state: &Patch) -> AnyElement {
-    let nodes: &[GroupTreeNode] = state.data.as_ref().map_or(&[], |data| &data.groups);
+    // Three states, not two: a tree that could not be read and a venue with no
+    // sets in it are different sentences, and the second one is advice.
+    let nodes: &[GroupTreeNode] = match (&state.error, state.data.as_ref()) {
+        (Some(error), _) => {
+            return luma_ui::plate(
+                format!("The group tree could not be read: {error}"),
+                ladder::danger(),
+            )
+        }
+        (None, None) => {
+            return luma_ui::plate("Reading the group tree…", ladder::muted_foreground())
+        }
+        (None, Some(data)) if data.groups.is_empty() => {
+            return luma_ui::plate(
+                "No groups yet — a group is derived once a fixture is placed.",
+                ladder::muted_foreground(),
+            )
+        }
+        (None, Some(data)) => &data.groups,
+    };
     div()
         .id("patch-groups")
         .max_h(px(360.0))
@@ -24,18 +43,6 @@ pub(super) fn groups(state: &Patch) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(2.0))
-        .when(nodes.is_empty(), |body| {
-            body.child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(ladder::foreground_alpha(0.55))
-                    .child("No groups yet — a group is derived once a fixture is placed.")
-                    .agent_node(
-                        Role::Text,
-                        "No groups yet — a group is derived once a fixture is placed.",
-                    ),
-            )
-        })
         .children(nodes.iter().map(|node| row(nodes, node)))
         .into_any_element()
 }

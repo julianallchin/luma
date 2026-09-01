@@ -1130,7 +1130,11 @@ fn hangs_off_a_stage(graph: &VenueGraph, node: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct ManualGroup {
     pub id: String,
-    pub name: String,
+    /// What the row is called, if anyone has called it anything. A group made
+    /// by hand starts nameless — it is a row an editor can drop fixtures into
+    /// before it is a word a score can say — so the tree shows it and the
+    /// selection namespace does not hold it.
+    pub name: Option<String>,
     pub fixtures: Vec<String>,
 }
 
@@ -1260,12 +1264,19 @@ pub fn merge_tree(
         if absorbed.contains_key(group.id.as_str()) {
             continue;
         }
-        let label = row
+        // A name the row does not have is not minted here: `unnamed group` as
+        // a label is a thing to show, and as a selection name it would be a
+        // word an expression could say for a set nobody has described.
+        let named = row
             .and_then(|row| row.label.clone())
-            .unwrap_or_else(|| group.name.clone());
+            .or_else(|| group.name.clone());
+        let name = named
+            .as_deref()
+            .map_or_else(String::new, normalize_group_name);
+        let label = named.unwrap_or_else(|| "unnamed group".to_string());
         nodes.push(GroupTreeNode {
             id: group.id.clone(),
-            name: normalize_group_name(&label),
+            name,
             label,
             parent_id: parent_of(
                 row.and_then(|row| row.parent_id.as_deref())
@@ -2096,7 +2107,7 @@ mod tests {
         let tree = derive_groups(&labelled("Truss 1", "Truss 2"));
         let manual = ManualGroup {
             id: "authored".into(),
-            name: "washes_horizontal_truss_1".into(),
+            name: Some("washes_horizontal_truss_1".into()),
             fixtures: vec!["a".into()],
         };
         let mut merged = merge_tree(&tree, &[], &[manual]);
@@ -2386,8 +2397,11 @@ mod goldens {
     fn catalog() -> &'static VenueSockets {
         static SOCKETS: std::sync::OnceLock<VenueSockets> = std::sync::OnceLock::new();
         SOCKETS.get_or_init(|| {
-            VenueSockets::load(repo_root().join("resources/meshes"))
-                .expect("the catalog resolves against the shipped meshes")
+            VenueSockets::load(
+                repo_root().join("resources/meshes"),
+                std::sync::Arc::new(luma_render::catalog::NoFixtures),
+            )
+            .expect("the catalog resolves against the shipped meshes")
         })
     }
 

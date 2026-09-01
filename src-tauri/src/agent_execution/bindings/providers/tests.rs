@@ -562,7 +562,27 @@ async fn full_assembly_covers_every_schema_branch() {
     close3(&fixtures[0]["rotation"], [0.0, 0.0, 0.0]);
     close3(&fixtures[0]["facing"], [0.0, 0.0, -1.0]);
     assert_eq!(fixtures[0]["facing_word"], "down");
-    assert_eq!(at(&v, "venue.groups")[0]["name"], "front_wash");
+    // The merged tree: the sets derived from where the rig hangs, and the one
+    // authored `fixture_groups` row after them. A venue nobody has grouped by
+    // hand still has groups here, which is the point of deriving them.
+    let groups = at(&v, "venue.groups");
+    let rows = groups.as_array().expect("the tree is a list");
+    let names: Vec<&str> = rows.iter().map(|g| g["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"front_wash"), "{names:?}");
+    assert!(names.len() > 1, "the derived sets come with it: {names:?}");
+    let authored = rows
+        .iter()
+        .find(|g| g["name"] == "front_wash")
+        .expect("the authored row is in the tree");
+    assert_eq!(authored["origin"], "manual");
+    assert_eq!(authored["path"], "front_wash");
+    // No `fixture_groups` row behind a derived node, so no axis columns on it.
+    let derived = rows
+        .iter()
+        .find(|g| g["origin"] == "derived")
+        .expect("something is derived");
+    assert!(derived.get("axisLr").is_none() && derived.get("axis_lr").is_none());
+    assert!(derived["role"].is_string());
     // Depth-first with children in id order, so the CDJ standing on the riser
     // comes before the riser's own row would if it had siblings.
     let pieces = at(&v, "venue.pieces");

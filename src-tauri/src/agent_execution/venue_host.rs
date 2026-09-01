@@ -377,6 +377,27 @@ impl VenueHost {
         Ok(json!({ "unplaced": venue.unplaced, "dangling": venue.dangling }))
     }
 
+    /// The venue's group tree, live: derivation, the overrides on it, and the
+    /// authored rows beside them, each node with the fixtures in it.
+    ///
+    /// The same rows as the `luma.venue["groups"]` snapshot, read now — a
+    /// script that has just hung six movers asks this to see the sets they
+    /// landed in, and the snapshot answers about the room it walked into.
+    async fn groups(&self) -> Result<Value, HostCallError> {
+        let mut access = self.read_access().await?;
+        let sources = groups::GroupSources::read(&self.resource_root, &mut access)
+            .await
+            .map_err(|error| {
+                HostCallError::new(
+                    "invalid_venue",
+                    format!("the venue's groups could not be read: {error}"),
+                )
+            })?;
+        let rows =
+            crate::agent_execution::bindings::providers::venue::group_rows(&sources.hierarchy());
+        Ok(json!({ "groups": rows }))
+    }
+
     async fn reach(&self, request: ReachRequest) -> Result<Value, HostCallError> {
         let reach = self
             .stage()
@@ -911,6 +932,7 @@ impl HostCallHandler for VenueHost {
                     "venue.fixtures" => self.fixtures(decode(payload)?),
                     "venue.describe" => self.describe().await,
                     "venue.open" => self.open().await,
+                    "venue.groups" => self.groups().await,
                     "venue.reach" => self.reach(decode(payload)?).await,
                     "venue.place" => self.place(decode(payload)?).await,
                     "venue.attach" => self.attach(decode(payload)?).await,

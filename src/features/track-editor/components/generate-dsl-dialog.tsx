@@ -7,7 +7,7 @@ import {
 import { googleProvider } from "@earendil-works/pi-ai/providers/google";
 import { Sparkles, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FixtureGroup } from "@/bindings/groups";
+import type { GroupTreeNode } from "@/bindings/groups";
 import type { BeatGrid, ScoreSummary, TrackSummary } from "@/bindings/schema";
 import { useAppViewStore } from "@/features/app/stores/use-app-view-store";
 import { exportScoreDsl, importScoreDsl, validateScoreDsl } from "@/lib/dsl";
@@ -509,12 +509,12 @@ export function GenerateDslDialog({
 				useAppViewStore.getState().currentVenue?.id ?? null;
 			let groupNames: string[] = [];
 			if (currentVenueId) {
-				const groups = await invoke<FixtureGroup[]>("list_groups", {
+				// The merged tree — the names a Selection can actually say,
+				// derived sets included.
+				const nodes = await invoke<GroupTreeNode[]>("list_group_tree", {
 					venueId: currentVenueId,
 				});
-				groupNames = groups
-					.map((g) => g.name)
-					.filter((n): n is string => Boolean(n));
+				groupNames = nodes.map((n) => n.name).filter((n) => Boolean(n));
 			}
 
 			const system = buildGeneratePrompt(

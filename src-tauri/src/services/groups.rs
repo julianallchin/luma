@@ -109,26 +109,26 @@ async fn get_cached_venue_fixtures(
     // We're the loader. Always clean up the loading lock, even on error.
     let result = async {
         let fixtures = fixtures_db::get_patched_fixtures(access).await?;
-        let memberships = groups_db::get_venue_memberships(access).await?;
+        let memberships = groups_db::venue_memberships(access).await?;
 
         // fixture_id → (normalized group name → which heads are members)
         let mut by_fixture: HashMap<String, HashMap<String, HeadMembership>> = HashMap::new();
-        for (fixture_id, group_name, head_index) in memberships {
-            let Some(name) = group_name.as_deref().map(normalize_group_name) else {
+        for row in memberships {
+            let Some(name) = row.group_name.as_deref().map(normalize_group_name) else {
                 continue;
             };
             if name.is_empty() {
                 continue;
             }
             let entry = by_fixture
-                .entry(fixture_id)
+                .entry(row.fixture_id)
                 .or_default()
                 .entry(name)
                 .or_insert_with(|| HeadMembership::Heads(HashSet::new()));
-            if head_index < 0 {
+            if row.head_index < 0 {
                 *entry = HeadMembership::All;
             } else if let HeadMembership::Heads(heads) = entry {
-                heads.insert(head_index as usize);
+                heads.insert(row.head_index as usize);
             }
         }
 
@@ -138,7 +138,7 @@ async fn get_cached_venue_fixtures(
         // graph has not been built has no structure to derive from, which is an
         // empty tree rather than an error.
         if local::venue_graph::root_id(access).await?.is_some() {
-            for node in group_tree(resource_path, access).await? {
+            for node in GroupSources::read(resource_path, access).await?.tree() {
                 if node.name.is_empty() {
                     continue;
                 }
@@ -178,94 +178,6 @@ async fn get_cached_venue_fixtures(
     }
 
     result
-}
-
-// =============================================================================
-// Public API
-// =============================================================================
-
-/// Get grouped hierarchy for a venue: Groups -> Fixtures -> Heads
-pub async fn get_grouped_hierarchy_with_path(
-    resource_path: &Path,
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<FixtureGroupNode>, String> {
-    // One solve for the whole hierarchy: head positions are the only thing here
-    // that needs the rig, and a group's fixtures are a subset of the venue's.
-    let venue = crate::venue_graph::resolved(access, resource_path).await?;
-    let groups = groups_db::list_groups(access).await?;
-
-    let mut result = Vec::with_capacity(groups.len());
-
-    for group in groups {
-        let members = groups_db::get_members_in_group(access, &group.id).await?;
-
-        // Fold per-head rows into one node per fixture, preserving member order.
-        // `None` heads = whole-fixture membership.
-        let mut order: Vec<String> = Vec::new();
-        let mut folded: HashMap<String, (PatchedFixture, Option<Vec<i64>>)> = HashMap::new();
-        for member in members {
-            let id = member.fixture.id.clone();
-            if !folded.contains_key(&id) {
-                order.push(id.clone());
-                folded.insert(id.clone(), (member.fixture, Some(Vec::new())));
-            }
-            let entry = folded.get_mut(&id).unwrap();
-            if member.head_index < 0 {
-                entry.1 = None;
-            } else if let Some(heads) = entry.1.as_mut() {
-                heads.push(member.head_index);
-            }
-        }
-
-        let mut grouped_fixtures = Vec::with_capacity(order.len());
-        // What the set is mostly for is its first member's role; whether it has
-        // anything to aim is true of the group if it is true of anything in it.
-        let mut group_role = None;
-        let mut group_moves = false;
-
-        for fixture_id in order {
-            let (fixture, member_heads) = folded.remove(&fixture_id).unwrap();
-            let (role, moves) = role_and_aim(resource_path, &fixture);
-            group_role = group_role.or(Some(role));
-            group_moves |= moves;
-
-            let all_heads = get_fixture_heads_with_path(resource_path, &venue, &fixture);
-            let head_count = all_heads.len() as i64;
-            let heads = match member_heads {
-                None => all_heads,
-                Some(indices) => all_heads
-                    .into_iter()
-                    .filter(|h| indices.contains(&h.head_index))
-                    .collect(),
-            };
-
-            grouped_fixtures.push(GroupedFixtureNode {
-                id: fixture.id.clone(),
-                label: fixture
-                    .label
-                    .clone()
-                    .unwrap_or_else(|| format!("{} {}", fixture.manufacturer, fixture.model)),
-                role,
-                moves,
-                heads,
-                head_count,
-            });
-        }
-
-        result.push(FixtureGroupNode {
-            group_id: group.id,
-            group_name: group.name.clone(),
-            role: group_role,
-            moves: group_moves,
-            axis_lr: group.axis_lr,
-            axis_fb: group.axis_fb,
-            axis_ab: group.axis_ab,
-            movement_config: group.movement_config.clone(),
-            fixtures: grouped_fixtures,
-        });
-    }
-
-    Ok(result)
 }
 
 /// One fixture's definition, parsed at most once per file per process.
@@ -933,14 +845,27 @@ pub async fn remove_head_from_group(
 
 /// Everything the group tree is made of, read once.
 ///
+/// **The** read: every surface that asks a venue what its groups are asks
+/// this, and gets one answer — the derivation, the overrides on top of it, and
+/// the authored `fixture_groups` rows beside it. There is no second place to
+/// ask, and nothing writes derived sets into `fixture_groups` to make them
+/// visible; a set exists because the rig describes it, not because a row does.
+///
 /// One derivation per command. The tree, a node in it, the derivation path an
 /// override row records and the tree the command hands back afterwards are all
 /// questions about the same solve — asking each of them separately re-solved
 /// the venue and re-parsed every `.qxf` in it, four times over for a rename.
 pub struct GroupSources {
+    root: PathBuf,
+    solved: Solved,
     derived: DerivedTree,
     overrides: Vec<GroupOverride>,
     manual: Vec<ManualGroup>,
+    /// Every authored membership row, which is where per-head membership lives.
+    /// Derivation has none: a derived set holds whole fixtures.
+    members: Vec<groups_db::Membership>,
+    /// The authored rows themselves, for the columns only they have.
+    authored: Vec<crate::models::groups::FixtureGroup>,
 }
 
 impl GroupSources {
@@ -954,26 +879,156 @@ impl GroupSources {
         resource_path: &Path,
         access: &mut impl AuthorizedVenue,
     ) -> Result<Self, String> {
-        let derived = group_derivation::derive_groups(&venue_facts(resource_path, access).await?);
+        let solved = solve(resource_path, access).await?;
+        let derived = group_derivation::derive_groups(&solved.facts);
         let overrides = overrides_db::list(access).await?;
+        let members = groups_db::venue_memberships(access).await?;
+        let authored = groups_db::list_groups(access).await?;
 
-        let mut manual = Vec::new();
-        for group in groups_db::list_groups(access).await? {
-            let Some(name) = group.name.clone() else {
-                continue;
-            };
-            let fixtures = groups_db::group_member_ids(access, &group.id).await?;
-            manual.push(ManualGroup {
-                id: group.id,
-                name,
-                fixtures,
-            });
-        }
+        // Membership order, deduplicated across the per-head rows — the ids a
+        // node carries, in the order the editor put them in.
+        let manual = authored
+            .iter()
+            .map(|group| {
+                let mut fixtures: Vec<String> = Vec::new();
+                for row in members.iter().filter(|row| row.group_id == group.id) {
+                    if !fixtures.contains(&row.fixture_id) {
+                        fixtures.push(row.fixture_id.clone());
+                    }
+                }
+                ManualGroup {
+                    id: group.id.clone(),
+                    name: group.name.clone(),
+                    fixtures,
+                }
+            })
+            .collect();
+
         Ok(GroupSources {
+            root: resource_path.to_path_buf(),
+            solved,
             derived,
             overrides,
             manual,
+            members,
+            authored,
         })
+    }
+
+    /// The merged tree with every node's fixtures resolved — role, aim, heads,
+    /// and the columns an authored row has.
+    ///
+    /// The same nodes [`Self::tree`] returns, in the same order; the difference
+    /// is only how much of each fixture comes with them.
+    #[must_use]
+    pub fn hierarchy(&self) -> Vec<FixtureGroupNode> {
+        let by_id: HashMap<&str, &PatchedFixture> = self
+            .solved
+            .fixtures
+            .iter()
+            .map(|fixture| (fixture.id.as_str(), fixture))
+            .collect();
+
+        self.tree()
+            .into_iter()
+            .map(|node| {
+                let authored = self
+                    .authored
+                    .iter()
+                    .find(|group| group.id == node.id)
+                    .filter(|_| node.role.is_none());
+                let mut moves = false;
+                let mut fixtures = Vec::with_capacity(node.fixtures.len());
+                for id in &node.fixtures {
+                    let Some(fixture) = by_id.get(id.as_str()).copied() else {
+                        continue;
+                    };
+                    let (role, aims) = role_and_aim(&self.root, fixture);
+                    moves |= aims;
+                    let all_heads =
+                        get_fixture_heads_with_path(&self.root, &self.solved.venue, fixture);
+                    let head_count = all_heads.len() as i64;
+                    let heads = match self.member_heads(&node.id, id) {
+                        None => all_heads,
+                        Some(indices) => all_heads
+                            .into_iter()
+                            .filter(|head| indices.contains(&head.head_index))
+                            .collect(),
+                    };
+                    fixtures.push(GroupedFixtureNode {
+                        id: fixture.id.clone(),
+                        label: fixture.label.clone().unwrap_or_else(|| {
+                            format!("{} {}", fixture.manufacturer, fixture.model)
+                        }),
+                        role,
+                        moves: aims,
+                        heads,
+                        head_count,
+                    });
+                }
+                FixtureGroupNode {
+                    id: node.id,
+                    name: node.name,
+                    label: node.label,
+                    parent_id: node.parent_id,
+                    origin: node.origin,
+                    role: node.role,
+                    moves,
+                    axis_lr: authored.and_then(|group| group.axis_lr),
+                    axis_fb: authored.and_then(|group| group.axis_fb),
+                    axis_ab: authored.and_then(|group| group.axis_ab),
+                    movement_config: authored.and_then(|group| group.movement_config.clone()),
+                    fixtures,
+                }
+            })
+            .collect()
+    }
+
+    /// Every group's members as the compositor's *member keys*:
+    /// `"<fixture>"` for a whole fixture, `"<fixture>:<head>"` for one head.
+    ///
+    /// Keyed by node id, derived nodes included — a controller fader bound to
+    /// `spots_left_wing` has to find that set, and only the authored table
+    /// having an id for it is what made every such binding silently do nothing.
+    #[must_use]
+    pub fn member_keys(&self) -> HashMap<String, Vec<String>> {
+        self.hierarchy()
+            .into_iter()
+            .map(|node| {
+                let keys = node
+                    .fixtures
+                    .iter()
+                    .flat_map(|fixture| {
+                        // A fixture the group holds whole is one key; the mode
+                        // that defines no heads is held whole too.
+                        if fixture.heads.is_empty()
+                            || fixture.heads.len() as i64 == fixture.head_count
+                        {
+                            vec![fixture.id.clone()]
+                        } else {
+                            fixture.heads.iter().map(|head| head.id.clone()).collect()
+                        }
+                    })
+                    .collect();
+                (node.id, keys)
+            })
+            .collect()
+    }
+
+    /// Which heads of `fixture` a node holds — `None` when it holds the whole
+    /// fixture, which is every derived node and the ordinary authored row.
+    fn member_heads(&self, group_id: &str, fixture_id: &str) -> Option<Vec<i64>> {
+        let mut heads = Vec::new();
+        for row in &self.members {
+            if row.group_id != group_id || row.fixture_id != fixture_id {
+                continue;
+            }
+            if row.head_index == groups_db::WHOLE_FIXTURE {
+                return None;
+            }
+            heads.push(row.head_index);
+        }
+        (!heads.is_empty()).then_some(heads)
     }
 
     /// The merged group tree: derivation, the overrides on top, and the
@@ -1050,6 +1105,24 @@ impl GroupSources {
     }
 }
 
+/// The label path of every node of a merged tree, `/`-joined, keyed by id.
+///
+/// The tree arrives parents-first, so one pass builds each path out of the one
+/// already built for its parent. What a node *is called* is [`FixtureGroupNode::
+/// name`]; this is where it sits, spelled for a reader.
+#[must_use]
+pub fn label_paths(nodes: &[FixtureGroupNode]) -> HashMap<String, String> {
+    let mut paths: HashMap<String, String> = HashMap::with_capacity(nodes.len());
+    for node in nodes {
+        let path = match node.parent_id.as_deref().and_then(|id| paths.get(id)) {
+            Some(parent) => format!("{parent}/{}", node.label),
+            None => node.label.clone(),
+        };
+        paths.insert(node.id.clone(), path);
+    }
+    paths
+}
+
 /// The node already answering to `name`, if any — the one check that keeps the
 /// selection namespace a namespace.
 ///
@@ -1077,21 +1150,36 @@ pub fn node_answering_to<'a>(
         .find(|node| node.id != except && !node.name.is_empty() && node.name == name)
 }
 
-/// The facts [`group_derivation::derive_groups`] reads, out of the database.
+/// One venue, solved once: where everything is, what the patch says it is, and
+/// the facts derivation reads off both.
 ///
-/// One solve. The graph supplies placement and structure, the patch list
-/// supplies identity and role, and `facts_from` is where they meet — see
-/// [`group_derivation`] for why that seam is there.
+/// One value because they come from one pass. A caller that resolved the venue
+/// and then asked for the facts solved it twice, and the two solves were free
+/// to disagree.
+pub struct Solved {
+    pub venue: ResolvedVenue,
+    pub facts: VenueFacts,
+    /// The patch list, in database order.
+    pub fixtures: Vec<PatchedFixture>,
+}
+
+/// Solve a venue and read the facts derivation needs off it.
+///
+/// The graph supplies placement and structure, the patch list supplies identity
+/// and role, and `facts_from` is where they meet — see [`group_derivation`] for
+/// why that seam is there.
 ///
 /// # Errors
-/// As [`GroupSources::read`].
-pub async fn venue_facts(
+/// Fails if the graph or the patch list cannot be read, or if the catalog
+/// cannot be resolved.
+pub async fn solve(
     resource_path: &Path,
     access: &mut impl AuthorizedVenue,
-) -> Result<VenueFacts, String> {
+) -> Result<Solved, String> {
     let venue_id = access.venue_id().to_string();
     let graph = crate::venue_graph::graph(access).await?;
-    let solved = luma_scene::venue::resolve(&graph, crate::venue_graph::sockets(resource_path)?);
+    let sockets = crate::venue_graph::sockets(resource_path)?;
+    let venue = luma_scene::venue::resolve(&graph, sockets);
 
     let order = groups_db::fixture_creation_order(access).await?;
     let fixtures = fixtures_db::get_patched_fixtures(access).await?;
@@ -1105,24 +1193,12 @@ pub async fn venue_facts(
         })
         .collect();
 
-    Ok(group_derivation::facts_from(
-        &venue_id,
-        &solved,
-        &graph,
-        crate::venue_graph::sockets(resource_path)?,
-        &identities,
-    ))
-}
-
-/// The merged group tree, for a caller that wants nothing else from the solve.
-///
-/// # Errors
-/// As [`GroupSources::read`].
-pub async fn group_tree(
-    resource_path: &Path,
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<GroupTreeNode>, String> {
-    Ok(GroupSources::read(resource_path, access).await?.tree())
+    let facts = group_derivation::facts_from(&venue_id, &venue, &graph, sockets, &identities);
+    Ok(Solved {
+        venue,
+        facts,
+        fixtures,
+    })
 }
 
 /// A fixture's role, from its definition and the mode it is patched in.

@@ -24,6 +24,8 @@ use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::eval::context::resolve_primitive_ids_with_access;
 use crate::eval::ops::spatial::rig_uv;
+use crate::models::groups::{FixtureGroupNode, GroupOrigin};
+use crate::services::group_derivation::FixtureRole;
 use fixture_kinematics::StageDirection;
 use glam::DVec3;
 use luma_scene::venue::{NodePose, ResolvedVenue};
@@ -91,18 +93,42 @@ struct UnplacedBinding {
     descendants: usize,
 }
 
+/// One node of the venue's group tree, with the fixtures in it.
+///
+/// The whole tree, flat and parents-first: a derived set is as real as an
+/// authored one and an agent that only saw `fixture_groups` saw nothing at all
+/// in a venue nobody had grouped by hand. `parent_id` carries the shape;
+/// `path` is that shape said in one string, because the name a score uses is
+/// the path.
 #[derive(Serialize)]
-struct GroupBinding {
+pub(crate) struct GroupBinding {
     id: String,
-    name: Option<String>,
+    /// The snake_case name a selection expression uses. Empty for a group
+    /// nobody has named, which selects nothing.
+    name: String,
+    /// One path segment — what the tree shows for this node.
+    label: String,
+    /// The labels from the root down to this node, `/`-joined.
+    path: String,
+    parent_id: Option<String>,
+    /// `derived`, `edited` or `manual`.
+    origin: &'static str,
+    /// The role branch this sits under; absent for an authored group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<&'static str>,
+    /// Authored `fixture_groups` rows only — a derived set has no axis
+    /// configuration, and absent says so where a null would read as centred.
+    #[serde(skip_serializing_if = "Option::is_none")]
     axis_lr: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     axis_fb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     axis_ab: Option<f64>,
     fixtures: Vec<GroupFixtureBinding>,
 }
 
 #[derive(Serialize)]
-struct GroupFixtureBinding {
+pub(crate) struct GroupFixtureBinding {
     id: String,
     label: String,
     /// Primitive ids of the heads that are in the group. Shorter than
@@ -330,37 +356,57 @@ async fn groups(
     ctx: &ProviderCtx<'_>,
     access: &mut VenueAccess<'_, Read>,
 ) -> Result<(), String> {
-    let root = ctx.resource_root.to_path_buf();
-    match crate::services::groups::get_grouped_hierarchy_with_path(&root, access).await {
-        Ok(nodes) => {
-            let bindings: Vec<GroupBinding> = nodes
-                .into_iter()
-                .map(|g| GroupBinding {
-                    id: g.group_id,
-                    name: g.group_name,
-                    axis_lr: g.axis_lr,
-                    axis_fb: g.axis_fb,
-                    axis_ab: g.axis_ab,
-                    fixtures: g
-                        .fixtures
-                        .into_iter()
-                        .map(|f| GroupFixtureBinding {
-                            id: f.id,
-                            label: f.label,
-                            heads: f.heads.into_iter().map(|h| h.id).collect(),
-                            head_count: f.head_count,
-                        })
-                        .collect(),
-                })
-                .collect();
-            inline(b, "venue.groups", &bindings)
-        }
+    match crate::services::groups::GroupSources::read(ctx.resource_root, access).await {
+        Ok(sources) => inline(b, "venue.groups", group_rows(&sources.hierarchy())),
         Err(e) => unavailable(
             b,
             "venue.groups",
             format!("the venue's groups could not be loaded: {e}"),
         ),
     }
+}
+
+/// The tree as rows, with each node's path spelled out.
+///
+/// Parents come before children, so one pass down the list can build every
+/// path from the one already built for its parent.
+///
+/// Shared with the live `venue.groups` verb ([`crate::agent_execution::
+/// venue_host`]): the snapshot an agent walks into and the answer it gets after
+/// changing the rig are the same rows, or the verb would be a second shape of
+/// the same thing.
+pub(crate) fn group_rows(nodes: &[FixtureGroupNode]) -> Vec<GroupBinding> {
+    let paths = crate::services::groups::label_paths(nodes);
+    let mut rows = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        rows.push(GroupBinding {
+            id: node.id.clone(),
+            name: node.name.clone(),
+            label: node.label.clone(),
+            path: paths.get(&node.id).cloned().unwrap_or_default(),
+            parent_id: node.parent_id.clone(),
+            origin: match node.origin {
+                GroupOrigin::Derived => "derived",
+                GroupOrigin::Edited => "edited",
+                GroupOrigin::Manual => "manual",
+            },
+            role: node.role.map(FixtureRole::as_str),
+            axis_lr: node.axis_lr,
+            axis_fb: node.axis_fb,
+            axis_ab: node.axis_ab,
+            fixtures: node
+                .fixtures
+                .iter()
+                .map(|f| GroupFixtureBinding {
+                    id: f.id.clone(),
+                    label: f.label.clone(),
+                    heads: f.heads.iter().map(|h| h.id.clone()).collect(),
+                    head_count: f.head_count,
+                })
+                .collect(),
+        });
+    }
+    rows
 }
 
 async fn positions(

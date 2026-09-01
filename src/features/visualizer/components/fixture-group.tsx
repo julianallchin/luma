@@ -184,10 +184,16 @@ export function FixtureGroup({
 
 		const boxes: BoundingBox[] = [];
 		const fixtureMap = new Map(placedFixtures.map((f) => [f.id, f]));
+		// Leaves only. The tree is nested — a wing's top half is inside the
+		// wing is inside the role — and drawing every level would stack four
+		// boxes around one set of lights.
+		const parents = new Set(
+			groups.map((g) => g.parentId).filter((id): id is string => !!id),
+		);
 
 		for (let i = 0; i < groups.length; i++) {
 			const group = groups[i];
-			if (group.fixtures.length === 0) continue;
+			if (group.fixtures.length === 0 || parents.has(group.id)) continue;
 
 			const min = new THREE.Vector3(Infinity, Infinity, Infinity);
 			const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
@@ -232,8 +238,8 @@ export function FixtureGroup({
 			const color = GROUP_COLORS[i % GROUP_COLORS.length];
 
 			boxes.push({
-				groupId: group.groupId,
-				groupName: group.groupName,
+				groupId: group.id,
+				groupName: group.label,
 				min: [min.x, min.y, min.z],
 				max: [max.x, max.y, max.z],
 				color,

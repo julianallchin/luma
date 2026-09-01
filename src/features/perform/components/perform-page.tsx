@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2, Pencil, Plus, Settings2, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FixtureGroup } from "@/bindings/groups";
+import type { GroupTreeNode } from "@/bindings/groups";
 import type {
 	ControllerState,
 	ControllerStatus,
@@ -73,7 +73,9 @@ export function PerformPage() {
 	const [bindings, setBindings] = useState<MidiBinding[]>([]);
 	const [modifiers, setModifiers] = useState<ModifierDef[]>([]);
 	const [patterns, setPatterns] = useState<PatternSummary[]>([]);
-	const [flatGroups, setFlatGroups] = useState<FixtureGroup[]>([]);
+	// The merged group tree: derived sets and authored rows in one list, which
+	// is what a fader or a modifier can be bound to.
+	const [flatGroups, setFlatGroups] = useState<GroupTreeNode[]>([]);
 	const [ctrlStatus, setCtrlStatus] = useState<ControllerStatus | null>(null);
 	const [ctrlState, setCtrlState] = useState<ControllerState | null>(null);
 	const [mixerStatus, setMixerStatus] = useState<{
@@ -173,7 +175,7 @@ export function PerformPage() {
 					venueId: currentVenueId,
 				}),
 				invoke<PatternSummary[]>("list_patterns"),
-				invoke<FixtureGroup[]>("list_groups", { venueId: currentVenueId }),
+				invoke<GroupTreeNode[]>("list_group_tree", { venueId: currentVenueId }),
 			]);
 			setCues(c);
 			setBindings(b);
@@ -399,7 +401,7 @@ export function PerformPage() {
 										.map((b) => {
 											const gid = b.action.group_id as string;
 											const groupName =
-												groups.find((g) => g.groupId === gid)?.groupName ??
+												groups.find((g) => g.id === gid)?.name ||
 												gid.slice(0, 6);
 											const value = ctrlState?.groupIntensities?.[gid] ?? 1;
 											return (
@@ -1263,7 +1265,7 @@ function ActionsSection({
 	venueId: string;
 	bindings: MidiBinding[];
 	cues: Cue[];
-	groups: FixtureGroup[];
+	groups: GroupTreeNode[];
 	modifiers: ModifierDef[];
 	onChange: () => void;
 }) {
@@ -1350,7 +1352,7 @@ function ModifiersSection({
 }: {
 	venueId: string;
 	modifiers: ModifierDef[];
-	groups: FixtureGroup[];
+	groups: GroupTreeNode[];
 	onChange: () => void;
 }) {
 	const [adding, setAdding] = useState(false);
@@ -1374,7 +1376,7 @@ function ModifiersSection({
 				<div className="border border-border/40 divide-y divide-border/40">
 					{modifiers.map((m) => {
 						const groupNames = m.groups
-							?.map((gid) => groups.find((g) => g.id === gid)?.name ?? gid)
+							?.map((gid) => groups.find((g) => g.id === gid)?.name || gid)
 							.join(", ");
 						return (
 							<Row key={m.id}>

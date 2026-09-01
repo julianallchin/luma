@@ -70,6 +70,8 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		set({ venueId });
 
 		try {
+			// The merged tree: derived sets, the edits on them, and the authored
+			// rows beside them. Flat with `parentId`, parents before children.
 			const groups = await invoke<FixtureGroupNode[]>("get_grouped_hierarchy", {
 				venueId,
 			});
@@ -95,14 +97,17 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 				groups: [
 					...state.groups,
 					{
-						groupId: group.id,
-						groupName: group.name,
+						id: group.id,
+						name: group.name ?? "",
+						label: group.name ?? "unnamed group",
+						parentId: null,
+						origin: "manual",
 						role: null,
 						moves: false,
-						movementConfig: null,
-						axisLr: group.axisLr,
-						axisFb: group.axisFb,
-						axisAb: group.axisAb,
+						movementConfig: undefined,
+						axisLr: group.axisLr ?? undefined,
+						axisFb: group.axisFb ?? undefined,
+						axisAb: group.axisAb ?? undefined,
 						fixtures: [],
 					} as FixtureGroupNode,
 				],
@@ -119,10 +124,11 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		// Optimistic update
 		set((state) => ({
 			groups: state.groups.map((g) =>
-				g.groupId === id
+				g.id === id
 					? {
 							...g,
-							groupName: name,
+							name,
+							label: name,
 							axisLr: axisLr ?? g.axisLr,
 							axisFb: axisFb ?? g.axisFb,
 							axisAb: axisAb ?? g.axisAb,
@@ -151,7 +157,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		// Optimistic update
 		const previousGroups = get().groups;
 		set((state) => ({
-			groups: state.groups.filter((g) => g.groupId !== id),
+			groups: state.groups.filter((g) => g.id !== id),
 			selectedGroupId:
 				state.selectedGroupId === id ? null : state.selectedGroupId,
 		}));
@@ -173,7 +179,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		if (headIndex === undefined) {
 			set((state) => ({
 				groups: state.groups.map((g) =>
-					g.groupId === groupId
+					g.id === groupId
 						? {
 								...g,
 								fixtures: g.fixtures.some((f) => f.id === fixtureId)
@@ -216,7 +222,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		if (headIndex === undefined) {
 			set((state) => ({
 				groups: state.groups.map((g) =>
-					g.groupId === groupId
+					g.id === groupId
 						? {
 								...g,
 								fixtures: g.fixtures.filter((f) => f.id !== fixtureId),
@@ -248,7 +254,9 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 		// Optimistic update
 		set((state) => ({
 			groups: state.groups.map((g) =>
-				g.groupId === groupId ? { ...g, movementConfig: config } : g,
+				// `null` clears the row's column; absent is how the node says
+				// it has none.
+				g.id === groupId ? { ...g, movementConfig: config ?? undefined } : g,
 			),
 		}));
 

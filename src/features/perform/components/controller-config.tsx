@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
-import type { FixtureGroup } from "@/bindings/groups";
+import type { GroupTreeNode } from "@/bindings/groups";
 import type {
 	ControllerStatus,
 	Cue,
@@ -47,7 +47,7 @@ export function labelMidiInput(input: MidiInput): string {
 export function labelAction(
 	action: MidiBinding["action"],
 	cues: Cue[],
-	groups: FixtureGroup[],
+	groups: GroupTreeNode[],
 ): string {
 	if (action.type === "fireCue") {
 		const cue = cues.find((c) => c.id === action.cue_id);
@@ -56,7 +56,7 @@ export function labelAction(
 	if (action.type === "setIntensity") {
 		if (!action.group_id) return "Master brightness";
 		const g = groups.find((g) => g.id === action.group_id);
-		return `${g?.name ?? action.group_id} brightness`;
+		return `${g?.name || action.group_id} brightness`;
 	}
 	if (action.type === "blackout") return "Blackout";
 	return "Controller on/off";
@@ -378,7 +378,7 @@ export function CreateActionBindingForm({
 	onCancel,
 }: {
 	venueId: string;
-	groups: FixtureGroup[];
+	groups: GroupTreeNode[];
 	modifiers: ModifierDef[];
 	displayOrder: number;
 	onCreated: () => void;
@@ -538,7 +538,7 @@ export function CreateActionBindingForm({
 						<NativeSelectOption value="">Master (all)</NativeSelectOption>
 						{groups.map((g) => (
 							<NativeSelectOption key={g.id} value={g.id}>
-								{g.name ?? g.id}
+								{g.name || g.label}
 							</NativeSelectOption>
 						))}
 					</NativeSelect>
@@ -589,7 +589,7 @@ export function CreateModifierForm({
 	onCancel,
 }: {
 	venueId: string;
-	groups: FixtureGroup[];
+	groups: GroupTreeNode[];
 	onCreated: () => void;
 	onCancel: () => void;
 }) {
@@ -698,7 +698,7 @@ export function CreateModifierForm({
 									onChange={() => toggleGroup(g.id)}
 									className="w-3 h-3"
 								/>
-								<span className="text-xs">{g.name ?? g.id}</span>
+								<span className="text-xs">{g.name || g.label}</span>
 							</label>
 						))}
 					</div>

@@ -120,7 +120,7 @@ export function formatVenueContext(
 	});
 
 	const groupLines = groups.map((g) => {
-		const name = g.groupName ?? "<unnamed>";
+		const name = g.name || "<unnamed>";
 		const members = g.fixtures
 			.map((m) => {
 				const headCount = Number(m.headCount);
@@ -132,11 +132,14 @@ export function formatVenueContext(
 			})
 			.join(", ");
 		const axes: string[] = [];
-		if (g.axisLr !== null) axes.push(`LR=${fmtN(g.axisLr)}`);
-		if (g.axisFb !== null) axes.push(`FB=${fmtN(g.axisFb)}`);
-		if (g.axisAb !== null) axes.push(`AB=${fmtN(g.axisAb)}`);
+		// Absent on a derived set — it has no authored row to carry them.
+		if (g.axisLr != null) axes.push(`LR=${fmtN(g.axisLr)}`);
+		if (g.axisFb != null) axes.push(`FB=${fmtN(g.axisFb)}`);
+		if (g.axisAb != null) axes.push(`AB=${fmtN(g.axisAb)}`);
 		const axesStr = axes.length > 0 ? `  [${axes.join(" ")}]` : "";
-		return `${name} (${g.role ?? "empty"}, ${g.fixtures.length} fixtures)${axesStr}\n    ${members || "<empty>"}`;
+		// A derived node names its role branch; a hand-made group has none, so
+		// it says where it came from instead.
+		return `${name} (${g.role ?? g.origin}, ${g.fixtures.length} fixtures)${axesStr}\n    ${members || "<empty>"}`;
 	});
 
 	return `# Venue context

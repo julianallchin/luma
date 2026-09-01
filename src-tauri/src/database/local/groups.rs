@@ -1,6 +1,7 @@
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::database::local::sync_delete;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::fixtures::PatchedFixture;
 use crate::models::groups::{
@@ -188,14 +189,17 @@ pub async fn delete_group(access: &mut VenueAccess<'_, Write>, id: &str) -> Resu
         ));
     }
 
-    let result = sqlx::query("DELETE FROM fixture_groups WHERE id = ? AND venue_id = ?")
-        .bind(id)
-        .bind(access.venue_id().to_owned())
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to delete group: {}", e))?;
+    let venue_id = access.venue_id().to_owned();
+    let deleted = sync_delete::delete_synced_where(
+        access.connection(),
+        "fixture_groups",
+        "id = ? AND venue_id = ?",
+        &[id, &venue_id],
+    )
+    .await
+    .map_err(|e| format!("Failed to delete group: {}", e))?;
 
-    Ok(result.rows_affected())
+    Ok(deleted as u64)
 }
 
 // -----------------------------------------------------------------------------
@@ -219,14 +223,12 @@ pub async fn add_member_to_group(
     require_fixture_and_group(access, fixture_id, group_id).await?;
     if head_index == WHOLE_FIXTURE {
         // Whole-fixture membership subsumes any per-head rows.
-        sqlx::query(
-            "DELETE FROM fixture_group_members
-             WHERE fixture_id = ? AND group_id = ? AND head_index != ?",
+        sync_delete::delete_synced_where(
+            access.connection(),
+            "fixture_group_members",
+            "fixture_id = ? AND group_id = ? AND head_index != ?",
+            &[fixture_id, group_id, &WHOLE_FIXTURE.to_string()],
         )
-        .bind(fixture_id)
-        .bind(group_id)
-        .bind(WHOLE_FIXTURE)
-        .execute(&mut *access.connection())
         .await
         .map_err(|e| format!("Failed to clear per-head rows: {}", e))?;
     } else {
@@ -288,21 +290,21 @@ pub async fn remove_member_from_group(
     require_fixture_and_group(access, fixture_id, group_id).await?;
     let result = match head_index {
         None => {
-            sqlx::query("DELETE FROM fixture_group_members WHERE fixture_id = ? AND group_id = ?")
-                .bind(fixture_id)
-                .bind(group_id)
-                .execute(&mut *access.connection())
-                .await
+            sync_delete::delete_synced_where(
+                access.connection(),
+                "fixture_group_members",
+                "fixture_id = ? AND group_id = ?",
+                &[fixture_id, group_id],
+            )
+            .await
         }
         Some(h) => {
-            sqlx::query(
-                "DELETE FROM fixture_group_members
-                 WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
+            sync_delete::delete_synced_where(
+                access.connection(),
+                "fixture_group_members",
+                "fixture_id = ? AND group_id = ? AND head_index = ?",
+                &[fixture_id, group_id, &h.to_string()],
             )
-            .bind(fixture_id)
-            .bind(group_id)
-            .bind(h)
-            .execute(&mut *access.connection())
             .await
         }
     };
@@ -336,14 +338,12 @@ pub async fn split_whole_fixture_membership(
         return Ok(false);
     };
 
-    sqlx::query(
-        "DELETE FROM fixture_group_members
-         WHERE fixture_id = ? AND group_id = ? AND head_index = ?",
+    sync_delete::delete_synced_where(
+        access.connection(),
+        "fixture_group_members",
+        "fixture_id = ? AND group_id = ? AND head_index = ?",
+        &[fixture_id, group_id, &WHOLE_FIXTURE.to_string()],
     )
-    .bind(fixture_id)
-    .bind(group_id)
-    .bind(WHOLE_FIXTURE)
-    .execute(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to remove whole-fixture row: {}", e))?;
 
@@ -395,73 +395,58 @@ async fn require_fixture_and_group(
     }
 }
 
-/// One membership row in a group, joined with its fixture.
-pub struct GroupMember {
-    pub fixture: PatchedFixture,
+/// One `fixture_group_members` row, with the group it belongs to named.
+///
+/// The venue's whole authored membership in one shape, because every consumer
+/// wants a different slice of it — the selection cache wants it by name, the
+/// hierarchy wants it by group and head — and two queries over one table were
+/// two answers that could disagree.
+#[derive(Debug, Clone)]
+pub struct Membership {
+    pub group_id: String,
+    /// The `fixture_groups` row's name, as authored. `None` for a group nobody
+    /// has named.
+    pub group_name: Option<String>,
+    pub fixture_id: String,
+    /// [`WHOLE_FIXTURE`] for whole-fixture membership.
     pub head_index: i64,
 }
 
-/// Get all membership rows in a group (a fixture appears once per row:
-/// once with [`WHOLE_FIXTURE`] or once per member head).
-pub async fn get_members_in_group(
+/// Every authored membership row in the venue, in membership order.
+///
+/// # Errors
+/// Fails if `fixture_group_members` cannot be read.
+pub async fn venue_memberships(
     access: &mut impl AuthorizedVenue,
-    group_id: &str,
-) -> Result<Vec<GroupMember>, String> {
+) -> Result<Vec<Membership>, String> {
     #[derive(FromRow)]
     struct Row {
-        #[sqlx(flatten)]
-        fixture: PatchedFixture,
-        head_index: i64,
-    }
-    let rows = sqlx::query_as::<_, Row>(
-        "SELECT f.id, f.uid, f.venue_id, f.universe, f.address, f.num_channels,
-                f.address_pinned,
-                f.manufacturer, f.model, f.mode_name, f.fixture_path, f.label,
-                f.pos_x, f.pos_y, f.pos_z, f.rot_x, f.rot_y, f.rot_z,
-                m.head_index
-         FROM fixtures f
-         JOIN fixture_group_members m ON f.id = m.fixture_id
-         WHERE m.group_id = ? AND f.venue_id = ?
-         ORDER BY m.display_order, m.head_index",
-    )
-    .bind(group_id)
-    .bind(access.venue_id().to_owned())
-    .fetch_all(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to get members in group: {}", e))?;
-    Ok(rows
-        .into_iter()
-        .map(|r| GroupMember {
-            fixture: r.fixture,
-            head_index: r.head_index,
-        })
-        .collect())
-}
-
-/// All membership rows for a venue: (fixture_id, normalized-or-raw group name, head_index).
-/// Feeds the selection-expression cache.
-pub async fn get_venue_memberships(
-    access: &mut impl AuthorizedVenue,
-) -> Result<Vec<(String, Option<String>, i64)>, String> {
-    #[derive(FromRow)]
-    struct Row {
-        fixture_id: String,
+        group_id: String,
         name: Option<String>,
+        fixture_id: String,
         head_index: i64,
     }
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT m.fixture_id, g.name, m.head_index
+        "SELECT m.group_id, g.name, m.fixture_id, m.head_index
          FROM fixture_group_members m
          JOIN fixture_groups g ON g.id = m.group_id
-         WHERE g.venue_id = ?",
+         JOIN fixtures f ON f.id = m.fixture_id
+         WHERE g.venue_id = ? AND f.venue_id = ?
+         ORDER BY m.display_order, m.head_index",
     )
+    .bind(access.venue_id().to_owned())
     .bind(access.venue_id().to_owned())
     .fetch_all(&mut *access.connection())
     .await
-    .map_err(|e| format!("Failed to get venue memberships: {}", e))?;
+    .map_err(|e| format!("Failed to read the venue's group memberships: {e}"))?;
     Ok(rows
         .into_iter()
-        .map(|r| (r.fixture_id, r.name, r.head_index))
+        .map(|r| Membership {
+            group_id: r.group_id,
+            group_name: r.name,
+            fixture_id: r.fixture_id,
+            head_index: r.head_index,
+        })
         .collect())
 }
 
@@ -530,40 +515,4 @@ pub async fn fixture_creation_order(
     .fetch_all(&mut *access.connection())
     .await
     .map_err(|e| format!("Failed to read the fixture creation order: {e}"))
-}
-
-/// The fixture ids in one group, in membership order, deduplicated across
-/// per-head rows.
-///
-/// [`get_members_in_group`] answers the same question with whole
-/// [`PatchedFixture`] rows because the hierarchy draws them; the group tree
-/// holds ids and nothing else, and reading twenty columns to throw nineteen
-/// away is how a tree of forty groups becomes a table scan of eight hundred.
-///
-/// # Errors
-/// Fails if `fixture_group_members` cannot be read.
-pub async fn group_member_ids(
-    access: &mut impl AuthorizedVenue,
-    group_id: &str,
-) -> Result<Vec<String>, String> {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT m.fixture_id
-         FROM fixture_group_members m
-         JOIN fixtures f ON f.id = m.fixture_id
-         WHERE m.group_id = ? AND f.venue_id = ?
-         ORDER BY m.display_order, m.head_index",
-    )
-    .bind(group_id)
-    .bind(access.venue_id().to_owned())
-    .fetch_all(&mut *access.connection())
-    .await
-    .map_err(|e| format!("Failed to read group membership: {e}"))?;
-
-    let mut ids: Vec<String> = Vec::with_capacity(rows.len());
-    for id in rows {
-        if !ids.contains(&id) {
-            ids.push(id);
-        }
-    }
-    Ok(ids)
 }

@@ -150,7 +150,7 @@ export function MovementPyramids() {
 	const groups = useGroupStore((s) => s.groups);
 	const patchedFixtures = usePlacedFixtures();
 
-	const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
+	const selectedGroup = groups.find((g) => g.id === selectedGroupId);
 	const config = selectedGroup?.movementConfig;
 
 	const fixtureMap = useMemo(

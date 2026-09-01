@@ -140,6 +140,9 @@ pub async fn remove_fixture_from_group(
 // Hierarchy and selection
 // -----------------------------------------------------------------------------
 
+/// The venue's groups with their fixtures: the merged tree
+/// ([`list_group_tree`]) with every node's members resolved to fixtures and
+/// heads. Flat with `parentId`, parents before children.
 pub async fn get_grouped_hierarchy(
     services: &AppServices,
     venue_id: String,
@@ -147,10 +150,9 @@ pub async fn get_grouped_hierarchy(
     crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(
-        groups_service::get_grouped_hierarchy_with_path(&services.fixtures_root, &mut access)
-            .await?,
-    )
+    Ok(GroupSources::read(&services.fixtures_root, &mut access)
+        .await?
+        .hierarchy())
 }
 
 pub async fn preview_selection_query(
@@ -282,7 +284,9 @@ pub async fn list_group_tree(
     crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    Ok(groups_service::group_tree(&services.fixtures_root, &mut access).await?)
+    Ok(GroupSources::read(&services.fixtures_root, &mut access)
+        .await?
+        .tree())
 }
 
 /// Rename one node of the tree. `label` of `None` drops the rename and lets the
@@ -1312,21 +1316,16 @@ mod tests {
                 .await
                 .expect("the fixture would not take a position");
         }
-        for statement in [
-            "DELETE FROM venue_node_params WHERE node_id IN
-                 (SELECT id FROM venue_nodes WHERE venue_id = ?)",
-            "DELETE FROM venue_constraints WHERE node_id IN
-                 (SELECT id FROM venue_nodes WHERE venue_id = ?)",
-            "DELETE FROM venue_edges WHERE child_id IN
-                 (SELECT id FROM venue_nodes WHERE venue_id = ?)",
-            "DELETE FROM venue_nodes WHERE venue_id = ?",
-        ] {
-            sqlx::query(statement)
-                .bind(&venue)
-                .execute(pool)
-                .await
-                .expect("the graph would not come back out");
-        }
+        let mut connection = pool.acquire().await.expect("a connection");
+        crate::database::local::sync_delete::delete_synced_where(
+            &mut connection,
+            "venue_nodes",
+            "venue_id = ?",
+            &[&venue],
+        )
+        .await
+        .expect("the graph would not come back out");
+        drop(connection);
         crate::services::groups::invalidate_venue_fixture_cache();
 
         venue

@@ -1129,7 +1129,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 102
+        "line": 101
       },
       "name": "current_account",
       "prose": {
@@ -1856,7 +1856,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 143
+        "line": 146
       },
       "name": "get_grouped_hierarchy",
       "prose": {
@@ -2031,7 +2031,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 164
+        "line": 163
       },
       "name": "get_session_item",
       "prose": {
@@ -2232,7 +2232,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 205
+        "line": 207
       },
       "name": "get_ungrouped_fixtures",
       "prose": {
@@ -2320,7 +2320,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 186
+        "line": 188
       },
       "name": "highlight_selection",
       "prose": {
@@ -2654,7 +2654,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 278
+        "line": 280
       },
       "name": "list_group_tree",
       "prose": {
@@ -2862,7 +2862,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 342
+        "line": 346
       },
       "name": "merge_group_nodes",
       "prose": {
@@ -2888,7 +2888,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 174
+        "line": 180
       },
       "name": "midi_compile_cues_for_deck",
       "prose": {
@@ -2911,7 +2911,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 100
+        "line": 101
       },
       "name": "midi_create_binding",
       "prose": {
@@ -2933,7 +2933,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 26
+        "line": 27
       },
       "name": "midi_create_cue",
       "prose": {
@@ -2955,7 +2955,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 69
+        "line": 70
       },
       "name": "midi_create_modifier",
       "prose": {
@@ -2977,7 +2977,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 122
+        "line": 123
       },
       "name": "midi_delete_binding",
       "prose": {
@@ -2999,7 +2999,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 48
+        "line": 49
       },
       "name": "midi_delete_cue",
       "prose": {
@@ -3022,7 +3022,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 80
+        "line": 81
       },
       "name": "midi_delete_modifier",
       "prose": {
@@ -3048,7 +3048,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 202
+        "line": 211
       },
       "name": "midi_fire_cue",
       "prose": {
@@ -3072,7 +3072,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 91
+        "line": 92
       },
       "name": "midi_list_bindings",
       "prose": {
@@ -3092,7 +3092,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 17
+        "line": 18
       },
       "name": "midi_list_cues",
       "prose": {
@@ -3112,7 +3112,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 60
+        "line": 61
       },
       "name": "midi_list_modifiers",
       "prose": {
@@ -3132,7 +3132,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 225
+        "line": 234
       },
       "name": "midi_release_cue",
       "prose": {
@@ -3156,7 +3156,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 136
+        "line": 137
       },
       "name": "midi_reload_mapping",
       "prose": {
@@ -3181,7 +3181,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 111
+        "line": 112
       },
       "name": "midi_update_binding",
       "prose": {
@@ -3203,7 +3203,7 @@
       "domain": "midi",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/midi.rs",
-        "line": 37
+        "line": 38
       },
       "name": "midi_update_cue",
       "prose": {
@@ -3419,7 +3419,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 317
+        "line": 321
       },
       "name": "move_group_node",
       "prose": {
@@ -3818,7 +3818,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 156
+        "line": 158
       },
       "name": "preview_selection_query",
       "prose": {
@@ -4146,7 +4146,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 444
+        "line": 443
       },
       "name": "remove_session_item",
       "prose": {
@@ -4177,7 +4177,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 293
+        "line": 297
       },
       "name": "rename_group_node",
       "prose": {
@@ -4480,7 +4480,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 361
+        "line": 365
       },
       "name": "reset_group_node",
       "prose": {
@@ -4818,7 +4818,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 37
+        "line": 36
       },
       "name": "send_login_code",
       "prose": {
@@ -4982,7 +4982,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 237
+        "line": 236
       },
       "name": "set_session_item",
       "prose": {
@@ -5279,7 +5279,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 220
+        "line": 222
       },
       "name": "update_movement_config",
       "prose": {
@@ -5448,7 +5448,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 65
+        "line": 64
       },
       "name": "verify_login_code",
       "prose": {
@@ -5520,7 +5520,7 @@
       "domain": "auth",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/auth.rs",
-        "line": 599
+        "line": 598
       },
       "name": "wipe_database",
       "prose": {
@@ -5528,10 +5528,10 @@
         "returns": "void (no TS arguments at all — `invoke(\"wipe_database\")`)",
         "sideEffects": [
           "holds engine.sync_lock for the whole boundary (blocks pull/push)",
-          "NETWORK: sync_files_unlocked + enqueue_dirty + push::flush_pending — offline or partial sync makes the command FAIL rather than delete",
+          "NETWORK: sync_files_unlocked + push::flush_pending until it delivers nothing — offline or partial sync makes the command FAIL rather than delete",
           "re-verifies the frozen principal after network work; errors if the session changed",
           "suspends analysis + python workspace generations; clears GraphRunStore; host_audio.unload(); render_engine.reset_for_identity_switch(); controller.disconnect(); mixer.disconnect(); stem_cache.clear()",
-          "BEGIN IMMEDIATE tx: closes signed write admission for the principal, audits every uid-bearing table + pending_ops for durability, deletes the signed-in projection, commits",
+          "BEGIN IMMEDIATE tx: closes signed write admission for the principal, audits every uid-bearing table plus undelivered rows and tombstones for durability, deletes the signed-in projection and this principal's push state, commits",
           "recover_committed_signout after commit; prints '[auth] Signed-in database projection wiped on sign-out'"
         ]
       },
@@ -5727,11 +5727,11 @@
     {
       "emitters": [
         "src-tauri/src/controller_manager.rs:645",
-        "src-tauri/src/dispatch/handlers/midi.rs:221",
-        "src-tauri/src/dispatch/handlers/midi.rs:230"
+        "src-tauri/src/dispatch/handlers/midi.rs:230",
+        "src-tauri/src/dispatch/handlers/midi.rs:239"
       ],
       "listeners": [
-        "src/features/perform/components/perform-page.tsx:214"
+        "src/features/perform/components/perform-page.tsx:216"
       ],
       "name": "controller_state",
       "orphan": false
@@ -5761,10 +5761,10 @@
         "src-tauri/src/dispatch/handlers/tracks.rs:324",
         "src-tauri/src/dispatch/handlers/tracks.rs:362",
         "src-tauri/src/dispatch/handlers/tracks.rs:427",
-        "src-tauri/src/sync/orchestrator.rs:141",
-        "src-tauri/src/sync/orchestrator.rs:192",
-        "src-tauri/src/sync/push.rs:848",
-        "src-tauri/src/sync/push.rs:885"
+        "src-tauri/src/sync/orchestrator.rs:137",
+        "src-tauri/src/sync/orchestrator.rs:188",
+        "src-tauri/src/sync/push.rs:1040",
+        "src-tauri/src/sync/push.rs:1077"
       ],
       "listeners": [
         "src/App.tsx:468",
@@ -5781,7 +5781,7 @@
       "listeners": [
         "src/features/perform/components/controller-config.tsx:402",
         "src/features/perform/components/controller-config.tsx:607",
-        "src/features/perform/components/perform-page.tsx:1027"
+        "src/features/perform/components/perform-page.tsx:1029"
       ],
       "name": "midi_learn_captured",
       "orphan": false
@@ -5791,7 +5791,7 @@
         "src-tauri/src/mixer_manager.rs:169"
       ],
       "listeners": [
-        "src/features/perform/components/perform-page.tsx:714"
+        "src/features/perform/components/perform-page.tsx:716"
       ],
       "name": "mixer_learned",
       "orphan": false
@@ -5802,7 +5802,7 @@
         "src-tauri/src/mixer_manager.rs:214"
       ],
       "listeners": [
-        "src/features/perform/components/perform-page.tsx:154"
+        "src/features/perform/components/perform-page.tsx:156"
       ],
       "name": "mixer_state",
       "orphan": false
@@ -5884,7 +5884,7 @@
     {
       "emitters": [
         "src-tauri/src/controller_manager.rs:657",
-        "src-tauri/src/dispatch/handlers/midi.rs:239",
+        "src-tauri/src/dispatch/handlers/midi.rs:248",
         "src-tauri/src/render_engine.rs:46"
       ],
       "listeners": [

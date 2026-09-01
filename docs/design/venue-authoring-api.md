@@ -109,7 +109,17 @@ v.aim(heads, direction=(0, 1, -0.5))       # or aim(heads, at=(0, 8, 0))
 v.nodes(kind=, label=glob, on=, region=)   # -> objects
 #   .id .label .kind .at (facade centre) .size .host .tips .face
 v.extent(selection)   # -> span + centre in u/v — the one-line "is it centred" check
+v.groups()            # -> the sets the rig describes, flat and parents-first
+#   .name (what a score selects by) .path .label .role .origin .fixtures .heads
 ```
+
+`groups()` is a read of the *derived* tree — role, then where a run sits, then
+the halves a row falls into — with hand edits on top and hand-made
+`fixture_groups` rows beside them. One read serves it, the patch page and every
+other surface (`services::groups::GroupSources`); nothing materialises a derived
+set into a table to make it visible. A hand-made row's `axis_*` columns come
+with it and a derived node ships **without** them, because it has no row and a
+null there would read as "centred".
 
 Every field a query returns is legal input to the write verbs, so
 read → edit → verify round-trips. `describe()` / `tiles()` demote to
