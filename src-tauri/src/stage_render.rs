@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
 
 use glam::Vec3;
-use luma_render::scene_desc::{self, RenderSettings};
+use luma_render::scene_desc::{self, RenderSettings, VenueEnvironment};
 use luma_render::{assets, build_frame_with, coords, Renderer, DEFAULT_SUBFRAMES};
 use luma_scene::venue::ResolvedVenue;
 use luma_scene::{Camera, View, Viewfinder};
@@ -43,13 +43,17 @@ pub const FOV_Y_DEG: f32 = 50.0;
 /// is not on a frame budget, and the haze is most of what a beam *is*.
 const HAZE_RESOLUTION: f32 = 1.0;
 
-/// Render settings every offscreen frame uses.
+/// Render settings one offscreen frame of `environment` uses.
 ///
-/// Always the editor's lit environment: an offscreen frame is read by someone
-/// who was not in the room, and a dark stage hides everything the score does
-/// not happen to light.
-fn offscreen_render() -> RenderSettings {
-    RenderSettings::editor_lit(FOV_Y_DEG, HAZE_RESOLUTION)
+/// The room is lit by the venue's own environment and by nothing else. There
+/// used to be an "editor work light" here — a lit preset switched on because an
+/// offscreen frame is read by someone who was not in the room and a dark stage
+/// hides everything the score does not light. That reasoning was right and the
+/// mechanism was a second lighting system: the same picture now comes out of
+/// the *default* environment, indoor with the house at full, which is what
+/// every venue has unless someone turned it down on purpose.
+fn offscreen_render(environment: VenueEnvironment) -> RenderSettings {
+    RenderSettings::room(environment, FOV_Y_DEG, HAZE_RESOLUTION)
 }
 
 /// Largest offscreen frame an agent may ask for, per side. Mirrors the figure
@@ -76,6 +80,13 @@ pub struct VenueGeometry {
     /// Keyed by `fixture_path`. A path whose bundle no longer resolves is
     /// absent rather than an error: a venue can outlive a fixture bundle.
     pub definitions: HashMap<String, FixtureDefinition>,
+    /// What lights this room.
+    ///
+    /// Read off the venue record with the rest of it, so one snapshot answers
+    /// where everything is *and* what it is seen by. A caller taking a picture
+    /// under different light overwrites this before calling [`Self::scene`] —
+    /// that is a camera setting, not an edit, and it never reaches the record.
+    pub environment: VenueEnvironment,
 }
 
 impl VenueGeometry {
@@ -103,6 +114,7 @@ impl VenueGeometry {
         access: &mut VenueAccess<'_, Read>,
         fixtures_root: &Path,
     ) -> Result<Self, String> {
+        let environment = local::venues::get_venue(access).await?.environment;
         let fixtures = local::fixtures::get_patched_fixtures(access).await?;
         let venue = crate::venue_graph::resolved(access, fixtures_root).await?;
         let mut definitions = HashMap::new();
@@ -124,6 +136,7 @@ impl VenueGeometry {
             fixtures,
             venue,
             definitions,
+            environment,
         })
     }
 
@@ -140,10 +153,10 @@ impl VenueGeometry {
     /// function of the framing and of the frame's aspect ratio, so it is
     /// resolved by [`render_rgba`] and installed on the built frame.
     ///
-    /// The environment is [`offscreen_render`]'s, not the editor viewport's.
+    /// The room is lit by [`Self::environment`] — see [`offscreen_render`].
     #[must_use]
     pub fn scene(&self) -> (scene_desc::Scene, BTreeMap<String, scene_desc::Definition>) {
-        let render = offscreen_render();
+        let render = offscreen_render(self.environment);
         let definitions: BTreeMap<String, scene_desc::Definition> = self
             .definitions
             .iter()
@@ -954,6 +967,7 @@ mod tests {
             fixtures: Vec::new(),
             venue,
             definitions: HashMap::new(),
+            environment: VenueEnvironment::default(),
         }
     }
 

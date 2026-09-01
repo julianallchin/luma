@@ -204,6 +204,7 @@ use handlers::score_dsl::{
     ScoreDslExportResponse, ScoreDslImportResponse, ScoreDslValidationResponse,
 };
 use handlers::tracks::TrackAudioBase64;
+use luma_render::scene_desc::VenueEnvironment;
 use prodjlink::DiscoveredDevice;
 
 commands! {
@@ -665,6 +666,7 @@ commands! {
     venues::get_or_create_share_code(venue_id: String) -> String;
     venues::join_venue(code: String) -> Venue;
     venues::leave_venue(venue_id: String) -> ();
+    venues::set_venue_environment(venue_id: String, environment: VenueEnvironment) -> ();
 
     midi::midi_list_cues(venue_id: String) -> Vec<Cue>;
     midi::midi_create_cue(input: CreateCueInput) -> Cue;

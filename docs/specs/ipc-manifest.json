@@ -1112,7 +1112,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 29
+        "line": 30
       },
       "name": "create_venue",
       "prose": {
@@ -1287,7 +1287,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 51
+        "line": 52
       },
       "name": "delete_venue",
       "prose": {
@@ -1893,7 +1893,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 62
+        "line": 63
       },
       "name": "get_or_create_share_code",
       "prose": {
@@ -2254,7 +2254,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 22
+        "line": 23
       },
       "name": "get_venue",
       "prose": {
@@ -2579,7 +2579,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 111
+        "line": 112
       },
       "name": "join_venue",
       "prose": {
@@ -2629,7 +2629,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 149
+        "line": 150
       },
       "name": "leave_venue",
       "prose": {
@@ -2832,7 +2832,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 16
+        "line": 17
       },
       "name": "list_venues",
       "prose": {
@@ -5024,6 +5024,28 @@
       "returns": "()"
     },
     {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "environment",
+          "rust": "VenueEnvironment"
+        }
+      ],
+      "domain": "venues",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "line": 188
+      },
+      "name": "set_venue_environment",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
       "args": [],
       "domain": "skills",
       "handler": {
@@ -5377,7 +5399,7 @@
       "domain": "venues",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/venues.rs",
-        "line": 38
+        "line": 39
       },
       "name": "update_venue",
       "prose": {
@@ -5673,7 +5695,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/tracks.rs"
     },
     {
-      "commandCount": 8,
+      "commandCount": 9,
       "domain": "venues",
       "handlers": "src-tauri/src/dispatch/handlers/venues.rs"
     },
@@ -5832,7 +5854,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:149",
+        "gpui/crates/app/src/library.rs:150",
         "src/features/dj-import/components/dj-import-browser.tsx:86",
         "src/features/tracks/components/track-browser.tsx:355"
       ],
@@ -5894,7 +5916,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 220,
+    "commandCount": 221,
     "domainCount": 33,
     "eventCount": 18,
     "unportedCount": 0

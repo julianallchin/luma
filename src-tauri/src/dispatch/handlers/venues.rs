@@ -9,6 +9,7 @@ use crate::database::local::venues as venues_db;
 use crate::database::remote::common::SupabaseClient;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::venues::Venue;
+use luma_render::scene_desc::VenueEnvironment;
 
 /// Every venue in the local library, owned and joined alike. Read-only and
 /// unscoped — the per-venue authorization gate (`VenueAccess`) guards the
@@ -176,6 +177,23 @@ pub async fn leave_venue(services: &AppServices, venue_id: String) -> Result<(),
     venues_db::remove_current_venue_membership(pool, &venue_id, &auth.principal.user_id).await?;
 
     Ok(())
+}
+
+/// What kind of room this venue is, and how far up its one dial is.
+///
+/// Venue truth at the tier of the name, and local-only, so there is no cloud
+/// round trip: take the write lease, write the column, commit — the shape
+/// `controller_connect` uses for the port. One write for both modes because
+/// the value is one closed enum; see [`venues_db::set_environment`].
+pub async fn set_venue_environment(
+    services: &AppServices,
+    venue_id: String,
+    environment: VenueEnvironment,
+) -> Result<(), CommandError> {
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    venues_db::set_environment(&mut access, environment).await?;
+    Ok(access.commit().await?)
 }
 
 // ============================================================================
