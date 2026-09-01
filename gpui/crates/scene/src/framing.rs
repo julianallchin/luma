@@ -78,6 +78,16 @@ impl Framing {
     /// Smallest half-diagonal a rig is treated as having. A one-fixture venue
     /// still needs a scale.
     const MIN_RADIUS: f32 = 1.0;
+    /// Fraction of an open-air frame's height that belongs to the sky.
+    ///
+    /// A fit answers one question — where does the whole rig land inside the
+    /// frame — and indoors that is the whole of a named view, because there is
+    /// nothing above the rig to lose. Outdoors there is, and the fit alone
+    /// loses it: a front view looks down from eighteen degrees up, which leaves
+    /// the horizon in the top eighth of the picture and the sky as a strip.
+    /// Handing the top third of the frame to the sky is what turns the same
+    /// fitted rig into a rig *under* one. See [`Viewfinder::horizon_polar`].
+    pub const SKY_SHARE: f32 = 1.0 / 3.0;
 
     /// Half the size of a fixture body, in metres — how far outside its own
     /// lens a head is framed.
@@ -393,6 +403,13 @@ pub struct Viewfinder {
     /// Fraction of the *usable* half-frame left empty on each side, as visual
     /// breathing room. Applies on top of the insets, not instead of them.
     pub margin: f32,
+    /// Whether the frame is open to the sky.
+    ///
+    /// A composition rule, which is why it lives here beside the margin and the
+    /// insets rather than being threaded through every camera call: it says the
+    /// top [`Framing::SKY_SHARE`] of the frame is spoken for, exactly as the
+    /// insets say the bottom band is.
+    pub open_air: bool,
 }
 
 impl Viewfinder {
@@ -404,7 +421,61 @@ impl Viewfinder {
             aspect,
             insets: Insets::NONE,
             margin: Framing::MARGIN,
+            open_air: false,
         }
+    }
+
+    /// The same frame, open to the sky (or not).
+    #[must_use]
+    pub fn open_air(mut self, open: bool) -> Self {
+        self.open_air = open;
+        self
+    }
+
+    /// Steepest an open-air view may look down: the polar angle whose horizon
+    /// lands on the frame's sky line. [`None`] under a roof, where nothing
+    /// bounds it.
+    ///
+    /// The horizon is where a view ray is level, so it sits `tan(elevation)`
+    /// above the aim point measured in units of `tan(fov_y/2)` — and the aim
+    /// point is the usable rectangle's centre, which the chrome may already
+    /// have moved. Solving for the elevation that puts it
+    /// [`Framing::SKY_SHARE`] of the way down from the top edge is one line,
+    /// and it is a function of the lens and the chrome alone: the rig, its
+    /// size and its distance do not enter, because the horizon does not move
+    /// when the camera does.
+    ///
+    /// Returned as a polar angle from +Z, which is the form a camera takes.
+    #[must_use]
+    pub fn horizon_polar(&self) -> Option<f32> {
+        if !self.open_air {
+            return None;
+        }
+        let sky_line = 1.0 - 2.0 * Framing::SKY_SHARE - self.vertical().0;
+        Some(std::f32::consts::FRAC_PI_2 - (sky_line * self.tangents().1).atan())
+    }
+
+    /// `direction` — from the aim point towards the eye — brought down to
+    /// [`Self::horizon_polar`] when it looks down more steeply than that.
+    ///
+    /// Only the elevation moves: the azimuth, the fitted distance and the aim
+    /// are all solved from the result exactly as they were from the input, so
+    /// an open-air view is the same view from lower down and further back, not
+    /// a different one. A direction with no azimuth to preserve — straight up,
+    /// straight down — is returned untouched, which is what keeps an overhead
+    /// overhead.
+    #[must_use]
+    pub fn under_sky(&self, direction: Vec3) -> Vec3 {
+        let Some(polar) = self.horizon_polar() else {
+            return direction;
+        };
+        let direction = direction.normalize_or(Vec3::NEG_Y);
+        let plan = direction.truncate();
+        if plan.length_squared() < 1e-8 || direction.z <= polar.cos() {
+            return direction;
+        }
+        let (sp, cp) = polar.sin_cos();
+        (plan.normalize() * sp).extend(cp)
     }
 
     /// The same frame with chrome over its edges.

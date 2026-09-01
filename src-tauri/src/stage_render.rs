@@ -510,8 +510,10 @@ impl Sequence {
             size.1.clamp(1, MAX_DIMENSION),
         );
         let framing = scene.framing(&definitions);
-        // No chrome over a headless frame, so the fit gets the whole of it.
-        let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1 as f32);
+        // No chrome over a headless frame, so the fit gets the whole of it —
+        // except outdoors, where the top of the frame belongs to the sky.
+        let viewfinder = Viewfinder::new(FOV_Y_DEG, size.0 as f32 / size.1 as f32)
+            .open_air(scene.render.sky.is_some());
         let camera = Camera::for_view(view, &framing, booth, &viewfinder);
 
         let id = NEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
