@@ -64,6 +64,18 @@ const DIRECTION_TOLERANCE: f64 = 1e-3;
 /// Contact is not collision: a mated piece touches its host by construction.
 const COLLISION_CLEARANCE_M: f64 = 0.02;
 
+/// How close two faces' normals must be before they count as pointing the same
+/// way, as a difference of cosines. Wide, because the tie this resolves is
+/// exact: a deck's four top edges inherit their normal from the top face they
+/// sit on, so they point *identically* up and only their joint tells them apart.
+const FACE_TIE: f64 = 1e-6;
+
+/// How far off a stated `face=` the nearest face may point and still be the one
+/// meant, as a cosine. Beyond sixty degrees the caller named a face the piece
+/// does not have, and seating it on whatever happened to be nearest is how a
+/// speaker ends up facing the wall with nothing said.
+const FACE_MIN_DOT: f64 = 0.5;
+
 /// The nearest buildable length, never shorter than one module.
 #[must_use]
 pub fn quantize_length(metres: f64) -> f64 {
@@ -188,6 +200,51 @@ impl Extent {
     }
 }
 
+/// The face a direction names, among candidates already known to be hostable.
+///
+/// Nearest by normal, and among faces pointing the *same* way the one a piece
+/// can be set down on rather than the joint that only butts two pieces together
+/// — a deck's four top edges inherit the top face's own up, so a plain "put it
+/// on top" ties four ways and three of the four answers are edge joints.
+fn nearest_face<'a>(
+    faces: &'a [(ResolvedSocket, DVec3)],
+    wanted: DVec3,
+) -> Option<&'a (ResolvedSocket, DVec3)> {
+    let best = faces
+        .iter()
+        .map(|(_, normal)| normal.dot(wanted))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let tied = faces
+        .iter()
+        .filter(move |(_, normal)| normal.dot(wanted) >= best - FACE_TIE);
+    let mut tied = tied.peekable();
+    let first = *tied.peek()?;
+    Some(
+        tied.clone()
+            .find(|(s, _)| s.socket_type.kind() == crate::sockets::SocketKind::Surface)
+            .unwrap_or(first),
+    )
+}
+
+/// Why this piece hosts nothing at all, where the catalog has a reason worth
+/// saying. `None` for a piece that simply has no free face.
+fn hosts_nothing_because(piece: &crate::catalog::Piece) -> Option<&'static str> {
+    (piece.kind == crate::catalog::PieceKind::DjBooth)
+        .then_some("the booth already carries its own players and mixer")
+}
+
+/// How far a placed box reaches along one world direction, metres.
+fn span_along(world: &DMat4, bounds: DAabb, direction: DVec3) -> f64 {
+    let direction = direction.normalize_or_zero();
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for corner in corners(bounds) {
+        let along = world.transform_point3(corner).dot(direction);
+        lo = lo.min(along);
+        hi = hi.max(along);
+    }
+    hi - lo
+}
+
 fn corners(b: DAabb) -> [DVec3; 8] {
     let (l, h) = (b.min, b.max);
     [
@@ -268,15 +325,21 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
         Some(Footprint::of(&self.world(node)?, self.bounds(node)?))
     }
 
-    /// The extent of a set of nodes, ignoring any the solve or the supply has
-    /// no answer for.
+    /// The extent of a set of nodes, ignoring any the solve has no pose for.
+    ///
+    /// A node the *supply* cannot measure — a fixture, whose box is a patch row
+    /// rather than a mesh — counts as the point it hangs at. Leaving it out
+    /// made `extent(kind="fixture")` answer `None` for a room full of lights,
+    /// which reads as "nothing is there".
     #[must_use]
     pub fn extent<'n>(&self, nodes: impl IntoIterator<Item = &'n str>) -> Option<Extent> {
-        Extent::of(
-            nodes
-                .into_iter()
-                .filter_map(|id| Some((self.world(id)?, self.bounds(id)?))),
-        )
+        Extent::of(nodes.into_iter().filter_map(|id| {
+            Some((
+                self.world(id)?,
+                self.bounds(id)
+                    .unwrap_or_else(|| DAabb::new(DVec3::ZERO, DVec3::ZERO)),
+            ))
+        }))
     }
 
     /// One node's sockets in world space, as `(socket, world position, world
@@ -417,17 +480,51 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
             .filter(|(s, _, _)| s.socket_type != SocketType::Grab)
             .map(|(s, _, normal)| (s, normal))
             .collect();
-        faces
-            .iter()
-            .max_by(|a, b| a.1.dot(wanted).total_cmp(&b.1.dot(wanted)))
+        nearest_face(&faces, wanted)
             .map(|(s, _)| s.name.clone())
-            .ok_or_else(|| Refusal::NoFace {
-                node: node.to_string(),
-                offered: faces
-                    .iter()
-                    .map(|(_, n)| facade_from_three(*n).to_array())
-                    .collect(),
-            })
+            .ok_or_else(|| self.no_face(node, &faces))
+    }
+
+    /// How a node reads in a message: its id, its label and what it is.
+    ///
+    /// A refusal naming a bare uuid tells the reader nothing they can act on,
+    /// and the graph is holding both halves of the answer.
+    fn name_of(&self, node: &str) -> String {
+        let Some(row) = self.graph.node(node) else {
+            return format!("`{node}`");
+        };
+        if row.kind == NodeKind::Venue {
+            return format!("the room itself (`{node}`)");
+        }
+        let piece = row
+            .catalog_ref
+            .as_deref()
+            .and_then(crate::catalog::find)
+            .map(|p| p.short);
+        match (row.label.as_deref(), piece) {
+            (Some(label), Some(piece)) => format!("`{node}` (\"{label}\", a {piece})"),
+            (Some(label), None) => format!("`{node}` (\"{label}\")"),
+            (None, Some(piece)) => format!("`{node}` (a {piece})"),
+            (None, None) => format!("`{node}`"),
+        }
+    }
+
+    /// The refusal for a face nothing here has, named the way a reader can act
+    /// on.
+    fn no_face(&self, node: &str, faces: &[(ResolvedSocket, DVec3)]) -> Refusal {
+        Refusal::NoFace {
+            name: self.name_of(node),
+            hint: self
+                .graph
+                .node(node)
+                .and_then(|row| row.catalog_ref.as_deref())
+                .and_then(crate::catalog::find)
+                .and_then(|piece| hosts_nothing_because(piece).map(str::to_string)),
+            offered: faces
+                .iter()
+                .map(|(_, n)| facade_from_three(*n).to_array())
+                .collect(),
+        }
     }
 
     /// The first placed node whose box the candidate overlaps, ignoring
@@ -475,11 +572,30 @@ pub enum Refusal {
     NoTip { node: String },
     /// Several free ends and no direction to pick between them.
     AmbiguousTip { node: String, ends: Vec<[f64; 3]> },
-    /// The host has no face at all a piece could sit on.
+    /// The host has no face at all a piece could sit on, or none pointing the
+    /// way the caller named.
     NoFace {
-        node: String,
+        /// The host as a reader knows it — id, label and piece. A bare uuid is
+        /// not something anybody can act on.
+        name: String,
+        /// Why this piece hosts nothing, where there is a reason to give.
+        hint: Option<String>,
         offered: Vec<[f64; 3]>,
     },
+    /// A piece with no half that bolts to the end it was handed.
+    NoJoint {
+        piece: String,
+        /// The host, as [`Scene::name_of`] words it.
+        host: String,
+        /// What the host's end is, in the socket vocabulary's own word.
+        joint: &'static str,
+        /// Whether that joint articulates, and so whether `angle=` is the fix.
+        turnable: Option<f64>,
+    },
+    /// A turn asked of a joint that is bolted rather than articulated.
+    NoTurn { piece: String, joint: &'static str },
+    /// A turn past what one joint can give.
+    TurnTooFar { wanted: f64, limit: f64 },
     /// No joint this piece has makes that turn. `legal` is every direction it
     /// *can* leave in, as facade vectors.
     ImpossibleTurn {
@@ -537,13 +653,52 @@ impl std::fmt::Display for Refusal {
                 ends.len(),
                 vectors(ends)
             ),
-            Refusal::NoFace { node, offered } if offered.is_empty() => {
-                write!(f, "nothing can be mounted on `{node}`")
-            }
-            Refusal::NoFace { node, offered } => write!(
+            Refusal::NoFace {
+                name,
+                hint,
+                offered,
+            } if offered.is_empty() => write!(
                 f,
-                "`{node}` has no face that way; its faces point {}",
+                "{name} has no face anything mounts on{}",
+                hint.as_deref()
+                    .map(|why| format!(" — {why}"))
+                    .unwrap_or_default()
+            ),
+            Refusal::NoFace { name, offered, .. } => write!(
+                f,
+                "{name} has no face that way; its faces point {}",
                 vectors(offered)
+            ),
+            Refusal::NoJoint {
+                piece,
+                host,
+                joint,
+                turnable,
+            } => {
+                write!(f, "a `{piece}` has no half that bolts to a {joint}: {host} chains only to another piece with a {joint}")?;
+                match turnable {
+                    Some(step) => write!(
+                        f,
+                        " — to turn the chain, give the next piece angle= instead \
+                         ({step:.0}deg steps, up to +-{HINGE_LIMIT_DEG:.0}deg)"
+                    ),
+                    None => Ok(()),
+                }
+            }
+            Refusal::NoTurn { piece, joint } => write!(
+                f,
+                "a {joint} is bolted, so a `{piece}` on it has no angle to set; \
+                 turn with a hinge or a corner instead"
+            ),
+            Refusal::TurnTooFar { wanted, limit } => write!(
+                f,
+                "angle={wanted:.0}deg is past this joint's +-{limit:.0}deg; chain \
+                 another piece and turn again"
+            ),
+            Refusal::ImpossibleTurn { wanted, legal } if legal.is_empty() => write!(
+                f,
+                "nothing here leaves toward {}; this joint has no other way out",
+                say(DVec3::from(*wanted))
             ),
             Refusal::ImpossibleTurn { wanted, legal } => write!(
                 f,
@@ -727,7 +882,15 @@ pub fn compile<S: NodeSockets + ?Sized>(
         name: request.piece.clone(),
         near: near_names(&request.piece),
     })?;
-    if request.angle.is_some() && request.axis.is_none() && !is_hinge(piece) {
+    // A free placement has no joint to turn, so an angle on one is a hinge's
+    // parameter given to a piece that is not a hinge. A *chained* piece is a
+    // different question — its joint may articulate — and it is answered where
+    // the joint is known.
+    if request.angle.is_some()
+        && request.axis.is_none()
+        && !is_hinge(piece)
+        && request.from.is_none()
+    {
         return Err(Refusal::WrongKind {
             expected: "an axis= to turn about",
             got: "angle= alone",
@@ -735,23 +898,25 @@ pub fn compile<S: NodeSockets + ?Sized>(
     }
     let mut announce = Vec::new();
     let params = piece_params(piece, request, &mut announce);
-    let kind = request
-        .from
-        .as_ref()
-        .map_or_else(|| free_kind(piece, request), |_| chained_kind(piece));
 
     let mut probe = Node {
         id: String::new(),
-        kind,
+        kind: stick_kind(piece, request.direction),
         catalog_ref: Some(piece.id.to_string()),
         label: request.label.clone(),
         params: params.iter().map(|(k, v)| (k.clone(), *v)).collect(),
     };
 
     let mut plan = match request.from.as_ref() {
-        None => free_placement(scene, request, &probe, &mut announce)?,
+        None => free_placement(scene, request, piece, &probe, &mut announce)?,
         Some(tip) => chained(scene, request, piece, &probe, tip, &mut announce)?,
     };
+    // The kind follows the *shape the piece ended up in*, which a chained
+    // piece only knows once its joint has been solved: a leg is a tower whether
+    // it was placed on the floor or added onto a corner, and filing the two
+    // under different kinds is a query that silently misses half a rig.
+    plan.kind = stick_kind(piece, Some(plan.run));
+    probe.kind = plan.kind;
 
     // `to=` spends length after the joint has fixed the direction, so it is
     // resolved once the mate is known and then re-solved into the pose below.
@@ -806,35 +971,42 @@ fn is_stick(piece: &crate::catalog::Piece) -> bool {
     matches!(piece.geometry, Geometry::Procedural(Family::Truss))
 }
 
-/// The node kind a free placement of this piece is filed under.
+/// A mesh piece's own front, in its asset frame (`+Z` front — see
+/// [`crate::sockets`]).
+const LOCAL_FRONT: DVec3 = DVec3::Z;
+
+/// Whether this piece has a front that means something, and so should meet the
+/// house rather than the back wall when the caller states no direction.
 ///
-/// A guess the caller can override, and the *only* thing in this module that
-/// looks at what a piece is for rather than what shape it is: `describe()` and
-/// the derived groups read the kind back, so a tower filed as a `piece` reads
-/// as furniture.
-fn free_kind(piece: &crate::catalog::Piece, request: &Request) -> NodeKind {
+/// The endpoints the frame contract already names — speakers, players, the
+/// mixer, the booth. Structure has a run instead of a front, and a deck turned
+/// to face anything is still a deck.
+fn faces_house(piece: &crate::catalog::Piece) -> bool {
+    use crate::catalog::PieceKind::{Cdj, DjBooth, Mixer, Speaker};
+    matches!(piece.kind, Speaker | Cdj | Mixer | DjBooth)
+}
+
+/// The node kind a piece is filed under — the *only* thing in this module that
+/// looks at what a piece is for rather than what shape it is, because
+/// `describe()` and the derived groups read the kind back and a tower filed as
+/// a `piece` reads as furniture.
+///
+/// One rule for both verbs. A stick standing up is a tower and a stick lying
+/// along is a run, and which verb built it does not enter into it: filing the
+/// placed leg and the chained leg under different kinds made `kind="tower"`
+/// answer for half a rig.
+fn stick_kind(piece: &crate::catalog::Piece, run: Option<[f64; 3]>) -> NodeKind {
     if !is_stick(piece) {
         return match piece.kind {
             crate::catalog::PieceKind::Floor => NodeKind::Stage,
             _ => NodeKind::Piece,
         };
     }
-    let vertical = request
-        .direction
-        .map(|d| DVec3::from(d).normalize_or_zero().z.abs() > 0.5)
-        .unwrap_or(false);
+    let vertical = run.is_some_and(|d| DVec3::from(d).normalize_or_zero().z.abs() > 0.5);
     if vertical {
         NodeKind::Tower
     } else {
         NodeKind::Run
-    }
-}
-
-fn chained_kind(piece: &crate::catalog::Piece) -> NodeKind {
-    if is_stick(piece) {
-        NodeKind::Run
-    } else {
-        NodeKind::Piece
     }
 }
 
@@ -915,11 +1087,64 @@ fn run_axis<S: NodeSockets + ?Sized>(scene: &Scene<'_, S>, probe: &Node) -> Opti
     Some(longest)
 }
 
+/// The box a piece fills where a bare `place` puts it on the floor — its
+/// footprint at the origin, in facade axes.
+///
+/// The catalog's printed dimensions, and the reason they are computed rather
+/// than transcribed: a mesh is modelled in whatever frame its author chose, the
+/// seat turns it, and an endpoint turns again to meet the house. Any answer not
+/// solved through the same [`place_on`] the placement uses is a second answer,
+/// and the one three agents believed said a deck was 1 m across the stage.
+///
+/// `None` for a piece with no seat — a truss stands on its ends and has no
+/// resting pose to print.
+///
+/// Kept in step with [`free_placement`] by construction: the yaw here is the
+/// same [`twist`] of [`LOCAL_FRONT`] onto the house that a direction-less
+/// placement of a [`faces_house`] piece takes.
+#[must_use]
+pub fn resting_footprint<S: NodeSockets + ?Sized>(sockets: &S, node: &Node) -> Option<Footprint> {
+    let piece = crate::catalog::find(node.catalog_ref.as_deref()?)?;
+    let bounds = sockets.bounds(node)?;
+    let floor = crate::venue::root_socket(FLOOR_SOCKET)?;
+    let held = sockets
+        .sockets(node)
+        .into_iter()
+        .filter(|s| s.socket_type.polarity().can_be_held())
+        .filter(|s| s.socket_type.mates(floor.socket_type))
+        .min_by(|a, b| {
+            a.normal
+                .dot(crate::snap::WORLD_UP)
+                .total_cmp(&b.normal.dot(crate::snap::WORLD_UP))
+        })?;
+    let seat = |yaw: f64| {
+        place_on(
+            DMat4::IDENTITY,
+            &floor,
+            &held,
+            node.kind,
+            SurfacePlacement {
+                yaw,
+                ..SurfacePlacement::FLUSH
+            },
+        )
+    };
+    let yaw = if faces_house(piece) {
+        let host_normal = socket_world(&floor).z_axis.truncate().normalize_or_zero();
+        let at_rest = seat(0.0).transform_vector3(LOCAL_FRONT).normalize_or_zero();
+        twist(at_rest, three_from_facade(DVec3::Y), host_normal)
+    } else {
+        0.0
+    };
+    Some(Footprint::of(&seat(yaw), bounds))
+}
+
 /// A free placement: the piece is anchored by its footprint centre on a
 /// surface, turned so it runs the way the caller pointed.
 fn free_placement<S: NodeSockets + ?Sized>(
     scene: &Scene<'_, S>,
     request: &Request,
+    piece: &crate::catalog::Piece,
     probe: &Node,
     announce: &mut Vec<String>,
 ) -> Result<Plan, Refusal> {
@@ -937,7 +1162,6 @@ fn free_placement<S: NodeSockets + ?Sized>(
     let held = held_sockets(scene, probe);
     let wanted_face = match request.face {
         Some(face) => three_from_facade(DVec3::from(face)).normalize_or_zero(),
-        None if parent == scene.graph.root() => three_from_facade(DVec3::Z),
         None => three_from_facade(DVec3::Z),
     };
     let faces: Vec<(ResolvedSocket, DVec3)> = scene
@@ -947,18 +1171,26 @@ fn free_placement<S: NodeSockets + ?Sized>(
         .filter(|(s, _, _)| s.socket_type != SocketType::Grab)
         .map(|(s, _, normal)| (s, normal))
         .collect();
-    let host = faces
+    let mates: Vec<(ResolvedSocket, DVec3)> = faces
         .iter()
         .filter(|(s, _)| held.iter().any(|h| h.socket_type.mates(s.socket_type)))
-        .max_by(|a, b| a.1.dot(wanted_face).total_cmp(&b.1.dot(wanted_face)))
+        .cloned()
+        .collect();
+    let host = nearest_face(&mates, wanted_face)
         .map(|(s, _)| s.clone())
-        .ok_or_else(|| Refusal::NoFace {
-            node: parent.clone(),
-            offered: faces
-                .iter()
-                .map(|(_, n)| facade_from_three(*n).to_array())
-                .collect(),
-        })?;
+        .ok_or_else(|| scene.no_face(&parent, &faces))?;
+    // A stated `face=` the host does not have is a refusal, not a nearest
+    // guess: seating a speaker on whatever happened to point closest is how
+    // `face=` came to look like a parameter the room ignores.
+    if request.face.is_some() {
+        let landed = mates
+            .iter()
+            .find(|(s, _)| s.name == host.name)
+            .map_or(0.0, |(_, n)| n.dot(wanted_face));
+        if landed < FACE_MIN_DOT {
+            return Err(scene.no_face(&parent, &faces));
+        }
+    }
 
     let candidates: Vec<ResolvedSocket> = held
         .into_iter()
@@ -967,10 +1199,19 @@ fn free_placement<S: NodeSockets + ?Sized>(
 
     let host_world = parent_world * socket_world(&host);
     let host_normal = host_world.z_axis.truncate().normalize_or_zero();
+    // Which of the piece's own axes the turn is measured on, and where that
+    // axis is meant to end up. A stated `direction=` turns the piece's **run**;
+    // an endpoint with no run to speak of is turned by its **front**, which is
+    // the only thing anybody means by where a speaker points.
+    let (reference, wanted) = match request.direction {
+        Some(direction) => (
+            run_axis(scene, probe),
+            Some(three_from_facade(DVec3::from(direction)).normalize_or_zero()),
+        ),
+        None if faces_house(piece) => (Some(LOCAL_FRONT), Some(three_from_facade(DVec3::Y))),
+        None => (run_axis(scene, probe), None),
+    };
     let axis = run_axis(scene, probe);
-    let wanted = request
-        .direction
-        .map(|d| three_from_facade(DVec3::from(d)).normalize_or_zero());
 
     // Which footing, and how far round: the two together are the only freedom a
     // surface placement has, so they are chosen together against one measure.
@@ -990,12 +1231,22 @@ fn free_placement<S: NodeSockets + ?Sized>(
                 },
             )
         };
-        let (yaw, error) = match (wanted, axis) {
-            (Some(wanted), Some(axis)) => {
-                let at_rest = flat(0.0).transform_vector3(axis).normalize_or_zero();
+        let (yaw, error) = match (wanted, reference) {
+            (Some(wanted), Some(reference)) => {
+                let at_rest = flat(0.0).transform_vector3(reference).normalize_or_zero();
                 let yaw = twist(at_rest, wanted, host_normal);
-                let landed = flat(yaw).transform_vector3(axis).normalize_or_zero();
-                (yaw, 1.0 - landed.dot(wanted).abs().min(1.0))
+                let landed = flat(yaw).transform_vector3(reference).normalize_or_zero();
+                // A run has no sign — a truss laid along `+u` is the same truss
+                // laid along `-u` — but a front does, and a speaker turned to
+                // face upstage is not the one that was asked for.
+                let along = landed.dot(wanted);
+                let error = 1.0
+                    - if request.direction.is_some() {
+                        along.abs().min(1.0)
+                    } else {
+                        along.min(1.0)
+                    };
+                (yaw, error)
             }
             _ => (0.0, 0.0),
         };
@@ -1004,12 +1255,19 @@ fn free_placement<S: NodeSockets + ?Sized>(
         }
     }
     let (error, held, yaw) = best.expect("candidates is non-empty");
-    if error > DIRECTION_TOLERANCE {
+    // Only a *stated* direction refuses. The house-facing default is a
+    // convenience, and a piece whose joint cannot take it stays as it lay.
+    if error > DIRECTION_TOLERANCE && request.direction.is_some() {
         return Err(Refusal::ImpossibleTurn {
             wanted: request.direction.unwrap_or([0.0; 3]),
             legal: legal_free_directions(scene, probe, parent_world, &host, &candidates),
         });
     }
+    let yaw = if error > DIRECTION_TOLERANCE {
+        0.0
+    } else {
+        yaw
+    };
 
     // `at` is the footprint **centre**, so the seat is solved backwards from
     // where the box ends up rather than from where the socket lands — placing
@@ -1032,15 +1290,25 @@ fn free_placement<S: NodeSockets + ?Sized>(
     };
     let at_origin = place_on(parent_world, &host, &held, probe.kind, seat);
     let centre0 = Footprint::of(&at_origin, bounds).at;
-    // The host's own mark is where its `(u, v)` start, and the axes stay the
-    // **facade's**: `+u` is stage right on the floor, on a deck top and on a
-    // grid alike. A host's authored tangent is a modelling detail — a deck's
-    // happens to run toward the crowd — and letting it turn the caller's plan a
-    // quarter turn is exactly the invisible frame this API exists to kill.
-    let mark = facade_from_three(host_world.w_axis.truncate());
+    // The host's own mark is its **footprint centre**, not the socket the piece
+    // happens to bolt to: `on=deck, at=(0, 0)` is the middle of that deck
+    // whether the piece lands on its top or on a corner, and a socket-relative
+    // origin put a tower half a deck away from where it was asked for. The axes
+    // stay the **facade's**: `+u` is stage right on the floor, on a deck top
+    // and on a grid alike. A host's authored tangent is a modelling detail — a
+    // deck's happens to run toward the crowd — and letting it turn the caller's
+    // plan a quarter turn is exactly the invisible frame this API exists to
+    // kill.
+    let mark = scene.footprint(&parent).map_or_else(
+        || {
+            let socket = facade_from_three(host_world.w_axis.truncate());
+            [socket.x, socket.y]
+        },
+        |print| print.at,
+    );
     let target = request
         .at
-        .map_or(centre0, |at| [mark.x + at[0], mark.y + at[1]]);
+        .map_or(centre0, |at| [mark[0] + at[0], mark[1] + at[1]]);
     let delta = three_from_facade(DVec3::new(
         target[0] - centre0[0],
         target[1] - centre0[1],
@@ -1204,7 +1472,7 @@ fn chained<S: NodeSockets + ?Sized>(
     let mut parent_world = scene
         .world(&parent)
         .ok_or_else(|| Refusal::UnknownNode(parent.clone()))?;
-    let mut host = host_socket(scene, &parent, &tip.socket)?;
+    let host = host_socket(scene, &parent, &tip.socket)?;
     let mut parent_roll = None;
 
     // A joint whose exit the *next* piece chooses: re-roll it now, before the
@@ -1217,7 +1485,7 @@ fn chained<S: NodeSockets + ?Sized>(
         }
     }
 
-    let held = chain_socket(scene, piece, probe, &host)?;
+    let held = chain_socket(scene, piece, probe, &host, &parent)?;
     let host_world = parent_world * socket_world(&host);
     let out = host_world.z_axis.truncate().normalize_or_zero();
 
@@ -1232,6 +1500,12 @@ fn chained<S: NodeSockets + ?Sized>(
             out,
             announce,
         )?
+    } else if let Some(angle) = request.angle {
+        // The joint itself is the hinge. A rail chain articulates at its posts
+        // — that is what a crowd barrier does round a corner — so the turn is
+        // the mate's own roll, in the steps the socket declares, and no piece
+        // is inserted to carry it.
+        articulated_roll(piece, &host, angle, announce)?
     } else {
         // A stick bolted to an end runs straight out of it; the only thing a
         // roll would change is which way up the section is, which nothing here
@@ -1262,6 +1536,16 @@ fn chained<S: NodeSockets + ?Sized>(
         .sockets
         .bounds(probe)
         .unwrap_or_else(|| DAabb::new(DVec3::ZERO, DVec3::ZERO));
+    // A joint is a box, and a box on the run is length the run does not get.
+    // Said out loud because it is the arithmetic nobody does: a leg, a corner,
+    // a beam of the nominal width and a corner puts the far leg half a corner
+    // past where the width says it is.
+    if is_corner(piece) {
+        announce.push(format!(
+            "the corner adds {:.2} m along the run",
+            span_along(&world, bounds, out)
+        ));
+    }
     Ok(Plan {
         kind: probe.kind,
         catalog_ref: probe.catalog_ref.clone().unwrap_or_default(),
@@ -1282,9 +1566,52 @@ fn chained<S: NodeSockets + ?Sized>(
         announce: Vec::new(),
         at: Footprint::of(&world, bounds),
         tip: None,
-        run: facade_from_three(out).to_array(),
+        // Where the chain goes on from here. An articulated joint turns about
+        // its own vertical, so the run leaves turned by exactly the angle the
+        // caller asked for — reporting the unturned normal would send the next
+        // piece's tip search the wrong way round the corner.
+        run: facade_from_three(if held.mode == crate::sockets::SocketMode::Upright {
+            rotate_about(out, DVec3::Y, roll)
+        } else {
+            out
+        })
+        .to_array(),
         world,
     })
+}
+
+/// The roll a turn at an articulated joint spends, radians.
+///
+/// The joint's own freedom, read off the socket: a rail post steps in whole
+/// degrees and a bolted end does not step at all. Off-step is snapped and
+/// announced like every other quantity here; past the limit is refused, because
+/// a chain built at a right angle when a hundred and twenty was asked for is
+/// not the shape anybody wanted.
+fn articulated_roll(
+    piece: &crate::catalog::Piece,
+    host: &ResolvedSocket,
+    angle: f64,
+    announce: &mut Vec<String>,
+) -> Result<f64, Refusal> {
+    let crate::sockets::RollFreedom::Steps(step) = host.roll else {
+        return Err(Refusal::NoTurn {
+            piece: piece.short.to_string(),
+            joint: host.socket_type.as_str(),
+        });
+    };
+    if !angle.is_finite() || angle.abs() > HINGE_LIMIT_DEG {
+        return Err(Refusal::TurnTooFar {
+            wanted: angle,
+            limit: HINGE_LIMIT_DEG,
+        });
+    }
+    let turned = (angle / step).round() * step;
+    if (turned - angle).abs() > 1e-9 {
+        announce.push(format!(
+            "{angle:.1}deg is not a whole {step:.0}deg step at this joint: turned {turned:.1}deg"
+        ));
+    }
+    Ok(turned.to_radians())
 }
 
 /// The half of the joint the new piece meets its host by.
@@ -1299,6 +1626,7 @@ fn chain_socket<S: NodeSockets + ?Sized>(
     piece: &crate::catalog::Piece,
     probe: &Node,
     host: &ResolvedSocket,
+    parent: &str,
 ) -> Result<ResolvedSocket, Refusal> {
     let mates: Vec<ResolvedSocket> = held_sockets(scene, probe)
         .into_iter()
@@ -1318,9 +1646,14 @@ fn chain_socket<S: NodeSockets + ?Sized>(
             return Ok(found.clone());
         }
     }
-    mates.into_iter().next().ok_or(Refusal::ImpossibleTurn {
-        wanted: [0.0; 3],
-        legal: Vec::new(),
+    mates.into_iter().next().ok_or_else(|| Refusal::NoJoint {
+        piece: piece.short.to_string(),
+        host: scene.name_of(parent),
+        joint: host.socket_type.as_str(),
+        turnable: match host.roll {
+            crate::sockets::RollFreedom::Steps(step) => Some(step),
+            _ => None,
+        },
     })
 }
 
@@ -1665,6 +1998,322 @@ fn far_end<S: NodeSockets + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sockets::resolve_socket;
+    use crate::venue::{resolve, Params, ResolvedVenue, VenueGraph};
+    use std::collections::HashMap;
+
+    /// The geometry supply, built the way the real one is: the **catalog's own**
+    /// authored sockets, resolved against a measured box. Only the measurement
+    /// is a stand-in, so a question asked here is asked of the same pieces a
+    /// venue holds. Procedural pieces have no authored sockets by design and
+    /// are therefore not answerable here — see `luma_render::catalog`.
+    struct Meshes(HashMap<&'static str, DAabb>);
+
+    impl Meshes {
+        /// Boxes measured off the shipped GLBs, to the centimetre.
+        fn shipped() -> Self {
+            let box_of = |x: f64, y: f64, z: f64| {
+                DAabb::new(
+                    DVec3::new(-x / 2.0, -y / 2.0, -z / 2.0),
+                    DVec3::new(x / 2.0, y / 2.0, z / 2.0),
+                )
+            };
+            Meshes(HashMap::from([
+                (
+                    "stage_lab/stage_praticavel_2x1x1.glb",
+                    box_of(2.0, 1.01, 1.0),
+                ),
+                ("stage_lab/stage_praticavel_1x1.glb", box_of(1.0, 0.3, 1.0)),
+                ("stage_lab/speaker_jbl_vtx_v20.glb", box_of(0.91, 0.28, 0.4)),
+                ("stage_lab/guardrail.glb", box_of(0.4, 1.0, 2.14)),
+                ("assembly/dj_booth", box_of(2.0, 1.17, 1.0)),
+            ]))
+        }
+    }
+
+    impl NodeSockets for Meshes {
+        fn sockets(&self, node: &Node) -> Vec<ResolvedSocket> {
+            let Some(piece) = node.catalog_ref.as_deref().and_then(crate::catalog::find) else {
+                return Vec::new();
+            };
+            let Some(bounds) = self.bounds(node) else {
+                return Vec::new();
+            };
+            piece
+                .sockets
+                .iter()
+                .map(|def| resolve_socket(def, &bounds))
+                .collect()
+        }
+
+        fn bounds(&self, node: &Node) -> Option<DAabb> {
+            self.0.get(node.catalog_ref.as_deref()?).copied()
+        }
+    }
+
+    /// A room with a floor and nothing on it.
+    fn room() -> VenueGraph {
+        VenueGraph::new(Node {
+            id: "root".into(),
+            kind: NodeKind::Venue,
+            catalog_ref: None,
+            label: None,
+            params: Params::default(),
+        })
+    }
+
+    /// Compile one request against a graph and write it in as `id`, answering
+    /// with the plan — the two steps every caller of this module takes.
+    fn build(
+        graph: &mut VenueGraph,
+        solved: &mut ResolvedVenue,
+        supply: &Meshes,
+        id: &str,
+        request: &Request,
+    ) -> Result<Plan, Refusal> {
+        let plan = compile(&Scene::new(graph, solved, supply), request)?;
+        plan.apply(graph, id, supply)
+            .expect("the plan is this graph's");
+        *solved = resolve(graph, supply);
+        Ok(plan)
+    }
+
+    fn request(piece: &str) -> Request {
+        Request {
+            piece: piece.into(),
+            ..Request::default()
+        }
+    }
+
+    /// The bug three agents hit first: `on=` landed a piece half a deck away in
+    /// plan and sunk into its host, because a deck's four top *edges* inherit
+    /// their normal from the top face and won the "which face points up" tie.
+    #[test]
+    fn a_piece_placed_on_a_host_sits_on_its_top_centred_on_the_hosts_mark() {
+        let supply = Meshes::shipped();
+        let mut graph = room();
+        let mut solved = resolve(&graph, &supply);
+        let deck = build(
+            &mut graph,
+            &mut solved,
+            &supply,
+            "deck",
+            &Request {
+                at: Some([3.0, 2.0]),
+                ..request("deck")
+            },
+        )
+        .expect("a deck on the floor");
+        assert!((deck.at.at[0] - 3.0).abs() < 1e-9 && (deck.at.at[1] - 2.0).abs() < 1e-9);
+
+        let on = build(
+            &mut graph,
+            &mut solved,
+            &supply,
+            "riser",
+            &Request {
+                on: Some("deck".into()),
+                at: Some([0.0, 0.0]),
+                ..request("deck_1x1")
+            },
+        )
+        .expect("a deck on a deck");
+        // `at=(0, 0)` on a host is the host's own footprint centre, on **both**
+        // axes.
+        assert!(
+            (on.at.at[0] - deck.at.at[0]).abs() < 1e-9
+                && (on.at.at[1] - deck.at.at[1]).abs() < 1e-9,
+            "landed at {:?}, host is at {:?}",
+            on.at.at,
+            deck.at.at
+        );
+        // And it stands *on* the top rather than inside it.
+        let host_top = deck.at.z + deck.at.size[2] / 2.0;
+        let bottom = on.at.z - on.at.size[2] / 2.0;
+        assert!(
+            (bottom - host_top).abs() < 1e-9,
+            "its underside is at {bottom}, the host's top at {host_top}"
+        );
+        assert_eq!(on.edge.their_socket, "top");
+    }
+
+    /// An endpoint has a front, and nobody who puts a speaker down means it to
+    /// face the back wall.
+    #[test]
+    fn an_endpoint_faces_the_house_with_no_direction_stated() {
+        let supply = Meshes::shipped();
+        let mut graph = room();
+        let mut solved = resolve(&graph, &supply);
+        let speaker = build(
+            &mut graph,
+            &mut solved,
+            &supply,
+            "pa",
+            &Request {
+                at: Some([4.0, 0.0]),
+                ..request("vtx_v20")
+            },
+        )
+        .expect("a speaker on the floor");
+        let front = facade_from_three(
+            speaker
+                .world
+                .transform_vector3(LOCAL_FRONT)
+                .normalize_or_zero(),
+        );
+        assert!(front.y > 0.99, "the box faces {front:?}, not the crowd");
+        // Which is also the box being wider across the stage than it is deep.
+        assert!(speaker.at.size[0] > speaker.at.size[1]);
+    }
+
+    /// A face the host does not have is a refusal, not a nearest guess — and
+    /// the refusal names the node the way a reader knows it.
+    #[test]
+    fn a_face_nothing_has_is_refused_by_name() {
+        let supply = Meshes::shipped();
+        let mut graph = room();
+        let mut solved = resolve(&graph, &supply);
+        build(
+            &mut graph,
+            &mut solved,
+            &supply,
+            "booth",
+            &Request {
+                at: Some([0.0, 0.0]),
+                label: Some("the booth".into()),
+                ..request("dj_booth")
+            },
+        )
+        .expect("a booth on the floor");
+        let refusal = compile(
+            &Scene::new(&graph, &solved, &supply),
+            &Request {
+                on: Some("booth".into()),
+                at: Some([0.0, 0.0]),
+                ..request("deck_1x1")
+            },
+        )
+        .expect_err("the booth hosts nothing");
+        let said = refusal.to_string();
+        assert!(said.contains("the booth"), "{said}");
+        assert!(said.contains("dj_booth"), "{said}");
+        assert!(said.contains("carries its own"), "{said}");
+    }
+
+    /// A guardrail chain turns at its posts, and the post is the only hinge it
+    /// has: `add("hinge")` there refuses with the fix in the message.
+    #[test]
+    fn a_rail_chain_turns_at_its_post_and_says_so_when_it_cannot() {
+        let supply = Meshes::shipped();
+        let mut graph = room();
+        let mut solved = resolve(&graph, &supply);
+        let rail = build(
+            &mut graph,
+            &mut solved,
+            &supply,
+            "rail",
+            &Request {
+                at: Some([0.0, 0.0]),
+                ..request("guardrail")
+            },
+        )
+        .expect("a rail on the floor");
+        let tip = rail.tip_at("rail").expect("a rail has two ends");
+
+        let turned = compile(
+            &Scene::new(&graph, &solved, &supply),
+            &Request {
+                from: Some(tip.clone()),
+                angle: Some(32.0),
+                ..request("guardrail")
+            },
+        )
+        .expect("a rail turns at its post");
+        // Off-step is snapped and announced, as every other quantity here is.
+        assert!(
+            turned.announce.iter().any(|line| line.contains("30.0deg")),
+            "{:?}",
+            turned.announce
+        );
+        // And the run leaves turned, so the next piece grows the right way —
+        // a positive angle counterclockwise about `+z`, the same right-hand
+        // rule a hinge takes, which swings a rail running toward the crowd
+        // round toward stage left.
+        let run = DVec3::from(turned.run);
+        assert!(run.z.abs() < 1e-9, "{run:?}");
+        assert!((run.y - 30f64.to_radians().cos()).abs() < 1e-9, "{run:?}");
+        assert!((run.x + 30f64.to_radians().sin()).abs() < 1e-9, "{run:?}");
+
+        // Past the joint's limit is a refusal naming the limit.
+        let far = compile(
+            &Scene::new(&graph, &solved, &supply),
+            &Request {
+                from: Some(tip.clone()),
+                angle: Some(120.0),
+                ..request("guardrail")
+            },
+        )
+        .expect_err("a post does not fold back on itself");
+        assert!(far.to_string().contains("+-90deg"), "{far}");
+
+        // And a piece with no half that bolts to a rail end refuses with the
+        // turn as the fix, rather than with a truncated list of nothing.
+        let wrong = compile(
+            &Scene::new(&graph, &solved, &supply),
+            &Request {
+                from: Some(tip),
+                axis: Some([0.0, 0.0, 1.0]),
+                angle: Some(30.0),
+                ..request("hinge")
+            },
+        )
+        .expect_err("a hinge is not a rail post");
+        let said = wrong.to_string();
+        assert!(said.contains("rail_end"), "{said}");
+        assert!(said.contains("angle="), "{said}");
+        assert!(!said.ends_with("turns to "), "{said}");
+    }
+
+    /// A fixture has no measurable box and every one of them used to fall out
+    /// of `extent`, which answered `None` for a room full of lights.
+    #[test]
+    fn a_node_with_no_measurable_box_still_spans_the_point_it_hangs_at() {
+        let supply = Meshes::shipped();
+        let mut graph = room();
+        let mut solved = resolve(&graph, &supply);
+        build(
+            &mut graph,
+            &mut solved,
+            &supply,
+            "deck",
+            &Request {
+                at: Some([2.0, 0.0]),
+                ..request("deck")
+            },
+        )
+        .expect("a deck on the floor");
+        // A node the supply cannot measure: no catalog ref, so no box.
+        graph.insert_placed(
+            Node {
+                id: "head".into(),
+                kind: NodeKind::Fixture,
+                catalog_ref: None,
+                label: None,
+                params: Params::default(),
+            },
+            crate::venue::Edge {
+                parent: "deck".into(),
+                my_socket: "top".into(),
+                their_socket: "top".into(),
+                roll: 0.0,
+            },
+        );
+        solved = resolve(&graph, &supply);
+        let scene = Scene::new(&graph, &solved, &supply);
+        let span = scene.extent(["head"]).expect("a point is an extent");
+        assert_eq!(span.count, 1);
+        assert!(span.size.iter().all(|s| s.abs() < 1e-9));
+    }
 
     #[test]
     fn the_facade_frame_is_world_space_under_another_name() {
