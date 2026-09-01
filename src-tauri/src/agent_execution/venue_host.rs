@@ -32,7 +32,7 @@ use tokio::runtime::Handle;
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
 use crate::eval::{Arena, Scope};
 use crate::models::distribute::DistributeLayout;
 use crate::models::selection::Selection;
@@ -42,6 +42,7 @@ use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
 use crate::services::track_edits::TrackScope;
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
 use crate::storage::StorageRoot;
+use luma_render::scene_desc::{SkyParams, VenueEnvironment};
 use luma_render::venue_tiles::TileMap;
 use luma_scene::View;
 
@@ -94,21 +95,20 @@ impl VenueHost {
         let width = clamp_dimension("width", request.width)?;
         let height = clamp_dimension("height", request.height)?;
         let time = self.clamp_time(request.t).await?;
+        let lighting = dialed(request.house, request.sun)?;
 
         // One venue snapshot for the geometry *and* the selection: a mark on a
         // fixture that is not in the frame is worse than no mark at all.
-        let mut access =
-            VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
-                .await
-                .map_err(|error| {
-                    HostCallError::new(
-                        "invalid_venue",
-                        format!("the venue is not available: {error}"),
-                    )
-                })?;
-        let geometry = VenueGeometry::read(&mut access, &self.resource_root)
+        let mut access = self.read_access().await?;
+        let mut geometry = VenueGeometry::read(&mut access, &self.resource_root)
             .await
             .map_err(|error| HostCallError::new("invalid_venue", error))?;
+        // A frame-local light, written over the room's own after it was read
+        // and never written back: `venue.environment` is the edit, this is the
+        // exposure.
+        if let Some(environment) = lighting {
+            geometry.environment = environment;
+        }
         if geometry.is_empty() {
             return Err(HostCallError::new(
                 "invalid_venue",
@@ -221,15 +221,7 @@ impl VenueHost {
                 "cell_m must be a finite number of metres",
             ));
         }
-        let mut access =
-            VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
-                .await
-                .map_err(|error| {
-                    HostCallError::new(
-                        "invalid_venue",
-                        format!("the venue is not available: {error}"),
-                    )
-                })?;
+        let mut access = self.read_access().await?;
         let map = crate::venue_graph::tiles(
             &mut access,
             &self.resource_root,
@@ -241,6 +233,104 @@ impl VenueHost {
         .await
         .map_err(|error| HostCallError::new("invalid_venue", error))?;
         Ok(json!({ "map": map }))
+    }
+
+    /// The room's own light: read it, or move it.
+    ///
+    /// One verb for both directions because there is one value. Called with no
+    /// arguments it reads; called with any it writes, and the write is venue
+    /// truth — it lands on the venue record, so every later picture of this
+    /// room, here or in the editor, is taken under it. The frame-local
+    /// override lives on `venue.render` instead.
+    ///
+    /// The scalar picks the mode: `house` is an indoor room's rig, `sun` is the
+    /// sky, and a room is lit by one or the other. `mode` alone switches
+    /// without moving a dial — it keeps the scalar the room already had in that
+    /// mode, or takes that mode's default the first time it is entered.
+    async fn environment(&self, request: EnvironmentRequest) -> Result<Value, HostCallError> {
+        let dial = dialed(request.house, request.sun)?;
+        let mode = request.mode.as_deref().map(Mode::parse).transpose()?;
+        if let (Some(mode), Some(dial)) = (mode, dial) {
+            if mode != Mode::of(dial) {
+                return Err(HostCallError::new(
+                    "invalid_argument",
+                    format!(
+                        "{}= is the dial of an {} room, so it disagrees with mode={:?}",
+                        Mode::of(dial).dial(),
+                        Mode::of(dial).word(),
+                        mode.word(),
+                    ),
+                ));
+            }
+        }
+
+        // A pure read never opens a write transaction: an agent looking at the
+        // room should not queue behind one that is building in it.
+        if mode.is_none() && dial.is_none() {
+            let mut access = self.read_access().await?;
+            return Ok(described(self.current(&mut access).await?));
+        }
+
+        let mut access =
+            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+                .await
+                .map_err(|error| {
+                    HostCallError::new(
+                        "invalid_venue",
+                        format!("the venue is not available: {error}"),
+                    )
+                })?;
+        let current = self.current(&mut access).await?;
+        let wanted = match (dial, mode) {
+            (Some(dial), _) => dial,
+            // Mode alone: the room keeps the dial it had, if it had one in this
+            // mode, so switching out and back is not a way to lose a setting.
+            (None, Some(Mode::Indoor)) => VenueEnvironment::indoor(match current {
+                VenueEnvironment::Indoor { .. } => current.house_level(),
+                VenueEnvironment::Outdoor { .. } => VenueEnvironment::default().house_level(),
+            }),
+            (None, Some(Mode::Outdoor)) => VenueEnvironment::outdoor(match current {
+                VenueEnvironment::Outdoor { .. } => current.sun_elevation_deg(),
+                VenueEnvironment::Indoor { .. } => SkyParams::DUSK.sun_elevation_deg,
+            }),
+            (None, None) => unreachable!("a read returned above"),
+        };
+        crate::database::local::venues::set_environment(&mut access, wanted)
+            .await
+            .map_err(|error| HostCallError::new("internal", error))?;
+        access
+            .commit()
+            .await
+            .map_err(|error| HostCallError::new("internal", error))?;
+        Ok(described(wanted))
+    }
+
+    /// This thread's venue, open for reading.
+    async fn read_access(&self) -> Result<VenueAccess<'_, Read>, HostCallError> {
+        VenueAccess::<Read>::read(&self.pool, VenueResource::Venue(&self.venue_id))
+            .await
+            .map_err(|error| {
+                HostCallError::new(
+                    "invalid_venue",
+                    format!("the venue is not available: {error}"),
+                )
+            })
+    }
+
+    /// The environment on the venue record right now.
+    async fn current(
+        &self,
+        access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    ) -> Result<VenueEnvironment, HostCallError> {
+        Ok(crate::database::local::venues::get_venue(access)
+            .await
+            .map_err(|error| {
+                HostCallError::new(
+                    "invalid_venue",
+                    format!("the venue could not be read: {error}"),
+                )
+            })?
+            .environment)
     }
 
     // -- the build verbs ------------------------------------------------
@@ -624,6 +714,9 @@ impl VenueHost {
             fixtures: Vec::new(),
             venue,
             definitions: std::collections::HashMap::new(),
+            // A draft is a component being looked at for its shape, not a room.
+            // The house at full is the light that shows one.
+            environment: luma_render::scene_desc::VenueEnvironment::default(),
         };
         self.shoot(
             geometry,
@@ -751,6 +844,7 @@ impl HostCallHandler for VenueHost {
                 match method {
                     "venue.render" => self.render(decode(payload)?).await,
                     "venue.tiles" => self.tiles(decode(payload)?).await,
+                    "venue.environment" => self.environment(decode(payload)?).await,
                     "venue.catalog" => self.catalog(),
                     "venue.fixtures" => self.fixtures(decode(payload)?),
                     "venue.describe" => self.describe().await,
@@ -794,6 +888,131 @@ fn clamp_dimension(name: &str, value: u32) -> Result<u32, HostCallError> {
         ));
     }
     Ok(value.min(MAX_DIMENSION))
+}
+
+/// Which of the two lighting models a call is talking about.
+///
+/// The words are [`VenueEnvironment::mode`]'s, parsed back — the record, the
+/// verb and the editor's selector spell them once, in the renderer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Indoor,
+    Outdoor,
+}
+
+impl Mode {
+    fn parse(word: &str) -> Result<Self, HostCallError> {
+        match word {
+            "indoor" => Ok(Self::Indoor),
+            "outdoor" => Ok(Self::Outdoor),
+            other => Err(HostCallError::new(
+                "invalid_argument",
+                format!("mode is \"indoor\" or \"outdoor\", not {other:?}"),
+            )),
+        }
+    }
+
+    fn of(environment: VenueEnvironment) -> Self {
+        match environment {
+            VenueEnvironment::Indoor { .. } => Self::Indoor,
+            VenueEnvironment::Outdoor { .. } => Self::Outdoor,
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            Self::Indoor => "indoor",
+            Self::Outdoor => "outdoor",
+        }
+    }
+
+    /// The one dial this mode has, by the name the caller passes it under.
+    fn dial(self) -> &'static str {
+        match self {
+            Self::Indoor => "house",
+            Self::Outdoor => "sun",
+        }
+    }
+}
+
+/// One `house=` or `sun=` as an environment; `None` when neither was given.
+///
+/// The dial *is* the mode — a room is lit by its house rig or by the sky, so
+/// naming a level names a room, and naming both names two rooms. Values out of
+/// range are clamped by the constructors rather than refused: a caller asking
+/// for the sun at 200° means noon, and there is nothing for it to fix.
+/// Non-finite is the one value with no nearest legal answer *and* no JSON
+/// spelling, so it falls back to the mode's default rather than poisoning the
+/// record it would be written to.
+fn dialed(house: Option<f64>, sun: Option<f64>) -> Result<Option<VenueEnvironment>, HostCallError> {
+    match (house, sun) {
+        (Some(_), Some(_)) => Err(HostCallError::new(
+            "invalid_argument",
+            "a room is lit by its house rig or by the sky, not both: pass house= or sun=",
+        )),
+        (Some(level), None) => Ok(Some(VenueEnvironment::indoor(finite(
+            level,
+            VenueEnvironment::default().house_level(),
+        )))),
+        (None, Some(deg)) => Ok(Some(VenueEnvironment::outdoor(finite(
+            deg,
+            SkyParams::DUSK.sun_elevation_deg,
+        )))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn finite(value: f64, fallback: f32) -> f32 {
+    let value = value as f32;
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
+}
+
+/// One environment as the wire carries it: the mode, and the dial that mode
+/// has. The other mode's dial is `null` rather than zero — a room with no sun
+/// in it does not have a sun at the horizon.
+pub(crate) fn environment_record(environment: VenueEnvironment) -> Value {
+    json!({
+        "mode": environment.mode(),
+        "house": matches!(environment, VenueEnvironment::Indoor { .. })
+            .then(|| environment.house_level()),
+        "sun": matches!(environment, VenueEnvironment::Outdoor { .. })
+            .then(|| environment.sun_elevation_deg()),
+    })
+}
+
+/// The same record with the sentence a reader actually wants beside it, so a
+/// program that just moved the light can print what it did without formatting
+/// two numbers itself.
+fn described(environment: VenueEnvironment) -> Value {
+    let mut value = environment_record(environment);
+    value["describe"] = Value::String(match environment {
+        VenueEnvironment::Indoor { .. } => {
+            format!("indoor, house at {:.0}%", environment.house_level() * 100.0)
+        }
+        VenueEnvironment::Outdoor { .. } => {
+            let deg = environment.sun_elevation_deg();
+            let side = if deg < 0.0 { "below" } else { "above" };
+            format!("outdoor, sun {:.1}\u{00b0} {side} the horizon", deg.abs())
+        }
+    });
+    value
+}
+
+/// The room's own light. Every field absent is a read; any field present is a
+/// write.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvironmentRequest {
+    /// `"indoor"` or `"outdoor"`. Alone, it switches without moving a dial.
+    mode: Option<String>,
+    /// How far up the house rig is, 0 to 1. Implies an indoor room.
+    house: Option<f64>,
+    /// Degrees the sun stands above the horizon. Implies an open-air room.
+    sun: Option<f64>,
 }
 
 /// How many library rows one call will parse and return, whatever it asks for.
@@ -1137,4 +1356,14 @@ struct RenderRequest {
     /// this channel is a verification channel, and a picture that does not say
     /// which way the heads point does not verify a patch.
     aim_arrows: bool,
+    /// Light this one frame with the house at `house`, whatever the room is.
+    ///
+    /// A camera setting, not an edit: it is written over the environment the
+    /// venue was read with and never written back, so the room is unchanged
+    /// the moment the shutter closes. `venue.environment` is the edit.
+    house: Option<f64>,
+    /// Light this one frame with the sun `sun` degrees up, whatever the room
+    /// is. The same camera setting as [`Self::house`], and exclusive with it —
+    /// one frame has one sky.
+    sun: Option<f64>,
 }

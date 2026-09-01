@@ -686,6 +686,9 @@ class LumaNamespace(LumaRecord):
             header.append("scope: " + "  ".join(scope_bits))
         if scope.get("venue_id"):
             header.extend(VENUE_FRAME_CONTRACT)
+            environment = _environment_line(self)
+            if environment is not None:
+                header.append(environment)
 
         available: list[str] = []
         unavailable: list[str] = []
@@ -704,6 +707,33 @@ class LumaNamespace(LumaRecord):
         # ordinary repr bounded; callers opt into the complete inventory with
         # ``luma.catalog()``.
         return LumaRecord.__repr__(self)
+
+
+def _environment_line(namespace: "LumaNamespace") -> str | None:
+    """The room's lighting environment, as one line under the frame contract.
+
+    The contract above it is static text — the frame every verb means its
+    numbers in. This is the opposite: the light this particular room is in
+    right now, read off the venue record already in the namespace so the
+    inventory costs no host call. `None` whenever the record cannot answer —
+    no venue, an unavailable branch, an older manifest — because a missing
+    line is a better inventory than a raised exception.
+    """
+    venue = _record_items(namespace).get("venue")
+    try:
+        environment = venue["environment"]
+    except (AttributeError, KeyError, TypeError):
+        return None
+    if not isinstance(environment, LumaRecord):
+        return None
+    mode = environment.get("mode")
+    house = environment.get("house")
+    sun = environment.get("sun")
+    if mode == "indoor" and isinstance(house, (int, float)):
+        return f"  environment: indoor, house {float(house):.2f}"
+    if mode == "outdoor" and isinstance(sun, (int, float)):
+        return f"  environment: outdoor, sun {float(sun):.1f}°"
+    return f"  environment: {mode}" if isinstance(mode, str) else None
 
 
 def _record_items(record: "LumaRecord") -> dict[str, Any]:
