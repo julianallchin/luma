@@ -547,6 +547,27 @@ impl VenueSockets {
 }
 
 impl NodeSockets for VenueSockets {
+    /// A node's local box: measured off the GLB, or computed from the
+    /// generator at the node's own parameters.
+    ///
+    /// `None` for a fixture (its housing is the QLC+ definition's business, not
+    /// the solver's) and for a `catalog_ref` the catalog has dropped — the
+    /// authoring layer treats "unknown" as "cannot say whether it is in the
+    /// way", which is the honest answer and the one a guessed box would hide.
+    fn bounds(&self, node: &Node) -> Option<DAabb> {
+        let catalog_ref = node.catalog_ref.as_deref()?;
+        if node.kind == NodeKind::Fixture {
+            return None;
+        }
+        match luma_scene::catalog::piece(catalog_ref).map(|p| p.geometry) {
+            Some(Geometry::Procedural(family)) => {
+                Some(procedural_bounds(node_params(family, &node.params)))
+            }
+            Some(Geometry::Mesh { .. } | Geometry::Assembly(_)) => self.catalog.bounds(catalog_ref),
+            None => None,
+        }
+    }
+
     fn is_known(&self, node: &Node) -> bool {
         // A fixture names a patch row, which was never a catalog entry.
         node.kind == NodeKind::Fixture

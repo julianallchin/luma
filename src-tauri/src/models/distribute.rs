@@ -28,6 +28,9 @@ pub enum DistributeLayout {
     /// Evenly across the fraction `from..to` of the face, `0` at its
     /// negative-tangent end.
     Span { from: f64, to: f64 },
+    /// Packed body to body, centred `metres` from the face's **middle** —
+    /// signed, so `-2.0` is two metres toward the face's negative-tangent end.
+    At { metres: f64 },
 }
 
 impl From<DistributeLayout> for Layout {
@@ -36,6 +39,7 @@ impl From<DistributeLayout> for Layout {
             DistributeLayout::Even => Layout::Even,
             DistributeLayout::Spacing { metres } => Layout::Spacing(metres),
             DistributeLayout::Span { from, to } => Layout::Span(from, to),
+            DistributeLayout::At { metres } => Layout::At(metres),
         }
     }
 }
@@ -49,6 +53,7 @@ impl From<Layout> for DistributeLayout {
             Layout::Even => DistributeLayout::Even,
             Layout::Spacing(metres) => DistributeLayout::Spacing { metres },
             Layout::Span(from, to) => DistributeLayout::Span { from, to },
+            Layout::At(metres) => DistributeLayout::At { metres },
         }
     }
 }

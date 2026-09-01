@@ -366,6 +366,18 @@ impl Articulation {
         }
     }
 
+    /// The pan, radians about the mount normal.
+    #[must_use]
+    pub fn pan_rad(self) -> f32 {
+        self.pan
+    }
+
+    /// The tilt, radians off the mount normal.
+    #[must_use]
+    pub fn tilt_rad(self) -> f32 {
+        self.tilt
+    }
+
     /// The rotation this articulation applies, in data space.
     ///
     /// Public because a *rest* aim is baked into the mount frame by the venue
@@ -487,6 +499,42 @@ pub fn aim(mount: &Mount, art: &Articulation) -> Vec3 {
     (mount.rotation * art.rotation() * REST_AXIS).normalize()
 }
 
+/// The articulation that points a mounted head along `direction` — the inverse
+/// of [`aim`].
+///
+/// Exact for every direction, including straight back along the mount normal: a
+/// head that has to look behind itself tilts a half turn, and there is no
+/// direction the two axes cannot reach. That is why this returns an
+/// [`Articulation`] rather than a `Result` — "aim there" has an answer
+/// everywhere, and clamping to a fixture's own pan/tilt range is the patch's
+/// business, not the geometry's.
+///
+/// ```
+/// use fixture_kinematics::{aim, aim_at, Mount};
+/// use glam::Vec3;
+///
+/// // Hung square off the grid, asked to look at the house.
+/// let mount = Mount::from_stored(Vec3::new(0.0, 0.0, 6.0), [0.0; 3]);
+/// let art = aim_at(&mount, Vec3::Y);
+/// assert!(aim(&mount, &art).abs_diff_eq(Vec3::Y, 1e-5));
+/// ```
+#[must_use]
+pub fn aim_at(mount: &Mount, direction: Vec3) -> Articulation {
+    let wanted = direction.normalize_or_zero();
+    if wanted.length_squared() < 0.5 {
+        return Articulation::REST;
+    }
+    // Read the target in the mount's own frame; the rotation is orthonormal, so
+    // its transpose is its inverse.
+    let local = mount.rotation.transpose() * wanted;
+    // `Rz(-pan) · Rx(tilt) · REST_AXIS` is `(sin t sin p, sin t cos p, -cos t)`,
+    // so both angles fall straight out of the components. Solving the pair here
+    // rather than searching is what makes the round trip exact.
+    let tilt = (-local.z).clamp(-1.0, 1.0).acos();
+    let pan = local.x.atan2(local.y);
+    Articulation::from_radians(pan, tilt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +542,26 @@ mod tests {
 
     fn close(got: Vec3, want: Vec3) {
         assert!(got.abs_diff_eq(want, 1e-5), "got {got:?}, want {want:?}");
+    }
+
+    /// Every direction has an articulation, and it is the one that produces it.
+    #[test]
+    fn aiming_round_trips_through_every_direction() {
+        let mount = Mount::from_stored(Vec3::new(1.0, -2.0, 5.0), [0.3, -0.7, 1.1]);
+        for want in [
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::NEG_Z,
+            mount.normal(),
+            -mount.normal(),
+            Vec3::new(1.0, 2.0, -3.0).normalize(),
+        ] {
+            let art = aim_at(&mount, want);
+            close(aim(&mount, &art), want);
+        }
+        // Nothing to aim at leaves the head parked rather than NaN.
+        assert_eq!(aim_at(&mount, Vec3::ZERO), Articulation::REST);
     }
 
     #[test]

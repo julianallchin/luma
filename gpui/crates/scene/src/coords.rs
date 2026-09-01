@@ -180,6 +180,23 @@ pub fn euler_xyz_of_d(m: DMat3) -> DVec3 {
     }
 }
 
+/// [`world_from_three`] in `f64` — three space (Y-up) into world space (Z-up).
+///
+/// This is also the **facade frame** the venue authoring API states intent in:
+/// `+x` stage right, `+y` toward the crowd, `+z` up. Facade and world are the
+/// same space under two names, and saying so once here is what stops a second
+/// axis convention being invented for the agent surface.
+#[must_use]
+pub fn world_from_three_d(p: DVec3) -> DVec3 {
+    DVec3::new(p.x, -p.z, p.y)
+}
+
+/// [`three_from_world`] in `f64`, the inverse of [`world_from_three_d`].
+#[must_use]
+pub fn three_from_world_d(p: DVec3) -> DVec3 {
+    DVec3::new(p.x, p.z, -p.y)
+}
+
 /// [`three_pose_from_data`] in `f64`.
 #[must_use]
 pub fn three_pose_from_data_d(pos: [f64; 3], rot: [f64; 3]) -> DMat4 {

@@ -23,6 +23,7 @@
 //! socket layer to Z-up would touch.
 
 pub mod aabb;
+pub mod build;
 pub mod bvh;
 pub mod camera;
 pub mod catalog;
@@ -39,6 +40,7 @@ pub mod sockets;
 pub mod venue;
 
 pub use aabb::Aabb;
+pub use build::{Extent, Footprint, MODULE_M};
 pub use bvh::{MeshBvh, Ray, RayHit, TriMesh};
 pub use camera::{Camera, UnknownView, View, EYE_HEIGHT_M};
 pub use catalog::{piece, pieces, Family, Geometry, PaletteGroup, Piece, PieceKind};
