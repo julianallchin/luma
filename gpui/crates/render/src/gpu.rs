@@ -78,6 +78,8 @@ struct Globals {
     camera_forward: [f32; 4],
     cascade_splits: [f32; 4],
     ambient: [f32; 4],
+    room: [f32; 4],
+    room_falloff: [f32; 4],
     dir_to_light: [f32; 4],
     dir_color: [f32; 4],
     params: [f32; 4],
@@ -2470,6 +2472,10 @@ impl Renderer {
                 CASCADE_BLEND,
             ],
             ambient: frame.ambient.extend(0.0).to_array(),
+            room: frame.room.map_or([0.0; 4], |room| {
+                [room.centre.x, room.centre.y, room.half.x, room.half.y]
+            }),
+            room_falloff: [frame.room.map_or(0.0, |room| room.margin), 0.0, 0.0, 0.0],
             dir_to_light: frame
                 .directional
                 .map_or(Vec4::ZERO, |light| light.direction.extend(1.0))
@@ -3825,7 +3831,7 @@ mod tests {
 
     #[test]
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
-        assert_eq!(std::mem::size_of::<Globals>(), 368);
+        assert_eq!(std::mem::size_of::<Globals>(), 400);
         assert_eq!(std::mem::size_of::<HazeUniform>(), 176);
         assert_eq!(std::mem::size_of::<CompositeUniform>(), 112);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
@@ -4238,6 +4244,7 @@ mod tests {
             fixture_shadows: true,
             cluster_debug: false,
             clear_color: Vec3::ZERO,
+            room: None,
             ambient: Vec3::splat(0.002),
             environment: None,
             directional: None,
@@ -4333,6 +4340,7 @@ mod tests {
             cluster_debug: false,
             environment: None,
             clear_color: scene_radiance,
+            room: None,
             ambient: scene_radiance,
             directional: Some(DirectionalLight {
                 direction: Vec3::new(0.0, -1.0, 1.0).normalize(),

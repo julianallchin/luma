@@ -228,6 +228,15 @@ pub struct Frame {
     pub clear_color: Vec3,
     /// Linear ambient-light colour multiplied by its intensity.
     pub ambient: Vec3,
+    /// The room [`Self::ambient`] and [`Self::directional`] belong to, when
+    /// they are a house rig's stand-in for bounce rather than a whole sky.
+    ///
+    /// Both terms are uniform over the world, and the world here includes a
+    /// ground plane that runs to the horizon. This is what stops a room's own
+    /// light from lighting the horizon with it — see [`crate::house::Glow`].
+    /// `None` leaves them unbounded, which is what an atmosphere, a thumbnail
+    /// and a dark stage all want.
+    pub room: Option<crate::house::Glow>,
     /// Optional resident image-based environment.
     pub environment: Option<EnvironmentImage>,
     /// The independently controlled directional light, if enabled.
@@ -894,31 +903,16 @@ pub fn build_with(
     // The room's own rig, hung after the show's so a venue at the cone cap
     // loses house lamps before it loses a beam: the house is context, and a
     // beam that vanished would be a lie about the score.
-    if let Some(environment) = scene.render.house {
-        let lamps = crate::house::lamps(environment, scene.room_bounds());
-        let disc = bank.insert("::house-lamp".into(), crate::house::disc_mesh);
-        for lamp in lamps {
+    let lit_room = scene.render.house.and_then(|environment| {
+        let bounds = scene.room_bounds();
+        for lamp in crate::house::lamps(environment, bounds) {
             if fixture_cones.len() >= MAX_FIXTURE_CONES {
                 break;
             }
             fixture_cones.push(lamp.cone());
-            draws.push(Draw {
-                mesh: disc,
-                textures: MaterialTextures::default(),
-                model: Mat4::from_translation(lamp.position),
-                material: Material {
-                    base_color: Vec3::ZERO,
-                    metallic: 0.0,
-                    roughness: 1.0,
-                    emissive: lamp.emissive(),
-                    normal_scale: 1.0,
-                    occlusion_strength: 1.0,
-                    flat_shading: false,
-                },
-                editor_object: None,
-            });
         }
-    }
+        crate::house::glow(environment, bounds)
+    });
 
     // --- stage pieces ------------------------------------------------------
     let mut bodies = crate::cables::Bodies::default();
@@ -1020,6 +1014,7 @@ pub fn build_with(
         fixture_shadows: scene.render.fixture_shadows,
         cluster_debug: scene.render.cluster_debug,
         clear_color: Vec3::from(scene.render.environment.background),
+        room: lit_room,
         // Under a sky the fill is the sky itself, arriving as an image-based
         // probe the renderer builds from the same tables the background comes
         // from. A flat ambient term on top of it would be the room lit twice.

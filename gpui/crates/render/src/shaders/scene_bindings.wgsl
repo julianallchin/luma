@@ -12,6 +12,12 @@ struct Globals {
     // xyz: far distance for each cascade, w: transition fraction.
     cascade_splits: vec4<f32>,
     ambient: vec4<f32>,
+    // xy: centre of the room `ambient` and the directional light belong to,
+    // world XY. zw: its half-extents. See `room_glow` in `scene.wgsl`.
+    room: vec4<f32>,
+    // x: metres past that room over which both die to nothing. Zero when
+    // nothing bounds them — outdoors, or with no house rig at all. yzw unused.
+    room_falloff: vec4<f32>,
     // xyz: direction toward the light. w: 1 when the directional light exists.
     dir_to_light: vec4<f32>,
     // rgb: directional radiance, w: shadow-filter radius in texels.
