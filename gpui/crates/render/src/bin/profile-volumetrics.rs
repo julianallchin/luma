@@ -1171,6 +1171,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         fixture_shadows: true,
         cluster_debug: false,
         clear_color: base.clear_color,
+        room: None,
         ambient: base.ambient,
         environment: base.environment.clone(),
         directional: base.directional,

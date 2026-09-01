@@ -560,7 +560,6 @@ impl AtmosphereCache {
     }
 }
 
-
 /// The transmittance table, marched on the CPU and uploaded.
 ///
 /// Bruneton's (r, mu) parameterisation, inverted: `u` places the ray's length

@@ -233,6 +233,27 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     return sum / 9.0;
 }
 
+/// How much of the room's own light reaches this point.
+///
+/// The ambient term and the directional key are a house rig's stand-in for the
+/// bounce off walls this renderer does not model, and a stand-in for bounce is
+/// uniform — it lands on every shaded point, including the ground plane that
+/// runs to the horizon. A room's light does not do that. Inside the room's
+/// plan this is one, so the picture there is exactly the one the app has always
+/// drawn; outside, it dies to nothing over `room_falloff.x` metres and the
+/// world beyond the room is dark.
+///
+/// A zero margin means nothing bounds the light: outdoors it is a whole sky,
+/// and a thumbnail or a dark stage has no room to be contained by.
+fn room_glow(world: vec3<f32>) -> f32 {
+    let margin = globals.room_falloff.x;
+    if margin <= 0.0 {
+        return 1.0;
+    }
+    let outside = max(abs(world.xy - globals.room.xy) - globals.room.zw, vec2<f32>(0.0));
+    return 1.0 - smoothstep(0.0, margin, length(outside));
+}
+
 fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
     if globals.params.z < 0.5 {
         return 1.0;
@@ -334,7 +355,11 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     }
 
     var out = inst.emissive.rgb * textureSample(emissive_map, material_sampler, in.uv).rgb;
-    out += globals.ambient.rgb * diffuse_color * RECIPROCAL_PI * ao;
+    // The house's reach. Applied to the fill and the key and to nothing else:
+    // every fixture cone already falls off with distance, and an emissive
+    // surface is its own source.
+    let glow = room_glow(in.world);
+    out += globals.ambient.rgb * glow * diffuse_color * RECIPROCAL_PI * ao;
     if environment_params.enabled > 0.5 && environment_params.intensity > 0.0 {
         let dot_nv = saturate(dot(n, v));
         let fresnel = f_schlick(f0, 1.0, dot_nv);
@@ -366,7 +391,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         let l = globals.dir_to_light.xyz;
         let dot_nl = saturate(dot(n, l));
         if dot_nl > 0.0 {
-            let irradiance = dot_nl * globals.dir_color.rgb * shadow;
+            let irradiance = dot_nl * globals.dir_color.rgb * shadow * glow;
             out += irradiance * diffuse_color * RECIPROCAL_PI;
             out += irradiance * brdf_ggx(n, v, l, f0, roughness);
         }

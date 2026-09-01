@@ -1,12 +1,18 @@
-//! Renders one rigged venue under the atmosphere, at several sun elevations
-//! and from several views, as PNGs.
+//! Renders one rigged venue under each of its environments, from several
+//! views, as PNGs.
 //!
-//! The sky has no golden: it is a picture, and the only test that matters is
-//! looking at it. This is the instrument for that — `render-goldens` covers the
-//! tracked contract, which the sky is deliberately absent from.
+//! An environment has no golden: it is a picture, and the only test that
+//! matters is looking at it. This is the instrument for that — `render-goldens`
+//! covers the tracked contract, which every environment beyond the default is
+//! deliberately absent from.
+//!
+//! One probe for the house and for the sky, because they are one setting:
+//! `VenueEnvironment` is what the app stores, `RenderSettings::room` is how the
+//! renderer is asked for a venue, and a probe that reached past either would be
+//! photographing something the product cannot produce.
 //!
 //! ```text
-//! cargo run -p luma-render --bin sky-probe -- <output-dir>
+//! cargo run -p luma-render --bin environment-probe -- <output-dir>
 //! ```
 
 use std::collections::BTreeMap;
@@ -14,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use luma_render::assets::Library;
 use luma_render::scene_desc::{
-    CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, SkyParams,
+    CameraPose, Geometry, Piece, Procedural, RenderSettings, Scene, VenueEnvironment,
 };
 use luma_scene::{Camera, Framing, View, Viewfinder};
 
@@ -81,7 +87,7 @@ fn main() -> anyhow::Result<()> {
     let out_dir = PathBuf::from(
         std::env::args()
             .nth(1)
-            .unwrap_or_else(|| "sky-probe".into()),
+            .unwrap_or_else(|| "environment-probe".into()),
     );
     std::fs::create_dir_all(&out_dir)?;
     let meshes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes");
@@ -89,20 +95,22 @@ fn main() -> anyhow::Result<()> {
     let mut renderer = luma_render::Renderer::new()?;
     let definitions = BTreeMap::new();
 
-    for (label, elevation) in [
-        ("noon30", 30.0_f32),
-        ("dusk04", 4.0),
-        ("set005", 0.5),
-        ("twilight-04", -4.0),
+    for (label, environment) in [
+        ("house-100", VenueEnvironment::indoor(1.0)),
+        ("house-050", VenueEnvironment::indoor(0.5)),
+        ("house-015", VenueEnvironment::indoor(0.15)),
+        ("noon30", VenueEnvironment::outdoor(30.0)),
+        ("dusk04", VenueEnvironment::outdoor(4.0)),
+        ("set005", VenueEnvironment::outdoor(0.5)),
+        ("twilight-04", VenueEnvironment::outdoor(-4.0)),
     ] {
         for view in [View::Front, View::QuarterLeft, View::Audience] {
-            let mut render = RenderSettings::dark_stage(45.0, 1.0);
-            render.show_grid = false;
-            render.haze.enabled = false;
-            render.sky = Some(SkyParams::outdoor(elevation));
+            // Exactly what an agent's `luma.venue.render` asks for, so what
+            // this photographs is what the product draws.
+            let render = RenderSettings::room(environment, 45.0, 1.0);
 
             let mut scene = Scene {
-                id: format!("sky-{label}"),
+                id: format!("environment-{label}"),
                 times: vec![0.0],
                 camera: CameraPose {
                     position: [0.0, 0.0, 1.0],
@@ -118,7 +126,8 @@ fn main() -> anyhow::Result<()> {
                 state: BTreeMap::new(),
             };
             let framing: Framing = scene.framing(&definitions);
-            let finder = Viewfinder::new(scene.render.fov, WIDTH as f32 / HEIGHT as f32);
+            let finder = Viewfinder::new(scene.render.fov, WIDTH as f32 / HEIGHT as f32)
+                .open_air(scene.render.sky.is_some());
             let camera: Camera = Camera::for_view(view, &framing, None, &finder);
             let eye = camera.position();
             let target = camera.target;
