@@ -124,7 +124,11 @@ impl Camera {
     /// The **orbit views** ([`View::Front`], [`View::Overhead`], the two
     /// quarters, and `dj` with no booth) pick a direction and hand it to
     /// [`Framing::fit`]: the eye is free in space, so the closed-form distance
-    /// applies directly.
+    /// applies directly. Under an open-air [`Viewfinder`] every one of them but
+    /// the overhead first comes down to the frame's sky line
+    /// ([`Viewfinder::under_sky`]), because a fitted eye looking down at a rig
+    /// puts the horizon off the top edge and there is no picture of an outdoor
+    /// venue without one.
     ///
     /// The **standing views** ([`View::Audience`], and `dj` with a booth) pin
     /// the eye to a *height* — [`EYE_HEIGHT_M`] above [`Framing::floor_z`] —
@@ -148,7 +152,17 @@ impl Camera {
         booth: Option<Vec3>,
         view_finder: &Viewfinder,
     ) -> Self {
+        // Open air brings the eye down to the frame's sky line before the fit
+        // runs, so the distance is solved for the direction actually used and
+        // the rig is framed from there — see [`Viewfinder::under_sky`].
         let orbit = |target: Vec3, direction: Vec3| {
+            framing
+                .fit(target, view_finder.under_sky(direction), view_finder)
+                .above_floor(framing.floor_z())
+        };
+        // An overhead is an overhead whatever is over it: it takes the fitted
+        // direction straight, with no sky line to come down to.
+        let plan = |target: Vec3, direction: Vec3| {
             framing
                 .fit(target, direction, view_finder)
                 .above_floor(framing.floor_z())
@@ -172,7 +186,7 @@ impl Camera {
         };
         match view {
             View::Front => orbit(target, FRONT_EYE.normalize()),
-            View::Overhead => orbit(target, spherical(front_azimuth(), Framing::MIN_POLAR)),
+            View::Overhead => plan(target, spherical(front_azimuth(), Framing::MIN_POLAR)),
             View::QuarterLeft => orbit(target, spherical(front_azimuth() - QUARTER, QUARTER_POLAR)),
             View::QuarterRight => {
                 orbit(target, spherical(front_azimuth() + QUARTER, QUARTER_POLAR))
@@ -454,13 +468,15 @@ mod tests {
     }
 
     /// The frames a view has to survive: square, landscape pane, portrait
-    /// phone, and a landscape pane with chrome over both its edges.
-    fn finders() -> [Viewfinder; 4] {
+    /// phone, a landscape pane with chrome over both its edges, and the same
+    /// pane open to the sky.
+    fn finders() -> [Viewfinder; 5] {
         [
             Viewfinder::new(50.0, 1.0),
             Viewfinder::new(50.0, 16.0 / 9.0),
             Viewfinder::new(50.0, 9.0 / 16.0),
             Viewfinder::new(50.0, 16.0 / 9.0).inset(Insets::vertical(0.14, 0.10)),
+            Viewfinder::new(50.0, 16.0 / 9.0).open_air(true),
         ]
     }
 
@@ -664,6 +680,59 @@ mod tests {
         let eye = (dj.position() - target).truncate().normalize();
         assert!(eye.abs_diff_eq(bearing, 1e-3), "{eye:?} vs {bearing:?}");
         assert!((dj.position().z - framing.floor_z() - EYE_HEIGHT_M).abs() < 1e-4);
+    }
+
+    /// The whole of the outdoor rule: the horizon lands on the frame's sky
+    /// line, and the rig is still fitted from there
+    /// (`orbit_views_fit_the_usable_frame` covers the second half for the
+    /// open-air frame in `finders`).
+    #[test]
+    fn an_open_air_view_puts_the_horizon_on_the_sky_line() {
+        let framing = rig();
+        let roofed = Viewfinder::new(50.0, 16.0 / 9.0);
+        let open = roofed.open_air(true);
+        for name in [View::Front, View::QuarterLeft, View::QuarterRight] {
+            let camera = Camera::for_view(name, &framing, None, &open);
+            // A point level with the eye and effectively at infinity: where the
+            // horizon is drawn.
+            let away = (camera.position() - camera.target).truncate().normalize();
+            let horizon = camera.position() + (away * 1.0e6).extend(0.0);
+            let ndc = camera.project(horizon, open.aspect).y;
+            assert!(
+                (ndc - (1.0 - 2.0 * Framing::SKY_SHARE)).abs() < 1e-2,
+                "{name}: horizon at {ndc}"
+            );
+            // ...and it got there by coming down, not by turning.
+            let roofed_camera = Camera::for_view(name, &framing, None, &roofed);
+            assert!(camera.polar > roofed_camera.polar, "{name}");
+            assert!(
+                (camera.azimuth - roofed_camera.azimuth).abs() < 1e-4,
+                "{name}"
+            );
+        }
+    }
+
+    /// An overhead is an overhead whatever is over it.
+    #[test]
+    fn the_sky_does_not_reach_the_overhead() {
+        let framing = rig();
+        let roofed = Viewfinder::new(50.0, 16.0 / 9.0);
+        assert_eq!(
+            Camera::for_view(View::Overhead, &framing, None, &roofed),
+            Camera::for_view(View::Overhead, &framing, None, &roofed.open_air(true)),
+        );
+    }
+
+    /// Indoors nothing about a named view moves: there is no sky line, so the
+    /// lowering is the identity and every tracked contract image — all of them
+    /// rendered under a roof — is the picture it was.
+    #[test]
+    fn a_roofed_frame_has_no_sky_line() {
+        let view = Viewfinder::new(50.0, 16.0 / 9.0);
+        assert!(!view.open_air);
+        assert!(view.horizon_polar().is_none());
+        let steep = Vec3::new(0.0, 1.0, 3.0).normalize();
+        assert_eq!(view.under_sky(steep), steep);
     }
 
     #[test]
