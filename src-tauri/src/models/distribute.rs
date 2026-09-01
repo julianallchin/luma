@@ -212,7 +212,14 @@ impl From<Report> for DistributeReport {
                 .map(DistributedFixture::from)
                 .collect(),
             refusal: report.refusal.as_ref().map(DistributeRefusal::from),
-            warnings: report.warnings.iter().map(warning_line).collect(),
+            // The layout's own adjustments read as warnings because that is
+            // what they are: something the call decided for the caller.
+            warnings: report
+                .warnings
+                .iter()
+                .map(warning_line)
+                .chain(report.announce.iter().cloned())
+                .collect(),
             dangling: report.dangling.iter().map(ResolvedDangling::from).collect(),
             unplaced: report.unplaced.iter().map(ResolvedUnplaced::from).collect(),
         }

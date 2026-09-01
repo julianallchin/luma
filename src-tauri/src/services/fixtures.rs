@@ -56,10 +56,8 @@ pub fn search_fixtures(
         .as_ref()
         .ok_or("Fixtures not initialized. Call initialize_fixtures first.")?;
 
-    Ok(index
-        .entries
-        .iter()
-        .filter(|entry| matches(entry, &query))
+    Ok(best_first(&index.entries, &query)
+        .into_iter()
         .skip(offset)
         .take(limit)
         .cloned()
@@ -80,6 +78,57 @@ pub fn matches(entry: &FixtureEntry, query: &str) -> bool {
     query
         .split_whitespace()
         .all(|term| haystack.contains(&term.to_lowercase()))
+}
+
+/// Every entry that answers `query`, nearest answer first.
+///
+/// [`matches`] says *whether* an entry answers; this says **how well**, because
+/// a substring match has no sense of a word and "robe" found Martin's Strobe
+/// before it found anything Robe makes. A term that starts a word beats one
+/// buried inside one, and the maker's name beats the model's — searching for a
+/// manufacturer is the commonest thing anybody types.
+///
+/// A stable sort, so entries that score alike keep the index's own order.
+#[must_use]
+pub fn best_first<'a>(entries: &'a [FixtureEntry], query: &str) -> Vec<&'a FixtureEntry> {
+    let mut found: Vec<&FixtureEntry> = entries
+        .iter()
+        .filter(|entry| matches(entry, query))
+        .collect();
+    if query.split_whitespace().next().is_some() {
+        found.sort_by_key(|entry| distance(entry, query));
+    }
+    found
+}
+
+/// How far one entry is from a query — lower is nearer. See [`best_first`].
+fn distance(entry: &FixtureEntry, query: &str) -> u32 {
+    let maker = entry.manufacturer.to_lowercase();
+    let model = entry.model.to_lowercase();
+    query
+        .split_whitespace()
+        .map(|term| {
+            let term = term.to_lowercase();
+            if starts_a_word(&maker, &term) {
+                0
+            } else if starts_a_word(&model, &term) {
+                1
+            } else {
+                2
+            }
+        })
+        .sum()
+}
+
+/// Whether `term` begins a word of `text` — the start, or after a separator.
+fn starts_a_word(text: &str, term: &str) -> bool {
+    text.match_indices(term).any(|(at, _)| {
+        at == 0
+            || text[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_alphanumeric())
+    })
 }
 
 /// One mode of a library fixture, as a caller choosing one needs to see it.
@@ -134,10 +183,8 @@ pub struct LibraryFixture {
 /// Fails only if the fixtures root cannot be walked.
 pub fn library(root: &Path, query: &str, limit: usize) -> Result<Vec<LibraryFixture>, String> {
     let index = parser::build_index(root).map_err(|e| e.to_string())?;
-    Ok(index
-        .entries
-        .iter()
-        .filter(|entry| matches(entry, query))
+    Ok(best_first(&index.entries, query)
+        .into_iter()
         .filter_map(|entry| resolve_entry(root, entry))
         .take(limit)
         .collect())

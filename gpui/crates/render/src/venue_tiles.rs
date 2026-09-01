@@ -126,8 +126,9 @@ const MIN_LABEL_CELLS: f64 = 4.0;
 /// The one sentence that makes a map readable out of context. See the module
 /// docs for why it reads the way it does.
 const ORIENTATION: &str =
-    "plan as the house sees it: columns run +x → −x (stage right → stage left), \
-     rows run +y → −y (upstage → house)";
+    "plan as the house sees it, in the frame the build verbs state intent in: \
+     columns run +u → −u (stage right → stage left), rows run −v → +v \
+     (upstage → house)";
 
 // ---------------------------------------------------------------------------
 // what a node puts on the map
@@ -161,6 +162,23 @@ struct Mark {
     layer: Layer,
     glyph: char,
     footprint: Footprint,
+}
+
+impl Mark {
+    /// Which glyph wins a cell two marks of the same layer both want.
+    ///
+    /// A **joint** beats a **run**: a corner or a standing tower occupies one
+    /// cell and that cell is the whole of what the map says about it, where a
+    /// beam losing one cell of twenty still reads as a beam. Without this the
+    /// answer is whichever node the solve happened to hand over last, and a
+    /// symmetric portal came out with a tower on one side and nothing on the
+    /// other.
+    fn precedence(&self) -> u8 {
+        match self.footprint {
+            Footprint::Point(_) => 1,
+            Footprint::Segment(_, _) | Footprint::Hull(_) => 0,
+        }
+    }
 }
 
 impl Mark {
@@ -423,7 +441,7 @@ struct Grid {
     cols: usize,
     rows: usize,
     cell_m: f64,
-    cells: Vec<Option<(Layer, char)>>,
+    cells: Vec<Option<(Layer, u8, char)>>,
 }
 
 impl Grid {
@@ -482,26 +500,26 @@ impl Grid {
         ) * self.cell_m
     }
 
-    fn plot(&mut self, p: DVec2, layer: Layer, glyph: char) {
+    fn plot(&mut self, p: DVec2, layer: Layer, precedence: u8, glyph: char) {
         let Some((col, row)) = self.cell_of(p) else {
             return;
         };
         let slot = &mut self.cells[row * self.cols + col];
-        if slot.is_none_or(|(existing, _)| layer >= existing) {
-            *slot = Some((layer, glyph));
+        if slot.is_none_or(|(had, was, _)| (layer, precedence) >= (had, was)) {
+            *slot = Some((layer, precedence, glyph));
         }
     }
 
     fn stamp(&mut self, mark: &Mark) {
         match &mark.footprint {
-            Footprint::Point(p) => self.plot(*p, mark.layer, mark.glyph),
+            Footprint::Point(p) => self.plot(*p, mark.layer, mark.precedence(), mark.glyph),
             Footprint::Segment(a, b) => {
                 // Half-cell steps: the shortest step that cannot skip a cell
                 // whichever way the stick lies.
                 let steps = ((b - a).length() / (self.cell_m * 0.5)).ceil().max(1.0);
                 for i in 0..=(steps as usize) {
                     let t = i as f64 / steps;
-                    self.plot(a.lerp(*b, t), mark.layer, mark.glyph);
+                    self.plot(a.lerp(*b, t), mark.layer, mark.precedence(), mark.glyph);
                 }
             }
             Footprint::Hull(hull) => {
@@ -520,14 +538,19 @@ impl Grid {
                 for row in r0..=r1 {
                     for col in c0..=c1 {
                         if inside(hull, self.centre_of(col, row)) {
-                            self.plot(self.centre_of(col, row), mark.layer, mark.glyph);
+                            self.plot(
+                                self.centre_of(col, row),
+                                mark.layer,
+                                mark.precedence(),
+                                mark.glyph,
+                            );
                         }
                     }
                 }
                 // A piece narrower than a cell can contain no cell centre at
                 // all; it is still in the room, so its own centre is drawn.
                 if !self.rect_has(c0, r0, c1, r1, mark.glyph) {
-                    self.plot((lo + hi) * 0.5, mark.layer, mark.glyph);
+                    self.plot((lo + hi) * 0.5, mark.layer, mark.precedence(), mark.glyph);
                 }
             }
         }
@@ -535,7 +558,8 @@ impl Grid {
 
     fn rect_has(&self, c0: usize, r0: usize, c1: usize, r1: usize, glyph: char) -> bool {
         (r0..=r1).any(|row| {
-            (c0..=c1).any(|col| self.cells[row * self.cols + col].is_some_and(|(_, g)| g == glyph))
+            (c0..=c1)
+                .any(|col| self.cells[row * self.cols + col].is_some_and(|(_, _, g)| g == glyph))
         })
     }
 
@@ -583,13 +607,17 @@ impl Grid {
         writeln!(out, "{}", labels.trim_end()).ok();
         for row in 0..self.rows {
             let y = self.edge_of(0, row).y;
+            // Labelled in **facade** metres, which negate data `y`: this map is
+            // read next to the coordinates the caller built with, and a ruler
+            // in the storage convention put every upstage piece downstage for
+            // anybody checking one against the other.
             let mut line = if on_step(y, options.label_every_m) {
-                format!("{:>width$} ", metres(y), width = GUTTER - 1)
+                format!("{:>width$} ", metres(-y), width = GUTTER - 1)
             } else {
                 " ".repeat(GUTTER)
             };
             for col in 0..self.cols {
-                line.push(self.cells[row * self.cols + col].map_or(' ', |(_, g)| g));
+                line.push(self.cells[row * self.cols + col].map_or(' ', |(_, _, g)| g));
             }
             writeln!(out, "{}", line.trim_end()).ok();
         }
@@ -656,15 +684,15 @@ fn write_header(out: &mut String, grid: &Grid, options: TileMap) {
     let (lo, hi) = grid.extent();
     writeln!(
         out,
-        "gauntlet view · {:.1} m cells · x {:.1}…{:.1} m · y {:.1}…{:.1} m",
-        options.cell_m, lo.x, hi.x, lo.y, hi.y
+        "gauntlet view · {:.1} m cells · u {:.1}…{:.1} m · v {:.1}…{:.1} m",
+        options.cell_m, lo.x, hi.x, -hi.y, -lo.y
     )
     .ok();
     writeln!(out, "{ORIENTATION}").ok();
     let used: BTreeSet<char> = grid
         .cells
         .iter()
-        .filter_map(|c| c.map(|(_, g)| g))
+        .filter_map(|c| c.map(|(_, _, g)| g))
         .collect();
     let legend: Vec<String> = LEGEND
         .iter()
