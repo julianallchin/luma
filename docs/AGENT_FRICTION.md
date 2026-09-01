@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] `renderer_contract_goldens` asserts two whole RGBA buffers with `assert_eq!`, so a single-bit drift in one image prints eight megabytes of `3, 9, 18, 255,` and never says which pixel, how many, or by how much — you learn more from re-rendering by hand than from the failure.
 - [2026-08-31] `cargo build -p luma-mcp` from the repo root prints "could not find Cargo.toml" *and exits 0*, so a background build reports success and you drive a stale binary for twenty minutes; the binary is a `[[bin]]` of the `luma` package in `src-tauri/`, and only `cargo build --bin luma-mcp` from there builds it.
 - [2026-08-31] `git mv` stages the rename there and then, so the next `git commit` with an explicit path list quietly swallows it — in a shared checkout "stage by path" is only true if the index was empty when you started.
 - [2026-08-31] `cargo fmt -p <crate>` is sold as the safe alternative to `--all`, but it still rewrites every file in that crate; you come back to a stray hunk in a module you never opened and cannot tell it from another agent's work.
