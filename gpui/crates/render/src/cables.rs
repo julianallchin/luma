@@ -71,13 +71,22 @@ const MERGE_M: f32 = 0.9;
 
 /// Clear air above the rig's highest piece before the fade begins, and the
 /// height it takes to reach nothing.
+///
+/// Long, so the dissolve has no locatable beginning — it is darker air the
+/// higher you look rather than a band edge drawn across the room — but bounded
+/// above by the headroom a *fitted* camera leaves. `Framing::fit` frames the
+/// rig's bounding sphere with an 8% margin, which on a room-sized rig puts the
+/// top of frame around eight metres over the highest piece; a band that
+/// outruns that is cut off while still half opaque, and a cable severed by the
+/// frame edge reads worse than a short fade. Their sum is what has to stay
+/// under that headroom.
 const FADE_MARGIN_M: f32 = 1.5;
-const FADE_SPAN_M: f32 = 4.0;
+const FADE_SPAN_M: f32 = 6.0;
 
 /// Segments the fade band is cut into. The ramp is smooth in z, so it needs
-/// vertices to interpolate between; eight is past the point where the banding
-/// is visible at render resolution.
-const BAND_STEPS: usize = 8;
+/// vertices to interpolate between, and a longer span needs more of them to
+/// stay under the eye's threshold for faceting.
+const BAND_STEPS: usize = 16;
 
 /// The world boxes of the pieces placed so far, and the cables they imply.
 ///
