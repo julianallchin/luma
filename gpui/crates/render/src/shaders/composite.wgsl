@@ -155,7 +155,7 @@ fn agx(color_in: vec3<f32>) -> vec3<f32> {
 /// The horizon dissolve and the empty-pixel sky are the same question asked
 /// twice, so they read it from here rather than each resolving it.
 fn background_radiance(uv: vec2<f32>) -> vec3<f32> {
-    if environment_params.visible < 0.5 {
+    if environment_params.visible < 0.5 && sky.sun.w < 0.5 {
         return cfg.background.rgb;
     }
     let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
@@ -164,6 +164,12 @@ fn background_radiance(uv: vec2<f32>) -> vec3<f32> {
     let near_world = near_h.xyz / near_h.w;
     let far_world = far_h.xyz / far_h.w;
     var direction = normalize(far_world - near_world);
+    // An atmosphere is the background, and it outranks a probe: the sky's own
+    // table is what the sun disc, the horizon and the frame's key light are all
+    // read from, so a probe painted over it would be a second sky.
+    if sky.sun.w > 0.5 {
+        return sky_radiance(direction);
+    }
     let c = cos(environment_params.rotation);
     let s = sin(environment_params.rotation);
     direction = vec3<f32>(
@@ -192,7 +198,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // nothing here rescales it.
     let raw_depth = textureLoad(depth_tex, coord, 0);
     let background = background_radiance(uv);
-    if raw_depth <= 0.0 && environment_params.visible > 0.5 {
+    if raw_depth <= 0.0 && (environment_params.visible > 0.5 || sky.sun.w > 0.5) {
         // Only where the probe is meant to be seen: everywhere else the target
         // already holds the clear colour, resolved with whatever coverage the
         // silhouette had, and overwriting it would flatten that edge.
@@ -225,5 +231,33 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // integrates in-scatter against. Surface radiance decays exactly as the
     // medium's own glow builds, so everything converges to one fog colour with
     // distance — geometry never silhouettes against the sky through the haze.
-    return vec4<f32>(agx(scene * exp(-cfg.depth.z * depth) + haze), 1.0);
+    let display = agx(scene * exp(-cfg.depth.z * depth) + haze);
+    return vec4<f32>(display + sky_dither(display, frag.xy), 1.0);
+}
+
+/// One least-significant bit of triangular noise, under a sky only.
+///
+/// An atmosphere is a smooth gradient across hundreds of rows, and eight bits
+/// quantise it into visible steps — the one artefact that gives a physically
+/// integrated sky away as a shader. Every other frame this renderer draws is
+/// high-contrast stage light where a step has nowhere to show, and the tracked
+/// contract images have to stay byte-exact, so the noise is spent exactly where
+/// it buys something.
+///
+/// The amplitude is in *display* code values, not in the linear ones this
+/// shader returns. The target is sRGB-encoded, so a fixed linear step is a
+/// dozen code values in the shadows and a third of one in the highlights —
+/// grain at one end and banding still at the other. Dividing by the encoder's
+/// slope makes it one code value everywhere.
+fn sky_dither(display: vec3<f32>, frag: vec2<f32>) -> vec3<f32> {
+    if sky.sun.w < 0.5 {
+        return vec3<f32>(0.0);
+    }
+    // Two decorrelated hashes make a triangular distribution, which has no DC
+    // term: a uniform one would lift the whole frame by half a bit.
+    let a = fract(sin(dot(frag, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    let b = fract(sin(dot(frag, vec2<f32>(63.7264, 10.873))) * 32361.4771);
+    // Inverse slope of the sRGB transfer curve, 2.4 / 1.055 * L^(1 - 1/2.4).
+    let step = 2.2749 * pow(max(display, vec3<f32>(1e-4)), vec3<f32>(0.58333)) / 255.0;
+    return (a - b) * step;
 }

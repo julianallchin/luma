@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 
 use crate::frame::EnvironmentImage;
 
-const CUBE_SIZE: u32 = 128;
+pub(crate) const CUBE_SIZE: u32 = 128;
 const IRRADIANCE_SIZE: u32 = 16;
 const SPECULAR_MIPS: u32 = 8;
 const BRDF_SIZE: u32 = 128;
@@ -146,6 +146,103 @@ impl EnvironmentPipelines {
     pub(crate) fn scene_layout(&self) -> &wgpu::BindGroupLayout {
         &self.scene_layout
     }
+
+    /// Convolve a raw radiance cube into the diffuse-irradiance and
+    /// roughness-mipped specular cubes the scene pass samples.
+    ///
+    /// Split out of [`EnvironmentCache::prepare`] because the sky builds the
+    /// same two cubes from a procedurally rendered source
+    /// (`atmosphere::AtmosphereCache::prepare`), and one convolution is the
+    /// only way an authored HDR and a rendered sky can light a rig identically.
+    pub(crate) fn convolve(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        raw_sample: &wgpu::TextureView,
+        label: &str,
+    ) -> (wgpu::TextureView, wgpu::TextureView) {
+        let specular_texture = cube_texture(device, CUBE_SIZE, SPECULAR_MIPS, label);
+        let specular = specular_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(label),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        let irradiance_texture = cube_texture(device, IRRADIANCE_SIZE, 1, label);
+        let irradiance = irradiance_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(label),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        let irradiance_target = storage_mip(&irradiance_texture, 0, label);
+        dispatch_filter(
+            device,
+            encoder,
+            (&self.filter_layout, &self.filter_pipeline),
+            raw_sample,
+            &self.sampler,
+            &irradiance_target,
+            FilterParams {
+                size: IRRADIANCE_SIZE,
+                mode: 0,
+                roughness: 1.0,
+                source_size: CUBE_SIZE as f32,
+            },
+        );
+        for mip in 0..SPECULAR_MIPS {
+            let size = (CUBE_SIZE >> mip).max(1);
+            let target = storage_mip(&specular_texture, mip, label);
+            dispatch_filter(
+                device,
+                encoder,
+                (&self.filter_layout, &self.filter_pipeline),
+                raw_sample,
+                &self.sampler,
+                &target,
+                FilterParams {
+                    size,
+                    mode: 1,
+                    roughness: mip as f32 / (SPECULAR_MIPS - 1) as f32,
+                    source_size: CUBE_SIZE as f32,
+                },
+            );
+        }
+        (irradiance, specular)
+    }
+
+    /// Scene bindings for a sky-derived probe.
+    ///
+    /// `visible` is false: the sky's background is read from its own table at
+    /// full angular resolution (`atmosphere_sky.wgsl`), not from a 128-texel
+    /// cube face, and `intensity` is one because the exposure is already baked
+    /// into the cube.
+    pub(crate) fn sky_bind_group(
+        &self,
+        device: &wgpu::Device,
+        probe: &(wgpu::TextureView, wgpu::TextureView),
+    ) -> wgpu::BindGroup {
+        let uniform = buffer(
+            device,
+            &[SceneParams {
+                intensity: 1.0,
+                rotation: 0.0,
+                enabled: 1.0,
+                visible: 0.0,
+            }],
+            wgpu::BufferUsages::UNIFORM,
+            "environment-sky",
+        );
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("environment-sky"),
+            layout: &self.scene_layout,
+            entries: &[
+                binding(0, wgpu::BindingResource::TextureView(&probe.0)),
+                binding(1, wgpu::BindingResource::TextureView(&probe.1)),
+                binding(2, wgpu::BindingResource::TextureView(&self.brdf)),
+                binding(3, wgpu::BindingResource::Sampler(&self.sampler)),
+                binding(4, uniform.as_entire_binding()),
+            ],
+        })
+    }
 }
 
 impl EnvironmentCache {
@@ -176,21 +273,6 @@ impl EnvironmentCache {
             ..Default::default()
         });
         let raw_target = storage_mip(&raw_cube, 0, "environment-raw-target");
-        let specular_texture =
-            cube_texture(device, CUBE_SIZE, SPECULAR_MIPS, "environment-specular");
-        let specular = specular_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("environment-specular"),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
-        let irradiance_texture = cube_texture(device, IRRADIANCE_SIZE, 1, "environment-irradiance");
-        let irradiance = irradiance_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("environment-irradiance"),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
-        let irradiance_target =
-            storage_mip(&irradiance_texture, 0, "environment-irradiance-target");
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("environment-preprocess"),
@@ -204,38 +286,8 @@ impl EnvironmentCache {
             &raw_target,
             CUBE_SIZE,
         );
-        dispatch_filter(
-            device,
-            &mut encoder,
-            (&pipelines.filter_layout, &pipelines.filter_pipeline),
-            &raw_sample,
-            &pipelines.sampler,
-            &irradiance_target,
-            FilterParams {
-                size: IRRADIANCE_SIZE,
-                mode: 0,
-                roughness: 1.0,
-                source_size: CUBE_SIZE as f32,
-            },
-        );
-        for mip in 0..SPECULAR_MIPS {
-            let size = (CUBE_SIZE >> mip).max(1);
-            let target = storage_mip(&specular_texture, mip, "environment-specular-mip");
-            dispatch_filter(
-                device,
-                &mut encoder,
-                (&pipelines.filter_layout, &pipelines.filter_pipeline),
-                &raw_sample,
-                &pipelines.sampler,
-                &target,
-                FilterParams {
-                    size,
-                    mode: 1,
-                    roughness: mip as f32 / (SPECULAR_MIPS - 1) as f32,
-                    source_size: CUBE_SIZE as f32,
-                },
-            );
-        }
+        let (irradiance, specular) =
+            pipelines.convolve(device, &mut encoder, &raw_sample, "environment");
         queue.submit(Some(encoder.finish()));
         self.resident = Some(ResidentEnvironment {
             key: environment.key.clone(),
@@ -492,7 +544,12 @@ fn upload_hdr(
     texture
 }
 
-fn cube_texture(device: &wgpu::Device, size: u32, mips: u32, label: &str) -> wgpu::Texture {
+pub(crate) fn cube_texture(
+    device: &wgpu::Device,
+    size: u32,
+    mips: u32,
+    label: &str,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
@@ -509,7 +566,7 @@ fn cube_texture(device: &wgpu::Device, size: u32, mips: u32, label: &str) -> wgp
     })
 }
 
-fn storage_mip(texture: &wgpu::Texture, mip: u32, label: &str) -> wgpu::TextureView {
+pub(crate) fn storage_mip(texture: &wgpu::Texture, mip: u32, label: &str) -> wgpu::TextureView {
     texture.create_view(&wgpu::TextureViewDescriptor {
         label: Some(label),
         dimension: Some(wgpu::TextureViewDimension::D2Array),
