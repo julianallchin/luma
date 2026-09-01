@@ -340,25 +340,10 @@ impl AuthoredDocuments {
         )
         .await
         .map_err(AuthoredDocumentsError::Storage)?;
-        if !inserted_receipt {
-            // An existing exact receipt was hydrated from the server. Its
-            // terminal fact supersedes any locally dirty mutable thread
-            // snapshot, which must not be replayed after final cleanup.
-            sqlx::query(
-                "DELETE FROM pending_ops
-                 WHERE principal_key = ? AND table_name = 'agent_threads'
-                   AND record_id = ? AND op_type = 'upsert_explicit'",
-            )
-            .bind(principal_key(principal))
-            .bind(thread_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|error| {
-                AuthoredDocumentsError::Storage(format!(
-                    "discard terminal agent thread projection: {error}"
-                ))
-            })?;
-        }
+        // A hydrated server receipt used to need the queued thread snapshot
+        // retracted here. The snapshot no longer exists apart from the row, and
+        // the row is deleted below, so the terminal fact wins by construction.
+        let _ = inserted_receipt;
         let deleted = sqlx::query(
             "DELETE FROM agent_threads
              WHERE id = ? AND owner_user_id IS ? AND lifecycle_state = 'deleting'",

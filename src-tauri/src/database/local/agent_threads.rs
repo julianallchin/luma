@@ -17,7 +17,6 @@ use crate::models::agent_threads::{
     AgentThreadTranscriptHead, AgentThreadUsage, AppendAgentThreadMessagesInput,
     CreateAgentThreadInput,
 };
-use crate::sync::pending;
 
 const THREAD_COLUMNS: &str =
     "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, created_at, updated_at";
@@ -43,170 +42,9 @@ fn thread_not_found(thread_id: &str) -> String {
     format!("Agent thread not found: {thread_id}")
 }
 
-async fn enqueue_thread_snapshot(
-    connection: &mut SqliteConnection,
-    thread_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<(), String> {
-    let Some(user_id) = owner_user_id else {
-        return Ok(());
-    };
-    let payload: String = sqlx::query_scalar(
-        "SELECT json_object(
-             'id', id,
-             'owner_user_id', owner_user_id,
-             'agent_kind', agent_kind,
-             'subject_kind', subject_kind,
-             'subject_id', subject_id,
-             'implementation_id', implementation_id,
-             'venue_id', venue_id,
-             'score_id', score_id,
-             'title', title,
-             'lifecycle_state', lifecycle_state,
-             'forked_from_thread_id', forked_from_thread_id,
-             'forked_at_message_id', forked_at_message_id,
-             'parent_thread_id', parent_thread_id,
-             'parent_call_id', parent_call_id,
-             'created_at', created_at,
-             'updated_at', updated_at
-         )
-         FROM agent_threads WHERE id = ? AND owner_user_id = ?",
-    )
-    .bind(thread_id)
-    .bind(user_id)
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to serialize agent thread for sync: {error}"))?;
-    pending::enqueue_explicit_upsert_on(
-        connection,
-        user_id,
-        "agent_threads",
-        thread_id,
-        &payload,
-        "id",
-    )
-    .await
-    .map_err(|error| format!("Failed to enqueue agent thread sync: {error}"))
-}
-
-async fn enqueue_message_node(
-    connection: &mut SqliteConnection,
-    message_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<(), String> {
-    let Some(user_id) = owner_user_id else {
-        return Ok(());
-    };
-    let payload: String = sqlx::query_scalar(
-        "SELECT json_object(
-             'id', id,
-             'owner_user_id', owner_user_id,
-             'principal_key', principal_key,
-             'created_in_thread_id', created_in_thread_id,
-             'parent_message_id', parent_message_id,
-             'depth', depth,
-             'role', role,
-             'parts_json', parts_json,
-             'created_at', created_at
-         )
-         FROM agent_thread_messages
-         WHERE id = ? AND owner_user_id = ?",
-    )
-    .bind(message_id)
-    .bind(user_id)
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to serialize agent message for sync: {error}"))?;
-    pending::enqueue_immutable_on(
-        connection,
-        user_id,
-        "agent_thread_messages",
-        message_id,
-        &payload,
-        "id",
-    )
-    .await
-    .map_err(|error| format!("Failed to enqueue agent message sync: {error}"))
-}
-
-async fn enqueue_append_receipt(
-    connection: &mut SqliteConnection,
-    thread_id: &str,
-    operation_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<(), String> {
-    let Some(user_id) = owner_user_id else {
-        return Ok(());
-    };
-    let payload: String = sqlx::query_scalar(
-        "SELECT json_object(
-             'thread_id', thread_id,
-             'owner_user_id', owner_user_id,
-             'principal_key', principal_key,
-             'operation_id', operation_id,
-             'request_fingerprint', request_fingerprint,
-             'base_head_message_id', base_head_message_id,
-             'first_message_id', first_message_id,
-             'result_head_message_id', result_head_message_id,
-             'message_count', message_count,
-             'created_at', created_at
-         )
-         FROM agent_thread_message_appends
-         WHERE thread_id = ? AND operation_id = ? AND owner_user_id = ?",
-    )
-    .bind(thread_id)
-    .bind(operation_id)
-    .bind(user_id)
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to serialize agent append receipt for sync: {error}"))?;
-    pending::enqueue_immutable_on(
-        connection,
-        user_id,
-        "agent_thread_message_appends",
-        &crate::sync::registry::record_id([thread_id, operation_id]),
-        &payload,
-        "thread_id,operation_id",
-    )
-    .await
-    .map_err(|error| format!("Failed to enqueue agent append receipt sync: {error}"))
-}
-
-async fn enqueue_deletion_receipt(
-    connection: &mut SqliteConnection,
-    thread_id: &str,
-    owner_user_id: Option<&str>,
-) -> Result<(), String> {
-    let Some(user_id) = owner_user_id else {
-        return Ok(());
-    };
-    let payload: String = sqlx::query_scalar(
-        "SELECT json_object(
-             'thread_id', thread_id,
-             'owner_user_id', owner_user_id,
-             'principal_key', principal_key,
-             'document_id', document_id,
-             'deleted_at', deleted_at
-         )
-         FROM agent_thread_deletions
-         WHERE thread_id = ? AND owner_user_id = ?",
-    )
-    .bind(thread_id)
-    .bind(user_id)
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(|error| format!("Failed to serialize agent thread deletion for sync: {error}"))?;
-    pending::enqueue_immutable_on(
-        connection,
-        user_id,
-        "agent_thread_deletions",
-        thread_id,
-        &payload,
-        "thread_id",
-    )
-    .await
-    .map_err(|error| format!("Failed to enqueue agent thread deletion sync: {error}"))
-}
+// Sync delivery is not enqueued here. A thread, a message node, an append
+// receipt and a deletion receipt all become visible to push by existing with an
+// unset `synced_at`; the row is the payload, so there is nothing to copy.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ThreadDeletionTransition {
@@ -263,7 +101,6 @@ pub(crate) async fn create_thread_with_id(
     .map_err(|e| format!("Failed to create agent thread: {e}"))?;
 
     let thread = get_thread_row_for_connection(&mut transaction, id, owner_user_id, true).await?;
-    enqueue_thread_snapshot(&mut transaction, id, owner_user_id).await?;
     transaction
         .commit()
         .await
@@ -395,7 +232,6 @@ pub(crate) async fn fork_thread_for_connection(
 
     let fork =
         get_thread_row_for_connection(connection, new_thread_id, owner_user_id, true).await?;
-    enqueue_thread_snapshot(connection, new_thread_id, owner_user_id).await?;
     Ok(fork)
 }
 
@@ -541,8 +377,6 @@ pub(crate) async fn insert_thread_deletion_receipt(
                 "Agent thread deletion receipt identity collision: {thread_id}"
             ));
         }
-    } else {
-        enqueue_deletion_receipt(connection, thread_id, owner_user_id).await?;
     }
     Ok(inserted.rows_affected() == 1)
 }
@@ -669,7 +503,6 @@ pub(crate) async fn mark_thread_deleting(
         }
     };
 
-    enqueue_thread_snapshot(&mut tx, thread_id, owner_user_id).await?;
     tx.commit()
         .await
         .map_err(|e| format!("Failed to commit agent thread deletion: {e}"))?;
@@ -1020,11 +853,6 @@ pub async fn append_messages_at_head(
             stored_count,
         )
         .await?;
-        for message in &messages {
-            enqueue_message_node(&mut tx, &message.id, owner_user_id).await?;
-        }
-        enqueue_append_receipt(&mut tx, thread_id, &input.operation_id, owner_user_id).await?;
-        enqueue_thread_snapshot(&mut tx, thread_id, owner_user_id).await?;
         tx.commit()
             .await
             .map_err(|e| format!("Failed to commit agent thread append retry: {e}"))?;
@@ -1125,11 +953,6 @@ pub async fn append_messages_at_head(
     .execute(&mut *tx)
     .await
     .map_err(|e| format!("Failed to record agent thread append: {e}"))?;
-    for message in &appended {
-        enqueue_message_node(&mut tx, &message.id, owner_user_id).await?;
-    }
-    enqueue_append_receipt(&mut tx, thread_id, &input.operation_id, owner_user_id).await?;
-    enqueue_thread_snapshot(&mut tx, thread_id, owner_user_id).await?;
     tx.commit()
         .await
         .map_err(|e| format!("Failed to commit agent thread append: {e}"))?;
@@ -1605,7 +1428,6 @@ pub async fn rename_thread(
 
     let thread =
         get_thread_row_for_connection(&mut transaction, thread_id, owner_user_id, true).await?;
-    enqueue_thread_snapshot(&mut transaction, thread_id, owner_user_id).await?;
     transaction
         .commit()
         .await
@@ -2096,26 +1918,18 @@ mod tests {
             .is_empty());
     }
 
+    /// A signed-in transcript write leaves exactly the rows push will deliver,
+    /// visible by their unset delivery marker — and leaves the transcript head
+    /// alone, because that projection is advanced by the server's receipt.
     #[tokio::test]
-    async fn signed_in_transcript_writes_enqueue_trace_delivery_atomically() {
+    async fn signed_in_transcript_writes_are_deliverable_the_moment_they_commit() {
         let (_dir, pool) = test_pool().await;
         admit(&pool, Some("alice")).await;
         let thread = create_thread(&pool, track_thread("track-1"), Some("alice"))
             .await
             .unwrap();
 
-        let initial_ops: Vec<(String, String)> = sqlx::query_as(
-            "SELECT op_type, table_name FROM pending_ops
-             WHERE principal_key = 'signed-in:alice'
-             ORDER BY table_name",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            initial_ops,
-            vec![("upsert_explicit".into(), "agent_threads".into())]
-        );
+        assert_eq!(undelivered(&pool).await, vec!["agent_threads".to_owned()]);
 
         append_messages(
             &pool,
@@ -2134,35 +1948,40 @@ mod tests {
         .await
         .unwrap();
 
-        let ops: Vec<(String, String)> = sqlx::query_as(
-            "SELECT op_type, table_name FROM pending_ops
-             WHERE principal_key = 'signed-in:alice'
-             ORDER BY table_name, op_type",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
         assert_eq!(
-            ops,
+            undelivered(&pool).await,
             vec![
-                (
-                    "insert_immutable".into(),
-                    "agent_thread_message_appends".into()
-                ),
-                ("insert_immutable".into(), "agent_thread_messages".into()),
-                ("upsert_explicit".into(), "agent_threads".into()),
+                "agent_thread_message_appends".to_owned(),
+                "agent_thread_messages".to_owned(),
+                "agent_threads".to_owned(),
             ]
         );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE table_name = 'agent_thread_transcript_heads'",
-            )
-            .fetch_one(&pool)
+    }
+
+    /// Which trace tables currently owe the server something.
+    async fn undelivered(pool: &SqlitePool) -> Vec<String> {
+        let mut tables = Vec::new();
+        for table in [
+            "agent_threads",
+            "agent_thread_messages",
+            "agent_thread_message_appends",
+            "agent_thread_transcript_heads",
+        ] {
+            if !crate::sync::registry::has_delivery_marker(table) {
+                continue;
+            }
+            let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT COUNT(*) FROM {table} WHERE synced_at IS NULL"
+            )))
+            .fetch_one(pool)
             .await
-            .unwrap(),
-            0
-        );
+            .unwrap();
+            if count > 0 {
+                tables.push(table.to_owned());
+            }
+        }
+        tables.sort();
+        tables
     }
 
     #[tokio::test]

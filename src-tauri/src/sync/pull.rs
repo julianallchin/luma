@@ -235,12 +235,12 @@ pub async fn pull_all(
         let blocked_by = table
             .parents
             .iter()
-            .find(|parent| unavailable.contains(**parent));
+            .find(|parent| unavailable.contains(parent.table));
         if let Some(parent) = blocked_by {
             unavailable.insert(table.name);
             stats.errors.push(format!(
-                "{}: deferred because dependency {parent} did not finish",
-                table.name
+                "{}: deferred because dependency {} did not finish",
+                table.name, parent.table
             ));
             continue;
         }
@@ -281,11 +281,6 @@ pub async fn pull_all(
             stats
                 .errors
                 .push(format!("authored archive reconciliation: {error}"));
-        }
-        if let Err(error) = authored.enqueue_pending_head_integrations(pool, uid).await {
-            stats
-                .errors
-                .push(format!("authored head integration scan: {error}"));
         }
     }
 
@@ -628,12 +623,17 @@ async fn mark_dirty(pool: &SqlitePool, table: &TableMeta, record_id: &str) {
 fn build_upsert_sql(table: &TableMeta) -> String {
     let conflict_cols: Vec<&str> = table.pk_columns();
     if registry::pull_policy(table.name) != registry::PullPolicy::DirtyUpsert {
-        let placeholders: Vec<String> = (1..=table.columns.len())
+        // A pulled row arrives delivered. Stamping the marker in the same
+        // statement is what stops push from immediately sending it back.
+        let mut all_cols: Vec<&str> = table.columns.to_vec();
+        if registry::has_delivery_marker(table.name) {
+            all_cols.push("synced_at");
+        }
+        let placeholders: Vec<String> = (1..=all_cols.len())
             .map(|index| format!("?{index}"))
             .collect();
         if registry::pull_policy(table.name) == registry::PullPolicy::ProjectionUpsert {
-            let update_cols = table
-                .columns
+            let update_cols = all_cols
                 .iter()
                 .filter(|column| !conflict_cols.contains(column))
                 .map(|column| format!("{column} = excluded.{column}"))
@@ -642,7 +642,7 @@ fn build_upsert_sql(table: &TableMeta) -> String {
             return format!(
                 "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO UPDATE SET {}",
                 table.name,
-                table.columns.join(", "),
+                all_cols.join(", "),
                 placeholders.join(", "),
                 table.conflict_key,
                 update_cols,
@@ -651,7 +651,7 @@ fn build_upsert_sql(table: &TableMeta) -> String {
         return format!(
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) DO NOTHING",
             table.name,
-            table.columns.join(", "),
+            all_cols.join(", "),
             placeholders.join(", "),
             table.conflict_key,
         );
@@ -766,20 +766,23 @@ async fn execute_upsert(
     };
 
     let pull_policy = registry::pull_policy(table.name);
-    let has_delivery_columns = pull_policy == registry::PullPolicy::DirtyUpsert;
     let mut values: Vec<BoundValue> = Vec::with_capacity(table.columns.len() + 2);
     for col in table.columns {
         values.push(extract_value(table, &row, col)?);
     }
-    if has_delivery_columns {
-        // synced_at = updated_at (or now if no updated_at)
+    // The marker must equal `updated_at` exactly where the table has one: the
+    // dirty predicate is an inequality between the two, so any other value —
+    // including "now" — would read as an unpushed local edit.
+    if registry::has_delivery_marker(table.name) {
         let synced_at = row["updated_at"]
             .as_str()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
         values.push(BoundValue::Text(synced_at));
-        // Own rows get origin='local' so delete triggers fire.
+    }
+    if pull_policy == registry::PullPolicy::DirtyUpsert {
+        // Own rows get origin='local' so local deletes are told to the server.
         // Other users' rows are 'remote' to prevent cascade-delete sync.
         let is_own = current_uid
             .and_then(|uid| row.get("uid").and_then(|v| v.as_str()).map(|v| v == uid))
@@ -1242,78 +1245,46 @@ fn refused_remote_delete(table_name: &str, record_id: &str, reason: &str) -> Syn
 
 /// Check if a record has unpushed local changes — either a pending op
 /// in the queue or the source table's explicit dirty flag (`synced_at IS NULL`).
+/// Whether the local copy of this row is ahead of the server.
+///
+/// Read from the same ground truth push scans: the row's delivery marker, plus
+/// a recorded deletion that has not been delivered yet — an incoming row must
+/// not resurrect something this device has already deleted.
+///
+/// Immutable rows and server projections are never "dirty": an immutable row
+/// has to stay verifiable against the server copy even before its own delivery
+/// lands, and a terminal archive must beat an offline document-create replay.
 async fn is_locally_dirty(
     pool: &SqlitePool,
     table: &TableMeta,
     record_id: &str,
     current_uid: Option<&str>,
 ) -> bool {
-    let push_policy = registry::push_policy(table.name);
     if !matches!(
-        push_policy,
+        registry::push_policy(table.name),
         registry::PushPolicy::DirtyUpsert | registry::PushPolicy::ExplicitUpsert
     ) {
-        // Immutable rows can be verified while their delivery op is pending,
-        // and server projections/enrichments must never be hidden by a local
-        // authority wake-up. In particular, a terminal authored archive must
-        // beat an offline document-create replay.
         return false;
     }
-
-    // 1. Pending ops (queued upsert or delete not yet flushed to remote)
     let principal_key = crate::database::local::auth::principal_key(current_uid);
-    let has_pending = sqlx::query_scalar::<_, i64>(
-        "SELECT 1 FROM pending_ops
-         WHERE principal_key = ? AND table_name = ? AND record_id = ?",
-    )
-    .bind(principal_key)
-    .bind(table.name)
-    .bind(record_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .is_some();
-
-    if has_pending {
+    if super::tombstone::exists(pool, &principal_key, table.name, record_id)
+        .await
+        .unwrap_or(false)
+    {
         return true;
     }
-
-    // Immutable product traces carry no mutable delivery flag. Their creating
-    // transaction explicitly enqueues the row, so absence from pending_ops is
-    // the only delivery state.
-    if push_policy != registry::PushPolicy::DirtyUpsert {
+    let Some(pk_values) = table.decode_record_id(record_id) else {
         return false;
-    }
-
-    // 2. Dirty in source table (edited locally, not yet enqueued for push)
-    let pk_cols = table.pk_columns();
-    let where_clause = if pk_cols.len() == 1 {
-        format!("{} = ?1", pk_cols[0])
-    } else {
-        // Composite PK: record_id is "a:b", split on ':'
-        pk_cols
-            .iter()
-            .enumerate()
-            .map(|(i, c)| format!("{c} = ?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(" AND ")
     };
-
     let sql = format!(
-        "SELECT 1 FROM {} WHERE {where_clause} AND synced_at IS NULL",
-        table.name
+        "SELECT 1 FROM {} WHERE {} AND (synced_at IS NULL OR synced_at <> updated_at)",
+        table.name,
+        table.pk_where()
     );
-
-    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(&*sql));
-    if pk_cols.len() == 1 {
-        query = query.bind(record_id);
-    } else {
-        for part in record_id.split(':') {
-            query = query.bind(part);
-        }
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+    for value in pk_values {
+        query = query.bind(value);
     }
-
     query.fetch_optional(pool).await.ok().flatten().is_some()
 }
 
@@ -1442,6 +1413,8 @@ async fn apply_thread_projection(
     let remote_lifecycle = value_for_column(table, values, "lifecycle_state");
     let remote_updated_at = value_for_column(table, values, "updated_at");
     let id = value_for_column(table, values, "id");
+    // `synced_at = updated_at` for the same reason the insert path stamps it:
+    // a projection this device just received is not a local edit.
     let mut query = sqlx::query(
         "UPDATE agent_threads
          SET title = ?,
@@ -1449,10 +1422,17 @@ async fn apply_thread_projection(
                  WHEN lifecycle_state = 'deleting' OR ? = 'deleting' THEN 'deleting'
                  ELSE 'active'
              END,
-             updated_at = ?
+             updated_at = ?,
+             synced_at = ?
          WHERE id IS ?",
     );
-    for value in [remote_title, remote_lifecycle, remote_updated_at, id] {
+    for value in [
+        remote_title,
+        remote_lifecycle,
+        remote_updated_at,
+        remote_updated_at,
+        id,
+    ] {
         query = bind_value(query, value);
     }
     if query.execute(&mut **transaction).await?.rows_affected() != 1 {
@@ -1757,14 +1737,9 @@ mod remote_deletion_tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        sqlx::query(
-            "DELETE FROM pending_ops
-             WHERE table_name = 'agent_threads' AND record_id = ?",
-        )
-        .bind(&thread.id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        // Model the thread snapshot having been delivered before the server's
+        // terminal receipt arrives.
+        mark_thread_delivered(&pool, &thread.id).await;
 
         let deleted_at = "2026-08-02T00:00:02Z";
         let projection_only = SequenceRowsRemote {
@@ -1841,6 +1816,23 @@ mod remote_deletion_tests {
         .unwrap();
         assert!(second.errors.is_empty(), "{:?}", second.errors);
         assert_eq!(second.rows_pulled, 1);
+    }
+
+    /// Stamp a thread's delivery marker the way a successful push would.
+    async fn mark_thread_delivered(pool: &SqlitePool, thread_id: &str) {
+        let mut transaction = pool.begin().await.unwrap();
+        crate::database::local::write_admission::enter_remote_writes(&mut transaction)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE agent_threads SET synced_at = updated_at WHERE id = ?")
+            .bind(thread_id)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+        crate::database::local::write_admission::leave_remote_writes(&mut transaction)
+            .await
+            .unwrap();
+        transaction.commit().await.unwrap();
     }
 
     #[tokio::test]
@@ -1988,14 +1980,11 @@ mod remote_deletion_tests {
         assert!(workspaces.workspace_for_test(&thread.id).is_err());
         assert!(graph_runs.latest(&thread.id).is_none());
         assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE table_name = 'agent_threads' AND record_id = ?",
-            )
-            .bind(&thread.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_threads WHERE id = ?",)
+                .bind(&thread.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
             0,
             "the pulled terminal receipt supersedes a dirty thread projection"
         );
@@ -2413,15 +2402,22 @@ mod remote_deletion_tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE op_type = 'integrate_authored_head_proposal'
-                   AND record_id = 'later-live-proposal'",
+                "SELECT COUNT(*)
+                 FROM authored_head_proposals proposal
+                 LEFT JOIN authored_head_integrations integration
+                   ON integration.proposal_id = proposal.proposal_id
+                 JOIN authored_documents document
+                   ON document.document_id = proposal.document_id
+                 WHERE proposal.proposal_id = 'later-live-proposal'
+                   AND proposal.server_proposal_seq IS NOT NULL
+                   AND integration.proposal_id IS NULL
+                   AND document.archived_at IS NULL",
             )
             .fetch_one(&pool)
             .await
             .unwrap(),
             1,
-            "any online client must schedule the later live proposal"
+            "any online client must find the later live proposal to integrate"
         );
 
         let replay = pull_all(
@@ -2622,7 +2618,7 @@ mod remote_deletion_tests {
             .await
             .unwrap();
         let queued: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pending_ops
+            "SELECT COUNT(*) FROM sync_tombstones
              WHERE table_name IN (
                  'implementations',
                  'track_scores',
@@ -2633,76 +2629,6 @@ mod remote_deletion_tests {
         .await
         .unwrap();
         assert_eq!(queued, 0);
-    }
-
-    #[tokio::test]
-    async fn authored_sync_retirement_purges_legacy_override_queue_and_cursor_state() {
-        let (_directory, pool, _authored) = test_pool().await;
-        sqlx::raw_sql(
-            "CREATE TRIGGER sync_delete_venue_impl_overrides
-             AFTER DELETE ON venue_implementation_overrides FOR EACH ROW
-             BEGIN
-                 INSERT OR REPLACE INTO pending_ops
-                    (principal_key, op_type, table_name, record_id, next_retry_at)
-                 VALUES (
-                    'signed-in:alice',
-                    'delete',
-                    'venue_implementation_overrides',
-                    OLD.venue_id || ':' || OLD.pattern_id,
-                    CURRENT_TIMESTAMP
-                 );
-             END;
-             INSERT INTO pending_ops
-                (principal_key, op_type, table_name, record_id, conflict_key)
-             VALUES (
-                'signed-in:alice',
-                'delete',
-                'venue_implementation_overrides',
-                'venue:pattern',
-                'venue_id,pattern_id'
-             );
-             INSERT INTO sync_state (uid, table_name, last_pulled_at)
-             VALUES (
-                'alice',
-                'venue_implementation_overrides',
-                '2026-01-01T00:00:00Z'
-             );",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::raw_sql(include_str!(
-            "../../migrations/20260802000000_retire_relational_authored_sync.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let trigger_exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master
-             WHERE type = 'trigger' AND name = 'sync_delete_venue_impl_overrides'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(trigger_exists, 0);
-        let pending: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pending_ops
-             WHERE table_name = 'venue_implementation_overrides'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(pending, 0);
-        let cursor: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sync_state
-             WHERE table_name = 'venue_implementation_overrides'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(cursor, 0);
     }
 
     /// A venue whose only content is graph rows is a venue with something in
@@ -2842,8 +2768,8 @@ mod remote_deletion_tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE op_type = 'delete' AND table_name = 'scores'"
+                "SELECT COUNT(*) FROM sync_tombstones
+                 WHERE table_name = 'scores'"
             )
             .fetch_one(&pool)
             .await
@@ -2889,7 +2815,7 @@ mod remote_deletion_tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
+                "SELECT COUNT(*) FROM sync_tombstones
                  WHERE table_name = 'scores' AND record_id = 'foreign-score'"
             )
             .fetch_one(&pool)
@@ -2943,7 +2869,7 @@ mod remote_deletion_tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
+                "SELECT COUNT(*) FROM sync_tombstones
                  WHERE table_name = 'patterns' AND record_id = 'public-pattern'"
             )
             .fetch_one(&pool)
@@ -3065,8 +2991,8 @@ mod remote_deletion_tests {
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM pending_ops
-                 WHERE op_type = 'delete' AND table_name = 'patterns'"
+                "SELECT COUNT(*) FROM sync_tombstones
+                 WHERE table_name = 'patterns'"
             )
             .fetch_one(&pool)
             .await

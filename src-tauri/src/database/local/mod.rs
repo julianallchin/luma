@@ -13,6 +13,7 @@ pub mod scores;
 pub mod settings;
 pub mod stage;
 pub mod state;
+pub mod sync_delete;
 pub mod track_access;
 pub mod tracks;
 pub mod venue_access;

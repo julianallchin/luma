@@ -10,14 +10,10 @@ use crate::services::authored_documents::AuthoredDocuments;
 use super::error::SyncError;
 use super::files::{self, FileSyncStats};
 use super::host::SyncHost;
-use super::pending;
 use super::pull::{self, PullStats};
 use super::push;
 use super::registry;
 use super::traits::RemoteClient;
-
-/// Maximum dirty records to enqueue per table in a single pass.
-const DIRTY_BATCH_LIMIT: u32 = 1000;
 
 #[derive(Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,9 +207,6 @@ impl SyncEngine {
                     "authored projection bootstrap blocked push: {error}"
                 ))
             })?;
-        if let Err(e) = enqueue_dirty(&self.pool, uid).await {
-            eprintln!("[sync] Enqueue failed: {e}");
-        }
         let n = push::flush_pending_with_integrator(
             &self.pool,
             &self.state_pool,
@@ -274,56 +267,6 @@ impl SyncEngine {
         .await?;
         Ok(stats)
     }
-}
-
-/// Scan all tables for dirty records and enqueue them into pending_ops.
-/// Single implementation used by both sync_full and the background loop.
-/// Batches in groups of DIRTY_BATCH_LIMIT to bound memory usage.
-pub async fn enqueue_dirty(pool: &SqlitePool, uid: &str) -> Result<usize, SyncError> {
-    let mut count = 0;
-    for table in registry::TABLES {
-        if registry::push_policy(table.name) != registry::PushPolicy::DirtyUpsert {
-            continue;
-        }
-        let base_sql = table.dirty_query();
-        let has_principal = table.has_principal();
-        let sql = format!("{base_sql} LIMIT {DIRTY_BATCH_LIMIT}");
-
-        // One column per primary key, whatever the arity: the dirty query
-        // selects exactly `pk_columns()` and each row is read back positionally.
-        // Reading a fixed-width tuple instead silently truncated every table
-        // with a third key column to its first two.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(&*sql));
-        if has_principal {
-            query = query.bind(uid);
-        }
-        let rows = query.fetch_all(pool).await?;
-        if !rows.is_empty() {
-            eprintln!("[sync] {} dirty in {}", rows.len(), table.name);
-        }
-        for row in &rows {
-            use sqlx::Row;
-            let values: Vec<String> = (0..table.pk_columns().len())
-                .map(|index| row.try_get::<String, _>(index))
-                .collect::<Result<_, _>>()?;
-            let record_id = registry::record_id(values.iter().map(String::as_str));
-            if let Ok(payload) = read_record_as_json(pool, table, &record_id).await {
-                let json =
-                    serde_json::to_string(&payload).map_err(|e| SyncError::Parse(e.to_string()))?;
-                pending::enqueue_upsert(
-                    pool,
-                    uid,
-                    table.name,
-                    &record_id,
-                    &json,
-                    table.conflict_key,
-                )
-                .await?;
-                count += 1;
-            }
-        }
-    }
-    Ok(count)
 }
 
 /// Read a record from local SQLite as JSON, excluding local_only columns.

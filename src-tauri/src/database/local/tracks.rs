@@ -2,6 +2,7 @@ use sqlx::{FromRow, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::database::local::sync_delete;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::tracks::{
     ChordSection, TrackBeats, TrackBrowserRow, TrackRoots, TrackStem, TrackSummary,
@@ -442,23 +443,28 @@ pub async fn delete_prepared_track_record(
     track_id: &str,
     owner_user_id: Option<&str>,
 ) -> Result<u64, String> {
-    let result = match owner_user_id {
+    let deleted = match owner_user_id {
         Some(owner_user_id) => {
-            sqlx::query("DELETE FROM tracks WHERE id = ? AND uid = ?")
-                .bind(track_id)
-                .bind(owner_user_id)
-                .execute(&mut *connection)
-                .await
+            sync_delete::delete_synced_where(
+                connection,
+                "tracks",
+                "id = ? AND uid = ?",
+                &[track_id, owner_user_id],
+            )
+            .await
         }
         None => {
-            sqlx::query("DELETE FROM tracks WHERE id = ? AND uid IS NULL")
-                .bind(track_id)
-                .execute(&mut *connection)
-                .await
+            sync_delete::delete_synced_where(
+                connection,
+                "tracks",
+                "id = ? AND uid IS NULL",
+                &[track_id],
+            )
+            .await
         }
     }
     .map_err(|e| format!("Failed to delete prepared track: {e}"))?;
-    Ok(result.rows_affected())
+    Ok(deleted as u64)
 }
 
 // -----------------------------------------------------------------------------
