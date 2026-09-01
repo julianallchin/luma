@@ -2,7 +2,6 @@ use chrono::Utc;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::edits::PatternForkSource;
-use super::operations::enqueue_local_row;
 use super::{
     deterministic_creation_id, exact_graph_json, graph_files, normalized_creation_request_id,
     operation_request_fingerprint, principal_key, revision_for_clips, serialize_track,
@@ -11,10 +10,9 @@ use super::{
     ResolvedScope, Result, Score, TrackDocument, TrackScope, VenueAccess, VenueResource, Write,
     PATTERN_SUMMARY_COLUMNS, SCORE_PATH,
 };
+use crate::database::local::sync_delete;
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::services::authored_state::AuthoredDocumentKind;
-use crate::sync::authored_remote::ArchiveAuthoredDocumentInput;
-use crate::sync::pending;
 
 impl AuthoredDocuments {
     /// Import every live projection owned by the currently admitted principal
@@ -158,7 +156,7 @@ impl AuthoredDocuments {
     async fn bootstrap_legacy_archives_locked(
         &self,
         pool: &SqlitePool,
-        principal: Option<&str>,
+        _principal: Option<&str>,
         routes: Vec<LegacyArchivedRoute>,
     ) -> Result<usize> {
         let mut documents = routes
@@ -220,17 +218,7 @@ impl AuthoredDocuments {
                     document.id
                 )));
             }
-            if stored.archived_at.is_none() {
-                if let Some(user_id) = principal {
-                    enqueue_local_row(
-                        &mut transaction,
-                        user_id,
-                        "authored_documents",
-                        document.id.as_str(),
-                    )
-                    .await?;
-                }
-            }
+            if stored.archived_at.is_none() {}
         }
 
         // Phase two: archive at a current head that may have arrived from
@@ -321,23 +309,6 @@ impl AuthoredDocuments {
             .await
             .map_err(storage("insert legacy headless archive"))?;
 
-            if let Some(user_id) = principal {
-                let input = ArchiveAuthoredDocumentInput {
-                    archive_id,
-                    document_id: document.id.to_string(),
-                    device_id: device_id.clone(),
-                    operation_id,
-                    requested_revision_id: head,
-                    archived_at,
-                };
-                pending::enqueue_authored_archive_on(&mut transaction, user_id, &input)
-                    .await
-                    .map_err(|error| {
-                        AuthoredDocumentsError::Storage(format!(
-                            "enqueue legacy authored archive: {error}"
-                        ))
-                    })?;
-            }
             sqlx::query(
                 "DELETE FROM relational_upgrade_archived_routes
                  WHERE legacy_repository_id = ? AND principal_key = ?",
@@ -518,11 +489,16 @@ impl AuthoredDocuments {
                         .execute(&mut *transaction)
                         .await
                         .map_err(storage("remove terminal pattern implementations"))?;
-                    sqlx::query("DELETE FROM patterns WHERE id = ?")
-                        .bind(&pattern_id)
-                        .execute(&mut *transaction)
-                        .await
-                        .map_err(storage("remove terminal pattern"))?;
+                    crate::database::local::sync_delete::delete_synced_where(
+                        &mut transaction,
+                        "patterns",
+                        "id = ?",
+                        &[&pattern_id],
+                    )
+                    .await
+                    .map_err(|error| {
+                        AuthoredDocumentsError::Storage(format!("remove terminal pattern: {error}"))
+                    })?;
                 }
             }
         }
@@ -893,15 +869,6 @@ impl AuthoredDocuments {
         .execute(&mut *connection)
         .await
         .map_err(storage("record authored creation outcome"))?;
-        self.enqueue_revision_closure(
-            connection,
-            scope,
-            &revision,
-            files,
-            true,
-            Some((operation_kind, operation_id)),
-        )
-        .await?;
         self.create_head_proposal(connection, scope, None, &revision.id, operation_id)
             .await?;
         Ok(revision)
@@ -1149,11 +1116,11 @@ impl AuthoredDocuments {
             .execute(&mut *transaction)
             .await
             .map_err(storage("delete archived pattern implementations"))?;
-        sqlx::query("DELETE FROM patterns WHERE id = ?")
-            .bind(pattern_id)
-            .execute(&mut *transaction)
+        sync_delete::delete_synced_where(&mut transaction, "patterns", "id = ?", &[pattern_id])
             .await
-            .map_err(storage("delete archived pattern"))?;
+            .map_err(|error| {
+                AuthoredDocumentsError::Storage(format!("delete archived pattern: {error}"))
+            })?;
         if !publish {
             write_admission::leave_remote_writes(&mut transaction)
                 .await
@@ -1208,26 +1175,9 @@ impl AuthoredDocuments {
         .execute(&mut *connection)
         .await
         .map_err(storage("insert authored archive request"))?;
-        if scope.owner_user_id.is_none() {
-            return Ok(());
-        }
-        let input = ArchiveAuthoredDocumentInput {
-            archive_id,
-            document_id: scope.document_id.to_string(),
-            device_id,
-            operation_id,
-            requested_revision_id: Some(head.to_string()),
-            archived_at,
-        };
-        pending::enqueue_authored_archive_on(
-            connection,
-            scope.owner_user_id.as_deref().expect("checked"),
-            &input,
-        )
-        .await
-        .map_err(|error| {
-            AuthoredDocumentsError::Storage(format!("enqueue authored archive: {error}"))
-        })
+        // The archive row is the RPC's input; push finds it by its NULL
+        // `server_archive_seq`, and a guest scope has nothing to deliver.
+        Ok(())
     }
 }
 

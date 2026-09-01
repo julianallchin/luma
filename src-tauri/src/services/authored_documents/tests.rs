@@ -2216,25 +2216,22 @@ async fn another_device_discovers_and_integrates_an_offline_proposal() {
     .await
     .unwrap();
 
-    let queued = fixture
-        .authored
-        .enqueue_pending_head_integrations(&fixture.pool, owner)
-        .await
-        .unwrap();
-    assert_eq!(queued, 1);
-    let (queued_principal, queued_type): (String, String) = sqlx::query_as(
-        "SELECT principal_key, op_type FROM pending_ops
-         WHERE table_name = 'authored_head_authority' AND record_id = ?",
+    // Integration is not queued anywhere: a server-ordered proposal with no
+    // terminal integration *is* the work, and any owner device that reads the
+    // tables sees it.
+    let (pending_principal, pending_proposal): (String, String) = sqlx::query_as(
+        "SELECT proposal.principal_key, proposal.proposal_id
+         FROM authored_head_proposals proposal
+         LEFT JOIN authored_head_integrations integration
+           ON integration.proposal_id = proposal.proposal_id
+         WHERE proposal.server_proposal_seq IS NOT NULL
+           AND integration.proposal_id IS NULL",
     )
-    .bind(proposal_id)
     .fetch_one(&fixture.pool)
     .await
     .unwrap();
-    assert_eq!(queued_principal, format!("signed-in:{owner}"));
-    assert_eq!(
-        queued_type,
-        crate::sync::authored_remote::INTEGRATE_HEAD_PROPOSAL_OP
-    );
+    assert_eq!(pending_principal, format!("signed-in:{owner}"));
+    assert_eq!(pending_proposal, proposal_id);
 
     let remote = NoHeadRemote {
         proposal_id: proposal_id.into(),

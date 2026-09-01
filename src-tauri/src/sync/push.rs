@@ -1,4 +1,13 @@
-//! Push protocol: background sync loop with exponential backoff.
+//! Push protocol: deliver what the local tables say the server is owed.
+//!
+//! There is no queue. Every cycle re-derives the work from ground truth: rows
+//! whose delivery marker is behind their content, deletions recorded in
+//! `sync_tombstones`, and the authored authority operations whose
+//! server-assigned sequence is still NULL. The payload is built from the row at
+//! the moment it is sent, so an edit that lands during the remote call leaves
+//! the row dirty instead of being overwritten by a stale snapshot.
+//!
+//! See `docs/design/sync-push-v2.md`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,16 +20,41 @@ use crate::services::authored_documents::AuthoredDocuments;
 
 use super::authored_remote::{
     self, ArchiveAuthoredDocumentInput, HeadProposalIntegrator, SubmitHeadProposalInput,
-    ARCHIVE_AUTHORED_DOCUMENT_OP, INTEGRATE_HEAD_PROPOSAL_OP, SUBMIT_HEAD_PROPOSAL_OP,
 };
 use super::error::SyncError;
 use super::host::SyncHost;
-use super::pending::{self, PendingOp};
+use super::orchestrator::read_record_as_json;
 use super::pull;
-use super::registry;
+use super::push_state::{self, Subject, Verdict};
+use super::registry::{self, PushPolicy, TableMeta};
+use super::tombstone;
 use super::traits::RemoteClient;
 
-/// Flush ready pending ops to the remote. Returns count flushed.
+/// Rows and tombstones delivered in one flush before the loop gets another
+/// turn. A backlog drains over several cycles rather than holding the sync lock
+/// for minutes.
+const FLUSH_BUDGET: usize = 200;
+
+/// Most dirty rows of one table considered per cycle.
+const SCAN_LIMIT: u32 = 1000;
+
+/// One thing push owes the server, resolved from the tables at flush time.
+struct Owed {
+    table: &'static TableMeta,
+    record_id: String,
+    pk_values: Vec<String>,
+    /// The row `version` the decision was made against, where the table has
+    /// one. Retry state remembers it so a later edit restarts the budget, and
+    /// the delivery receipt refuses to land on a different one.
+    version: Option<i64>,
+    /// `updated_at` as read by the scan, for the one mutable table with no
+    /// version column. Same purpose as `version`: prove the row did not move
+    /// while the request was in flight.
+    stamp: Option<String>,
+}
+
+/// Flush everything the local tables owe the remote. Returns the count
+/// delivered.
 #[cfg(test)]
 pub async fn flush_pending(
     pool: &SqlitePool,
@@ -30,9 +64,9 @@ pub async fn flush_pending(
     flush_pending_with_integrator(pool, state_pool, remote, None).await
 }
 
-/// Flush pending operations with the domain-aware authored-head integration
-/// bridge installed. Production callers always provide `AuthoredDocuments`;
-/// tests may omit it to exercise ordinary row delivery in isolation.
+/// Flush with the domain-aware authored-head integration bridge installed.
+/// Production callers always provide `AuthoredDocuments`; tests may omit it to
+/// exercise ordinary row delivery in isolation.
 pub async fn flush_pending_with_integrator(
     pool: &SqlitePool,
     state_pool: &SqlitePool,
@@ -49,251 +83,574 @@ pub async fn flush_pending_with_integrator(
             "verified remote session does not match the active app-database principal".into(),
         ));
     }
+    super::transition::drain_legacy_push_queue(pool).await?;
     let principal_key = crate::database::local::auth::principal_key(Some(&admitted_user_id));
-    let ops = pending::fetch_ready_ops(pool, &principal_key).await?;
-    let mut flushed = 0;
+    let mut delivered = 0usize;
 
-    for op in &ops {
-        // A queued upsert only means anything while the row it copies still
-        // exists. Delete the row and its `sync_delete_*` trigger enqueues a
-        // tombstone under a *different* `op_type`, so the queue's uniqueness
-        // key cannot retract the upsert that precedes it — the pair is left
-        // for the flush to resolve. Resolve it here, before the remote call:
-        // pushing the upsert would resurrect the row server-side, and marking
-        // it synced afterwards would fail (there is nothing to mark), so the
-        // op would be reflushed every cycle forever. The tombstone queued
-        // behind it is the successor state and needs no help from us.
-        if op.op_type == "upsert" && !local_row_present(pool, op).await? {
-            eprintln!(
-                "[sync] dropping upsert {}.{}: the row was deleted locally; its tombstone supersedes it",
-                op.table_name, op.record_id
-            );
-            pending::remove_op(pool, op).await?;
-            continue;
+    // Parents before children: a child whose parent has not landed is skipped
+    // by the scan's reachability clause, so this order is what makes the skip
+    // temporary rather than permanent.
+    for table in registry::tables_in_topo_order() {
+        if delivered >= FLUSH_BUDGET {
+            return Ok(delivered);
         }
-        eprintln!(
-            "[sync] push {} {}.{} (attempt {})",
-            op.op_type, op.table_name, op.record_id, op.attempts
-        );
-        match execute_op(pool, remote, op, &token, &admitted_user_id, integrator).await {
-            Ok(()) => {
-                if op.op_type == "upsert" {
-                    // Mark synced first so if remove_op fails the record is
-                    // at least marked clean and won't be re-pushed.
-                    match mark_synced(pool, op, &admitted_user_id).await? {
-                        MarkOutcome::Marked | MarkOutcome::Gone => {}
-                        // The delivery succeeded but the local row will not
-                        // accept the receipt. That is this op's problem, not
-                        // the batch's: everything sorted after it is still
-                        // deliverable, so it takes the same failure path a
-                        // remote refusal takes and eventually dead-letters.
-                        MarkOutcome::Refused(reason) => {
-                            eprintln!(
-                                "[sync] delivered {}.{} but could not mark it synced: {reason}",
-                                op.table_name, op.record_id
-                            );
-                            pending::record_failure(pool, op, op.attempts + 1, &reason).await?;
-                            continue;
-                        }
-                    }
+        for subject in scan_dirty(pool, table, &principal_key, &admitted_user_id).await? {
+            if delivered >= FLUSH_BUDGET {
+                return Ok(delivered);
+            }
+            let outcome = deliver_row(pool, remote, &subject, &token, &admitted_user_id).await;
+            match settle(pool, &principal_key, &subject, Subject::Row, outcome).await? {
+                Settlement::Delivered => delivered += 1,
+                Settlement::Recorded => {}
+                Settlement::AbortBatch(error) => return Err(error),
+            }
+        }
+    }
+
+    // Authored integration wake-ups are derived the same way: a proposal the
+    // server has ordered, with no terminal integration yet, is work regardless
+    // of which device created it.
+    if let Some(integrator) = integrator {
+        for proposal_id in pending_integrations(pool, &principal_key).await? {
+            if delivered >= FLUSH_BUDGET {
+                return Ok(delivered);
+            }
+            match integrate_one(
+                pool,
+                remote,
+                integrator,
+                &token,
+                &admitted_user_id,
+                &proposal_id,
+            )
+            .await
+            {
+                Ok(()) => {
+                    push_state::clear(
+                        pool,
+                        &principal_key,
+                        "authored_head_integrations",
+                        &proposal_id,
+                        Subject::Row,
+                    )
+                    .await?;
+                    delivered += 1;
                 }
-                pending::remove_op(pool, op).await?;
-                flushed += 1;
-            }
-            Err(SyncError::Api { status: 401, .. }) => {
-                eprintln!("[sync] 401 — stopping batch for token refresh");
-                return Err(SyncError::Api {
-                    status: 401,
-                    message: "token expired".into(),
-                });
-            }
-            Err(SyncError::Api {
-                status: 409,
-                ref message,
-            }) => {
-                // A conflict is not proof that the remote row is identical to
-                // the local payload. Treating arbitrary 409s as success loses
-                // data on unique-key or immutable-row violations. Keep the op
-                // queued; FK conflicts and content conflicts both need either
-                // their dependency or the underlying divergence resolved.
-                let kind = if message.contains("23503") {
-                    "FK conflict"
-                } else {
-                    "conflict"
-                };
-                eprintln!(
-                    "[sync] 409 {kind} {}.{} — requeueing for retry: {message}",
-                    op.table_name, op.record_id
-                );
-                if op.op_type == INTEGRATE_HEAD_PROPOSAL_OP {
-                    pending::record_integration_retry(pool, op, message).await?;
-                } else {
-                    pending::record_failure(pool, op, op.attempts + 1, message).await?;
+                Err(error @ (SyncError::Network(_) | SyncError::Api { status: 401, .. })) => {
+                    return Err(error)
                 }
-            }
-            Err(e @ SyncError::Network(_)) => {
-                // Offline — propagate immediately so the loop can back off.
-                // Do not touch attempts: network errors never count against MAX_ATTEMPTS.
-                return Err(e);
-            }
-            Err(e) => {
-                let msg = format!("{e:?}");
-                eprintln!(
-                    "[sync] Push failed {}.{}: {msg}",
-                    op.table_name, op.record_id
-                );
-                if op.op_type == INTEGRATE_HEAD_PROPOSAL_OP {
-                    pending::record_integration_retry(pool, op, &msg).await?;
-                } else {
-                    pending::record_failure(pool, op, op.attempts + 1, &msg).await?;
+                Err(error) => {
+                    // Never terminal, never dead-lettered: a stale head or an
+                    // earlier pending proposal resolves itself once the device
+                    // that owns it makes progress.
+                    push_state::defer_retry(
+                        pool,
+                        &principal_key,
+                        "authored_head_integrations",
+                        &proposal_id,
+                        &format!("{error}"),
+                    )
+                    .await?;
                 }
             }
         }
     }
 
-    Ok(flushed)
+    // Children before parents, and after every upsert: the remote's soft delete
+    // does not cascade, so the order it hears about a subtree is the order this
+    // device deleted it.
+    for tombstone in tombstone::pending(pool, &principal_key).await? {
+        if delivered >= FLUSH_BUDGET {
+            return Ok(delivered);
+        }
+        let Some(table) = registry::get_table(&tombstone.table_name) else {
+            // A registry entry disappeared under a tombstone. Nothing can
+            // deliver it; say so once and stop asking.
+            push_state::record_failure(
+                pool,
+                &principal_key,
+                &tombstone.table_name,
+                &tombstone.record_id,
+                Subject::Tombstone,
+                None,
+                Verdict::Permanent,
+                "table is not registered for relational sync",
+            )
+            .await?;
+            continue;
+        };
+        let Some(pk_values) = table.decode_record_id(&tombstone.record_id) else {
+            push_state::record_failure(
+                pool,
+                &principal_key,
+                &tombstone.table_name,
+                &tombstone.record_id,
+                Subject::Tombstone,
+                None,
+                Verdict::Permanent,
+                "tombstone does not name every primary-key column",
+            )
+            .await?;
+            continue;
+        };
+        let subject = Owed {
+            table,
+            record_id: tombstone.record_id.clone(),
+            pk_values: pk_values.iter().map(|value| (*value).to_owned()).collect(),
+            version: None,
+            stamp: None,
+        };
+        // A row that exists again outranks the tombstone: the local table is
+        // the truth, and "present" is a later statement than "deleted". This is
+        // asked before the retry gate on purpose — a tombstone push has given
+        // up on must still be retracted when its identity comes back, or the
+        // recreated row would carry a deletion nobody can cancel.
+        if row_exists(pool, table, &subject.pk_values).await? {
+            tombstone::clear(pool, &principal_key, table.name, &subject.record_id).await?;
+            push_state::clear(
+                pool,
+                &principal_key,
+                table.name,
+                &subject.record_id,
+                Subject::Tombstone,
+            )
+            .await?;
+            continue;
+        }
+        if !tombstone.ready {
+            continue;
+        }
+        let outcome = deliver_tombstone(remote, &subject, &token).await;
+        match settle(pool, &principal_key, &subject, Subject::Tombstone, outcome).await? {
+            Settlement::Delivered => {
+                tombstone::clear(pool, &principal_key, table.name, &subject.record_id).await?;
+                delivered += 1;
+            }
+            Settlement::Recorded => {}
+            Settlement::AbortBatch(error) => return Err(error),
+        }
+    }
+
+    Ok(delivered)
 }
 
-async fn execute_op(
+/// What to do with the local state after one delivery attempt.
+enum Settlement {
+    Delivered,
+    /// The failure is recorded; the batch continues.
+    Recorded,
+    AbortBatch(SyncError),
+}
+
+/// Turn one delivery outcome into local state: clear the retry row on success,
+/// classify and record it otherwise.
+async fn settle(
+    pool: &SqlitePool,
+    principal_key: &str,
+    subject: &Owed,
+    kind: Subject,
+    outcome: Result<(), SyncError>,
+) -> Result<Settlement, SyncError> {
+    match outcome {
+        Ok(()) => {
+            push_state::clear(
+                pool,
+                principal_key,
+                subject.table.name,
+                &subject.record_id,
+                kind,
+            )
+            .await?;
+            Ok(Settlement::Delivered)
+        }
+        // The session is the batch's problem, not this row's.
+        Err(SyncError::Api { status: 401, .. }) => {
+            eprintln!("[sync] 401 — stopping batch for token refresh");
+            Ok(Settlement::AbortBatch(SyncError::Api {
+                status: 401,
+                message: "token expired".into(),
+            }))
+        }
+        // Offline. Attempts are untouched: being unreachable is not the row's
+        // fault and must not consume its budget.
+        Err(error @ SyncError::Network(_)) => Ok(Settlement::AbortBatch(error)),
+        Err(error) => {
+            let verdict = classify(subject.table, &error);
+            eprintln!(
+                "[sync] push failed {}.{}: {error}",
+                subject.table.name, subject.record_id
+            );
+            push_state::record_failure(
+                pool,
+                principal_key,
+                subject.table.name,
+                &subject.record_id,
+                kind,
+                subject.version,
+                verdict,
+                &format!("{error}"),
+            )
+            .await?;
+            Ok(Settlement::Recorded)
+        }
+    }
+}
+
+/// Whether retrying this failure can ever produce a different answer.
+///
+/// Three cases can be answered, and only three (audit T2.8, for the push side):
+///
+/// - an identity the remote column type cannot hold, decided before the request
+///   went out;
+/// - a unique-key violation on an immutable table — the server saying "this
+///   identity already exists with different bytes", a permanent divergence
+///   rather than a conflict that resolves itself;
+/// - a 403, which is row-level security refusing *this principal* for *this
+///   row*. Reachability already removes the case where such a refusal was
+///   really a missing parent, so what is left is a disagreement about ownership
+///   that the same token loses again every ten seconds.
+///
+/// Everything else is transient, including a 400 from a client ahead of the
+/// server's schema: a deploy, or a parent landing, does change that answer.
+fn classify(table: &TableMeta, error: &SyncError) -> Verdict {
+    match error {
+        SyncError::Unpushable(_) | SyncError::Api { status: 403, .. } => Verdict::Permanent,
+        SyncError::Api {
+            status: 409,
+            message,
+        } if message.contains("23505") && registry::is_immutable_table(table.name) => {
+            Verdict::Permanent
+        }
+        _ => Verdict::Transient,
+    }
+}
+
+/// Identities the remote cannot hold, whatever the payload says.
+///
+/// `venues.id` is `TEXT` locally and `uuid` remotely, so a scratch venue named
+/// `djtable-scratch-1` fails every push forever — and, before reachability, so
+/// did everything under it. Naming the mismatch here turns an infinite retry
+/// into one recorded, quiet fact; the subtree goes quiet on its own because its
+/// parent never becomes reachable.
+///
+/// This is deliberately not a per-table list of remote column types. Such a
+/// list is a fourth copy of the schema (audit T3.1) that nothing checks; one
+/// named poison with a reason is honest.
+fn unpushable_reason(table: &TableMeta, pk_values: &[String]) -> Option<String> {
+    let first = pk_values.first()?;
+    if table.name == "venues" && uuid::Uuid::parse_str(first).is_err() {
+        return Some(format!(
+            "venue id {first:?} is not a uuid and the remote column cannot hold it"
+        ));
+    }
+    None
+}
+
+/// Everything of `table` this principal owes the server, decided by the row.
+async fn scan_dirty(
+    pool: &SqlitePool,
+    table: &'static TableMeta,
+    principal_key: &str,
+    uid: &str,
+) -> Result<Vec<Owed>, SyncError> {
+    if !table.has_principal() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(sqlx::AssertSqlSafe(table.dirty_scan_sql(SCAN_LIMIT)))
+        .bind(principal_key)
+        .bind(uid)
+        .fetch_all(pool)
+        .await?;
+    use sqlx::Row;
+    let key_count = table.pk_columns().len();
+    rows.iter()
+        .map(|row| {
+            let pk_values: Vec<String> = (0..key_count)
+                .map(|index| row.try_get::<String, _>(index))
+                .collect::<Result<_, _>>()?;
+            Ok(Owed {
+                table,
+                record_id: registry::record_id(pk_values.iter().map(String::as_str)),
+                version: row.try_get::<Option<i64>, _>(key_count)?,
+                stamp: row.try_get::<Option<String>, _>(key_count + 1)?,
+                pk_values,
+            })
+        })
+        .collect()
+}
+
+/// Deliver one dirty row and write its receipt.
+async fn deliver_row(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
-    op: &PendingOp,
+    subject: &Owed,
     token: &str,
     admitted_user_id: &str,
-    integrator: Option<&dyn HeadProposalIntegrator>,
 ) -> Result<(), SyncError> {
-    match op.op_type.as_str() {
-        SUBMIT_HEAD_PROPOSAL_OP => {
-            let input: SubmitHeadProposalInput = parse_pending_payload(op)?;
-            let receipt = authored_remote::submit_head_proposal(remote, &input, token).await?;
-            apply_proposal_receipt(pool, admitted_user_id, &input, &receipt).await?;
-            return Ok(());
+    if let Some(reason) = unpushable_reason(subject.table, &subject.pk_values) {
+        return Err(SyncError::Unpushable(reason));
+    }
+    let table = subject.table;
+    let payload = read_record_as_json(pool, table, &subject.record_id).await?;
+    if !table.payload_principal_matches(&payload, admitted_user_id) {
+        return Err(SyncError::Local(format!(
+            "{}.{} is not owned by the active app principal {admitted_user_id:?}",
+            table.name, subject.record_id
+        )));
+    }
+    match registry::push_policy(table.name) {
+        PushPolicy::DirtyUpsert | PushPolicy::ExplicitUpsert => {
+            remote
+                .upsert_json(table.name, &payload, table.conflict_key, token)
+                .await?;
         }
-        ARCHIVE_AUTHORED_DOCUMENT_OP => {
-            let input: ArchiveAuthoredDocumentInput = parse_pending_payload(op)?;
-            let receipt = authored_remote::archive_authored_document(remote, &input, token).await?;
-            apply_archive_receipt(pool, admitted_user_id, &input, &receipt).await?;
-            return Ok(());
-        }
-        INTEGRATE_HEAD_PROPOSAL_OP => {
-            let payload: IntegrateWakeup = parse_pending_payload(op)?;
-            if payload.proposal_id != op.record_id {
-                return Err(SyncError::Parse(
-                    "authored integration wake-up identity does not match its payload".into(),
-                ));
-            }
-            let integrator = integrator.ok_or_else(|| {
-                SyncError::Local(format!(
-                    "authored proposal {} requires the domain integration hook",
-                    payload.proposal_id
-                ))
-            })?;
-            let receipt = integrator
-                .integrate_pending_proposal(
+        PushPolicy::ExplicitImmutable => {
+            remote
+                .insert_immutable_json(table.name, &payload, table.conflict_key, token)
+                .await?;
+            if table.name == "agent_thread_message_appends" {
+                reconcile_transcript_head_after_append(
                     pool,
                     remote,
                     token,
                     admitted_user_id,
-                    &payload.proposal_id,
+                    &payload,
                 )
                 .await?;
-            if !receipt.is_terminal() {
-                return Err(SyncError::Local(format!(
-                    "authored proposal {} was not terminal after integration ({:?}); recompute against the latest server head",
-                    payload.proposal_id, receipt.outcome
-                )));
             }
-            return Ok(());
         }
-        _ => {}
+        PushPolicy::ServerAuthority => {
+            return deliver_authority(pool, remote, subject, &payload, token, admitted_user_id)
+                .await;
+        }
     }
-    let table = registry::get_table(&op.table_name).ok_or_else(|| {
-        SyncError::Parse(format!(
-            "table {:?} is not registered for relational sync",
-            op.table_name
-        ))
-    })?;
-    match op.op_type.as_str() {
-        "upsert" | pending::INSERT_IMMUTABLE_OP | pending::EXPLICIT_UPSERT_OP => {
-            if op.conflict_key != table.conflict_key {
-                return Err(SyncError::Parse(format!(
-                    "queued conflict key {:?} does not match {} for table {:?}",
-                    op.conflict_key, table.conflict_key, op.table_name
-                )));
-            }
-            let payload: Value = serde_json::from_str(
-                op.payload_json
-                    .as_deref()
-                    .ok_or_else(|| SyncError::MissingField("payload_json".into()))?,
-            )
-            .map_err(|e| SyncError::Parse(e.to_string()))?;
-            if !table.payload_principal_matches(&payload, admitted_user_id) {
-                return Err(SyncError::Local(format!(
-                    "queued payload principal does not match the active app principal {admitted_user_id:?}"
-                )));
-            }
-            let expected_policy = match op.op_type.as_str() {
-                "upsert" => registry::PushPolicy::DirtyUpsert,
-                pending::INSERT_IMMUTABLE_OP => registry::PushPolicy::ExplicitImmutable,
-                pending::EXPLICIT_UPSERT_OP => registry::PushPolicy::ExplicitUpsert,
-                _ => unreachable!("matched above"),
-            };
-            if registry::push_policy(&op.table_name) != expected_policy {
-                return Err(SyncError::Parse(format!(
-                    "pending operation policy does not match sync registry for {:?}",
-                    op.table_name
-                )));
-            }
-            if expected_policy == registry::PushPolicy::ExplicitImmutable {
-                remote
-                    .insert_immutable_json(&op.table_name, &payload, &op.conflict_key, token)
-                    .await?;
-                if table.name == "agent_thread_message_appends" {
-                    reconcile_transcript_head_after_append(
-                        pool,
-                        remote,
-                        token,
-                        admitted_user_id,
-                        &payload,
-                    )
-                    .await?;
-                }
-                Ok(())
-            } else {
-                remote
-                    .upsert_json(&op.table_name, &payload, &op.conflict_key, token)
-                    .await
-            }
-        }
-        "delete" => {
-            // Soft-delete: PATCH deleted_at on the existing remote row.
-            // Uses PATCH (not upsert) because upsert's INSERT half fails
-            // NOT NULL constraints when sending only PK + deleted_at.
-            let pk_cols = table.pk_columns();
-            let pk_values = table.decode_record_id(&op.record_id).ok_or_else(|| {
-                SyncError::Parse(format!(
-                    "queued tombstone {}.{} does not name every primary-key column",
-                    op.table_name, op.record_id
-                ))
-            })?;
+    mark_delivered(pool, subject, admitted_user_id).await
+}
 
-            // Build PostgREST filter: "col1=eq.val1&col2=eq.val2"
-            let filter: Vec<String> = pk_cols
-                .iter()
-                .zip(pk_values.iter())
-                .map(|(col, val)| format!("{col}=eq.{val}"))
-                .collect();
-            let filter = filter.join("&");
-
-            let payload = serde_json::json!({
-                "deleted_at": chrono::Utc::now().to_rfc3339(),
-            });
-            remote
-                .patch_json(&op.table_name, &filter, &payload, token)
-                .await
+/// The two authority operations whose local row is the RPC's input. Their
+/// receipt is the server sequence the RPC assigns, written by the existing
+/// receipt appliers, so there is no delivery marker to set here.
+async fn deliver_authority(
+    pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    subject: &Owed,
+    payload: &Value,
+    token: &str,
+    admitted_user_id: &str,
+) -> Result<(), SyncError> {
+    match subject.table.name {
+        "authored_head_proposals" => {
+            let input: SubmitHeadProposalInput = serde_json::from_value(payload.clone())
+                .map_err(|error| SyncError::Parse(error.to_string()))?;
+            let receipt = authored_remote::submit_head_proposal(remote, &input, token).await?;
+            apply_proposal_receipt(pool, admitted_user_id, &input, &receipt).await
         }
-        other => Err(SyncError::Parse(format!("unknown op_type: {other}"))),
+        "authored_document_archives" => {
+            let input: ArchiveAuthoredDocumentInput = serde_json::from_value(payload.clone())
+                .map_err(|error| SyncError::Parse(error.to_string()))?;
+            let receipt = authored_remote::archive_authored_document(remote, &input, token).await?;
+            apply_archive_receipt(pool, admitted_user_id, &input, &receipt).await
+        }
+        other => Err(SyncError::Parse(format!(
+            "{other} is server-authoritative and has no client delivery"
+        ))),
     }
+}
+
+/// Tell the remote a row is gone: PATCH `deleted_at` on it.
+///
+/// PATCH rather than upsert because an upsert's INSERT half fails the remote's
+/// NOT NULL constraints when the payload is only a key and a timestamp — and
+/// the row's columns are no longer available to send, which is the point.
+async fn deliver_tombstone(
+    remote: &dyn RemoteClient,
+    subject: &Owed,
+    token: &str,
+) -> Result<(), SyncError> {
+    let filter = subject
+        .table
+        .pk_columns()
+        .iter()
+        .zip(subject.pk_values.iter())
+        .map(|(column, value)| format!("{column}=eq.{}", percent_encode_filter_value(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let payload = serde_json::json!({ "deleted_at": chrono::Utc::now().to_rfc3339() });
+    remote
+        .patch_json(subject.table.name, &filter, &payload, token)
+        .await
+}
+
+/// Write the delivery receipt onto the row, under the same admission the write
+/// itself required.
+///
+/// The receipt is a sync-owned write: the immutable tables' `RAISE(ABORT)`
+/// triggers and the thread projection's `updated_at` trigger both stand down
+/// inside `enter_remote_writes`, which is what lets a row that may not be
+/// edited still record that it was delivered.
+async fn mark_delivered(
+    pool: &SqlitePool,
+    subject: &Owed,
+    admitted_user_id: &str,
+) -> Result<(), SyncError> {
+    let table = subject.table;
+    let principal_guard = if table.columns.contains(&"uid") {
+        "uid = ?"
+    } else if table.columns.contains(&"principal_key") {
+        "principal_key = 'signed-in:' || ?"
+    } else {
+        "owner_user_id = ?"
+    };
+    // The receipt names the row the request was built from. A local edit during
+    // the remote call moves `version` (or `updated_at` where there is no
+    // version), the receipt matches nothing, and the row stays dirty instead of
+    // being marked clean over content the server never saw — audit T1.2.
+    let stamp_guard = if subject.version.is_some() {
+        " AND version = ?"
+    } else if subject.stamp.is_some() {
+        " AND updated_at IS ?"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "{}{stamp_guard} AND {principal_guard} AND EXISTS (
+             SELECT 1 FROM auth_write_admission AS admission
+             WHERE admission.singleton = 1
+               AND admission.armed = 1
+               AND admission.accepting = 1
+               AND admission.maintenance = 0
+               AND admission.active_uid = ?
+         )",
+        table.mark_delivered_sql()
+    );
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    crate::database::local::write_admission::enter_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    for value in &subject.pk_values {
+        query = query.bind(value);
+    }
+    if let Some(version) = subject.version {
+        query = query.bind(version);
+    } else if let Some(stamp) = &subject.stamp {
+        query = query.bind(stamp.as_str());
+    }
+    query = query.bind(admitted_user_id).bind(admitted_user_id);
+    let result = query.execute(&mut *transaction).await?;
+    crate::database::local::write_admission::leave_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    transaction.commit().await?;
+    if result.rows_affected() == 1 {
+        return Ok(());
+    }
+    // The delivery succeeded and the row will not take the receipt. That is
+    // this row's problem and not the batch's: it was deleted underneath the
+    // call (its tombstone is the successor state and needs no help), or the
+    // principal changed. Only the second is worth reporting.
+    if !row_exists(pool, table, &subject.pk_values).await? {
+        return Ok(());
+    }
+    if row_moved(pool, subject).await? {
+        // The delivery stands; the row simply owes the server more. The next
+        // scan sends the newer content.
+        return Ok(());
+    }
+    Err(SyncError::Local(format!(
+        "{}.{} would not accept its delivery receipt",
+        table.name, subject.record_id
+    )))
+}
+
+/// Server-ordered proposals with no terminal integration, whatever device made
+/// them. Any online owner device can advance any of them, so an offline author
+/// never blocks a document.
+async fn pending_integrations(
+    pool: &SqlitePool,
+    principal_key: &str,
+) -> Result<Vec<String>, SyncError> {
+    Ok(sqlx::query_scalar(
+        "SELECT proposal.proposal_id
+         FROM authored_head_proposals proposal
+         LEFT JOIN authored_head_integrations integration
+           ON integration.proposal_id = proposal.proposal_id
+         JOIN authored_documents document
+           ON document.document_id = proposal.document_id
+         LEFT JOIN sync_push_failures failure
+           ON failure.principal_key = proposal.principal_key
+          AND failure.table_name = 'authored_head_integrations'
+          AND failure.record_id = proposal.proposal_id
+         WHERE proposal.principal_key = ?
+           AND proposal.server_proposal_seq IS NOT NULL
+           AND integration.proposal_id IS NULL
+           AND document.archived_at IS NULL
+           AND (failure.record_id IS NULL OR failure.next_retry_at <= CURRENT_TIMESTAMP)
+         ORDER BY proposal.server_proposal_seq, proposal.proposal_id",
+    )
+    .bind(principal_key)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn integrate_one(
+    pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    integrator: &dyn HeadProposalIntegrator,
+    token: &str,
+    admitted_user_id: &str,
+    proposal_id: &str,
+) -> Result<(), SyncError> {
+    let receipt = integrator
+        .integrate_pending_proposal(pool, remote, token, admitted_user_id, proposal_id)
+        .await?;
+    if receipt.is_terminal() {
+        return Ok(());
+    }
+    Err(SyncError::Local(format!(
+        "authored proposal {proposal_id} was not terminal after integration ({:?}); recompute against the latest server head",
+        receipt.outcome
+    )))
+}
+
+/// Whether the row moved between the scan and the receipt.
+///
+/// `false` for a row with no stamp — an immutable row cannot move.
+async fn row_moved(pool: &SqlitePool, subject: &Owed) -> Result<bool, SyncError> {
+    let sql = format!(
+        "SELECT 1 FROM {} WHERE {} AND {}",
+        subject.table.name,
+        subject.table.pk_where(),
+        if subject.version.is_some() {
+            "version = ?"
+        } else {
+            "updated_at IS ?"
+        }
+    );
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+    for value in &subject.pk_values {
+        query = query.bind(value);
+    }
+    query = match (subject.version, &subject.stamp) {
+        (Some(version), _) => query.bind(version),
+        (None, Some(stamp)) => query.bind(stamp.clone()),
+        (None, None) => return Ok(false),
+    };
+    Ok(query.fetch_optional(pool).await?.is_none())
+}
+
+/// Whether the row those primary-key values name exists at all.
+async fn row_exists(
+    pool: &SqlitePool,
+    table: &TableMeta,
+    pk_values: &[String],
+) -> Result<bool, SyncError> {
+    let sql = format!("SELECT 1 FROM {} WHERE {}", table.name, table.pk_where());
+    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+    for value in pk_values {
+        query = query.bind(value);
+    }
+    Ok(query.fetch_optional(pool).await?.is_some())
 }
 
 async fn reconcile_transcript_head_after_append(
@@ -340,26 +697,6 @@ fn percent_encode_filter_value(value: &str) -> String {
     }
     encoded
 }
-
-fn parse_pending_payload<T: serde::de::DeserializeOwned>(op: &PendingOp) -> Result<T, SyncError> {
-    serde_json::from_str(
-        op.payload_json
-            .as_deref()
-            .ok_or_else(|| SyncError::MissingField("payload_json".into()))?,
-    )
-    .map_err(|error| {
-        SyncError::Parse(format!(
-            "invalid payload for pending operation {}.{}: {error}",
-            op.op_type, op.record_id
-        ))
-    })
-}
-
-#[derive(serde::Deserialize)]
-struct IntegrateWakeup {
-    proposal_id: String,
-}
-
 pub(super) async fn apply_proposal_receipt(
     pool: &SqlitePool,
     admitted_user_id: &str,
@@ -423,10 +760,10 @@ pub(super) async fn apply_proposal_receipt(
         )));
     }
     transaction.commit().await?;
-    // Submission is not integration. Queue the same content-free wake-up an
-    // unrelated owner device would create after pulling this proposal so a
-    // permanently offline author can never be required for progress.
-    pending::enqueue_head_integration(pool, admitted_user_id, &input.proposal_id).await?;
+    // Submission is not integration, and integration is not queued: the same
+    // scan that any other owner device runs will see this proposal has a server
+    // sequence and no terminal integration. A permanently offline author can
+    // never be required for progress.
     Ok(())
 }
 
@@ -551,147 +888,6 @@ pub(super) async fn apply_archive_receipt(
     transaction.commit().await?;
     Ok(())
 }
-
-/// Whether the local row a queued operation names is still there.
-///
-/// Ground truth for whether an upsert still has anything to say. Registry
-/// problems answer `true`: they are the push path's own errors to report, and
-/// this predicate must not turn one into a silent drop.
-async fn local_row_present(pool: &SqlitePool, op: &PendingOp) -> Result<bool, SyncError> {
-    let Some(table) = registry::get_table(&op.table_name) else {
-        return Ok(true);
-    };
-    let Some(pk_values) = table.decode_record_id(&op.record_id) else {
-        return Ok(true);
-    };
-    row_is_present(pool, table, &pk_values).await
-}
-
-/// Whether the row those primary-key values name exists at all.
-async fn row_is_present(
-    pool: &SqlitePool,
-    table: &registry::TableMeta,
-    pk_values: &[&str],
-) -> Result<bool, SyncError> {
-    row_exists(
-        pool,
-        &format!("SELECT 1 FROM {} WHERE {}", table.name, table.pk_where()),
-        pk_values,
-        &[],
-    )
-    .await
-}
-
-/// `SELECT 1` over `sql`, binding `pk_values` then `extra`.
-async fn row_exists(
-    pool: &SqlitePool,
-    sql: &str,
-    pk_values: &[&str],
-    extra: &[&str],
-) -> Result<bool, SyncError> {
-    let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.to_owned()));
-    for value in pk_values.iter().chain(extra) {
-        query = query.bind(*value);
-    }
-    Ok(query.fetch_optional(pool).await?.is_some())
-}
-
-/// What happened when a delivered upsert tried to clear its local dirty flag.
-enum MarkOutcome {
-    /// The row is clean; the op is done.
-    Marked,
-    /// The row is no longer there. Nothing to mark, nothing to retry — the
-    /// tombstone its delete enqueued is the successor state.
-    Gone,
-    /// The row is there but this principal may not write it, or write
-    /// admission closed underneath the remote call. Retryable, per-op.
-    Refused(String),
-}
-
-/// Mark a record as synced using TableMeta-derived SQL.
-///
-/// # Errors
-/// Only for a local database failure. A row that cannot take the receipt is an
-/// outcome, not an error: the three reasons it can happen are distinguishable
-/// and the caller has to treat them differently.
-async fn mark_synced(
-    pool: &SqlitePool,
-    op: &PendingOp,
-    admitted_user_id: &str,
-) -> Result<MarkOutcome, SyncError> {
-    let Some(table) = registry::get_table(&op.table_name) else {
-        return Ok(MarkOutcome::Refused(format!(
-            "table {:?} is not registered for relational sync",
-            op.table_name
-        )));
-    };
-    if !table.has_principal() {
-        return Ok(MarkOutcome::Refused(format!(
-            "sync table {:?} has no principal column",
-            op.table_name
-        )));
-    }
-    let principal_guard = if table.columns.contains(&"uid") {
-        "uid = ?"
-    } else {
-        "principal_key = 'signed-in:' || ?"
-    };
-    let sql = format!(
-        "{} AND {principal_guard} AND EXISTS (
-             SELECT 1 FROM auth_write_admission AS admission
-             WHERE admission.singleton = 1
-               AND admission.armed = 1
-               AND admission.accepting = 1
-               AND admission.maintenance = 0
-               AND admission.remote_writes = 0
-               AND admission.active_uid = ?
-         )",
-        table.mark_synced_sql()
-    );
-    let Some(pk_values) = table.decode_record_id(&op.record_id) else {
-        return Ok(MarkOutcome::Refused(format!(
-            "queued operation {}.{} does not name every primary-key column",
-            op.table_name, op.record_id
-        )));
-    };
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for val in &pk_values {
-        query = query.bind(*val);
-    }
-    query = query.bind(admitted_user_id).bind(admitted_user_id);
-    let result = query.execute(pool).await?;
-    if result.rows_affected() == 1 {
-        return Ok(MarkOutcome::Marked);
-    }
-
-    // Zero rows conflates three different situations, and the caller's
-    // response to each is different: drop the op, retry it, or stop. Ask which
-    // guard actually failed rather than naming the most alarming one.
-    if !row_is_present(pool, table, &pk_values).await? {
-        return Ok(MarkOutcome::Gone);
-    }
-    if !row_exists(
-        pool,
-        &format!(
-            "SELECT 1 FROM {} WHERE {} AND {principal_guard}",
-            table.name,
-            table.pk_where()
-        ),
-        &pk_values,
-        &[admitted_user_id],
-    )
-    .await?
-    {
-        return Ok(MarkOutcome::Refused(format!(
-            "{}.{} is not owned by the active app principal",
-            op.table_name, op.record_id
-        )));
-    }
-    Ok(MarkOutcome::Refused(format!(
-        "app-database write admission is no longer open for {admitted_user_id}"
-    )))
-}
-
 /// Background sync loop: push dirty every 10s, full pull+files every 60s.
 /// Accepts a shutdown receiver for graceful termination.
 pub async fn run_sync_loop(
@@ -758,10 +954,6 @@ pub async fn run_sync_loop(
         if let Err(error) = authored.bootstrap_live_projections(&pool, Some(&uid)).await {
             eprintln!("[sync] Authored projection bootstrap blocked push: {error}");
             continue;
-        }
-
-        if let Err(e) = super::orchestrator::enqueue_dirty(&pool, &uid).await {
-            eprintln!("[sync] Enqueue error: {e}");
         }
 
         match flush_pending_with_integrator(&pool, &state_pool, remote.as_ref(), Some(&authored))

@@ -2,14 +2,13 @@ use super::{
     agent_threads, apply_graph_edit_in_transaction, apply_track_projection_in_transaction,
     AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError, AuthoredProjectedDocument,
     DocumentScope, FileMap, GraphDocumentError, GraphEditPlan, MainState, ResolvedScope, Result,
-    RevisionId, RevisionInfo, RevisionMetadata, TrackEditError, TrackEditPlan, TrackEditResult,
+    RevisionId, RevisionMetadata, TrackEditError, TrackEditPlan, TrackEditResult,
     TrackProjectionAuthority, VenueAccess, VenueResource, Write,
 };
 use crate::database::local::venue_access::AuthorizedVenue;
 use crate::models::authored_state::AppliedAuthoredState;
 use crate::services::authored_state::{Actor, AuthoredStateError};
-use crate::sync::authored_remote::SubmitHeadProposalInput;
-use crate::sync::{pending, registry};
+use crate::sync::registry;
 use serde_json::Value;
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 
@@ -241,8 +240,6 @@ impl AuthoredDocuments {
         self.store
             .create_head(connection, &scope.document_id, &revision.id)
             .await?;
-        self.enqueue_revision_closure(connection, scope, &revision, &snapshot.files, true, None)
-            .await?;
         self.create_head_proposal(
             connection,
             scope,
@@ -339,15 +336,6 @@ impl AuthoredDocuments {
             .await?;
         insert_committed_operation(connection, scope, operation, Some(&main.head), &revision.id)
             .await?;
-        self.enqueue_revision_closure(
-            connection,
-            scope,
-            &revision,
-            &files,
-            false,
-            Some((operation.kind, operation.id)),
-        )
-        .await?;
         self.create_head_proposal(
             connection,
             scope,
@@ -495,15 +483,6 @@ impl AuthoredDocuments {
         .execute(&mut *connection)
         .await
         .map_err(storage("record conflicted authored operation"))?;
-        if let Some(user_id) = scope.owner_user_id.as_deref() {
-            enqueue_local_row(
-                connection,
-                user_id,
-                "authored_operation_outcomes",
-                &registry::record_id([scope.document_id.as_str(), operation.kind, operation.id]),
-            )
-            .await?;
-        }
         Ok(())
     }
 
@@ -575,64 +554,6 @@ impl AuthoredDocuments {
         })
     }
 
-    pub(super) async fn enqueue_revision_closure(
-        &self,
-        connection: &mut SqliteConnection,
-        scope: &ResolvedScope,
-        revision: &RevisionInfo,
-        files: &FileMap,
-        include_document: bool,
-        operation: Option<(&str, &str)>,
-    ) -> Result<()> {
-        let Some(user_id) = scope.owner_user_id.as_deref() else {
-            return Ok(());
-        };
-        if include_document {
-            enqueue_local_row(
-                connection,
-                user_id,
-                "authored_documents",
-                scope.document_id.as_str(),
-            )
-            .await?;
-        }
-        enqueue_local_row(
-            connection,
-            user_id,
-            "authored_revisions",
-            revision.id.as_str(),
-        )
-        .await?;
-        for path in files.keys() {
-            enqueue_local_row(
-                connection,
-                user_id,
-                "authored_revision_files",
-                &registry::record_id([revision.id.as_str(), path.as_str()]),
-            )
-            .await?;
-        }
-        for parent_order in 0..revision.parents.len() {
-            enqueue_local_row(
-                connection,
-                user_id,
-                "authored_revision_parents",
-                &registry::record_id([revision.id.as_str(), parent_order.to_string().as_str()]),
-            )
-            .await?;
-        }
-        if let Some((kind, id)) = operation {
-            enqueue_local_row(
-                connection,
-                user_id,
-                "authored_operation_outcomes",
-                &registry::record_id([scope.document_id.as_str(), kind, id]),
-            )
-            .await?;
-        }
-        Ok(())
-    }
-
     pub(super) async fn create_head_proposal(
         &self,
         connection: &mut SqliteConnection,
@@ -679,20 +600,10 @@ impl AuthoredDocuments {
         .fetch_one(&mut *connection)
         .await
         .map_err(storage("load authored head proposal timestamp"))?;
-        let input = SubmitHeadProposalInput {
-            proposal_id,
-            document_id: scope.document_id.to_string(),
-            device_id,
-            operation_id: operation_id.to_owned(),
-            base_revision_id: base_revision_id.map(ToString::to_string),
-            proposed_revision_id: proposed_revision_id.to_string(),
-            created_at,
-        };
-        pending::enqueue_head_proposal_on(connection, user_id, &input)
-            .await
-            .map_err(|error| {
-                AuthoredDocumentsError::Storage(format!("enqueue authored head proposal: {error}"))
-            })
+        // No queue entry: the row just written *is* the RPC's input, and push
+        // finds it by its NULL `server_proposal_seq`.
+        let _ = (user_id, created_at);
+        Ok(())
     }
 }
 
@@ -768,29 +679,6 @@ fn require_operation_fingerprint(existing: &OperationOutcomeRow, expected: &str)
             "operation id was already used with different input".into(),
         ))
     }
-}
-
-pub(super) async fn enqueue_local_row(
-    connection: &mut SqliteConnection,
-    user_id: &str,
-    table_name: &str,
-    record_id: &str,
-) -> Result<()> {
-    let (table, payload) = local_row_payload(connection, table_name, record_id).await?;
-    pending::enqueue_immutable_on(
-        connection,
-        user_id,
-        table.name,
-        record_id,
-        &payload.to_string(),
-        table.conflict_key,
-    )
-    .await
-    .map_err(|error| {
-        AuthoredDocumentsError::Storage(format!(
-            "enqueue immutable authored row {table_name}.{record_id}: {error}"
-        ))
-    })
 }
 
 pub(super) async fn local_row_payload(

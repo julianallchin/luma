@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::operations::{
-    enqueue_local_row, insert_committed_operation, operation_outcome_on, OperationSpec,
-};
+use super::operations::{insert_committed_operation, operation_outcome_on, OperationSpec};
 use super::workspaces::{load_workspace_row, replace_workspace_files};
 use super::{
     agent_threads, graph_files, operation_request_fingerprint, AgentThread,
@@ -16,7 +14,6 @@ use super::{
     FinalizeAuthoredTurnInput, MainState, PrepareAuthoredTurnInput, PreparedAuthoredTurn,
     ResolvedScope, Result, RevisionId, RevisionInfo, TrackProjectionAuthority, MAX_HISTORY_PAGE,
 };
-use crate::sync::registry;
 
 /// The head an agent turn writes to.
 ///
@@ -314,20 +311,6 @@ impl AuthoredDocuments {
         .execute(&mut *connection)
         .await
         .map_err(storage("record authored turn preparation"))?;
-        self.enqueue_revision_closure(connection, &scope, &revision, &snapshot.files, false, None)
-            .await?;
-        if let Some(user_id) = scope.owner_user_id.as_deref() {
-            enqueue_local_row(
-                connection,
-                user_id,
-                "authored_turn_preparations",
-                &registry::record_id([
-                    input.thread_id.as_str(),
-                    input.assistant_message_id.as_str(),
-                ]),
-            )
-            .await?;
-        }
         write.commit().await?;
         Ok(PreparedAuthoredTurn {
             document_id: scope.document_id.to_string(),
@@ -422,13 +405,6 @@ impl AuthoredDocuments {
                     &conflicts,
                 )
                 .await?;
-                enqueue_turn_outcome(
-                    connection,
-                    &scope,
-                    &input.thread_id,
-                    &input.assistant_message_id,
-                )
-                .await?;
                 write.commit().await?;
                 return Ok(AuthoredTurnCommit::Conflicted {
                     document_id: scope.document_id.to_string(),
@@ -474,15 +450,6 @@ impl AuthoredDocuments {
             &input.assistant_message_id,
             &prepared_id,
             &final_revision.id,
-        )
-        .await?;
-        self.enqueue_revision_closure(connection, &scope, &final_revision, &files, false, None)
-            .await?;
-        enqueue_turn_outcome(
-            connection,
-            &scope,
-            &input.thread_id,
-            &input.assistant_message_id,
         )
         .await?;
         write.commit().await?;
@@ -800,15 +767,6 @@ impl AuthoredDocuments {
             &revision.id,
         )
         .await?;
-        self.enqueue_revision_closure(
-            connection,
-            &scope,
-            &revision,
-            &target_files,
-            false,
-            Some(("restore", operation_id)),
-        )
-        .await?;
         self.create_head_proposal(
             connection,
             &scope,
@@ -1091,24 +1049,6 @@ async fn insert_turn_conflict(
     .execute(&mut *connection)
     .await
     .map_err(storage("record conflicted authored turn"))?;
-    Ok(())
-}
-
-async fn enqueue_turn_outcome(
-    connection: &mut SqliteConnection,
-    scope: &ResolvedScope,
-    thread_id: &str,
-    assistant_message_id: &str,
-) -> Result<()> {
-    if let Some(user_id) = scope.owner_user_id.as_deref() {
-        enqueue_local_row(
-            connection,
-            user_id,
-            "authored_turn_outcomes",
-            &registry::record_id([thread_id, assistant_message_id]),
-        )
-        .await?;
-    }
     Ok(())
 }
 

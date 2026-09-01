@@ -735,15 +735,6 @@ impl AuthoredDocuments {
         }
         insert_committed_operation(connection, &scope, operation, Some(&head), &revision.id)
             .await?;
-        self.enqueue_revision_closure(
-            connection,
-            &scope,
-            &revision,
-            &files,
-            false,
-            Some((operation.kind, operation.id)),
-        )
-        .await?;
         write.commit().await?;
         replace_workspace_files(&self.workspace_path(&scope, workspace_id)?, &files).await?;
         Ok(result)
@@ -919,15 +910,6 @@ impl AuthoredDocuments {
         }
         insert_committed_operation(connection, &scope, operation, Some(&expected), &revision.id)
             .await?;
-        self.enqueue_revision_closure(
-            connection,
-            &scope,
-            &revision,
-            &canonical_files,
-            false,
-            Some((operation.kind, operation.id)),
-        )
-        .await?;
         write.commit().await?;
         replace_workspace_files(&path, &canonical_files).await?;
         Ok(AuthoredWorkspaceCommit {
@@ -1528,15 +1510,6 @@ impl AuthoredDocuments {
             operation,
             Some(&target_head),
             &revision.id,
-        )
-        .await?;
-        self.enqueue_revision_closure(
-            connection,
-            &scope,
-            &revision,
-            &files,
-            false,
-            Some((operation.kind, operation.id)),
         )
         .await?;
         write.commit().await?;

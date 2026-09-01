@@ -18,10 +18,6 @@ pub const SUBMIT_HEAD_PROPOSAL_RPC: &str = "submit_authored_head_proposal";
 pub const INTEGRATE_HEAD_PROPOSAL_RPC: &str = "integrate_authored_head_proposal";
 pub const ARCHIVE_AUTHORED_DOCUMENT_RPC: &str = "archive_authored_document";
 
-pub const SUBMIT_HEAD_PROPOSAL_OP: &str = "submit_authored_head_proposal";
-pub const INTEGRATE_HEAD_PROPOSAL_OP: &str = "integrate_authored_head_proposal";
-pub const ARCHIVE_AUTHORED_DOCUMENT_OP: &str = "archive_authored_document";
-
 /// Narrow bridge between transport and the domain-aware total merge engine.
 ///
 /// Push owns durable retry/removal of the wake-up. The implementation owns

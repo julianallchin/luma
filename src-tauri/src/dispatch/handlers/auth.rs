@@ -21,8 +21,7 @@ use sqlx::{Sqlite, SqliteConnection, Transaction};
 use crate::dispatch::{AppServices, CommandError};
 #[cfg(test)]
 use crate::services::authored_documents::AuthoredDocuments;
-use crate::sync::orchestrator::enqueue_dirty;
-use crate::sync::{push, registry};
+use crate::sync::push;
 
 /// Ask Supabase to email a six-digit login code.
 ///
@@ -638,17 +637,22 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
         .sync_files_unlocked(&services.sync_host())
         .await
         .map_err(|error| format!("Cannot sign out before files are durable: {error}"))?;
-    enqueue_dirty(&db.0, &principal)
+    // One flush delivers a bounded slice so the background loop is never held
+    // for minutes; sign-out wants the whole backlog gone, because the wipe
+    // audit refuses to discard a row the server has not seen.
+    loop {
+        let delivered = push::flush_pending_with_integrator(
+            &db.0,
+            &state.0,
+            engine.remote().as_ref(),
+            Some(engine.authored()),
+        )
         .await
         .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;
-    push::flush_pending_with_integrator(
-        &db.0,
-        &state.0,
-        engine.remote().as_ref(),
-        Some(engine.authored()),
-    )
-    .await
-    .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;
+        if delivered == 0 {
+            break;
+        }
+    }
 
     // StateDb has one connection by construction. Keeping it checked out
     // freezes session persistence until the wipe commits. Re-reading after all
@@ -782,52 +786,84 @@ async fn assert_signed_in_catalog_durable(
 ) -> Result<(), String> {
     audit_uid_bearing_tables(transaction).await?;
     let pending_principal = crate::database::local::auth::principal_key(Some(principal));
-    let pending: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM pending_ops WHERE principal_key = ?")
-            .bind(&pending_principal)
-            .fetch_one(&mut **transaction)
-            .await
-            .map_err(|error| format!("Failed to inspect pending catalog sync: {error}"))?;
-    if pending != 0 {
-        return Err(format!(
-            "Refusing database wipe: {pending} operation(s) are still pending remote sync"
-        ));
+    // Push has no queue to count. Outstanding work is exactly what the tables
+    // say: rows whose delivery marker is behind their content, plus deletions
+    // the server has not been told about — minus whatever push has permanently
+    // given up on, which is abandoned rather than pending and is named below
+    // instead of blocking the wipe forever.
+    let mut undelivered: Vec<String> = Vec::new();
+    let tombstones: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sync_tombstones AS tombstone
+         LEFT JOIN sync_push_failures AS failure
+                ON failure.principal_key = tombstone.principal_key
+               AND failure.table_name = tombstone.table_name
+               AND failure.record_id = tombstone.record_id
+               AND failure.subject = 'tombstone'
+         WHERE tombstone.principal_key = ? AND COALESCE(failure.permanent, 0) = 0",
+    )
+    .bind(&pending_principal)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to inspect pending catalog sync: {error}"))?;
+    if tombstones != 0 {
+        undelivered.push(format!("{tombstones} deletion(s)"));
     }
-
-    for table in registry::TABLES {
-        // Explicit immutable/authority operations are covered by the empty
-        // principal-scoped pending queue above. Only dirty-row tables expose
-        // the uid/synced_at delivery contract checked here.
-        if registry::push_policy(table.name) != registry::PushPolicy::DirtyUpsert {
-            continue;
-        }
-        if !table.columns.contains(&"uid") {
+    for table in crate::sync::registry::TABLES {
+        // Every table push can deliver is audited here. A `DirtyUpsert` table
+        // without a principal column would be skipped silently, so say so.
+        if crate::sync::registry::push_policy(table.name)
+            == crate::sync::registry::PushPolicy::DirtyUpsert
+            && !table.has_principal()
+        {
             return Err(format!(
                 "Refusing database wipe: sync table {} has no principal column",
                 table.name
             ));
         }
-        let count_sql = format!(
-            "SELECT COUNT(*) FROM {} WHERE uid = ? AND synced_at IS NULL",
-            table.name
-        );
-        let dirty: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(count_sql))
+        let Some(sql) = table.undelivered_count_sql() else {
+            continue;
+        };
+        let count = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
             .bind(principal)
             .fetch_one(&mut **transaction)
             .await
             .map_err(|error| {
-                format!(
-                    "Failed to inspect {} catalog durability: {error}",
-                    table.name
-                )
+                format!("Failed to inspect {} sync durability: {error}", table.name)
             })?;
-        if dirty != 0 {
-            return Err(format!(
-                "Refusing database wipe: {dirty} signed-in {} row(s) are not durably synced",
-                table.name
-            ));
+        if count != 0 {
+            undelivered.push(format!("{count} {}", table.name));
         }
     }
+    if !undelivered.is_empty() {
+        return Err(format!(
+            "Refusing database wipe: still pending remote sync: {}",
+            undelivered.join(", ")
+        ));
+    }
+    // Abandoned work is not hidden by the wipe: it is stated once, here, since
+    // this is the moment the local copy stops being the only copy that matters.
+    let abandoned: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT table_name, record_id, last_error FROM sync_push_failures
+         WHERE principal_key = ? AND permanent = 1
+         ORDER BY table_name, record_id",
+    )
+    .bind(&pending_principal)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| format!("Failed to inspect abandoned sync work: {error}"))?;
+    if !abandoned.is_empty() {
+        eprintln!(
+            "[sync] signing out with {} record(s) the server never accepted:",
+            abandoned.len()
+        );
+        for (table, record, error) in &abandoned {
+            eprintln!(
+                "[sync]   {table}.{record}: {}",
+                error.as_deref().unwrap_or("no reason recorded")
+            );
+        }
+    }
+
     let dirty_categories: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM pattern_categories
          WHERE uid = ? AND synced_at IS NULL",
@@ -957,6 +993,21 @@ async fn wipe_signed_in_projection(
         .execute(&mut **transaction)
         .await
         .map_err(|error| format!("Failed to reset signed-in pull cursors: {error}"))?;
+    // Push state is this session's, not the database's. The audit above proved
+    // nothing deliverable is left; what remains is abandoned verdicts and any
+    // tombstone that came with them, and both would otherwise be inherited by
+    // whoever signs in next at the same primary key.
+    let principal_key = crate::database::local::auth::principal_key(Some(principal));
+    for statement in [
+        "DELETE FROM sync_push_failures WHERE principal_key = ?",
+        "DELETE FROM sync_tombstones WHERE principal_key = ?",
+    ] {
+        sqlx::query(statement)
+            .bind(&principal_key)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| format!("Failed to reset signed-in push state: {error}"))?;
+    }
     sqlx::query(
         "UPDATE auth_write_admission SET maintenance = 0
          WHERE singleton = 1 AND maintenance = 1 AND accepting = 0",
@@ -1038,12 +1089,37 @@ mod tests {
             )
             .await
             .unwrap();
-        // Model a completed remote flush. Append-only authored rows carry
-        // delivery state exclusively in the principal-scoped pending queue.
-        sqlx::query("DELETE FROM pending_ops WHERE principal_key = 'signed-in:alice'")
-            .execute(&pool)
+        // Model a completed remote flush. Delivery is a marker on the row, and
+        // an immutable row will only take one inside a sync-owned write.
+        let mut receipt = pool.begin().await.unwrap();
+        crate::database::local::write_admission::enter_remote_writes(&mut receipt)
             .await
             .unwrap();
+        for table in crate::sync::registry::TABLES {
+            if !crate::sync::registry::has_delivery_marker(table.name) {
+                continue;
+            }
+            let marker = if matches!(
+                crate::sync::registry::push_policy(table.name),
+                crate::sync::registry::PushPolicy::DirtyUpsert
+                    | crate::sync::registry::PushPolicy::ExplicitUpsert
+            ) {
+                "updated_at"
+            } else {
+                "CURRENT_TIMESTAMP"
+            };
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {} SET synced_at = {marker} WHERE synced_at IS NULL",
+                table.name
+            )))
+            .execute(&mut *receipt)
+            .await
+            .unwrap();
+        }
+        crate::database::local::write_admission::leave_remote_writes(&mut receipt)
+            .await
+            .unwrap();
+        receipt.commit().await.unwrap();
         sqlx::query(
             "UPDATE patterns
              SET synced_at = updated_at, version = version + 1
@@ -1164,10 +1240,19 @@ mod tests {
             .expect_err("a dirty graph row is undelivered work");
         assert!(error.contains("venue_nodes"), "{error}");
 
-        sqlx::query("UPDATE venue_nodes SET synced_at = updated_at, version = version + 1")
+        for table in [
+            "venue_nodes",
+            "venue_edges",
+            "venue_node_params",
+            "venue_constraints",
+        ] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {table} SET synced_at = updated_at, version = version + 1"
+            )))
             .execute(&pool)
             .await
             .unwrap();
+        }
         wipe_database_pool(&pool, &authored, "alice").await.unwrap();
 
         assert_eq!(

@@ -21,7 +21,6 @@ use crate::sync::authored_remote::{
     IntegrateHeadProposalInput,
 };
 use crate::sync::error::SyncError;
-use crate::sync::pending;
 use crate::sync::registry;
 use crate::sync::traits::RemoteClient;
 
@@ -286,39 +285,6 @@ impl AuthoredDocuments {
             .await
             .map_err(storage("commit authoritative server head projection"))?;
         Ok(())
-    }
-
-    /// Queue every server-ordered proposal that has no terminal integration.
-    /// The proposal's originating device is irrelevant: any online owner
-    /// device can consume the same immutable closure and advance it.
-    pub(crate) async fn enqueue_pending_head_integrations(
-        &self,
-        pool: &SqlitePool,
-        admitted_user_id: &str,
-    ) -> std::result::Result<usize, SyncError> {
-        let principal = principal_key(Some(admitted_user_id));
-        let proposal_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT proposal.proposal_id
-             FROM authored_head_proposals proposal
-             LEFT JOIN authored_head_integrations integration
-               ON integration.proposal_id = proposal.proposal_id
-             JOIN authored_documents document
-               ON document.document_id = proposal.document_id
-             WHERE proposal.principal_key = ?
-               AND proposal.server_proposal_seq IS NOT NULL
-               AND integration.proposal_id IS NULL
-               AND document.archived_at IS NULL
-             ORDER BY proposal.server_proposal_seq, proposal.proposal_id",
-        )
-        .bind(&principal)
-        .fetch_all(pool)
-        .await?;
-        let mut connection = pool.acquire().await?;
-        for proposal_id in &proposal_ids {
-            pending::enqueue_head_integration_on(&mut connection, admitted_user_id, proposal_id)
-                .await?;
-        }
-        Ok(proposal_ids.len())
     }
 
     async fn scope_for_document(
@@ -744,16 +710,6 @@ impl AuthoredDocuments {
             )
             .await
             .map_err(sync_local)?;
-        self.enqueue_revision_closure(
-            &mut transaction,
-            &scope,
-            &revision,
-            &merged.snapshot.files,
-            false,
-            None,
-        )
-        .await
-        .map_err(sync_local)?;
         transaction.commit().await?;
         Ok(IntegrateHeadProposalInput::new(
             &proposal.proposal_id,
