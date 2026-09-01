@@ -210,7 +210,7 @@ pub struct RenderSettings {
     pub sun: Option<DirectionalLight>,
     /// Whether the fading editor ground grid is drawn.
     pub show_grid: bool,
-    /// Whether the venue's 200 m ground plane is drawn. Off for renders whose
+    /// Whether the venue's ground plane is drawn. Off for renders whose
     /// subject is a single piece (the palette thumbnails), on everywhere a
     /// room is the subject.
     pub show_floor: bool,
