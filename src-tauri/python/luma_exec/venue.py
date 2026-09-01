@@ -734,6 +734,35 @@ class Distribution:
         return f"{self!r}\n{self._tree}"
 
 
+class Environment:
+    """How a room is lit when the score is not lighting it: its house, or the sky.
+
+    One dial, because a room has one: `house` is the level of the house rig on
+    an indoor room and `sun` is how far the sun stands above the horizon on an
+    open-air one. The dial the room does not have is `None` rather than zero:
+    an indoor room does not have a sun on the horizon, it has no sun.
+    """
+
+    __slots__ = ("mode", "house", "sun", "_line")
+
+    def __init__(self, response: Mapping[str, Any]) -> None:
+        #: `"indoor"` or `"outdoor"`.
+        self.mode = str(response["mode"])
+        #: House level, 0 to 1, or `None` outdoors.
+        house = response.get("house")
+        self.house = None if house is None else float(house)
+        #: Sun elevation in degrees above the horizon, or `None` indoors.
+        sun = response.get("sun")
+        self.sun = None if sun is None else float(sun)
+        self._line = str(response.get("describe") or self.mode)
+
+    def __repr__(self) -> str:
+        return f"<Environment {self._line}>"
+
+    def __str__(self) -> str:
+        return self._line
+
+
 class LibraryMode:
     """One mode of a library fixture — the string `distribute` takes as `mode`."""
 
@@ -1005,13 +1034,21 @@ class Venue:
         height: int = DEFAULT_HEIGHT,
         highlight: str | None = None,
         aim_arrows: bool = DEFAULT_AIM_ARROWS,
+        house: float | None = None,
+        sun: float | None = None,
     ) -> StageImage:
         """Render the stage at `t` seconds and return the resulting figure.
 
         `view` is one of `luma.venue.views`. `t` is absolute track time, clamped
-        to the track's span. The room is always drawn under the editor's work
-        light and ground grid, so the hardware stays legible next to whatever
-        the score is doing at `t`.
+        to the track's span. The room is drawn under its own environment — see
+        `environment()` — with a ground grid over the floor, so the hardware
+        stays legible next to whatever the score is doing at `t`.
+
+        `house` and `sun` light *this frame only*. They are a camera setting,
+        not an edit: pass `house=0.2` to see the rig in a dim room, or `sun=10`
+        to see it in daylight, and the venue is exactly as it was afterwards.
+        Pass one or the other — a frame has one sky. `environment()` is the way
+        to change the room itself.
 
         `highlight` is a group selection expression (`"moving_spots"`,
         `"~back_wash & left"`). It *replaces* the lighting: every head it
@@ -1045,6 +1082,8 @@ class Venue:
                 "height": height,
                 "highlight": None if highlight is None else str(highlight),
                 "aimArrows": bool(aim_arrows),
+                "house": None if house is None else float(house),
+                "sun": None if sun is None else float(sun),
             },
         )
         shot = StageImage(
@@ -1078,6 +1117,45 @@ class Venue:
             )
         response = host_call("venue.tiles", {"cellM": _finite("cell_m", cell_m)})
         return str(response["map"])
+
+    # -- the room's light -------------------------------------------------
+
+    def environment(
+        self,
+        *,
+        mode: str | None = None,
+        house: float | None = None,
+        sun: float | None = None,
+    ) -> Environment:
+        """Read the room's lighting environment, or move it.
+
+        With no arguments this reads. With any argument it writes, and the
+        write is venue truth: it lands on the venue itself, so every picture
+        taken afterwards — here, in another cell, in the editor — is taken
+        under it. For a one-off exposure that changes nothing, pass `house=` or
+        `sun=` to `render()` instead.
+
+        `house` is the level of the room's house rig, 0 (dark) to 1 (full), and
+        setting it makes the room indoor. `sun` is how far the sun stands above
+        the horizon in degrees, -90 to 90, and setting it makes the room open
+        air. A room is lit by one or the other, so passing both is an error.
+        Values outside those ranges are clamped, not refused.
+
+        `mode` on its own — `"indoor"` or `"outdoor"` — switches without moving
+        a dial: the room keeps the level it last had in that mode.
+        """
+        # `_verb`, like every other call that writes the venue: a thread with no
+        # venue in scope has no room to light, and that is the one failure this
+        # facade owns.
+        response = self._verb(
+            "venue.environment",
+            {
+                "mode": None if mode is None else str(mode),
+                "house": None if house is None else float(house),
+                "sun": None if sun is None else float(sun),
+            },
+        )
+        return Environment(response)
 
     # -- building --------------------------------------------------------
 

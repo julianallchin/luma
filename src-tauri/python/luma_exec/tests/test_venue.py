@@ -31,6 +31,7 @@ from luma_exec.venue import (  # noqa: E402
     Cursor,
     Distribution,
     Draft,
+    Environment,
     Extent,
     NodeInfo,
     Placement,
@@ -64,6 +65,24 @@ class Host:
         self.calls.append((method, payload))
         if method == "venue.tiles":
             return {"map": TILE_MAP}
+        if method == "venue.environment":
+            # The host's rule, not the facade's: the dial picks the mode, and a
+            # read with no dial answers with the room as it stands.
+            if payload["sun"] is not None:
+                sun = float(payload["sun"])
+                return {
+                    "mode": "outdoor",
+                    "house": None,
+                    "sun": sun,
+                    "describe": f"outdoor, sun {sun:.1f}\u00b0 above the horizon",
+                }
+            house = 1.0 if payload["house"] is None else float(payload["house"])
+            return {
+                "mode": "indoor",
+                "house": house,
+                "sun": None,
+                "describe": f"indoor, house at {house * 100:.0f}%",
+            }
         assert method == "venue.render"
         outputs = self.workspace / "outputs"
         outputs.mkdir(parents=True, exist_ok=True)
@@ -120,6 +139,8 @@ class VenueRenderTests(unittest.TestCase):
                         "height": 200,
                         "highlight": None,
                         "aimArrows": True,
+                        "house": None,
+                        "sun": None,
                     },
                 )
             ],
@@ -137,6 +158,33 @@ class VenueRenderTests(unittest.TestCase):
         self.assertEqual(
             [call[1]["aimArrows"] for call in self.host.calls], [True, False]
         )
+
+    def test_environment_reads_with_no_arguments_and_writes_with_any(self) -> None:
+        at_rest = self.venue.environment()
+        self.assertEqual(
+            self.host.calls[-1],
+            ("venue.environment", {"mode": None, "house": None, "sun": None}),
+        )
+        self.assertEqual((at_rest.mode, at_rest.house, at_rest.sun), ("indoor", 1.0, None))
+        self.assertEqual(str(at_rest), "indoor, house at 100%")
+
+        outdoors = self.venue.environment(sun=12.0)
+        self.assertEqual(
+            self.host.calls[-1][1], {"mode": None, "house": None, "sun": 12.0}
+        )
+        self.assertIsInstance(outdoors, Environment)
+        self.assertEqual((outdoors.mode, outdoors.house, outdoors.sun), ("outdoor", None, 12.0))
+        self.assertEqual(
+            repr(outdoors), "<Environment outdoor, sun 12.0\u00b0 above the horizon>"
+        )
+
+    def test_a_frame_local_light_rides_on_the_render_call(self) -> None:
+        """`house=`/`sun=` are the camera; nothing about them says `environment`."""
+        self.venue.render(house=0.2)
+        method, payload = self.host.calls[-1]
+        self.assertEqual(method, "venue.render")
+        self.assertEqual(payload["house"], 0.2)
+        self.assertIsNone(payload["sun"])
 
     def test_the_host_clamp_wins_over_the_requested_time(self) -> None:
         self.assertEqual(self.venue.render(t=1e9).t, 100.0)
