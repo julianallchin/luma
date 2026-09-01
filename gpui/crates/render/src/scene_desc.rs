@@ -218,6 +218,23 @@ pub struct RenderSettings {
     /// like the two above: off for a render whose subject is one piece, on
     /// wherever the subject is a rig.
     pub show_cables: bool,
+    /// The venue environment this room is lit by, when the subject *is* a room.
+    ///
+    /// `environment` and `sun` above are this value's bounds-free half, already
+    /// resolved by [`crate::house::fill`]; this field is what the frame builder
+    /// needs to hang the house rig, which it cannot do until it knows how big
+    /// the room is. `None` means the subject is not a room — a palette
+    /// thumbnail, or a tracked contract capture — and no house is hung.
+    pub house: Option<VenueEnvironment>,
+    /// The physically based sky, when the room is open air.
+    ///
+    /// `None` — the default everywhere, including every tracked contract
+    /// capture — means no atmosphere: the background is
+    /// [`Environment::background`] and the probe, if any, is an authored HDR.
+    /// `Some` replaces all three of the background, the ambient probe and the
+    /// directional light with one self-consistent atmosphere; see
+    /// [`SkyParams`].
+    pub sky: Option<SkyParams>,
     /// Renderer diagnostic output. `Pbr` is the authored display path.
     pub debug_view: DebugView,
     /// Whether fixture cones contribute punctual light to opaque surfaces.
@@ -304,6 +321,218 @@ pub struct EnvironmentProbe {
     pub rotation_deg: f32,
     /// Whether the probe is also painted behind scene geometry.
     pub visible: bool,
+}
+
+/// A physically based atmosphere: where the sun is, and nothing else.
+///
+/// The model is Hillaire (EGSR 2020) and lives in `crate::atmosphere`. Two
+/// angles are the whole authored surface, because everything else about a sky
+/// follows from them: the colour of the horizon, the colour of the sun, the
+/// brightness of the day and the direction of every cast shadow are one
+/// calculation, not four dials that can be set to disagree.
+///
+/// # Angles
+///
+/// Both are in the renderer's Z-up world. Elevation is degrees above the
+/// horizon. Azimuth is degrees counter-clockwise from world +X, the same
+/// convention the view fits in `luma_scene::camera` use — so `+90` is toward
+/// the crowd (+Y) and `270` is straight upstage (-Y).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkyParams {
+    /// Degrees above the horizon. Negative is civil twilight, which the model
+    /// renders rather than clamping away.
+    pub sun_elevation_deg: f32,
+    /// Degrees counter-clockwise from world +X.
+    pub sun_azimuth_deg: f32,
+    /// Albedo of the ground the sky bounces sunlight off, 0 to 1. It is what
+    /// fills the sky below the horizon, where a venue's floor dissolves into
+    /// the background.
+    pub ground_albedo: f32,
+    /// Display exposure, or `None` for the elevation-fitted default.
+    ///
+    /// The default is the honest answer for almost every frame: dusk to noon is
+    /// many stops, and the fitted curve is what keeps a rig legible across all
+    /// of them. Set it only to hold a deliberate look — a render that must
+    /// match another at a different hour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<f32>,
+}
+
+impl SkyParams {
+    /// Degrees off dead upstage the default sun stands.
+    ///
+    /// A sun on the centre line puts the disc behind the middle of the rig and
+    /// the picture reads as a diagram. Twenty degrees is enough that the rake
+    /// of the light is visible without losing the backlight.
+    const DEFAULT_OFFSET_DEG: f32 = 20.0;
+
+    /// The outdoor default: dusk behind the stage.
+    ///
+    /// Four degrees is the elevation where the ozone term is doing its most
+    /// visible work — warm along the horizon, blue overhead — and where a rig
+    /// backlit by the sun silhouettes. Upstage is world -Y, i.e. azimuth 270,
+    /// offset so the disc is not dead centre.
+    pub const DUSK: Self = Self {
+        sun_elevation_deg: 4.0,
+        sun_azimuth_deg: 270.0 - Self::DEFAULT_OFFSET_DEG,
+        ground_albedo: 0.1,
+        exposure: None,
+    };
+
+    /// The sky for an open-air venue whose sun is `elevation_deg` up.
+    ///
+    /// **This is the environment seam.** [`VenueEnvironment::Outdoor`] carries
+    /// exactly one number, and this is the function that turns it into a sky:
+    /// `crate::house::fill`'s outdoor arm should return `Self::outdoor(env
+    /// .sun_elevation_deg())` here, drop its placeholder sun and ambient, and
+    /// let the atmosphere supply all three. Nothing else has to change — the
+    /// renderer already prefers the sky's sun over an authored one whenever
+    /// [`RenderSettings::sky`] is set.
+    #[must_use]
+    pub fn outdoor(elevation_deg: f32) -> Self {
+        Self {
+            sun_elevation_deg: if elevation_deg.is_finite() {
+                elevation_deg.clamp(-90.0, 90.0)
+            } else {
+                Self::DUSK.sun_elevation_deg
+            },
+            ..Self::DUSK
+        }
+    }
+}
+
+/// What kind of room a venue is, and the one dial that mode has.
+///
+/// This is **venue truth**, not a render dial: it sits on the venue record
+/// beside its name, and every picture of that room — the editor viewport, an
+/// agent's offscreen frame — is taken under it. [`crate::house`] is the one
+/// place it turns into light.
+///
+/// One scalar per mode, on purpose. A room is either lit by its own house rig
+/// or by the sky, and the question an operator actually asks is "how far up?"
+/// — how bright the house is, or how high the sun is. Everything else about
+/// either mode is derived, so there is nothing else to store and nothing that
+/// can disagree.
+///
+/// Both scalars are read through [`Self::house_level`] and
+/// [`Self::sun_elevation_deg`], which clamp: a value that arrived from a
+/// database column or an agent cannot put the renderer in a state it has no
+/// answer for.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum VenueEnvironment {
+    /// A room with a house rig over it. `house_level` is 0 (dark) to 1 (full).
+    Indoor {
+        /// How far up the house lights are.
+        #[serde(rename = "houseLevel")]
+        house_level: f32,
+    },
+    /// Open air. `sun_elevation_deg` is the time of day: -90 (midnight) to
+    /// 90 (overhead).
+    ///
+    /// The sky and the sun light are not built here — see [`crate::house`].
+    Outdoor {
+        /// Degrees above the horizon.
+        #[serde(rename = "sunElevationDeg")]
+        sun_elevation_deg: f32,
+    },
+}
+
+impl Default for VenueEnvironment {
+    /// Indoor, house at full: the picture this app has always drawn.
+    fn default() -> Self {
+        Self::Indoor { house_level: 1.0 }
+    }
+}
+
+impl VenueEnvironment {
+    /// An indoor room at `level`, clamped to 0..=1.
+    #[must_use]
+    pub fn indoor(level: f32) -> Self {
+        Self::Indoor {
+            house_level: level.clamp(0.0, 1.0),
+        }
+    }
+
+    /// Open air with the sun `deg` above the horizon, clamped to -90..=90.
+    #[must_use]
+    pub fn outdoor(deg: f32) -> Self {
+        Self::Outdoor {
+            sun_elevation_deg: deg.clamp(-90.0, 90.0),
+        }
+    }
+
+    /// How far up the house is, or zero outdoors. Always in 0..=1.
+    #[must_use]
+    pub fn house_level(self) -> f32 {
+        match self {
+            Self::Indoor { house_level } => {
+                if house_level.is_finite() {
+                    house_level.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            }
+            Self::Outdoor { .. } => 0.0,
+        }
+    }
+
+    /// The sun's elevation, or zero indoors. Always in -90..=90.
+    #[must_use]
+    pub fn sun_elevation_deg(self) -> f32 {
+        match self {
+            Self::Indoor { .. } => 0.0,
+            Self::Outdoor {
+                sun_elevation_deg: deg,
+            } => {
+                if deg.is_finite() {
+                    deg.clamp(-90.0, 90.0)
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    /// `"indoor"` or `"outdoor"` — the spelling the record, the agent verb and
+    /// the editor's mode selector all use.
+    #[must_use]
+    pub fn mode(self) -> &'static str {
+        match self {
+            Self::Indoor { .. } => "indoor",
+            Self::Outdoor { .. } => "outdoor",
+        }
+    }
+
+    /// The JSON one venue record's `environment` column holds.
+    ///
+    /// The record spelling and the wire spelling are the same string on
+    /// purpose: an agent reading `luma.venue.environment()`, the editor's mode
+    /// selector and the database column are all looking at one value, and a
+    /// second encoding would be a second place for them to disagree.
+    #[must_use]
+    pub fn to_record(self) -> String {
+        serde_json::to_string(&self).unwrap_or_else(|_| String::from("{}"))
+    }
+}
+
+/// Read an environment back out of a venue record.
+///
+/// **Total.** A column that is empty, truncated, written by an older build or
+/// simply wrong reads as the default — indoor, house at full — because there
+/// is no useful thing for a venue to do with "this room has no lighting model"
+/// and a failed read here would take the whole venue down with it.
+impl From<String> for VenueEnvironment {
+    fn from(record: String) -> Self {
+        serde_json::from_str(&record).unwrap_or_default()
+    }
+}
+
+impl From<VenueEnvironment> for String {
+    fn from(environment: VenueEnvironment) -> Self {
+        environment.to_record()
+    }
 }
 
 impl Environment {
@@ -406,6 +635,8 @@ impl RenderSettings {
             show_grid: false,
             show_floor: true,
             show_cables: true,
+            house: None,
+            sky: None,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
@@ -415,9 +646,14 @@ impl RenderSettings {
         }
     }
 
-    /// Interactive editor-light defaults.
+    /// One object, lit so you can see it — the palette and library thumbnails.
+    ///
+    /// Not a room, and deliberately without a [`house`](Self::house): the
+    /// subject is a piece on nothing, and hanging a house rig over it would
+    /// light a ceiling that does not exist. A *room* is lit by its venue's own
+    /// environment; see [`Self::room`].
     #[must_use]
-    pub const fn editor_lit(fov: f32, haze_resolution: f32) -> Self {
+    pub const fn object_lit(fov: f32, haze_resolution: f32) -> Self {
         Self {
             environment: Environment::EDITOR,
             haze: HazeSettings {
@@ -430,6 +666,45 @@ impl RenderSettings {
             show_grid: true,
             show_floor: true,
             show_cables: true,
+            house: None,
+            sky: None,
+            debug_view: DebugView::Pbr,
+            fixture_surface_lighting: true,
+            fixture_shadows: true,
+            cluster_debug: false,
+            fov,
+            legacy_shadow_eye: None,
+        }
+    }
+
+    /// A room, lit by its venue's environment.
+    ///
+    /// The one preset a venue is ever drawn under, offscreen and live alike.
+    /// `environment` and `sun` come straight out of [`crate::house::fill`], so
+    /// there is no second opinion about what an environment means; the frame
+    /// builder reads [`Self::house`] back to hang the lamps once it knows the
+    /// room's bounds.
+    ///
+    /// At the default environment — indoor, house at full — this is exactly the
+    /// editor light the app has always drawn a venue under, plus the house rig
+    /// that light was always standing in for.
+    #[must_use]
+    pub fn room(environment: VenueEnvironment, fov: f32, haze_resolution: f32) -> Self {
+        let fill = crate::house::fill(environment);
+        Self {
+            environment: fill.environment,
+            haze: HazeSettings {
+                enabled: true,
+                steps: 8,
+                resolution: haze_resolution,
+                density: 0.8,
+            },
+            sun: fill.sun,
+            show_grid: true,
+            show_floor: true,
+            show_cables: true,
+            house: Some(environment),
+            sky: fill.sky,
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
@@ -456,6 +731,10 @@ struct RenderSettingsWire {
     show_grid: Option<bool>,
     #[serde(default)]
     show_cables: Option<bool>,
+    #[serde(default)]
+    house: Option<VenueEnvironment>,
+    #[serde(default)]
+    sky: Option<SkyParams>,
     #[serde(default)]
     debug_view: DebugView,
     #[serde(default)]
@@ -495,6 +774,14 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // at this boundary, on in every constructor — the same split
                 // `fixture_surface_lighting` is held at, for the same reason.
                 show_cables: wire.show_cables.unwrap_or(false),
+                // Absent means "not a room", exactly as it does in
+                // `object_lit`. The tracked contract captures predate venue
+                // environments and are about materials and beams; a house hung
+                // over them would rewrite all nineteen.
+                house: wire.house,
+                // Absent means no atmosphere, which is what every tracked
+                // contract image was captured under.
+                sky: wire.sky,
                 debug_view: wire.debug_view,
                 // Absent means the constructors' default, which is on — only
                 // the legacy branch below pins it off, and that pin has its
@@ -513,7 +800,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         let mut settings = if dark {
             Self::dark_stage(wire.fov, wire.haze_resolution.unwrap_or(1.0))
         } else {
-            Self::editor_lit(wire.fov, wire.haze_resolution.unwrap_or(1.0))
+            Self::object_lit(wire.fov, wire.haze_resolution.unwrap_or(1.0))
         };
         settings.haze.enabled = wire.volumetric_haze.unwrap_or(false) && dark;
         settings.haze.steps = wire.haze_steps.unwrap_or(8);
@@ -523,6 +810,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         // off at this compatibility boundary preserves those captured inputs;
         // every new interactive preset enables the path.
         settings.show_cables = wire.show_cables.unwrap_or(false);
+        settings.sky = wire.sky;
         settings.fixture_surface_lighting = wire.fixture_surface_lighting.unwrap_or(false);
         settings.fixture_shadows = wire.fixture_shadows.unwrap_or(false);
         settings.cluster_debug = wire.cluster_debug;
@@ -961,15 +1249,32 @@ impl Scene {
                     self.primitive(&f.id, 0).map(|s| s.position),
                 ),
             }),
-            self.pieces.iter().filter(|p| p.is_rig_bearing()).map(|p| {
-                let base = crate::coords::world_from_data(glam::Vec3::from(p.pos));
-                let half = p.framing_half_extent();
-                luma_scene::Aabb::new(
-                    base - glam::Vec3::new(half, half, 0.0),
-                    base + glam::Vec3::splat(half),
-                )
-            }),
+            self.pieces
+                .iter()
+                .filter(|p| p.is_rig_bearing())
+                .map(piece_box),
         )
+    }
+
+    /// The room a house rig hangs over, in world space.
+    ///
+    /// Every head and every rig-bearing piece, and nothing else: unlike
+    /// [`Self::framing`] this does not follow the beams out, because where the
+    /// light *goes* is not where the room is. A venue with nothing in it
+    /// returns [`luma_scene::Aabb::EMPTY`]; [`crate::house::lamps`] turns that
+    /// into a minimum room rather than refusing, since an empty venue is
+    /// exactly the one an operator is about to start building in.
+    #[must_use]
+    pub fn room_bounds(&self) -> luma_scene::Aabb {
+        let mut bounds = luma_scene::Aabb::from_points(
+            self.fixtures
+                .iter()
+                .map(|f| crate::coords::world_from_data(glam::Vec3::from(f.pos))),
+        );
+        for piece in self.pieces.iter().filter(|p| p.is_rig_bearing()) {
+            bounds.union(&piece_box(piece));
+        }
+        bounds
     }
 
     /// `<id>-<t>.png`, matching `harness/shot-visualizer.mjs`'s `stamp`.
@@ -989,6 +1294,20 @@ impl Scene {
     pub fn primitive(&self, fixture_id: &str, head: usize) -> Option<PrimitiveState> {
         self.state.get(&format!("{fixture_id}:{head}")).copied()
     }
+}
+
+/// The box a piece occupies, **standing on** its origin.
+///
+/// Standing on, not centred: a piece's stored position is where it meets the
+/// floor. Shared by [`Scene::framing`] and [`Scene::room_bounds`] so a camera
+/// and a house rig cannot disagree about how big a truss is.
+fn piece_box(piece: &Piece) -> luma_scene::Aabb {
+    let base = crate::coords::world_from_data(glam::Vec3::from(piece.pos));
+    let half = piece.framing_half_extent();
+    luma_scene::Aabb::new(
+        base - glam::Vec3::new(half, half, 0.0),
+        base + glam::Vec3::splat(half),
+    )
 }
 
 impl Definition {

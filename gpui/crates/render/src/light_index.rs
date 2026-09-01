@@ -298,10 +298,16 @@ pub(crate) struct LightRest {
     /// rides through this module's reorder untouched — slot assignment stays
     /// keyed to source order.
     pub shadow_slot: f32,
+    /// This cone's share of the participating medium — see
+    /// [`FixtureCone::haze_gain`](crate::frame::FixtureCone::haze_gain).
+    ///
+    /// It rides in what used to be the first padding word, so the struct is
+    /// still 64 bytes and the index's id space is untouched.
+    pub haze_gain: f32,
     /// WGSL rounds this struct to its 16-byte `vec3` alignment; Rust does
     /// not. Without the explicit tail the array strides disagree and every
     /// light after the first reads the previous one's bytes.
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -1225,6 +1231,7 @@ mod tests {
             wash: 0.0,
             gobo: 0,
             gobo_rotation: 0.0,
+            haze_gain: 1.0,
         }
     }
 

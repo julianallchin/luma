@@ -320,6 +320,7 @@ fn lit_frame(lights: usize) -> Frame {
                 wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
+                haze_gain: 1.0,
             }
         })
         .collect();

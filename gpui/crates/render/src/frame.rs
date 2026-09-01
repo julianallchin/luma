@@ -107,6 +107,15 @@ pub struct FixtureCone {
     pub gobo: u32,
     /// Gobo rotation in radians around the beam axis.
     pub gobo_rotation: f32,
+    /// How much of this cone scatters in the participating medium. One for a
+    /// lensed fixture, zero for a source that is not a beam.
+    ///
+    /// A cone is two things at once — it lights surfaces and it lights the
+    /// haze — and until now every light had to be both. A house downlight is a
+    /// diffuser behind a can: it lays a pool on the floor and there is nothing
+    /// in the air to see. Marching sixty of them would fill the room with warm
+    /// fog and spend the frame's whole volumetric budget saying so.
+    pub haze_gain: f32,
 }
 
 /// A fixture's face light: lights its own housing from behind the lens and
@@ -222,7 +231,16 @@ pub struct Frame {
     /// Optional resident image-based environment.
     pub environment: Option<EnvironmentImage>,
     /// The independently controlled directional light, if enabled.
+    ///
+    /// When [`Self::sky`] is set this **is** the sky's sun: same direction,
+    /// same reddened colour, same exposure. One source of truth for the disc in
+    /// the picture, the colour of the horizon and the angle of every shadow.
     pub directional: Option<DirectionalLight>,
+    /// The atmosphere, when the room is open air.
+    ///
+    /// Its presence also decides [`Self::directional`], [`Self::ambient`] and
+    /// [`Self::environment`] — see `atmosphere::SkyFrame`.
+    pub sky: Option<crate::atmosphere::SkyFrame>,
     /// Effective density after the hazer-dimmer scaling; zero disables the pass.
     pub haze_density: f32,
     /// Equiangular samples per beam.
@@ -646,6 +664,15 @@ pub fn build_with(
     let mut point_lights = Vec::new();
     let mut fixture_cones = Vec::new();
 
+    // --- sky ---------------------------------------------------------------
+    // An atmosphere answers three questions a scene would otherwise answer
+    // separately — what is behind the geometry, what fills the shadows, and
+    // where the key light comes from. Resolving it here, before anything is
+    // built, is what stops those three drifting apart, and it is also what the
+    // ground quad below needs: outdoors the floor and the sky's ground are the
+    // same ground.
+    let sky = scene.render.sky.as_ref().map(crate::atmosphere::resolve);
+
     // --- floor -------------------------------------------------------------
     // Model space stays three-space throughout: every model matrix below is
     // `to_world · (whatever three.js composed)`, so mesh data and local offsets
@@ -666,7 +693,16 @@ pub fn build_with(
             textures: MaterialTextures::default(),
             model: to_world * Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             material: Material {
-                base_color: hex_srgb(0x03_03_03),
+                // Indoors this is a black stage floor. Outdoors it is the
+                // ground, and the ground already has an albedo: the one the
+                // sky bounces sunlight off. Spelling it twice would let a
+                // venue's near floor and the same ground at the horizon
+                // disagree, which is visible as a seam exactly where the
+                // composite dissolves one into the other.
+                base_color: sky.map_or_else(
+                    || hex_srgb(0x03_03_03),
+                    |sky| Vec3::splat(sky.ground_albedo),
+                ),
                 metallic: 0.0,
                 roughness: 0.95,
                 emissive: Vec3::ZERO,
@@ -780,6 +816,7 @@ pub fn build_with(
                     wash: cone.wash,
                     gobo: head_state.gobo.min(2),
                     gobo_rotation: head_state.gobo_rotation,
+                    haze_gain: 1.0,
                 });
             }
             continue;
@@ -849,7 +886,38 @@ pub fn build_with(
             wash: cone.wash,
             gobo: head_state.gobo.min(2),
             gobo_rotation: head_state.gobo_rotation,
+            haze_gain: 1.0,
         });
+    }
+
+    // --- house lights ------------------------------------------------------
+    // The room's own rig, hung after the show's so a venue at the cone cap
+    // loses house lamps before it loses a beam: the house is context, and a
+    // beam that vanished would be a lie about the score.
+    if let Some(environment) = scene.render.house {
+        let lamps = crate::house::lamps(environment, scene.room_bounds());
+        let disc = bank.insert("::house-lamp".into(), crate::house::disc_mesh);
+        for lamp in lamps {
+            if fixture_cones.len() >= MAX_FIXTURE_CONES {
+                break;
+            }
+            fixture_cones.push(lamp.cone());
+            draws.push(Draw {
+                mesh: disc,
+                textures: MaterialTextures::default(),
+                model: Mat4::from_translation(lamp.position),
+                material: Material {
+                    base_color: Vec3::ZERO,
+                    metallic: 0.0,
+                    roughness: 1.0,
+                    emissive: lamp.emissive(),
+                    normal_scale: 1.0,
+                    occlusion_strength: 1.0,
+                    flat_shading: false,
+                },
+                editor_object: None,
+            });
+        }
     }
 
     // --- stage pieces ------------------------------------------------------
@@ -952,26 +1020,32 @@ pub fn build_with(
         fixture_shadows: scene.render.fixture_shadows,
         cluster_debug: scene.render.cluster_debug,
         clear_color: Vec3::from(scene.render.environment.background),
-        ambient: Vec3::from(scene.render.environment.ambient_color)
-            * scene.render.environment.ambient_intensity.max(0.0),
-        environment,
-        directional: scene.render.sun.and_then(|sun| {
-            let direction = Vec3::from(sun.direction).normalize_or_zero();
-            (direction != Vec3::ZERO && sun.intensity > 0.0).then_some(DirectionalLight {
-                direction,
-                radiance: Vec3::from(sun.color).max(Vec3::ZERO) * sun.intensity,
-                shadow_eye: scene
-                    .render
-                    .legacy_shadow_eye
-                    .map_or(direction * 244.0_f32.sqrt(), Vec3::from),
-                shadows: sun.shadows,
-                shadow_softness: if sun.shadow_softness.is_finite() {
-                    sun.shadow_softness.clamp(0.0, 3.0)
-                } else {
-                    1.0
-                },
-            })
-        }),
+        // Under a sky the fill is the sky itself, arriving as an image-based
+        // probe the renderer builds from the same tables the background comes
+        // from. A flat ambient term on top of it would be the room lit twice.
+        ambient: if sky.is_some() {
+            Vec3::ZERO
+        } else {
+            Vec3::from(scene.render.environment.ambient_color)
+                * scene.render.environment.ambient_intensity.max(0.0)
+        },
+        environment: if sky.is_some() { None } else { environment },
+        directional: sky.map_or_else(
+            || sun_from(scene),
+            |sky| {
+                // Below the horizon the transmittance table has already taken
+                // the sun to nothing; there is no key light at twilight, only
+                // the sky.
+                (sky.sun_radiance.max_element() > 1e-3).then_some(DirectionalLight {
+                    direction: sky.sun_direction,
+                    radiance: sky.sun_radiance,
+                    shadow_eye: sky.sun_direction * 244.0_f32.sqrt(),
+                    shadows: true,
+                    shadow_softness: 1.0,
+                })
+            },
+        ),
+        sky,
         haze_density: if scene.render.haze.enabled {
             haze_density
         } else {
@@ -983,6 +1057,31 @@ pub fn build_with(
         debug_view: scene.render.debug_view,
         camera,
         overlays,
+    })
+}
+
+/// The authored directional light, when a frame has no sky.
+///
+/// Split out because [`build_with`] now chooses between this and the sun the
+/// atmosphere derives, and an inline `map_or_else` over thirty lines hides
+/// which of the two a frame is actually lit by.
+fn sun_from(scene: &Scene) -> Option<DirectionalLight> {
+    scene.render.sun.and_then(|sun| {
+        let direction = Vec3::from(sun.direction).normalize_or_zero();
+        (direction != Vec3::ZERO && sun.intensity > 0.0).then_some(DirectionalLight {
+            direction,
+            radiance: Vec3::from(sun.color).max(Vec3::ZERO) * sun.intensity,
+            shadow_eye: scene
+                .render
+                .legacy_shadow_eye
+                .map_or(direction * 244.0_f32.sqrt(), Vec3::from),
+            shadows: sun.shadows,
+            shadow_softness: if sun.shadow_softness.is_finite() {
+                sun.shadow_softness.clamp(0.0, 3.0)
+            } else {
+                1.0
+            },
+        })
     })
 }
 

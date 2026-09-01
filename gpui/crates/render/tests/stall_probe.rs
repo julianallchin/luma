@@ -68,6 +68,7 @@ fn lit_frame(lights: usize, phase: f32, haze: bool) -> Frame {
                 wash: 0.0,
                 gobo: 0,
                 gobo_rotation: 0.0,
+                haze_gain: 1.0,
             }
         })
         .collect();

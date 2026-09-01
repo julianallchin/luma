@@ -80,10 +80,13 @@ struct FixtureLightRest {
     // Shadow-map layer for this cone, or negative when it has none: maps are
     // capped, so a cone's layer is not its index.
     shadow_slot: f32,
-    // Three scalars, not a `vec3`: a `vec3` member would take its own 16-byte
+    // How much of this cone scatters in the medium: one for a lensed fixture,
+    // zero for a source that is not a beam (a house downlight). Rides in what
+    // used to be the first pad word.
+    haze_gain: f32,
+    // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
     // alignment and push the struct to 80 bytes, disagreeing with the Rust
     // stride. Scalars keep it at 64.
-    _pad0: f32,
     _pad1: f32,
     _pad2: f32,
 };

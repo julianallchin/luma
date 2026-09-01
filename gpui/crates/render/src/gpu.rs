@@ -19,6 +19,7 @@ use glam::{Mat4, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
 use crate::assets::Image;
+use crate::atmosphere::{AtmosphereCache, AtmospherePipelines};
 use crate::environment::{EnvironmentCache, EnvironmentPipelines};
 use crate::frame::{Draw, Frame};
 use crate::haze_field::HazeField;
@@ -413,6 +414,7 @@ pub struct Renderer {
     /// produce it are shared; the probe is not, because it is uploaded from
     /// whatever scene *this* renderer was last asked to draw.
     environment: EnvironmentCache,
+    atmosphere: AtmosphereCache,
     shadow_map: wgpu::TextureView,
     shadow_layers: [wgpu::TextureView; CASCADE_COUNT],
     fixture_shadow_map: wgpu::TextureView,
@@ -838,6 +840,7 @@ pub struct Gpu {
     queue: wgpu::Queue,
     adapter_profile: RendererProfile,
     environment: EnvironmentPipelines,
+    atmosphere: AtmospherePipelines,
     scene_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     cluster_layout: wgpu::BindGroupLayout,
@@ -1029,6 +1032,7 @@ impl Gpu {
         started: Instant,
     ) -> anyhow::Result<Self> {
         let environment = EnvironmentPipelines::new(&device, &queue);
+        let atmosphere = AtmospherePipelines::new(&device, &queue);
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
             entries: &[
@@ -1214,7 +1218,15 @@ impl Gpu {
             "haze-temporal",
             include_str!("shaders/haze_temporal.wgsl"),
         );
-        let composite_module = shader(&device, "composite", include_str!("shaders/composite.wgsl"));
+        let composite_module = shader(
+            &device,
+            "composite",
+            &format!(
+                "{}{}",
+                crate::atmosphere::composite_prelude(),
+                include_str!("shaders/composite.wgsl")
+            ),
+        );
         let grid_module = shader(
             &device,
             "grid",
@@ -1430,7 +1442,11 @@ impl Gpu {
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("composite"),
-                bind_group_layouts: &[Some(&composite_layout), Some(environment.scene_layout())],
+                bind_group_layouts: &[
+                    Some(&composite_layout),
+                    Some(environment.scene_layout()),
+                    Some(atmosphere.composite_layout()),
+                ],
                 immediate_size: 0,
             });
         let composite_pipelines = [Channels::Rgba, Channels::Bgra].map(|channels| {
@@ -1670,6 +1686,7 @@ impl Gpu {
             queue,
             adapter_profile,
             environment,
+            atmosphere,
             scene_layout,
             material_layout,
             cluster_layout,
@@ -1857,6 +1874,7 @@ impl Renderer {
         Self {
             gpu,
             environment: EnvironmentCache::default(),
+            atmosphere: AtmosphereCache::default(),
             shadow_map,
             shadow_layers,
             fixture_shadow_map,
@@ -2385,7 +2403,8 @@ impl Renderer {
                 gobo: light.gobo.min(2) as f32,
                 gobo_rotation: light.gobo_rotation.rem_euclid(std::f32::consts::TAU),
                 shadow_slot: slot_of[index],
-                _pad: [0.0; 3],
+                haze_gain: light.haze_gain.clamp(0.0, 1.0),
+                _pad: [0.0; 2],
             })
             .collect();
         let fixture_shadow_matrices: Vec<FixtureShadowMatrix> = shadow_slots
@@ -2478,11 +2497,25 @@ impl Renderer {
         ) {
             self.upload_stats.environments += 1;
         }
-        let (_environment_uniform, environment_bg) = self.environment.bind_group(
+        let (_environment_uniform, mut environment_bg) = self.environment.bind_group(
             &self.gpu.environment,
             &self.gpu.device,
             frame.environment.as_ref(),
         );
+        // The sky, when there is one, is both the background the composite
+        // resolves and the probe the scene pass is lit by. Its tables are
+        // rebuilt only when the sun moves, so this is a cache hit for every
+        // frame of a fixed hour.
+        let (sky_bg, sky_probe) = self.atmosphere.prepare(
+            &self.gpu.atmosphere,
+            &self.gpu.environment,
+            &self.gpu.device,
+            &mut encoder,
+            frame.sky.as_ref(),
+        );
+        if let Some(probe) = &sky_probe {
+            environment_bg = self.gpu.environment.sky_bind_group(&self.gpu.device, probe);
+        }
 
         // --- resident geometry ----------------------------------------------
         // Frame assembly is intentionally cheap and ephemeral, but the meshes
@@ -3384,6 +3417,7 @@ impl Renderer {
                 pass.set_pipeline(&self.gpu.composite_pipelines[channels.index()]);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.set_bind_group(1, &environment_bg, &[]);
+                pass.set_bind_group(2, &sky_bg, &[]);
                 pass.draw(0..3, 0..1);
             }
 
@@ -4176,6 +4210,7 @@ mod tests {
                     wash: 0.0,
                     gobo: 0,
                     gobo_rotation: 0.0,
+                    haze_gain: 1.0,
                 }
             })
             .collect();
@@ -4206,6 +4241,7 @@ mod tests {
             ambient: Vec3::splat(0.002),
             environment: None,
             directional: None,
+            sky: None,
             haze_density: 0.0,
             haze_steps: 1,
             haze_resolution: 0.5,
@@ -4305,6 +4341,7 @@ mod tests {
                 shadows: false,
                 shadow_softness: 1.0,
             }),
+            sky: None,
             haze_density: 0.0,
             haze_steps: 1,
             haze_resolution: 1.0,
@@ -4689,6 +4726,7 @@ fn sanitize_fixture_cone(light: &crate::frame::FixtureCone) -> crate::frame::Fix
         wash: finite(light.wash, 0.0).clamp(0.0, 1.0),
         gobo: light.gobo.min(2),
         gobo_rotation: finite(light.gobo_rotation, 0.0).rem_euclid(std::f32::consts::TAU),
+        haze_gain: finite(light.haze_gain, 1.0).clamp(0.0, 1.0),
     }
 }
 
