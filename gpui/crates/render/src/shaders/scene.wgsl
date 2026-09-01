@@ -182,7 +182,32 @@ fn environment_direction(world_direction: vec3<f32>) -> vec3<f32> {
 fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     // `shadow-normalBias={0.01}`: push the sample along the surface normal so
     // near-grazing faces do not shadow themselves.
-    let biased = world + n * 0.01;
+    //
+    // One fixed push is enough for a key light high overhead, where a shadow
+    // texel spans a few centimetres of light-space depth. A sun four degrees
+    // above the horizon crosses *metres* in the same texel, and a ground plane
+    // under it stripes itself with acne from edge to edge. The correction is
+    // the tangent of the incidence angle, which is how far along the surface a
+    // texel's depth error reaches.
+    //
+    // Faded in as the light comes down rather than applied throughout: every
+    // captured frame this renderer is held to was lit from above thirty-five
+    // degrees, where the constant they were tuned with is already right, and a
+    // bias that moved under them would be a change of contract dressed as a
+    // fix. `dir_to_light.z` is the sun's own elevation — world Z is up.
+    let matrix = globals.light_view_proj[cascade];
+    let texel = globals.params.y;
+    let radius = clamp(globals.dir_color.w, 0.0, 3.0);
+    // World size of one shadow texel in this cascade. The light camera is
+    // orthographic, so the length of the matrix's x row is two over the slice's
+    // width, and a texel's share of that is what the offset has to clear.
+    let world_texel =
+        2.0 * texel / max(length(vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x)), 1e-6);
+    let cos_nl = clamp(dot(n, globals.dir_to_light.xyz), 0.0, 1.0);
+    let tangent = clamp(sqrt(1.0 - cos_nl * cos_nl) / max(cos_nl, 0.02), 1.0, 200.0);
+    let low_sun = 1.0 - smoothstep(0.30, 0.55, globals.dir_to_light.z);
+    let grazing = max(0.01, world_texel * 0.35 * tangent);
+    let biased = world + n * mix(0.01, grazing, low_sun);
     let clip = globals.light_view_proj[cascade] * vec4<f32>(biased, 1.0);
     let ndc = clip.xyz / clip.w;
     if ndc.z > 1.0 || ndc.z < 0.0 {
@@ -192,8 +217,6 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return 1.0;
     }
-    let texel = globals.params.y;
-    let radius = clamp(globals.dir_color.w, 0.0, 3.0);
     var sum = 0.0;
     for (var j = -1; j <= 1; j = j + 1) {
         for (var i = -1; i <= 1; i = i + 1) {
