@@ -441,6 +441,10 @@ class BuildHost:
         if method == "venue.query":
             return {"nodes": [node_row("n-1"), node_row("n-2", label="wing_left")]}
         if method == "venue.extent":
+            # The host's rule: absent `ids` narrows nothing, an *empty* list is
+            # a selection of nothing and spans nothing.
+            if payload["ids"] == []:
+                return {"extent": None}
             return {
                 "extent": {
                     "count": 2,
@@ -461,6 +465,10 @@ class BuildHost:
         if method == "venue.draft.discard":
             return {}
         if method == "venue.draft.describe":
+            return {"text": "draft  venue\n"}
+        if method == "venue.draft.aim":
+            return {"aimed": len(payload["rows"])}
+        if method in ("venue.draft.remove", "venue.draft.params"):
             return {"text": "draft  venue\n"}
         if method == "venue.draft.render":
             return {
@@ -489,6 +497,20 @@ class BuildHost:
         if method == "venue.remove":
             return {"describe": "root  venue\n"}
         if method == "venue.distribute":
+            if payload["draftId"] is not None:
+                # A draft has no patch: the row is recorded, and the index it
+                # comes back with is what `draft.aim` names it by.
+                return {
+                    "report": {
+                        "draftRow": 0,
+                        "fixtures": [],
+                        "refusal": None,
+                        "warnings": ["recorded in the draft"],
+                        "dangling": [],
+                        "unplaced": [],
+                    },
+                    "describe": "draft  venue\n",
+                }
             return {
                 "report": {
                     "hostNodeId": "run-1",
@@ -628,6 +650,12 @@ class BuildTests(unittest.TestCase):
 
     def test_remove_answers_with_the_tree_that_is_left(self) -> None:
         self.assertIn("venue", self.venue.remove("wing-1"))
+        self.assertEqual(self.host.last("venue.remove")["nodeIds"], ["wing-1"])
+
+    def test_remove_takes_a_selection(self) -> None:
+        """Removing is a goal state, and the goal is usually a selection."""
+        self.venue.remove(self.venue.nodes())
+        self.assertEqual(self.host.last("venue.remove")["nodeIds"], ["n-1", "n-2"])
 
     def test_every_verb_hands_back_the_tree_it_produced(self) -> None:
         """One solve, both channels — a program never asks twice what its own
@@ -635,7 +663,16 @@ class BuildTests(unittest.TestCase):
         placed = self.venue.attach("truss/straight", to="deck-1", socket="corner_fl")
         self.assertTrue(placed.placed)
         self.assertIn("root  venue", placed.describe())
-        self.assertIn("root  venue", str(placed))
+
+    def test_printing_a_report_is_a_summary_and_not_the_whole_rig(self) -> None:
+        """The tree is tens of kilobytes and every write verb carries one;
+        `describe()` is where it lives."""
+        placed = self.venue.attach("truss/straight", to="deck-1", socket="corner_fl")
+        self.assertNotIn("root  venue", str(placed))
+        self.assertIn("<Placement n-1 placed>", str(placed))
+        row = self.venue.distribute("a.qxf", 4, on="run-1", face=(0, -1, 0), mode="m")
+        self.assertNotIn("root  venue", str(row))
+        self.assertIn("Distribution", str(row))
 
     # -- distribute ------------------------------------------------------
 
@@ -764,6 +801,20 @@ class BuildTests(unittest.TestCase):
         self.venue.extent(self.venue.nodes())
         self.assertEqual(self.host.last("venue.extent")["ids"], ["n-1", "n-2"])
 
+    def test_an_empty_selection_is_a_question_about_nothing(self) -> None:
+        """`extent([])` is not `extent()`: a caller that selected no nodes
+        asked about no nodes, and the whole venue is the wrong answer."""
+        self.assertIsNone(self.venue.extent([]))
+        self.assertEqual(self.host.last("venue.extent")["ids"], [])
+        # And a filter that names nothing still asks the host, which answers.
+        self.venue.nodes()
+        self.assertIsNone(self.host.last("venue.query")["ids"])
+
+    def test_aim_says_so_when_it_is_handed_nothing(self) -> None:
+        with self.assertRaises(LumaHostCallError) as caught:
+            self.venue.aim([], direction=(0, 1, 0))
+        self.assertIn("empty selection", str(caught.exception))
+
     def test_aim_takes_a_direction_or_a_point_but_not_both(self) -> None:
         self.venue.aim(["fix-1", "fix-2"], direction=(0, 1, -0.5))
         payload = self.host.last("venue.aim")
@@ -804,6 +855,31 @@ class BuildTests(unittest.TestCase):
         self.assertAlmostEqual(payload["yaw"], math.pi / 2)
         self.assertEqual(nodes, ("s-1",))
 
+    def test_a_draft_is_edited_the_way_a_room_is(self) -> None:
+        """A component that cannot be aimed, trimmed or pruned is not a place
+        anything can be authored — the draft surface is the venue's, over a
+        scratch graph."""
+        gate = self.venue.draft()
+        row = gate.distribute("a.qxf", 8, on="d1", face=(0, 1, 0), mode="m")
+        self.assertEqual(row.draft_row, 0)
+        self.assertEqual(gate.aim(row, at=(0, 6, 0)), 1)
+        payload = self.host.last("venue.draft.aim")
+        self.assertEqual((payload["draftId"], payload["rows"]), ("draft-1", [0]))
+        self.assertEqual(payload["at"], [0.0, 6.0, 0.0])
+        with self.assertRaises(LumaHostCallError):
+            gate.aim(row)
+        with self.assertRaises(LumaHostCallError):
+            gate.aim("not-a-row", at=(0, 0, 0))
+
+        gate.remove("d2")
+        self.assertEqual(self.host.last("venue.draft.remove")["nodeIds"], ["d2"])
+        gate.trim("d1", span=4.0, yaw=90.0)
+        params = self.host.last("venue.draft.params")["params"]
+        self.assertEqual(params["span"], 4.0)
+        self.assertAlmostEqual(params["yaw"], math.pi / 2)
+        # `toward` is a vocabulary, not a verb with a host call behind it.
+        self.assertEqual(repr(gate.toward((0, 6))), repr(self.venue.toward((0, 6))))
+
     def test_a_component_that_raises_leaves_no_draft_open(self) -> None:
         def broken(_s: Any) -> None:
             raise ValueError("nope")
@@ -823,6 +899,18 @@ class BuildTests(unittest.TestCase):
         # Printing the page is the whole of reading it.
         self.assertIn("Robe/Robe-Spiider.qxf", str(found))
         self.assertIn("39 ch", str(found))
+
+    def test_a_library_path_is_a_name_distribute_takes(self) -> None:
+        """`fixtures()[n].path` is the field every docstring hands a caller, so
+        it has to be a legal first argument with or without a mode beside it."""
+        self.venue.distribute("Robe/Robe-Spiider.qxf", 2, on="run-1", face=(0, 0, -1))
+        payload = self.host.last("venue.distribute")
+        self.assertEqual(payload["fixturePath"], "Robe/Robe-Spiider.qxf")
+        self.assertEqual(payload["modeName"], "Mode 1")
+        self.venue.distribute(
+            "Robe/Robe-Spiider.qxf", 2, on="run-1", face=(0, 0, -1), mode="Basic"
+        )
+        self.assertEqual(self.host.last("venue.distribute")["modeName"], "Basic")
 
     def test_a_mode_that_is_not_there_names_the_ones_that_are(self) -> None:
         head = self.venue.fixtures()[0]
