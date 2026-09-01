@@ -352,6 +352,7 @@ fn build_input<'a>(
         exclude_id: exclude.or_else(|| input.get("excludeId").and_then(Value::as_str)),
         shift_held: input["shiftHeld"].as_bool().expect("shiftHeld"),
         surface,
+        aim: None,
         lookup_sockets: lookup,
     }
 }

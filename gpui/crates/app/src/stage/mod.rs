@@ -565,18 +565,39 @@ impl Build {
             .is_some_and(|node| self.freedom_of(node) == Freedom::Free)
     }
 
-    /// Whether this node's open sockets wear beads right now.
+    /// Whether this node's open sockets are *named* on the element layer right
+    /// now — the positions a pointer, or a script, may reach a joint at.
     ///
-    /// The room at rest is a picture, not a control surface: beads appear when
-    /// the hand needs a joint to aim at — every candidate while something is
-    /// held or a run is being measured — and, at rest, only on the selected
-    /// piece, which is how an extend is begun. Choosing and configuring draw
-    /// their own affordances and no beads at all.
+    /// Wider than what is drawn (see [`Build::socket_marked`]): while a piece
+    /// is in the air every candidate joint has a pixel, because that is how
+    /// aiming works, but only the one the ghost is stuck to is painted.
     pub(crate) fn socket_shown(&self, node: &str) -> bool {
         match &self.hand {
             Hand::Placing(_) | Hand::Extending(_) => true,
             Hand::Choosing(_) | Hand::Configuring(_) => false,
             Hand::Idle => self.selected.as_deref() == Some(node),
+        }
+    }
+
+    /// Whether the ghost is stuck to exactly this joint.
+    pub(crate) fn latched_at(&self, node: &str, socket: &str) -> bool {
+        self.hand
+            .held()
+            .and_then(|held| held.latched.as_ref())
+            .is_some_and(|m| m.host_id.as_deref() == Some(node) && m.host_socket == socket)
+    }
+
+    /// Whether this socket is *drawn in the picture*.
+    ///
+    /// One mark while a piece is in the air, and it is the joint the ghost has
+    /// taken hold of. The alternative — every open socket lit at once — is a
+    /// field of dots the eye has to search and the pointer has to dodge, and
+    /// it says nothing the ghost is not already saying. At rest the selected
+    /// piece keeps its ends, because that is where a run is begun.
+    pub(crate) fn socket_marked(&self, node: &str, socket: &str) -> bool {
+        match &self.hand {
+            Hand::Placing(_) => self.latched_at(node, socket),
+            _ => self.socket_shown(node),
         }
     }
 
@@ -1061,14 +1082,37 @@ impl Luma {
         cx.notify();
     }
 
-    /// The cursor moved over the room while something is held. `hit` is the
-    /// mesh face under it, when a rendered frame had one to give.
-    pub(crate) fn stage_aim(
-        &mut self,
-        world: glam::DVec3,
-        hit: Option<hand::SurfaceHit>,
-        cx: &mut Context<Self>,
-    ) {
+    /// The cursor moved over the room while something is held.
+    ///
+    /// Both halves of the aim are used and they answer different questions:
+    /// the pointer's *pixel* chooses which joint the gesture means, and the
+    /// world point it met is where a free seat actually goes. The projection
+    /// is taken from the same camera the marks are drawn through
+    /// ([`project_socket`]), so a pointer and a mark cannot disagree.
+    pub(crate) fn stage_aim(&mut self, aimed: hand::Aimed, cx: &mut Context<Self>) {
+        let Some(state) = self.visualizer.as_ref() else {
+            return;
+        };
+        let camera = state.camera();
+        let pane = state.stage_pane();
+        let size = (f32::from(pane.size.width), f32::from(pane.size.height));
+        let cursor = glam::DVec2::new(
+            f64::from(f32::from(aimed.at.x - pane.origin.x)),
+            f64::from(f32::from(aimed.at.y - pane.origin.y)),
+        );
+        let project = |at: glam::DVec3| {
+            project_socket(&camera, size, at).map(|(p, depth)| {
+                glam::DVec3::new(f64::from(f32::from(p.x)), f64::from(f32::from(p.y)), depth)
+            })
+        };
+        // No pane yet is no camera to point through, and then the ladder falls
+        // back to the world-space radii rather than aiming at nothing.
+        let aim = (size.0 > 1.0 && size.1 > 1.0).then_some(luma_scene::snap::Aim {
+            cursor,
+            project: &project,
+        });
+        let hand::Aimed { world, hit, .. } = &aimed;
+        let (world, hit) = (*world, hit.clone());
         let Some(build) = self.build_mut() else {
             return;
         };
@@ -1089,13 +1133,14 @@ impl Luma {
             kind,
             footing.as_deref(),
             world,
+            aim.as_ref(),
             latch.as_ref(),
             hit.as_ref(),
             exclude.as_deref(),
             body,
         );
         if let Hand::Placing(held) = &mut build.hand {
-            held.cursor = Some((world, hit));
+            held.cursor = Some(aimed);
             match solved {
                 Some((landed, latch)) => {
                     held.landed = Some(landed);
@@ -1129,22 +1174,9 @@ impl Luma {
         held.latched = None;
         let cursor = held.cursor.clone();
         match cursor {
-            Some((world, hit)) => self.stage_aim(world, hit, cx),
+            Some(aimed) => self.stage_aim(aimed, cx),
             None => cx.notify(),
         }
-    }
-
-    /// Aim at a named socket — what a press on a socket bead means. The bead
-    /// *is* the aim: a projected point would put the ghost a pixel of camera
-    /// error away from the joint it is naming.
-    pub(crate) fn stage_aim_socket(&mut self, node: &str, socket: &str, cx: &mut Context<Self>) {
-        let Some(build) = self.build_mut() else {
-            return;
-        };
-        let Some(at) = build.room.socket_world(node, socket) else {
-            return;
-        };
-        self.stage_aim(at, None, cx);
     }
 
     /// Aim the hand at whatever the pointer is over: the picture's own mesh
@@ -1157,7 +1189,7 @@ impl Luma {
         else {
             return;
         };
-        self.stage_aim(world, hit, cx);
+        self.stage_aim(hand::Aimed { at, world, hit }, cx);
     }
 
     /// A click on the room while the hand is placing: aim there, then commit.
@@ -1303,6 +1335,7 @@ impl Luma {
                     catalog_ref,
                     kind,
                     display_name,
+                    params,
                     ..
                 },
                 Landing::Free {
@@ -1318,6 +1351,7 @@ impl Luma {
                 surface.as_ref().map(|(n, s)| (n.as_str(), s.as_str())),
                 my_socket,
                 *seat,
+                params.clone(),
             )),
             (Holding::Duplicate { root, flip, .. }, how) => {
                 self.stage_duplicate_commit(&venue, root, *flip, how, cx);
@@ -1325,40 +1359,6 @@ impl Luma {
             }
         };
         self.stage_verb(pending, cx);
-    }
-
-    /// Click an open socket: either aim the held piece at it, or start a run
-    /// out of it.
-    pub(crate) fn stage_socket_clicked(
-        &mut self,
-        node: String,
-        socket: String,
-        at: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let feature = self
-            .build_state()
-            .and_then(|build| build.room.socket(&node, &socket))
-            .is_some_and(hand::is_feature);
-        if let Some(held) = self.build_state().and_then(|build| build.hand.held()) {
-            // A fixture meeting a face is a *row*, not one light: that is the
-            // gesture the whole configure surface exists for. Structure meeting
-            // the same face is still one piece — a truss lands where it is
-            // pointed.
-            if feature && held.what.kind() == NodeKind::Fixture {
-                let what = held.what.clone();
-                self.stage_configure(what, node, socket, at, cx);
-                return;
-            }
-            self.stage_aim_socket(&node, &socket, cx);
-            self.stage_drop(at, cx);
-            return;
-        }
-
-        // At rest a bead is an aiming affordance and a menu anchor. Placing
-        // starts only in the add-element dialog, and a run starts only from
-        // the bead's own menu — a bare click that armed a whole mode was the
-        // "what is this Place run thing" surprise.
     }
 
     /// Start measuring a run out of `socket` — the node menu's "Extend run".
@@ -3170,41 +3170,35 @@ const BEAD_QUIET: f32 = 5.0;
 /// A socket that would take what is in the hand, or has taken it.
 const BEAD_LIVE: f32 = 7.0;
 
-/// How far apart two beads must sit before both can be pressed.
+/// Where a socket falls on the pane, and how far along the view it is.
 ///
-/// Two beads on one pixel is not a near miss, it is one unreachable socket:
-/// hit-testing is paint order, so the later bead swallows every press aimed at
-/// the earlier one. The venue's own two hosts are the standing case — the floor
-/// and the grid are the *same point* with opposite normals
-/// ([`luma_scene::venue::root_socket`]) — but a deck seen edge-on stacks its
-/// corners the same way, so the fix is the general one.
-const BEAD_CLEAR: f32 = 2.0 * BEAD_LIVE;
-
-/// Push beads apart until each has its own pixel.
-///
-/// A bead is a *handle for* a socket, not a claim about where the socket is:
-/// pressing one aims by name ([`Luma::stage_aim_socket`]), and the renderer
-/// draws the socket itself at the exact point. So a nudged handle costs
-/// nothing that is true, and buys a socket that can be reached.
-///
-/// Downward, in list order, because the order sockets come out of the room is
-/// stable — so the same room lays its beads out the same way every frame, and
-/// a script that found one last frame finds it in the same place this frame.
-fn declutter(beads: &mut [Bead]) {
-    for at in 1..beads.len() {
-        loop {
-            let here = beads[at].at;
-            let crowded = beads[..at].iter().any(|other| {
-                let dx = f32::from(other.at.x - here.x);
-                let dy = f32::from(other.at.y - here.y);
-                dx.hypot(dy) < BEAD_CLEAR
-            });
-            if !crowded {
-                break;
-            }
-            beads[at].at.y += px(BEAD_CLEAR);
-        }
+/// The one projection the builder has: the marks are drawn through it and the
+/// snap chooses through it, so a pointer and a mark cannot disagree about
+/// where a joint is. `None` for a socket behind the eye, which is a socket no
+/// gesture can mean.
+pub(crate) fn project_socket(
+    camera: &luma_scene::Camera,
+    size: (f32, f32),
+    at: glam::DVec3,
+) -> Option<(Point<Pixels>, f64)> {
+    let (width, height) = size;
+    if width <= 1.0 || height <= 1.0 {
+        return None;
     }
+    let world = coords::world_from_three(at.as_vec3());
+    let forward = (camera.target - camera.position()).normalize_or_zero();
+    let depth = (world - camera.position()).dot(forward);
+    if depth <= 0.0 {
+        return None;
+    }
+    let ndc = camera.project(world, width / height);
+    Some((
+        Point::new(
+            px((ndc.x * 0.5 + 0.5) * width),
+            px((1.0 - (ndc.y * 0.5 + 0.5)) * height),
+        ),
+        f64::from(depth),
+    ))
 }
 
 /// One socket, projected.
@@ -3216,21 +3210,19 @@ pub(crate) struct Bead {
     pub(crate) state: luma_render::scene_desc::SocketMarkState,
 }
 
-/// Every socket worth pointing at, in window-relative pixels.
+/// Every socket the pointer may name, at its own projected pixel.
 ///
-/// Projection here rather than in the picture is what makes a socket
-/// *clickable*: a bead drawn by the renderer is a triangle with no hitbox, and
-/// a hitbox is what both a hand and a script need. The renderer draws the same
-/// beads for the eye ([`luma_render::scene_desc::SocketMark`]); this is the
-/// half a pointer can reach, and both read the same room, so they cannot
-/// disagree about where a joint is.
+/// **Not a second pick system.** Nothing here nudges a mark off its socket and
+/// nothing here aims by name: the pixel a mark sits on is the socket's own
+/// projection, and the snap chooses through the very same
+/// [`project_socket`] — so pointing at a mark and pointing at the pixel under
+/// it are the same gesture, and a script that finds a socket by name reaches
+/// it by pointing like a hand does.
+///
+/// While a piece is in the air these are *positions only* — see
+/// [`build_layer`] for why nothing is painted on them.
 pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)) -> Vec<Bead> {
     use luma_render::scene_desc::SocketMarkState;
-    let (width, height) = size;
-    if width <= 1.0 || height <= 1.0 {
-        return Vec::new();
-    }
-    let aspect = width / height;
     let held = build.held_sockets();
     let held_kind = build
         .hand
@@ -3243,21 +3235,25 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
         .held()
         .and_then(|held| held.latched.as_ref())
         .cloned();
-    let forward = (camera.target - camera.position()).normalize_or_zero();
     let mut out = Vec::new();
     for (node, socket) in build.room.open_sockets() {
         if !build.socket_shown(node) || !hand::can_host(socket) {
             continue;
         }
-        let Some(at) = build.room.socket_world(node, &socket.name) else {
+        let Some(world) = build.room.socket_world(node, &socket.name) else {
             continue;
         };
-        let world = coords::world_from_three(at.as_vec3());
-        if (world - camera.position()).dot(forward) <= 0.0 {
+        let Some((at, _)) = project_socket(camera, size, world) else {
             continue;
-        }
-        let ndc = camera.project(world, aspect);
-        if ndc.x.abs() > 1.2 || ndc.y.abs() > 1.2 {
+        };
+        // A tenth of a pane clear of it: a mark whose socket is off screen is
+        // a claim about a joint nobody can point at.
+        let margin = (px(size.0 * 0.1), px(size.1 * 0.1));
+        if at.x < -margin.0
+            || at.y < -margin.1
+            || at.x > px(size.0) + margin.0
+            || at.y > px(size.1) + margin.1
+        {
             continue;
         }
         let state = if latched
@@ -3274,14 +3270,10 @@ pub(crate) fn beads(build: &Build, camera: &luma_scene::Camera, size: (f32, f32)
             node: node.to_string(),
             socket: socket.name.clone(),
             label: format!("Socket {} {}", build.label_of(node), socket.name),
-            at: Point::new(
-                px((ndc.x * 0.5 + 0.5) * width),
-                px((1.0 - (ndc.y * 0.5 + 0.5)) * height),
-            ),
+            at,
             state,
         });
     }
-    declutter(&mut out);
     out
 }
 
@@ -3342,47 +3334,84 @@ pub(crate) fn build_layer(
                 .agent_node(Role::Card, "Stage room"),
         );
     }
-    // Beads first, then everything that sits over them. gpui hit-tests in paint
-    // order, so a control added before a bead is a control the bead swallows —
-    // which is exactly what the run's length box did from under one.
-    for bead in beads(build, camera, size) {
-        let app = app.clone();
-        let hover = app.clone();
+    // Socket marks first, then everything that sits over them. gpui hit-tests
+    // in paint order, so a control added before a mark is a control the mark
+    // swallows — which is exactly what the run's length box did from under one.
+    //
+    // **While a piece is in the air, nothing is painted on them.** A field of
+    // dots over every socket in the room was not an affordance but a second,
+    // worse pick system: each dot *hovered* the ghost onto its own joint by
+    // name, so the ghost latched a corner the operator was not pointing at and
+    // the hysteresis then welded it there. The ghost is already the answer to
+    // "where will this go", and the one mark left in the air is the joint it
+    // is stuck to, drawn in the picture at its own depth (`SocketMark`). What
+    // survives here is the socket's *position* — the claim the harness reads,
+    // the anchor a mark at rest hangs on, and a press that means nothing more
+    // than a press on the room at that pixel.
+    let placing = matches!(build.hand, Hand::Placing(_));
+    let socket_marks = beads(build, camera, size);
+    // How far right the selected piece's own marks reach, so a caption beside
+    // it does not sit on top of them. A short piece's ends are within a card's
+    // width of its centre, and a card is `occlude` — it swallowed the very
+    // right-press that begins a run.
+    let selected_right = build.selected.as_deref().and_then(|node| {
+        socket_marks
+            .iter()
+            .filter(|mark| mark.node == node)
+            .map(|mark| f32::from(mark.at.x) + hand::SOCKET_MARK_PICK_PX)
+            .max_by(f32::total_cmp)
+    });
+    for bead in &socket_marks {
         let (node, socket) = (bead.node.clone(), bead.socket.clone());
-        let (hover_node, hover_socket) = (node.clone(), socket.clone());
         let (menu, menu_node, menu_socket) = (app.clone(), node.clone(), socket.clone());
-        // Quiet unless it is a candidate. An open socket is a fact about the
-        // room and there are dozens of them; a compatible one is an answer to
-        // what is in the hand, and the latched one is *the* answer. Size and
-        // value carry that ranking together, so the picture reads before any
-        // of it is named.
-        let (dot, colour, ring) = match bead.state {
-            SocketMarkState::Open => (BEAD_QUIET, ladder::foreground_alpha(0.34), 0.0),
-            SocketMarkState::Compatible => (BEAD_LIVE, ladder::accent().into(), 0.0),
-            SocketMarkState::Latched => (BEAD_LIVE, ladder::foreground().into(), 3.0),
-        };
-        let diameter = hand::SOCKET_MARK_PICK_PX * 2.0;
-        layer = layer.child(
-            div()
-                .id(gpui::SharedString::from(format!("bead:{node}:{socket}")))
-                .absolute()
-                .left(bead.at.x - px(hand::SOCKET_MARK_PICK_PX))
-                .top(bead.at.y - px(hand::SOCKET_MARK_PICK_PX))
-                .w(px(diameter))
-                .h(px(diameter))
-                .flex()
-                .items_center()
-                .justify_center()
-                // Not `occlude`: a bead owns the press, but the wheel is the
-                // camera's everywhere. While placing, beads pepper the whole
-                // structure — full occlusion made zoom dead over exactly the
-                // thing being looked at.
+        let label = bead.label.clone();
+        let drop = app.clone();
+        let mut mark = div()
+            .id(gpui::SharedString::from(format!("bead:{node}:{socket}")))
+            .absolute()
+            .left(bead.at.x - px(hand::SOCKET_MARK_PICK_PX))
+            .top(bead.at.y - px(hand::SOCKET_MARK_PICK_PX))
+            .w(px(hand::SOCKET_MARK_PICK_PX * 2.0))
+            .h(px(hand::SOCKET_MARK_PICK_PX * 2.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            // A press on a mark is a press on the room at that pixel and
+            // nothing more: it aims where the pointer is, exactly as a press
+            // on bare floor does, and the screen-space search is what turns
+            // that pixel into this joint. Aiming *by name* is what this used
+            // to do, and it is what latched a corner nobody was pointing at.
+            .on_click(move |event, _, cx| {
+                let at = event.position();
+                drop.update(cx, |this, cx| this.stage_click_room(at, cx));
+            })
+            // The joint's own menu, which is where a run is begun.
+            .on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
+                cx.stop_propagation();
+                let (node, socket, at) = (menu_node.clone(), menu_socket.clone(), event.position);
+                menu.update(cx, |this, cx| {
+                    if let Some(build) = this.build_mut() {
+                        build.select(Some(node.clone()));
+                    }
+                    this.stage_open_menu(at, node, Some(socket), cx);
+                });
+            });
+        if !placing {
+            // Quiet unless it is a candidate. An open socket is a fact about
+            // the room; a compatible one is an answer to what is in the hand.
+            let (dot, colour, ring) = match bead.state {
+                SocketMarkState::Open => (BEAD_QUIET, ladder::foreground_alpha(0.34), 0.0),
+                SocketMarkState::Compatible => (BEAD_LIVE, ladder::accent().into(), 0.0),
+                SocketMarkState::Latched => (BEAD_LIVE, ladder::foreground().into(), 3.0),
+            };
+            mark = mark
+                // Not `occlude`: a mark owns the press, but the wheel is the
+                // camera's everywhere.
                 .block_mouse_except_scroll()
                 .child(
                     // No border: a hairline around a 5px dot over a dark room
-                    // is most of the dot. The latched bead gets a halo instead
-                    // — light *around* the mark rather than a line closing it
-                    // in, which is what a thing being held looks like.
+                    // is most of the dot. A halo instead — light *around* the
+                    // mark rather than a line closing it in.
                     div().w(px(dot)).h(px(dot)).rounded_full().bg(colour).when(
                         ring > 0.0,
                         |mark| {
@@ -3395,40 +3424,9 @@ pub(crate) fn build_layer(
                             }])
                         },
                     ),
-                )
-                // Aiming is screen-space; acceptance is not. A raised socket is
-                // metres away from wherever the cursor's ray meets the floor,
-                // so pointing at a bead is the only way a hand can reach one —
-                // and the bead's own hitbox is the radius that decides, in
-                // pixels. What it then hands the ladder is the socket's *world*
-                // position, which is what the snap-out radius is measured in.
-                .on_hover(move |hovered, _, cx| {
-                    if !*hovered {
-                        return;
-                    }
-                    let (node, socket) = (hover_node.clone(), hover_socket.clone());
-                    hover.update(cx, |this, cx| this.stage_aim_socket(&node, &socket, cx));
-                })
-                .on_click(move |event, _, cx| {
-                    let (node, socket) = (node.clone(), socket.clone());
-                    let at = event.position();
-                    app.update(cx, |this, cx| {
-                        this.stage_socket_clicked(node, socket, at, cx);
-                    });
-                })
-                .on_mouse_down(gpui::MouseButton::Right, move |event, _, cx| {
-                    cx.stop_propagation();
-                    let (node, socket, at) =
-                        (menu_node.clone(), menu_socket.clone(), event.position);
-                    menu.update(cx, |this, cx| {
-                        if let Some(build) = this.build_mut() {
-                            build.select(Some(node.clone()));
-                        }
-                        this.stage_open_menu(at, node, Some(socket), cx);
-                    });
-                })
-                .agent_node(Role::Button, bead.label),
-        );
+                );
+        }
+        layer = layer.child(mark.agent_node(Role::Button, label));
     }
     // The selection's own card, drawn beside the thing it is about. The
     // sheet this replaces took a column off the room to say the same four
@@ -3616,7 +3614,8 @@ pub(crate) fn build_layer(
                 card = card
                     .children(selected.relation.clone().map(note))
                     .children(selected.constraint.clone().map(note));
-                let left = px((f32::from(at.x) + SELECTED_CARD_GAP)
+                let beside = f32::from(at.x).max(selected_right.unwrap_or(f32::MIN));
+                let left = px((beside + SELECTED_CARD_GAP)
                     .min(size.0 - SELECTED_CARD_W - INSET)
                     .max(INSET));
                 let top = px(f32::from(at.y)
@@ -3976,14 +3975,16 @@ pub(crate) fn install(build: &Build, editor: &mut luma_render::scene_desc::Edito
     out.sockets = build
         .room
         .open_sockets()
-        .filter(|(node, socket)| build.socket_shown(node) && hand::can_host(socket))
+        .filter(|(node, socket)| build.socket_marked(node, &socket.name) && hand::can_host(socket))
         .filter_map(|(node, socket)| {
             let at = build.room.socket_world(node, &socket.name)?;
             let pose = build.room.pose(node)?;
             Some(SocketMark {
                 pos: point_of(at),
                 normal: point_of(pose.transform_vector3(socket.normal).normalize_or_zero()),
-                state: if !held.is_empty() && hand::compatible(socket, &held, held_kind) {
+                state: if build.latched_at(node, &socket.name) {
+                    luma_render::scene_desc::SocketMarkState::Latched
+                } else if !held.is_empty() && hand::compatible(socket, &held, held_kind) {
                     luma_render::scene_desc::SocketMarkState::Compatible
                 } else {
                     luma_render::scene_desc::SocketMarkState::Open

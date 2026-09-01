@@ -2326,6 +2326,7 @@ impl Library {
         surface: Option<(&str, &str)>,
         my_socket: &str,
         seat: luma_scene::venue::SurfacePlacement,
+        params: BTreeMap<String, f64>,
     ) -> impl Future<Output = Result<PlacementReport, LibraryError>> + use<> {
         let (surface_node_id, surface_socket) = match surface {
             Some((node, socket)) => (Some(node), Some(socket)),
@@ -2345,6 +2346,12 @@ impl Library {
                 "v": seat.v,
                 "yaw": seat.yaw,
                 "trim": seat.trim,
+                // The generator's own vocabulary — a scrubbed span, a hinge's
+                // angle — travels with the piece whichever way it is put down.
+                // Dropping it here made a free placement silently forget the
+                // length the operator had just set, which is the same params
+                // `attach` carries.
+                "params": params,
             }),
         )
     }

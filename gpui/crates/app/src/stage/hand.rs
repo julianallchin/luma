@@ -12,14 +12,16 @@
 //!
 //! # Two radii, and why they are not one
 //!
-//! Snapping is *hysteretic*: [`luma_scene::snap::ATTACH_THRESHOLD`] (0.5 m) is
-//! how close the cursor must come for a joint to take hold, and
-//! [`luma_scene::snap::DETACH_THRESHOLD`] (0.8 m) is how far it must go for
-//! that joint to let go. Both are **world-space metres, measured at the host
-//! socket**, because a screen-space radius would make a snap depend on the
-//! camera and a piece would come loose when someone zoomed out. The one number
-//! that *is* screen-space is [`SOCKET_MARK_PICK_PX`], which is only how big a
-//! socket bead's hitbox is — an aiming affordance, never an acceptance test.
+//! Snapping is *hysteretic*: [`luma_scene::snap::attach_radius`] is how close
+//! the cursor must come for a joint to take hold, and
+//! [`luma_scene::snap::detach_radius`] is how far it must go for that joint to
+//! let go. Both are **pixels at the projected host socket**, because which
+//! joint a gesture means is what the operator is *pointing at*: adjacent deck
+//! corners are 0.7 m apart, so a metre-space radius latched whichever of them
+//! iteration order reached first and then a wider metre-space radius welded it
+//! there. A room with no camera to project through (the first frame, before a
+//! pane is laid out) falls back to the metre pair, which is also what the port
+//! goldens pin.
 //!
 //! # The ladder
 //!
@@ -36,7 +38,7 @@ use glam::{DMat4, DVec3};
 use luma_render::catalog::{VenueSockets, BASE_SOCKET, SEAT_SOCKET};
 use luma_scene::coords;
 use luma_scene::snap::{
-    solve_snap, ScenePiece, SnapInput, SnapMatch, ATTACH_THRESHOLD, DETACH_THRESHOLD,
+    attach_radius, detach_radius, solve_snap, Aim, ScenePiece, SnapInput, SnapMatch,
 };
 use luma_scene::sockets::{Polarity, ResolvedSocket, SocketKind, SocketType};
 use luma_scene::venue::{
@@ -44,8 +46,10 @@ use luma_scene::venue::{
     FLOOR_SOCKET,
 };
 
-/// How far from a socket bead's centre, in pixels, a press still counts as
-/// aiming at it. An aiming radius only — acceptance is the world-space pair
+/// How big a socket mark's box is, in pixels: the anchor a right-press finds
+/// the joint's menu by, and the box a script clicks the middle of. **Not an
+/// acceptance radius** — a press inside one means nothing more than a press on
+/// the room at that pixel, and which joint that pixel is is the two radii
 /// above.
 pub(crate) const SOCKET_MARK_PICK_PX: f32 = 11.0;
 
@@ -218,7 +222,23 @@ pub(crate) struct Held {
     /// Where the last aim came from, kept so an edit to the held piece's own
     /// parameters (a span scrub) can re-solve the landing without waiting for
     /// the pointer to move again.
-    pub(crate) cursor: Option<(DVec3, Option<SurfaceHit>)>,
+    pub(crate) cursor: Option<Aimed>,
+}
+
+/// One aim: the pointer, and what it met in the room.
+///
+/// Both halves, because the two answer different questions — the pixel chooses
+/// *which* joint the gesture means, the world point is where a free seat
+/// actually goes — and a re-solve after a parameter edit has to reproduce the
+/// same aim exactly.
+#[derive(Debug, Clone)]
+pub(crate) struct Aimed {
+    /// The pointer, in window pixels.
+    pub(crate) at: gpui::Point<gpui::Pixels>,
+    /// Where its ray met the room, in the socket layer's frame.
+    pub(crate) world: DVec3,
+    /// The mesh face under it, when a rendered frame had one to give.
+    pub(crate) hit: Option<SurfaceHit>,
 }
 
 /// The add-element dialog's own state.
@@ -644,6 +664,7 @@ impl Room {
         kind: NodeKind,
         footing: Option<&str>,
         cursor: DVec3,
+        aim: Option<&Aim<'_>>,
         latched: Option<&SnapMatch>,
         surface: Option<&SurfaceHit>,
         exclude: Option<&str>,
@@ -652,7 +673,7 @@ impl Room {
         // The latch first: a joint that has taken hold keeps the ghost until
         // the cursor leaves the wider radius, whatever the search would say.
         if let Some(latch) = latched {
-            if let Some(landed) = self.hold(latch, held_sockets, kind, cursor, exclude, body) {
+            if let Some(landed) = self.hold(latch, held_sockets, kind, cursor, aim, exclude, body) {
                 return Some((landed, Some(latch.clone())));
             }
         }
@@ -679,12 +700,13 @@ impl Room {
             exclude_id: exclude,
             shift_held: false,
             surface: None,
+            aim,
             lookup_sockets: &lookup,
         });
 
         match (&result.matched, &result.parent_id) {
             // A discrete joint, close enough to take hold.
-            (Some(matched), Some(parent)) if result.score <= ATTACH_THRESHOLD => {
+            (Some(matched), Some(parent)) if result.score <= attach_radius(aim) => {
                 let world = self.mate(
                     parent,
                     &matched.host_socket,
@@ -783,18 +805,29 @@ impl Room {
 
     /// Keep a joint that has already taken hold, while the cursor is still
     /// inside the wider radius.
+    #[allow(clippy::too_many_arguments)]
     fn hold(
         &self,
         latch: &SnapMatch,
         held_sockets: &[ResolvedSocket],
         kind: NodeKind,
         cursor: DVec3,
+        aim: Option<&Aim<'_>>,
         exclude: Option<&str>,
         body: Option<luma_scene::aabb::DAabb>,
     ) -> Option<Landed> {
         let parent = latch.host_id.as_deref()?;
         let at = self.socket_world(parent, &latch.host_socket)?;
-        if at.distance(cursor) > DETACH_THRESHOLD {
+        // In the same space the search chose it: a joint let go of in metres
+        // while it was chosen in pixels is a joint that never lets go — 0.8 m
+        // of hysteresis over corners 0.7 m apart welded the wrong one on.
+        let left = match aim {
+            Some(aim) => aim
+                .reach(at)
+                .is_none_or(|(px, _)| px > detach_radius(Some(aim))),
+            None => at.distance(cursor) > detach_radius(None),
+        };
+        if left {
             return None;
         }
         let world = self.mate(
@@ -879,8 +912,9 @@ fn piece_bounds(
 ) -> Option<luma_scene::aabb::DAabb> {
     let reference = node.catalog_ref.as_deref()?;
     match luma_scene::catalog::piece(reference)?.geometry {
-        luma_scene::catalog::Geometry::Mesh { .. }
-        | luma_scene::catalog::Geometry::Assembly(_) => sockets.catalog().bounds(reference),
+        luma_scene::catalog::Geometry::Mesh { .. } | luma_scene::catalog::Geometry::Assembly(_) => {
+            sockets.catalog().bounds(reference)
+        }
         luma_scene::catalog::Geometry::Procedural(family) => {
             Some(luma_render::catalog::procedural_bounds(
                 luma_render::catalog::node_params(family, &node.params),
