@@ -310,9 +310,23 @@ impl Build {
                 .node(root)
                 .map(|node| self.sockets.sockets(node))
                 .unwrap_or_default(),
-            Holding::Unplaced { .. } | Holding::Fixture { .. } => {
-                vec![luma_render::catalog::fixture_clamp()]
-            }
+            // A light's clamp stands off its housing, so the ghost has to ask
+            // the supply for it exactly as the commit will — a preview that
+            // hangs by the origin previews a placement that will not happen.
+            // An unplaced fixture already has a node to ask about; a held one
+            // is the bundle path it was dragged out of.
+            Holding::Unplaced { node, .. } => self
+                .graph
+                .node(node)
+                .map(|node| self.sockets.sockets(node))
+                .unwrap_or_default(),
+            Holding::Fixture { path, .. } => self.sockets.sockets(&luma_scene::venue::Node {
+                id: hand::GHOST_NODE.to_string(),
+                kind: luma_scene::venue::NodeKind::Fixture,
+                catalog_ref: Some(path.clone()),
+                label: None,
+                params: luma_scene::venue::Params::default(),
+            }),
         }
     }
 
@@ -4058,6 +4072,7 @@ mod tests {
     fn build_of(graph: VenueGraph) -> Build {
         let sockets = luma_render::catalog::VenueSockets::load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+            std::sync::Arc::new(luma_render::catalog::NoFixtures),
         )
         .expect("the shipped meshes");
         Build {

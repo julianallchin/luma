@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use luma_render::catalog::{fixture_clamp, VenueSockets, FIXTURE_CLAMP_SOCKET};
+use luma_render::catalog::{VenueSockets, FIXTURE_CLAMP_SOCKET};
 use luma_render::venue_tiles::TileMap;
 use luma_scene::venue::{
     resolve, ConstraintStatus, Edge, Node, NodeKind, Params, VenueGraph, FLOOR_SOCKET, RIG_SOCKET,
@@ -293,9 +293,12 @@ fn venue() -> VenueGraph {
     graph
 }
 
-/// A fixture's `catalog_ref` is a patch-row id, not a catalog piece, so the
-/// socket supply has to answer for it. In the app that is `VenueSockets`; here
-/// the two golden fixtures get the same one clamp it would give them.
+/// The supply, and the one clamp a fixture hangs by — which now has a length,
+/// so these poses pin the housing standing off its host rather than through it.
+///
+/// This golden has no fixture bundle, so every `fixture:*` ref is answered with
+/// [`luma_render::catalog::StatedHousing::stock_head`] — the same statement the
+/// Tauri crate's copy of this rig makes, which is what lets the two be compared.
 struct Sockets(VenueSockets);
 
 impl luma_scene::venue::NodeSockets for Sockets {
@@ -304,9 +307,6 @@ impl luma_scene::venue::NodeSockets for Sockets {
     }
 
     fn sockets(&self, node: &Node) -> Vec<luma_scene::sockets::ResolvedSocket> {
-        if node.kind == NodeKind::Fixture {
-            return vec![fixture_clamp()];
-        }
         self.0.sockets(node)
     }
 }
@@ -315,10 +315,23 @@ fn catalog() -> &'static Sockets {
     static SOCKETS: std::sync::OnceLock<Sockets> = std::sync::OnceLock::new();
     SOCKETS.get_or_init(|| {
         Sockets(
-            VenueSockets::load(repo_root().join("resources/meshes"))
-                .expect("the catalog resolves against the shipped meshes"),
+            VenueSockets::load(
+                repo_root().join("resources/meshes"),
+                std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
+            )
+            .expect("the catalog resolves against the shipped meshes"),
         )
     })
+}
+
+/// The standoff `GoldenBundle` produces, so a test can name it instead of
+/// hard-coding a number the mesh decides.
+fn golden_standoff() -> f64 {
+    let clamp = luma_scene::venue::NodeSockets::sockets(
+        catalog(),
+        &node("probe", NodeKind::Fixture, "fixture:probe", &[]),
+    );
+    clamp[0].position.y
 }
 
 /// Six decimals — a micrometre. The solve is `f64` and deterministic, so this
@@ -496,6 +509,54 @@ fn tiles_golden() -> String {
     .expect("the capture serializes");
     out.push('\n');
     out
+}
+
+/// A light hangs *off* what it is clamped to, never through it.
+///
+/// The clamp is the top of the housing, so the point that lands on the host
+/// plane is the top of the housing, and the body is entirely on the free side
+/// of it — upward off a floor, downward off a grid, and the pose origin (the
+/// pivot the head turns about) a standoff away from the plane in each case.
+/// Mating by the origin instead put 60% of every yoke inside its truss.
+#[test]
+fn a_fixture_hangs_off_its_host_by_its_housing() {
+    let standoff = golden_standoff();
+    assert!(
+        standoff > 0.05,
+        "a stated half-metre moving head has a housing: {standoff}"
+    );
+    let solved = resolve(&venue(), catalog());
+    let pose = |id: &str| {
+        solved
+            .poses()
+            .find(|p| p.node == id)
+            .unwrap_or_else(|| panic!("{id} is placed"))
+            .world
+    };
+
+    // The floor light: no trim, so the plane is the floor itself.
+    let up = pose("uplight");
+    let clamp = up * glam::DVec4::new(0.0, standoff, 0.0, 1.0);
+    assert!(
+        clamp.y.abs() < 1e-9,
+        "the clamp is on the floor it was seated on: {}",
+        clamp.y
+    );
+    assert!(
+        (up.w_axis.y - standoff).abs() < 1e-9,
+        "the pivot stands a housing above it: {}",
+        up.w_axis.y
+    );
+
+    // The flown light: same relation, the other way up, and the beam with it.
+    let flown = pose("flown");
+    let clamp = flown * glam::DVec4::new(0.0, standoff, 0.0, 1.0);
+    assert!(
+        (clamp.y - (flown.w_axis.y + standoff)).abs() < 1e-9,
+        "the clamp is a housing above the pivot, which hangs below it"
+    );
+    let beam = flown * glam::DVec4::new(0.0, -1.0, 0.0, 0.0);
+    assert!(beam.y < -0.99, "a flown light still fires down: {}", beam.y);
 }
 
 #[test]

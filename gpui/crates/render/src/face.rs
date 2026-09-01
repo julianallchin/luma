@@ -128,6 +128,7 @@ mod tests {
     fn sockets() -> VenueSockets {
         VenueSockets::load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+            std::sync::Arc::new(crate::catalog::NoFixtures),
         )
         .expect("the catalog resolves against the shipped meshes")
     }

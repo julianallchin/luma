@@ -152,11 +152,14 @@ pub async fn create(
         spec.pinned,
     )
     .await?;
+    // `catalog_ref` is what says what shape a node is, and for a light that is
+    // its bundle path: the socket supply reads the housing off it to put the
+    // clamp on top of the body instead of at its pivot.
     venue_graph_db::insert_node_with_id(
         access,
         &fixture.id,
         luma_scene::venue::NodeKind::Fixture.as_str(),
-        Some(&fixture.id),
+        Some(spec.fixture_path),
         Some(&label),
     )
     .await?;

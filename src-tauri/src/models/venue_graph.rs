@@ -28,7 +28,9 @@ pub struct VenueNode {
     pub venue_id: String,
     /// `venue` | `stage` | `run` | `tower` | `piece` | `fixture` | `array`.
     pub kind: String,
-    /// A catalog piece id, or a `fixtures` row id for a fixture node.
+    /// What says what shape this node is: a catalog piece id, or a fixture's
+    /// bundle path. Read back off the patch for a fixture node written before
+    /// that was true — see `get_graph`.
     pub catalog_ref: Option<String>,
     pub label: Option<String>,
 }

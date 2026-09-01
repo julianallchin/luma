@@ -16,7 +16,9 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use glam::{DMat4, DVec3};
-use luma_render::catalog::{fixture_clamp, origin_mount, VenueSockets, FIXTURE_CLAMP_SOCKET};
+use luma_render::catalog::{
+    fixture_clamp, origin_mount, FixtureDefinitions, VenueSockets, FIXTURE_CLAMP_SOCKET,
+};
 use luma_render::venue_tiles::TileMap;
 use luma_scene::coords::three_pose_from_data_d;
 use luma_scene::sockets::ResolvedSocket;
@@ -43,11 +45,33 @@ pub fn sockets(fixtures_root: &Path) -> Result<&'static VenueSockets, String> {
     static SOCKETS: OnceLock<Result<VenueSockets, String>> = OnceLock::new();
     SOCKETS
         .get_or_init(|| {
-            VenueSockets::load(crate::stage_render::meshes_root(Some(fixtures_root)))
-                .map_err(|e| format!("the stage catalog could not be resolved: {e}"))
+            VenueSockets::load(
+                crate::stage_render::meshes_root(Some(fixtures_root)),
+                std::sync::Arc::new(BundledFixtures(fixtures_root.to_path_buf())),
+            )
+            .map_err(|e| format!("the stage catalog could not be resolved: {e}"))
         })
         .as_ref()
         .map_err(Clone::clone)
+}
+
+/// The shipped QLC+ bundle, as the socket supply's answer to "how tall is this
+/// light".
+///
+/// Keyed by `fixture_path` — which is what a fixture node's `catalog_ref`
+/// carries, the same way a piece node's carries its mesh — so the supply needs
+/// no patch, no venue and no database to place a light off its housing. The
+/// parse is [`crate::services::fixtures`]'s, read once per path and memoized by
+/// the supply.
+pub struct BundledFixtures(pub std::path::PathBuf);
+
+impl FixtureDefinitions for BundledFixtures {
+    fn definition(&self, fixture_path: &str) -> Option<luma_render::scene_desc::Definition> {
+        let relative = crate::stage_render::confined_path(fixture_path)?;
+        crate::services::fixtures::get_fixture_definition(&self.0, relative)
+            .ok()
+            .map(|def| crate::stage_render::definition(&def))
+    }
 }
 
 /// Read a venue's graph and solve it.
@@ -207,11 +231,15 @@ pub async fn migrate(
         .await?;
     }
     for fixture in &fixtures {
+        // `catalog_ref` names a node's *geometry* — a mesh for a piece, a
+        // bundle path for a light. It used to hold the patch-row id, which the
+        // node id already is, so a fixture named nothing and hung by its own
+        // origin.
         local::venue_graph::insert_node_with_id(
             access,
             &fixture.id,
             NodeKind::Fixture.as_str(),
-            Some(&fixture.id),
+            Some(&fixture.fixture_path),
             fixture.label.as_deref(),
         )
         .await?;
@@ -269,7 +297,19 @@ pub async fn migrate(
             [fixture.pos_x, fixture.pos_y, fixture.pos_z],
             [fixture.rot_x, fixture.rot_y, fixture.rot_z],
         );
-        let (edge, placement) = fixture_placement(world);
+        let node = Node {
+            id: fixture.id.clone(),
+            kind: NodeKind::Fixture,
+            catalog_ref: Some(fixture.fixture_path.clone()),
+            label: fixture.label.clone(),
+            params: Params::default(),
+        };
+        let clamp = sockets
+            .sockets(&node)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| fixture_clamp(0.0));
+        let (edge, placement) = fixture_placement(world, &clamp);
         write_placement(access, &fixture.id, &root_id, &edge, placement).await?;
     }
 
@@ -435,8 +475,7 @@ fn on_the_floor(node: &Node, world: DMat4, sockets: &VenueSockets) -> (Edge, Sur
 /// has no record of; it lands on the nearer of the two and the builder re-hangs
 /// it. That is the design doc's phase-0 decision — every rest direction moves —
 /// showing up in the data.
-fn fixture_placement(world: DMat4) -> (Edge, SurfacePlacement) {
-    let clamp = fixture_clamp();
+fn fixture_placement(world: DMat4, clamp: &ResolvedSocket) -> (Edge, SurfacePlacement) {
     // The beam comes out in the socket layer's frame, where data-space *up* is
     // `+Y`. Reading `.z` here would be reading the depth axis — which is the
     // exact mistake the design doc's audit found three copies of.
@@ -447,7 +486,7 @@ fn fixture_placement(world: DMat4) -> (Edge, SurfacePlacement) {
         RIG_SOCKET
     };
     let host = root_socket(name).expect("both root sockets exist");
-    let placement = invert_placement(world, DMat4::IDENTITY, &host, &clamp, NodeKind::Fixture);
+    let placement = invert_placement(world, DMat4::IDENTITY, &host, clamp, NodeKind::Fixture);
     (
         Edge {
             parent: String::new(),
@@ -765,6 +804,19 @@ mod tests {
     /// here as rows because that is the shape a document stores, and
     /// [`resolve_rows_reproduce_the_venue_poses_golden`] holds the two
     /// spellings to the same solve, so the copy cannot drift in silence.
+    /// The render crate's rig is built without a fixture bundle, so both
+    /// copies of it answer every `fixture:*` ref with the same stated housing.
+    /// Resolving this one through the shipped bundle instead would hang its
+    /// lights by their pivots and disagree with the golden for that reason
+    /// alone.
+    fn golden_supply() -> VenueSockets {
+        VenueSockets::load(
+            crate::stage_render::meshes_root(Some(Path::new(FIXTURES_ROOT))),
+            std::sync::Arc::new(luma_render::catalog::StatedHousing::stock_head()),
+        )
+        .expect("the catalog resolves")
+    }
+
     fn golden_rows() -> VenueGraphRows {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
@@ -953,9 +1005,10 @@ mod tests {
     /// goldens describing different venues.
     #[test]
     fn resolve_rows_reproduce_the_venue_poses_golden() {
-        let solved = crate::models::venue_graph::ResolvedVenue::from(
-            &resolve_rows(&golden_rows(), Path::new(FIXTURES_ROOT)).expect("the rig resolves"),
-        );
+        let solved = crate::models::venue_graph::ResolvedVenue::from(&resolve_graph(
+            &golden_rows().to_graph().expect("the rig has a root"),
+            &golden_supply(),
+        ));
         let golden: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(repo_root().join("harness/goldens/venue-poses.json"))
                 .expect("the pose golden is committed"),

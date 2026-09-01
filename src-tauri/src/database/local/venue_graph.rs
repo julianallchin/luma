@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
+use crate::database::local::sync_delete;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::venue_graph::{VenueConstraint, VenueEdge, VenueGraphRows, VenueNode};
 
@@ -81,9 +82,20 @@ pub fn graph_table_committed(table: &str) {
 pub async fn get_graph(access: &mut impl AuthorizedVenue) -> Result<VenueGraphRows, String> {
     let venue_id = access.venue_id().to_string();
 
+    // `catalog_ref` names a node's geometry, and for a light that is its
+    // bundle path. Venues written before that was true stored the patch-row id
+    // — which the node id already is — so the path is read back off the patch
+    // here rather than repaired in place: `venue_nodes` is a table whose
+    // triggers refuse a migration-time write, and a row that is rewritten the
+    // next time it is saved needs no repair anyway.
     let nodes = sqlx::query_as::<_, VenueNode>(
-        "SELECT id, venue_id, kind, catalog_ref, label
-         FROM venue_nodes WHERE venue_id = ? ORDER BY id ASC",
+        "SELECT node.id, node.venue_id, node.kind,
+                COALESCE(fixture.fixture_path, node.catalog_ref) AS catalog_ref,
+                node.label
+         FROM venue_nodes node
+         LEFT JOIN fixtures fixture
+                ON fixture.id = node.id AND node.kind = 'fixture'
+         WHERE node.venue_id = ? ORDER BY node.id ASC",
     )
     .bind(&venue_id)
     .fetch_all(&mut *access.connection())
@@ -290,11 +302,14 @@ pub async fn delete_edge(
     access: &mut VenueAccess<'_, Write>,
     child_id: &str,
 ) -> Result<(), String> {
-    sqlx::query("DELETE FROM venue_edges WHERE child_id = ?")
-        .bind(child_id)
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("Failed to detach venue node: {e}"))?;
+    sync_delete::delete_synced_where(
+        access.connection(),
+        "venue_edges",
+        "child_id = ?",
+        &[child_id],
+    )
+    .await
+    .map_err(|e| format!("Failed to detach venue node: {e}"))?;
     graph_changed();
     Ok(())
 }
@@ -330,12 +345,14 @@ pub async fn set_params(
             // A non-finite value is a cleared key, not a stored NaN: NaN in a
             // transform poisons every descendant's pose.
             _ => {
-                sqlx::query("DELETE FROM venue_node_params WHERE node_id = ? AND key = ?")
-                    .bind(node_id)
-                    .bind(key)
-                    .execute(&mut *access.connection())
-                    .await
-                    .map_err(|e| format!("Failed to clear venue node param: {e}"))?;
+                sync_delete::delete_synced_where(
+                    access.connection(),
+                    "venue_node_params",
+                    "node_id = ? AND key = ?",
+                    &[node_id, key.as_str()],
+                )
+                .await
+                .map_err(|e| format!("Failed to clear venue node param: {e}"))?;
             }
         }
     }
@@ -367,18 +384,14 @@ pub async fn set_label(
 /// The caller passes the whole subtree it means to remove, because which nodes
 /// those are is the graph's question, not SQL's.
 ///
-/// # Why the belongings go first, rather than by cascade
-///
-/// The three dependent tables declare `ON DELETE CASCADE`, but their write
-/// admission (`20260802600000`) authorizes a param or a constraint *through the
-/// node that owns it* — and during a cascade that node is already gone, so the
-/// `BEFORE DELETE` guard finds no owner and aborts the whole statement. Deleting
-/// them while the node still stands is the same set of rows, in the order the
-/// admission can actually check.
-///
-/// Dropping the edges a node is the **parent** of is what leaves its children
-/// unplaced rather than dangling at a parent that no longer exists — which is
-/// how `delete_subtree` trays the lights off a truss it takes down.
+/// Everything hanging off a node — its params, its constraints, and every edge
+/// it is either end of — goes with it, because [`sync_delete`] walks the sync
+/// registry's foreign keys before it touches the node. `ON DELETE CASCADE`
+/// cannot do this: the dependants' write admission authorizes them *through*
+/// their node, and inside a cascade that node is already gone, so the guard
+/// finds no owner and aborts the whole statement. Dropping the edges a node is
+/// the *parent* of is what leaves its children unplaced rather than dangling —
+/// which is how `delete_subtree` trays the lights off a truss it takes down.
 ///
 /// # Errors
 /// Fails if any delete is refused.
@@ -386,41 +399,15 @@ pub async fn delete_nodes(
     access: &mut VenueAccess<'_, Write>,
     ids: &[String],
 ) -> Result<(), String> {
-    // Everything that hangs off a node goes first, in one pass over the whole
-    // batch, and only then the nodes themselves.
-    //
-    // Not for tidiness — `ON DELETE CASCADE` would do it — but because the
-    // cascade cannot be authorized. Each of these tables has a delete trigger
-    // that admits the write by joining the row back to its `venue_nodes` row,
-    // and inside a cascade that row is already gone: the join finds nothing,
-    // the trigger aborts, and the whole delete fails with the *dependant's*
-    // error rather than the node's. Deleting them while their node still
-    // stands is what lets the trigger see what it is checking. The batch is
-    // swept table by table because a subtree's edges name its siblings.
     for id in ids {
-        for statement in [
-            "DELETE FROM venue_constraints WHERE node_id = ? OR target_node = ?",
-            "DELETE FROM venue_edges WHERE child_id = ? OR parent_id = ?",
-        ] {
-            sqlx::query(statement)
-                .bind(id)
-                .bind(id)
-                .execute(&mut *access.connection())
-                .await
-                .map_err(|e| format!("Failed to detach venue node: {e}"))?;
-        }
-        sqlx::query("DELETE FROM venue_node_params WHERE node_id = ?")
-            .bind(id)
-            .execute(&mut *access.connection())
-            .await
-            .map_err(|e| format!("Failed to clear venue node params: {e}"))?;
-    }
-    for id in ids {
-        sqlx::query("DELETE FROM venue_nodes WHERE id = ?")
-            .bind(id)
-            .execute(&mut *access.connection())
-            .await
-            .map_err(|e| format!("Failed to delete venue node: {e}"))?;
+        sync_delete::delete_synced_where(
+            access.connection(),
+            "venue_nodes",
+            "id = ?",
+            &[id.as_str()],
+        )
+        .await
+        .map_err(|e| format!("Failed to delete venue node: {e}"))?;
     }
     graph_changed();
     Ok(())

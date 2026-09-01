@@ -1075,7 +1075,7 @@ pub struct PrimitiveState {
 }
 
 /// The QLC+ `.qxf` subset the renderer reads.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Definition {
     /// QLC+ fixture type; selects the mesh and the fallback cone.
     #[serde(rename = "Type")]
@@ -1090,7 +1090,7 @@ pub struct Definition {
 
 /// A patchable mode. Only its head count matters here — the visualizer patches
 /// DMX, not pixels.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Mode {
     /// Mode name, matched against `Fixture::mode_name`.
     #[serde(rename = "@Name")]
@@ -1101,7 +1101,7 @@ pub struct Mode {
 }
 
 /// QLC+ `Physical`.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Physical {
     /// Housing size.
     #[serde(rename = "Dimensions")]
@@ -1115,7 +1115,7 @@ pub struct Physical {
 }
 
 /// Millimetres, as QLC+ writes them.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Dimensions {
     /// Width, mm.
     #[serde(rename = "@Width")]
@@ -1129,7 +1129,7 @@ pub struct Dimensions {
 }
 
 /// Pixel grid of a procedural fixture.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Layout {
     /// Pixels per row.
     #[serde(rename = "@Width")]
@@ -1141,7 +1141,7 @@ pub struct Layout {
 
 /// Lens block. A fixed lens repeats one value; a zoom lens gives a range and,
 /// with no zoom channel in the state model, the renderer sits at mid-zoom.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Lens {
     /// Narrow end of the beam angle, degrees. Zero means "unknown".
     #[serde(rename = "@DegreesMin")]

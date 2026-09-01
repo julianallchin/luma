@@ -21,7 +21,11 @@ fn meshes_root() -> PathBuf {
 }
 
 fn supply() -> VenueSockets {
-    VenueSockets::load(meshes_root()).expect("the catalog resolves")
+    VenueSockets::load(
+        meshes_root(),
+        std::sync::Arc::new(luma_render::catalog::NoFixtures),
+    )
+    .expect("the catalog resolves")
 }
 
 /// A venue holding nothing but its root, plus a counter for minted ids.
