@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**218 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
+**220 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -25,7 +25,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
 | `compositor` | 2 | `src-tauri/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `src-tauri/src/dispatch/handlers/controller.rs` |
-| `distribute` | 1 | `src-tauri/src/dispatch/handlers/distribute.rs` |
+| `distribute` | 2 | `src-tauri/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 16 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
 | `groups` | 16 | `src-tauri/src/dispatch/handlers/groups.rs` |
@@ -41,13 +41,13 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `scores` | 10 | `src-tauri/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
 | `skills` | 2 | `src-tauri/src/dispatch/handlers/skills.rs` |
-| `stage` | 15 | `src-tauri/src/dispatch/handlers/stage.rs` |
+| `stage` | 16 | `src-tauri/src/dispatch/handlers/stage.rs` |
 | `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `src-tauri/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 8 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **218** | |
+| **total** | **220** | |
 
 ## Commands
 
@@ -168,6 +168,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `distribute` | `venueId: String`<br>`hostNodeId: Option<String>`<br>`hostSocket: Option<String>`<br>`fixturePath: String`<br>`modeName: String`<br>`count: usize`<br>`layout: DistributeLayout`<br>`labelPrefix: Option<String>` | `DistributeReport` |
+| `redistribute` | `venueId: String`<br>`memberNodeId: String`<br>`count: usize`<br>`layout: DistributeLayout` | `DistributeReport` |
 
 ### `engine_dj`
 
@@ -370,6 +371,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_venue_graph` | `venueId: String` | `VenueGraphRows` |
+| `restore_graph` | `venueId: String`<br>`rows: VenueGraphRows` | `ResolvedVenue` |
 | `get_resolved_venue` | `venueId: String` | `ResolvedVenue` |
 | `venue_tiles` | `venueId: String`<br>`cellM: Option<f64>` | `String` |
 | `attach` | `venueId: String`<br>`kind: String`<br>`catalogRef: Option<String>`<br>`label: Option<String>`<br>`parentId: String`<br>`mySocket: Option<String>`<br>`theirSocket: String`<br>`yaw: Option<f64>`<br>`params: Option<BTreeMap<String, f64>>` | `PlacementReport` |
