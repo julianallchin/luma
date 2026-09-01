@@ -359,7 +359,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 123
+        "line": 137
       },
       "name": "attach",
       "prose": {
@@ -771,7 +771,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 239
+        "line": 253
       },
       "name": "constrain",
       "prose": {
@@ -1221,7 +1221,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 323
+        "line": 337
       },
       "name": "delete_subtree",
       "prose": {
@@ -1310,7 +1310,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 76
+        "line": 90
       },
       "name": "describe_venue",
       "prose": {
@@ -1332,7 +1332,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 220
+        "line": 234
       },
       "name": "detach",
       "prose": {
@@ -1412,7 +1412,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 300
+        "line": 314
       },
       "name": "duplicate",
       "prose": {
@@ -1627,7 +1627,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 279
+        "line": 293
       },
       "name": "extend",
       "prose": {
@@ -1653,7 +1653,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 105
+        "line": 119
       },
       "name": "extend_reach",
       "prose": {
@@ -3631,7 +3631,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 183
+        "line": 197
       },
       "name": "place_free",
       "prose": {
@@ -3919,13 +3919,43 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 154
+        "line": 168
       },
       "name": "reattach",
       "prose": {
         "returns": "PlacementReport"
       },
       "returns": "PlacementReport"
+    },
+    {
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "memberNodeId",
+          "rust": "String"
+        },
+        {
+          "name": "count",
+          "rust": "usize"
+        },
+        {
+          "name": "layout",
+          "rust": "DistributeLayout"
+        }
+      ],
+      "domain": "distribute",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/distribute.rs",
+        "line": 64
+      },
+      "name": "redistribute",
+      "prose": {
+        "returns": "DistributeReport"
+      },
+      "returns": "DistributeReport"
     },
     {
       "args": [
@@ -4461,6 +4491,28 @@
     {
       "args": [
         {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "rows",
+          "rust": "VenueGraphRows"
+        }
+      ],
+      "domain": "stage",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "line": 60
+      },
+      "name": "restore_graph",
+      "prose": {
+        "returns": "ResolvedVenue"
+      },
+      "returns": "ResolvedVenue"
+    },
+    {
+      "args": [
+        {
           "name": "graph",
           "rust": "Graph"
         },
@@ -4882,7 +4934,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 259
+        "line": 273
       },
       "name": "set_params",
       "prose": {
@@ -4989,7 +5041,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 91
+        "line": 105
       },
       "name": "stage_catalog",
       "prose": {
@@ -5352,7 +5404,7 @@
       "domain": "stage",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/stage.rs",
-        "line": 60
+        "line": 74
       },
       "name": "venue_tiles",
       "prose": {
@@ -5521,7 +5573,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/controller.rs"
     },
     {
-      "commandCount": 1,
+      "commandCount": 2,
       "domain": "distribute",
       "handlers": "src-tauri/src/dispatch/handlers/distribute.rs"
     },
@@ -5601,7 +5653,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/skills.rs"
     },
     {
-      "commandCount": 15,
+      "commandCount": 16,
       "domain": "stage",
       "handlers": "src-tauri/src/dispatch/handlers/stage.rs"
     },
@@ -5842,7 +5894,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 218,
+    "commandCount": 220,
     "domainCount": 33,
     "eventCount": 18,
     "unportedCount": 0
