@@ -1,13 +1,16 @@
 //! Headless venue dumper.
 //!
 //! Emits JSON: venue id/name, every fixture (with 3D position + rotation),
-//! and every fixture group + its member fixture IDs.
+//! and the venue's whole group tree — derived sets, the edits on them, and the
+//! authored `fixture_groups` rows — each with its member fixture IDs.
 //!
 //! Drives the 2D box-projection in the trace-viewer canvas. luma-lighting-
 //! model only needs positions + grouping, not the full QLC+ channel layout.
 //!
-//! Standalone — does NOT depend on `luma_lib::database` (private) or any
-//! Tauri state. Just opens the SQLite read-only and runs three queries.
+//! Read-only, and read through the same merged group read the app uses
+//! (`services::groups::GroupSources`) rather than a `fixture_groups` query of
+//! its own: a dumper that saw only the authored table reported "no groups" for
+//! every venue built by an agent.
 //!
 //! Usage:
 //!     cargo run --release --bin dump_venue -- --venue-id <UUID> [--output PATH]
@@ -18,6 +21,9 @@
 
 use std::path::PathBuf;
 
+use luma_lib::database::local::venue_access::{Read, VenueAccess, VenueResource};
+use luma_lib::models::groups::GroupOrigin;
+use luma_lib::services::groups::GroupSources;
 use luma_lib::storage::StorageRoot;
 use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -41,21 +47,32 @@ struct FixtureRow {
     num_channels: i64,
 }
 
-#[derive(Serialize, FromRow)]
-#[serde(rename_all = "camelCase")]
-struct GroupRow {
-    id: String,
-    name: Option<String>,
-    axis_lr: Option<f64>,
-    axis_fb: Option<f64>,
-    axis_ab: Option<f64>,
-}
-
+/// One node of the merged group tree, flat with `parentId`, parents first.
+///
+/// The axis fields are columns of an authored `fixture_groups` row, so a
+/// derived node ships without them rather than with nulls a reader could take
+/// for "centred".
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GroupDump {
-    #[serde(flatten)]
-    group: GroupRow,
-    #[serde(rename = "memberIds")]
+    id: String,
+    /// The snake_case name a selection expression uses; empty for a group
+    /// nobody has named.
+    name: String,
+    label: String,
+    /// The labels from the root down to this node, `/`-joined.
+    path: String,
+    parent_id: Option<String>,
+    /// `derived`, `edited` or `manual`.
+    origin: GroupOrigin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    axis_lr: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    axis_fb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    axis_ab: Option<f64>,
     member_ids: Vec<String>,
 }
 
@@ -139,30 +156,31 @@ async fn main() -> Result<(), String> {
     .await
     .map_err(|e| format!("fixtures query failed: {e}"))?;
 
-    let group_rows: Vec<GroupRow> = sqlx::query_as(
-        "SELECT id, name, axis_lr, axis_fb, axis_ab
-         FROM fixture_groups WHERE venue_id = ? ORDER BY display_order",
-    )
-    .bind(&args.venue_id)
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| format!("groups query failed: {e}"))?;
-
-    let mut groups: Vec<GroupDump> = Vec::with_capacity(group_rows.len());
-    for group in group_rows {
-        // DISTINCT: per-head membership stores one row per head.
-        let members: Vec<String> = sqlx::query_scalar(
-            "SELECT DISTINCT fixture_id FROM fixture_group_members WHERE group_id = ?",
-        )
-        .bind(&group.id)
-        .fetch_all(&pool)
+    let fixtures_root = luma_lib::services::fixtures::resolve_fixtures_root_from(None)?;
+    let mut access = VenueAccess::<Read>::read(&pool, VenueResource::Venue(&args.venue_id))
         .await
-        .map_err(|e| format!("group members query failed: {e}"))?;
-        groups.push(GroupDump {
-            group,
-            member_ids: members,
-        });
-    }
+        .map_err(|e| format!("venue not readable: {e}"))?;
+    let nodes = GroupSources::read(&fixtures_root, &mut access)
+        .await
+        .map_err(|e| format!("group tree read failed: {e}"))?
+        .hierarchy();
+    let paths = luma_lib::services::groups::label_paths(&nodes);
+    let groups: Vec<GroupDump> = nodes
+        .iter()
+        .map(|node| GroupDump {
+            id: node.id.clone(),
+            name: node.name.clone(),
+            label: node.label.clone(),
+            path: paths.get(&node.id).cloned().unwrap_or_default(),
+            parent_id: node.parent_id.clone(),
+            origin: node.origin,
+            role: node.role.map(|role| role.as_str().to_string()),
+            axis_lr: node.axis_lr,
+            axis_fb: node.axis_fb,
+            axis_ab: node.axis_ab,
+            member_ids: node.fixtures.iter().map(|f| f.id.clone()).collect(),
+        })
+        .collect();
 
     let dump = VenueDump {
         venue_id: args.venue_id.clone(),

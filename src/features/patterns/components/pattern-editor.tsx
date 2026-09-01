@@ -25,7 +25,7 @@ import {
 } from "react";
 import { useBlocker, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import type { FixtureGroupNode } from "@/bindings/groups";
+import type { GroupTreeNode } from "@/bindings/groups";
 import type {
 	AnnotationPreview,
 	BeatGrid,
@@ -911,12 +911,12 @@ function PreviewSelectionBar({ venueId }: { venueId: string | null }) {
 			return;
 		}
 		let active = true;
-		invoke<FixtureGroupNode[]>("get_grouped_hierarchy", { venueId })
+		// The tree, not the hierarchy: this wants the selection namespace, and a
+		// head position per fixture per node is what the other call is for.
+		invoke<GroupTreeNode[]>("list_group_tree", { venueId })
 			.then((nodes) => {
 				if (!active) return;
-				const names = nodes
-					.map((n) => n.groupName)
-					.filter((n): n is string => !!n);
+				const names = nodes.map((n) => n.name).filter((n) => !!n);
 				setGroups([...new Set(names)].sort());
 			})
 			.catch(() => active && setGroups([]));

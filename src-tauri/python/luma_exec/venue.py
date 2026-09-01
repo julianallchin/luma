@@ -8,8 +8,8 @@ back a `StageImage`.
 
 Where a verb and a record field share a name the **verb wins**, because a verb
 asks the room as it stands and the record is the snapshot this cell walked into:
-`unplaced()` is the live version of `venue["unplaced"]`, and `fixtures()` is a
-different question altogether — the *library* an agent picks a head out of,
+`unplaced()` and `groups()` are the live versions of `venue["unplaced"]` and
+`venue["groups"]`, and `fixtures()` is a different question altogether — the *library* an agent picks a head out of,
 where `venue["fixtures"]` is the lights already patched in this room.
 
     luma.venue.render()                              # front, t=0
@@ -112,6 +112,7 @@ Reading the room
 The read side is an equal partner, and every field it hands back is legal input
 to a write verb::
 
+    v.groups()                            # the sets the rig describes, as a tree
     v.nodes(kind="run", label="wing_*")   # -> .id .label .kind .at .size .face .tips
     v.extent(v.nodes(kind="tower"))       # -> span and centre in u/v: "is it centred?"
     print(v.describe())                   # the tree, with facade coordinates
@@ -147,7 +148,7 @@ Reading this surface
 
 Everything that *asks the room* is a verb and takes parentheses: `render()`,
 `tiles()`, `catalog()`, `fixtures()`, `describe()`, `nodes()`, `extent()`,
-`tip()`, `dangling()`, `unplaced()`, and the build verbs. Everything already
+`tip()`, `dangling()`, `unplaced()`, `groups()`, and the build verbs. Everything already
 *in your hand* is a plain attribute — `venue.views`, `cursor.at`,
 `cursor.size`, `placement.placed`, `distribution.ok`, `head.path`. A
 machine-extracted listing of this module shows several of the second kind as if
@@ -1012,6 +1013,145 @@ class Catalog:
         return f"<Catalog {len(self.pieces)} pieces>"
 
 
+class GroupFixture:
+    """One fixture in a group, and which of its heads the group holds."""
+
+    __slots__ = ("node_id", "label", "heads", "head_count")
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        #: The `fixtures` row id, which is also its venue-graph node id.
+        self.node_id = str(row["id"])
+        self.label = str(row["label"])
+        #: Primitive ids (`<fixture>:<head>`) of the heads in the group. Shorter
+        #: than `head_count` means only part of the fixture is in it.
+        self.heads = tuple(str(h) for h in row.get("heads") or ())
+        self.head_count = int(row.get("headCount") or 0)
+
+    def __repr__(self) -> str:
+        part = "" if len(self.heads) == self.head_count else f" {len(self.heads)}/{self.head_count} heads"
+        return f"<{self.node_id} {self.label}{part}>"
+
+
+class Group:
+    """One set of lights, as the venue describes it.
+
+    A group is **derived** from where fixtures hang — the role a light is, the
+    wing its run sits on, the half of that row it falls in — and re-derives
+    whenever the rig moves. `origin` says where this one came from: `derived`
+    is the rule's, `edited` is the rule's with a rename or a move on top, and
+    `manual` is a set somebody made by hand. Nothing has to be made by hand for
+    a venue to have groups.
+
+    `name` is the word a score selects by, and it is the whole path in
+    snake_case (`spots_left_wing_top`); `path` is that path spelled for a
+    reader. A group nobody has named has an empty `name` and selects nothing.
+
+    `axis_lr` / `axis_fb` / `axis_ab` are columns of a hand-made row, so a
+    derived group does not have them — `None` here means "no such setting",
+    not "centred".
+    """
+
+    __slots__ = (
+        "id", "name", "label", "path", "parent_id", "origin", "role",
+        "axis_lr", "axis_fb", "axis_ab", "fixtures",
+    )
+
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.id = str(row["id"])
+        self.name = str(row.get("name") or "")
+        self.label = str(row.get("label") or "")
+        self.path = str(row.get("path") or self.label)
+        self.parent_id = row.get("parentId")
+        #: `derived`, `edited` or `manual`.
+        self.origin = str(row.get("origin") or "derived")
+        #: `wash`, `spot`, `beam`, `strobe`, `blinder`, `pixel`, `fx`, `other`
+        #: — the role branch this sits under. `None` for a hand-made group.
+        self.role = row.get("role")
+        self.axis_lr = row.get("axisLr")
+        self.axis_fb = row.get("axisFb")
+        self.axis_ab = row.get("axisAb")
+        self.fixtures = tuple(GroupFixture(f) for f in row.get("fixtures") or ())
+
+    @property
+    def fixture_ids(self) -> tuple[str, ...]:
+        """The `fixtures` row ids in this group, in creation order."""
+        return tuple(f.node_id for f in self.fixtures)
+
+    @property
+    def heads(self) -> tuple[str, ...]:
+        """Every primitive id the group holds — what `luma.venue.positions`
+        is labelled with, so a group and a position row join by identity."""
+        return tuple(head for f in self.fixtures for head in f.heads)
+
+    @property
+    def depth(self) -> int:
+        """How deep the node sits, counted off `path`."""
+        return self.path.count("/")
+
+    def __len__(self) -> int:
+        return len(self.fixtures)
+
+    def __repr__(self) -> str:
+        name = self.name or "(unnamed)"
+        return f"<group {name} {len(self.fixtures)} fixtures>"
+
+
+class GroupTree(tuple):
+    """The venue's groups, flat and parents-first — index it by name or path.
+
+        g = luma.venue.groups()
+        print(g)                       # the tree
+        g["spots_left_wing"].heads     # the primitives in that set
+        [n.name for n in g if n.role == "spot"]
+
+    Flat rather than nested because the shape is already in `path` and
+    `parent_id`, and because what a score wants out of this is a *name*.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, rows: Any) -> "GroupTree":
+        return super().__new__(cls, (Group(row) for row in rows or ()))
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, (int, slice)):
+            return tuple.__getitem__(self, key)
+        wanted = str(key)
+        for group in self:
+            if group.name == wanted or group.path == wanted or group.id == wanted:
+                return group
+        raise KeyError(
+            f"{key!r} is not a group in this venue; try one of "
+            + ", ".join(n for n in self.names()[:12])
+        )
+
+    def __contains__(self, key: object) -> bool:
+        wanted = str(key)
+        return any(g.name == wanted or g.path == wanted or g.id == wanted for g in self)
+
+    def names(self) -> tuple[str, ...]:
+        """Every name a selection expression can say, in tree order."""
+        return tuple(g.name for g in self if g.name)
+
+    def __repr__(self) -> str:
+        return f"<GroupTree {len(self)} groups>"
+
+    def __str__(self) -> str:
+        if not self:
+            return (
+                "no groups — a group is derived from where fixtures hang, so "
+                "place some lights and they appear"
+            )
+        lines = ["  <name>  <fixtures>   (indented by where it sits)"]
+        for group in self:
+            mark = "" if group.origin == "derived" else f"  [{group.origin}]"
+            lines.append(
+                f"  {'  ' * group.depth}{group.name or group.label}"
+                f"  {len(group.fixtures)}{mark}"
+            )
+        return "\n".join(lines)
+
+
 class Venue:
     """The venue binding record, with the host's camera attached."""
 
@@ -1292,6 +1432,20 @@ class Venue:
         return tuple(
             UnplacedBranch(row) for row in self._verb("venue.open", {})["unplaced"]
         )
+
+    def groups(self) -> GroupTree:
+        """Every set of lights this venue describes, as a tree.
+
+        Derived from where fixtures hang, with any hand edits on top and any
+        hand-made groups beside them — one answer, not two. Read live, so a
+        script that has just hung six movers sees the sets they landed in;
+        `venue["groups"]` is the same rows as this cell found them.
+
+            g = v.groups()
+            print(g)
+            v.render(highlight=g["spots_left_wing"].name)
+        """
+        return GroupTree(self._verb("venue.groups", {})["groups"])
 
     def reach(self, node: Any, socket: str) -> Reach | None:
         """What a run out of `socket` would meet, and the buildable gap to it.

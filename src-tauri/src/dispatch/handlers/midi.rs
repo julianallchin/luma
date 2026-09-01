@@ -9,6 +9,7 @@ use crate::models::midi::{
 };
 use crate::models::universe::UniverseState;
 use crate::render_engine::ResolvedTarget;
+use crate::services::groups::GroupSources;
 
 // ============================================================================
 // Cue CRUD
@@ -137,6 +138,8 @@ pub async fn midi_reload_mapping(
     services: &AppServices,
     venue_id: String,
 ) -> Result<(), CommandError> {
+    // The group map is the merged tree, which needs the venue's graph.
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
     let cues = midi_db::list_cues(&mut access).await?;
@@ -146,8 +149,11 @@ pub async fn midi_reload_mapping(
         .controller
         .reload_mapping(cues, modifiers, bindings);
 
-    // Refresh group→fixture map so target resolution stays in sync.
-    let group_map = midi_db::get_group_fixture_map(&mut access).await?;
+    // Refresh group→fixture map so target resolution stays in sync. The merged
+    // read, so a binding can name a derived set as well as an authored row.
+    let group_map = GroupSources::read(&services.fixtures_root, &mut access)
+        .await?
+        .member_keys();
     drop(access);
     services.render_engine.set_group_fixture_map(group_map);
 
@@ -177,9 +183,12 @@ pub async fn midi_compile_cues_for_deck(
     track_id: String,
     venue_id: String,
 ) -> Result<(), CommandError> {
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    let group_map = midi_db::get_group_fixture_map(&mut access).await?;
+    let group_map = GroupSources::read(&services.fixtures_root, &mut access)
+        .await?
+        .member_keys();
     drop(access);
     services.render_engine.set_group_fixture_map(group_map);
 

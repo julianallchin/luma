@@ -56,7 +56,16 @@ export function GroupedFixtureTree() {
 		}
 	}, [editingGroupId]);
 
-	const selectedGroup = groups.find((g) => g.groupId === selectedGroupId);
+	// How deep each node sits. The tree arrives flat and parents-first, so one
+	// pass over it is enough — a depth field on the wire would be a second
+	// answer to what `parentId` already says.
+	const depths = new Map<string, number>();
+	for (const group of groups) {
+		const parent = group.parentId;
+		depths.set(group.id, parent ? (depths.get(parent) ?? 0) + 1 : 0);
+	}
+
+	const selectedGroup = groups.find((g) => g.id === selectedGroupId);
 
 	// Movement config — only a group with something to aim has a pyramid.
 	const isMovingGroup = selectedGroup?.moves ?? false;
@@ -100,7 +109,7 @@ export function GroupedFixtureTree() {
 
 	const handleGroupClick = (groupId: string) => {
 		setSelectedGroupId(groupId);
-		const group = groups.find((g) => g.groupId === groupId);
+		const group = groups.find((g) => g.id === groupId);
 		const ids = group?.fixtures.map((f) => f.id) ?? [];
 		// Blink only what the group controls: whole fixtures blink whole, but
 		// partially-membered fixtures blink just their member heads.
@@ -153,9 +162,9 @@ export function GroupedFixtureTree() {
 
 	const handleDeleteGroup = async () => {
 		if (selectedGroupId === null) return;
-		const group = groups.find((g) => g.groupId === selectedGroupId);
-		if (!group || group.fixtures.length > 0) {
-			return; // Can't delete non-empty group
+		const group = groups.find((g) => g.id === selectedGroupId);
+		if (group?.origin !== "manual" || group.fixtures.length > 0) {
+			return; // Only an empty hand-made group has a row to delete
 		}
 		const success = await deleteGroup(selectedGroupId);
 		if (success) {
@@ -187,8 +196,8 @@ export function GroupedFixtureTree() {
 		}
 		setEditingValue(next); // show normalized name
 
-		const current = groups.find((g) => g.groupId === editingGroupId);
-		if (current?.groupName === next) {
+		const current = groups.find((g) => g.id === editingGroupId);
+		if (current?.name === next) {
 			setEditingGroupId(null);
 			return;
 		}
@@ -275,38 +284,40 @@ export function GroupedFixtureTree() {
 	};
 
 	const renderGroup = (group: FixtureGroupNode, index: number) => {
-		const isSelected = selectedGroupId === group.groupId;
-		const isDragOver = dragOverGroupId === group.groupId;
-		const isEditing = editingGroupId === group.groupId;
+		const isSelected = selectedGroupId === group.id;
+		const isDragOver = dragOverGroupId === group.id;
+		const isEditing = editingGroupId === group.id;
 		const color = GROUP_COLORS[index % GROUP_COLORS.length];
 		const hasFixtures = group.fixtures.length > 0;
+		// A derived set is a fact about where the rig hangs, not a bag: it has no
+		// `fixture_groups` row to rename, drop into or delete. It is shown here
+		// and edited on the surface that moves the structure it comes from.
+		const authored = group.origin === "manual";
 
 		return (
 			<section
-				key={group.groupId}
-				aria-label={group.groupName ?? "Unnamed Group"}
+				key={group.id}
+				aria-label={group.label}
 				className={cn(
-					"m-2 rounded-lg border bg-card transition-colors",
+					"mr-2 my-2 rounded-lg border bg-card transition-colors",
 					isSelected
 						? "border-primary ring-1 ring-primary/50"
 						: isDragOver
 							? "border-primary/50 bg-primary/5"
 							: "border-trim",
 				)}
-				onDragOver={(e) => handleDragOver(e, group.groupId)}
-				onDragLeave={handleDragLeave}
-				onDrop={(e) => handleDrop(e, group.groupId)}
+				style={{ marginLeft: 8 + (depths.get(group.id) ?? 0) * 12 }}
+				onDragOver={authored ? (e) => handleDragOver(e, group.id) : undefined}
+				onDragLeave={authored ? handleDragLeave : undefined}
+				onDrop={authored ? (e) => handleDrop(e, group.id) : undefined}
 			>
 				{/* Header */}
 				<button
 					type="button"
 					className="flex items-center py-2 px-3 cursor-pointer w-full text-left"
-					onClick={() => handleGroupClick(group.groupId)}
+					onClick={() => handleGroupClick(group.id)}
 					onDoubleClick={() => {
-						startEditingGroup(
-							group.groupId,
-							group.groupName ?? "Unnamed Group",
-						);
+						if (authored) startEditingGroup(group.id, group.label);
 					}}
 				>
 					{/* Color indicator */}
@@ -339,8 +350,20 @@ export function GroupedFixtureTree() {
 					) : (
 						<>
 							<span className="flex-1 truncate text-sm font-medium">
-								{group.groupName ?? "Unnamed Group"}
+								{group.label}
 							</span>
+							{!authored && (
+								<span
+									className="text-[10px] uppercase tracking-wider text-muted-foreground/60 ml-2 flex-shrink-0"
+									title={
+										group.origin === "edited"
+											? "Derived from the rig, with a hand edit on it"
+											: "Derived from where the rig hangs"
+									}
+								>
+									{group.origin}
+								</span>
+							)}
 							<span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
 								{group.fixtures.length}
 							</span>
@@ -357,7 +380,7 @@ export function GroupedFixtureTree() {
 								fixture.heads.map((h) => Number(h.headIndex)),
 							);
 							const isPartial = headCount > 0 && memberHeads.size < headCount;
-							const expandKey = `${group.groupId}/${fixture.id}`;
+							const expandKey = `${group.id}/${fixture.id}`;
 							const isExpanded = expandedFixtures.has(expandKey);
 							const canExpand = headCount > 1;
 
@@ -384,16 +407,18 @@ export function GroupedFixtureTree() {
 												{memberHeads.size}/{headCount}
 											</span>
 										)}
-										<button
-											type="button"
-											onClick={() =>
-												handleRemoveFixture(fixture.id, group.groupId)
-											}
-											className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
-											title="Remove from group"
-										>
-											<X size={12} />
-										</button>
+										{authored && (
+											<button
+												type="button"
+												onClick={() =>
+													handleRemoveFixture(fixture.id, group.id)
+												}
+												className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
+												title="Remove from group"
+											>
+												<X size={12} />
+											</button>
+										)}
 									</div>
 
 									{/* Head list: members are draggable to other groups;
@@ -407,7 +432,7 @@ export function GroupedFixtureTree() {
 												<div
 													// biome-ignore lint/suspicious/noArrayIndexKey: head index is the head's identity
 													key={headIndex}
-													draggable={isMember}
+													draggable={authored && isMember}
 													onDragStart={(e) => {
 														e.dataTransfer.setData(
 															"headRef",
@@ -438,13 +463,13 @@ export function GroupedFixtureTree() {
 													>
 														{headLabel}
 													</button>
-													{isMember ? (
+													{!authored ? null : isMember ? (
 														<button
 															type="button"
 															onClick={() =>
 																handleRemoveFixture(
 																	fixture.id,
-																	group.groupId,
+																	group.id,
 																	headIndex,
 																)
 															}
@@ -459,7 +484,7 @@ export function GroupedFixtureTree() {
 															onClick={() =>
 																addFixtureToGroup(
 																	fixture.id,
-																	group.groupId,
+																	group.id,
 																	{ id: fixture.id, label: fixture.label },
 																	headIndex,
 																)
@@ -484,8 +509,8 @@ export function GroupedFixtureTree() {
 
 	const canDeleteSelectedGroup = () => {
 		if (selectedGroupId === null) return false;
-		const group = groups.find((g) => g.groupId === selectedGroupId);
-		return group && group.fixtures.length === 0;
+		const group = groups.find((g) => g.id === selectedGroupId);
+		return group?.origin === "manual" && group.fixtures.length === 0;
 	};
 
 	if (isLoading) {
@@ -510,7 +535,7 @@ export function GroupedFixtureTree() {
 			>
 				{groups.length === 0 ? (
 					<div className="p-4 text-sm text-muted-foreground">
-						No groups yet. Drag fixtures here.
+						No groups yet — a group is derived once a fixture is placed.
 					</div>
 				) : (
 					groups.map((group, i) => renderGroup(group, i))

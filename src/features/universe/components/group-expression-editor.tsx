@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FixtureGroup } from "@/bindings/groups";
+import type { GroupTreeNode } from "@/bindings/groups";
 import { cn } from "@/shared/lib/utils";
 
 type GroupToken = {
@@ -110,12 +110,12 @@ export function GroupExpressionEditor({
 			setNames([]);
 			return;
 		}
-		invoke<FixtureGroup[]>("list_groups", { venueId })
-			.then((groups) => {
+		// The merged tree: derived sets are selectable by name exactly like
+		// authored ones, and a venue nobody has grouped by hand still has names.
+		invoke<GroupTreeNode[]>("list_group_tree", { venueId })
+			.then((nodes) => {
 				const uniqueNames = [
-					...new Set(
-						groups.map((g) => g.name).filter((n): n is string => Boolean(n)),
-					),
+					...new Set(nodes.map((n) => n.name).filter((n) => Boolean(n))),
 				];
 				uniqueNames.sort();
 				setNames(uniqueNames);

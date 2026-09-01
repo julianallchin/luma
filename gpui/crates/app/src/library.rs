@@ -2996,7 +2996,7 @@ fn config_dir() -> Result<StorageRoot, String> {
 
 /// Root of the bundled fixture definitions. Prefers the repo's newest bundle
 /// so a dev build sees today's fixtures, exactly as the headless harness does.
-fn fixtures_root() -> Result<PathBuf, String> {
+pub(crate) fn fixtures_root() -> Result<PathBuf, String> {
     if let Some(path) = luma_ui::runtime::Runtime::with(|runtime| runtime.fixtures_root.clone()) {
         return Ok(path);
     }

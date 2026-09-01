@@ -115,15 +115,33 @@ pub struct FixtureGroup {
     pub updated_at: String,
 }
 
-/// Hierarchy node for displaying groups in the UI
+/// One node of the group tree with its fixtures resolved — the shape a surface
+/// that draws the *contents* of a set reads.
+///
+/// [`GroupTreeNode`] is the same node without them, and both come from the one
+/// merged read ([`crate::services::groups::GroupSources`]): a page that needs
+/// only structure should not pay for a head position per fixture per node.
+///
+/// # The axis fields are authored-only
+///
+/// `axis_lr` / `axis_fb` / `axis_ab` and [`MovementConfig`] are columns of a
+/// `fixture_groups` row, so a derived node — which has no row — ships **without
+/// them** rather than with nulls that could be mistaken for "centred". Deriving
+/// them from geometry is the movement layer's job and it is not built; until it
+/// is, consumers must tolerate their absence.
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroupNode {
-    pub group_id: String,
-    pub group_name: Option<String>,
-    /// The role of the group's first member — what the set is mostly for.
-    /// `None` for an empty group.
+    pub id: String,
+    /// The snake_case name a selection expression uses. Unique in the venue,
+    /// and empty for a group nobody has named — which selects nothing.
+    pub name: String,
+    /// What the tree shows — one path segment, not the whole path.
+    pub label: String,
+    pub parent_id: Option<String>,
+    pub origin: GroupOrigin,
+    /// The role branch this sits under; `None` for an authored group.
     pub role: Option<FixtureRole>,
     /// Whether anything in the group aims: a pan or a tilt channel somewhere.
     ///
@@ -131,9 +149,21 @@ pub struct FixtureGroupNode {
     /// mover and a par are both [`FixtureRole::Wash`], and only one of them has
     /// a movement pyramid to configure.
     pub moves: bool,
+    /// Left (-1) to Right (+1). Authored groups only — see the type's docs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub axis_lr: Option<f64>,
+    /// Front (-1) to Back (+1). Authored groups only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub axis_fb: Option<f64>,
+    /// Below (-1) to Above (+1). Authored groups only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub axis_ab: Option<f64>,
+    /// Authored groups only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub movement_config: Option<MovementConfig>,
     pub fixtures: Vec<GroupedFixtureNode>,
 }

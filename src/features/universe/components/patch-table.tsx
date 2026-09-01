@@ -85,14 +85,16 @@ export function PatchTable() {
 		fixtureId: string;
 	} | null>(null);
 
-	// Index fixture → group name(s)
+	// Index fixture → the deepest group holding it. The tree arrives
+	// parents-first, so the last node a fixture appears in is its leaf — and
+	// that is the set a human means: `spots_left_wing_top` says more than
+	// `spots`, and every ancestor is implied by it.
 	const fixtureGroups = useMemo(() => {
 		const map = new Map<string, string>();
 		for (const g of groups) {
+			if (!g.name) continue;
 			for (const f of g.fixtures) {
-				const existing = map.get(f.id);
-				const name = g.groupName ?? "";
-				map.set(f.id, existing ? `${existing}, ${name}` : name);
+				map.set(f.id, g.name);
 			}
 		}
 		return map;

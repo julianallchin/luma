@@ -2,6 +2,7 @@ use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::database::local::sync_delete;
 use crate::database::local::venue_access::{AuthorizedVenue, VenueAccess, Write};
 use crate::models::midi::{
     CreateBindingInput, CreateCueInput, CreateModifierInput, Cue, CueExecutionMode, MidiBinding,
@@ -250,13 +251,16 @@ pub async fn update_cue(
 }
 
 pub async fn delete_cue(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
-    let result = sqlx::query("DELETE FROM cues WHERE id = ? AND venue_id = ?")
-        .bind(id)
-        .bind(access.venue_id().to_owned())
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("delete_cue: {}", e))?;
-    Ok(result.rows_affected())
+    let venue_id = access.venue_id().to_owned();
+    let deleted = sync_delete::delete_synced_where(
+        access.connection(),
+        "cues",
+        "id = ? AND venue_id = ?",
+        &[id, &venue_id],
+    )
+    .await
+    .map_err(|e| format!("delete_cue: {}", e))?;
+    Ok(deleted as u64)
 }
 
 // ============================================================================
@@ -349,13 +353,16 @@ pub async fn update_modifier(
 }
 
 pub async fn delete_modifier(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
-    let result = sqlx::query("DELETE FROM midi_modifiers WHERE id = ? AND venue_id = ?")
-        .bind(id)
-        .bind(access.venue_id().to_owned())
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("delete_modifier: {}", e))?;
-    Ok(result.rows_affected())
+    let venue_id = access.venue_id().to_owned();
+    let deleted = sync_delete::delete_synced_where(
+        access.connection(),
+        "midi_modifiers",
+        "id = ? AND venue_id = ?",
+        &[id, &venue_id],
+    )
+    .await
+    .map_err(|e| format!("delete_modifier: {}", e))?;
+    Ok(deleted as u64)
 }
 
 // ============================================================================
@@ -479,55 +486,14 @@ pub async fn update_binding(
 }
 
 pub async fn delete_binding(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
-    let result = sqlx::query("DELETE FROM midi_bindings WHERE id = ? AND venue_id = ?")
-        .bind(id)
-        .bind(access.venue_id().to_owned())
-        .execute(&mut *access.connection())
-        .await
-        .map_err(|e| format!("delete_binding: {}", e))?;
-    Ok(result.rows_affected())
-}
-
-// ============================================================================
-// Group→fixture map for target filtering
-// ============================================================================
-
-#[derive(FromRow)]
-struct GroupMemberRow {
-    group_id: String,
-    fixture_id: String,
-    head_index: i64,
-}
-
-/// Returns HashMap<group_id, Vec<member_key>> for all groups in a venue.
-/// A member key is `"{fixture_id}"` for whole-fixture membership
-/// (head_index = -1) or `"{fixture_id}:{head}"` for a single head — the same
-/// forms `composite_frame`'s allowed-set filter matches against.
-pub async fn get_group_fixture_map(
-    access: &mut impl AuthorizedVenue,
-) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
-    sqlx::query_as::<_, GroupMemberRow>(
-        "SELECT g.id as group_id, m.fixture_id, m.head_index
-         FROM fixture_groups g
-         JOIN fixture_group_members m ON m.group_id = g.id
-         WHERE g.venue_id = ?",
+    let venue_id = access.venue_id().to_owned();
+    let deleted = sync_delete::delete_synced_where(
+        access.connection(),
+        "midi_bindings",
+        "id = ? AND venue_id = ?",
+        &[id, &venue_id],
     )
-    .bind(access.venue_id().to_owned())
-    .fetch_all(&mut *access.connection())
     .await
-    .map_err(|e| format!("get_group_fixture_map: {}", e))?
-    .into_iter()
-    .fold(
-        Ok(std::collections::HashMap::new()),
-        |acc: Result<std::collections::HashMap<String, Vec<String>>, String>, r| {
-            let mut map = acc?;
-            let key = if r.head_index < 0 {
-                r.fixture_id
-            } else {
-                format!("{}:{}", r.fixture_id, r.head_index)
-            };
-            map.entry(r.group_id).or_default().push(key);
-            Ok(map)
-        },
-    )
+    .map_err(|e| format!("delete_binding: {}", e))?;
+    Ok(deleted as u64)
 }
