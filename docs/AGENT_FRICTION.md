@@ -2,6 +2,9 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-31] `cargo build -p luma-mcp` from the repo root prints "could not find Cargo.toml" *and exits 0*, so a background build reports success and you drive a stale binary for twenty minutes; the binary is a `[[bin]]` of the `luma` package in `src-tauri/`, and only `cargo build --bin luma-mcp` from there builds it.
+- [2026-08-31] `git mv` stages the rename there and then, so the next `git commit` with an explicit path list quietly swallows it — in a shared checkout "stage by path" is only true if the index was empty when you started.
+- [2026-08-31] `cargo fmt -p <crate>` is sold as the safe alternative to `--all`, but it still rewrites every file in that crate; you come back to a stray hunk in a module you never opened and cannot tell it from another agent's work.
 - [2026-08-31] the `luma` package has no `anyhow` dependency, but every `luma_render` entry point returns `anyhow::Result`, so a new bin under `src-tauri/src/bin/` cannot spell its own error type the way the crate it drives does — you box a `dyn Error` and hope the `From` impls line up.
 - [2026-08-31] a venue's mothergrid beams hang inverted relative to every tower spot, so one tilt value sent to the whole rig puts half the shafts on the deck and fires the other half into the sky; nothing in `PrimitiveState` says which mounts flip, so a look has to learn it by rendering.
 - [2026-08-31] `scene_desc::CameraPose` is eye+target only, so an offscreen frame has no roll: a dutch angle is not expressible anywhere in the renderer, headless or live.
