@@ -61,8 +61,8 @@ use gpui_component::scroll::ScrollableElement;
 use luma_lib::models::universe::UniverseState;
 use luma_lib::stage_render;
 use luma_render::{
-    assets, build_frame_with, coords, frame::EditorObject, scene_desc, AsyncViewport, FrameTimings,
-    MetricSummary, SubmitOutcome,
+    assets, build_frame_with, coords, frame::EditorObject, house, scene_desc,
+    scene_desc::VenueEnvironment, AsyncViewport, FrameTimings, MetricSummary, SubmitOutcome,
 };
 use luma_scene::{
     apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, hit_test_gizmo, snap_angle_15,
@@ -401,6 +401,10 @@ pub(crate) struct Visualizer {
     /// earlier than prepaint can supply it.
     size: gpui::Size<Pixels>,
     viewport_origin: Point<Pixels>,
+    /// The venue's own environment, as the rig last landed with it — venue
+    /// truth, not a render dial. What the room is actually drawn under is
+    /// [`Self::environment`].
+    venue_environment: VenueEnvironment,
     render_lab: RenderLab,
     /// Whether the FPS readout is unfolded into the full frame-stats panel.
     fps_expanded: bool,
@@ -622,6 +626,15 @@ enum EditorDrag {
 #[derive(Clone, PartialEq)]
 struct RenderLab {
     open: bool,
+    /// The room's environment — the venue's own, or the house turned all the
+    /// way down while a score plays over it (see [`Visualizer::environment`]).
+    ///
+    /// Every field below it is this value's *fill*, resolved once through
+    /// [`house::fill`] and then free to be overridden by hand. This one is not
+    /// a fill: it is what hangs the house rig and what supplies the sky, both
+    /// of which the frame builder resolves for itself against the room's
+    /// bounds, so it is carried whole rather than flattened into dials.
+    house: VenueEnvironment,
     sun_enabled: bool,
     sun_azimuth_deg: f32,
     sun_elevation_deg: f32,
@@ -659,11 +672,12 @@ fn editor_sun_angles() -> (f32, f32) {
 }
 
 impl RenderLab {
-    fn new(editor_lit: bool) -> Self {
+    fn new(environment: VenueEnvironment) -> Self {
         let (azimuth_deg, elevation_deg) = editor_sun_angles();
-        Self {
+        let mut lab = Self {
             open: false,
-            sun_enabled: editor_lit,
+            house: environment,
+            sun_enabled: true,
             // The editor key light, in the lab's own polar spelling. Read off
             // `DirectionalLight::EDITOR` rather than typed again: the const and
             // the three numbers that used to sit here were the same light said
@@ -676,14 +690,13 @@ impl RenderLab {
             sun_color: scene_desc::DirectionalLight::EDITOR.color,
             sun_shadows: true,
             sun_shadow_softness: 1.0,
-            environment_enabled: editor_lit,
+            // A pure dev override, on by default: what the background and the
+            // ambient term actually *are* is the environment's answer, written
+            // by `set_environment` below.
+            environment_enabled: true,
             background_color: scene_desc::Environment::EDITOR.background,
             ambient_color: scene_desc::Environment::EDITOR.ambient_color,
-            ambient_intensity: if editor_lit {
-                scene_desc::Environment::EDITOR.ambient_intensity
-            } else {
-                0.0
-            },
+            ambient_intensity: scene_desc::Environment::EDITOR.ambient_intensity,
             probe_enabled: false,
             probe_intensity: 0.8,
             probe_rotation_deg: 0.0,
@@ -695,28 +708,37 @@ impl RenderLab {
             haze_density: 0.8,
             haze_steps: 8,
             haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
-            grid_enabled: editor_lit,
+            grid_enabled: true,
             debug_view: scene_desc::DebugView::Pbr,
-        }
+        };
+        lab.set_environment(environment);
+        lab
     }
 
-    /// Re-apply the editor/live lighting choice after the stage's subject
-    /// changed under it.
+    /// Re-derive the lighting from the environment the room is now drawn
+    /// under.
     ///
-    /// Exactly the fields [`Self::new`] derives from the same flag, and no
-    /// others: everything else in the lab is an authored tweak, and a stage
-    /// that reset a hand-set haze density because the track changed would be
-    /// throwing away work nobody asked it to.
-    fn set_editor_lit(&mut self, editor_lit: bool) {
-        self.sun_enabled = editor_lit;
-        self.sun_intensity = scene_desc::DirectionalLight::EDITOR.intensity;
-        self.environment_enabled = editor_lit;
-        self.ambient_intensity = if editor_lit {
-            scene_desc::Environment::EDITOR.ambient_intensity
-        } else {
-            0.0
-        };
-        self.grid_enabled = editor_lit;
+    /// Exactly the fields [`house::fill`] answers, and no others: everything
+    /// else in the lab is an authored tweak, and a stage that reset a hand-set
+    /// haze density because the track changed would be throwing away work
+    /// nobody asked it to.
+    ///
+    /// The grid goes with the room being visible at all. It is editor chrome
+    /// laid on the floor, and a dark stage is the one picture whose whole
+    /// point is that the floor is not lit.
+    fn set_environment(&mut self, environment: VenueEnvironment) {
+        let fill = house::fill(environment);
+        self.house = environment;
+        self.background_color = fill.environment.background;
+        self.ambient_color = fill.environment.ambient_color;
+        self.ambient_intensity = fill.environment.ambient_intensity;
+        self.sun_enabled = fill.sun.is_some();
+        self.sun_intensity = fill
+            .sun
+            .map_or(scene_desc::DirectionalLight::EDITOR.intensity, |sun| {
+                sun.intensity
+            });
+        self.grid_enabled = fill.sun.is_some() || fill.sky.is_some();
     }
 
     fn sun_direction(&self) -> [f32; 3] {
@@ -875,7 +897,9 @@ impl Visualizer {
         cx: &mut Context<Luma>,
     ) -> Self {
         let rig = library.venue_rig(venue_id);
-        let editor_lit = subject.is_none();
+        // The venue's own environment arrives with its rig; until then the
+        // default room, which is the picture this app has always opened with.
+        let environment = Self::environment_of(VenueEnvironment::default(), subject.as_ref());
         let composite = subject
             .clone()
             .map(|lit| (library.composite_score(&lit.score, None), lit));
@@ -925,10 +949,48 @@ impl Visualizer {
             gizmo_hover: None,
             size: gpui::Size::default(),
             viewport_origin: Point::default(),
-            render_lab: RenderLab::new(editor_lit),
+            venue_environment: VenueEnvironment::default(),
+            render_lab: RenderLab::new(environment),
             fps_expanded: false,
             build: None,
             stage: Rc::default(),
+        }
+    }
+
+    /// The venue's own environment — what the stage page's control edits, and
+    /// what a room with no score over it is drawn under.
+    pub(crate) fn venue_environment(&self) -> VenueEnvironment {
+        self.venue_environment
+    }
+
+    /// Adopt an edited environment without waiting for the write to land.
+    ///
+    /// The lab is re-derived from it, which is what puts the new light on
+    /// screen: its `house` field rides in the idle key, so a resting viewport
+    /// wakes for the change rather than re-presenting the room it had.
+    pub(crate) fn set_venue_environment(&mut self, environment: VenueEnvironment) {
+        self.venue_environment = environment;
+        self.render_lab.set_environment(self.environment());
+    }
+
+    /// The environment this room is drawn under right now.
+    ///
+    /// **The rule, entire:** no score on this stage ⇒ the venue's own
+    /// environment; a score playing ⇒ the house goes down. A lit show is the
+    /// venue's one dial turned to zero, not a second preset —
+    /// `VenueEnvironment::indoor(0.0)` *is* the dark stage, and
+    /// [`house::fill`] answers it with a black environment, no sun and no
+    /// lamps.
+    fn environment(&self) -> VenueEnvironment {
+        Self::environment_of(self.venue_environment, self.subject.as_ref())
+    }
+
+    /// [`Self::environment`] before there is a `self` to ask — the opening
+    /// frame, where the venue's own environment has not landed yet.
+    fn environment_of(venue: VenueEnvironment, subject: Option<&Lit>) -> VenueEnvironment {
+        match subject {
+            Some(_) => VenueEnvironment::indoor(0.0),
+            None => venue,
         }
     }
 
@@ -942,7 +1004,7 @@ impl Visualizer {
     /// sample that follows is not (see [`Library::sample_universe`]).
     fn relight(&mut self, library: &Library, subject: Option<Lit>, cx: &mut Context<Luma>) {
         self.subject = subject.clone();
-        self.render_lab.set_editor_lit(subject.is_none());
+        self.render_lab.set_environment(self.environment());
         let Some(lit) = subject else {
             // Nothing on screen is about a score any more, so the stage stops
             // claiming one. What the engine still holds is stale and unread —
@@ -1026,7 +1088,9 @@ impl Visualizer {
             .iter()
             .map(|(path, def)| (path.clone(), stage_render::definition(def)))
             .collect();
-        let scene = scene(&rig, &definitions);
+        self.venue_environment = rig.environment;
+        self.render_lab.set_environment(self.environment());
+        let scene = scene(&rig, &definitions, self.environment());
         self.framing = scene.framing(&definitions);
         self.camera = opening_camera(&self.framing, &self.view_finder());
         self.owes_opening_pose = true;
@@ -1752,6 +1816,7 @@ fn zoom_scale(distance: f32) -> f32 {
 pub(crate) fn scene(
     rig: &Rig,
     definitions: &BTreeMap<String, scene_desc::Definition>,
+    environment: VenueEnvironment,
 ) -> scene_desc::Scene {
     // A fixture node's id *is* its `fixtures` row id, which is what makes the
     // patch and the placement two halves of one fixture without either half
@@ -1771,10 +1836,12 @@ pub(crate) fn scene(
         },
         editing: true,
         aim_arrows: false,
-        // Interactive dark-stage defaults, with the haze resolution reduced
-        // for the live path. Environment, sun and haze remain independent
-        // controls on the renderer contract.
-        render: scene_desc::RenderSettings::dark_stage(
+        // The one preset a venue is drawn under, with the haze resolution
+        // reduced for the live path. The lab overwrites the fill dials each
+        // frame; the house and the sky are re-read from this environment
+        // there too, so the lamps hang from the first frame on.
+        render: scene_desc::RenderSettings::room(
+            environment,
             FOV_Y_DEG,
             luma_render::LIVE_HAZE_RESOLUTION,
         ),
@@ -3382,6 +3449,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     // lab remains owned by the screen.
     let stage = Rc::clone(&state.stage);
     let camera = state.camera;
+    let house = state.render_lab.house;
     let sun_enabled = state.render_lab.sun_enabled;
     let sun_direction = state.render_lab.sun_direction();
     let sun_intensity = state.render_lab.sun_intensity;
@@ -3601,6 +3669,13 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                     shadows: sun_shadows,
                                     shadow_softness: sun_shadow_softness,
                                 });
+                            // The room's own two halves, which are not fill
+                            // dials and so are not the lab's to override: the
+                            // house rig the frame builder hangs once it knows
+                            // the bounds, and the atmosphere an open-air venue
+                            // takes its background, ambient and sun from.
+                            scene.render.house = Some(house);
+                            scene.render.sky = house::fill(house).sky;
                             scene.render.haze.enabled = haze_enabled;
                             scene.render.haze.density = haze_density;
                             scene.render.haze.steps = haze_steps;
@@ -4030,7 +4105,7 @@ mod render_lab_tests {
 
     #[test]
     fn render_lab_controls_are_independent_and_bounded() {
-        let mut lab = RenderLab::new(true);
+        let mut lab = RenderLab::new(VenueEnvironment::default());
         let original_background = lab.background_color;
 
         // Out-of-range targets on purpose: a slider hands over whatever the

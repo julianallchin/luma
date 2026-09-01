@@ -232,7 +232,10 @@ impl Luma {
                         .iter()
                         .map(|(path, def)| (path.clone(), stage_render::definition(def)))
                         .collect();
-                    let mut scene = crate::visualizer::scene(&rig, &definitions);
+                    // The subject is one fixture on nothing, so the room's
+                    // environment is thrown away a line later — `object_lit`
+                    // is the preset for a thumbnail, and it hangs no house.
+                    let mut scene = crate::visualizer::scene(&rig, &definitions, rig.environment);
                     scene.render = luma_render::scene_desc::RenderSettings::object_lit(
                         crate::visualizer::FOV_Y_DEG,
                         luma_render::LIVE_HAZE_RESOLUTION,

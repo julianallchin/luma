@@ -39,6 +39,7 @@ use gpui::{div, px, AnyElement, Context, Div, Entity, Pixels, Point, Window};
 use gpui_component::{Icon, IconName};
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
+use luma_render::scene_desc::VenueEnvironment;
 use luma_scene::catalog::{pieces, PaletteGroup};
 use luma_scene::coords;
 use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
@@ -48,6 +49,7 @@ use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
 use crate::fixture_library::{self, FixtureLibrary};
 use crate::library::{LibraryError, Rig};
+use crate::visualizer::Visualizer;
 use crate::Luma;
 
 use hand::{Extending, Hand, Held, Holding, Landed, Landing, Room};
@@ -1564,6 +1566,43 @@ impl Luma {
         self.stage_verb(pending, cx);
     }
 
+    /// Write the venue's lighting environment: what kind of room this is, and
+    /// how far up its one dial.
+    ///
+    /// Not a graph verb — nothing in the room moves — so it does not go
+    /// through [`Self::stage_verb`] and there is no re-solve to wait for. The
+    /// viewport adopts the value first and the write follows: a scrub hands
+    /// over a value per pointer step, and a house dial that only moved once
+    /// the database had answered would lag the picture it is dimming. A
+    /// refusal lands on the build's report line, where every other stage
+    /// write's does.
+    pub(crate) fn stage_set_environment(
+        &mut self,
+        environment: VenueEnvironment,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.visualizer.as_mut() else {
+            return;
+        };
+        let venue = state.venue_id.clone();
+        state.set_venue_environment(environment);
+        let pending = self.library.set_venue_environment(&venue, environment);
+        cx.spawn(async move |this, cx| {
+            let Err(error) = pending.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Some(build) = this.build_mut() {
+                    build.report = vec![error.to_string()];
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Detach the selected node. Its rows stay: it lands in the tray, which is
     /// the difference between unplaced and deleted.
     pub(crate) fn stage_detach(&mut self, cx: &mut Context<Self>) {
@@ -2071,6 +2110,10 @@ impl Build {
 /// mutable borrow of the workspace, and the builder lives beside the picture.
 /// Every field is also a *claim* the harness can read — see the module docs.
 pub(crate) struct StageView {
+    /// The venue's own environment — what kind of room this is and how far up
+    /// its one dial. Venue truth, so the control edits *this* and never the
+    /// darkened room a playing score is drawn under.
+    pub(crate) environment: VenueEnvironment,
     /// The add-element dialog's keyboard cursor, when it is up.
     pub(crate) choosing: Option<usize>,
     pub(crate) selected: Option<SelectedView>,
@@ -2137,7 +2180,12 @@ impl Luma {
     pub(crate) fn stage_view(&self) -> Option<StageView> {
         let build = self.build_state()?;
         let selected = build.selected_view();
+        let environment = self
+            .visualizer
+            .as_ref()
+            .map_or_else(VenueEnvironment::default, Visualizer::venue_environment);
         Some(StageView {
+            environment,
             choosing: build.hand.choosing().map(|c| c.cursor),
             selected,
             unplaced: build
@@ -2231,6 +2279,7 @@ pub(crate) fn stage_page(
         .absolute()
         .inset_0()
         .child(add_button(app))
+        .child(environment_card(view.environment, app))
         .children(
             (view.choosing.is_some() || state.closing.is_closing())
                 .then(|| chooser(state, view, view.choosing.unwrap_or(0), app, window)),
@@ -2287,6 +2336,117 @@ fn add_button(app: &Entity<Luma>) -> AnyElement {
         );
     bar.into_any_element()
 }
+
+/// The room's own light: what kind of room this is, and how far up its one
+/// dial.
+///
+/// Bottom-left, the one corner of the picture nothing else claims — the add
+/// button holds the top-left, a held run's span sits top-centre, and the
+/// renderer lab spans the whole right edge when it is open. It is also as far
+/// as a fixed control can get from the selection's card, which follows its
+/// piece around the middle of the room.
+///
+/// One dial, because the environment has one: a room is lit by its own house
+/// rig or by the sky, and the only question either mode takes is how far up.
+/// The mode chooses which of the two the box is showing, so there is never a
+/// control on screen for the half that is not in effect.
+fn environment_card(environment: VenueEnvironment, app: &Entity<Luma>) -> AnyElement {
+    let mut track = float::segmented().w(px(ENVIRONMENT_MODE_W));
+    for (name, indoor) in [("Indoor", true), ("Outdoor", false)] {
+        let app = app.clone();
+        track = track.child(
+            float::segment(
+                name,
+                matches!(environment, VenueEnvironment::Indoor { .. }) == indoor,
+                name,
+            )
+            .id(gpui::ElementId::Name(format!("environment-{name}").into()))
+            .on_click(move |_, _, cx| {
+                // Switching modes keeps neither scalar: the other mode's
+                // dial is a different quantity, and a house level read as
+                // an elevation is a sunset at one degree. Each mode opens
+                // at its own default — house at full, sun at mid-morning.
+                let chosen = if indoor {
+                    VenueEnvironment::default()
+                } else {
+                    VenueEnvironment::outdoor(ENVIRONMENT_DEFAULT_SUN_DEG)
+                };
+                app.update(cx, |this, cx| this.stage_set_environment(chosen, cx));
+            })
+            .agent_node(Role::Toggle, name),
+        );
+    }
+    let dial = match environment {
+        VenueEnvironment::Indoor { .. } => {
+            let app = app.clone();
+            float::field_row(
+                "House",
+                float::scrub(
+                    "stage-house-level",
+                    f64::from(environment.house_level()),
+                    0.0,
+                    1.0,
+                    0.05,
+                    ENVIRONMENT_DIAL_W,
+                    move |value, _, cx| {
+                        app.update(cx, |this, cx| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            this.stage_set_environment(VenueEnvironment::indoor(value as f32), cx);
+                        });
+                    },
+                ),
+            )
+        }
+        VenueEnvironment::Outdoor { .. } => {
+            let app = app.clone();
+            float::field_row(
+                "Sun",
+                float::scrub(
+                    "stage-sun-elevation",
+                    f64::from(environment.sun_elevation_deg()),
+                    -90.0,
+                    90.0,
+                    1.0,
+                    ENVIRONMENT_DIAL_W,
+                    move |value, _, cx| {
+                        app.update(cx, |this, cx| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            this.stage_set_environment(VenueEnvironment::outdoor(value as f32), cx);
+                        });
+                    },
+                ),
+            )
+        }
+    };
+    div()
+        .absolute()
+        .bottom(px(INSET))
+        .left(px(INSET))
+        .occlude()
+        .child(
+            float::popover_card()
+                .flex_row()
+                .items_end()
+                .gap(px(8.0))
+                .p(px(8.0))
+                .child(float::field_row("Room", track))
+                .child(dial)
+                .agent_node(Role::Card, "Environment"),
+        )
+        .into_any_element()
+}
+
+/// Wide enough for "Outdoor" twice over, and narrow enough that the card is
+/// chrome in a corner rather than a panel.
+const ENVIRONMENT_MODE_W: f32 = 148.0;
+
+/// The dial's box. The number is the whole control, so it is sized to the
+/// widest number either mode prints — a signed two-digit elevation.
+const ENVIRONMENT_DIAL_W: f32 = 56.0;
+
+/// Where an open-air venue's sun starts: high enough that the room is lit and
+/// low enough that everything in it still casts a shadow with a direction.
+const ENVIRONMENT_DEFAULT_SUN_DEG: f32 = 40.0;
 
 // ---------------------------------------------------------------------------
 // The add-element dialog
