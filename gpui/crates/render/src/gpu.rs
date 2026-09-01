@@ -866,6 +866,7 @@ pub struct Gpu {
     /// format.
     composite_pipelines: [wgpu::RenderPipeline; 2],
     grid_pipeline: wgpu::RenderPipeline,
+    compass_pipeline: wgpu::RenderPipeline,
     cable_pipeline: wgpu::RenderPipeline,
     /// Indexed by [`overlay_pipeline_index`]: the two output formats crossed
     /// with two topologies and two depth behaviours.
@@ -1481,7 +1482,7 @@ impl Gpu {
             vertex: wgpu::VertexState {
                 module: &grid_module,
                 entry_point: Some("vs_main"),
-                buffers: &[Some(grid_vertex_layout)],
+                buffers: &[Some(grid_vertex_layout.clone())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -1497,6 +1498,39 @@ impl Gpu {
             primitive: wgpu::PrimitiveState::default(),
             // `depthWrite: false` — the grid tests against the stage but never
             // occludes it.
+            depth_stencil: Some(depth_state(false)),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // The grid's own state, with the grid's own module, down to a second
+        // fragment entry point: the compass is the same quad, blended the same
+        // way, and a divergent depth or blend choice here would be a second
+        // answer to a settled question.
+        let compass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("compass"),
+            layout: Some(&scene_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &grid_module,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(grid_vertex_layout.clone())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &grid_module,
+                entry_point: Some("fs_compass"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SCENE_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(depth_state(false)),
             multisample: wgpu::MultisampleState {
                 count: MSAA_SAMPLES,
@@ -1707,6 +1741,7 @@ impl Gpu {
             temporal_pipeline,
             composite_pipelines,
             grid_pipeline,
+            compass_pipeline,
             cable_pipeline,
             overlay_pipelines,
             hard_shadow_sampler,
@@ -3130,12 +3165,21 @@ impl Renderer {
                         view: &msaa_color,
                         resolve_target: Some(&scene_view),
                         depth_slice: None,
+                        // Alpha clears to *zero* while rgb clears to the
+                        // frame's colour: the target's alpha is then the
+                        // coverage every draw accumulated, and the composite
+                        // uses it to swap the clear colour for the real
+                        // background one pixel at a time — including under a
+                        // cable or a grid line, which is what the transparent
+                        // tail needs and what the depth buffer cannot say.
+                        // `composite.wgsl` subtracts exactly this rgb, so the
+                        // two must stay the same value.
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
                                 r: f64::from(frame.clear_color.x),
                                 g: f64::from(frame.clear_color.y),
                                 b: f64::from(frame.clear_color.z),
-                                a: 1.0,
+                                a: 0.0,
                             }),
                             store: wgpu::StoreOp::Store,
                         },
@@ -3158,6 +3202,7 @@ impl Renderer {
                 for (slot, kind) in frame.transparent.iter().enumerate() {
                     pass.set_pipeline(match kind {
                         crate::frame::Transparent::Grid => &self.gpu.grid_pipeline,
+                        crate::frame::Transparent::Compass => &self.gpu.compass_pipeline,
                         crate::frame::Transparent::Cables => &self.gpu.cable_pipeline,
                     });
                     draw_range(&mut pass, &transparent[slot..=slot], true);

@@ -185,7 +185,8 @@ fn background_radiance(uv: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(frag.xy);
-    var scene = textureLoad(scene_tex, coord, 0).rgb;
+    let texel = textureLoad(scene_tex, coord, 0);
+    var scene = texel.rgb;
     let size = vec2<f32>(textureDimensions(scene_tex));
     let uv = frag.xy / size;
     // Anchored on *this* pixel's own depth, not on the depth the nearest haze
@@ -198,12 +199,25 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // nothing here rescales it.
     let raw_depth = textureLoad(depth_tex, coord, 0);
     let background = background_radiance(uv);
-    if raw_depth <= 0.0 && (environment_params.visible > 0.5 || sky.sun.w > 0.5) {
-        // Only where the probe is meant to be seen: everywhere else the target
-        // already holds the clear colour, resolved with whatever coverage the
-        // silhouette had, and overwriting it would flatten that edge.
-        scene = background;
-    }
+    // Swap the clear colour for the real background, by exactly the fraction
+    // of this pixel the scene did not cover.
+    //
+    // The scene target was cleared to the clear colour with alpha zero, and
+    // every draw blended over it, so it holds `a·src + (1−a)·clear` with the
+    // accumulated coverage in `a`. Adding `(1−a)·(background − clear)` turns
+    // that into `a·src + (1−a)·background` — the same pixel composited over
+    // the background instead of over the clear colour, with no second guess at
+    // what `a` was.
+    //
+    // Written as a correction rather than a replacement for two reasons. It
+    // reaches the *partly* covered pixels — an MSAA silhouette edge, and a
+    // cable or a grid line over open sky, which the transparent tail draws
+    // without ever touching the opaque depth buffer this used to interrogate:
+    // asking "is the depth empty here" painted the sky straight over the
+    // rigging, so a flown truss outdoors hung on nothing. And where there is
+    // no background to swap in, `background` *is* `clear`, the correction is
+    // an exact zero, and every pixel is the byte it was before.
+    scene = scene + (1.0 - texel.a) * (background - cfg.background.rgb);
     let depth = linear_view_depth(raw_depth);
     let debug = u32(cfg.params.w + 0.5);
     if debug >= 1u && debug <= 5u {

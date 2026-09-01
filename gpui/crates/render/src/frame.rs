@@ -180,12 +180,18 @@ pub struct EnvironmentImage {
 
 /// Which pipeline paints one transparent draw.
 ///
-/// Declared in paint order: the grid lies on the floor and the cables hang in
-/// the room over it, so a cable blends over a grid line rather than under it.
+/// Declared in paint order: the grid and the compass lie on the floor and the
+/// cables hang in the room over them, so a cable blends over a grid line
+/// rather than under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transparent {
     /// The fading editor ground grid, `shaders/grid.wgsl`.
     Grid,
+    /// The downstage compass arrow, `shaders/grid.wgsl`'s second fragment
+    /// entry point. Its own draw rather than a branch inside the grid's,
+    /// because it is gated by its own setting: a room can want the ruler and
+    /// not the sign, or the sign and not the ruler.
+    Compass,
     /// Rigging cables, `shaders/cables.wgsl`.
     Cables,
 }
@@ -941,8 +947,12 @@ pub fn build_with(
     // The grid and the cables are transparent, so they trail every opaque
     // draw, in the paint order `Transparent` declares.
     let mut transparent = Vec::new();
-    if scene.render.show_grid {
-        transparent.push(Transparent::Grid);
+    // The grid and the compass are painted on the same lifted quad — the
+    // floor, a couple of millimetres up so it never fights the ground it lies
+    // on. One closure, so a second floor affordance cannot end up at a
+    // different height than the first.
+    let mut floor_decal = |kind: Transparent| {
+        transparent.push(kind);
         draws.push(Draw {
             mesh: floor,
             textures: MaterialTextures::default(),
@@ -952,6 +962,12 @@ pub fn build_with(
             material: Material::default(),
             editor_object: None,
         });
+    };
+    if scene.render.show_grid {
+        floor_decal(Transparent::Grid);
+    }
+    if scene.render.show_gizmos {
+        floor_decal(Transparent::Compass);
     }
     if let Some(cables) = scene.render.show_cables.then(|| bodies.mesh()).flatten() {
         transparent.push(Transparent::Cables);

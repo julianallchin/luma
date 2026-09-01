@@ -110,6 +110,9 @@ fn render_all() {
             // Nor is a card a room: a piece the palette shows at head height
             // is not flown, it is just posed for the picture.
             render.show_cables = false;
+            // Nor the room's chrome: a compass says which way the house is,
+            // and a card has no house.
+            render.show_gizmos = false;
             render.environment.background = background;
             Scene {
                 id: format!("preview-{}", piece.id),
