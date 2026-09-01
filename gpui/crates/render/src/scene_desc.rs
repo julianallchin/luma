@@ -218,6 +218,17 @@ pub struct RenderSettings {
     /// like the two above: off for a render whose subject is one piece, on
     /// wherever the subject is a rig.
     pub show_cables: bool,
+    /// Whether unlit editor gizmos are drawn — today the downstage compass
+    /// arrow on the floor (`shaders/grid.wgsl`), which is the one piece of
+    /// chrome the renderer paints without being asked for it.
+    ///
+    /// One flag for the class, not one per glyph: a gizmo is display UI that
+    /// stands *in* the scene, and every one of them is wrong for the same
+    /// reason at the same moment — a beauty render, a thumbnail, a plate for
+    /// print. A second gizmo joins this flag. Aim arrows are not gizmos in
+    /// this sense: `Scene::aim_arrows` is an explicit request for a diagram,
+    /// and keeps its own switch.
+    pub show_gizmos: bool,
     /// The venue environment this room is lit by, when the subject *is* a room.
     ///
     /// `environment` and `sun` above are this value's bounds-free half, already
@@ -635,6 +646,7 @@ impl RenderSettings {
             show_grid: false,
             show_floor: true,
             show_cables: true,
+            show_gizmos: true,
             house: None,
             sky: None,
             debug_view: DebugView::Pbr,
@@ -666,6 +678,7 @@ impl RenderSettings {
             show_grid: true,
             show_floor: true,
             show_cables: true,
+            show_gizmos: true,
             house: None,
             sky: None,
             debug_view: DebugView::Pbr,
@@ -703,6 +716,7 @@ impl RenderSettings {
             show_grid: true,
             show_floor: true,
             show_cables: true,
+            show_gizmos: true,
             house: Some(environment),
             sky: fill.sky,
             debug_view: DebugView::Pbr,
@@ -731,6 +745,8 @@ struct RenderSettingsWire {
     show_grid: Option<bool>,
     #[serde(default)]
     show_cables: Option<bool>,
+    #[serde(default)]
+    show_gizmos: Option<bool>,
     #[serde(default)]
     house: Option<VenueEnvironment>,
     #[serde(default)]
@@ -774,6 +790,9 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // at this boundary, on in every constructor — the same split
                 // `fixture_surface_lighting` is held at, for the same reason.
                 show_cables: wire.show_cables.unwrap_or(false),
+                // Same split, same reason: the compass is chrome, and the
+                // tracked images predate it.
+                show_gizmos: wire.show_gizmos.unwrap_or(false),
                 // Absent means "not a room", exactly as it does in
                 // `object_lit`. The tracked contract captures predate venue
                 // environments and are about materials and beams; a house hung
@@ -810,6 +829,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         // off at this compatibility boundary preserves those captured inputs;
         // every new interactive preset enables the path.
         settings.show_cables = wire.show_cables.unwrap_or(false);
+        settings.show_gizmos = wire.show_gizmos.unwrap_or(false);
         settings.sky = wire.sky;
         settings.fixture_surface_lighting = wire.fixture_surface_lighting.unwrap_or(false);
         settings.fixture_shadows = wire.fixture_shadows.unwrap_or(false);
