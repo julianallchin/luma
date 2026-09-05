@@ -164,11 +164,19 @@ fn major_axis(cells: &[&Cell], toward: &[f64; 3]) -> Result<[f64; 3]> {
     if best.1 < 1e-12 {
         return Err(Error("coincident cells do not define a major axis".into()));
     }
-    let alignment = dot(best.0, *toward);
+    let mut alignment = dot(best.0, *toward);
     if alignment.abs() < 1e-9 {
-        return Err(Error(
-            "orientation is perpendicular to the major axis".into(),
-        ));
+        // A perpendicular hint has no preference between the two signs.
+        // Orient the largest component positively, with X/Y/Z breaking ties.
+        let dominant = (0..3)
+            .max_by(|a, b| {
+                best.0[*a]
+                    .abs()
+                    .total_cmp(&best.0[*b].abs())
+                    .then_with(|| b.cmp(a))
+            })
+            .unwrap();
+        alignment = best.0[dominant];
     }
     Ok(best.0.map(|v| if alignment < 0.0 { -v } else { v }))
 }

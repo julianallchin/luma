@@ -65,3 +65,11 @@ persist only the clip override; the Pattern default remains unchanged. The full
 backend run passed 1,106 tests, with the same two rig construction failures and
 10 ignored tests. The v2-to-v3 migration is idempotent and retains old softness
 controls through the composable Soft Edges node. No live database was upgraded.
+
+Rendering follow-up: Major Axis accepts a perpendicular orientation hint by
+choosing the sign of its largest component deterministically. The exact edited
+Gasworks Park Chase (Major Axis, Wrap, custom Envelope) now produces a populated
+512×32 clip preview. Clip preview errors are displayed and delivered to the
+originating track tab. The native graph view shows an eight-second output
+heatmap using Pattern defaults, with a refresh control. Seven native graph and
+lighting workflow tests pass. Subgraph navigation remains unimplemented.

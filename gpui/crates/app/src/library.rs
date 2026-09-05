@@ -1709,6 +1709,20 @@ impl Library {
     ///
     /// Takes the graph by value, not by id: a live preview runs what the
     /// editor *holds*, which is routinely ahead of what the seam has saved.
+    pub fn graph_preview_image(
+        &self,
+        graph: &Graph,
+        track: &str,
+        venue: &str,
+    ) -> impl Future<Output = Result<luma_lib::models::patterns::AnnotationPreview, LibraryError>> + use<>
+    {
+        self.call(
+            "preview_graph_image",
+            json!({"graph":graph,"trackId":track,"venueId":venue,
+            "startTime":0.,"endTime":8.,"beatGrid":null}),
+        )
+    }
+
     pub fn run_graph(
         &self,
         graph: &Graph,
