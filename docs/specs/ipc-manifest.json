@@ -2004,6 +2004,19 @@
       "returns": "GraphDocument"
     },
     {
+      "args": [],
+      "domain": "composable_patterns",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
+        "line": 5
+      },
+      "name": "get_pattern_node_library",
+      "prose": {
+        "returns": "Value"
+      },
+      "returns": "Value"
+    },
+    {
       "args": [
         {
           "name": "venueId",
@@ -3668,6 +3681,24 @@
         ]
       },
       "returns": "AnnotationPreview"
+    },
+    {
+      "args": [
+        {
+          "name": "request",
+          "rust": "Value"
+        }
+      ],
+      "domain": "composable_patterns",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
+        "line": 9
+      },
+      "name": "preview_composable_pattern",
+      "prose": {
+        "returns": "Value"
+      },
+      "returns": "Value"
     },
     {
       "args": [
@@ -5612,6 +5643,11 @@
     },
     {
       "commandCount": 2,
+      "domain": "composable_patterns",
+      "handlers": "src-tauri/src/dispatch/handlers/composable_patterns.rs"
+    },
+    {
+      "commandCount": 2,
       "domain": "compositor",
       "handlers": "src-tauri/src/dispatch/handlers/compositor.rs"
     },
@@ -5940,8 +5976,8 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 223,
-    "domainCount": 33,
+    "commandCount": 225,
+    "domainCount": 34,
     "eventCount": 18,
     "unportedCount": 0
   },

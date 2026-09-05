@@ -208,8 +208,8 @@ impl Fixture {
             sqlx::query(
                 "INSERT INTO fixtures (id, venue_id, universe, address, num_channels,
                     manufacturer, model, mode_name, fixture_path, label, pos_x, pos_y, pos_z)
-                 VALUES (?, ?, 1, ?, 8, 'Chauvet', 'SlimPAR', '8-Channel',
-                    'Chauvet/SlimPAR.qxf', ?, ?, 0.0, 2.0)",
+                 VALUES (?, ?, 1, ?, 7, 'Chauvet', 'SlimPAR 64', '7ch',
+                    'Chauvet/Chauvet-SlimPAR-64.qxf', ?, ?, 0.0, 2.0)",
             )
             .bind(id)
             .bind(&self.venue_id)

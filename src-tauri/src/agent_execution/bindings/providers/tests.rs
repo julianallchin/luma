@@ -78,7 +78,15 @@ impl Fixture {
         let pool = test_pool(dir.path()).await;
         let storage = StorageRoot::from_path(dir.path().join("config"));
         let resource_root = dir.path().join("resources");
-        std::fs::create_dir_all(&resource_root).unwrap();
+        std::fs::create_dir_all(resource_root.join("Chauvet")).unwrap();
+        std::fs::write(
+            resource_root.join("Chauvet/SlimPAR.qxf"),
+            r#"<FixtureDefinition>
+            <Manufacturer>Chauvet</Manufacturer><Model>SlimPAR</Model><Type>LED Bar</Type>
+            <Mode Name="8-Channel"/>
+        </FixtureDefinition>"#,
+        )
+        .unwrap();
         let workspace = dir.path().join("workspace");
         // Unique per test: `services::groups` keeps a process-wide venue cache.
         let venue_id = format!("ven-{}", uuid::Uuid::new_v4());

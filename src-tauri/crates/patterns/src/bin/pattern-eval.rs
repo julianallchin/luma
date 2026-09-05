@@ -1,7 +1,7 @@
 //! JSON-in/JSON-out access to the same graph evaluator used by contract tests.
 //! Useful for inspecting a definition or rendering a saved score during the
 //! migration; never opens a user's library or sends device output.
-use luma_patterns::{standard_library, Cell, Frame, Library, MappingSpec, Score, Value};
+use luma_patterns::{standard_library, Cell, Frame, Library, PreparedPattern, Score, Value};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -30,7 +30,8 @@ enum Request {
         score: Score,
         clip: String,
         beats: Vec<f64>,
-        mapping: MappingSpec,
+        #[serde(default)]
+        inputs: BTreeMap<String, Value>,
         cells: Vec<Cell>,
     },
 }
@@ -56,42 +57,45 @@ fn run() -> Result<serde_json::Value, String> {
                 return Err("preview is limited to 10,000 frames".into());
             }
             let library = library.unwrap_or_else(standard_library);
+            let prepared = PreparedPattern::new(
+                &library,
+                &definition,
+                &inputs,
+                Frame {
+                    beat: clip_start,
+                    clip_start,
+                    seed,
+                    cells: &cells,
+                },
+            )
+            .map_err(|error| error.to_string())?;
             let frames = beats
                 .into_iter()
-                .map(|beat| {
-                    library.evaluate(
-                        &definition,
-                        &inputs,
-                        Frame {
-                            cells: &cells,
-                            beat,
-                            clip_start,
-                            seed,
-                        },
-                    )
-                })
+                .map(|beat| prepared.evaluate(beat))
                 .collect::<luma_patterns::Result<Vec<_>>>()
-                .map_err(|e| e.to_string())?;
+                .map_err(|error| error.to_string())?;
             serde_json::to_value(frames)
         }
         Request::PreviewScore {
             score,
             clip,
             beats,
-            mapping,
+            inputs,
             cells,
         } => {
             if beats.len() > 10000 {
                 return Err("preview is limited to 10,000 frames".into());
             }
-            let inputs = BTreeMap::from([("mapping".into(), Value::Mapping(mapping))]);
             let library = standard_library();
             score
                 .validate(&library)
                 .map_err(|error| error.to_string())?;
+            let prepared = score
+                .prepare_clip(&library, &clip, &inputs, &cells)
+                .map_err(|error| error.to_string())?;
             let frames = beats
                 .into_iter()
-                .map(|beat| score.evaluate_clip(&library, &clip, &inputs, beat, &cells))
+                .map(|beat| prepared.evaluate(beat))
                 .collect::<luma_patterns::Result<Vec<_>>>()
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(frames)

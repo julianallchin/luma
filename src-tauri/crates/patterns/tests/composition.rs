@@ -466,3 +466,58 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
         .0
         .contains("resolved cell values"));
 }
+
+#[test]
+fn prepared_graph_matches_interpreter_when_seeking_across_strokes() {
+    let library = standard_library();
+    for name in ["chase", "dissolve_flash"] {
+        let prepared = PreparedPattern::new(&library, name, &inputs(), frame(8.0)).unwrap();
+        // Resolve Mapping is baked, and nested graph wrappers aren't runtime steps.
+        assert_eq!(prepared.dynamic_step_count(), 4);
+        for beat in [8.0, 9.3, 11.0, 8.2, 15.999, 12.1] {
+            assert_eq!(
+                prepared.evaluate(beat).unwrap(),
+                library.evaluate(name, &inputs(), frame(beat)).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_clip_owns_its_overrides_and_obeys_the_score_span() {
+    let lib = standard_library();
+    let mut score = Score::default();
+    score
+        .insert_effect(&lib, "chase", "local", 8.0, 4.0)
+        .unwrap();
+    score
+        .clips
+        .get_mut("local")
+        .unwrap()
+        .inputs
+        .insert("width".into(), Value::Proportion(0.8));
+    let prepared = score
+        .prepare_clip(&lib, "local", &BTreeMap::new(), cells())
+        .unwrap();
+    let lit = prepared.evaluate(9.0).unwrap();
+    assert!(prepared.evaluate(7.99).unwrap().is_empty());
+    assert!(prepared.evaluate(12.0).unwrap().is_empty());
+    score
+        .clips
+        .get_mut("local")
+        .unwrap()
+        .inputs
+        .insert("width".into(), Value::Proportion(0.0));
+    assert_eq!(prepared.evaluate(9.0).unwrap(), lit);
+    assert_ne!(
+        score
+            .evaluate_clip(&lib, "local", &BTreeMap::new(), 9.0, cells())
+            .unwrap(),
+        lit
+    );
+    assert!(prepared.evaluate(f64::NAN).is_err());
+    assert!(score
+        .insert_effect(&lib, "chase", "overflow", f64::MAX, f64::MAX)
+        .is_err());
+    assert!(!score.clips.contains_key("overflow"));
+}

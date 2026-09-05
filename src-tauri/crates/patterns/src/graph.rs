@@ -77,10 +77,16 @@ pub struct Definition {
     pub body: Body,
 }
 impl Definition {
+    pub fn lighting_output(&self) -> Option<&str> {
+        let mut outputs = self
+            .outputs
+            .iter()
+            .filter(|(_, output)| output.value_type == ValueType::Lighting);
+        let (name, _) = outputs.next()?;
+        outputs.next().is_none().then_some(name.as_str())
+    }
     pub fn playable(&self) -> bool {
-        self.outputs
-            .values()
-            .any(|o| o.value_type == ValueType::Lighting)
+        self.lighting_output().is_some()
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -336,7 +342,7 @@ fn check_cycle(
     Ok(())
 }
 
-fn run_primitive(
+pub(crate) fn run_primitive(
     p: Primitive,
     i: &BTreeMap<String, Value>,
     frame: Frame,

@@ -538,6 +538,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // registers routes for frontend
             dispatch::adapter::get_node_types,
+            dispatch::adapter::get_pattern_node_library,
+            dispatch::adapter::preview_composable_pattern,
             dispatch::adapter::run_graph,
             dispatch::adapter::preview_pattern,
             dispatch::adapter::get_pattern,

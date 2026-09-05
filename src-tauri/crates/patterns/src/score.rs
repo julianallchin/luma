@@ -1,4 +1,6 @@
-use crate::{Binding, Body, Definition, Error, Frame, Graph, Library, Node, Result, Value};
+use crate::{
+    Binding, Body, Definition, Error, Frame, Graph, Library, Node, PreparedPattern, Result, Value,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -122,7 +124,11 @@ impl Score {
         start: f64,
         duration: f64,
     ) -> Result<()> {
-        if !start.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        if !start.is_finite()
+            || !duration.is_finite()
+            || duration <= 0.0
+            || !(start + duration).is_finite()
+        {
             return Err(Error(
                 "clip needs finite start and positive duration".into(),
             ));
@@ -205,8 +211,41 @@ impl Score {
         }
         Ok(library)
     }
-    /// Host inputs resolve venue-relative values (for example Mapping). Clip
-    /// overrides affect only their occurrence. They never mutate the definition.
+    /// Bind clip overrides once. The resulting program owns its inputs and
+    /// geometry and can render any frame, including a backwards seek.
+    pub fn prepare_clip(
+        &self,
+        base: &Library,
+        clip_id: &str,
+        host_inputs: &BTreeMap<String, Value>,
+        cells: &[crate::Cell],
+    ) -> Result<PreparedClip> {
+        self.validate(base)?;
+        let clip = self
+            .clips
+            .get(clip_id)
+            .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
+        let pattern = &self.patterns[&clip.pattern];
+        let library = self.library(base)?;
+        let mut inputs = host_inputs.clone();
+        inputs.extend(clip.inputs.clone());
+        let program = PreparedPattern::new(
+            &library,
+            &pattern.definition,
+            &inputs,
+            Frame {
+                cells,
+                beat: clip.start,
+                clip_start: clip.start,
+                seed: clip.seed,
+            },
+        )?;
+        Ok(PreparedClip {
+            program,
+            start: clip.start,
+            end: clip.start + clip.duration,
+        })
+    }
     pub fn evaluate_clip(
         &self,
         base: &Library,
@@ -215,37 +254,8 @@ impl Score {
         beat: f64,
         cells: &[crate::Cell],
     ) -> Result<BTreeMap<String, Value>> {
-        let clip = self
-            .clips
-            .get(clip_id)
-            .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
-        if !beat.is_finite()
-            || !clip.start.is_finite()
-            || !clip.duration.is_finite()
-            || clip.duration <= 0.0
-        {
-            return Err(Error("invalid clip time".into()));
-        }
-        let pattern = self
-            .patterns
-            .get(&clip.pattern)
-            .ok_or_else(|| Error(format!("unknown pattern {}", clip.pattern)))?;
-        let library = self.library(base)?;
-        let mut inputs = host_inputs.clone();
-        inputs.extend(clip.inputs.clone());
-        if beat < clip.start || beat >= clip.start + clip.duration {
-            return Ok(BTreeMap::new());
-        }
-        library.evaluate(
-            &pattern.definition,
-            &inputs,
-            Frame {
-                cells,
-                beat,
-                clip_start: clip.start,
-                seed: clip.seed,
-            },
-        )
+        self.prepare_clip(base, clip_id, host_inputs, cells)?
+            .evaluate(beat)
     }
 }
 
@@ -260,4 +270,22 @@ fn authored_value(value: &Value) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedClip {
+    program: PreparedPattern,
+    start: f64,
+    end: f64,
+}
+impl PreparedClip {
+    pub fn evaluate(&self, beat: f64) -> Result<BTreeMap<String, Value>> {
+        if !beat.is_finite() {
+            return Err(Error("musical time must be finite".into()));
+        }
+        if beat < self.start || beat >= self.end {
+            return Ok(BTreeMap::new());
+        }
+        self.program.evaluate(beat)
+    }
 }
