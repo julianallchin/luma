@@ -7,10 +7,10 @@
 //! Reference impls (math matched 1:1): legacy `node_graph/nodes/selection.rs`
 //! `get_attribute` (the `pos_*`/`rel_*`/`index`/`normalized_index`/
 //! `angular_*`/`circle_radius` attribute table) and `mirror`, plus
-//! `node_graph/circle_fit.rs` for the PCA+RANSAC angular fit.
+//! `luma_patterns::circle_fit` for the PCA+RANSAC angular fit.
 
 use super::KernelCtx;
-use crate::node_graph::circle_fit;
+use luma_patterns::circle_fit;
 use crate::node_graph::oklab::oklab_to_srgb;
 
 /// World axis selector. `pos_*`/`rel_*`/`mirror` all parameterize over this.
