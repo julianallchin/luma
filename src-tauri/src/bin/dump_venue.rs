@@ -21,10 +21,13 @@
 
 use std::path::PathBuf;
 
+use glam::{DMat4, DVec3};
 use luma_lib::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use luma_lib::models::groups::GroupOrigin;
 use luma_lib::services::groups::GroupSources;
 use luma_lib::storage::StorageRoot;
+use luma_scene::coords::data_pose_of_d;
+use luma_scene::venue::NodeSockets;
 use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::FromRow;
@@ -76,12 +79,52 @@ struct GroupDump {
     member_ids: Vec<String>,
 }
 
+/// One patched fixture as the grouping rule sees it: identity from the patch
+/// list, role from the definition, placement from the solve — in data space
+/// (+X stage right, +Y upstage, +Z up), metres.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FixtureFactDump {
+    id: String,
+    label: Option<String>,
+    manufacturer: String,
+    model: String,
+    role: String,
+    /// The venue-graph node the fixture hangs on; `None` for the patch tray.
+    parent: Option<String>,
+    position: Option<[f64; 3]>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SocketDump {
+    name: String,
+    position: [f64; 3],
+}
+
+/// One structure node of the solved venue, data space.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PieceDump {
+    node: String,
+    label: Option<String>,
+    kind: String,
+    catalog_ref: Option<String>,
+    parent: Option<String>,
+    position: [f64; 3],
+    sockets: Vec<SocketDump>,
+}
+
 #[derive(Serialize)]
 struct VenueDump {
     venue_id: String,
     venue_name: Option<String>,
     fixtures: Vec<FixtureRow>,
     groups: Vec<GroupDump>,
+    /// Solved facts: the same values `group_derivation` reads.
+    fixture_facts: Vec<FixtureFactDump>,
+    pieces: Vec<PieceDump>,
+    stage_centre_x: f64,
 }
 
 struct Args {
@@ -160,10 +203,10 @@ async fn main() -> Result<(), String> {
     let mut access = VenueAccess::<Read>::read(&pool, VenueResource::Venue(&args.venue_id))
         .await
         .map_err(|e| format!("venue not readable: {e}"))?;
-    let nodes = GroupSources::read(&fixtures_root, &mut access)
+    let sources = GroupSources::read(&fixtures_root, &mut access)
         .await
-        .map_err(|e| format!("group tree read failed: {e}"))?
-        .hierarchy();
+        .map_err(|e| format!("group tree read failed: {e}"))?;
+    let nodes = sources.hierarchy();
     let paths = luma_lib::services::groups::label_paths(&nodes);
     let groups: Vec<GroupDump> = nodes
         .iter()
@@ -182,11 +225,70 @@ async fn main() -> Result<(), String> {
         })
         .collect();
 
+    // The same solve the group tree came from, read a second time for the raw
+    // facts: the `fixtures` rows carry table positions (all zero), which say
+    // nothing about where anything hangs.
+    let solved = luma_lib::services::groups::solve(&fixtures_root, &mut access)
+        .await
+        .map_err(|e| format!("solve failed: {e}"))?;
+    let sockets = luma_lib::venue_graph::sockets(&fixtures_root)?;
+    let graph = luma_lib::venue_graph::graph(&mut access).await?;
+
+    let fixture_facts: Vec<FixtureFactDump> = solved
+        .facts
+        .fixtures
+        .iter()
+        .map(|fact| {
+            let row = fixtures.iter().find(|row| row.id == fact.id);
+            FixtureFactDump {
+                id: fact.id.clone(),
+                label: row.and_then(|row| row.label.clone()),
+                manufacturer: row.map(|row| row.manufacturer.clone()).unwrap_or_default(),
+                model: fact.model.clone(),
+                role: fact.role.as_str().to_string(),
+                parent: fact.placement.as_ref().map(|p| p.parent.clone()),
+                position: fact.placement.as_ref().map(|p| p.position),
+            }
+        })
+        .collect();
+
+    let fixture_ids: std::collections::HashSet<&str> =
+        fixtures.iter().map(|row| row.id.as_str()).collect();
+    let pieces: Vec<PieceDump> = solved
+        .venue
+        .poses()
+        .filter(|pose| !fixture_ids.contains(pose.node.as_str()))
+        .map(|pose| PieceDump {
+            node: pose.node.clone(),
+            label: pose.label.clone(),
+            kind: pose.kind.as_str().to_string(),
+            catalog_ref: pose.catalog_ref.clone(),
+            parent: pose.parent.clone(),
+            position: pose.data_pose().0,
+            sockets: graph
+                .node(&pose.node)
+                .map(|node| sockets.sockets(node))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|socket| SocketDump {
+                    name: socket.name,
+                    position: data_pose_of_d(
+                        pose.world * DMat4::from_translation(DVec3::from(socket.position)),
+                    )
+                    .0,
+                })
+                .collect(),
+        })
+        .collect();
+
     let dump = VenueDump {
         venue_id: args.venue_id.clone(),
         venue_name,
         fixtures,
         groups,
+        fixture_facts,
+        pieces,
+        stage_centre_x: solved.facts.stage_centre_x,
     };
     let json = serde_json::to_string_pretty(&dump).map_err(|e| format!("serialize failed: {e}"))?;
 
