@@ -2,6 +2,13 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-09-01] supabase has a project-wide 50 MB upload cap that overrides the `renders` bucket's 500 MB `file_size_limit`; both the object and TUS endpoints 413. the bucket limit is a lie until the project limit is raised.
+- [2026-09-01] `luma-record` prints its progress bar to stderr; pipe it through `tail` and you lose the ETA for the whole 20-minute render. run it unpiped or tee to a file.
+- [2026-09-01] the headless authoring agent on a 194-fixture rig got `venue.groups` = "unknown host method" from a stale `luma-mcp` and had no way to address left/right or per-portal subsets. rebuild the MCP binary before an authoring run.
+- [2026-09-01] `dump_venue` emits `posX/posY/posZ` straight from the `fixtures` table — all zeros for every venue — and nothing in the JSON says those are patch-table coordinates, not where anything hangs.
+- [2026-09-01] `GroupSources` owns the `Solved` it built but exposes no accessor, so a caller that wants facts as well as the tree solves the venue twice — the exact cost `Solved`'s doc comment exists to prevent.
+- [2026-09-01] a stale `luma-mcp` binary keeps serving the old binding after a rebuild of the lib; `luma.venue.groups` reported 0 on every venue for hours because the running server predated the commit. nothing warns that the MCP process is older than the source.
+- [2026-09-01] homebrew `python3.14` is broken on this machine: `pyexpat` links a symbol missing from `/usr/lib/libexpat.1.dylib`, so `import matplotlib` dies. use a `uv` venv on 3.12.
 - [2026-09-01] "groups" means two different things depending on which file you are in: `fixture_groups` (authored rows) and the derived tree from `group_derivation`, and nothing in either name says so — you can read `list_groups`, `get_grouped_hierarchy_with_path` and `list_group_tree` in one sitting and still not notice one of them never sees derivation.
 - [2026-09-01] there is no way to run the group derivation against a real venue in the app DB: the goldens build their venues in Rust test code, `dump_venue` only dumps the authored table, and the python facade has no group verb — diagnosing a live venue means reading the derivation and the sqlite rows side by side and reasoning it out.
 - [2026-09-01] the gpui patch page renders "No groups yet" both when the tree is empty and when `list_group_tree` errored, so the one surface that shows derived groups cannot distinguish "nothing to derive" from "the solve failed".
