@@ -17,6 +17,8 @@ pub struct AnnotationPreview {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternSummary {
+    /// None for a library Pattern; otherwise owned by this score.
+    pub score_id: Option<String>,
     pub id: String,
     pub uid: Option<String>,
     pub name: String,

@@ -49,7 +49,7 @@ const SCRIPT: &str = r#"
     until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
     app.frames(8, { waitMs: 30 });
 
-    const sheet = () => app.snapshot().find({ role: "card", label: "Args sheet" });
+    const sheet = () => app.snapshot().find({ role: "card", label: "Clip inputs" });
     const clip = (i) => app.snapshot().findAll({ role: "card", label: "Glow" })[i];
     const waveform = () => app.snapshot().find({ role: "card", label: "Waveform" });
 
@@ -66,7 +66,7 @@ const SCRIPT: &str = r#"
     until("the sheet populates", (s) =>
         s.findAll({ role: "input" }).some((n) => n.label.startsWith("intensity = ")));
     until("the slide to settle", (s) => {
-        const n = s.find({ role: "card", label: "Args sheet" });
+        const n = s.find({ role: "card", label: "Clip inputs" });
         return n !== undefined && n.bounds.width >= 319;
     });
     app.frames(4, { waitMs: 30 });
@@ -85,7 +85,7 @@ const SCRIPT: &str = r#"
     // which the sheet does not cover, clears the selection and the sheet goes.
     app.click(waveform());
     until("the sheet to leave", (s) =>
-        s.find({ role: "card", label: "Args sheet" }) === undefined);
+        s.find({ role: "card", label: "Clip inputs" }) === undefined);
     app.frames(6, { waitMs: 30 });
     const afterThroughClick = sheet();
 

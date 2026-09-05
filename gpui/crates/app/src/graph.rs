@@ -1482,6 +1482,19 @@ impl Scene {
                         })
                         .collect::<Vec<_>>()
                 };
+                // A connected input takes its value from its wire. Do not show
+                // a second editable-looking literal which evaluation ignores.
+                let params: Vec<_> = definition
+                    .into_iter()
+                    .flat_map(|d| d.params.iter())
+                    .filter(|param| {
+                        !instance
+                            .type_id
+                            .starts_with(luma_lib::node_graph::lighting::PREFIX)
+                            || !wired.contains(&(instance.id.as_str(), param.id.as_str(), false))
+                    })
+                    .cloned()
+                    .collect();
                 Card {
                     node_id: instance.id.clone().into(),
                     // A type the catalogue does not know still gets a card: it
@@ -1503,7 +1516,7 @@ impl Scene {
                         .unwrap_or_default(),
                     body: body_for(
                         &instance.type_id,
-                        definition.map(|d| d.params.as_slice()).unwrap_or_default(),
+                        &params,
                         &instance.params,
                         views.get(&instance.id),
                     ),

@@ -624,9 +624,10 @@ pub static TABLES: &[TableMeta] = &[
     TableMeta {
         name: "patterns",
         conflict_key: "id",
-        parents: &[],
+        parents: &[Parent::fk("scores", "score_id")],
         columns: &[
             "id",
+            "score_id",
             "uid",
             "name",
             "description",

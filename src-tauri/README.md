@@ -2,20 +2,20 @@
 
 ## Overview
 
-The backend is a Rust application built with Tauri that provides the core services for Luma. The entry point is `main.rs` which calls `luma_lib::run()` from `lib.rs`. The `lib.rs` file sets up the Tauri application, initializes the databases, registers command handlers, and starts background services.
+This is the shared Rust backend consumed by the native GPUI app and command-line tools. `lib.rs` exports the services; `gpui/crates/app/src/main.rs` launches the desktop app. The directory retains its historical name, but the Tauri interface and window entry point have been removed.
 
 ### Database / Services / Commands split
 
 - `models/` — data shapes only (no logic).
 - `database/local/` — pure SQL helpers on `&SqlitePool` (CRUD, no filesystem or side effects).
 - `services/` — business logic and orchestration (filesystem, workers, ArtNet, audio/DSP).
-- `commands/` — Tauri wrappers that pull state (`State<'_, Db>`, `AppHandle`, caches) and delegate to services.
+- `dispatch/` — host-neutral command signatures and handlers receiving `AppServices`.
 
 The local SQLite DB (`luma.db`) is initialized in `database::init_app_db()` and stored in the app config dir. Tables cover patterns, tracks (plus beats/roots/stems/waveforms), scores, fixtures, venues, and implementations.
 
 ### Tracks
 
-Service: orchestrates imports (hash/copy, lofty metadata, album art), storage layout, and workers (beats, roots, stems, waveforms, mel spec) with mutex guards to avoid duplicate work. DB: `database/local/tracks.rs` holds only the queries/upserts. Commands are declared in `dispatch/mod.rs`; host-neutral bodies in `dispatch/handlers/tracks.rs` receive `AppServices` capabilities and both Tauri and GPUI use that same path.
+Service: orchestrates imports (hash/copy, lofty metadata, album art), storage layout, and workers (beats, roots, stems, waveforms, mel spec) with mutex guards to avoid duplicate work. DB: `database/local/tracks.rs` holds only the queries/upserts. Commands are declared in `dispatch/mod.rs`; host-neutral bodies in `dispatch/handlers/tracks.rs` receive `AppServices` capabilities and GPUI and backend tools use that same path.
 
 ### Patterns
 

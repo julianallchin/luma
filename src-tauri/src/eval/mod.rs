@@ -9,6 +9,7 @@ pub mod compile;
 pub mod composite;
 pub mod context;
 pub mod graph_run;
+pub mod lighting;
 pub mod ops;
 pub mod scene;
 
@@ -99,6 +100,7 @@ pub use crate::models::node_graph::BlendMode;
 /// jump-table dispatch, and a backend-agnostic schema (the GPU door).
 #[derive(Clone, Debug)]
 pub enum OpKind {
+    Lighting(std::sync::Arc<lighting::Program>),
     Math(ops::math::MathOp),
     Spatial(ops::spatial::SpatialOp),
     Signal(ops::signals::SignalOp),
@@ -412,6 +414,7 @@ fn run_op(op: &Op, plan: &Plan, times: &[f32], scratch: &mut Arena) {
 
 fn dispatch(kind: &OpKind, ctx: &KernelCtx) -> Vec<f32> {
     match kind {
+        OpKind::Lighting(program) => program.run(ctx),
         OpKind::Math(o) => ops::math::run_math(o, ctx),
         OpKind::Spatial(o) => ops::spatial::run_spatial(o, ctx),
         OpKind::Signal(o) => ops::signals::run_signals(o, ctx),

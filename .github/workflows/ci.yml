@@ -2,7 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
+  push:
+    branches: [dev]
   workflow_dispatch:
 
 jobs:
@@ -29,4 +31,10 @@ jobs:
         working-directory: gpui
       - name: Test scene model
         run: cargo test -p luma-scene
+        working-directory: gpui
+      - name: Test composable pattern engine
+        run: cargo test -p luma-patterns
+        working-directory: gpui
+      - name: Test native pattern workflow
+        run: cargo test -p gpui-agent --test headless lighting_patterns
         working-directory: gpui

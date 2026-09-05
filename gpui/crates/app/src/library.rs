@@ -1585,6 +1585,29 @@ impl Library {
         self.call("list_patterns", json!({}))
     }
 
+    pub fn copy_pattern_to_library(
+        &self,
+        pattern_id: &str,
+        request_id: &str,
+    ) -> impl Future<Output = Result<PatternSummary, LibraryError>> + use<> {
+        self.call(
+            "copy_pattern_to_library",
+            json!({"patternId":pattern_id,"requestId":request_id}),
+        )
+    }
+
+    pub fn create_lighting_pattern(
+        &self,
+        effect: &str,
+        score_id: &str,
+        request_id: &str,
+    ) -> impl Future<Output = Result<PatternSummary, LibraryError>> + use<> {
+        self.call(
+            "create_lighting_pattern",
+            json!({"effect":effect,"scoreId":score_id,"requestId":request_id}),
+        )
+    }
+
     /// One pattern's arg definitions, resolved against a venue — the schema
     /// the args sheet renders from. Venue-resolved on purpose, unlike
     /// [`Self::pattern_graph`]: a venue can pin a different implementation of

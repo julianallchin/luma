@@ -3131,3 +3131,81 @@ async fn deleting_a_venue_thread_leaves_a_receipt_with_no_document() {
             .unwrap();
     assert_eq!(document_id, None);
 }
+
+#[tokio::test]
+async fn score_local_pattern_creation_scope_and_archive_are_durable() {
+    let owner = "lighting-owner";
+    let fixture = Fixture::signed_in(owner).await;
+    sqlx::query("INSERT INTO tracks(id,uid,track_hash,file_path) VALUES('track',?,'lighting-track','/track')").bind(owner).execute(&fixture.pool).await.unwrap();
+    sqlx::query("INSERT INTO venues(id,uid,name) VALUES('venue',?,'Venue')")
+        .bind(owner)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    for id in ["score", "other"] {
+        sqlx::query(
+            "INSERT INTO scores(id,uid,track_id,venue_id,name) VALUES(?,?,'track','venue','Score')",
+        )
+        .bind(id)
+        .bind(owner)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    }
+    let graph = crate::node_graph::lighting::pattern("dissolve_flash").unwrap();
+    let pattern = fixture
+        .authored
+        .create_pattern_with_graph(
+            &fixture.pool,
+            Some(owner),
+            "0637f8d9-e774-48c5-9a55-3eecaf06f849",
+            "Dissolve Flash".into(),
+            None,
+            Some(graph.clone()),
+            Some("score"),
+        )
+        .await
+        .unwrap();
+    let replay = fixture
+        .authored
+        .create_pattern_with_graph(
+            &fixture.pool,
+            Some(owner),
+            "0637f8d9-e774-48c5-9a55-3eecaf06f849",
+            "Dissolve Flash".into(),
+            None,
+            Some(graph),
+            Some("score"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pattern.id, replay.id);
+    assert_eq!(pattern.score_id.as_deref(), Some("score"));
+    let refused=sqlx::query("INSERT INTO track_scores(id,uid,score_id,pattern_id,start_time,end_time,z_index,blend_mode,args_json) VALUES('bad',?,'other',?,0,1,0,'replace','{}')").bind(owner).bind(&pattern.id).execute(&fixture.pool).await;
+    assert!(refused
+        .unwrap_err()
+        .to_string()
+        .contains("belongs to another score"));
+    fixture
+        .authored
+        .archive_score(&fixture.pool, Some(owner), "score")
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM patterns WHERE id=?")
+        .bind(&pattern.id)
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let archived: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM authored_documents WHERE subject_id=? AND archived_at IS NOT NULL",
+    )
+    .bind(&pattern.id)
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        archived, 1,
+        "deleting a score must preserve its local graph history"
+    );
+}

@@ -221,6 +221,9 @@ pub struct Editor {
     loop_region: Option<(f64, f64)>,
     /// The open insertion menu, if a right-click put one up.
     menu: Option<InsertMenu>,
+    menu_query: String,
+    menu_search: Entity<luma_ui::text_input::TextInput>,
+    _menu_subscription: Subscription,
     /// The menu's list scroll, so the keyboard cursor can pull an off-screen
     /// pattern into view — a cursor past the clip edge otherwise commits a row
     /// the user cannot see.
@@ -533,6 +536,33 @@ struct InsertMenu {
     /// a keyboard" means, and there is no second notion of focus for the two
     /// to disagree over.
     active: usize,
+}
+
+#[derive(Clone)]
+enum InsertChoice {
+    Node { effect: String, name: String },
+    Pattern(PatternSummary),
+}
+impl InsertChoice {
+    fn name(&self) -> &str {
+        match self {
+            Self::Node { name, .. } => name,
+            Self::Pattern(p) => &p.name,
+        }
+    }
+    fn id(&self) -> String {
+        match self {
+            Self::Node { effect, .. } => format!("node-{effect}"),
+            Self::Pattern(p) => p.id.clone(),
+        }
+    }
+    fn origin(&self) -> &str {
+        match self {
+            Self::Node { .. } => "Lighting node",
+            Self::Pattern(p) if p.score_id.is_some() => "This score",
+            Self::Pattern(_) => "Library",
+        }
+    }
 }
 
 /// The selection cursor: a point in time, or a rectangle of time × lanes.
@@ -1688,7 +1718,7 @@ impl Editor {
     /// web's is — a menu that wrapped would commit the wrong pattern to a hand
     /// that held the key a beat too long.
     fn step_menu(&mut self, down: bool) {
-        let last = self.patterns.len().saturating_sub(1);
+        let last = self.insertion_choices().len().saturating_sub(1);
         let Some(menu) = self.menu.as_mut() else {
             return;
         };
@@ -1701,9 +1731,39 @@ impl Editor {
     }
 
     /// The pattern `Enter` would put down, with the insertion it belongs to.
-    fn menu_choice(&self) -> Option<(InsertMenu, PatternSummary)> {
+    fn insertion_choices(&self) -> Vec<InsertChoice> {
+        let query = self.menu_query.to_lowercase();
+        let mut choices: Vec<_> = luma_lib::node_graph::lighting::node_types()
+            .into_iter()
+            .filter_map(|node| {
+                let effect = node
+                    .id
+                    .strip_prefix(luma_lib::node_graph::lighting::PREFIX)?;
+                luma_lib::node_graph::lighting::pattern(effect).ok()?;
+                Some(InsertChoice::Node {
+                    effect: effect.to_string(),
+                    name: node.name,
+                })
+            })
+            .collect();
+        choices.extend(
+            self.patterns
+                .iter()
+                .filter(|pattern| {
+                    pattern.score_id.is_none()
+                        || pattern.score_id.as_deref()
+                            == self.score.as_ref().map(|score| score.id.as_str())
+                })
+                .cloned()
+                .map(InsertChoice::Pattern),
+        );
+        choices.retain(|choice| choice.name().to_lowercase().contains(&query));
+        choices
+    }
+
+    fn menu_choice(&self) -> Option<(InsertMenu, InsertChoice)> {
         let menu = self.menu?;
-        Some((menu, self.patterns.get(menu.active)?.clone()))
+        Some((menu, self.insertion_choices().get(menu.active)?.clone()))
     }
 
     /// Put a clip of `pattern` where `menu` says.
@@ -1955,6 +2015,22 @@ impl Luma {
         let patterns = self.library.patterns();
         let audio = self.library.load_audio(track_id);
 
+        let menu_search = cx.new(|cx| {
+            luma_ui::text_input::TextInput::search("Search lighting nodes and Patterns…", cx)
+        });
+        let search_target = target.clone();
+        let menu_subscription = cx.subscribe(&menu_search, move |this, field, event, cx| {
+            if event == &luma_ui::text_input::Event::Edited {
+                let query = field.read(cx).text().to_string();
+                this.edit_track_tab(&search_target, cx, |editor| {
+                    editor.menu_query = query;
+                    if let Some(menu) = editor.menu.as_mut() {
+                        menu.active = 0;
+                    }
+                    editor.menu_scroll.scroll_to_item(0);
+                });
+            }
+        });
         let state = Box::new(Editor {
             track_id: track.id.clone(),
             track_name: track_title(&track),
@@ -1974,6 +2050,9 @@ impl Luma {
             clipboard: None,
             loop_region: None,
             menu: None,
+            menu_query: String::new(),
+            menu_search,
+            _menu_subscription: menu_subscription,
             menu_scroll: ScrollHandle::new(),
             selected: Vec::new(),
             cursor: None,
@@ -2563,13 +2642,47 @@ impl Luma {
     }
 
     /// Commit an insertion on the pattern the pointer chose.
-    fn insert_pattern(
-        &mut self,
-        menu: InsertMenu,
-        pattern: PatternSummary,
-        cx: &mut Context<Self>,
-    ) {
-        self.track_command(|editor| editor.insert(menu, &pattern), cx);
+    fn insert_pattern(&mut self, menu: InsertMenu, choice: InsertChoice, cx: &mut Context<Self>) {
+        match choice {
+            InsertChoice::Pattern(pattern) => {
+                self.track_command(|editor| editor.insert(menu, &pattern), cx)
+            }
+            InsertChoice::Node { effect, .. } => {
+                let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+                    return;
+                };
+                let Some(score) = editor.score.as_ref() else {
+                    return;
+                };
+                let score_id = score.id.clone();
+                let target = Target::TrackEditor {
+                    track: editor.track_id.to_string(),
+                    venue: editor.venue_id.clone(),
+                };
+                let pending = self.library.create_lighting_pattern(
+                    &effect,
+                    &score_id,
+                    &uuid::Uuid::new_v4().to_string(),
+                );
+                self.with_track_editor(cx, |editor| editor.menu = None);
+                cx.spawn(async move |this,cx| {
+                    let result=pending.await;
+                    this.update(cx,|this,cx| {
+                        let mut insert=None;
+                        this.edit_track_tab(&target,cx,|editor|{
+                            if editor.score.as_ref().map(|score|score.id.as_str())!=Some(score_id.as_str()){return;}
+                            match result { Ok(pattern)=>{Rc::make_mut(&mut editor.patterns).push(pattern.clone());insert=Some(pattern);},Err(error)=>editor.error=Some(error.to_string()) }
+                        });
+                        // Publish through the normal timeline transaction and undo history.
+                        if let Some(pattern)=insert {
+                            if matches!(this.workspace.active_body(),Some(Body::TrackEditor(editor)) if editor.score.as_ref().is_some_and(|score|score.id==score_id)) {
+                                this.track_command(|editor|editor.insert(menu,&pattern),cx);
+                            }
+                        }
+                    }).ok();
+                }).detach();
+            }
+        }
     }
 
     /// A press on the canvas: take the playhead, a clip, or a sweep of empty
@@ -3498,6 +3611,7 @@ pub fn track_editor(
 /// insertion it commits is identical.
 fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
     div()
+        .key_context("PatternInsert")
         .absolute()
         // Opaque to the pointer: the canvas listens for presses over its whole
         // hitbox and dismisses the menu on any of them, and a *Normal* hitbox
@@ -3506,7 +3620,7 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
         .occlude()
         .top_0()
         .right_0()
-        .w(px(220.))
+        .w(px(320.))
         .max_h_full()
         .flex()
         .flex_col()
@@ -3515,6 +3629,15 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
         .border_1()
         .border_color(ladder::control_border())
         .child(luma_ui::silkscreen("INSERT PATTERN".to_string()).into_any_element())
+        .child(
+            div()
+                .flex_none()
+                .h(px(36.))
+                .px(px(8.))
+                .py(px(6.))
+                .child(state.menu_search.clone())
+                .agent_node(Role::Input, "Search lighting nodes and Patterns…"),
+        )
         // A real scroller under the drawer's header, gutters outside it
         // (`float::viewport`'s contract): the library outgrows the canvas, and
         // `step_menu`'s `scroll_to_item` keeps the row `Enter` would commit on
@@ -3538,17 +3661,21 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
                         .flex_initial()
                         .overflow_y_scroll()
                         .track_scroll(&state.menu_scroll)
-                        .children(state.patterns.iter().enumerate().map(|(index, pattern)| {
-                            let app = app.clone();
-                            let chosen = pattern.clone();
-                            let name: SharedString = pattern.name.clone().into();
-                            // The active row wears the ladder's hover fill, so
-                            // what `Enter` would commit is the row a pointer
-                            // would be over — one affordance for "this one",
-                            // whichever moved it there.
-                            luma_ui::luma_button(&pattern.name, Enabled::Yes)
+                        .children(state.insertion_choices().iter().enumerate().map(
+                            |(index, pattern)| {
+                                let app = app.clone();
+                                let chosen = pattern.clone();
+                                let name: SharedString = pattern.name().to_string().into();
+                                // The active row wears the ladder's hover fill, so
+                                // what `Enter` would commit is the row a pointer
+                                // would be over — one affordance for "this one",
+                                // whichever moved it there.
+                                luma_ui::luma_button(
+                                    &format!("{} · {}", pattern.name(), pattern.origin()),
+                                    Enabled::Yes,
+                                )
                                 .when(index == target.active, |el| el.bg(ladder::hover()))
-                                .id(SharedString::from(format!("insert-{}", pattern.id)))
+                                .id(SharedString::from(format!("insert-{}", pattern.id())))
                                 .w_full()
                                 .on_click(move |_, _, cx| {
                                     let chosen = chosen.clone();
@@ -3557,7 +3684,8 @@ fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
                                     });
                                 })
                                 .agent_node(Role::Row, name)
-                        })),
+                            },
+                        )),
                 ),
         )
 }
@@ -3942,7 +4070,14 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
         // left click is the pointer contract in `timeline_press`.
         match (event.button, event.click_count) {
             (MouseButton::Right, _) => {
-                pressed.update(cx, |this, cx| this.timeline_insert_menu(at, cx));
+                pressed.update(cx, |this, cx| {
+                    this.timeline_insert_menu(at, cx);
+                    if let Some(Body::TrackEditor(editor)) = this.workspace.active_body() {
+                        if editor.menu.is_some() {
+                            editor.menu_search.focus_handle(cx).focus(window, cx);
+                        }
+                    }
+                });
             }
             (MouseButton::Left, 2) => {
                 pressed.update(cx, |this, cx| this.timeline_open_pattern(at, cx));

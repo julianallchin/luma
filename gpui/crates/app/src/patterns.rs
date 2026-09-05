@@ -47,7 +47,13 @@ impl Luma {
                 if let Some(crate::shell::Overlay::Patterns(state)) = this.overlay.open_mut() {
                     state.loaded = true;
                     match result {
-                        Ok(rows) => state.rows = rows.into(),
+                        Ok(rows) => {
+                            state.rows = rows
+                                .into_iter()
+                                .filter(|p| p.score_id.is_none())
+                                .collect::<Vec<_>>()
+                                .into()
+                        }
                         Err(error) => state.error = Some(error.to_string()),
                     }
                     cx.notify();

@@ -17,5 +17,6 @@ pub fn get_node_types() -> Vec<NodeTypeDef> {
     types.extend(spatial::get_node_types());
     types.extend(apply::get_node_types());
     types.extend(analysis::get_node_types());
+    types.extend(super::lighting::node_types());
     types
 }

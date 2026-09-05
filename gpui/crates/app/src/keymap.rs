@@ -238,6 +238,10 @@ pub(crate) fn init(cx: &mut App) {
     // fields for the usual reason: `=` and `-` are characters.
     let viewing = format!("{} && !{}", context::VISUALIZER, context::TEXT_INPUT);
     let mut bindings = vec![
+        KeyBinding::new("down", NextInsertOption, Some("PatternInsert")),
+        KeyBinding::new("up", PrevInsertOption, Some("PatternInsert")),
+        KeyBinding::new("enter", CommitInsertOption, Some("PatternInsert")),
+        KeyBinding::new("escape", DismissOverlay, Some("PatternInsert")),
         KeyBinding::new("space", PlayPause, Some(&editing)),
         KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
         KeyBinding::new("backspace", DeleteNodes, Some(&graphing)),

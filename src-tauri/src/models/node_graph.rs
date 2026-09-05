@@ -7,6 +7,17 @@ use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PortType {
+    Beats,
+    Proportion,
+    Position,
+    Boolean,
+    Mapping,
+    Coordinates,
+    Boundary,
+    Envelope,
+    Mask,
+    Lighting,
+
     Intensity,
     Audio,
     BeatGrid,
@@ -26,6 +37,16 @@ impl PortType {
     #[must_use]
     pub fn key(&self) -> &'static str {
         match self {
+            PortType::Beats => "Beats",
+            PortType::Proportion => "Proportion",
+            PortType::Position => "Position",
+            PortType::Boolean => "Boolean",
+            PortType::Mapping => "Mapping",
+            PortType::Coordinates => "Coordinates",
+            PortType::Boundary => "Boundary",
+            PortType::Envelope => "Envelope",
+            PortType::Mask => "Mask",
+            PortType::Lighting => "Lighting",
             PortType::Intensity => "Intensity",
             PortType::Audio => "Audio",
             PortType::BeatGrid => "BeatGrid",
@@ -82,6 +103,13 @@ impl ParamType {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternArgType {
+    Beats,
+    Proportion,
+    Position,
+    Boolean,
+    Mapping,
+    Boundary,
+
     Color,
     Scalar,
     Selection,

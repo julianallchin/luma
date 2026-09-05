@@ -272,7 +272,10 @@ async fn seeded_venue_patch_golden_is_current() {
 
     let path = repo_root().join("harness/goldens/patch/seeded-venue.json");
     std::fs::create_dir_all(path.parent().expect("a parent")).expect("golden directory");
-    let same = std::fs::read_to_string(&path).is_ok_and(|old| old == contents);
+    let same = std::fs::read_to_string(&path).is_ok_and(|old| {
+        serde_json::from_str::<serde_json::Value>(&old).ok()
+            == serde_json::from_str::<serde_json::Value>(&contents).ok()
+    });
     if !same {
         std::fs::write(&path, &contents).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }

@@ -432,16 +432,23 @@ pub fn compile_pattern(
 
     let grid = ctx.beat_grid.as_ref();
     let onsets = Some(&ctx.drum_onsets);
-    for node in topo_order(nodes, edges)? {
-        let lc = LowerCtx {
-            node,
-            edges,
-            args,
-            by_id: &by_id,
-            grid,
-            onsets,
-        };
-        lower_node(&lc, &mut low)?;
+    if nodes
+        .iter()
+        .any(|n| n.type_id.starts_with(crate::node_graph::lighting::PREFIX))
+    {
+        super::lighting::lower(nodes, edges, args, &ctx, &primitive_ids, &mut low)?;
+    } else {
+        for node in topo_order(nodes, edges)? {
+            let lc = LowerCtx {
+                node,
+                edges,
+                args,
+                by_id: &by_id,
+                grid,
+                onsets,
+            };
+            lower_node(&lc, &mut low)?;
+        }
     }
 
     let mut plan = Plan {
@@ -807,6 +814,24 @@ mod tests {
                     definition.id,
                     param.id
                 );
+                if let Some(id) = definition
+                    .id
+                    .strip_prefix(crate::node_graph::lighting::PREFIX)
+                {
+                    let library = luma_patterns::standard_library();
+                    let kind = library.definitions[id].inputs[&param.id].value_type;
+                    for option in options {
+                        crate::node_graph::lighting::decode(kind, &Value::from(option.id.clone()))
+                            .unwrap();
+                    }
+                    assert!(crate::node_graph::lighting::decode(
+                        kind,
+                        &Value::from("__no_such_option__")
+                    )
+                    .is_err());
+                    checked += 1;
+                    continue;
+                }
                 for option in options {
                     if let Err(e) = lower_alone(&definition, &param.id, &option.id) {
                         panic!(

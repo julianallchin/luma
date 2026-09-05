@@ -145,7 +145,7 @@ pub fn pattern_args_def(args: &[PatternArgDef]) -> Option<NodeTypeDef> {
     }
     Some(NodeTypeDef {
         id: "pattern_args".to_string(),
-        name: "Pattern Args".to_string(),
+        name: "Inputs".to_string(),
         description: None,
         category: Some("Input".to_string()),
         inputs: Vec::new(),
@@ -155,6 +155,12 @@ pub fn pattern_args_def(args: &[PatternArgDef]) -> Option<NodeTypeDef> {
                 id: arg.id.clone(),
                 name: arg.name.clone(),
                 port_type: match arg.arg_type {
+                    PatternArgType::Beats => PortType::Beats,
+                    PatternArgType::Proportion => PortType::Proportion,
+                    PatternArgType::Position => PortType::Position,
+                    PatternArgType::Boolean => PortType::Boolean,
+                    PatternArgType::Mapping => PortType::Mapping,
+                    PatternArgType::Boundary => PortType::Boundary,
                     PatternArgType::Selection => PortType::Selection,
                     PatternArgType::Palette | PatternArgType::Gradient => PortType::Stops,
                     PatternArgType::Color | PatternArgType::Scalar => PortType::Signal,

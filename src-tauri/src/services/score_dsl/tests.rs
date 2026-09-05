@@ -1006,6 +1006,7 @@ fn cyberdrum_fixture_roundtrips_all_109_clips_and_is_string_stable() {
         .unwrap()
         .iter()
         .map(|value| PatternSummary {
+            score_id: None,
             id: value["id"].to_string(),
             uid: None,
             name: value["name"].as_str().unwrap().to_owned(),

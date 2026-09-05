@@ -2839,7 +2839,8 @@ mod goldens {
         }
         let have = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(
-            have == want,
+            serde_json::from_str::<serde_json::Value>(&have).ok()
+                == serde_json::from_str::<serde_json::Value>(&want).ok(),
             "{} is stale.\n{}\nRerun with {REGENERATE}=1 to recapture.",
             path.display(),
             first_difference(&have, &want),

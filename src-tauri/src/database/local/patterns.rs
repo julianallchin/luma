@@ -3,7 +3,7 @@ use sqlx::SqliteConnection;
 use crate::models::patterns::PatternSummary;
 
 const PATTERN_SUMMARY_SELECT: &str =
-    "SELECT pattern.id, pattern.uid, pattern.name, pattern.description,
+    "SELECT pattern.id, pattern.uid, pattern.score_id, pattern.name, pattern.description,
             pattern.category_name, pattern.created_at, pattern.updated_at,
             pattern.is_verified, pattern.author_name, pattern.forked_from_id
      FROM patterns pattern

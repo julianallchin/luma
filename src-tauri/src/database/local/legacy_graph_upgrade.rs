@@ -313,7 +313,15 @@ fn upgrade_argument_values(implementation_id: &str, graph: &mut Graph) -> Result
                     changed = true;
                 }
             }
-            PatternArgType::Scalar | PatternArgType::Palette | PatternArgType::Gradient => {}
+            PatternArgType::Scalar
+            | PatternArgType::Palette
+            | PatternArgType::Gradient
+            | PatternArgType::Beats
+            | PatternArgType::Proportion
+            | PatternArgType::Position
+            | PatternArgType::Boolean
+            | PatternArgType::Mapping
+            | PatternArgType::Boundary => {}
         }
     }
     Ok(changed)
