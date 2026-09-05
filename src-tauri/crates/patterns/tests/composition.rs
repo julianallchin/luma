@@ -634,3 +634,31 @@ fn spatial_envelope_is_signed_and_wraps_without_mirroring() {
     assert!((result["a"] - ramp.sample(0.5)).abs() < 1e-9);
     assert_eq!(result["a"], result["d"]);
 }
+
+#[test]
+fn a_perpendicular_major_axis_hint_still_maps_a_horizontal_rig() {
+    let cells: Vec<_> = (0..5)
+        .map(|i| Cell {
+            id: i.to_string(),
+            group: "rig".into(),
+            world: [i as f64, 0., 2.],
+            uvz: [i as f64, 0., 2.],
+        })
+        .collect();
+    let map = MappingSpec {
+        source: MappingSource::MajorAxis {
+            toward: [0., 0., 1.],
+        },
+        per_group: false,
+        reverse: false,
+    }
+    .resolve(&cells)
+    .unwrap();
+    assert_eq!(
+        map.coordinates
+            .iter()
+            .map(|c| c.position)
+            .collect::<Vec<_>>(),
+        vec![0., 0.25, 0.5, 0.75, 1.]
+    );
+}

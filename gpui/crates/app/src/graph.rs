@@ -98,10 +98,7 @@ use crate::Luma;
 #[derive(Clone)]
 pub(crate) struct TrackContext {
     pub(crate) track: String,
-    /// Unread until the preview runner lands (phase 4b) — carried from day
-    /// one because `run_graph` needs it and an editor that resolved only half
-    /// its context would have to go asking again at run time.
-    #[allow(dead_code)]
+    /// Venue supplying the heads for the output preview.
     pub(crate) venue: String,
     /// For the toolbar readout — ids are for the seam, not the eye.
     pub(crate) track_name: SharedString,
@@ -166,6 +163,10 @@ pub struct Editor {
     /// behind what is on screen. Flushed when the save returns.
     dirty: bool,
     error: Option<String>,
+    preview: Option<std::sync::Arc<gpui::RenderImage>>,
+    preview_error: Option<String>,
+    preview_generation: u64,
+    preview_running: bool,
 }
 
 /// The view-data store: the latest [`Signal`] each view node has been handed,
@@ -568,6 +569,7 @@ impl Luma {
         if self.workspace.body_mut(&target).is_some() {
             self.edit_graph_tab(&target, cx, |editor| editor.context = context);
             self.workspace.select(&target);
+            self.refresh_graph_preview(&target, cx);
             cx.notify();
             return;
         }
@@ -593,6 +595,10 @@ impl Luma {
             saving: false,
             dirty: false,
             error: None,
+            preview: None,
+            preview_error: None,
+            preview_generation: 0,
+            preview_running: false,
         });
         self.open_tab(target.clone(), move || TabBody::Graph(state), cx);
         cx.spawn(async move |this, cx| {
@@ -618,6 +624,61 @@ impl Luma {
                     }
                     (Err(error), _) | (_, Err(error)) => editor.error = Some(error.to_string()),
                 });
+                this.refresh_graph_preview(&target, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn refresh_graph_preview(&mut self, target: &Target, cx: &mut Context<Self>) {
+        let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
+            return;
+        };
+        let Some(document) = &editor.document else {
+            return;
+        };
+        editor.preview_generation += 1;
+        let generation = editor.preview_generation;
+        editor.preview_running = true;
+        let pending = self.library.graph_preview_image(
+            &document.graph,
+            &editor.context.track,
+            &editor.context.venue,
+        );
+        let target = target.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await.map(|row| {
+                let mut pixels = row.pixels;
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+                image::RgbaImage::from_raw(row.width, row.height, pixels).map(|image| {
+                    std::sync::Arc::new(gpui::RenderImage::new([image::Frame::new(image)]))
+                })
+            });
+            this.update(cx, |this, cx| {
+                this.edit_graph_tab(&target, cx, |editor| {
+                    if generation != editor.preview_generation {
+                        return;
+                    }
+                    editor.preview_running = false;
+                    match result {
+                        Ok(Some(image)) => {
+                            editor.preview = Some(image);
+                            editor.preview_error = None;
+                        }
+                        Ok(None) => {
+                            editor.preview = None;
+                            editor.preview_error = Some("Preview returned an invalid image".into());
+                        }
+                        Err(error) => {
+                            editor.preview = None;
+                            editor.preview_error = Some(error.to_string());
+                        }
+                    }
+                })
             })
             .ok();
         })
@@ -2137,12 +2198,48 @@ pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
             }
             (None, Some(_)) => canvas_element(state, app).into_any_element(),
         })
+        .child(
+            div()
+                .flex_none()
+                .w_full()
+                .px(px(16.))
+                .py(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .h(px(120.))
+                .overflow_hidden()
+                .child(luma_ui::silkscreen(
+                    "PATTERN DEFAULTS · 0–8 SECONDS · TIME →".to_string(),
+                ))
+                .when_some(state.preview.clone(), |el, image| {
+                    el.child(
+                        gpui::img(image)
+                            .w_full()
+                            .h(px(80.))
+                            .agent_node(Role::Card, "Pattern output preview"),
+                    )
+                })
+                .when_some(state.preview_error.clone(), |el, error| {
+                    el.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(ladder::danger())
+                            .child(error.clone())
+                            .agent_node(Role::Text, error),
+                    )
+                }),
+        )
 }
 
 /// What is open, how big it is, and whether a write is in the air. Nothing
 /// here is a control the canvas needs — the canvas is driven by the pointer —
 /// so the strip stays a readout. Closing lives on the tab's chip.
-fn toolbar(state: &Editor, _app: &Entity<Luma>) -> Div {
+fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
+    let preview_app = app.clone();
+    let target = Target::Graph {
+        pattern: state.pattern.id.clone(),
+    };
     let nodes = state.scene.borrow().cards.len();
     div()
         .flex()
@@ -2161,6 +2258,20 @@ fn toolbar(state: &Editor, _app: &Entity<Luma>) -> Div {
                 .agent_node(Role::Text, state.pattern.name.clone()),
         )
         .child(luma_ui::silkscreen(format!("{nodes} NODES")))
+        .child(
+            luma_ui::luma_button(
+                if state.preview_running {
+                    "Rendering…"
+                } else {
+                    "Refresh preview"
+                },
+                luma_ui::Enabled::Yes,
+            )
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                preview_app.update(cx, |this, cx| this.refresh_graph_preview(&target, cx))
+            })
+            .agent_node(Role::Button, "Refresh preview"),
+        )
         // The resolved context, shown: implicit context that silently changes
         // what the plots mean is obscurity; a context that is never shown is
         // worse than none (§6).

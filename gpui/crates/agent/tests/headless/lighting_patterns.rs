@@ -76,6 +76,8 @@ fn edit_a_chase_envelope_per_clip() {
         app.frames(12,{waitMs:80});
         app.click(app.snapshot().find({role:"button",label:"Save copy to library"}));
         app.frames(24,{waitMs:80});
+        app.click(app.snapshot().find({role:"card",label:"Chase"}),{count:2});
+        until("rendered graph output",s=>s.find({role:"card",label:"Pattern output preview"}));
         ({shown,fields:inputs.findAll({role:"input"}).map(n=>n.label),errors:app.snapshot().findAll({role:"text"}).map(n=>n.label).filter(n=>n.includes("failed")||n.includes("invalid"))})
     "#),Duration::from_secs(60));
     assert_eq!(result.error, None, "{}", result.stdout);

@@ -206,6 +206,7 @@ pub struct Editor {
     previews: Rc<RefCell<HashMap<SharedString, Preview>>>,
     /// Clips whose single-clip preview render is in flight.
     preview_inflight: HashSet<SharedString>,
+    preview_errors: HashMap<SharedString, String>,
     /// Clips edited again while their render was in flight. Re-issued when it
     /// lands — the render reads the clip's current state at issue, so one
     /// trailing render covers everything a burst of edits did.
@@ -2045,6 +2046,7 @@ impl Luma {
             patterns: Rc::new(Vec::new()),
             previews: Rc::new(RefCell::new(HashMap::new())),
             preview_inflight: HashSet::new(),
+            preview_errors: HashMap::new(),
             preview_queued: HashSet::new(),
             history: History::default(),
             clipboard: None,
@@ -2089,11 +2091,16 @@ impl Luma {
         let previews = self.library.annotation_previews(track_id, &venue_id);
         let preview_target = target.clone();
         cx.spawn(async move |this, cx| {
-            let Ok(rows) = previews.await else {
-                return;
-            };
+            let result = previews.await;
             this.update(cx, |this, cx| {
-                this.edit_track_tab(&preview_target, cx, |editor| editor.install_previews(rows));
+                this.edit_track_tab(&preview_target, cx, |editor| match result {
+                    Ok(rows) => editor.install_previews(rows),
+                    Err(error) => {
+                        editor
+                            .preview_errors
+                            .insert("initial".into(), format!("Preview: {error}"));
+                    }
+                });
             })
             .ok();
         })
@@ -3268,7 +3275,19 @@ impl Luma {
     /// *current* state when it is issued, that one trailing render covers
     /// everything the burst did.
     fn refresh_clip_preview(&mut self, id: SharedString, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
+        let Some(target) = self.workspace.active().cloned() else {
+            return;
+        };
+        self.refresh_clip_preview_for(target, id, cx);
+    }
+
+    fn refresh_clip_preview_for(
+        &mut self,
+        target: Target,
+        id: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Body::TrackEditor(state)) = self.workspace.body_mut(&target) else {
             return;
         };
         if state.preview_inflight.contains(&id) {
@@ -3299,18 +3318,24 @@ impl Luma {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut again = false;
-                this.with_track_editor(cx, |editor| {
+                this.edit_track_tab(&target, cx, |editor| {
                     editor.preview_inflight.remove(&id);
                     again = editor.preview_queued.remove(&id);
-                    // A render that failed keeps the previous thumbnail — a
-                    // stale picture over a truthful clip box, exactly what the
-                    // screen shows while a slow render is still on its way.
-                    if let Ok(row) = result {
-                        editor.install_preview(row);
+                    match result {
+                        Ok(row) => {
+                            editor.preview_errors.remove(&id);
+                            editor.install_preview(row);
+                        }
+                        Err(error) => {
+                            editor.previews.borrow_mut().remove(&id);
+                            editor
+                                .preview_errors
+                                .insert(id.clone(), format!("Preview: {error}"));
+                        }
                     }
                 });
                 if again {
-                    this.refresh_clip_preview(id, cx);
+                    this.refresh_clip_preview_for(target, id, cx);
                 }
             })
             .ok();
@@ -3771,7 +3796,11 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         })
         // A refused write, over the timeline it was refused for.
         .when_some(
-            state.error.clone().filter(|_| state.waveform.is_some()),
+            state
+                .error
+                .clone()
+                .or_else(|| state.preview_errors.values().next().cloned())
+                .filter(|_| state.waveform.is_some()),
             |el, message| {
                 el.child(
                     div()

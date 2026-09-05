@@ -145,7 +145,7 @@ pub fn pattern_args_def(args: &[PatternArgDef]) -> Option<NodeTypeDef> {
     }
     Some(NodeTypeDef {
         id: "pattern_args".to_string(),
-        name: "Inputs".to_string(),
+        name: "Clip controls".to_string(),
         description: None,
         category: Some("Input".to_string()),
         inputs: Vec::new(),
