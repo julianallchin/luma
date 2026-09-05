@@ -152,16 +152,14 @@ fn build(
     let start = clock
         .beat_at(f64::from(ctx.span.0))
         .map_err(|e| e.to_string())?;
-    let uv = super::ops::spatial::rig_uv(&ctx.positions);
     let cells: Vec<_> = ids
         .iter()
         .zip(&ctx.positions)
-        .zip(uv)
-        .map(|((id, world), uv)| p::Cell {
+        .map(|(id, world)| p::Cell {
             id: id.clone(),
             group: "selection".into(),
             world: world.map(f64::from),
-            uvz: [f64::from(uv[0]), f64::from(uv[1]), f64::from(world[2])],
+            uvz: stage_coordinates(*world),
         })
         .collect();
     let prepared = p::PreparedPattern::new(
@@ -211,6 +209,17 @@ fn build(
     low.outputs.color = Some(color);
     Ok(())
 }
+// Stored venue positions are +X stage right, +Y upstage, +Z up.
+// MappingSpec normalizes these projections over the selection. Keep the stage
+// axes independent; an oblique fitted direction belongs to MajorAxis.
+fn stage_coordinates(world: [f32; 3]) -> [f64; 3] {
+    [
+        f64::from(world[0]),
+        -f64::from(world[1]),
+        f64::from(world[2]),
+    ]
+}
+
 impl Program {
     pub fn run(&self, ctx: &KernelCtx) -> Vec<f32> {
         let mut out = ctx.out_buf();
@@ -242,6 +251,35 @@ impl Program {
 mod tests {
     use super::*;
     use crate::models::node_graph::BeatGrid;
+    #[test]
+    fn stage_mapping_keeps_downstage_and_height_independent() {
+        let cells: Vec<_> = [[0., 10., 0.], [0., 0., 0.], [0., 10., 5.]]
+            .into_iter()
+            .enumerate()
+            .map(|(i, world)| p::Cell {
+                id: i.to_string(),
+                group: "all".into(),
+                world: world.map(f64::from),
+                uvz: stage_coordinates(world),
+            })
+            .collect();
+        let resolve = |source| {
+            p::MappingSpec {
+                source,
+                per_group: false,
+                reverse: false,
+            }
+            .resolve(&cells)
+            .unwrap()
+            .coordinates
+            .iter()
+            .map(|c| c.position)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(resolve(p::MappingSource::V), vec![0., 1., 0.]);
+        assert_eq!(resolve(p::MappingSource::Z), vec![0., 0., 1.]);
+    }
+
     #[test]
     fn native_pattern_roundtrip_and_per_head_playback() {
         let mut graph = crate::node_graph::lighting::pattern("dissolve_flash").unwrap();
