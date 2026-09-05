@@ -493,6 +493,7 @@ pub static TABLES: &[TableMeta] = &[
             "name",
             "description",
             "share_code",
+            "environment",
             "created_at",
             "updated_at",
         ],

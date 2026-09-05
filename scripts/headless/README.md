@@ -377,3 +377,25 @@ protocol above, so an out-of-process coding agent gets the `python` tool itself:
 `open` a track, then `python`, `reset` and `cancel` against its persistent
 kernel. See `docs/design/agent-code-execution.md` §20.1 for the tool contract
 and a `.mcp.json` to register it with.
+
+## Render a saved venue
+
+From `src-tauri/`, run:
+
+```sh
+cargo run --bin render_venue -- --venue-id UUID --output /tmp/venue.png --view front
+```
+
+This reads the same solved venue and saved environment as the app. It opens
+SQLite read-only, including committed WAL changes, and never starts an agent
+thread, changes the library, or refreshes the app's credentials. Use `--db PATH`
+for a scratch library, `--view overhead` for a plan, and `--width`/`--height` for
+1–2000 pixel dimensions. The final JSON line names the image, venue, camera,
+fixture count, and lighting environment. Fixtures are unlit; this command
+checks the built room. Use `luma.venue.render(t=...)` in a score session to
+inspect an evaluated lighting cue.
+
+The MCP server checks its executable against source files before `open` and
+`python`. If it reports stale code, rebuild **the binary**, then restart the
+client's MCP connection. Rebuilding the library does not update a running
+server. Cancel/reset remain available to finish an existing session safely.

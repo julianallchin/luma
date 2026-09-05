@@ -103,7 +103,8 @@ impl HostConfig {
         }
     }
 
-    fn fixtures_root(&self) -> Result<PathBuf, String> {
+    /// Resolve fixture assets without opening a library or starting a host.
+    pub fn fixtures_root(&self) -> Result<PathBuf, String> {
         if let Some(path) = &self.fixtures_root {
             return Ok(path.clone());
         }

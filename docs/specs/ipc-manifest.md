@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**221 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
+**223 commands** across **33 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -42,12 +42,12 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
 | `skills` | 2 | `src-tauri/src/dispatch/handlers/skills.rs` |
 | `stage` | 16 | `src-tauri/src/dispatch/handlers/stage.rs` |
-| `sync` | 2 | `src-tauri/src/dispatch/handlers/sync.rs` |
+| `sync` | 4 | `src-tauri/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `src-tauri/src/dispatch/handlers/telemetry.rs` |
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **221** | |
+| **total** | **223** | |
 
 ## Commands
 
@@ -393,6 +393,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | --- | --- | --- |
 | `force_quit` | — | `()` |
 | `sync_full` | — | `SyncReport` |
+| `sync_status` | — | `SyncStatus` |
+| `sync_retry` | — | `()` |
 
 ### `telemetry`
 
@@ -457,7 +459,7 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 | `controller_state` | 3 | 1 |  |
 | `dmx://update` | 0 | 1 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
 | `host-audio://state` | 1 | 2 |  |
-| `library-changed` | 7 | 2 |  |
+| `library-changed` | 5 | 2 |  |
 | `midi_learn_captured` | 2 | 3 |  |
 | `mixer_learned` | 1 | 1 |  |
 | `mixer_state` | 2 | 1 |  |

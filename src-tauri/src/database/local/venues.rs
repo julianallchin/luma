@@ -350,18 +350,14 @@ pub async fn set_controller_port(
     Ok(())
 }
 
-/// Set this venue's lighting environment (local-only, not synced).
+/// Set this venue's lighting environment, synced with the venue.
 ///
 /// One write for both modes, because the value is one closed enum: switching a
 /// room from indoor to outdoor and moving its one dial are the same edit, and a
 /// pair of setters would let a caller write a mode without the scalar that mode
 /// needs.
 ///
-/// The `venues_updated_at` trigger clears `synced_at` on any venue write, so
-/// this dirties the row and costs one push of the *remote* columns even though
-/// the environment itself never leaves the machine. Same as
-/// [`set_controller_port`]; not worth a trigger exemption until something
-/// writes it per frame.
+/// The ordinary venue dirtiness trigger schedules delivery of this edit.
 pub async fn set_environment(
     access: &mut VenueAccess<'_, Write>,
     environment: VenueEnvironment,

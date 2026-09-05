@@ -19,3 +19,5 @@ pub mod universe;
 pub mod venue_graph;
 pub mod venues;
 pub mod waveforms;
+
+pub mod sync;

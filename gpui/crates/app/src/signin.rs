@@ -228,30 +228,35 @@ impl Luma {
         .detach();
     }
 
-    /// Bring the library up to date with the cloud, then open it. Nothing is
-    /// usable in between — the window is [`splash`] — because a library that
-    /// has not pulled yet is not this account's library, only what the disk
-    /// last saw of it, and a venue picker over that would offer to create a
-    /// room the person already has.
-    ///
-    /// A sync that cannot land — offline, refused — is logged and the local
-    /// library opens as it is: the door is held for the cloud's answer, not
-    /// for the cloud's existence.
+    /// Open a cached library immediately while the cloud catches up. A first
+    /// sign-in with no local venues still waits for the initial pull, avoiding
+    /// an empty picker that would offer to recreate existing rooms.
     pub(crate) fn sync_then_restore(&mut self, cx: &mut Context<Self>) {
         if self.syncing {
             return;
         }
         self.syncing = true;
         let pending = self.library.sync_pull();
+        let local = self.library.venues();
         cx.notify();
         cx.spawn(async move |this, cx| {
+            if local.await.is_ok_and(|venues| !venues.is_empty()) {
+                this.update(cx, |this, cx| {
+                    this.syncing = false;
+                    this.restore_venue(cx);
+                    cx.notify();
+                })
+                .ok();
+            }
             let result = pending.await;
             this.update(cx, |this, cx| {
-                this.syncing = false;
                 if let Err(error) = result {
                     eprintln!("[luma] the library could not be brought up to date: {error}");
                 }
-                this.restore_venue(cx);
+                if this.syncing {
+                    this.syncing = false;
+                    this.restore_venue(cx);
+                }
                 cx.notify();
             })
             .ok();

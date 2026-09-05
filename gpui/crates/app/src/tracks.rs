@@ -668,6 +668,7 @@ pub fn sidebar(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Window
                     el.child(div().absolute().inset_0().occlude())
                 }),
         )
+        .child(crate::sync_status::sidebar(shell, app))
         .child(account_foot(shell, app, window))
 }
 

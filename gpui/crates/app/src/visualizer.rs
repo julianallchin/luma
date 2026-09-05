@@ -899,7 +899,7 @@ impl Visualizer {
         let rig = library.venue_rig(venue_id);
         // The venue's own environment arrives with its rig; until then the
         // default room, which is the picture this app has always opened with.
-        let environment = Self::environment_of(VenueEnvironment::default(), subject.as_ref());
+        let environment = VenueEnvironment::default();
         let composite = subject
             .clone()
             .map(|lit| (library.composite_score(&lit.score, None), lit));
@@ -973,25 +973,10 @@ impl Visualizer {
         self.render_lab.set_environment(self.environment());
     }
 
-    /// The environment this room is drawn under right now.
-    ///
-    /// **The rule, entire:** no score on this stage ⇒ the venue's own
-    /// environment; a score playing ⇒ the house goes down. A lit show is the
-    /// venue's one dial turned to zero, not a second preset —
-    /// `VenueEnvironment::indoor(0.0)` *is* the dark stage, and
-    /// [`house::fill`] answers it with a black environment, no sun and no
-    /// lamps.
+    /// Preview and authoring use the same saved room. Selecting a score
+    /// changes its fixtures' output, not the time of day or the house lights.
     fn environment(&self) -> VenueEnvironment {
-        Self::environment_of(self.venue_environment, self.subject.as_ref())
-    }
-
-    /// [`Self::environment`] before there is a `self` to ask — the opening
-    /// frame, where the venue's own environment has not landed yet.
-    fn environment_of(venue: VenueEnvironment, subject: Option<&Lit>) -> VenueEnvironment {
-        match subject {
-            Some(_) => VenueEnvironment::indoor(0.0),
-            None => venue,
-        }
+        self.venue_environment
     }
 
     /// Light this stage with a different score, without rebuilding it.
