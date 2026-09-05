@@ -20,6 +20,7 @@ pub mod auth;
 pub mod authored_state;
 pub mod categories;
 pub mod cloud_sync;
+pub mod composable_patterns;
 pub mod compositor;
 pub mod controller;
 pub mod distribute;

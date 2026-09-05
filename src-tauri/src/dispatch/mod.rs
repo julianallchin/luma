@@ -228,6 +228,9 @@ commands! {
         fps: f32,
     ) -> Vec<UniverseState>;
 
+    composable_patterns::get_pattern_node_library() -> Value;
+    composable_patterns::preview_composable_pattern(request: Value) -> Value;
+
     patterns::list_patterns() -> Vec<PatternSummary>;
     patterns::get_pattern(id: String) -> PatternSummary;
     patterns::create_pattern(

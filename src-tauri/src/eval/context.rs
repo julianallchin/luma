@@ -29,7 +29,7 @@ use fixture_kinematics::{rig_position, FixtureGeometry};
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Process-wide cache of decoded mono track audio, keyed by `track_hash`. The
@@ -42,9 +42,9 @@ static AUDIO_CACHE: Lazy<Mutex<HashMap<String, ResidentAudio>>> =
 const AUDIO_CACHE_MAX: usize = 8;
 
 /// Process-wide cache of per-fixture cell geometry, keyed by
-/// `"{fixture_path}|{mode}"`, so fixture definitions are parsed from disk once
+/// definition path and mode, so fixture definitions are parsed from disk once
 /// per venue rather than once per (fixture × annotation).
-static OFFSETS_CACHE: Lazy<Mutex<HashMap<String, FixtureGeometry>>> =
+static OFFSETS_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), FixtureGeometry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Drop the cached resident data for a track (called when leaving it).
@@ -150,28 +150,36 @@ pub(crate) fn seed_for(instance: Option<&str>, node_id: &str) -> u64 {
     h.finish()
 }
 
-/// Per-head offsets for a fixture definition (single head at origin if the
-/// definition is missing/unparsable).
+/// Per-head offsets for a fixture definition. Missing or invalid definitions
+/// are errors: inventing a single head would hide missing pixel geometry.
 ///
 /// Derived from the QLC+ `Physical` block — a housing size and a pixel grid.
 /// QLC+ carries no pivot or aperture geometry, so these are positions on the
 /// housing face and nothing more.
-fn head_offsets(resource_root: &Path, fixture_path: &str, mode_name: &str) -> FixtureGeometry {
-    let key = format!("{fixture_path}|{mode_name}");
+fn head_offsets(
+    resource_root: &Path,
+    fixture_path: &str,
+    mode_name: &str,
+) -> Result<FixtureGeometry, String> {
+    let def_path = resource_root.join(fixture_path);
+    let key = (def_path.clone(), mode_name.to_owned());
     if let Ok(cache) = OFFSETS_CACHE.lock() {
         if let Some(hit) = cache.get(&key) {
-            return hit.clone();
+            return Ok(hit.clone());
         }
     }
-    let def_path = resource_root.join(fixture_path);
-    let offsets = parse_definition(&def_path)
-        .ok()
-        .map(|def| head_geometry(&def, mode_name))
-        .unwrap_or_else(|| FixtureGeometry::unauthored(Vec::new()));
+    let definition = parse_definition(&def_path)
+        .map_err(|error| format!("Failed to load fixture definition {fixture_path}: {error}"))?;
+    if !definition.modes.iter().any(|mode| mode.name == mode_name) {
+        return Err(format!(
+            "Fixture definition {fixture_path} has no mode {mode_name}"
+        ));
+    }
+    let offsets = head_geometry(&definition, mode_name);
     if let Ok(mut cache) = OFFSETS_CACHE.lock() {
         cache.insert(key, offsets.clone());
     }
-    offsets
+    Ok(offsets)
 }
 
 /// Resolve the ordered `(primitive_id = "{fixtureUuid}:{head}", world_position)`
@@ -233,22 +241,32 @@ pub async fn resolve_primitive_ids_with_access(
     let (selection, seed) =
         graph_selection(nodes, edges, args, instance).unwrap_or_else(|| (Selection::all(), 0));
 
+    match resolve_selection_primitives_with_access(access, resource_root, &selection, seed).await {
+        Ok(primitives) => primitives,
+        Err(error) => {
+            log::warn!("[ctx] selection could not be resolved: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Resolve an explicit selection into physical heads, preserving errors for
+/// callers that must explain a failed preview rather than return an empty rig.
+pub(crate) async fn resolve_selection_primitives_with_access(
+    access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    resource_root: &Path,
+    selection: &Selection,
+    seed: u64,
+) -> Result<Vec<(String, [f32; 3])>, String> {
     // One solve for the whole pre-pass: a primitive's position is where its
     // fixture hangs, and every selected fixture is a node of the same venue.
-    let venue = match crate::venue_graph::resolved(access, resource_root).await {
-        Ok(venue) => venue,
-        Err(e) => {
-            log::warn!("[ctx] venue could not be resolved, so it has no primitives: {e}");
-            return Vec::new();
-        }
-    };
+    let venue = crate::venue_graph::resolved(access, resource_root).await?;
 
     let root_buf = resource_root.to_path_buf();
     let fixtures = crate::services::groups::resolve_selection_expression_with_path(
-        &root_buf, access, &selection, seed,
+        &root_buf, access, selection, seed,
     )
-    .await
-    .unwrap_or_default();
+    .await?;
 
     let mut out = Vec::new();
     for resolved in &fixtures {
@@ -258,7 +276,7 @@ pub async fn resolve_primitive_ids_with_access(
         let Some(pose) = venue.pose(&fixture.id) else {
             continue;
         };
-        let geom = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name);
+        let geom = head_offsets(resource_root, &fixture.fixture_path, &fixture.mode_name)?;
         let mount = fixture_mount(pose);
         let mut push = |i: usize| {
             let pos = rig_position(&geom, &mount, i).to_array();
@@ -274,7 +292,7 @@ pub async fn resolve_primitive_ids_with_access(
                 .for_each(|&i| push(i)),
         }
     }
-    out
+    Ok(out)
 }
 
 /// Decode a track's mono resident audio. Three tiers: process-wide in-memory
@@ -494,4 +512,32 @@ pub async fn build_resident_context(
         ..Default::default()
     };
     (ctx, primitive_ids)
+}
+
+#[cfg(test)]
+mod head_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn missing_definition_is_not_a_single_invented_head_or_a_cache_hit_from_another_root() {
+        let valid = tempfile::tempdir().unwrap();
+        let missing = tempfile::tempdir().unwrap();
+        std::fs::write(
+            valid.path().join("fixture.qxf"),
+            r#"<FixtureDefinition>
+            <Manufacturer>Test</Manufacturer><Model>Head</Model><Type>LED</Type>
+            <Mode Name="one"/>
+        </FixtureDefinition>"#,
+        )
+        .unwrap();
+        assert!(head_offsets(valid.path(), "fixture.qxf", "one").is_ok());
+        assert!(head_offsets(valid.path(), "fixture.qxf", "unknown")
+            .unwrap_err()
+            .contains("no mode unknown"));
+        let error = head_offsets(missing.path(), "fixture.qxf", "one").unwrap_err();
+        assert!(error.contains("fixture.qxf"));
+        assert!(error.contains("Failed to load fixture definition"));
+        std::fs::write(missing.path().join("fixture.qxf"), "not XML").unwrap();
+        assert!(head_offsets(missing.path(), "fixture.qxf", "one").is_err());
+    }
 }

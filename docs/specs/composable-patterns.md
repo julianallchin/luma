@@ -7,7 +7,7 @@ Status: implementation in progress on `codex/composable-patterns`.
 A pattern is a playable composition containing a graph. A clip is a timed
 instance of a pattern, with overrides of its exposed inputs. Patterns authored
 from the score belong to that score unless explicitly saved to the library.
-Reusable graphs may produce intermediate values; only graphs with a Lighting
+Reusable graphs may produce intermediate values; only graphs with exactly one Lighting
 output appear in the score insertion picker.
 
 There is one input definition: type, default, evaluation rate, and description.
@@ -69,3 +69,11 @@ The first slice establishes executable graph contracts and effect kernels.
 Persistence, migration, score insertion, and rich input editors must consume those
 contracts; a second disconnected runtime or an indefinitely retained legacy
 editor is not the finished result.
+
+
+The next slice prepares graphs outside the frame loop and previews them against
+an authorized native venue snapshot. The native bridge expands actual fixture
+heads, resolves subsets per head, maps seconds through detected beats, and emits
+the existing renderer's UniverseState. It does not yet replace score persistence
+or the active playback scene. The local-score preparation API is ready for that
+integration; library revision storage and legacy conversion remain outstanding.

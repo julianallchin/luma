@@ -14,13 +14,14 @@ async fn main() -> Result<(), String> {
     let mut db = StorageRoot::from_env_default()?.luma_db_path();
     let mut venue = None;
     let mut output = None;
+    let mut state_path = None;
     let mut view = View::Front;
     let mut format = String::from("png");
     let mut width = 1600u32;
     let mut height = 1000u32;
     while let Some(arg) = args.next() {
         if arg == "--help" {
-            println!("render_venue --venue-id UUID --output PATH [--db PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
+            println!("render_venue --venue-id UUID --output PATH [--db PATH] [--state PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
             return Ok(());
         }
         let value = args
@@ -31,6 +32,7 @@ async fn main() -> Result<(), String> {
             "--db" => db = PathBuf::from(value),
             "--venue-id" => venue = Some(value),
             "--output" => output = Some(PathBuf::from(value)),
+            "--state" => state_path = Some(PathBuf::from(value)),
             "--view" => {
                 view = value
                     .parse()
@@ -76,10 +78,17 @@ async fn main() -> Result<(), String> {
 
     let environment = geometry.environment;
     let fixture_count = geometry.fixtures.len();
+    let state = state_path
+        .map(|path| {
+            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            serde_json::from_slice::<luma_lib::models::universe::UniverseState>(&bytes)
+                .map_err(|e| format!("{}: invalid lighting state: {e}", path.display()))
+        })
+        .transpose()?;
     let shot = Shot {
         view,
         booth: geometry.booth(),
-        state: None,
+        state,
         time: 0.,
         size: (width, height),
     };

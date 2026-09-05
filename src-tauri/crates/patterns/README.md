@@ -55,11 +55,59 @@ cargo run --manifest-path src-tauri/Cargo.toml -p luma-patterns --bin pattern-ev
 This is not yet the app's score editor or playback runtime. The score picker,
 rich input editors, authored revision storage, library promotion, and legacy
 migration must be connected before switching existing scores. The reference
-interpreter currently validates graphs during evaluation; production playback
-needs a prepared execution plan and a measured frame budget. `Rate::Fixed` inputs
+interpreter remains an oracle for tests. `PreparedPattern` validates and flattens
+the graph once, resolves fixed geometry once, and evaluates only dynamic kernels
+per frame. `Score::prepare_clip` also freezes clip overrides and enforces the
+clip span. Native previews use this prepared path and `BeatTimeline`, which
+interpolates the detected beat grid rather than assuming constant BPM. `Rate::Fixed` inputs
 reject frame-varying wires instead of silently sampling them once. Continuous
 speed automation and event-latched inputs are not implemented yet.
 
 Preserve legacy Major Span/Count behavior in migration: those old operators pick
 a world axis, whereas the new Major Axis fits a principal direction. Do not
 reinterpret one as the other.
+
+## Native venue previews
+
+The shared Tauri/headless dispatcher exposes `get_pattern_node_library` and
+`preview_composable_pattern`. The latter accepts `request`:
+
+```json
+{
+  "venueId": "venue UUID",
+  "trackId": "track UUID",
+  "definition": "dissolve_flash",
+  "targets": [{"expression": "pixel_bars", "subset": {"fraction": 0.5}}],
+  "times": [0, 0.25, 0.5, 0.75, 1],
+  "clipStart": 0,
+  "seed": 42,
+  "inputs": {"travel": {"type": "beats", "value": 2}}
+}
+```
+
+Times and clipStart are track seconds; exposed durations are beats. The response
+contains resolved cells, musical beat positions, and `UniverseState` frames.
+Each target is a mapping group; overlapping targets are rejected. Subsets count
+heads after geometry expansion. Missing fixture definitions are reported rather
+than replaced by invented single-head geometry. Preview retains venue and track
+read authorization and does not change the active scene or drive hardware.
+An optional `library` supplies custom graph definitions using the same contracts.
+
+Save one returned frame as JSON to render it in the real venue:
+
+```
+cargo run --manifest-path src-tauri/Cargo.toml --bin render_venue -- \
+  --db /path/to/disposable/luma.db --venue-id UUID \
+  --state /path/to/frame.json --output /path/to/preview.png
+```
+
+For repeatable execution measurements, save the response's `cells` array:
+
+```
+cargo run --manifest-path src-tauri/Cargo.toml -p luma-patterns --release \
+  --example frame-budget < cells.json
+```
+
+The measurement separates preparation from per-frame evaluation and includes
+per-cell output construction. It does not measure the compositor, stage renderer,
+or hardware output; those need their own budget during playback integration.

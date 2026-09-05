@@ -2,15 +2,19 @@
 //! A frame is evaluated in musical time over resolved independently controllable cells.
 mod catalog;
 pub mod circle_fit;
+mod clock;
 mod graph;
 mod mapping;
+mod prepared;
 mod score;
 mod spatial;
 mod value;
 
 pub use catalog::standard_library;
+pub use clock::*;
 pub use graph::*;
 pub use mapping::*;
+pub use prepared::*;
 pub use score::*;
 pub use spatial::*;
 pub use value::*;

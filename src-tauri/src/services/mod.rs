@@ -19,6 +19,7 @@ pub(crate) mod authored_documents;
 pub(crate) mod authored_merge;
 pub(crate) mod authored_state;
 pub(crate) mod authored_sync_merge;
+pub(crate) mod composable_patterns;
 pub mod distribute;
 pub mod fixture_create;
 pub mod fixtures;
