@@ -33,8 +33,7 @@ pub struct Venue {
     ///
     /// Stored as the type's own JSON (`sqlx(try_from)` decodes it, and the
     /// decode is total — see that type's `From<String>`), so the column, the
-    /// wire and `luma.venue.environment()` are one string. Local-only: it is
-    /// absent from `sync::registry`'s `venues` columns.
+    /// wire and `luma.venue.environment()` are one string, synced with the venue.
     #[sqlx(try_from = "String")]
     #[ts(
         type = "{ mode: \"indoor\", houseLevel: number } | { mode: \"outdoor\", sunElevationDeg: number }"

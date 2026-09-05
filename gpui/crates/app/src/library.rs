@@ -925,6 +925,21 @@ impl Library {
     /// Bring the library up to date with the cloud, resolving the moment the
     /// pull has landed.
     ///
+    pub(crate) fn cloud_sync_enabled(&self) -> bool {
+        self.cloud
+    }
+
+    pub(crate) fn sync_status(
+        &self,
+    ) -> impl Future<Output = Result<luma_lib::models::sync::SyncStatus, LibraryError>> + use<>
+    {
+        self.call("sync_status", json!({}))
+    }
+
+    pub(crate) fn retry_sync(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("sync_retry", json!({}))
+    }
+
     /// A full sync — discovery, pull, files, push — is started on this
     /// library's reactor and left to finish; what the returned future waits
     /// for is only the pull, because that is the phase after which every

@@ -33,6 +33,9 @@ pub struct SyncEngine {
     remote: Arc<dyn RemoteClient>,
     authored: AuthoredDocuments,
     pub(crate) push_notify: Arc<Notify>,
+    // Failures are scoped to the account and operation that observed them.
+    last_errors:
+        Arc<std::sync::Mutex<std::collections::BTreeMap<(String, &'static str), Vec<String>>>>,
     /// Prevents concurrent sync operations (sync_full vs background loop).
     pub(crate) sync_lock: Arc<Mutex<()>>,
 }
@@ -51,15 +54,56 @@ impl SyncEngine {
             authored,
             push_notify: Arc::new(Notify::new()),
             sync_lock: Arc::new(Mutex::new(())),
+            last_errors: Arc::default(),
         }
+    }
+
+    pub async fn status(&self) -> Result<crate::models::sync::SyncStatus, SyncError> {
+        let Some(uid) = crate::database::local::auth::admitted_principal(&self.pool)
+            .await
+            .map_err(SyncError::Local)?
+        else {
+            return Ok(crate::models::sync::SyncStatus::default());
+        };
+        let principal = crate::database::local::auth::principal_key(Some(&uid));
+        let failures = sqlx::query_as::<_, crate::models::sync::SyncFailure>(
+            "SELECT table_name, record_id, subject, attempts, permanent, last_error
+             FROM sync_push_failures WHERE principal_key = ?
+             ORDER BY permanent DESC, table_name, record_id, subject",
+        )
+        .bind(principal)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(crate::models::sync::SyncStatus {
+            syncing: self.sync_lock.try_lock().is_err(),
+            errors: self
+                .last_errors
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|((owner, _), _)| owner == &uid)
+                .flat_map(|(_, errors)| errors.iter().cloned())
+                .collect(),
+            failures,
+        })
+    }
+
+    pub async fn retry(&self) -> Result<(), SyncError> {
+        let _guard = self.sync_lock.lock().await;
+        let uid = crate::database::local::auth::admitted_principal(&self.pool)
+            .await
+            .map_err(SyncError::Local)?
+            .ok_or(SyncError::AuthRequired)?;
+        let principal = crate::database::local::auth::principal_key(Some(&uid));
+        sqlx::query("DELETE FROM sync_push_failures WHERE principal_key = ?")
+            .bind(principal)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
-    }
-
-    pub fn state_pool(&self) -> &SqlitePool {
-        &self.state_pool
     }
 
     pub fn remote(&self) -> &Arc<dyn RemoteClient> {
@@ -188,6 +232,13 @@ impl SyncEngine {
             host.events.emit("library-changed", ());
         }
 
+        let mut errors = report.errors.clone();
+        errors.extend(report.pull.errors.iter().cloned());
+        errors.extend(report.files.errors.iter().cloned());
+        self.last_errors
+            .lock()
+            .unwrap()
+            .insert((uid.clone(), "full"), errors);
         println!("[sync] Full sync complete");
         Ok(report)
     }
@@ -195,7 +246,16 @@ impl SyncEngine {
     /// Enqueue dirty records and flush pending ops. Returns count pushed.
     pub async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
         let _guard = self.sync_lock.lock().await;
-        self.run_push_unlocked(uid).await
+        let result = self.run_push_unlocked(uid).await;
+        self.last_errors.lock().unwrap().insert(
+            (uid.to_string(), "push"),
+            result
+                .as_ref()
+                .err()
+                .map(|error| vec![error.to_string()])
+                .unwrap_or_default(),
+        );
+        result
     }
 
     async fn run_push_unlocked(&self, uid: &str) -> Result<usize, SyncError> {

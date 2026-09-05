@@ -348,12 +348,7 @@ pub fn run() {
                 );
                 let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
                 tauri::async_runtime::spawn(sync::push::run_sync_loop(
-                    engine.pool().clone(),
-                    engine.state_pool().clone(),
-                    engine.remote().clone(),
-                    engine.push_notify.clone(),
-                    engine.sync_lock.clone(),
-                    engine.authored().clone(),
+                    engine.clone(),
                     sync::host::SyncHost {
                         storage: authored_storage.clone(),
                 events: dispatch::tauri_events(app_handle),
@@ -680,6 +675,8 @@ pub fn run() {
             dispatch::adapter::leave_venue,
             // New sync engine
             dispatch::adapter::sync_full,
+            dispatch::adapter::sync_status,
+            dispatch::adapter::sync_retry,
             dispatch::adapter::force_quit,
             dispatch::adapter::append_render_telemetry,
             // Remote queries

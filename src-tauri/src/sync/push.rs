@@ -9,14 +9,11 @@
 //!
 //! See `docs/design/sync-push-v2.md`.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tokio::sync::{watch, Mutex, Notify};
-
-use crate::services::authored_documents::AuthoredDocuments;
+use tokio::sync::watch;
 
 use super::authored_remote::{
     self, ArchiveAuthoredDocumentInput, HeadProposalIntegrator, SubmitHeadProposalInput,
@@ -891,194 +888,42 @@ pub(super) async fn apply_archive_receipt(
 /// Background sync loop: push dirty every 10s, full pull+files every 60s.
 /// Accepts a shutdown receiver for graceful termination.
 pub async fn run_sync_loop(
-    pool: SqlitePool,
-    state_pool: SqlitePool,
-    remote: Arc<dyn RemoteClient>,
-    notify: Arc<Notify>,
-    sync_lock: Arc<Mutex<()>>,
-    authored: AuthoredDocuments,
+    engine: super::orchestrator::SyncEngine,
     host: SyncHost,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut pull_interval = tokio::time::interval(Duration::from_secs(60));
-    pull_interval.tick().await; // skip immediate first tick
-    let mut auth_backoff: Option<tokio::time::Instant> = None;
-    let mut offline_until: Option<tokio::time::Instant> = None;
-
+    pull_interval.tick().await;
+    let mut retry_after: Option<tokio::time::Instant> = None;
     loop {
-        let is_pull_tick;
-        tokio::select! {
-            _ = shutdown.changed() => {
-                println!("[sync] Shutting down sync loop");
-                return;
-            }
-            _ = notify.notified() => { is_pull_tick = false; }
-            _ = pull_interval.tick() => { is_pull_tick = true; }
-            _ = tokio::time::sleep(Duration::from_secs(10)) => { is_pull_tick = false; }
-        }
-
-        // If we recently got a 401, back off before retrying.
-        if let Some(until) = auth_backoff {
-            if tokio::time::Instant::now() < until {
-                continue;
-            }
-            auth_backoff = None;
-        }
-
-        // If we recently hit a network error, pause until the check window expires.
-        if let Some(until) = offline_until {
-            if tokio::time::Instant::now() < until {
-                continue;
-            }
-            offline_until = None;
-        }
-
-        // Acquire the sync lock so we don't collide with sync_full.
-        let _guard = sync_lock.lock().await;
-
-        if is_pull_tick {
-            if let Err(SyncError::Network(msg)) =
-                run_pull_cycle(&pool, &state_pool, remote.as_ref(), &authored, &host).await
-            {
-                eprintln!("[sync] Offline — retrying in 30s ({msg})");
-                offline_until = Some(tokio::time::Instant::now() + Duration::from_secs(30));
-                continue;
-            }
-        }
-
-        let uid = match crate::database::local::auth::admitted_principal(&pool).await {
-            Ok(Some(uid)) => uid,
-            Ok(None) | Err(_) => continue,
+        let pull = tokio::select! {
+            _ = shutdown.changed() => return,
+            _ = engine.push_notify.notified() => false,
+            _ = pull_interval.tick() => true,
+            _ = tokio::time::sleep(Duration::from_secs(10)) => false,
         };
-
-        if let Err(error) = authored.bootstrap_live_projections(&pool, Some(&uid)).await {
-            eprintln!("[sync] Authored projection bootstrap blocked push: {error}");
+        if retry_after.is_some_and(|until| tokio::time::Instant::now() < until) {
             continue;
         }
-
-        match flush_pending_with_integrator(&pool, &state_pool, remote.as_ref(), Some(&authored))
-            .await
-        {
-            Ok(n) if n > 0 => println!("[sync] Pushed {n} ops"),
-            Err(SyncError::AuthRequired) => {}
-            // The session is gone for good; the app needs a person to sign in.
-            // Say so once per backoff window rather than once per tick.
-            Err(SyncError::SessionRevoked) => {
-                eprintln!("[sync] Session revoked — sign in again to resume");
+        let uid = match crate::database::local::auth::admitted_principal(engine.pool()).await {
+            Ok(Some(uid)) => uid,
+            _ => continue,
+        };
+        // Both entry points share the engine's lock and diagnostics. A second
+        // pull implementation used to discard file and per-table errors.
+        let result = if pull {
+            engine.sync_full(&host).await.map(|_| ())
+        } else {
+            engine.run_push(&uid).await.map(|_| ())
+        };
+        if let Err(error) = result {
+            if matches!(error, SyncError::SessionRevoked) {
                 host.events.emit("session-revoked", ());
-                auth_backoff = Some(tokio::time::Instant::now() + Duration::from_secs(30));
             }
-            Err(SyncError::Api { status: 401, .. }) => {
-                auth_backoff = Some(tokio::time::Instant::now() + Duration::from_secs(30));
-            }
-            Err(SyncError::Network(msg)) => {
-                eprintln!("[sync] Offline — retrying in 30s ({msg})");
-                offline_until = Some(tokio::time::Instant::now() + Duration::from_secs(30));
-            }
-            Err(e) => eprintln!("[sync] Push error: {e}"),
-            _ => {}
+            eprintln!("[sync] {error}");
+            retry_after = Some(tokio::time::Instant::now() + Duration::from_secs(30));
         }
     }
-}
-
-/// Full pull cycle: discovery → pull → files → emit library-changed.
-/// Returns `Err(SyncError::Network(_))` when the remote is unreachable so the
-/// caller can engage offline backoff.
-async fn run_pull_cycle(
-    pool: &SqlitePool,
-    state_pool: &SqlitePool,
-    remote: &dyn RemoteClient,
-    authored: &AuthoredDocuments,
-    host: &SyncHost,
-) -> Result<(), SyncError> {
-    let (token, uid) = match get_auth(state_pool).await {
-        Ok(auth) => auth,
-        Err(_) => return Ok(()),
-    };
-
-    // Discovery — find new/removed venues
-    if let Err(e) = super::pull::discover_venues(pool, remote, &uid, &token).await {
-        if matches!(&e, SyncError::Network(_)) {
-            eprintln!("[sync] Discovery error (offline): {e}");
-            return Err(e);
-        }
-        eprintln!("[sync] Discovery error: {e}");
-    }
-
-    // Delta pull
-    let mut data_changed = false;
-    match super::pull::pull_all(
-        pool,
-        authored,
-        &host.workspaces,
-        &host.graph_runs,
-        &host.subagents,
-        remote,
-        &token,
-        Some(&uid),
-    )
-    .await
-    {
-        Ok(stats) => {
-            if stats.rows_pulled > 0 {
-                println!(
-                    "[sync] Pulled {} rows across {} tables",
-                    stats.rows_pulled, stats.tables_pulled
-                );
-                data_changed = true;
-            }
-        }
-        Err(e) if matches!(&e, SyncError::Network(_)) => {
-            eprintln!("[sync] Pull error (offline): {e}");
-            return Err(e);
-        }
-        Err(e) => eprintln!("[sync] Pull error: {e}"),
-    }
-
-    // Emit early so the UI sees pulled data before file downloads.
-    if data_changed {
-        host.events.emit("library-changed", ());
-    }
-
-    // File sync (upload pending, download stubs)
-    let engine_auth = async {
-        let auth = crate::database::local::auth::get_current_auth(state_pool)
-            .await
-            .map_err(SyncError::from)?
-            .ok_or(SyncError::AuthRequired)?;
-        Ok::<_, SyncError>((auth.access_token, auth.principal.user_id))
-    };
-
-    if let Ok((token, uid)) = engine_auth.await {
-        let mut stats = super::files::FileSyncStats::default();
-        let _ =
-            super::files::upload_pending_audio(pool, remote, &uid, &token, &mut stats, host).await;
-        let _ =
-            super::files::upload_pending_stems(pool, remote, &uid, &token, &mut stats, host).await;
-        let _ =
-            super::files::upload_pending_album_art(pool, remote, &uid, &token, &mut stats, host)
-                .await;
-        let _ = super::files::download_pending_audio(pool, remote, host, &token, &mut stats).await;
-        let _ = super::files::download_pending_stems(pool, remote, host, &token, &mut stats).await;
-        let _ =
-            super::files::download_pending_album_art(pool, remote, host, &token, &mut stats).await;
-
-        let files_changed = stats.audio_downloaded + stats.stems_downloaded + stats.art_downloaded;
-        if files_changed > 0 {
-            println!(
-                "[sync] Files: {}↑ {}↓ audio, {}↑ {}↓ stems, {}↑ {}↓ art",
-                stats.audio_uploaded,
-                stats.audio_downloaded,
-                stats.stems_uploaded,
-                stats.stems_downloaded,
-                stats.art_uploaded,
-                stats.art_downloaded,
-            );
-            host.events.emit("library-changed", ());
-        }
-    }
-
-    Ok(())
 }
 
 async fn get_auth(state_pool: &SqlitePool) -> Result<(String, String), SyncError> {

@@ -20,9 +20,19 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** Where the app itself keeps `luma.db`, `state.db` and `tracks/`. */
-export const REAL_CONFIG_DIR = join(homedir(), "Library/Application Support/com.luma.luma");
+export const REAL_CONFIG_DIR = join(
+    process.platform === "darwin" ? join(homedir(), "Library/Application Support")
+        : process.platform === "win32" ? (process.env.APPDATA ?? join(homedir(), "AppData/Roaming"))
+        : (process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")),
+    "com.luma.luma",
+);
 /** The managed venv and deployed `luma_exec`. Hosts only ever read from it. */
-export const REAL_CACHE_DIR = join(homedir(), "Library/Caches/com.luma.luma");
+export const REAL_CACHE_DIR = join(
+    process.platform === "darwin" ? join(homedir(), "Library/Caches")
+        : process.platform === "win32" ? (process.env.LOCALAPPDATA ?? join(homedir(), "AppData/Local"))
+        : (process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache")),
+    "com.luma.luma",
+);
 
 export type Content = { type: string; text?: string; data?: string; mimeType?: string };
 export type ToolResult = { content: Content[]; isError?: boolean };

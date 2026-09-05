@@ -185,6 +185,7 @@ use crate::models::scores::{
     UpdateTrackScoreInput,
 };
 use crate::models::selection::Selection;
+use crate::models::sync::SyncStatus;
 use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
 use crate::models::universe::UniverseState;
 use crate::models::venue_graph::{
@@ -768,6 +769,8 @@ commands! {
 
     sync::force_quit() -> ();
     sync::sync_full() -> SyncReport;
+    sync::sync_status() -> SyncStatus;
+    sync::sync_retry() -> ();
 
     rekordbox::rekordbox_open_library() -> RekordboxLibraryInfo;
     rekordbox::rekordbox_list_tracks() -> Vec<RekordboxTrack>;

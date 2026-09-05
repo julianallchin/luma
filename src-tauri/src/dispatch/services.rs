@@ -475,16 +475,7 @@ impl AppServices {
         &self,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
-        crate::sync::push::run_sync_loop(
-            self.sync.pool().clone(),
-            self.sync.state_pool().clone(),
-            self.sync.remote().clone(),
-            self.sync.push_notify.clone(),
-            self.sync.sync_lock.clone(),
-            self.sync.authored().clone(),
-            self.sync_host(),
-            shutdown,
-        )
+        crate::sync::push::run_sync_loop(self.sync.clone(), self.sync_host(), shutdown)
     }
 
     pub(crate) fn sync_host(&self) -> SyncHost {

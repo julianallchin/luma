@@ -20,3 +20,27 @@ pub async fn sync_full(services: &AppServices) -> Result<SyncReport, CommandErro
         .await
         .map_err(|error| CommandError::Internal(error.to_string()))
 }
+
+pub async fn sync_status(
+    services: &AppServices,
+) -> Result<crate::models::sync::SyncStatus, CommandError> {
+    services
+        .sync
+        .status()
+        .await
+        .map_err(|e| CommandError::Internal(e.to_string()))
+}
+
+pub async fn sync_retry(services: &AppServices) -> Result<(), CommandError> {
+    services
+        .sync
+        .retry()
+        .await
+        .map_err(|e| CommandError::Internal(e.to_string()))?;
+    services
+        .sync
+        .sync_full(&services.sync_host())
+        .await
+        .map(|_| ())
+        .map_err(|e| CommandError::Internal(e.to_string()))
+}

@@ -67,6 +67,60 @@ const SERVER: ServerInfo = ServerInfo {
     version: env!("CARGO_PKG_VERSION"),
 };
 
+/// A rebuilt executable does not replace the image already running in a
+/// client's MCP process. Keep its original stamp so that case is visible too.
+struct BinaryAge {
+    path: std::path::PathBuf,
+    built: std::time::SystemTime,
+}
+static BINARY_AGE: std::sync::OnceLock<Option<BinaryAge>> = std::sync::OnceLock::new();
+
+fn stale_binary() -> Option<String> {
+    let age = BINARY_AGE
+        .get_or_init(|| {
+            let path = std::env::current_exe().ok()?;
+            let built = std::fs::metadata(&path).ok()?.modified().ok()?;
+            Some(BinaryAge { path, built })
+        })
+        .as_ref()?;
+    if std::fs::metadata(&age.path).ok()?.modified().ok()? > age.built {
+        return Some("luma-mcp was rebuilt, but this client is still running the previous executable. Restart the MCP connection.".into());
+    }
+    fn newer(path: &std::path::Path, built: std::time::SystemTime) -> bool {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            let Ok(kind) = entry.file_type() else {
+                return false;
+            };
+            if kind.is_dir() {
+                return newer(&entry.path(), built);
+            }
+            kind.is_file()
+                && matches!(
+                    entry.path().extension().and_then(|s| s.to_str()),
+                    Some("rs" | "py" | "wgsl")
+                )
+                && entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|time| time > built)
+        })
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let sources = [
+        root.join("src"),
+        root.join("python/luma_exec"),
+        root.join("../gpui/crates/scene/src"),
+        root.join("../gpui/crates/render/src"),
+    ];
+    if sources.iter().any(|path| newer(path, age.built)) {
+        return Some("luma-mcp is older than the source it serves. Run `cargo build --bin luma-mcp --manifest-path src-tauri/Cargo.toml`, then restart this MCP connection before authoring.".into());
+    }
+    None
+}
+
 /// How many library rows one listing may show before it stops being an
 /// orientation surface and starts being a context dump.
 const LISTING_LIMIT: usize = 60;
@@ -224,6 +278,11 @@ async fn call(
     session: &SessionCell,
     client: &ClientCell,
 ) -> Value {
+    if matches!(name, "open" | "python") {
+        if let Some(message) = stale_binary() {
+            return tool_error(message);
+        }
+    }
     let outcome = match name {
         "find" => find(services, arguments).await,
         "open" => open(services, arguments, session, client).await,
@@ -952,6 +1011,9 @@ async fn record_usage(args: impl Iterator<Item = String>) -> Result<(), String> 
 }
 
 async fn run() -> Result<(), String> {
+    if let Some(message) = stale_binary() {
+        eprintln!("[luma-mcp] {message}");
+    }
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().is_some_and(|arg| arg == "record-usage") {
         args.next();

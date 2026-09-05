@@ -1023,6 +1023,72 @@ mod tests {
         assert_eq!(mock.upsert_count(), 1);
     }
 
+    #[tokio::test]
+    async fn venue_environment_is_part_of_the_delivered_record() {
+        let (_directory, pool) = test_pool().await;
+        authenticate(&pool, "u-1").await;
+        seed_venue(&pool, VENUE, "u-1", "Outdoor stage").await;
+        let environment = r#"{"mode":"outdoor","sunElevationDeg":17.0}"#;
+        sqlx::query("UPDATE venues SET environment = ? WHERE id = ?")
+            .bind(environment)
+            .bind(VENUE)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mock = MockRemoteClient::new();
+        push::flush_pending(&pool, &pool, &mock).await.unwrap();
+        let delivered = mock.upserted.lock().unwrap();
+        let (_, payload) = delivered
+            .iter()
+            .find(|(table, _)| table == "venues")
+            .unwrap();
+        assert_eq!(payload["environment"], environment);
+    }
+
+    #[tokio::test]
+    async fn sync_status_and_retry_are_scoped_to_the_signed_in_account() {
+        let (directory, pool) = test_pool().await;
+        authenticate(&pool, "alice").await;
+        for uid in ["alice", "bob"] {
+            super::super::push_state::record_failure(
+                &pool,
+                &format!("signed-in:{uid}"),
+                "venues",
+                VENUE,
+                super::super::push_state::Subject::Row,
+                Some(1),
+                super::super::push_state::Verdict::Permanent,
+                "Permission denied",
+            )
+            .await
+            .unwrap();
+        }
+        let engine = super::super::orchestrator::SyncEngine::new(
+            pool.clone(),
+            pool.clone(),
+            std::sync::Arc::new(MockRemoteClient::new()),
+            crate::services::authored_documents::AuthoredDocuments::new(
+                crate::storage::StorageRoot::from_path(directory.path().join("authored")),
+            ),
+        );
+        let status = engine.status().await.unwrap();
+        assert_eq!(status.failures.len(), 1);
+        assert!(status.failures[0].permanent);
+        assert!(!status.syncing);
+        let guard = engine.sync_lock.lock().await;
+        assert!(engine.status().await.unwrap().syncing);
+        drop(guard);
+        engine.retry().await.unwrap();
+        assert!(engine.status().await.unwrap().failures.is_empty());
+        assert_eq!(
+            super::super::push_state::blocked(&pool, "signed-in:bob")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     /// The payload is the row as it stands when the request is made, and the
     /// receipt only lands if the row is still that row.
     #[tokio::test]

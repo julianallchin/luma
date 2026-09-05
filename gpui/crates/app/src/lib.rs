@@ -53,6 +53,7 @@ mod shell;
 mod signin;
 mod stage;
 mod subagents;
+mod sync_status;
 mod tab_chrome;
 mod tabs;
 mod track_editor;
@@ -169,6 +170,7 @@ pub struct Luma {
     /// The library is being brought up to date with the cloud before anything
     /// opens; the window shows [`signin::splash`] until the pull lands.
     pub(crate) syncing: bool,
+    pub(crate) sync_status: sync_status::SidebarSync,
     /// The one plane over the regions, or none — see [`shell::Overlay`].
     /// The dialog on screen, and — for the frames after it is dismissed —
     /// the one leaving. See [`luma_ui::dialog::Popup`]: gpui unmounts an
@@ -254,6 +256,7 @@ impl Luma {
             sign_in: None,
             refreshing_session: false,
             syncing: false,
+            sync_status: sync_status::SidebarSync::default(),
             overlay: luma_ui::dialog::Popup::default(),
             account_menu: luma_ui::dialog::Popup::default(),
             account_focus: cx.focus_handle().tab_stop(true),
@@ -289,6 +292,7 @@ impl Luma {
         }
         app.auto_repro(cx);
         app.watch_session(cx);
+        app.watch_sync(cx);
         app
     }
 

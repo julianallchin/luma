@@ -5168,6 +5168,32 @@
       "returns": "SyncReport"
     },
     {
+      "args": [],
+      "domain": "sync",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/sync.rs",
+        "line": 34
+      },
+      "name": "sync_retry",
+      "prose": {
+        "returns": "()"
+      },
+      "returns": "()"
+    },
+    {
+      "args": [],
+      "domain": "sync",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/sync.rs",
+        "line": 24
+      },
+      "name": "sync_status",
+      "prose": {
+        "returns": "SyncStatus"
+      },
+      "returns": "SyncStatus"
+    },
+    {
       "args": [
         {
           "name": "universe",
@@ -5680,7 +5706,7 @@
       "handlers": "src-tauri/src/dispatch/handlers/stage.rs"
     },
     {
-      "commandCount": 2,
+      "commandCount": 4,
       "domain": "sync",
       "handlers": "src-tauri/src/dispatch/handlers/sync.rs"
     },
@@ -5761,10 +5787,8 @@
         "src-tauri/src/dispatch/handlers/tracks.rs:324",
         "src-tauri/src/dispatch/handlers/tracks.rs:362",
         "src-tauri/src/dispatch/handlers/tracks.rs:427",
-        "src-tauri/src/sync/orchestrator.rs:137",
-        "src-tauri/src/sync/orchestrator.rs:188",
-        "src-tauri/src/sync/push.rs:1040",
-        "src-tauri/src/sync/push.rs:1077"
+        "src-tauri/src/sync/orchestrator.rs:181",
+        "src-tauri/src/sync/orchestrator.rs:232"
       ],
       "listeners": [
         "src/App.tsx:468",
@@ -5916,7 +5940,7 @@
   ],
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 221,
+    "commandCount": 223,
     "domainCount": 33,
     "eventCount": 18,
     "unportedCount": 0
