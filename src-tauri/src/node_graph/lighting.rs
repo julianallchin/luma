@@ -242,6 +242,7 @@ pub fn pattern(effect: &str) -> Result<Graph, String> {
             ValueType::Color => PatternArgType::Color,
             ValueType::Mapping => PatternArgType::Mapping,
             ValueType::Boundary => PatternArgType::Boundary,
+            ValueType::Envelope => PatternArgType::Envelope,
             ValueType::Boolean => PatternArgType::Boolean,
             _ => {
                 return Err(format!(
@@ -308,4 +309,68 @@ pub fn arg_choices(kind: &PatternArgType) -> Vec<ParamOption> {
         PatternArgType::Boolean => ValueType::Boolean,
         _ => return Vec::new(),
     })
+}
+
+/// Preserve old authored softness controls by making their envelope construction
+/// explicit. Clip overrides and graph connections retain their original IDs.
+pub fn upgrade_shape_inputs(graph: &mut Graph) -> bool {
+    let mut changed = false;
+    let targets: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            matches!(
+                n.type_id.as_str(),
+                "lighting/chase" | "lighting/chase_mask" | "lighting/pill"
+            )
+        })
+        .map(|n| n.id.clone())
+        .collect();
+    for target in targets {
+        let old_edge = graph
+            .edges
+            .iter()
+            .position(|e| e.to_node == target && e.to_port == "softness");
+        let old_value = graph
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == target)
+            .unwrap()
+            .params
+            .remove("softness");
+        if old_edge.is_none() && old_value.is_none() {
+            continue;
+        }
+        let mut id = format!("{target}_shape");
+        while graph.nodes.iter().any(|n| n.id == id) {
+            id.push('_');
+        }
+        let mut params = HashMap::new();
+        if let Some(value) = old_value {
+            params.insert("softness".into(), value);
+        }
+        if let Some(index) = old_edge {
+            graph.edges[index].to_node = id.clone();
+        }
+        graph.nodes.push(NodeInstance {
+            id: id.clone(),
+            type_id: "lighting/soft_edges".into(),
+            params,
+            position_x: None,
+            position_y: None,
+        });
+        let mut edge_id = format!("{id}_output");
+        while graph.edges.iter().any(|e| e.id == edge_id) {
+            edge_id.push('_');
+        }
+        graph.edges.push(Edge {
+            id: edge_id,
+            from_node: id,
+            from_port: "shape".into(),
+            to_node: target,
+            to_port: "shape".into(),
+        });
+        changed = true;
+    }
+    changed
 }

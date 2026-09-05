@@ -83,26 +83,80 @@ fn circle_wrap_preserves_the_two_halves_of_a_pill() {
         false,
     )
     .unwrap();
-    let wrapped = pill(&m, 0.0, 0.4, 0.0, Boundary::Natural);
+    let wrapped = pill(
+        &m,
+        0.0,
+        0.4,
+        &Envelope {
+            points: vec![[0., 1.], [1., 1.]],
+        },
+        Boundary::Natural,
+    );
     assert_eq!(wrapped["0"], 1.0);
     assert_eq!(wrapped["1"], 1.0);
     assert_eq!(wrapped["7"], 1.0);
-    let clipped = pill(&m, 0.0, 0.4, 0.0, Boundary::Clip);
+    let clipped = pill(
+        &m,
+        0.0,
+        0.4,
+        &Envelope {
+            points: vec![[0., 1.], [1., 1.]],
+        },
+        Boundary::Clip,
+    );
     assert_eq!(clipped["7"], 0.0);
     assert_eq!(m.coordinates[7].position, 0.875);
-    assert_eq!(wrapped, pill(&m, 1.0, 0.4, 0.0, Boundary::Natural));
+    assert_eq!(
+        wrapped,
+        pill(
+            &m,
+            1.0,
+            0.4,
+            &Envelope {
+                points: vec![[0., 1.], [1., 1.]]
+            },
+            Boundary::Natural
+        )
+    );
 }
 #[test]
 fn entry_and_exit_account_for_the_entire_stroke() {
     let m = bar();
     for width in [0.1, 0.25, 0.8] {
-        assert!(pill(&m, -width / 2.0, width, 0.0, Boundary::Clip)
-            .values()
-            .all(|v| *v == 0.0));
-        assert!(pill(&m, 1.0 + width / 2.0, width, 0.0, Boundary::Clip)
-            .values()
-            .all(|v| *v < 1e-12));
-        assert_eq!(pill(&m, 0.0, width, 0.0, Boundary::Clip)["bar/head-0"], 1.0);
+        assert!(pill(
+            &m,
+            -width / 2.0,
+            width,
+            &Envelope {
+                points: vec![[0., 1.], [1., 1.]]
+            },
+            Boundary::Clip
+        )
+        .values()
+        .all(|v| *v == 0.0));
+        assert!(pill(
+            &m,
+            1.0 + width / 2.0,
+            width,
+            &Envelope {
+                points: vec![[0., 1.], [1., 1.]]
+            },
+            Boundary::Clip
+        )
+        .values()
+        .all(|v| *v < 1e-12));
+        assert_eq!(
+            pill(
+                &m,
+                0.0,
+                width,
+                &Envelope {
+                    points: vec![[0., 1.], [1., 1.]]
+                },
+                Boundary::Clip
+            )["bar/head-0"],
+            1.0
+        );
     }
 }
 #[test]
@@ -534,11 +588,49 @@ fn pill_softness_preserves_width_and_feathers_the_edge() {
         false,
     )
     .unwrap();
-    let hard = pill(&mapping, 0.5, 0.4, 0., Boundary::Clip);
-    let soft = pill(&mapping, 0.5, 0.4, 1., Boundary::Clip);
+    let hard = pill(
+        &mapping,
+        0.5,
+        0.4,
+        &Envelope {
+            points: vec![[0., 1.], [1., 1.]],
+        },
+        Boundary::Clip,
+    );
+    let soft = pill(
+        &mapping,
+        0.5,
+        0.4,
+        &Envelope {
+            points: vec![[0., 0.], [0.5, 1.], [1., 0.]],
+        },
+        Boundary::Clip,
+    );
     assert_eq!(hard["edge"], 1.);
     assert!((soft["edge"] - 0.25).abs() < 1e-9);
     assert_eq!(soft["center"], 1.);
     assert_eq!(soft["left"], 0.);
     assert_eq!(soft["right"], 0.);
+}
+
+#[test]
+fn spatial_envelope_is_signed_and_wraps_without_mirroring() {
+    let mapping = Mapping::linear(
+        [
+            ("a".into(), 0.),
+            ("b".into(), 0.1),
+            ("c".into(), 0.9),
+            ("d".into(), 1.),
+        ],
+        false,
+    )
+    .unwrap();
+    let ramp = Envelope {
+        points: vec![[0., 0.], [1., 1.]],
+    };
+    let result = pill(&mapping, 0., 0.4, &ramp, Boundary::Wrap);
+    assert!((result["b"] - 0.75).abs() < 1e-9);
+    assert!((result["c"] - 0.25).abs() < 1e-9);
+    assert!((result["a"] - ramp.sample(0.5)).abs() < 1e-9);
+    assert_eq!(result["a"], result["d"]);
 }

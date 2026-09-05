@@ -161,6 +161,7 @@ pub fn pattern_args_def(args: &[PatternArgDef]) -> Option<NodeTypeDef> {
                     PatternArgType::Boolean => PortType::Boolean,
                     PatternArgType::Mapping => PortType::Mapping,
                     PatternArgType::Boundary => PortType::Boundary,
+                    PatternArgType::Envelope => PortType::Envelope,
                     PatternArgType::Selection => PortType::Selection,
                     PatternArgType::Palette | PatternArgType::Gradient => PortType::Stops,
                     PatternArgType::Color | PatternArgType::Scalar => PortType::Signal,

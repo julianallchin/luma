@@ -92,7 +92,7 @@ pub fn pill(
     mapping: &Mapping,
     position: f64,
     width: f64,
-    softness: f64,
+    shape: &crate::Envelope,
     boundary: Boundary,
 ) -> BTreeMap<String, f64> {
     mapping
@@ -100,24 +100,19 @@ pub fn pill(
         .iter()
         .map(|c| {
             let wrap = boundary == Boundary::Wrap || (boundary == Boundary::Natural && c.closed);
-            let distance = if wrap {
-                let d = (c.position - position).rem_euclid(1.0);
-                d.min(1.0 - d)
+            let offset = if wrap {
+                (c.position - position + 0.5).rem_euclid(1.0) - 0.5
             } else {
-                (c.position - position).abs()
+                c.position - position
             };
             let half = width * 0.5;
-            let edge = half * softness;
-            let coverage = if width <= 0.0 {
+            let coverage = if width <= 0.0
+                || (!(wrap && width >= 1.0)
+                    && offset.abs() + 8.0 * f64::EPSILON * position.abs().max(1.0) >= half)
+            {
                 0.0
-            } else if wrap && width >= 1.0 {
-                1.0
-            } else if distance + 8.0 * f64::EPSILON * position.abs().max(1.0) >= half {
-                0.0
-            } else if edge <= 0.0 {
-                1.0
             } else {
-                ((half - distance) / edge).clamp(0.0, 1.0)
+                shape.sample(offset / width + 0.5)
             };
             (c.cell.clone(), coverage)
         })

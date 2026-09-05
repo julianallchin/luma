@@ -21,7 +21,7 @@ use crate::models::node_graph::{
 
 const REVISION_DOMAIN: &[u8] = b"luma.graph-document.v1\0";
 const GRAPH_FILE_V1_SCHEMA_VERSION: u32 = 1;
-const GRAPH_FILE_SCHEMA_VERSION: u32 = 2;
+const GRAPH_FILE_SCHEMA_VERSION: u32 = 3;
 const MAX_GRAPH_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_NODES: usize = 4096;
 const MAX_EDGES: usize = 16_384;
@@ -106,7 +106,7 @@ struct GraphNodeLayoutV1 {
     position_y: Option<f64>,
 }
 
-// V2 retains the node/edge layout and adds typed musical and spatial inputs.
+// Frozen v2 vocabulary, used only to validate old files before migration.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GraphFileV2 {
@@ -120,10 +120,42 @@ struct GraphFileV2 {
 struct GraphArgV2 {
     id: String,
     name: String,
+    arg_type: GraphArgTypeV2,
+    default_value: Value,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+enum GraphArgTypeV2 {
+    Beats,
+    Proportion,
+    Position,
+    Boolean,
+    Mapping,
+    Boundary,
+    Color,
+    Scalar,
+    Selection,
+    Palette,
+    Gradient,
+}
+
+// V3 adds editable Envelope inputs and replaces pill softness with a shape.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GraphFileV3 {
+    schema_version: u32,
+    nodes: Vec<GraphNodeV1>,
+    edges: Vec<GraphEdgeV1>,
+    args: Vec<GraphArgV3>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GraphArgV3 {
+    id: String,
+    name: String,
     arg_type: PatternArgType,
     default_value: Value,
 }
-impl GraphFileV2 {
+impl GraphFileV3 {
     fn from_graph(graph: &Graph) -> Self {
         Self {
             schema_version: GRAPH_FILE_SCHEMA_VERSION,
@@ -150,7 +182,7 @@ impl GraphFileV2 {
             args: graph
                 .args
                 .iter()
-                .map(|arg| GraphArgV2 {
+                .map(|arg| GraphArgV3 {
                     id: arg.id.clone(),
                     name: arg.name.clone(),
                     arg_type: arg.arg_type.clone(),
@@ -552,7 +584,7 @@ pub fn graph_revision(graph: &Graph) -> Result<String, GraphDocumentError> {
 /// stored separately, and neither serializer consults the installed catalog.
 pub fn semantic_graph_json(graph: &Graph) -> Result<String, GraphDocumentError> {
     let graph = canonicalize_graph_structure(graph)?;
-    let value = serde_json::to_value(GraphFileV2::from_graph(&graph))
+    let value = serde_json::to_value(GraphFileV3::from_graph(&graph))
         .map_err(|error| GraphDocumentError::storage(format!("serialize graph: {error}")))?;
     Ok(format!("{}\n", crate::canonical_json::to_string(&value)))
 }
@@ -587,7 +619,7 @@ pub fn graph_from_files(
     let (semantic, layout) = migrate_graph_files_to_current(semantic_version, semantic, layout)?;
     validate_graph_file_v1_fields(&semantic)?;
     validate_layout_file_v1_fields(&layout)?;
-    let semantic: GraphFileV2 = serde_json::from_value(semantic)
+    let semantic: GraphFileV3 = serde_json::from_value(semantic)
         .map_err(|error| GraphDocumentError::invalid("graph.json", error.to_string()))?;
     let layout: GraphLayoutFileV1 = serde_json::from_value(layout)
         .map_err(|error| GraphDocumentError::invalid("layout.json", error.to_string()))?;
@@ -672,6 +704,17 @@ fn migrate_graph_files_once(
             .map_err(|e| GraphDocumentError::invalid("graph.json", e.to_string()))?;
         semantic["schemaVersion"] = Value::from(2);
         layout["schemaVersion"] = Value::from(2);
+        return Ok((semantic, layout));
+    }
+    if version == 2 {
+        serde_json::from_value::<GraphFileV2>(semantic.clone())
+            .map_err(|e| GraphDocumentError::invalid("graph.json", e.to_string()))?;
+        let old: GraphFileV3 = serde_json::from_value(semantic)
+            .map_err(|e| GraphDocumentError::invalid("graph.json", e.to_string()))?;
+        let mut graph = old.into_graph();
+        crate::node_graph::lighting::upgrade_shape_inputs(&mut graph);
+        semantic = serde_json::to_value(GraphFileV3::from_graph(&graph)).unwrap();
+        layout["schemaVersion"] = Value::from(3);
         return Ok((semantic, layout));
     }
     Err(GraphDocumentError::invalid(
@@ -1313,6 +1356,10 @@ fn validate_arg_default(issues: &mut Vec<GraphValidationIssue>, path: &str, arg:
         PatternArgType::Scalar | PatternArgType::Beats | PatternArgType::Position => {
             value.as_f64().is_some_and(f64::is_finite)
         }
+        PatternArgType::Envelope => {
+            serde_json::from_value::<luma_patterns::Envelope>(value.clone())
+                .is_ok_and(|v| v.validate().is_ok())
+        }
         PatternArgType::Proportion => value.as_f64().is_some_and(|v| (0.0..=1.0).contains(&v)),
         PatternArgType::Boolean => {
             crate::node_graph::lighting::decode(luma_patterns::ValueType::Boolean, value).is_ok()
@@ -1408,6 +1455,7 @@ fn output_port_type(
             PatternArgType::Boolean => PortType::Boolean,
             PatternArgType::Mapping => PortType::Mapping,
             PatternArgType::Boundary => PortType::Boundary,
+            PatternArgType::Envelope => PortType::Envelope,
             PatternArgType::Selection => PortType::Selection,
             PatternArgType::Palette | PatternArgType::Gradient => PortType::Stops,
             PatternArgType::Color | PatternArgType::Scalar => PortType::Signal,
@@ -1944,6 +1992,53 @@ mod tests {
                 .await
                 .unwrap(),
             "one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod envelope_migration_tests {
+    use super::*;
+    #[test]
+    fn v2_softness_becomes_an_explicit_envelope_without_changing_clip_inputs() {
+        let mut graph = crate::node_graph::lighting::pattern("chase").unwrap();
+        let arg = graph.args.iter_mut().find(|a| a.id == "shape").unwrap();
+        arg.id = "softness".into();
+        arg.name = "Edge softness".into();
+        arg.arg_type = PatternArgType::Proportion;
+        arg.default_value = serde_json::json!(0.3);
+        for edge in &mut graph.edges {
+            if edge.to_port == "shape" {
+                edge.to_port = "softness".into();
+                edge.from_port = "softness".into();
+            }
+        }
+        let mut semantic: Value =
+            serde_json::from_str(&semantic_graph_json(&graph).unwrap()).unwrap();
+        let mut layout: Value = serde_json::from_str(&graph_layout_json(&graph).unwrap()).unwrap();
+        semantic["schemaVersion"] = 2.into();
+        layout["schemaVersion"] = 2.into();
+        let migrated = graph_from_files(&semantic.to_string(), &layout.to_string()).unwrap();
+        canonicalize_graph(&migrated).unwrap();
+        assert!(migrated
+            .nodes
+            .iter()
+            .any(|n| n.type_id == "lighting/soft_edges"));
+        assert!(migrated
+            .args
+            .iter()
+            .any(|a| a.id == "softness" && a.default_value == serde_json::json!(0.3)));
+        assert!(!crate::node_graph::lighting::upgrade_shape_inputs(
+            &mut migrated.clone()
+        ));
+        let again = graph_from_files(
+            &semantic_graph_json(&migrated).unwrap(),
+            &graph_layout_json(&migrated).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            semantic_graph_json(&again).unwrap(),
+            semantic_graph_json(&migrated).unwrap()
         );
     }
 }

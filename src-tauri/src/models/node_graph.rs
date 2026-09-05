@@ -103,6 +103,7 @@ impl ParamType {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternArgType {
+    Envelope,
     Beats,
     Proportion,
     Position,

@@ -260,7 +260,8 @@ fn upgrade_graph_json(implementation_id: &str, source: &str) -> Result<Option<St
 
 fn upgrade_graph(implementation_id: &str, graph: &mut Graph) -> Result<bool, String> {
     ensure_unambiguous_node_ids(implementation_id, graph)?;
-    let mut changed = upgrade_argument_values(implementation_id, graph)?;
+    let mut changed = crate::node_graph::lighting::upgrade_shape_inputs(graph);
+    changed |= upgrade_argument_values(implementation_id, graph)?;
     changed |= upgrade_legacy_node_params(implementation_id, graph)?;
     changed |= migrate_select_nodes(implementation_id, graph)?;
     changed |= remove_retired_nodes(implementation_id, graph)?;
@@ -321,7 +322,8 @@ fn upgrade_argument_values(implementation_id: &str, graph: &mut Graph) -> Result
             | PatternArgType::Position
             | PatternArgType::Boolean
             | PatternArgType::Mapping
-            | PatternArgType::Boundary => {}
+            | PatternArgType::Boundary
+            | PatternArgType::Envelope => {}
         }
     }
     Ok(changed)

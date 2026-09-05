@@ -220,6 +220,7 @@ struct Cell {
 }
 
 enum Widget {
+    Envelope(Entity<luma_ui::arg::envelope::EnvelopeEditor>),
     Choice(Vec<luma_lib::models::node_graph::ParamOption>),
     Color(Entity<ColorArgEditor>),
     Scalar(Entity<DraftedNumber>),
@@ -536,6 +537,21 @@ fn build(
         .map(|def| {
             let stored = stored_arg(editor, def);
             let widget = match def.arg_type {
+                PatternArgType::Envelope => {
+                    let points = envelope_points(&stored, &def.default_value);
+                    let entity = cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
+                    let arg_id = def.id.clone();
+                    subs.push(cx.subscribe(
+                        &entity,
+                        move |this: &mut Luma,
+                              _,
+                              event: &luma_ui::arg::envelope::EnvelopeChanged,
+                              cx| {
+                            this.arg_live(&arg_id, serde_json::json!({"points": event.0}), cx);
+                        },
+                    ));
+                    Widget::Envelope(entity)
+                }
                 PatternArgType::Color => {
                     let value = color_from_wire(&stored, &def.default_value);
                     let entity = cx.new(|cx| {
@@ -708,6 +724,10 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
             continue;
         }
         match &mut cell.widget {
+            Widget::Envelope(entity) => {
+                let points = envelope_points(&stored, &cell.def.default_value);
+                entity.update(cx, |editor, cx| editor.set_value(points, cx));
+            }
             Widget::Choice(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
@@ -1082,7 +1102,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
             }
             let mut rows = Vec::new();
             for (title, ids) in [
-                ("Shape", &["width", "softness"][..]),
+                ("Shape", &["width", "shape", "softness"][..]),
                 (
                     "Space",
                     &["selection", "mapping", "boundary", "start", "end"][..],
@@ -1113,15 +1133,6 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
                         .agent_node(Role::Text, title.to_string())
                         .into_any_element(),
                 );
-                if title == "Shape" && cells.iter().any(|(_, cell)| cell.def.id == "width") {
-                    rows.push(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(ladder::foreground())
-                            .child("Edge softness: 0 = hard pill, 1 = fade from center to edges.")
-                            .into_any_element(),
-                    );
-                }
                 for (index, cell) in cells {
                     rows.extend(arg_rows(state, app, index, cell));
                 }
@@ -1129,6 +1140,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
             for (index, cell) in built.cells.iter().enumerate().filter(|(_, cell)| {
                 ![
                     "width",
+                    "shape",
                     "softness",
                     "selection",
                     "mapping",
@@ -1227,6 +1239,7 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 },
             ))
         }
+        Widget::Envelope(entity) => one(div().child(entity.clone())),
         Widget::Color(entity) => one(div().child(entity.clone())),
         Widget::Scalar(entity) => one(div().child(entity.clone())),
         Widget::Selection(entity) => {
@@ -1574,4 +1587,16 @@ fn gradient_widget(
         )
     });
     div().relative().child(bar).children(plate)
+}
+
+fn envelope_points(value: &serde_json::Value, default: &serde_json::Value) -> Vec<[f64; 2]> {
+    [value, default]
+        .into_iter()
+        .find_map(|value| {
+            serde_json::from_value::<luma_patterns::Envelope>(value.clone())
+                .ok()
+                .filter(|e| e.validate().is_ok())
+                .map(|e| e.points)
+        })
+        .unwrap_or_else(|| vec![[0., 1.], [1., 1.]])
 }
