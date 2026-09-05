@@ -1092,11 +1092,10 @@ mod tests {
         .expect("the capture serializes");
         capture.push('\n');
         assert!(
-            !write_if_changed(
-                &repo_root().join("harness/goldens/venue-graph-diff.json"),
-                capture.as_bytes(),
-            ),
-            "the venue diff golden was stale and has been rewritten — review and commit it"
+            std::fs::read_to_string(repo_root().join("harness/goldens/venue-graph-diff.json"))
+                .is_ok_and(|old| serde_json::from_str::<serde_json::Value>(&old).ok()
+                    == serde_json::from_str::<serde_json::Value>(&capture).ok()),
+            "the venue diff golden has changed"
         );
     }
 }

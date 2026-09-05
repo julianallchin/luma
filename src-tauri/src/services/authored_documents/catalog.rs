@@ -520,9 +520,23 @@ impl AuthoredDocuments {
         name: String,
         description: Option<String>,
     ) -> Result<PatternSummary> {
+        self.create_pattern_with_graph(pool, principal, request_id, name, description, None, None)
+            .await
+    }
+
+    pub async fn create_pattern_with_graph(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        request_id: &str,
+        name: String,
+        description: Option<String>,
+        graph: Option<Graph>,
+        score_id: Option<&str>,
+    ) -> Result<PatternSummary> {
         let request_id = normalized_creation_request_id(request_id)?;
         let principal_key = principal_key(principal);
-        let fingerprint = operation_request_fingerprint(
+        let mut fingerprint = operation_request_fingerprint(
             "create_pattern",
             &[
                 &name,
@@ -534,6 +548,13 @@ impl AuthoredDocuments {
                 description.as_deref().unwrap_or(""),
             ],
         );
+        if let Some(ref graph) = graph {
+            let serialized = exact_graph_json(graph)?;
+            fingerprint = operation_request_fingerprint(
+                "create_lighting_pattern",
+                &[&fingerprint, &serialized, score_id.unwrap_or("")],
+            );
+        }
         let pattern_id =
             deterministic_creation_id(&principal_key, "pattern", &request_id, "subject");
         let implementation_id =
@@ -546,24 +567,28 @@ impl AuthoredDocuments {
             return Ok(pattern);
         }
 
-        let graph = Graph {
+        let graph = graph.unwrap_or(Graph {
             nodes: Vec::new(),
             edges: Vec::new(),
             args: Vec::new(),
-        };
+        });
+        crate::services::graph_documents::canonicalize_graph(&graph)?;
         let files = graph_files(&graph)?;
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|error| {
             AuthoredDocumentsError::Storage(format!("begin pattern creation: {error}"))
         })?;
         require_admitted_principal(&mut transaction, principal).await?;
-        sqlx::query("INSERT INTO patterns (id, uid, name, description) VALUES (?, ?, ?, ?)")
-            .bind(&pattern_id)
-            .bind(principal)
-            .bind(&name)
-            .bind(&description)
-            .execute(&mut *transaction)
-            .await
-            .map_err(storage("insert pattern"))?;
+        sqlx::query(
+            "INSERT INTO patterns (id, uid, name, description, score_id) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&pattern_id)
+        .bind(principal)
+        .bind(&name)
+        .bind(&description)
+        .bind(score_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage("insert pattern"))?;
         sqlx::query(
             "INSERT INTO implementations (id, uid, pattern_id, name, graph_json)
              VALUES (?, ?, ?, NULL, ?)",
@@ -935,6 +960,8 @@ impl AuthoredDocuments {
             score_id,
         )
         .await?;
+        self.archive_local_score_patterns(access.connection(), principal, score_id)
+            .await?;
         access
             .enter_maintenance()
             .await
@@ -957,6 +984,47 @@ impl AuthoredDocuments {
             .commit()
             .await
             .map_err(AuthoredDocumentsError::Storage)
+    }
+
+    async fn archive_local_score_patterns(
+        &self,
+        connection: &mut SqliteConnection,
+        principal: Option<&str>,
+        score_id: &str,
+    ) -> Result<()> {
+        let rows: Vec<(String,String)> = sqlx::query_as("SELECT p.id, i.id FROM patterns p JOIN implementations i ON i.pattern_id=p.id WHERE p.score_id=? ORDER BY p.id,i.id")
+            .bind(score_id).fetch_all(&mut *connection).await.map_err(storage("list score-local Patterns"))?;
+        let mut heads = Vec::new();
+        for (pattern, implementation) in &rows {
+            let scope = ResolvedScope::pattern(principal, pattern, implementation)?;
+            let current = self
+                .ensure_current_on_connection(connection, &scope)
+                .await?;
+            heads.push((scope, current.head));
+        }
+        for ((pattern, _), (scope, head)) in rows.iter().zip(&heads) {
+            self.archive_document_on_connection(connection, scope, head, "pattern", pattern)
+                .await?;
+        }
+        // Clip references are owned by this score, enforced by the schema.
+        sqlx::query("DELETE FROM track_scores WHERE score_id=?")
+            .bind(score_id)
+            .execute(&mut *connection)
+            .await
+            .map_err(storage("delete local Pattern clips"))?;
+        let patterns: std::collections::BTreeSet<_> =
+            rows.iter().map(|(id, _)| id.as_str()).collect();
+        for pattern in patterns {
+            sqlx::query("DELETE FROM implementations WHERE pattern_id=?")
+                .bind(pattern)
+                .execute(&mut *connection)
+                .await
+                .map_err(storage("delete local Pattern implementations"))?;
+            sync_delete::delete_synced_where(connection, "patterns", "id = ?", &[pattern])
+                .await
+                .map_err(AuthoredDocumentsError::Storage)?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn archive_score_from_remote(
@@ -990,6 +1058,12 @@ impl AuthoredDocuments {
             .await
             .map_err(AuthoredDocumentsError::Storage)?;
         require_terminal_remote_archive(&mut transaction, &resolved).await?;
+        self.archive_local_score_patterns(
+            &mut transaction,
+            scope.owner.as_deref(),
+            &resolved.track_scope().expect("score").score_id,
+        )
+        .await?;
         sqlx::query("DELETE FROM track_scores WHERE score_id = ?")
             .bind(resolved.track_scope().expect("score").score_id.as_str())
             .execute(&mut *transaction)

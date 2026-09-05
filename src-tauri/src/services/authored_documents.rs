@@ -73,7 +73,7 @@ const GRAPH_PATH: &str = "graph.json";
 const LAYOUT_PATH: &str = "layout.json";
 const MAX_HISTORY_PAGE: usize = 500;
 const PATTERN_SUMMARY_COLUMNS: &str =
-    "id, uid, name, description, category_name, created_at, updated_at, is_verified, author_name, forked_from_id";
+    "id, uid, score_id, name, description, category_name, created_at, updated_at, is_verified, author_name, forked_from_id";
 
 #[derive(Debug)]
 pub enum AuthoredDocumentsError {

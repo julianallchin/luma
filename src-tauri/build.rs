@@ -12,8 +12,6 @@ const PYTHON_BUILD_STANDALONE_VERSION: &str = "20260325";
 const FFMPEG_VERSION: &str = "b6.1.1";
 
 fn main() {
-    tauri_build::build();
-
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     // Use actual system architecture for Python, not Rust target

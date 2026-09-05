@@ -119,6 +119,8 @@ pub(crate) fn subset_label(subset: Subset) -> SharedString {
 
 /// The sheet's own state, owned by the [`Editor`].
 pub(crate) struct State {
+    copying: HashSet<String>,
+    copied: HashSet<String>,
     /// How much of the sheet is on screen — see [`luma_ui::sheet`]. The one
     /// place "is the sheet up" is stored: [`PaneWidth::target`] is the
     /// destination and [`PaneWidth::current`] is the picture, so the two
@@ -147,6 +149,8 @@ pub(crate) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            copying: HashSet::new(),
+            copied: HashSet::new(),
             slide: PaneWidth::new(0.),
             groups: Groups::NotAsked,
             defs: HashMap::new(),
@@ -181,6 +185,7 @@ enum Groups {
 /// Which sheet-owned menu is up. The color editor's two menus are its own.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Menu {
+    Choice(usize),
     Blend,
     /// The subset select of the selection cell at this index.
     Subset(usize),
@@ -215,6 +220,7 @@ struct Cell {
 }
 
 enum Widget {
+    Choice(Vec<luma_lib::models::node_graph::ParamOption>),
     Color(Entity<ColorArgEditor>),
     Scalar(Entity<DraftedNumber>),
     Selection(Entity<GroupExpressionEditor>),
@@ -532,7 +538,21 @@ fn build(
             let widget = match def.arg_type {
                 PatternArgType::Color => {
                     let value = color_from_wire(&stored, &def.default_value);
-                    let entity = cx.new(|cx| ColorArgEditor::new(def.name.clone(), value, cx));
+                    let entity = cx.new(|cx| {
+                        let control = ColorArgEditor::new(def.name.clone(), value, cx);
+                        if defs.iter().any(|input| {
+                            matches!(
+                                input.arg_type,
+                                PatternArgType::Beats
+                                    | PatternArgType::Proportion
+                                    | PatternArgType::Mapping
+                            )
+                        }) {
+                            control.rgb_only()
+                        } else {
+                            control
+                        }
+                    });
                     let arg_id = def.id.clone();
                     subs.push(cx.subscribe(
                         &entity,
@@ -543,10 +563,35 @@ fn build(
                     ));
                     Widget::Color(entity)
                 }
-                PatternArgType::Scalar => {
+                PatternArgType::Mapping | PatternArgType::Boundary | PatternArgType::Boolean => {
+                    Widget::Choice(luma_lib::node_graph::lighting::arg_choices(&def.arg_type))
+                }
+                PatternArgType::Scalar
+                | PatternArgType::Beats
+                | PatternArgType::Proportion
+                | PatternArgType::Position => {
                     let value = scalar_from_wire(&stored, &def.default_value);
                     let entity = cx.new(|cx| {
-                        DraftedNumber::new(def.name.clone(), value, -1e9, 1e9, FIELD_W, window, cx)
+                        DraftedNumber::new(
+                            def.name.clone(),
+                            value,
+                            if matches!(
+                                def.arg_type,
+                                PatternArgType::Proportion | PatternArgType::Beats
+                            ) {
+                                0.
+                            } else {
+                                -1e9
+                            },
+                            if def.arg_type == PatternArgType::Proportion {
+                                1.
+                            } else {
+                                1e9
+                            },
+                            FIELD_W,
+                            window,
+                            cx,
+                        )
                     });
                     let arg_id = def.id.clone();
                     subs.push(cx.subscribe(
@@ -663,6 +708,7 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
             continue;
         }
         match &mut cell.widget {
+            Widget::Choice(_) => {}
             Widget::Color(entity) => {
                 let value = color_from_wire(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(value, cx));
@@ -699,6 +745,43 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
 // -- the write paths ----------------------------------------------------------
 
 impl Luma {
+    fn copy_clip_pattern(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+            return;
+        };
+        if editor.sheet.copying.contains(id) || editor.sheet.copied.contains(id) {
+            return;
+        }
+        let target = Target::TrackEditor {
+            track: editor.track_id.to_string(),
+            venue: editor.venue_id.clone(),
+        };
+        let id = id.to_string();
+        let pending = self
+            .library
+            .copy_pattern_to_library(&id, &uuid::Uuid::new_v4().to_string());
+        self.with_track_editor(cx, |editor| {
+            editor.sheet.copying.insert(id.clone());
+        });
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.edit_track_tab(&target, cx, |editor| {
+                    editor.sheet.copying.remove(&id);
+                    match result {
+                        Ok(pattern) => {
+                            editor.sheet.copied.insert(id);
+                            Rc::make_mut(&mut editor.patterns).push(pattern);
+                        }
+                        Err(error) => editor.error = Some(error.to_string()),
+                    }
+                })
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// A blend pick from the sheet: every selected clip takes the mode, in
     /// one committed write — the web's `updateAnnotationsBatch`.
     pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
@@ -864,7 +947,7 @@ pub(super) fn sheet(
     let built = state.sheet.built.as_ref()?;
     Some(
         luma_ui::sheet::Sheet {
-            label: "Args sheet".into(),
+            label: "Clip inputs".into(),
             width: luma_ui::sheet::WIDTH,
             revealed,
             interactive: state.sheet.is_open(),
@@ -890,7 +973,19 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                 .px(pad)
                 .pt(pad)
                 .pb(px(12.))
-                .child(luma_ui::silkscreen("PATTERN".to_string()))
+                .child(luma_ui::silkscreen(
+                    if built
+                        .pattern
+                        .as_ref()
+                        .and_then(|id| state.patterns.iter().find(|p| p.id == id.as_ref()))
+                        .is_some_and(|p| p.score_id.is_some())
+                    {
+                        "PATTERN · THIS SCORE"
+                    } else {
+                        "PATTERN · LIBRARY"
+                    }
+                    .to_string(),
+                ))
                 .child(
                     div()
                         .w_full()
@@ -915,6 +1010,44 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(ROW_GAP))
+                    .children(
+                        built
+                            .pattern
+                            .as_ref()
+                            .filter(|id| {
+                                state
+                                    .patterns
+                                    .iter()
+                                    .any(|p| p.id == id.as_ref() && p.score_id.is_some())
+                            })
+                            .map(|id| {
+                                let id = id.to_string();
+                                let saving = state.sheet.copying.contains(&id);
+                                let copied = state.sheet.copied.contains(&id);
+                                let app = app.clone();
+                                luma_ui::luma_button(
+                                    if saving {
+                                        "Saving…"
+                                    } else if copied {
+                                        "Library copy saved"
+                                    } else {
+                                        "Save copy to library"
+                                    },
+                                    if saving || copied {
+                                        Enabled::No
+                                    } else {
+                                        Enabled::Yes
+                                    },
+                                )
+                                .id("save-pattern-library-copy")
+                                .on_click(move |_, _, cx| {
+                                    let id = id.clone();
+                                    app.update(cx, |this, cx| this.copy_clip_pattern(&id, cx));
+                                })
+                                .agent_node(Role::Button, "Save copy to library")
+                                .into_any_element()
+                            }),
+                    )
                     .child(named("blend", blend_select(state, built, app)))
                     .children(args(state, built, app)),
             ),
@@ -933,7 +1066,7 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     };
     match &built.pattern {
         None => note("Mixed patterns"),
-        Some(_) if built.cells.is_empty() => note("No args"),
+        Some(_) if built.cells.is_empty() => note("No exposed inputs"),
         Some(_) => built
             .cells
             .iter()
@@ -979,6 +1112,46 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
     let name = cell.def.name.as_str();
     let one = |control: Div| vec![named(name, control)];
     match &cell.widget {
+        Widget::Choice(options) => {
+            let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
+            let stored = cell
+                .synced
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| cell.synced.to_string());
+            let selected = options
+                .iter()
+                .find(|option| option.id == stored)
+                .map(|option| option.label.as_str())
+                .unwrap_or("Choose…");
+            let toggle = app.clone();
+            let pick = app.clone();
+            let options = options.clone();
+            let id = cell.def.id.clone();
+            one(luma_arg_select(
+                name,
+                selected,
+                &labels,
+                state.sheet.open == Some(Menu::Choice(index)),
+                move |_, cx| {
+                    toggle.update(cx, |this, cx| {
+                        this.with_track_editor(cx, |editor| {
+                            editor.sheet.open = if editor.sheet.open == Some(Menu::Choice(index)) {
+                                None
+                            } else {
+                                Some(Menu::Choice(index))
+                            };
+                        });
+                    });
+                },
+                move |selected, _, cx| {
+                    pick.update(cx, |this, cx| {
+                        this.with_track_editor(cx, |editor| editor.sheet.open = None);
+                        this.arg_live(&id, serde_json::json!(options[selected].id), cx);
+                    });
+                },
+            ))
+        }
         Widget::Color(entity) => one(div().child(entity.clone())),
         Widget::Scalar(entity) => one(div().child(entity.clone())),
         Widget::Selection(entity) => {

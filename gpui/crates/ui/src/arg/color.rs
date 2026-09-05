@@ -379,6 +379,7 @@ pub enum ColorArgEvent {
 /// picker plate. Owns the working [`Hsv`] and its two menus' open flags;
 /// emits [`ColorArgEvent::Changed`] with the committed [`ColorArg`] only.
 pub struct ColorArgEditor {
+    rgb_only: bool,
     id: SharedString,
     value: ColorArg,
     /// Working picker state; collapses to `value.rgb` on every edit but never
@@ -393,12 +394,21 @@ impl EventEmitter<ColorArgEvent> for ColorArgEditor {}
 impl ColorArgEditor {
     pub fn new(id: impl Into<SharedString>, value: ColorArg, _: &mut Context<Self>) -> Self {
         Self {
+            rgb_only: false,
             id: id.into(),
             value,
             hsv: Hsv::from_rgb(value.rgb),
             mode_menu_open: false,
             picker_open: false,
         }
+    }
+
+    /// A direct Color value has no inherited/mixed capability mode.
+    #[must_use]
+    pub fn rgb_only(mut self) -> Self {
+        self.rgb_only = true;
+        self.value.mode = ColorMode::Override;
+        self
     }
 
     #[must_use]
@@ -409,7 +419,10 @@ impl ColorArgEditor {
     /// A host-side write — an external change landed, so the working hue
     /// resyncs (and goes achromatic-ambiguous if the new rgb is grey; that is
     /// the honest reading of a value that moved under the editor).
-    pub fn set_value(&mut self, value: ColorArg, cx: &mut Context<Self>) {
+    pub fn set_value(&mut self, mut value: ColorArg, cx: &mut Context<Self>) {
+        if self.rgb_only {
+            value.mode = ColorMode::Override;
+        }
         if self.value == value {
             return;
         }
@@ -544,7 +557,7 @@ impl Render for ColorArgEditor {
             .flex()
             .items_center()
             .gap(px(4.))
-            .child(select)
+            .when(!self.rgb_only, |el| el.child(select))
             .child(self.swatch(cx))
             .children(plate)
     }

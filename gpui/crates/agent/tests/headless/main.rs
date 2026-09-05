@@ -51,3 +51,5 @@ mod venue_patch;
 mod venues;
 mod visualizer_score;
 mod workspace_scope;
+
+mod lighting_patterns;

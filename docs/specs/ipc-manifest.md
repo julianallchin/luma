@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**225 commands** across **34 domains** · **18 events** · **0 commands not on the seam**
+**227 commands** across **34 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -23,7 +23,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `authored_state` | 11 | `src-tauri/src/dispatch/handlers/authored_state.rs` |
 | `categories` | 1 | `src-tauri/src/dispatch/handlers/categories.rs` |
 | `cloud_sync` | 2 | `src-tauri/src/dispatch/handlers/cloud_sync.rs` |
-| `composable_patterns` | 2 | `src-tauri/src/dispatch/handlers/composable_patterns.rs` |
+| `composable_patterns` | 4 | `src-tauri/src/dispatch/handlers/composable_patterns.rs` |
 | `compositor` | 2 | `src-tauri/src/dispatch/handlers/compositor.rs` |
 | `controller` | 8 | `src-tauri/src/dispatch/handlers/controller.rs` |
 | `distribute` | 2 | `src-tauri/src/dispatch/handlers/distribute.rs` |
@@ -48,7 +48,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **225** | |
+| **total** | **227** | |
 
 ## Commands
 
@@ -148,6 +148,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
+| `copy_pattern_to_library` | `patternId: String`<br>`requestId: String` | `PatternSummary` |
+| `create_lighting_pattern` | `effect: String`<br>`scoreId: String`<br>`requestId: String` | `PatternSummary` |
 | `get_pattern_node_library` | — | `Value` |
 | `preview_composable_pattern` | `request: Value` | `Value` |
 
@@ -462,21 +464,21 @@ moved emitter cannot leave a stale row. An event with no emitter or no listener 
 
 | Event | Emitters | Listeners | Note |
 | --- | ---: | ---: | --- |
-| `close-requested` | 0 | 1 | **orphan** — emitted by Tauri's own window lifecycle, not by our code |
+| `close-requested` | 0 | 0 | **orphan** — emitted by Tauri's own window lifecycle, not by our code |
 | `controller_port_change` | 1 | 0 | **orphan** — emitted, nobody listens |
-| `controller_state` | 3 | 1 |  |
-| `dmx://update` | 0 | 1 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
-| `host-audio://state` | 1 | 2 |  |
-| `library-changed` | 5 | 2 |  |
-| `midi_learn_captured` | 2 | 3 |  |
-| `mixer_learned` | 1 | 1 |  |
-| `mixer_state` | 2 | 1 |  |
-| `open-settings` | 1 | 1 |  |
-| `perform_event` | 2 | 1 |  |
-| `python-env-progress` | 5 | 1 |  |
-| `track-import-state` | 8 | 3 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
-| `track-status-changed` | 1 | 1 |  |
-| `universe-buffer` | 0 | 1 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
-| `universe-state-update` | 3 | 1 |  |
-| `upload-progress-start` | 1 | 1 |  |
-| `upload-progress-tick` | 1 | 1 |  |
+| `controller_state` | 3 | 0 | **orphan** |
+| `dmx://update` | 0 | 0 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
+| `host-audio://state` | 1 | 0 | **orphan** |
+| `library-changed` | 5 | 0 | **orphan** |
+| `midi_learn_captured` | 2 | 0 | **orphan** |
+| `mixer_learned` | 1 | 0 | **orphan** |
+| `mixer_state` | 2 | 0 | **orphan** |
+| `open-settings` | 0 | 0 | **orphan** |
+| `perform_event` | 2 | 0 | **orphan** |
+| `python-env-progress` | 5 | 0 | **orphan** |
+| `track-import-state` | 8 | 1 | Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose. |
+| `track-status-changed` | 1 | 0 | **orphan** |
+| `universe-buffer` | 0 | 0 | **orphan** — dead listener — the visualizer reads `universe-state-update` instead |
+| `universe-state-update` | 3 | 0 | **orphan** |
+| `upload-progress-start` | 1 | 0 | **orphan** |
+| `upload-progress-tick` | 1 | 0 | **orphan** |

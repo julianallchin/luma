@@ -21,7 +21,7 @@ use crate::models::node_graph::{
 
 const REVISION_DOMAIN: &[u8] = b"luma.graph-document.v1\0";
 const GRAPH_FILE_V1_SCHEMA_VERSION: u32 = 1;
-const GRAPH_FILE_SCHEMA_VERSION: u32 = GRAPH_FILE_V1_SCHEMA_VERSION;
+const GRAPH_FILE_SCHEMA_VERSION: u32 = 2;
 const MAX_GRAPH_JSON_BYTES: usize = 6 * 1024 * 1024;
 const MAX_NODES: usize = 4096;
 const MAX_EDGES: usize = 16_384;
@@ -80,18 +80,6 @@ enum GraphArgTypeV1 {
     Gradient,
 }
 
-impl From<&PatternArgType> for GraphArgTypeV1 {
-    fn from(value: &PatternArgType) -> Self {
-        match value {
-            PatternArgType::Color => Self::Color,
-            PatternArgType::Scalar => Self::Scalar,
-            PatternArgType::Selection => Self::Selection,
-            PatternArgType::Palette => Self::Palette,
-            PatternArgType::Gradient => Self::Gradient,
-        }
-    }
-}
-
 impl From<GraphArgTypeV1> for PatternArgType {
     fn from(value: GraphArgTypeV1) -> Self {
         match value {
@@ -118,10 +106,27 @@ struct GraphNodeLayoutV1 {
     position_y: Option<f64>,
 }
 
-impl GraphFileV1 {
+// V2 retains the node/edge layout and adds typed musical and spatial inputs.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GraphFileV2 {
+    schema_version: u32,
+    nodes: Vec<GraphNodeV1>,
+    edges: Vec<GraphEdgeV1>,
+    args: Vec<GraphArgV2>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GraphArgV2 {
+    id: String,
+    name: String,
+    arg_type: PatternArgType,
+    default_value: Value,
+}
+impl GraphFileV2 {
     fn from_graph(graph: &Graph) -> Self {
         Self {
-            schema_version: GRAPH_FILE_V1_SCHEMA_VERSION,
+            schema_version: GRAPH_FILE_SCHEMA_VERSION,
             nodes: graph
                 .nodes
                 .iter()
@@ -145,10 +150,10 @@ impl GraphFileV1 {
             args: graph
                 .args
                 .iter()
-                .map(|arg| GraphArgV1 {
+                .map(|arg| GraphArgV2 {
                     id: arg.id.clone(),
                     name: arg.name.clone(),
-                    arg_type: (&arg.arg_type).into(),
+                    arg_type: arg.arg_type.clone(),
                     default_value: arg.default_value.clone(),
                 })
                 .collect(),
@@ -185,7 +190,7 @@ impl GraphFileV1 {
                 .map(|arg| PatternArgDef {
                     id: arg.id,
                     name: arg.name,
-                    arg_type: arg.arg_type.into(),
+                    arg_type: arg.arg_type,
                     default_value: arg.default_value,
                 })
                 .collect(),
@@ -196,7 +201,7 @@ impl GraphFileV1 {
 impl GraphLayoutFileV1 {
     fn from_graph(graph: &Graph) -> Self {
         Self {
-            schema_version: GRAPH_FILE_V1_SCHEMA_VERSION,
+            schema_version: GRAPH_FILE_SCHEMA_VERSION,
             nodes: graph
                 .nodes
                 .iter()
@@ -547,7 +552,7 @@ pub fn graph_revision(graph: &Graph) -> Result<String, GraphDocumentError> {
 /// stored separately, and neither serializer consults the installed catalog.
 pub fn semantic_graph_json(graph: &Graph) -> Result<String, GraphDocumentError> {
     let graph = canonicalize_graph_structure(graph)?;
-    let value = serde_json::to_value(GraphFileV1::from_graph(&graph))
+    let value = serde_json::to_value(GraphFileV2::from_graph(&graph))
         .map_err(|error| GraphDocumentError::storage(format!("serialize graph: {error}")))?;
     Ok(format!("{}\n", crate::canonical_json::to_string(&value)))
 }
@@ -582,7 +587,7 @@ pub fn graph_from_files(
     let (semantic, layout) = migrate_graph_files_to_current(semantic_version, semantic, layout)?;
     validate_graph_file_v1_fields(&semantic)?;
     validate_layout_file_v1_fields(&layout)?;
-    let semantic: GraphFileV1 = serde_json::from_value(semantic)
+    let semantic: GraphFileV2 = serde_json::from_value(semantic)
         .map_err(|error| GraphDocumentError::invalid("graph.json", error.to_string()))?;
     let layout: GraphLayoutFileV1 = serde_json::from_value(layout)
         .map_err(|error| GraphDocumentError::invalid("layout.json", error.to_string()))?;
@@ -656,9 +661,19 @@ fn migrate_graph_files_to_current(
 
 fn migrate_graph_files_once(
     version: u32,
-    _semantic: Value,
-    _layout: Value,
+    mut semantic: Value,
+    mut layout: Value,
 ) -> Result<(Value, Value), GraphDocumentError> {
+    if version == GRAPH_FILE_V1_SCHEMA_VERSION {
+        validate_graph_file_v1_fields(&semantic)?;
+        validate_layout_file_v1_fields(&layout)?;
+        // Decode with the frozen vocabulary before upgrading the version.
+        serde_json::from_value::<GraphFileV1>(semantic.clone())
+            .map_err(|e| GraphDocumentError::invalid("graph.json", e.to_string()))?;
+        semantic["schemaVersion"] = Value::from(2);
+        layout["schemaVersion"] = Value::from(2);
+        return Ok((semantic, layout));
+    }
     Err(GraphDocumentError::invalid(
         "graph.json.schemaVersion",
         format!("unsupported graph schema version {version}; no migration is registered"),
@@ -1295,7 +1310,20 @@ fn validate_params(
 fn validate_arg_default(issues: &mut Vec<GraphValidationIssue>, path: &str, arg: &PatternArgDef) {
     let value = &arg.default_value;
     let valid = match arg.arg_type {
-        PatternArgType::Scalar => value.as_f64().is_some_and(f64::is_finite),
+        PatternArgType::Scalar | PatternArgType::Beats | PatternArgType::Position => {
+            value.as_f64().is_some_and(f64::is_finite)
+        }
+        PatternArgType::Proportion => value.as_f64().is_some_and(|v| (0.0..=1.0).contains(&v)),
+        PatternArgType::Boolean => {
+            crate::node_graph::lighting::decode(luma_patterns::ValueType::Boolean, value).is_ok()
+        }
+        PatternArgType::Mapping => {
+            crate::node_graph::lighting::decode(luma_patterns::ValueType::Mapping, value).is_ok()
+        }
+        PatternArgType::Boundary => {
+            crate::node_graph::lighting::decode(luma_patterns::ValueType::Boundary, value).is_ok()
+        }
+
         PatternArgType::Color => {
             let object = value.as_object();
             object.is_some_and(|object| {
@@ -1344,11 +1372,14 @@ fn validate_pattern_args<'a>(
                 "argument id must be snake_case",
             );
         }
-        if !valid_identifier(&arg.name) {
+        if arg.name.trim().is_empty()
+            || arg.name.len() > 160
+            || arg.name.chars().any(char::is_control)
+        {
             issue(
                 issues,
                 format!("{path}.name"),
-                "argument name must be snake_case",
+                "input label must be nonempty text of at most 160 bytes",
             );
         }
         if args.insert(arg.id.as_str(), arg).is_some() {
@@ -1371,6 +1402,12 @@ fn output_port_type(
 ) -> Option<PortType> {
     if node.id == PATTERN_ARGS_NODE_ID && node.type_id == PATTERN_ARGS_NODE_ID {
         return args.get(port).map(|arg| match arg.arg_type {
+            PatternArgType::Beats => PortType::Beats,
+            PatternArgType::Proportion => PortType::Proportion,
+            PatternArgType::Position => PortType::Position,
+            PatternArgType::Boolean => PortType::Boolean,
+            PatternArgType::Mapping => PortType::Mapping,
+            PatternArgType::Boundary => PortType::Boundary,
             PatternArgType::Selection => PortType::Selection,
             PatternArgType::Palette | PatternArgType::Gradient => PortType::Stops,
             PatternArgType::Color | PatternArgType::Scalar => PortType::Signal,

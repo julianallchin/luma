@@ -332,7 +332,7 @@ const SCRIPT: &str = r#"
     // The args sheet is chrome that comes and goes with the selection, so it
     // has to be named here or a count taken with a clip selected would differ
     // from one taken without by the sheet rather than by a clip.
-    const CHROME = ["Waveform", "Ruler", "Args sheet"];
+    const CHROME = ["Waveform", "Ruler", "Clip inputs"];
     function total() {
         return shot().findAll({ role: "card" })
             .filter((c) => !CHROME.includes(c.label)).length;

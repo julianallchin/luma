@@ -20,3 +20,64 @@ pub async fn preview_composable_pattern(
     .await?;
     serde_json::to_value(result).map_err(|error| CommandError::Internal(error.to_string()))
 }
+
+/// Create the graph and its initial authored revision atomically. The score
+/// ownership constraint is enforced by SQLite in that same transaction.
+pub async fn create_lighting_pattern(
+    services: &AppServices,
+    effect: String,
+    score_id: String,
+    request_id: String,
+) -> Result<crate::models::patterns::PatternSummary, CommandError> {
+    let graph = crate::node_graph::lighting::pattern(&effect).map_err(CommandError::Invalid)?;
+    let name = luma_patterns::standard_library().definitions[&effect]
+        .name
+        .clone();
+    let principal = services.session_user_id().await?;
+    let result = services
+        .authored
+        .create_pattern_with_graph(
+            &services.db.0,
+            principal.as_deref(),
+            &request_id,
+            name,
+            None,
+            Some(graph),
+            Some(&score_id),
+        )
+        .await?;
+    services.sync.push_notify.notify_one();
+    Ok(result)
+}
+
+/// Save an independent library copy; existing score clips keep their local graph.
+pub async fn copy_pattern_to_library(
+    services: &AppServices,
+    pattern_id: String,
+    request_id: String,
+) -> Result<crate::models::patterns::PatternSummary, CommandError> {
+    let source =
+        crate::database::local::patterns::get_pattern_pool(&services.db.0, &pattern_id).await?;
+    let document = crate::services::graph_documents::load_visible_graph_document(
+        &services.db.0,
+        &pattern_id,
+        None,
+        None,
+    )
+    .await?;
+    let principal = services.session_user_id().await?;
+    let result = services
+        .authored
+        .create_pattern_with_graph(
+            &services.db.0,
+            principal.as_deref(),
+            &request_id,
+            source.name,
+            source.description,
+            Some(document.graph),
+            None,
+        )
+        .await?;
+    services.sync.push_notify.notify_one();
+    Ok(result)
+}

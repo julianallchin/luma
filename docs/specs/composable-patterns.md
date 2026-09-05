@@ -77,3 +77,25 @@ heads, resolves subsets per head, maps seconds through detected beats, and emits
 the existing renderer's UniverseState. It does not yet replace score persistence
 or the active playback scene. The local-score preparation API is ready for that
 integration; library revision storage and legacy conversion remain outstanding.
+
+
+## Native integration
+
+GPUI is the desktop host. The score insertion menu searches Lighting nodes,
+Patterns owned by the current score, and library Patterns. Inserting Chase or
+Dissolve Flash atomically creates a score-local graph with exposed inputs,
+then places it through the normal score edit/undo path. The clip inspector
+edits only that placement's overrides. Double-click opens its native graph. Save copy to library creates an independent library Pattern; score clips retain their local graph.
+Typed components compile through `eval::lighting` into the regular score
+renderer, including stage playback and clip heatmaps. Existing graphs retain
+their evaluator; mixing legacy signal nodes with typed components is rejected.
+Graph file v2 adds musical/spatial input types; v1 files are decoded using their
+frozen vocabulary before upgrading. SQLite and Supabase score-scope migrations
+are paired. Test local migrations on a copied library with `LUMA_CLOUD=off`.
+
+Still required: rich Envelope editing, exposing inputs from the graph canvas,
+immutable library references, and per-group
+mapping for a union selection. Selection currently scopes the whole compiled
+graph. New typed components cannot yet be combined with legacy signal nodes.
+
+The GPUI graph canvas still needs port dragging, a node-add palette, and input editing; the new engine components are registered but those native authoring gestures are not implemented yet.

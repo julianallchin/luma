@@ -70,7 +70,7 @@ const SCRIPT: &str = r#"
     // text plates.
     function readSheet() {
         const shot = app.snapshot();
-        const sheet = shot.find({ role: "card", label: "Args sheet" });
+        const sheet = shot.find({ role: "card", label: "Clip inputs" });
         const waveform = shot.find({ role: "card", label: "Waveform" });
         const inputs = {};
         for (const node of shot.findAll({ role: "input" })) {
@@ -95,7 +95,7 @@ const SCRIPT: &str = r#"
     }
     function untilGone() {
         until("the sheet to leave", (s) =>
-            s.find({ role: "card", label: "Args sheet" }) === undefined);
+            s.find({ role: "card", label: "Clip inputs" }) === undefined);
     }
 
     function clip(label, index) {

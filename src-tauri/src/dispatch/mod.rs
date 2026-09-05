@@ -1,45 +1,12 @@
-//! The command dispatcher seam: Luma's command surface, decoupled from any
-//! host runtime.
-//!
-//! # Interface
-//!
-//! The whole seam is three ideas:
-//!
-//! 1. Build an [`AppServices`] — [`AppServices::headless`] for a host that is
-//!    not the Tauri app.
-//! 2. Call [`dispatch`] with a command name and its JSON arguments.
-//! 3. Handle a [`CommandError`].
-//!
-//! Everything else — the wire decoding, the handler bodies, the generated
-//! `#[tauri::command]` wrappers — is implementation. A host that wants events
-//! or process control implements [`EventSink`] and [`Host`]; both have
-//! do-nothing defaults ([`Events::discard`], [`HostControl::process_exit`]) so
-//! a minimal host implements neither.
-//!
-//! # Implementation
-//!
-//! The command table below generates two entry points from one declaration:
-//! `adapter::<name>`, a `#[tauri::command]` that injects `AppServices` and
-//! lowers `CommandError` to the `String` the wire expects; and an arm of
-//! [`dispatch`], which decodes arguments from JSON instead. Declaring the wire
-//! name, argument names, argument types and return type exactly once is what
-//! keeps two hosts from drifting apart.
-//!
-//! Wire decoding lives in this file rather than its own module because it and
-//! [`dispatch`] know the same thing — the wire schema. Splitting them would be
-//! decomposition by chronology, not by knowledge.
-//!
-//! `docs/specs/dispatcher-port-guide.md` has the recipe for putting a command
-//! on the seam, the special cases, and the designs that lost.
-
-#![warn(missing_docs)]
+//! Shared command dispatcher for GPUI, the in-app agent, and backend tools.
+//! Hosts construct AppServices, dispatch a command with JSON arguments, and
+//! handle CommandError. The command table owns wire types and metadata.
 
 mod error;
 pub(crate) mod handlers;
 #[cfg(test)]
 mod manifest;
 mod services;
-mod tauri_host;
 
 pub use crate::engine_dj::types::EngineDjTrack as ImportedEngineDjTrack;
 pub use crate::rekordbox::types::RekordboxTrack as ImportedRekordboxTrack;
@@ -49,7 +16,6 @@ pub(crate) use services::WeakServices;
 pub use services::{
     AppServices, EventSink, Events, Host, HostControl, SharedServices, TrackSources,
 };
-pub(crate) use tauri_host::{tauri_events, tauri_host};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -67,29 +33,6 @@ use serde_json::Value;
 /// special cases.
 macro_rules! commands {
     ($( $domain:ident :: $name:ident ( $($arg:ident : $ty:ty),* $(,)? ) -> $ret:ty );* $(;)?) => {
-        /// The Tauri adapter. Each wrapper does the two things a handler
-        /// cannot: it receives the host's shared `AppServices`, and it lowers
-        /// [`CommandError`] to the `String` the wire carries. Generated, so a
-        /// wrapper cannot drift from its handler.
-        ///
-        /// Results are returned in their concrete type rather than through
-        /// `serde_json::Value`, so the desktop path serializes exactly once.
-        pub(crate) mod adapter {
-            #![allow(clippy::too_many_arguments, missing_docs)]
-            use super::*;
-            $(
-                #[tauri::command]
-                pub async fn $name(
-                    services: tauri::State<'_, SharedServices>,
-                    $($arg: $ty,)*
-                ) -> Result<$ret, String> {
-                    handlers::$domain::$name(&services, $($arg),*)
-                        .await
-                        .map_err(String::from)
-                }
-            )*
-        }
-
         /// Run a command by its wire name against `services`.
         ///
         /// `args` is the same JSON object the frontend passes to `invoke`;
@@ -110,7 +53,7 @@ macro_rules! commands {
                 $(
                     stringify!($name) => {
                         $( let $arg: $ty = decode(args, stringify!($arg))?; )*
-                        let value = handlers::$domain::$name(services, $($arg),*).await?;
+                        let value: $ret = handlers::$domain::$name(services, $($arg),*).await?;
                         serde_json::to_value(value).map_err(|error| {
                             CommandError::Internal(format!(
                                 "failed to serialize `{name}` result: {error}"
@@ -228,6 +171,8 @@ commands! {
         fps: f32,
     ) -> Vec<UniverseState>;
 
+    composable_patterns::copy_pattern_to_library(pattern_id: String, request_id: String) -> PatternSummary;
+    composable_patterns::create_lighting_pattern(effect: String, score_id: String, request_id: String) -> PatternSummary;
     composable_patterns::get_pattern_node_library() -> Value;
     composable_patterns::preview_composable_pattern(request: Value) -> Value;
 
