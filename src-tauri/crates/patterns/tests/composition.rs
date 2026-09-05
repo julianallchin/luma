@@ -1,0 +1,468 @@
+use luma_patterns::*;
+use std::collections::BTreeMap;
+
+fn bar() -> Mapping {
+    Mapping::linear(
+        (0..32).map(|n| (format!("bar/head-{n}"), f64::from(n))),
+        false,
+    )
+    .unwrap()
+}
+fn cells() -> &'static [Cell] {
+    static CELLS: std::sync::OnceLock<Vec<Cell>> = std::sync::OnceLock::new();
+    CELLS.get_or_init(|| {
+        (0..32)
+            .map(|n| Cell {
+                id: format!("bar/head-{n}"),
+                group: "bar".into(),
+                world: [0.0, 0.0, f64::from(n)],
+                uvz: [0.0, 0.0, f64::from(n)],
+            })
+            .collect()
+    })
+}
+fn frame(beat: f64) -> Frame<'static> {
+    Frame {
+        cells: cells(),
+        beat,
+        clip_start: 8.0,
+        seed: 42,
+    }
+}
+fn inputs() -> BTreeMap<String, Value> {
+    BTreeMap::from([(
+        "mapping".into(),
+        Value::Mapping(MappingSpec {
+            source: MappingSource::Z,
+            per_group: false,
+            reverse: false,
+        }),
+    )])
+}
+fn light(
+    lib: &Library,
+    id: &str,
+    values: &BTreeMap<String, Value>,
+    beat: f64,
+) -> BTreeMap<String, [f64; 3]> {
+    let result = lib.evaluate(id, values, frame(beat)).unwrap();
+    let Value::Lighting(l) = &result["lighting"] else {
+        panic!()
+    };
+    l.clone()
+}
+#[test]
+fn all_builtins_validate_and_only_lighting_graphs_are_score_candidates() {
+    let lib = standard_library();
+    for id in lib.definitions.keys() {
+        lib.validate(id).unwrap();
+    }
+    assert!(lib.definitions["chase"].playable());
+    assert!(lib.definitions["dissolve_flash"].playable());
+    assert!(!lib.definitions["chase_mask"].playable());
+    assert!(matches!(lib.definitions["chase"].body, Body::Graph(_)));
+    assert!(matches!(lib.definitions["chase_mask"].body, Body::Graph(_)));
+}
+#[test]
+fn chase_rest_is_dark_and_seeking_is_deterministic() {
+    let lib = standard_library();
+    let i = inputs();
+    let mid = light(&lib, "chase", &i, 9.0);
+    assert!(mid.values().any(|c| c[0] > 0.0));
+    for t in [10.0, 10.5, 11.999] {
+        assert!(light(&lib, "chase", &i, t).values().all(|c| c[0] == 0.0));
+    }
+    assert_eq!(mid, light(&lib, "chase", &i, 9.0));
+    assert_eq!(mid, light(&lib, "chase", &i, 13.0));
+}
+#[test]
+fn circle_wrap_preserves_the_two_halves_of_a_pill() {
+    let m = Mapping::circle(
+        (0..8).map(|n| (n.to_string(), f64::from(n) / 8.0)),
+        0.0,
+        false,
+    )
+    .unwrap();
+    let wrapped = pill(&m, 0.0, 0.4, 0.0, Boundary::Natural);
+    assert_eq!(wrapped["0"], 1.0);
+    assert_eq!(wrapped["1"], 1.0);
+    assert_eq!(wrapped["7"], 1.0);
+    let clipped = pill(&m, 0.0, 0.4, 0.0, Boundary::Clip);
+    assert_eq!(clipped["7"], 0.0);
+    assert_eq!(m.coordinates[7].position, 0.875);
+    assert_eq!(wrapped, pill(&m, 1.0, 0.4, 0.0, Boundary::Natural));
+}
+#[test]
+fn entry_and_exit_account_for_the_entire_stroke() {
+    let m = bar();
+    for width in [0.1, 0.25, 0.8] {
+        assert!(pill(&m, -width / 2.0, width, 0.0, Boundary::Clip)
+            .values()
+            .all(|v| *v == 0.0));
+        assert!(pill(&m, 1.0 + width / 2.0, width, 0.0, Boundary::Clip)
+            .values()
+            .all(|v| *v < 1e-12));
+        assert_eq!(pill(&m, 0.0, width, 0.0, Boundary::Clip)["bar/head-0"], 1.0);
+    }
+}
+#[test]
+fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
+    let m = bar();
+    let mut previous = dissolve(&m, 0.0, 0.2, 42);
+    assert!(previous.values().all(|v| *v == 1.0));
+    for step in 1..=100 {
+        let next = dissolve(&m, f64::from(step) / 100.0, 0.2, 42);
+        for (id, v) in &next {
+            assert!(*v <= previous[id]);
+        }
+        previous = next;
+    }
+    assert!(previous.values().all(|v| *v == 0.0));
+    let middle = dissolve(&m, 0.5, 0.0, 42);
+    assert!(middle.values().any(|v| *v == 0.0));
+    assert!(middle.values().any(|v| *v == 1.0));
+    let mut reordered = m.clone();
+    reordered.coordinates.reverse();
+    assert_eq!(middle, dissolve(&reordered, 0.5, 0.0, 42));
+}
+#[test]
+fn dissolve_reseeding_changes_between_strokes_only_when_requested() {
+    let lib = standard_library();
+    let mut i = inputs();
+    let first = light(&lib, "dissolve_flash", &i, 9.0);
+    assert_ne!(first, light(&lib, "dissolve_flash", &i, 13.0));
+    i.insert("reseed".into(), Value::Boolean(false));
+    assert_eq!(
+        light(&lib, "dissolve_flash", &i, 9.0),
+        light(&lib, "dissolve_flash", &i, 13.0)
+    );
+    assert!(light(&lib, "dissolve_flash", &i, 8.0)
+        .values()
+        .all(|c| c[0] == 1.0));
+    assert!(light(&lib, "dissolve_flash", &i, 10.0)
+        .values()
+        .all(|c| c[0] == 0.0));
+}
+#[test]
+fn nested_pattern_exposes_inputs_without_flattening_their_types() {
+    let mut lib = standard_library();
+    let chase = &lib.definitions["chase"];
+    let exposed_inputs = chase.inputs.clone();
+    let outputs = chase.outputs.clone();
+    let node = Node {
+        definition: "chase".into(),
+        inputs: exposed_inputs
+            .keys()
+            .map(|k| (k.clone(), Binding::Input { input: k.clone() }))
+            .collect(),
+    };
+    lib.definitions.insert(
+        "score-local".into(),
+        Definition {
+            name: "My chase".into(),
+            inputs: exposed_inputs,
+            outputs,
+            body: Body::Graph(Graph {
+                nodes: BTreeMap::from([("chase".into(), node)]),
+                outputs: BTreeMap::from([(
+                    "lighting".into(),
+                    Binding::Connection {
+                        node: "chase".into(),
+                        output: "lighting".into(),
+                    },
+                )]),
+            }),
+        },
+    );
+    assert_eq!(
+        light(&lib, "score-local", &inputs(), 9.0),
+        light(&lib, "chase", &inputs(), 9.0)
+    );
+}
+#[test]
+fn rejects_units_missing_targets_invalid_values_and_implicit_overlap() {
+    let lib = standard_library();
+    assert!(lib
+        .evaluate("pill", &BTreeMap::new(), frame(9.0))
+        .unwrap_err()
+        .0
+        .contains("mapping"));
+    let mut i = inputs();
+    i.insert("travel".into(), Value::Number(2.0));
+    assert!(lib
+        .evaluate("chase", &i, frame(9.0))
+        .unwrap_err()
+        .0
+        .contains("expected Beats"));
+    i.insert("travel".into(), Value::Beats(8.0));
+    assert!(lib
+        .evaluate("chase", &i, frame(9.0))
+        .unwrap_err()
+        .0
+        .contains("overlap"));
+    i.insert("travel".into(), Value::Beats(f64::NAN));
+    assert!(lib.evaluate("chase", &i, frame(9.0)).is_err());
+}
+#[test]
+fn rejects_signal_to_fixed_input_and_definition_cycles() {
+    let mut lib = standard_library();
+    let Body::Graph(g) = &mut lib.definitions.get_mut("chase_mask").unwrap().body else {
+        panic!()
+    };
+    g.nodes.get_mut("motion").unwrap().inputs.insert(
+        "travel".into(),
+        Binding::Connection {
+            node: "rhythm".into(),
+            output: "elapsed".into(),
+        },
+    );
+    assert!(lib.validate("chase").unwrap_err().0.contains("fixed input"));
+    let mut lib = standard_library();
+    let Body::Graph(g) = &mut lib.definitions.get_mut("chase_mask").unwrap().body else {
+        panic!()
+    };
+    g.nodes.get_mut("pill").unwrap().definition = "chase_mask".into();
+    assert!(lib.validate("chase").unwrap_err().0.contains("recursive"));
+}
+#[test]
+fn saved_graphs_roundtrip_without_losing_rich_values() {
+    let lib = standard_library();
+    let encoded = serde_json::to_string(&lib).unwrap();
+    let restored: Library = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(
+        light(&lib, "chase", &inputs(), 9.0),
+        light(&restored, "chase", &inputs(), 9.0)
+    );
+    let result = restored
+        .evaluate(
+            "envelope",
+            &BTreeMap::from([
+                (
+                    "shape".into(),
+                    Value::Envelope(Envelope {
+                        points: vec![[0.0, 0.0], [0.25, 1.0], [1.0, 0.0]],
+                    }),
+                ),
+                ("progress".into(), Value::Proportion(0.25)),
+            ]),
+            frame(9.0),
+        )
+        .unwrap();
+    assert_eq!(result["value"], Value::Proportion(1.0));
+}
+
+#[test]
+fn angled_wings_each_get_their_own_principal_progression() {
+    let cells: Vec<_> = (0..2)
+        .flat_map(|wing| {
+            (0..5).map(move |n| {
+                let t = f64::from(n);
+                let sign = if wing == 0 { -1.0 } else { 1.0 };
+                Cell {
+                    id: format!("wing-{wing}/cell-{n}"),
+                    group: format!("wing-{wing}"),
+                    world: [sign * t, t, 0.0],
+                    uvz: [sign * t, t, 0.0],
+                }
+            })
+        })
+        .collect();
+    let m = MappingSpec {
+        source: MappingSource::MajorAxis {
+            toward: [0.0, 1.0, 0.0],
+        },
+        per_group: true,
+        reverse: false,
+    }
+    .resolve(&cells)
+    .unwrap();
+    for c in &m.coordinates {
+        let n = c.cell.rsplit('-').next().unwrap().parse::<f64>().unwrap();
+        assert!((c.position - n / 4.0).abs() < 1e-9);
+    }
+    let reversed = MappingSpec {
+        source: MappingSource::MajorAxis {
+            toward: [0.0, 1.0, 0.0],
+        },
+        per_group: true,
+        reverse: true,
+    }
+    .resolve(&cells)
+    .unwrap();
+    for (a, b) in m.coordinates.iter().zip(&reversed.coordinates) {
+        assert!((a.position + b.position - 1.0).abs() < 1e-9);
+    }
+}
+#[test]
+fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
+    let mut lib = standard_library();
+    let source = lib.definitions["chase_mask"].clone();
+    let graph = Graph {
+        nodes: BTreeMap::from([
+            (
+                "mapping".into(),
+                Node {
+                    definition: "resolve_mapping".into(),
+                    inputs: BTreeMap::from([(
+                        "mapping".into(),
+                        Binding::Input {
+                            input: "mapping".into(),
+                        },
+                    )]),
+                },
+            ),
+            (
+                "chase".into(),
+                Node {
+                    definition: "chase_mask".into(),
+                    inputs: source
+                        .inputs
+                        .keys()
+                        .map(|k| (k.clone(), Binding::Input { input: k.clone() }))
+                        .collect(),
+                },
+            ),
+            (
+                "dissolve".into(),
+                Node {
+                    definition: "dissolve_mask".into(),
+                    inputs: BTreeMap::from([
+                        (
+                            "mapping".into(),
+                            Binding::Connection {
+                                node: "mapping".into(),
+                                output: "coordinates".into(),
+                            },
+                        ),
+                        ("progress".into(), Value::Proportion(0.5).into()),
+                    ]),
+                },
+            ),
+            (
+                "combine".into(),
+                Node {
+                    definition: "multiply_mask".into(),
+                    inputs: BTreeMap::from([
+                        (
+                            "a".into(),
+                            Binding::Connection {
+                                node: "chase".into(),
+                                output: "mask".into(),
+                            },
+                        ),
+                        (
+                            "b".into(),
+                            Binding::Connection {
+                                node: "dissolve".into(),
+                                output: "mask".into(),
+                            },
+                        ),
+                    ]),
+                },
+            ),
+            (
+                "color".into(),
+                Node {
+                    definition: "appearance".into(),
+                    inputs: BTreeMap::from([(
+                        "mask".into(),
+                        Binding::Connection {
+                            node: "combine".into(),
+                            output: "mask".into(),
+                        },
+                    )]),
+                },
+            ),
+        ]),
+        outputs: BTreeMap::from([(
+            "lighting".into(),
+            Binding::Connection {
+                node: "color".into(),
+                output: "lighting".into(),
+            },
+        )]),
+    };
+    lib.definitions.insert(
+        "dissolving-chase".into(),
+        Definition {
+            name: "Dissolving chase".into(),
+            inputs: source.inputs,
+            outputs: lib.definitions["appearance"].outputs.clone(),
+            body: Body::Graph(graph),
+        },
+    );
+    let actual = light(&lib, "dissolving-chase", &inputs(), 9.0);
+    let chase = light(&lib, "chase", &inputs(), 9.0);
+    let mask = dissolve(&bar(), 0.5, 0.0, 42);
+    for (id, color) in actual {
+        assert_eq!(color, chase[&id].map(|v| v * mask[&id]));
+    }
+}
+
+#[test]
+fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_graph() {
+    let lib = standard_library();
+    let mut score = Score::default();
+    score
+        .insert_effect(&lib, "chase", "local-1", 8.0, 8.0)
+        .unwrap();
+    let original = serde_json::to_value(&score.definitions).unwrap();
+    score
+        .clips
+        .get_mut("local-1")
+        .unwrap()
+        .inputs
+        .insert("color".into(), Value::Color([0.0, 0.0, 1.0]));
+    let saved = score.to_json(&lib).unwrap();
+    let restored = Score::from_json(&lib, &saved).unwrap();
+    assert_eq!(
+        original,
+        serde_json::to_value(&restored.definitions).unwrap()
+    );
+    let out = restored
+        .evaluate_clip(&lib, "local-1", &inputs(), 9.0, cells())
+        .unwrap();
+    let Value::Lighting(l) = &out["lighting"] else {
+        panic!()
+    };
+    assert!(l.values().any(|c| c[2] > 0.0));
+    assert!(l.values().all(|c| c[0] == 0.0));
+    assert!(restored
+        .evaluate_clip(&lib, "local-1", &inputs(), 16.0, cells())
+        .unwrap()
+        .is_empty());
+    assert!(score
+        .insert_effect(&lib, "chase_mask", "mask", 8.0, 8.0)
+        .is_err());
+}
+
+#[test]
+fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
+    let lib = standard_library();
+    let mut score = Score::default();
+    score
+        .insert_effect(&lib, "chase", "local", 0.0, 8.0)
+        .unwrap();
+    score.clips.get_mut("local").unwrap().inputs.insert(
+        "mapping".into(),
+        Value::Mapping(MappingSpec {
+            source: MappingSource::Circle { origin: 0.25 },
+            per_group: true,
+            reverse: true,
+        }),
+    );
+    let json = score.to_json(&lib).unwrap();
+    assert!(!json.contains("bar/head"));
+    Score::from_json(&lib, &json).unwrap();
+    score
+        .clips
+        .get_mut("local")
+        .unwrap()
+        .inputs
+        .insert("mapping".into(), Value::Coordinates(bar()));
+    assert!(score
+        .to_json(&lib)
+        .unwrap_err()
+        .0
+        .contains("resolved cell values"));
+}

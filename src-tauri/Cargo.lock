@@ -3305,6 +3305,7 @@ dependencies = [
  "libc",
  "lofty",
  "log",
+ "luma-patterns",
  "luma-render",
  "luma-scene",
  "mcp-stdio",
@@ -3341,6 +3342,15 @@ dependencies = [
  "ts-rs",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "luma-patterns"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
