@@ -27,7 +27,7 @@ pub enum Boundary {
     Wrap,
 }
 
-/// Normalized time/value knots. Duration belongs to the envelope evaluator.
+/// Normalized domain/value knots. The consumer supplies time or spatial meaning.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Envelope {
@@ -35,6 +35,19 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// A symmetric edge profile; useful as an editable preset or graph input.
+    pub fn soft_edges(softness: f64) -> Self {
+        let edge = softness.clamp(0., 1.) * 0.5;
+        let points = if edge <= 0. {
+            vec![[0., 1.], [1., 1.]]
+        } else if edge >= 0.5 {
+            vec![[0., 0.], [0.5, 1.], [1., 0.]]
+        } else {
+            vec![[0., 0.], [edge, 1.], [1. - edge, 1.], [1., 0.]]
+        };
+        Self { points }
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.points.len() < 2
             || self.points[0][0] != 0.0

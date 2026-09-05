@@ -51,7 +51,8 @@ are based on cell identity, instance seed, and optionally cycle identity, never
 selection iteration order or frame count. Progress 0 is fully lit; 1 is dark.
 
 Envelope is a reusable curve value. An envelope evaluator creates a temporal
-signal; the editor is not tied to a specific node. Time durations have beat units;
+signal; Chase samples it over the signed position within its width. Its native
+per-clip editor offers presets and editable knots, and is not tied to a specific node. Time durations have beat units;
 spatial proportions and normalized positions have distinct types.
 
 ## Acceptance path
@@ -89,11 +90,11 @@ edits only that placement's overrides. Double-click opens its native graph. Save
 Typed components compile through `eval::lighting` into the regular score
 renderer, including stage playback and clip heatmaps. Existing graphs retain
 their evaluator; mixing legacy signal nodes with typed components is rejected.
-Graph file v2 adds musical/spatial input types; v1 files are decoded using their
-frozen vocabulary before upgrading. SQLite and Supabase score-scope migrations
+Graph file v3 adds Envelope inputs; v1/v2 files are decoded using their
+frozen vocabularies before upgrading. SQLite and Supabase score-scope migrations
 are paired. Test local migrations on a copied library with `LUMA_CLOUD=off`.
 
-Still required: rich Envelope editing, exposing inputs from the graph canvas,
+Still required: exposing inputs from the graph canvas,
 immutable library references, and per-group
 mapping for a union selection. Selection currently scopes the whole compiled
 graph. New typed components cannot yet be combined with legacy signal nodes.

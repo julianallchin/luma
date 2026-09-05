@@ -170,7 +170,17 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                     ),
                 ),
                 ("width", proportion("Width", 0.25)),
-                ("softness", proportion("Edge softness", 0.1)),
+                (
+                    "shape",
+                    field(
+                        "Shape",
+                        "Brightness across the stroke, from its negative to positive edge",
+                        Value::Envelope(Envelope {
+                            points: vec![[0., 0.], [0.05, 1.], [0.95, 1.], [1., 0.]],
+                        }),
+                        Frame,
+                    ),
+                ),
                 ("active", proportion("Activity", 1.0)),
                 (
                     "boundary",
@@ -238,6 +248,19 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             vec![("a", lighting()), ("b", lighting())],
             vec![("lighting", ValueType::Lighting, Frame)],
         ),
+        Primitive::SoftEdges => (
+            "Soft Edges",
+            vec![(
+                "softness",
+                field(
+                    "Edge softness",
+                    "Symmetric edge fraction",
+                    Value::Proportion(0.1),
+                    Frame,
+                ),
+            )],
+            vec![("shape", ValueType::Envelope, Frame)],
+        ),
         Primitive::Envelope => (
             "Evaluate Envelope",
             vec![
@@ -249,7 +272,7 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                         Value::Envelope(Envelope {
                             points: vec![[0.0, 1.0], [1.0, 0.0]],
                         }),
-                        Fixed,
+                        Frame,
                     ),
                 ),
                 ("progress", proportion("Progress", 0.0)),
@@ -308,6 +331,7 @@ pub fn standard_library() -> Library {
         ("multiply_mask", Primitive::MultiplyMask),
         ("add_lighting", Primitive::AddLighting),
         ("envelope", Primitive::Envelope),
+        ("soft_edges", Primitive::SoftEdges),
     ] {
         library.definitions.insert(id.into(), primitive(p));
     }
@@ -315,7 +339,7 @@ pub fn standard_library() -> Library {
     for (id, names) in [
         ("rhythm", vec!["repeat", "grid_aligned"]),
         ("motion", vec!["travel", "start", "end"]),
-        ("pill", vec!["mapping", "width", "softness", "boundary"]),
+        ("pill", vec!["mapping", "width", "shape", "boundary"]),
     ] {
         for name in names {
             inputs.insert(name.into(), library.definitions[id].inputs[name].clone());
@@ -365,7 +389,7 @@ pub fn standard_library() -> Library {
             &[
                 ("mapping", wire("mapping", "coordinates")),
                 ("width", exposed("width")),
-                ("softness", exposed("softness")),
+                ("shape", exposed("shape")),
                 ("boundary", exposed("boundary")),
                 ("position", wire("motion", "position")),
                 ("active", wire("motion", "active")),

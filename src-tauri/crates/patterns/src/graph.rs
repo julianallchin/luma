@@ -61,6 +61,7 @@ pub enum Primitive {
     MultiplyMask,
     AddLighting,
     Envelope,
+    SoftEdges,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "body", rename_all = "snake_case")]
@@ -408,11 +409,14 @@ pub(crate) fn run_primitive(
             let Value::Boundary(boundary) = i["boundary"] else {
                 unreachable!()
             };
+            let Value::Envelope(shape) = &i["shape"] else {
+                unreachable!()
+            };
             let mut m = pill(
                 mapping("mapping"),
                 n("position"),
                 n("width"),
-                n("softness"),
+                shape,
                 boundary,
             );
             for v in m.values_mut() {
@@ -481,6 +485,10 @@ pub(crate) fn run_primitive(
             }
             out("lighting", Value::Lighting(sum))
         }
+        Primitive::SoftEdges => out(
+            "shape",
+            Value::Envelope(crate::Envelope::soft_edges(n("softness"))),
+        ),
         Primitive::Envelope => {
             let Value::Envelope(e) = &i["shape"] else {
                 unreachable!()
