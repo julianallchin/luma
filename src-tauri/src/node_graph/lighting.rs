@@ -10,9 +10,9 @@ pub const PREFIX: &str = "lighting/";
 pub fn choices(kind: ValueType) -> Vec<ParamOption> {
     let rows: &[(&str, &str)] = match kind {
         ValueType::Mapping => &[
-            ("z", "Height (Z)"),
-            ("u", "Across (U)"),
-            ("v", "Depth (V)"),
+            ("z", "Up (Z+)"),
+            ("u", "Stage right (U+)"),
+            ("v", "Downstage (V+)"),
             ("major_axis", "Major axis"),
             ("circle", "Solved circle"),
             ("order", "Selection order"),

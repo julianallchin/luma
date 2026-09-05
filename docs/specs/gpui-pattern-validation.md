@@ -11,6 +11,13 @@ The typed engine runs inside the existing score renderer, including stage
 playback and clip previews. Dissolve operates on independently addressable heads.
 A connected node input no longer displays a second, ignored literal control.
 
+Typed stage mappings use U+ toward stage right, V+ toward downstage, and Z+
+upward, normalized over the selection. They do not use the legacy rig UV
+projection (whose V was height). Major Axis remains the fitted oblique mapping.
+The clip inspector groups shape, space, timing, and appearance, with width and
+edge softness first. Direction independence and edge feathering have regression
+coverage.
+
 ## Validation
 
 - Native UI: search, keyboard insertion, clip inspector, persisted score-local

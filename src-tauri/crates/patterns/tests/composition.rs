@@ -521,3 +521,24 @@ fn prepared_clip_owns_its_overrides_and_obeys_the_score_span() {
         .is_err());
     assert!(!score.clips.contains_key("overflow"));
 }
+
+#[test]
+fn pill_softness_preserves_width_and_feathers_the_edge() {
+    let mapping = Mapping::linear(
+        [
+            ("left".into(), 0.),
+            ("edge".into(), 0.35),
+            ("center".into(), 0.5),
+            ("right".into(), 1.),
+        ],
+        false,
+    )
+    .unwrap();
+    let hard = pill(&mapping, 0.5, 0.4, 0., Boundary::Clip);
+    let soft = pill(&mapping, 0.5, 0.4, 1., Boundary::Clip);
+    assert_eq!(hard["edge"], 1.);
+    assert!((soft["edge"] - 0.25).abs() < 1e-9);
+    assert_eq!(soft["center"], 1.);
+    assert_eq!(soft["left"], 0.);
+    assert_eq!(soft["right"], 0.);
+}

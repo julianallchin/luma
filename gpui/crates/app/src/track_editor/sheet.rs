@@ -1067,12 +1067,87 @@ fn args(state: &Editor, built: &Built, app: &Entity<Luma>) -> Vec<AnyElement> {
     match &built.pattern {
         None => note("Mixed patterns"),
         Some(_) if built.cells.is_empty() => note("No exposed inputs"),
-        Some(_) => built
-            .cells
-            .iter()
-            .enumerate()
-            .flat_map(|(index, cell)| arg_rows(state, app, index, cell))
-            .collect(),
+        Some(_) => {
+            let typed = built
+                .cells
+                .iter()
+                .any(|cell| cell.def.arg_type == PatternArgType::Mapping);
+            if !typed {
+                return built
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, cell)| arg_rows(state, app, index, cell))
+                    .collect();
+            }
+            let mut rows = Vec::new();
+            for (title, ids) in [
+                ("Shape", &["width", "softness"][..]),
+                (
+                    "Space",
+                    &["selection", "mapping", "boundary", "start", "end"][..],
+                ),
+                (
+                    "Timing",
+                    &["travel", "repeat", "grid_aligned", "reseed"][..],
+                ),
+                ("Appearance", &["color", "brightness"][..]),
+            ] {
+                let cells: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        built
+                            .cells
+                            .iter()
+                            .enumerate()
+                            .find(|(_, cell)| cell.def.id == *id)
+                    })
+                    .collect();
+                if cells.is_empty() {
+                    continue;
+                }
+                rows.push(
+                    div()
+                        .pt(px(8.))
+                        .child(luma_ui::silkscreen(title.to_string()))
+                        .agent_node(Role::Text, title.to_string())
+                        .into_any_element(),
+                );
+                if title == "Shape" && cells.iter().any(|(_, cell)| cell.def.id == "width") {
+                    rows.push(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(ladder::foreground())
+                            .child("Edge softness: 0 = hard pill, 1 = fade from center to edges.")
+                            .into_any_element(),
+                    );
+                }
+                for (index, cell) in cells {
+                    rows.extend(arg_rows(state, app, index, cell));
+                }
+            }
+            for (index, cell) in built.cells.iter().enumerate().filter(|(_, cell)| {
+                ![
+                    "width",
+                    "softness",
+                    "selection",
+                    "mapping",
+                    "boundary",
+                    "start",
+                    "end",
+                    "travel",
+                    "repeat",
+                    "grid_aligned",
+                    "reseed",
+                    "color",
+                    "brightness",
+                ]
+                .contains(&cell.def.id.as_str())
+            }) {
+                rows.extend(arg_rows(state, app, index, cell));
+            }
+            rows
+        }
     }
 }
 
