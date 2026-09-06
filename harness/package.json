@@ -1,0 +1,11 @@
+{
+  "name": "luma-render-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compare": "bun compare-shots.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

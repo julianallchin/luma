@@ -6,7 +6,6 @@ use crate::services::group_derivation::FixtureRole;
 /// Movement pyramid configuration for a fixture group.
 /// Defines the base aim direction and angular extents for UV perturbation.
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct MovementConfig {
     /// Base direction unit vector (Z-up coordinate system)
@@ -95,7 +94,6 @@ pub fn validate_group_name(name: &str) -> Result<(), String> {
 
 /// A fixture group within a venue
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroup {
     pub id: String,
@@ -130,7 +128,6 @@ pub struct FixtureGroup {
 /// them from geometry is the movement layer's job and it is not built; until it
 /// is, consumers must tolerate their absence.
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureGroupNode {
     pub id: String,
@@ -170,7 +167,6 @@ pub struct FixtureGroupNode {
 
 /// A fixture within a group hierarchy
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct GroupedFixtureNode {
     pub id: String,
@@ -188,7 +184,6 @@ pub struct GroupedFixtureNode {
 
 /// A head within a fixture
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct HeadNode {
     /// Format: "fixtureId:headIndex"
@@ -201,7 +196,6 @@ pub struct HeadNode {
 
 /// Where a node of the group tree came from.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "snake_case")]
 pub enum GroupOrigin {
     /// The rule produced it and nobody has touched it. It re-derives on every
@@ -223,7 +217,6 @@ pub enum GroupOrigin {
 /// children, so a consumer can build the tree in one pass, and `ts-rs` can
 /// name the type.
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct GroupTreeNode {
     pub id: String,

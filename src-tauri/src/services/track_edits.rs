@@ -65,7 +65,6 @@ impl From<&TrackEditScope> for TrackScope {
 /// id until apply; the result maps that id to the UUID allocated by Rust.
 #[derive(TS, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackClip {
     pub id: String,
@@ -121,7 +120,6 @@ pub struct TrackEditCheck {
 /// The authoritative document after a successful apply.
 #[derive(TS, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackEditResult {
     pub revision: String,

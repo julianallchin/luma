@@ -100,7 +100,6 @@ use crate::models::groups::{normalize_group_name, GroupOrigin, GroupTreeNode};
 /// Eight values, closed. This is the vocabulary a score speaks; a ninth would
 /// mean every venue's tree grew a branch nothing references.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/bindings/groups.ts")]
 #[serde(rename_all = "snake_case")]
 pub enum FixtureRole {
     /// Colour over an area: pars, wash movers, anything with mixing and no gobo.

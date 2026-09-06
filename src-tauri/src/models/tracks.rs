@@ -4,7 +4,6 @@ use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackSummary {
     pub id: String,
@@ -34,7 +33,6 @@ pub struct TrackSummary {
 /// Durable phase-one result from any track import source.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackImportResult {
     pub import_id: String,
@@ -44,7 +42,6 @@ pub struct TrackImportResult {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackImportFailure {
     pub source_id: String,
@@ -53,7 +50,6 @@ pub struct TrackImportFailure {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum TrackImportPhase {
     Importing,
@@ -65,7 +61,6 @@ pub enum TrackImportPhase {
 /// never on human-readable status text.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackImportProgress {
     pub import_id: String,
@@ -89,7 +84,6 @@ pub struct TrackImportProgress {
 /// Beat analysis data for a track
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackBeats {
     #[sqlx(rename = "track_id")]
@@ -129,7 +123,6 @@ pub struct ChordSection {
 /// Root/section analysis data for a track
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackRoots {
     #[sqlx(rename = "track_id")]
@@ -152,7 +145,6 @@ pub struct TrackRoots {
 /// Stem audio file for a track
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackStem {
     #[sqlx(rename = "track_id")]
@@ -174,7 +166,6 @@ pub struct TrackStem {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackBrowserRow {
     pub id: String,
@@ -219,7 +210,6 @@ pub struct TrackBrowserRow {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct MelSpec {
     pub width: usize,
     pub height: usize,

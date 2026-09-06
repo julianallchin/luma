@@ -11,7 +11,6 @@ use ts_rs::TS;
 /// these units, so a bucket from one is comparable with a bucket from another.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct BandEnvelopes {
     /// Low frequency envelope (bass) - values 0.0-1.0
@@ -42,7 +41,6 @@ pub struct BandGains {
 /// Waveform data for timeline visualization
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackWaveform {
     pub track_id: String,
@@ -80,7 +78,6 @@ pub struct TrackWaveform {
 /// never a differently shaped or differently coloured waveform.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct WaveformWindow {
     pub track_id: String,

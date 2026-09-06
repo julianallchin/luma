@@ -14,7 +14,6 @@ use ts_rs::TS;
 /// One executed cell.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PythonCellResult {
     /// `"ok"` | `"error"` | `"interrupted"` | `"failed"`.
@@ -42,7 +41,6 @@ pub struct PythonCellResult {
 /// copy the model provider needs for an image part (design §14.7 / D10).
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PythonCellFigure {
     pub artifact_rel: String,
@@ -60,7 +58,6 @@ pub struct PythonCellFigure {
 /// serde ignores them, and so must every other decoder.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PythonToolOutput {
     #[ts(type = r#""ok" | "error" | "interrupted" | "failed""#)]
@@ -81,7 +78,6 @@ pub struct PythonToolOutput {
 /// was persisted.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PythonStoredFigure {
     pub width: u32,
@@ -98,7 +94,6 @@ pub struct PythonStoredFigure {
 /// something a caller may assert.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PythonScopeInput {
     pub track_id: Option<String>,

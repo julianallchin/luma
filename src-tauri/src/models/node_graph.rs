@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum PortType {
     Intensity,
     Audio,
@@ -44,7 +43,6 @@ impl PortType {
 /// label a picker shows for it.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ParamOption {
     pub id: String,
@@ -52,7 +50,6 @@ pub struct ParamOption {
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum ParamType {
     Number,
     Text,
@@ -84,7 +81,6 @@ impl ParamType {
 }
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum PatternArgType {
     Color,
     Scalar,
@@ -95,7 +91,6 @@ pub enum PatternArgType {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternArgDef {
     pub id: String,
@@ -107,7 +102,6 @@ pub struct PatternArgDef {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PortDef {
     pub id: String,
@@ -117,7 +111,6 @@ pub struct PortDef {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ParamDef {
     pub id: String,
@@ -135,7 +128,6 @@ pub struct ParamDef {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct NodeTypeDef {
     pub id: String,
@@ -149,7 +141,6 @@ pub struct NodeTypeDef {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct NodeInstance {
     pub id: String,
@@ -162,7 +153,6 @@ pub struct NodeInstance {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Edge {
     pub id: String,
@@ -174,7 +164,6 @@ pub struct Edge {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Graph {
     pub nodes: Vec<NodeInstance>,
@@ -187,7 +176,6 @@ pub struct Graph {
 /// The host is responsible for loading audio and computing beat grids.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct GraphContext {
     pub track_id: String,
@@ -203,7 +191,6 @@ pub struct GraphContext {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct BeatGrid {
     pub beats: Vec<f32>,
     pub downbeats: Vec<f32>,
@@ -214,7 +201,6 @@ pub struct BeatGrid {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct SeriesSample {
     pub time: f32,
@@ -224,7 +210,6 @@ pub struct SeriesSample {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Series {
     pub dim: usize,
@@ -234,7 +219,6 @@ pub struct Series {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct Signal {
     pub n: usize,       // Spatial dimension (Selection size)
     pub t: usize,       // Temporal dimension (Time samples)
@@ -251,7 +235,6 @@ pub struct Signal {
 /// `Gradient` node (user-positioned stops). The data structure is the same.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct Stops {
     /// (t_position, rgba) — `t` in `[0,1]`, the list is sorted ascending by t.
     pub stops: Vec<(f32, [f32; 4])>,
@@ -333,7 +316,6 @@ impl Stops {
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct AudioCrop {
     pub start_seconds: f32,
     pub end_seconds: f32,
@@ -341,7 +323,6 @@ pub struct AudioCrop {
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub enum BlendMode {
     Replace,
     Add,
@@ -398,7 +379,6 @@ impl BlendMode {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct PrimitiveTimeSeries {
     pub primitive_id: String,
     // Using Series for each capability
@@ -411,14 +391,12 @@ pub struct PrimitiveTimeSeries {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct LayerTimeSeries {
     pub primitives: Vec<PrimitiveTimeSeries>,
 }
 
 #[derive(TS, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RunResult {
     pub views: HashMap<String, Signal>,

@@ -4,7 +4,6 @@ use ts_rs::TS;
 /// A track from the Rekordbox master.db, deserialized from the subprocess bridge.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/rekordbox.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RekordboxTrack {
     /// Rekordbox content ID (string)
@@ -30,7 +29,6 @@ pub struct RekordboxTrack {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/rekordbox.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RekordboxPlaylist {
     pub id: String,
@@ -42,7 +40,6 @@ pub struct RekordboxPlaylist {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/rekordbox.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RekordboxLibraryInfo {
     #[ts(type = "number")]

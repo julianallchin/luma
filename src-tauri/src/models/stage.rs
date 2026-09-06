@@ -8,7 +8,6 @@ use ts_rs::TS;
 /// drawing into three.js (Y-up).
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/stage.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct StagePiece {
     pub id: String,

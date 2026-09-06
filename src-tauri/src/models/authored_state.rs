@@ -12,7 +12,6 @@ use crate::services::score_dsl::{
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredOperationKind {
     InitialImport,
@@ -33,7 +32,6 @@ pub enum AuthoredOperationKind {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredProjectedDocument {
     TrackScore {
@@ -48,7 +46,6 @@ pub enum AuthoredProjectedDocument {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PrepareAuthoredTurnInput {
     pub thread_id: String,
@@ -58,7 +55,6 @@ pub struct PrepareAuthoredTurnInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PreparedAuthoredTurn {
     pub document_id: String,
@@ -68,7 +64,6 @@ pub struct PreparedAuthoredTurn {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct FinalizeAuthoredTurnInput {
     pub thread_id: String,
@@ -82,7 +77,6 @@ pub struct FinalizeAuthoredTurnInput {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub enum AuthoredTurnCommit {
     Committed {
@@ -105,7 +99,6 @@ pub enum AuthoredTurnCommit {
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredRevisionPosition {
     Current,
@@ -115,7 +108,6 @@ pub enum AuthoredRevisionPosition {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredConversationCheckpoint {
     pub thread_id: String,
@@ -124,7 +116,6 @@ pub struct AuthoredConversationCheckpoint {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredHistoryEntry {
     pub revision_id: String,
@@ -154,7 +145,6 @@ pub struct AuthoredHistoryEntry {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredHistoryPage {
     pub entries: Vec<AuthoredHistoryEntry>,
@@ -165,7 +155,6 @@ pub struct AuthoredHistoryPage {
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredRestoreMode {
     StateOnly,
@@ -174,7 +163,6 @@ pub enum AuthoredRestoreMode {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct RestoreAuthoredStateInput {
     pub thread_id: String,
@@ -185,7 +173,6 @@ pub struct RestoreAuthoredStateInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredRestoreResult {
     pub document_id: String,
@@ -203,7 +190,6 @@ pub struct AuthoredRestoreResult {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateAuthoredWorkspaceInput {
     pub thread_id: String,
@@ -215,7 +201,6 @@ pub struct CreateAuthoredWorkspaceInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ForkAuthoredWorkspaceInput {
     pub thread_id: String,
@@ -240,7 +225,6 @@ pub struct AuthoredWorkspace {
 /// workspace path remains an implementation detail of the local supervisor.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceHandle {
     pub id: String,
@@ -250,7 +234,6 @@ pub struct AuthoredWorkspaceHandle {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceInput {
     pub thread_id: String,
@@ -259,7 +242,6 @@ pub struct AuthoredWorkspaceInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceCheck {
     pub id: String,
@@ -272,7 +254,6 @@ pub struct AuthoredWorkspaceCheck {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CommitAuthoredWorkspaceInput {
     pub thread_id: String,
@@ -285,7 +266,6 @@ pub struct CommitAuthoredWorkspaceInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct MergeAuthoredWorkspaceInput {
     pub thread_id: String,
@@ -296,7 +276,6 @@ pub struct MergeAuthoredWorkspaceInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct MergeAuthoredWorkspaceIntoWorkspaceInput {
     pub thread_id: String,
@@ -308,7 +287,6 @@ pub struct MergeAuthoredWorkspaceIntoWorkspaceInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredWorkspaceCommit {
     pub id: String,
@@ -322,7 +300,6 @@ pub struct AuthoredWorkspaceCommit {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredCurrentRevision {
     pub document_id: String,
@@ -335,7 +312,6 @@ pub struct AuthoredCurrentRevision {
 /// semantic graph and layout as one bounded workspace update.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct WriteAuthoredWorkspaceGraphInput {
     pub thread_id: String,
@@ -345,7 +321,6 @@ pub struct WriteAuthoredWorkspaceGraphInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredMergeInput {
     Base,
@@ -377,7 +352,6 @@ impl From<TriviaMergeInput> for AuthoredMergeInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredMergePathSegment {
     Input(AuthoredMergeInput),
@@ -432,7 +406,6 @@ impl From<MergePathSegment> for AuthoredMergePathSegment {
 
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredMergeConflictKind {
     DuplicateKey,
@@ -480,7 +453,6 @@ impl From<TriviaMergeValue> for AuthoredMergeValue {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "state", content = "value", rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum AuthoredMergeValue {
     Missing,
@@ -498,7 +470,6 @@ impl From<MergeValue> for AuthoredMergeValue {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AuthoredMergeConflict {
     pub path: Vec<AuthoredMergePathSegment>,
@@ -541,7 +512,6 @@ impl From<TriviaMergeConflict> for AuthoredMergeConflict {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub enum AuthoredWorkspaceMerge {
     Merged {

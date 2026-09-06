@@ -6,7 +6,6 @@ use ts_rs::TS;
 /// Patterns can have multiple implementations (e.g., "default", "minimal", "club mode")
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Implementation {
     pub id: String,

@@ -3,7 +3,6 @@ use sqlx::FromRow;
 use ts_rs::TS;
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 pub enum ChannelType {
     Intensity,
     Colour,
@@ -21,7 +20,6 @@ pub enum ChannelType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS, PartialEq)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 pub enum ChannelColour {
     Red,
     Green,
@@ -36,7 +34,6 @@ pub enum ChannelColour {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct FixtureDefinition {
     pub manufacturer: String,
@@ -92,7 +89,6 @@ impl FixtureDefinition {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Channel {
     #[serde(rename = "@Name")]
@@ -233,7 +229,6 @@ impl Channel {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Group {
     #[serde(rename = "@Byte")]
@@ -243,7 +238,6 @@ pub struct Group {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Capability {
     #[serde(rename = "@Min")]
@@ -281,7 +275,6 @@ impl Capability {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Mode {
     #[serde(rename = "@Name")]
@@ -293,7 +286,6 @@ pub struct Mode {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 pub struct ModeChannel {
     #[serde(rename = "@Number")]
     pub number: u32,
@@ -302,14 +294,12 @@ pub struct ModeChannel {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 pub struct Head {
     #[serde(rename = "Channel")]
     pub channels: Vec<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Physical {
     pub dimensions: Option<Dimensions>,
@@ -321,7 +311,6 @@ pub struct Physical {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Bulb {
     #[serde(rename = "@Type")]
@@ -333,7 +322,6 @@ pub struct Bulb {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Lens {
     #[serde(rename = "@Name")]
@@ -345,7 +333,6 @@ pub struct Lens {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Focus {
     #[serde(rename = "@Type")]
@@ -357,7 +344,6 @@ pub struct Focus {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Technical {
     #[serde(rename = "@PowerConsumption")]
@@ -367,7 +353,6 @@ pub struct Technical {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Dimensions {
     #[serde(rename = "@Weight")]
@@ -381,7 +366,6 @@ pub struct Dimensions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "PascalCase")]
 pub struct Layout {
     #[serde(rename = "@Width")]
@@ -391,7 +375,6 @@ pub struct Layout {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 pub struct FixtureEntry {
     pub manufacturer: String,
     pub model: String,
@@ -400,7 +383,6 @@ pub struct FixtureEntry {
 
 /// A fixture that has been patched to a venue
 #[derive(Debug, Serialize, Deserialize, Clone, TS, FromRow)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PatchedFixture {
     pub id: String,
@@ -435,7 +417,6 @@ pub struct PatchedFixture {
 /// Not a column on [`PatchedFixture`]: that struct is a row, and a derived value
 /// stored beside the thing it is derived from is a value that can be stale.
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureFacing {
     pub id: String,
@@ -447,7 +428,6 @@ pub struct FixtureFacing {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "camelCase")]
 pub enum FixtureNodeType {
     Fixture,
@@ -455,7 +435,6 @@ pub enum FixtureNodeType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../src/bindings/fixtures.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureNode {
     pub id: String,

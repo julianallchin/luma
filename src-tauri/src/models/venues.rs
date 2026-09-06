@@ -9,7 +9,6 @@ pub const ROLE_MEMBER: &str = "member";
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venues.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Venue {
     pub id: String,
@@ -58,7 +57,6 @@ impl Venue {
 /// Per-venue override of which implementation to use for a pattern
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venues.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueImplementationOverride {
     #[sqlx(rename = "venue_id")]

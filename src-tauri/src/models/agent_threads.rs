@@ -9,7 +9,6 @@ use ts_rs::TS;
 /// each owns its own Python workspace.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AgentThread {
     pub id: String,
@@ -55,7 +54,6 @@ pub struct AgentThread {
 /// unknown part shape round-trips verbatim rather than being dropped.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AgentThreadMessage {
     pub id: String,
@@ -95,7 +93,6 @@ impl<'r> FromRow<'r, SqliteRow> for AgentThreadMessage {
 /// A thread plus its full ordered message history.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AgentThreadDetail {
     pub thread: AgentThread,
@@ -104,7 +101,6 @@ pub struct AgentThreadDetail {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateAgentThreadInput {
     /// Caller-owned idempotency key. Retries must reuse this UUID.
@@ -130,7 +126,6 @@ pub struct CreateAgentThreadInput {
 /// by the database, never by the caller.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct NewAgentThreadMessage {
     pub id: Option<String>,
@@ -143,7 +138,6 @@ pub struct NewAgentThreadMessage {
 /// exact response are committed by one SQLite transaction.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AppendAgentThreadMessagesInput {
     pub operation_id: String,
@@ -167,7 +161,6 @@ pub struct AppendAgentThreadMessagesInput {
 /// card, because a rate card in the tree is a second source of truth.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AgentThreadUsage {
     pub thread_id: String,
@@ -195,7 +188,6 @@ pub struct AgentThreadUsage {
 /// Current immutable-node tip of one conversation transcript.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AgentThreadTranscriptHead {
     pub thread_id: String,
@@ -214,7 +206,6 @@ pub struct AgentThreadTranscriptHead {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub enum AgentThreadAppendOutcome {
     Appended {
