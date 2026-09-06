@@ -31,7 +31,7 @@ struct PatternBinding {
 }
 
 pub async fn provide(b: &mut BindingBuilder, ctx: &ProviderCtx<'_>) -> Result<(), String> {
-    let patterns = match local::patterns::list_patterns_pool(ctx.pool).await {
+    let mut patterns = match local::patterns::list_patterns_pool(ctx.pool).await {
         Ok(p) => p,
         Err(e) => {
             super::unavailable(
@@ -42,6 +42,17 @@ pub async fn provide(b: &mut BindingBuilder, ctx: &ProviderCtx<'_>) -> Result<()
             return Ok(());
         }
     };
+
+    inline(
+        b,
+        "patterns.nodes",
+        &luma_patterns::standard_library().definitions,
+    )?;
+    patterns.retain(|pattern| {
+        pattern.score_id.is_none()
+            || pattern.score_id == ctx.scope.score_id
+            || ctx.scope.pattern_id.as_deref() == Some(pattern.id.as_str())
+    });
 
     let summaries: Vec<PatternBinding> = patterns
         .iter()

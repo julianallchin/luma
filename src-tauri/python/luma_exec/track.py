@@ -317,7 +317,17 @@ class _PatternCatalog:
 
         self._schemas = dict(_items(schemas))
 
+    def register(self, pattern: Mapping[str, Any]) -> None:
+        pattern_id, name = str(pattern["id"]), str(pattern["name"])
+        if pattern_id not in self._by_id:
+            self._ids_by_name.setdefault(name.casefold(), []).append(pattern_id)
+        self._by_id[pattern_id] = {"id": pattern_id, "name": name}
+        self._schemas[pattern_id] = pattern["args"]
+
     def resolve(self, reference: str) -> tuple[str, str | None]:
+        from .patterns import SavedPattern
+        if isinstance(reference, SavedPattern):
+            self.register(reference.summary())
         reference = str(reference)
         if reference in self._by_id:
             return reference, self.name(reference)
@@ -414,6 +424,7 @@ class Track(_ImmutableSnapshot):
     __slots__ = (
         "_values",
         "_patterns",
+        "_node_definitions",
         "_features",
         "_host_call",
         "_artifact_store",
@@ -439,6 +450,7 @@ class Track(_ImmutableSnapshot):
     ) -> None:
         self._values = values
         self._patterns = _PatternCatalog(patterns)
+        self._node_definitions = _field(patterns, "nodes", default={})
         self._features = features
         self._host_call = host_call
         self._artifact_store = artifact_store
@@ -460,6 +472,14 @@ class Track(_ImmutableSnapshot):
         if not self.editable:
             raise TrackReadOnlyError("this track is read-only")
         return Edit(self)
+
+    def pattern(self, name: str, *, description: str | None = None):
+        """Draft a new score-local Pattern. Nothing is saved until draft.save()."""
+        if not self.editable:
+            raise TrackReadOnlyError("this track is read-only")
+        from .patterns import PatternDraft
+        return PatternDraft(name, self._node_definitions, self._host_call,
+                            self._patterns.register, description=description)
 
     def _advance(self, revision: str, clips: tuple[Clip, ...]) -> None:
         """Adopt the authoritative document a successful apply just produced.
