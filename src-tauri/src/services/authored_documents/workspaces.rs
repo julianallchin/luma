@@ -199,7 +199,13 @@ impl AuthoredDocuments {
             &head_files,
         )
         .await?;
-        if matches!(&scope.document, DocumentScope::Track(_)) && files != head_files {
+        if matches!(&scope.document, DocumentScope::Track(_))
+            && files != head_files
+            && !matches!(
+                self.decode_files(&scope, &head_files)?,
+                AuthoredDocument::GraphScore(_)
+            )
+        {
             replace_workspace_files(&source_path, &head_files).await?;
             files = head_files;
         }
@@ -304,7 +310,13 @@ impl AuthoredDocuments {
         let mut raw_files =
             read_workspace_files_or_restore_missing(&path, required_paths(&scope), &head_files)
                 .await?;
-        if matches!(&scope.document, DocumentScope::Track(_)) && raw_files != head_files {
+        if matches!(&scope.document, DocumentScope::Track(_))
+            && raw_files != head_files
+            && !matches!(
+                self.decode_files(&scope, &head_files)?,
+                AuthoredDocument::GraphScore(_)
+            )
+        {
             // Track children author only through structured Python operations,
             // which advance the detached head transactionally. Repair a stale
             // post-commit materialization instead of treating it as a second,
@@ -1758,6 +1770,9 @@ impl AuthoredDocuments {
         match &scope.document {
             DocumentScope::Track(track_scope) => {
                 require_exact_paths(files, &[SCORE_PATH])?;
+                if utf8_file(files, SCORE_PATH)?.trim_start().starts_with('{') {
+                    return self.decode_files(scope, files);
+                }
                 let context = load_score_dsl_context(pool, track_scope)
                     .await
                     .map_err(AuthoredDocumentsError::Storage)?;
@@ -1833,7 +1848,10 @@ impl AuthoredDocuments {
             replace_workspace_files(&path, &files).await?;
         }
         let document = self.decode_files(scope, &files)?;
-        if !matches!(document, AuthoredDocument::Track(_)) {
+        if !matches!(
+            document,
+            AuthoredDocument::Track(_) | AuthoredDocument::GraphScore(_)
+        ) {
             return Err(AuthoredDocumentsError::Scope(
                 "track workspace resolved to a graph document".into(),
             ));
@@ -1852,6 +1870,13 @@ impl AuthoredDocuments {
         match &scope.document {
             DocumentScope::Track(track_scope) => {
                 require_exact_paths(files, &[SCORE_PATH])?;
+                if utf8_file(files, SCORE_PATH)?.trim_start().starts_with('{') {
+                    let document = self.decode_files(scope, files)?;
+                    let canonical = self
+                        .files_for_document(pool, scope, &document, None)
+                        .await?;
+                    return Ok((canonical, document));
+                }
                 let context = load_score_dsl_context(pool, track_scope)
                     .await
                     .map_err(AuthoredDocumentsError::Storage)?;
@@ -2148,6 +2173,9 @@ fn require_outcome_fingerprint(outcome: &OperationOutcomeRow, expected: &str) ->
 fn require_track_document(document: &AuthoredDocument) -> Result<&TrackDocument> {
     match document {
         AuthoredDocument::Track(track) => Ok(track),
+        AuthoredDocument::GraphScore(_) => Err(AuthoredDocumentsError::Invalid(
+            "this score uses graph definitions; edit its score document".into(),
+        )),
         AuthoredDocument::Graph(_) => Err(AuthoredDocumentsError::Storage(
             "score workspace resolved to a graph document".into(),
         )),

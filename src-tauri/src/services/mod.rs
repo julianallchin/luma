@@ -24,6 +24,7 @@ pub mod distribute;
 pub mod fixture_create;
 pub mod fixtures;
 pub mod graph_documents;
+pub mod graph_scores;
 pub mod group_derivation;
 pub mod groups;
 pub mod patch;

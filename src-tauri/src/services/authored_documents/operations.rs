@@ -376,34 +376,80 @@ impl AuthoredDocuments {
         }
         match (&scope.document, candidate) {
             (DocumentScope::Track(track_scope), AuthoredDocument::Track(candidate)) => {
-                let current = super::projection::load_track_document_for_connection(
+                let current = super::projection::load_score_document_for_connection(
                     connection,
                     track_scope,
                     scope.owner_user_id.as_deref(),
                 )
                 .await?;
-                if current.revision != expected_projection_revision {
+                if current.revision() != expected_projection_revision {
                     return Err(AuthoredDocumentsError::Track(TrackEditError::Conflict {
                         expected_revision: expected_projection_revision.to_owned(),
-                        current_revision: current.revision,
+                        current_revision: current.revision().to_owned(),
                     }));
                 }
+                let restoring_legacy = matches!(current, AuthoredDocument::GraphScore(_));
+                if restoring_legacy {
+                    sqlx::query("UPDATE scores SET graph_document_json = NULL WHERE id = ?")
+                        .bind(&track_scope.score_id)
+                        .execute(&mut *connection)
+                        .await
+                        .map_err(storage("restore legacy score format"))?;
+                }
+                let legacy = super::projection::load_track_document_for_connection(
+                    connection,
+                    track_scope,
+                    scope.owner_user_id.as_deref(),
+                )
+                .await?;
                 let edit = apply_track_projection_in_transaction(
                     connection,
                     track_scope,
                     scope.owner_user_id.as_deref(),
                     TrackEditPlan {
-                        base_revision: expected_projection_revision.to_owned(),
+                        base_revision: legacy.revision,
                         candidate: candidate.clips,
                     },
                     track_authority.identity(),
                 )
                 .await?;
-                let changed = edit.added + edit.updated + edit.removed > 0;
+                let changed = restoring_legacy || edit.added + edit.updated + edit.removed > 0;
                 let document = AuthoredProjectedDocument::TrackScore {
                     revision: edit.revision.clone(),
                 };
                 Ok((changed, document, Some(edit)))
+            }
+            (DocumentScope::Track(track_scope), AuthoredDocument::GraphScore(candidate)) => {
+                let current = super::projection::load_score_document_for_connection(
+                    connection,
+                    track_scope,
+                    scope.owner_user_id.as_deref(),
+                )
+                .await?;
+                if current.revision() != expected_projection_revision {
+                    return Err(AuthoredDocumentsError::Track(TrackEditError::Conflict {
+                        expected_revision: expected_projection_revision.to_owned(),
+                        current_revision: current.revision().to_owned(),
+                    }));
+                }
+                let changed = current.revision() != candidate.revision;
+                if changed {
+                    crate::services::graph_scores::project(
+                        connection,
+                        track_scope,
+                        scope.owner_user_id.as_deref(),
+                        &candidate,
+                    )
+                    .await
+                    .map_err(AuthoredDocumentsError::Invalid)?;
+                }
+                Ok((
+                    changed,
+                    AuthoredProjectedDocument::TrackScore {
+                        revision: candidate.revision,
+                    },
+                    None,
+                ))
             }
             (DocumentScope::Pattern(graph_scope), AuthoredDocument::Graph(candidate)) => {
                 let current =
