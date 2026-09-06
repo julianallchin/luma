@@ -78,3 +78,14 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
   definitions cannot be deleted while inspecting them.
 - Preview and score rendering share U right / V downstage / Z up. Fixed expressions
   are folded during preparation; this is constant folding, not op fusion.
+
+- Version-2 score sources now use the same authored revision identity, CAS,
+  idempotent edit path, restore, detached workspace merge and server-head
+  projection as legacy scores. Eight focused tests cover atomic rollback,
+  stale writes, shared graph edits, migration/restore, workspace merges and
+  first sync materialization. Existing authored-history tests also pass.
+- `scores.graph_document_json` is a local-only projection. It is excluded from
+  metadata row sync; updates leave the metadata clock unchanged. New SQLite
+  migrations guard against writing legacy clips into a migrated score. No
+  Supabase schema change is needed for this payload: it travels in the existing
+  `score.luma` revision file.

@@ -81,6 +81,46 @@ impl AuthoredDocuments {
         subject: &str,
     ) -> Result<AppliedAuthoredState> {
         validate_token(operation_id, "score edit operation id")?;
+        if source.trim_start().starts_with('{') {
+            let candidate = super::GraphScoreDocument::from_source(source)
+                .map_err(AuthoredDocumentsError::Invalid)?;
+            let files = super::projection::score_files(&candidate)?;
+            let fingerprint = operation_request_fingerprint(
+                "graph_score_edit",
+                &[
+                    &track_scope.score_id,
+                    &track_scope.track_id,
+                    &track_scope.venue_id,
+                    expected_revision,
+                    &file_snapshot_id(&files),
+                ],
+            );
+            let scope = ResolvedScope::track(principal, track_scope)?;
+            let _guard = self.document_guard(&scope.document_id).await;
+            let main = self.load_current_locked(pool, &scope).await?;
+            return Ok(self
+                .apply_candidate_locked(
+                    pool,
+                    &scope,
+                    &main.head,
+                    expected_revision,
+                    files,
+                    AuthoredDocument::GraphScore(candidate),
+                    TrackProjectionAuthority::ExistingOnly,
+                    OperationSpec {
+                        kind: "score_edit",
+                        id: operation_id,
+                        fingerprint: &fingerprint,
+                        result_json: None,
+                    },
+                    subject,
+                    None,
+                    None,
+                    None,
+                )
+                .await?
+                .state);
+        }
         let fingerprint = operation_request_fingerprint(
             "score_dsl_import",
             &[
@@ -662,6 +702,9 @@ pub(super) async fn load_pattern_fork_source(
 fn require_track(main: &MainState) -> Result<&TrackDocument> {
     match &main.document {
         AuthoredDocument::Track(document) => Ok(document),
+        AuthoredDocument::GraphScore(_) => Err(AuthoredDocumentsError::Invalid(
+            "this score uses graph definitions; edit its score document".into(),
+        )),
         AuthoredDocument::Graph(_) => Err(AuthoredDocumentsError::Storage(
             "score scope resolved to graph history".into(),
         )),

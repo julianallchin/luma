@@ -53,6 +53,7 @@ use crate::services::graph_documents::{
     semantic_graph_json, GraphDocument, GraphDocumentError, GraphEditPlan, GraphScope,
     GraphValidationIssue,
 };
+use crate::services::graph_scores::GraphScoreDocument;
 use crate::services::score_dsl::{
     clips_to_canonical_document, compile_draft_track_document, compile_import_track_document,
     load_score_dsl_context, load_score_pattern_names, merge_document_trivia,
@@ -342,6 +343,7 @@ impl ResolvedScope {
 #[derive(Clone)]
 enum AuthoredDocument {
     Track(TrackDocument),
+    GraphScore(GraphScoreDocument),
     Graph(GraphDocument),
 }
 
@@ -349,6 +351,7 @@ impl AuthoredDocument {
     fn revision(&self) -> &str {
         match self {
             Self::Track(track) => &track.revision,
+            Self::GraphScore(score) => &score.revision,
             Self::Graph(graph) => &graph.revision,
         }
     }
@@ -357,6 +360,9 @@ impl AuthoredDocument {
         match self {
             Self::Track(track) => AuthoredProjectedDocument::TrackScore {
                 revision: track.revision.clone(),
+            },
+            Self::GraphScore(score) => AuthoredProjectedDocument::TrackScore {
+                revision: score.revision.clone(),
             },
             Self::Graph(graph) => AuthoredProjectedDocument::PatternGraph {
                 implementation_id: graph.implementation_id.clone(),

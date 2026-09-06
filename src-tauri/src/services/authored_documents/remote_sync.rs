@@ -5,17 +5,17 @@ use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
 use super::operations::local_row_payload;
 use super::{
-    apply_graph_edit_in_transaction, apply_track_projection_in_transaction, canonicalize_graph,
-    exact_graph_json, graph_files, operation_request_fingerprint, principal_key, Actor,
-    AuthoredDocument, AuthoredDocuments, AuthoredDocumentsError, AuthoredSnapshot, DocumentScope,
-    GraphDocument, GraphEditPlan, ResolvedScope, Result, RevisionId, RevisionMetadata,
-    TrackEditPlan, TrackProjectionAuthority,
+    apply_graph_edit_in_transaction, canonicalize_graph, exact_graph_json, graph_files,
+    operation_request_fingerprint, principal_key, Actor, AuthoredDocument, AuthoredDocuments,
+    AuthoredDocumentsError, AuthoredSnapshot, DocumentScope, GraphDocument, GraphEditPlan,
+    ResolvedScope, Result, RevisionId, RevisionMetadata, TrackProjectionAuthority,
 };
 use crate::database::local::write_admission;
 use crate::services::authored_state::{AuthoredDocumentId, AuthoredStateError};
 use crate::services::authored_sync_merge::{
     merge_graph_total, merge_track_total, SyncMergeResolution,
 };
+use crate::services::graph_scores;
 use crate::sync::authored_remote::{
     self, HeadIntegrationReceipt, HeadIntegrationResolution, HeadProposalIntegrator,
     IntegrateHeadProposalInput,
@@ -350,22 +350,22 @@ impl AuthoredDocuments {
         snapshot: AuthoredSnapshot,
     ) -> Result<()> {
         match (&scope.document, snapshot.document) {
-            (DocumentScope::Track(track_scope), AuthoredDocument::Track(track)) => {
-                let current = super::projection::load_track_document_for_connection(
+            (
+                DocumentScope::Track(track_scope),
+                document @ (AuthoredDocument::Track(_) | AuthoredDocument::GraphScore(_)),
+            ) => {
+                let current = super::projection::load_score_document_for_connection(
                     connection,
                     track_scope,
                     scope.owner_user_id.as_deref(),
                 )
                 .await?;
-                apply_track_projection_in_transaction(
+                self.project_candidate_on_connection(
                     connection,
-                    track_scope,
-                    scope.owner_user_id.as_deref(),
-                    TrackEditPlan {
-                        base_revision: current.revision,
-                        candidate: track.clips,
-                    },
-                    TrackProjectionAuthority::TrustedRevision.identity(),
+                    scope,
+                    document,
+                    current.revision(),
+                    TrackProjectionAuthority::TrustedRevision,
                 )
                 .await?;
             }
@@ -431,7 +431,39 @@ impl AuthoredDocuments {
                 resolution: SyncMergeResolution::WholeProposalFallback,
             }));
         };
+        // A migration is an atomic format transition. An unchanged side can
+        // follow it directly; concurrent edits take the later server proposal.
+        if base.files == current.files || proposal.files == current.files {
+            return Ok(Some(ResolvedSyncSnapshot {
+                snapshot: proposal.clone(),
+                resolution: SyncMergeResolution::Structural,
+            }));
+        }
+        if base.files == proposal.files {
+            return Ok(Some(ResolvedSyncSnapshot {
+                snapshot: current.clone(),
+                resolution: SyncMergeResolution::Structural,
+            }));
+        }
         match (&base.document, &current.document, &proposal.document) {
+            (
+                AuthoredDocument::GraphScore(base),
+                AuthoredDocument::GraphScore(current),
+                AuthoredDocument::GraphScore(proposal),
+            ) => {
+                let merged = graph_scores::merge::total(base, current, proposal);
+                if merged.resolution == SyncMergeResolution::KeptCurrentFallback {
+                    return Ok(None);
+                }
+                let files = super::projection::score_files(&merged.value)?;
+                Ok(Some(ResolvedSyncSnapshot {
+                    snapshot: AuthoredSnapshot {
+                        files,
+                        document: AuthoredDocument::GraphScore(merged.value),
+                    },
+                    resolution: merged.resolution,
+                }))
+            }
             (
                 AuthoredDocument::Track(base_track),
                 AuthoredDocument::Track(current_track),
@@ -516,7 +548,7 @@ impl AuthoredDocuments {
                 });
                 let files = match &document {
                     AuthoredDocument::Graph(graph) => graph_files(&graph.graph)?,
-                    AuthoredDocument::Track(_) => unreachable!(),
+                    AuthoredDocument::Track(_) | AuthoredDocument::GraphScore(_) => unreachable!(),
                 };
                 let resolution = merged.resolution;
                 let snapshot = if resolution == SyncMergeResolution::WholeProposalFallback
@@ -531,6 +563,14 @@ impl AuthoredDocuments {
                     resolution,
                 }))
             }
+            (
+                AuthoredDocument::Track(_) | AuthoredDocument::GraphScore(_),
+                AuthoredDocument::Track(_) | AuthoredDocument::GraphScore(_),
+                AuthoredDocument::Track(_) | AuthoredDocument::GraphScore(_),
+            ) => Ok(Some(ResolvedSyncSnapshot {
+                snapshot: proposal.clone(),
+                resolution: SyncMergeResolution::WholeProposalFallback,
+            })),
             _ => Ok(None),
         }
     }
@@ -739,6 +779,10 @@ impl AuthoredDocuments {
                 )
                 .await
                 .is_ok()
+            }
+            AuthoredDocument::GraphScore(score) => {
+                scope.track_scope().is_some()
+                    && graph_scores::GraphScoreDocument::new(score.score.clone()).is_ok()
             }
             AuthoredDocument::Graph(graph) => canonicalize_graph(&graph.graph).is_ok(),
         }

@@ -63,9 +63,11 @@ cargo +1.97.1 run --manifest-path src-tauri/Cargo.toml -p luma-patterns --bin pa
 Typed built-ins already run through the app's normal score evaluator and can be
 inserted from its native picker. The native graph canvas hides synthetic input
 wiring and supports read-only navigation into built-in graph definitions. The
-version-2 score document is not yet the production persistence model: authored
-revision storage, editing score-local definitions, Python authoring, and the
+version-2 score document is supported by authored revision storage, restoration,
+agent workspace merges and history sync. The native/Python consumers and the
 manual legacy migration still need to move together before adopting the reset.
+Its SQLite cache is local-only; Supabase transports the existing score.luma
+revision file.
 The built-in library is fixed; account-level library promotion is being removed. The reference
 interpreter remains an oracle for tests. `PreparedGraph` validates and flattens
 the graph once, resolves fixed geometry once, and evaluates only dynamic kernels

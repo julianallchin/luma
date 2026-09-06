@@ -3209,3 +3209,6 @@ async fn score_local_pattern_creation_scope_and_archive_are_durable() {
         "deleting a score must preserve its local graph history"
     );
 }
+
+#[path = "tests/graph_scores.rs"]
+mod graph_scores;

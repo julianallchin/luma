@@ -4,6 +4,8 @@ use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
 use crate::services::score_dsl::decode_canonical_track_document;
 
+use crate::services::graph_scores::{self, GraphScoreDocument};
+
 use super::{
     canonicalize_graph, clips_to_canonical_document, graph_files, graph_from_files, graph_revision,
     load_score_pattern_names, merge_document_trivia, merge_document_trivia_later_wins,
@@ -24,14 +26,14 @@ impl AuthoredDocuments {
         prior_files: Option<&FileMap>,
     ) -> Result<AuthoredSnapshot> {
         let document = match &scope.document {
-            DocumentScope::Track(track_scope) => AuthoredDocument::Track(
-                load_track_document_for_connection(
+            DocumentScope::Track(track_scope) => {
+                load_score_document_for_connection(
                     connection,
                     track_scope,
                     scope.owner_user_id.as_deref(),
                 )
-                .await?,
-            ),
+                .await?
+            }
             DocumentScope::Pattern(graph_scope) => AuthoredDocument::Graph(
                 load_graph_document_for_connection(connection, graph_scope).await?,
             ),
@@ -65,6 +67,11 @@ impl AuthoredDocuments {
             DocumentScope::Track(_) => {
                 require_exact_paths(files, &[SCORE_PATH])?;
                 let source = utf8_file(files, SCORE_PATH)?;
+                if source.trim_start().starts_with('{') {
+                    return GraphScoreDocument::from_source(source)
+                        .map(AuthoredDocument::GraphScore)
+                        .map_err(AuthoredDocumentsError::Invalid);
+                }
                 let (document, _) = decode_canonical_track_document(source)
                     .map_err(|error| AuthoredDocumentsError::Invalid(error.to_string()))?;
                 Ok(AuthoredDocument::Track(document))
@@ -92,6 +99,7 @@ impl AuthoredDocuments {
         prior_files: Option<&FileMap>,
     ) -> Result<FileMap> {
         match (&scope.document, document) {
+            (DocumentScope::Track(_), AuthoredDocument::GraphScore(score)) => score_files(score),
             (DocumentScope::Track(_), AuthoredDocument::Track(track)) => {
                 if let Some(reused) = reusable_track_files(track, prior_files) {
                     return Ok(reused);
@@ -118,6 +126,7 @@ impl AuthoredDocuments {
         prior_files: Option<&FileMap>,
     ) -> Result<FileMap> {
         match (&scope.document, document) {
+            (DocumentScope::Track(_), AuthoredDocument::GraphScore(score)) => score_files(score),
             (DocumentScope::Track(_), AuthoredDocument::Track(track)) => {
                 if let Some(reused) = reusable_track_files(track, prior_files) {
                     return Ok(reused);
@@ -153,7 +162,26 @@ impl AuthoredDocuments {
         ours: &AuthoredSnapshot,
         theirs: &AuthoredSnapshot,
     ) -> Result<std::result::Result<(AuthoredDocument, FileMap), Vec<AuthoredMergeConflict>>> {
+        // Format transitions remain one atomic edit. A concurrent legacy edit
+        // must be resolved explicitly rather than disappearing during migration.
+        if ours.files == theirs.files || base.files == theirs.files {
+            return Ok(Ok((ours.document.clone(), ours.files.clone())));
+        }
+        if base.files == ours.files {
+            return Ok(Ok((theirs.document.clone(), theirs.files.clone())));
+        }
         match (&base.document, &ours.document, &theirs.document) {
+            (
+                AuthoredDocument::GraphScore(base),
+                AuthoredDocument::GraphScore(ours),
+                AuthoredDocument::GraphScore(theirs),
+            ) => match graph_scores::merge::strict(base, ours, theirs) {
+                Ok(score) => {
+                    let files = score_files(&score)?;
+                    Ok(Ok((AuthoredDocument::GraphScore(score), files)))
+                }
+                Err(conflicts) => Ok(Err(conflicts)),
+            },
             (
                 AuthoredDocument::Track(base_track),
                 AuthoredDocument::Track(ours_track),
@@ -230,9 +258,14 @@ impl AuthoredDocuments {
                 }
                 Err(conflicts) => Ok(Err(conflicts.into_iter().map(Into::into).collect())),
             },
-            _ => Err(AuthoredDocumentsError::Storage(
-                "authored history contains mixed document kinds".into(),
-            )),
+            _ => Ok(Err(vec![AuthoredMergeConflict {
+                path: vec![AuthoredMergePathSegment::ScoreDocument],
+                kind: AuthoredMergeConflictKind::SemanticDependency,
+                base: AuthoredMergeValue::Missing,
+                ours: AuthoredMergeValue::Missing,
+                theirs: AuthoredMergeValue::Missing,
+                detail: Some("score format changed while another edit was in progress".into()),
+            }])),
         }
     }
 
@@ -301,6 +334,16 @@ impl AuthoredDocuments {
                         }
                     }
                 }
+                AuthoredDocument::GraphScore(document) => {
+                    ids.extend(
+                        document
+                            .score
+                            .clips
+                            .keys()
+                            .filter(|id| needed.contains(*id))
+                            .cloned(),
+                    );
+                }
                 AuthoredDocument::Graph(_) => {
                     return Err(AuthoredDocumentsError::Storage(
                         "graph revision found in score lineage".into(),
@@ -332,7 +375,8 @@ fn serialize_track_files(
 ) -> Result<FileMap> {
     let prior_source = prior_files
         .and_then(|files| files.get(SCORE_PATH))
-        .and_then(|bytes| std::str::from_utf8(bytes).ok());
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .filter(|source| !source.trim_start().starts_with('{'));
     let source = serialize_track(track, pattern_names, prior_source)?;
     Ok(FileMap::from([(
         SCORE_PATH.to_owned(),
@@ -449,4 +493,32 @@ pub(super) async fn load_graph_document_for_connection(
         revision: graph_revision(&graph)?,
         graph,
     })
+}
+
+/// The relational legacy clip projection is read only until that score has
+/// been migrated. Both formats retain the same authored document identity.
+pub(super) async fn load_score_document_for_connection(
+    connection: &mut SqliteConnection,
+    scope: &TrackScope,
+    owner: Option<&str>,
+) -> Result<AuthoredDocument> {
+    match graph_scores::load(connection, scope, owner)
+        .await
+        .map_err(AuthoredDocumentsError::Storage)?
+    {
+        Some(score) => Ok(AuthoredDocument::GraphScore(score)),
+        None => Ok(AuthoredDocument::Track(
+            load_track_document_for_connection(connection, scope, owner).await?,
+        )),
+    }
+}
+
+pub(super) fn score_files(score: &GraphScoreDocument) -> Result<FileMap> {
+    Ok(FileMap::from([(
+        SCORE_PATH.to_owned(),
+        score
+            .source()
+            .map_err(AuthoredDocumentsError::Invalid)?
+            .into_bytes(),
+    )]))
 }
