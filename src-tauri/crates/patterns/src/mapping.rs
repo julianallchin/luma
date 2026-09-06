@@ -180,3 +180,11 @@ fn major_axis(cells: &[&Cell], toward: &[f64; 3]) -> Result<[f64; 3]> {
     }
     Ok(best.0.map(|v| if alignment < 0.0 { -v } else { v }))
 }
+
+impl Cell {
+    /// Venue coordinates are X stage right, Y upstage, Z up. The authored
+    /// stage convention is U right, V downstage, Z up, independent of rig fits.
+    pub fn stage_coordinates(world: [f64; 3]) -> [f64; 3] {
+        [world[0], -world[1], world[2]]
+    }
+}

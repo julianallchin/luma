@@ -20,6 +20,9 @@ fn field(name: &str, description: &str, value: Value, rate: Rate) -> Input {
     input(name, description, value.value_type(), rate, Some(value))
 }
 pub(crate) fn primitive(p: Primitive) -> Definition {
+    if let Some(definition) = crate::field_ops::definition(p) {
+        return definition;
+    }
     use Rate::{Fixed, Frame};
     let mapping = || {
         input(
@@ -156,66 +159,54 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                 ("active", ValueType::Proportion, Frame),
             ],
         ),
-        Primitive::Pill => (
-            "Pill",
+        Primitive::CoordinateOffset => (
+            "Coordinate offset",
             vec![
                 ("mapping", mapping()),
                 (
                     "position",
                     field(
                         "Position",
-                        "Stroke center in mapped coordinates",
+                        "Center in mapped coordinates",
                         Value::Position(0.0),
                         Frame,
                     ),
                 ),
-                ("width", proportion("Width", 0.25)),
-                (
-                    "shape",
-                    field(
-                        "Shape",
-                        "Brightness across the stroke, from its negative to positive edge",
-                        Value::Envelope(Envelope {
-                            points: vec![[0., 0.], [0.05, 1.], [0.95, 1.], [1., 0.]],
-                        }),
-                        Frame,
-                    ),
-                ),
-                ("active", proportion("Activity", 1.0)),
                 (
                     "boundary",
                     field(
                         "Boundary",
-                        "Follow mapping, clip, or wrap",
+                        "Use mapping topology, clip, or wrap",
                         Value::Boundary(Boundary::Natural),
                         Fixed,
                     ),
                 ),
             ],
-            vec![("mask", ValueType::Mask, Frame)],
-        ),
-        Primitive::Dissolve => (
-            "Dissolve Mask",
             vec![
-                ("mapping", mapping()),
-                ("progress", proportion("Progress", 0.0)),
-                ("softness", proportion("Cell fade softness", 0.0)),
+                ("value", ValueType::Field, Frame),
+                ("wrapped", ValueType::Mask, Frame),
+            ],
+        ),
+        Primitive::FieldEnvelope => (
+            "Sample envelope per head",
+            vec![
                 (
-                    "cycle",
-                    field(
-                        "Cycle",
-                        "Stable stroke identity from Rhythm",
-                        Value::Number(0.0),
+                    "phase",
+                    input(
+                        "Phase",
+                        "Coordinate at which to sample the curve",
+                        ValueType::Field,
                         Frame,
+                        None,
                     ),
                 ),
                 (
-                    "reseed",
+                    "shape",
                     field(
-                        "New order each stroke",
-                        "Keep thresholds fixed within each stroke",
-                        Value::Boolean(true),
-                        Fixed,
+                        "Envelope",
+                        "Normalized editable curve",
+                        Value::Envelope(Envelope::soft_edges(0.1)),
+                        Frame,
                     ),
                 ),
             ],
@@ -234,14 +225,41 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                         Frame,
                     ),
                 ),
-                ("brightness", proportion("Brightness", 1.0)),
             ],
             vec![("lighting", ValueType::Lighting, Frame)],
         ),
-        Primitive::MultiplyMask => (
-            "Multiply Masks",
-            vec![("a", mask()), ("b", mask())],
-            vec![("mask", ValueType::Mask, Frame)],
+        Primitive::WritePosition => (
+            "Position output",
+            vec![
+                (
+                    "pan",
+                    field(
+                        "Pan (degrees)",
+                        "Absolute pan angle in degrees",
+                        Value::Number(0.0),
+                        Frame,
+                    ),
+                ),
+                (
+                    "tilt",
+                    field(
+                        "Tilt (degrees)",
+                        "Absolute tilt angle in degrees",
+                        Value::Number(0.0),
+                        Frame,
+                    ),
+                ),
+            ],
+            vec![("lighting", ValueType::Lighting, Frame)],
+        ),
+        Primitive::WriteDimmer | Primitive::WriteStrobe | Primitive::WriteSpeed => (
+            match p {
+                Primitive::WriteDimmer => "Dimmer output",
+                Primitive::WriteStrobe => "Strobe output",
+                _ => "Movement speed output",
+            },
+            vec![("value", proportion("Value", 1.0))],
+            vec![("lighting", ValueType::Lighting, Frame)],
         ),
         Primitive::AddLighting => (
             "Add Lighting",
@@ -279,6 +297,7 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             ],
             vec![("value", ValueType::Proportion, Frame)],
         ),
+        _ => unreachable!("fundamental field definition handled above"),
     };
     Definition {
         name: name.into(),
@@ -321,20 +340,99 @@ fn node(definition: &str, inputs: &[(&str, Binding)]) -> Node {
 /// by exposing primitive inputs, preserving type/default/editor semantics.
 pub fn standard_library() -> Library {
     let mut library = Library::default();
+    for (id, op) in [
+        ("core/add", Primitive::FieldBinary(FieldMath::Add)),
+        ("core/subtract", Primitive::FieldBinary(FieldMath::Subtract)),
+        ("core/multiply", Primitive::FieldBinary(FieldMath::Multiply)),
+        ("core/divide", Primitive::FieldBinary(FieldMath::Divide)),
+        ("core/minimum", Primitive::FieldBinary(FieldMath::Minimum)),
+        ("core/maximum", Primitive::FieldBinary(FieldMath::Maximum)),
+        (
+            "core/number_field",
+            Primitive::Broadcast(ScalarKind::Number),
+        ),
+        (
+            "core/coverage_field",
+            Primitive::Broadcast(ScalarKind::Proportion),
+        ),
+        ("core/mask_values", Primitive::MaskToField),
+        ("core/clamp_coverage", Primitive::FieldClamp),
+        ("core/greater", Primitive::FieldGreater),
+        ("core/choose", Primitive::FieldSelect),
+        ("core/random", Primitive::RandomField),
+        ("core/choose_number", Primitive::ChooseNumber),
+    ] {
+        library.definitions.insert(id.into(), primitive(op));
+    }
+
     for (id, p) in [
         ("resolve_mapping", Primitive::ResolveMapping),
         ("rhythm", Primitive::Rhythm),
         ("motion", Primitive::Motion),
-        ("pill", Primitive::Pill),
-        ("dissolve_mask", Primitive::Dissolve),
+        ("coordinate_offset", Primitive::CoordinateOffset),
+        ("sample_field_envelope", Primitive::FieldEnvelope),
         ("appearance", Primitive::Appearance),
-        ("multiply_mask", Primitive::MultiplyMask),
+        ("write_position", Primitive::WritePosition),
+        ("write_dimmer", Primitive::WriteDimmer),
+        ("write_strobe", Primitive::WriteStrobe),
+        ("write_speed", Primitive::WriteSpeed),
         ("add_lighting", Primitive::AddLighting),
         ("envelope", Primitive::Envelope),
         ("soft_edges", Primitive::SoftEdges),
     ] {
         library.definitions.insert(id.into(), primitive(p));
     }
+    library.definitions.insert(
+        "multiply_mask".into(),
+        Definition {
+            name: "Multiply Masks".into(),
+            inputs: BTreeMap::from([
+                (
+                    "a".into(),
+                    library.definitions["appearance"].inputs["mask"].clone(),
+                ),
+                (
+                    "b".into(),
+                    library.definitions["appearance"].inputs["mask"].clone(),
+                ),
+            ]),
+            outputs: library.definitions["core/clamp_coverage"].outputs.clone(),
+            body: Body::Graph(Graph {
+                nodes: BTreeMap::from([
+                    (
+                        "a".into(),
+                        node("core/mask_values", &[("mask", exposed("a"))]),
+                    ),
+                    (
+                        "b".into(),
+                        node("core/mask_values", &[("mask", exposed("b"))]),
+                    ),
+                    (
+                        "product".into(),
+                        node(
+                            "core/multiply",
+                            &[("a", wire("a", "value")), ("b", wire("b", "value"))],
+                        ),
+                    ),
+                    (
+                        "coverage".into(),
+                        node(
+                            "core/clamp_coverage",
+                            &[("value", wire("product", "value"))],
+                        ),
+                    ),
+                ]),
+                outputs: BTreeMap::from([("mask".into(), wire("coverage", "mask"))]),
+            }),
+        },
+    );
+    library
+        .definitions
+        .insert("scale_mask".into(), scale_mask_graph(&library));
+    library.definitions.insert("pill".into(), pill_graph());
+    library
+        .definitions
+        .insert("dissolve_mask".into(), dissolve_graph());
     let mut inputs = BTreeMap::new();
     for (id, names) in [
         ("rhythm", vec!["repeat", "grid_aligned"]),
@@ -412,7 +510,7 @@ pub fn standard_library() -> Library {
         definition: "chase_mask".into(),
         inputs: bindings.into_iter().collect(),
     };
-    for name in ["color", "brightness"] {
+    for name in ["color"] {
         inputs.insert(
             name.into(),
             library.definitions["appearance"].inputs[name].clone(),
@@ -431,11 +529,7 @@ pub fn standard_library() -> Library {
                         "appearance".into(),
                         node(
                             "appearance",
-                            &[
-                                ("mask", wire("mask", "mask")),
-                                ("color", exposed("color")),
-                                ("brightness", exposed("brightness")),
-                            ],
+                            &[("mask", wire("mask", "mask")), ("color", exposed("color"))],
                         ),
                     ),
                 ]),
@@ -447,18 +541,33 @@ pub fn standard_library() -> Library {
     for (id, names) in [
         ("rhythm", vec!["repeat", "grid_aligned"]),
         ("motion", vec!["travel"]),
-        ("dissolve_mask", vec!["mapping", "softness", "reseed"]),
-        ("appearance", vec!["color", "brightness"]),
+        (
+            "dissolve_mask",
+            vec!["softness", "reseed", "refresh", "refresh_every"],
+        ),
+        ("appearance", vec!["color"]),
     ] {
         for name in names {
             inputs.insert(name.into(), library.definitions[id].inputs[name].clone());
         }
     }
     inputs.insert(
-        "mapping".into(),
-        library.definitions["resolve_mapping"].inputs["mapping"].clone(),
+        "shape".into(),
+        library.definitions["envelope"].inputs["shape"].clone(),
     );
+    inputs.get_mut("shape").unwrap().name = "Fade shape".into();
     let mut nodes = timing;
+    nodes.insert(
+        "coverage".into(),
+        node(
+            "envelope",
+            &[
+                ("shape", exposed("shape")),
+                ("progress", wire("motion", "progress")),
+            ],
+        ),
+    );
+    nodes.remove("mapping");
     nodes.get_mut("motion").unwrap().inputs.remove("start");
     nodes.get_mut("motion").unwrap().inputs.remove("end");
     nodes.insert(
@@ -466,11 +575,22 @@ pub fn standard_library() -> Library {
         node(
             "dissolve_mask",
             &[
-                ("mapping", wire("mapping", "coordinates")),
                 ("softness", exposed("softness")),
+                ("refresh", exposed("refresh")),
+                ("refresh_every", exposed("refresh_every")),
                 ("reseed", exposed("reseed")),
-                ("progress", wire("motion", "progress")),
+                ("coverage", wire("coverage", "value")),
                 ("cycle", wire("rhythm", "cycle")),
+            ],
+        ),
+    );
+    nodes.insert(
+        "active".into(),
+        node(
+            "scale_mask",
+            &[
+                ("mask", wire("dissolve", "mask")),
+                ("amount", wire("motion", "active")),
             ],
         ),
     );
@@ -479,9 +599,8 @@ pub fn standard_library() -> Library {
         node(
             "appearance",
             &[
-                ("mask", wire("dissolve", "mask")),
+                ("mask", wire("active", "mask")),
                 ("color", exposed("color")),
-                ("brightness", exposed("brightness")),
             ],
         ),
     );
@@ -498,4 +617,385 @@ pub fn standard_library() -> Library {
         },
     );
     library
+}
+
+/// Dissolve is a recipe: random thresholds, arithmetic, comparison and choice.
+/// No effect-specific runtime operation is needed for either dissolve or flicker.
+fn dissolve_graph() -> Definition {
+    let mut inputs = BTreeMap::new();
+    for (key, name, value, rate) in [
+        ("coverage", "Coverage", Value::Proportion(1.0), Rate::Frame),
+        (
+            "softness",
+            "Cell fade softness",
+            Value::Proportion(0.0),
+            Rate::Frame,
+        ),
+        ("cycle", "Stroke index", Value::Number(0.0), Rate::Frame),
+        (
+            "reseed",
+            "New order each stroke",
+            Value::Boolean(true),
+            Rate::Fixed,
+        ),
+        ("refresh", "Flicker", Value::Boolean(false), Rate::Fixed),
+        (
+            "refresh_every",
+            "Refresh every",
+            Value::Beats(0.125),
+            Rate::Fixed,
+        ),
+    ] {
+        inputs.insert(key.into(), field(name, name, value, rate));
+    }
+    let mut nodes = BTreeMap::new();
+    let constant = |value| Binding::Value {
+        value: Value::Number(value),
+    };
+    nodes.insert(
+        "one".into(),
+        node("core/number_field", &[("value", constant(1.0))]),
+    );
+    nodes.insert(
+        "zero".into(),
+        node("core/number_field", &[("value", constant(0.0))]),
+    );
+    nodes.insert(
+        "coverage_value".into(),
+        node("core/coverage_field", &[("value", exposed("coverage"))]),
+    );
+    nodes.insert(
+        "progress".into(),
+        node(
+            "core/subtract",
+            &[
+                ("a", wire("one", "value")),
+                ("b", wire("coverage_value", "value")),
+            ],
+        ),
+    );
+    nodes.insert(
+        "softness".into(),
+        node("core/coverage_field", &[("value", exposed("softness"))]),
+    );
+    nodes.insert(
+        "refresh_clock".into(),
+        node("rhythm", &[("repeat", exposed("refresh_every"))]),
+    );
+    nodes.insert(
+        "stroke".into(),
+        node(
+            "core/choose_number",
+            &[
+                ("condition", exposed("reseed")),
+                ("yes", exposed("cycle")),
+                ("no", constant(0.0)),
+            ],
+        ),
+    );
+    nodes.insert(
+        "epoch".into(),
+        node(
+            "core/choose_number",
+            &[
+                ("condition", exposed("refresh")),
+                ("yes", wire("refresh_clock", "cycle")),
+                ("no", wire("stroke", "value")),
+            ],
+        ),
+    );
+    nodes.insert(
+        "random".into(),
+        node("core/random", &[("epoch", wire("epoch", "value"))]),
+    );
+    for (id, operation, a, b) in [
+        ("spread", "core/subtract", "one", "softness"),
+        ("fade_start", "core/multiply", "random", "spread"),
+        ("elapsed", "core/subtract", "progress", "fade_start"),
+        ("fraction", "core/divide", "elapsed", "softness"),
+        ("fade", "core/subtract", "one", "fraction"),
+    ] {
+        nodes.insert(
+            id.into(),
+            node(
+                operation,
+                &[("a", wire(a, "value")), ("b", wire(b, "value"))],
+            ),
+        );
+    }
+    nodes.insert(
+        "hard".into(),
+        node(
+            "core/greater",
+            &[
+                ("a", wire("random", "value")),
+                ("b", wire("progress", "value")),
+            ],
+        ),
+    );
+    nodes.insert(
+        "hard_values".into(),
+        node("core/mask_values", &[("mask", wire("hard", "mask"))]),
+    );
+    nodes.insert(
+        "soft".into(),
+        node(
+            "core/greater",
+            &[
+                ("a", wire("softness", "value")),
+                ("b", wire("zero", "value")),
+            ],
+        ),
+    );
+    nodes.insert(
+        "choose".into(),
+        node(
+            "core/choose",
+            &[
+                ("condition", wire("soft", "mask")),
+                ("yes", wire("fade", "value")),
+                ("no", wire("hard_values", "value")),
+            ],
+        ),
+    );
+    nodes.insert(
+        "coverage".into(),
+        node("core/clamp_coverage", &[("value", wire("choose", "value"))]),
+    );
+    Definition {
+        name: "Dissolve Mask".into(),
+        inputs,
+        outputs: BTreeMap::from([(
+            "mask".into(),
+            Output {
+                value_type: ValueType::Mask,
+                rate: Rate::Frame,
+            },
+        )]),
+        body: Body::Graph(Graph {
+            nodes,
+            outputs: BTreeMap::from([("mask".into(), wire("coverage", "mask"))]),
+        }),
+    }
+}
+
+fn pill_graph() -> Definition {
+    use Rate::{Fixed, Frame};
+    let mapping = || {
+        input(
+            "Mapping",
+            "Resolved coordinates",
+            ValueType::Coordinates,
+            Fixed,
+            None,
+        )
+    };
+    let proportion = |name, value| {
+        field(
+            name,
+            "Fraction of the selected domain",
+            Value::Proportion(value),
+            Frame,
+        )
+    };
+    let inputs = vec![
+        ("mapping", mapping()),
+        (
+            "position",
+            field(
+                "Position",
+                "Stroke center in mapped coordinates",
+                Value::Position(0.0),
+                Frame,
+            ),
+        ),
+        ("width", proportion("Width", 0.25)),
+        (
+            "shape",
+            field(
+                "Shape",
+                "Brightness across the stroke, from its negative to positive edge",
+                Value::Envelope(Envelope {
+                    points: vec![[0., 0.], [0.05, 1.], [0.95, 1.], [1., 0.]],
+                }),
+                Frame,
+            ),
+        ),
+        ("active", proportion("Activity", 1.0)),
+        (
+            "boundary",
+            field(
+                "Boundary",
+                "Follow mapping, clip, or wrap",
+                Value::Boundary(Boundary::Natural),
+                Fixed,
+            ),
+        ),
+    ];
+
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        "offset".into(),
+        node(
+            "coordinate_offset",
+            &[
+                ("mapping", exposed("mapping")),
+                ("position", exposed("position")),
+                ("boundary", exposed("boundary")),
+            ],
+        ),
+    );
+    for (id, value) in [("zero", 0.0), ("half", 0.5), ("one", 1.0)] {
+        nodes.insert(
+            id.into(),
+            node(
+                "core/number_field",
+                &[("value", Value::Number(value).into())],
+            ),
+        );
+    }
+    for id in ["width", "active"] {
+        nodes.insert(
+            id.into(),
+            node("core/coverage_field", &[("value", exposed(id))]),
+        );
+    }
+    for (id, op, a, b) in [
+        ("relative", "core/divide", "offset", "width"),
+        ("phase", "core/add", "relative", "half"),
+    ] {
+        nodes.insert(
+            id.into(),
+            node(op, &[("a", wire(a, "value")), ("b", wire(b, "value"))]),
+        );
+    }
+    nodes.insert(
+        "shape".into(),
+        node(
+            "sample_field_envelope",
+            &[
+                ("phase", wire("phase", "value")),
+                ("shape", exposed("shape")),
+            ],
+        ),
+    );
+    for (id, a, b) in [
+        ("past_start", "phase", "zero"),
+        ("before_end", "one", "phase"),
+        ("nonzero", "width", "zero"),
+        ("partial", "one", "width"),
+    ] {
+        nodes.insert(
+            id.into(),
+            node(
+                "core/greater",
+                &[("a", wire(a, "value")), ("b", wire(b, "value"))],
+            ),
+        );
+        nodes.insert(
+            format!("{id}_value"),
+            node("core/mask_values", &[("mask", wire(id, "mask"))]),
+        );
+    }
+    for id in ["past_start", "before_end"] {
+        nodes
+            .get_mut(id)
+            .unwrap()
+            .inputs
+            .insert("tolerance".into(), Value::Number(1e-12).into());
+    }
+    nodes.insert(
+        "wrapped_value".into(),
+        node("core/mask_values", &[("mask", wire("offset", "wrapped"))]),
+    );
+    nodes.insert(
+        "shape_value".into(),
+        node("core/mask_values", &[("mask", wire("shape", "mask"))]),
+    );
+    for (id, op, a, b) in [
+        (
+            "inside",
+            "core/multiply",
+            "past_start_value",
+            "before_end_value",
+        ),
+        ("full_width", "core/subtract", "one", "partial_value"),
+        (
+            "full_circle",
+            "core/multiply",
+            "full_width",
+            "wrapped_value",
+        ),
+        ("included", "core/maximum", "inside", "full_circle"),
+        ("visible", "core/multiply", "included", "nonzero_value"),
+        ("shaped", "core/multiply", "shape_value", "visible"),
+        ("gated", "core/multiply", "shaped", "active"),
+    ] {
+        nodes.insert(
+            id.into(),
+            node(op, &[("a", wire(a, "value")), ("b", wire(b, "value"))]),
+        );
+    }
+    nodes.insert(
+        "coverage".into(),
+        node("core/clamp_coverage", &[("value", wire("gated", "value"))]),
+    );
+    Definition {
+        name: "Pill".into(),
+        inputs: inputs.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        outputs: primitive(Primitive::FieldClamp).outputs,
+        body: Body::Graph(Graph {
+            nodes,
+            outputs: BTreeMap::from([("mask".into(), wire("coverage", "mask"))]),
+        }),
+    }
+}
+
+fn scale_mask_graph(library: &Library) -> Definition {
+    Definition {
+        name: "Scale mask".into(),
+        inputs: BTreeMap::from([
+            (
+                "mask".into(),
+                library.definitions["appearance"].inputs["mask"].clone(),
+            ),
+            (
+                "amount".into(),
+                field(
+                    "Amount",
+                    "Mask strength",
+                    Value::Proportion(1.0),
+                    Rate::Frame,
+                ),
+            ),
+        ]),
+        outputs: library.definitions["core/clamp_coverage"].outputs.clone(),
+        body: Body::Graph(Graph {
+            nodes: BTreeMap::from([
+                (
+                    "mask".into(),
+                    node("core/mask_values", &[("mask", exposed("mask"))]),
+                ),
+                (
+                    "amount".into(),
+                    node("core/coverage_field", &[("value", exposed("amount"))]),
+                ),
+                (
+                    "product".into(),
+                    node(
+                        "core/multiply",
+                        &[("a", wire("mask", "value")), ("b", wire("amount", "value"))],
+                    ),
+                ),
+                (
+                    "coverage".into(),
+                    node(
+                        "core/clamp_coverage",
+                        &[("value", wire("product", "value"))],
+                    ),
+                ),
+            ]),
+            outputs: BTreeMap::from([("mask".into(), wire("coverage", "mask"))]),
+        }),
+    }
 }

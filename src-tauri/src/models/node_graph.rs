@@ -350,61 +350,7 @@ pub struct AudioCrop {
     pub end_seconds: f32,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub enum BlendMode {
-    Replace,
-    Add,
-    Multiply,
-    Screen,
-    Max,
-    Min,
-    Lighten,
-    Value, // New "Value" blend mode
-    Subtract,
-}
-
-impl BlendMode {
-    /// Every mode, in the order every picker lists them. The one canonical
-    /// list — the score DSL, the track-edit hasher, and both hosts' blend
-    /// selects all read it from here rather than keeping a spelling of their
-    /// own.
-    pub const ALL: [Self; 9] = [
-        Self::Replace,
-        Self::Add,
-        Self::Multiply,
-        Self::Screen,
-        Self::Max,
-        Self::Min,
-        Self::Lighten,
-        Self::Value,
-        Self::Subtract,
-    ];
-
-    /// The mode's wire spelling. Identical to the serde `camelCase` rename on
-    /// the enum — the DSL and the JSON schema deliberately agree — so a new
-    /// variant added to one is a compile error here rather than a drift.
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Replace => "replace",
-            Self::Add => "add",
-            Self::Multiply => "multiply",
-            Self::Screen => "screen",
-            Self::Max => "max",
-            Self::Min => "min",
-            Self::Lighten => "lighten",
-            Self::Value => "value",
-            Self::Subtract => "subtract",
-        }
-    }
-
-    /// [`Self::name`]'s inverse; `None` for a word that names no mode.
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|mode| mode.name() == name)
-    }
-}
+pub use luma_patterns::BlendMode;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

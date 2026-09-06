@@ -4,7 +4,7 @@ use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, V
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::selection::{Selection, Subset};
 use crate::models::universe::{PrimitiveState, UniverseState};
-use luma_patterns::{standard_library, BeatTimeline, Cell, Frame, PreparedPattern, Value};
+use luma_patterns::{standard_library, BeatTimeline, Cell, Frame, PreparedGraph, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -74,20 +74,9 @@ pub(crate) async fn preview(
                 id,
                 group: target.expression.clone(),
                 world: position.map(f64::from),
-                uvz: [0.0, 0.0, f64::from(position[2])],
+                uvz: luma_patterns::Cell::stage_coordinates(position.map(f64::from)),
             });
         }
-    }
-    let positions: Vec<_> = cells
-        .iter()
-        .map(|cell| cell.world.map(|v| v as f32))
-        .collect();
-    for (cell, uv) in cells
-        .iter_mut()
-        .zip(crate::eval::ops::spatial::rig_uv(&positions))
-    {
-        cell.uvz[0] = f64::from(uv[0]);
-        cell.uvz[1] = f64::from(uv[1]);
     }
     if cells.is_empty() {
         return Err("the targets contain no placed, controllable cells".into());
@@ -109,7 +98,7 @@ pub(crate) async fn preview(
     let start = clock
         .beat_at(request.clip_start)
         .map_err(|e| e.to_string())?;
-    let prepared = PreparedPattern::new(
+    let prepared = PreparedGraph::new(
         &library,
         &request.definition,
         &request.inputs,
@@ -182,25 +171,19 @@ fn select_heads(
     });
     heads
 }
-fn universe(lighting: BTreeMap<String, [f64; 3]>) -> UniverseState {
+fn universe(lighting: BTreeMap<String, luma_patterns::FixtureOutput>) -> UniverseState {
     UniverseState {
         primitives: lighting
             .into_iter()
-            .map(|(id, color)| {
-                let peak = color.iter().copied().fold(0.0_f64, f64::max);
-                let rgb = if peak > 0.0 {
-                    color.map(|v| (v / peak) as f32)
-                } else {
-                    [0.0; 3]
-                };
+            .map(|(id, value)| {
                 (
                     id,
                     PrimitiveState {
-                        dimmer: peak.clamp(0.0, 1.0) as f32,
-                        color: rgb,
-                        strobe: 0.0,
-                        position: [0.0; 2],
-                        speed: 1.0,
+                        dimmer: value.dimmer.unwrap_or(0.0).clamp(0.0, 1.0) as f32,
+                        color: value.color.unwrap_or([1.0; 3]).map(|v| v as f32),
+                        position: value.position.unwrap_or([0.0; 2]).map(|v| v as f32),
+                        strobe: value.strobe.unwrap_or(0.0) as f32,
+                        speed: value.speed.unwrap_or(1.0) as f32,
                     },
                 )
             })
@@ -228,7 +211,10 @@ mod tests {
     }
     #[test]
     fn color_and_dimmer_do_not_apply_coverage_twice() {
-        let state = universe(BTreeMap::from([("cell".into(), [0.1, 0.2, 0.4])]));
+        let state = universe(BTreeMap::from([(
+            "cell".into(),
+            luma_patterns::FixtureOutput::from_rgb([0.1, 0.2, 0.4]),
+        )]));
         let head = &state.primitives["cell"];
         assert_eq!(head.dimmer, 0.4);
         assert_eq!(head.color, [0.25, 0.5, 1.0]);

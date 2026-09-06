@@ -1,6 +1,6 @@
 //! `cargo run -p luma-patterns --release --example frame-budget < cells.json`
 //! Input: a JSON array of host-resolved Cells, e.g. preview_composable_pattern.cells.
-use luma_patterns::{standard_library, Cell, Frame, PreparedPattern};
+use luma_patterns::{standard_library, Cell, Frame, PreparedGraph};
 use std::{collections::BTreeMap, hint::black_box, io, time::Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let library = standard_library();
     for definition in ["chase", "dissolve_flash"] {
         let start = Instant::now();
-        let program = PreparedPattern::new(
+        let program = PreparedGraph::new(
             &library,
             definition,
             &BTreeMap::new(),
