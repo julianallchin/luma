@@ -90,12 +90,24 @@ legacy history clears the graph projection before recreating the old clip rows.
 ## Delivery state
 
 See `docs/design/graph-reset.md` for the verified ledger. Native port wiring,
-node addition, exposed-input editing, layout and clip playback now use the score
-document. New-score/perform consumers, the replacement Python API and the
-remaining EBF effects still need that path. The old
+node addition, exposed-input editing, layout, clip playback, new-score creation,
+perform playback and Python editing now use the score document. The remaining
+EBF effects and their saved clips still need rebuilding and migration. The old
 production editor/runtime remains only for scores awaiting manual migration;
 it is not the destination model. No React/Tauri webview interface is involved.
 
 Continuous rate automation still needs integrated phase. Per-group mapping of
 a union selection still needs explicit mapping domains. The prepared evaluator
 flattens graph calls and folds constant expressions; it does not yet fuse ops.
+
+Python discovery uses `luma.track.nodes(search)` and `definition(id)`. Editing
+uses `edit.graph()`, `graph.node(definition_id, **inputs)`, output references,
+exposed inputs and explicit graph outputs. `edit.graph(node="chase")` is the
+one-node shortcut. `edit.add_clip(graph, beats=(32, 48), inputs={"width": .4})`
+places it; `edit.make_independent(clip)` detaches local dependencies. Detached
+workspaces use this same API and only advance their own revision until merged.
+
+Saving validates fixed input relationships without venue geometry. Host checks
+also prepare the actual selected domain. Resource bounds reject excessive
+nesting and expansion before recursive execution; see the execution ledger for
+the current limits. A dynamic expression may still fail at another sampled time.

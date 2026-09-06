@@ -32,6 +32,7 @@ use crate::services::track_edits::{
 use crate::storage::StorageRoot;
 
 mod patterns;
+mod score;
 
 const SAMPLES_PER_BEAT: f64 = 16.0;
 const FALLBACK_SAMPLES_PER_SECOND: f64 = 32.0;
@@ -157,6 +158,16 @@ impl TrackHost {
         .await
         .map_err(|message| HostCallError::new("compile_error", message))?;
 
+        self.render_scene(scene, request.start_time, request.end_time)
+            .await
+    }
+
+    async fn render_scene(
+        &self,
+        scene: crate::eval::Scene,
+        start: f64,
+        end: f64,
+    ) -> Result<Value, HostCallError> {
         let resolved = resolve_primitive_ids(
             &self.pool,
             &self.scope.venue_id,
@@ -179,8 +190,8 @@ impl TrackHost {
             .await
             .map_err(|message| HostCallError::new("internal", message))?;
         let requested_times = sample_times(
-            request.start_time,
-            request.end_time,
+            start,
+            end,
             beat_grid.as_ref().map(|grid| f64::from(grid.bpm)),
         );
         let render_times: Vec<f32> = requested_times.iter().map(|time| *time as f32).collect();
@@ -336,6 +347,16 @@ impl HostCallHandler for TrackHost {
         context.check()?;
         let limit = call_limit(context)?;
         self.runtime.block_on(async {
+            if matches!(
+                method,
+                "track.score_check"
+                    | "track.score_apply"
+                    | "track.score_render"
+                    | "track.graph_edit"
+                    | "track.score_independent"
+            ) {
+                return self.score_call(method, payload, context).await;
+            }
             if matches!(method, "track.pattern_check" | "track.pattern_create") {
                 return self.pattern_call(method, payload, context).await;
             }

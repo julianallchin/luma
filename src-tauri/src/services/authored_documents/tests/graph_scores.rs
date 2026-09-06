@@ -1,6 +1,65 @@
 use super::*;
 use crate::services::graph_scores::{self, GraphScoreDocument};
 
+#[tokio::test]
+async fn new_scores_start_as_graph_documents_and_creation_replay_preserves_edits() {
+    let fixture = Fixture::new().await;
+    let existing = fixture.track_scope().await;
+    let request = Uuid::new_v4().to_string();
+    let metadata = fixture
+        .authored
+        .create_score(
+            &fixture.pool,
+            &request,
+            &existing.track_id,
+            &existing.venue_id,
+            Some("New score"),
+        )
+        .await
+        .unwrap();
+    let scope = TrackScope {
+        score_id: metadata.id.clone(),
+        ..existing
+    };
+    let empty = stored(&fixture, &scope).await.unwrap();
+    assert_eq!(empty.score, luma_patterns::Score::default());
+    let initial = current(&fixture, &scope).await;
+    assert_eq!(
+        initial.files[SCORE_PATH],
+        empty.source().unwrap().as_bytes()
+    );
+    let candidate = chase();
+    fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "edit-created-score",
+            &candidate.source().unwrap(),
+            &empty.revision,
+            "Place Chase",
+        )
+        .await
+        .unwrap();
+    let replay = fixture
+        .authored
+        .create_score(
+            &fixture.pool,
+            &request,
+            &scope.track_id,
+            &scope.venue_id,
+            Some("New score"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.id, metadata.id);
+    assert_eq!(
+        stored(&fixture, &scope).await.unwrap().revision,
+        candidate.revision
+    );
+}
+
 fn chase() -> GraphScoreDocument {
     let mut score = luma_patterns::Score::default();
     score

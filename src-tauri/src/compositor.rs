@@ -8,7 +8,6 @@
 
 use serde_json::Value;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::audio::StemCache;
 use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, VenueResource};
@@ -18,10 +17,6 @@ use crate::models::node_graph::{BeatGrid, Graph};
 use crate::models::scores::TrackScore;
 use crate::render_engine::RenderEngine;
 use crate::storage::StorageRoot;
-
-/// Monotonically increasing generation counter. Each `leave_track` bumps this so
-/// any in-flight `composite_track` can detect it has gone stale.
-static COMPOSITING_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Compiled plan per annotation id + a signature of the inputs that determine it
 /// `(pattern, args, span, venue)`. Drives the **incremental composite**: a pass
@@ -61,11 +56,6 @@ fn annotation_sig(
     h.finish()
 }
 
-/// Bump the generation so any in-flight compositing aborts at its next check-point.
-pub fn cancel_compositing() {
-    COMPOSITING_GENERATION.fetch_add(1, Ordering::SeqCst);
-}
-
 /// Cancel compositing, clear the render engine's active scene, and unload audio.
 /// Called when navigating away from the track editor.
 ///
@@ -80,7 +70,6 @@ pub(crate) async fn leave_track(
     score_id: &str,
 ) -> Result<(), String> {
     let (_access, track_id) = score_scope(pool, score_id).await?;
-    cancel_compositing();
     clear_plan_cache();
     render_engine.set_active_scene(None);
     host_audio.unload();
@@ -384,8 +373,8 @@ fn live_track_scores(annotations: Option<Vec<LiveAnnotation>>) -> Option<Vec<Tra
 /// The score is the subject, not the `(track, venue)` pair it sits on: a pair
 /// carries as many scores as there are people who annotated it, and blending
 /// them would light the rig with a document nobody is looking at. Which one is
-/// on screen is the caller's fact — [`install_track_scene`] then only has to
-/// install what it is handed.
+/// on screen is the caller's fact. Building a candidate never changes another
+/// render slot, and installation rejects an update superseded while compiling.
 ///
 /// `annotations` is the editor's working copy when it has one (fresh args
 /// mid-drag), and `None` for a caller that is only *watching* the score, which
@@ -400,10 +389,35 @@ pub(crate) async fn install_score_scene(
     annotations: Option<Vec<LiveAnnotation>>,
     graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
+    let update = render_engine.begin_scene_update(crate::render_engine::SceneTarget::Active);
+    let scene = build_score_scene(
+        pool,
+        storage,
+        resource_root,
+        score_id,
+        annotations,
+        graph_score,
+        false,
+    )
+    .await?;
+    render_engine.finish_scene_update(update, scene);
+    Ok(())
+}
+
+/// Resolve and compile one score, including a caller's optional working copy.
+/// Rendering, performance decks and agent previews share this format boundary.
+pub(crate) async fn build_score_scene(
+    pool: &sqlx::SqlitePool,
+    storage: &StorageRoot,
+    resource_root: &Path,
+    score_id: &str,
+    annotations: Option<Vec<LiveAnnotation>>,
+    graph_score: Option<luma_patterns::Score>,
+    strict: bool,
+) -> Result<Scene, String> {
     if annotations.is_some() && graph_score.is_some() {
         return Err("provide one score working copy".into());
     }
-    let generation = COMPOSITING_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let (mut access, track_id) = score_scope(pool, score_id).await?;
     let venue_id = access.venue_id().to_owned();
     let source: Option<String> =
@@ -425,17 +439,13 @@ pub(crate) async fn install_score_scene(
         if annotations.is_some() {
             return Err("this score uses graphs; provide its complete score working copy".into());
         }
-        let scene = crate::services::graph_scores::prepare_scene(
+        return crate::services::graph_scores::prepare_scene(
             &mut access,
             resource_root,
             &track_id,
             &document.score,
         )
-        .await?;
-        if COMPOSITING_GENERATION.load(Ordering::SeqCst) == generation {
-            render_engine.set_active_scene(if scene.is_empty() { None } else { Some(scene) });
-        }
-        return Ok(());
+        .await;
     }
 
     let clips: Vec<TrackScore> = match live_track_scores(annotations) {
@@ -443,65 +453,17 @@ pub(crate) async fn install_score_scene(
         None => crate::database::local::scores::get_clips_of_score(&mut access, score_id).await?,
     };
     drop(access);
-    install_track_scene(
+    build_scene_with_policy(
+        pool,
         pool,
         storage,
         resource_root,
-        render_engine,
         &track_id,
         &venue_id,
-        clips,
+        &clips,
+        strict,
     )
     .await
-}
-
-/// Compile `annotations` into a [`Scene`] against `(track_id, venue_id)` and
-/// install it — unless a concurrent `leave_track` or composite has already
-/// superseded this pass.
-///
-/// Takes the clip list rather than resolving one: what a rig is lit by is a
-/// question its callers answer differently (one score for the editor's stage,
-/// every score on the pair for a perform deck that has only matched a track),
-/// and a resolver in here would have to be told which they meant anyway.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn install_track_scene(
-    pool: &sqlx::SqlitePool,
-    storage: &StorageRoot,
-    resource_root: &Path,
-    render_engine: &RenderEngine,
-    track_id: &str,
-    venue_id: &str,
-    annotations: Vec<TrackScore>,
-) -> Result<(), String> {
-    let generation = COMPOSITING_GENERATION.load(Ordering::SeqCst);
-    if annotations.is_empty() {
-        clear_plan_cache();
-        render_engine.set_active_scene(None);
-        return Ok(());
-    }
-
-    let scene = build_scene(
-        pool,
-        pool,
-        storage,
-        resource_root,
-        track_id,
-        venue_id,
-        &annotations,
-    )
-    .await?;
-
-    // Bail if a newer leave_track / composite invalidated this pass.
-    if COMPOSITING_GENERATION.load(Ordering::SeqCst) != generation {
-        return Ok(());
-    }
-
-    if scene.is_empty() {
-        render_engine.set_active_scene(None);
-    } else {
-        render_engine.set_active_scene(Some(scene));
-    }
-    Ok(())
 }
 
 /// Fetch annotations for a (track, venue) pair, sorted by z_index ascending.
@@ -512,22 +474,6 @@ pub(crate) async fn fetch_scores(
     crate::database::local::scores::get_scores_for_track(access, track_id)
         .await
         .map_err(|e| format!("Failed to fetch scores: {}", e))
-}
-
-/// Every persisted score row for a `(venue, track)`, opening the venue itself.
-///
-/// [`fetch_scores`] needs an already-authorized venue; callers outside the
-/// compositing pipeline have only ids, and this is the one place that gap is
-/// bridged rather than each of them re-deriving the access.
-pub(crate) async fn scores_for_track(
-    pool: &sqlx::SqlitePool,
-    venue_id: &str,
-    track_id: &str,
-) -> Result<Vec<TrackScore>, String> {
-    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id))
-        .await
-        .map_err(|error| format!("the venue is not available: {error}"))?;
-    fetch_scores(&mut access, track_id).await
 }
 
 /// Load beat grid for a track.

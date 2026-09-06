@@ -78,13 +78,13 @@ pub async fn perform_match_track(
         return Ok(PerformTrackMatch::miss(filename));
     };
 
-    let scores = crate::database::local::scores::get_scores_for_track(&mut access, &track.id)
+    let scores = crate::database::local::scores::list_scores_for_track(&mut access, &track.id)
         .await
         .map_err(CommandError::Internal)?;
 
     Ok(PerformTrackMatch {
         track_id: Some(track.id.clone()),
-        has_annotations: !scores.is_empty(),
+        has_annotations: scores.iter().any(|score| score.annotation_count > 0),
         filename,
     })
 }
@@ -155,13 +155,13 @@ pub async fn perform_match_track_by_metadata(
             .to_string()
     });
 
-    let scores = crate::database::local::scores::get_scores_for_track(&mut access, &track.id)
+    let scores = crate::database::local::scores::list_scores_for_track(&mut access, &track.id)
         .await
         .map_err(CommandError::Internal)?;
 
     Ok(PerformTrackMatch {
         track_id: Some(track.id.clone()),
-        has_annotations: !scores.is_empty(),
+        has_annotations: scores.iter().any(|score| score.annotation_count > 0),
         filename,
     })
 }
@@ -221,35 +221,40 @@ fn bigram_similarity(a: &str, b: &str) -> f64 {
 
 // ── Composite deck ────────────────────────────────────────────────────────────
 
-/// Composite a track's light show and assign the result to a perform deck.
-///
-/// Two-step by design: compositing installs into `active_scene`, which is then
-/// promoted to the deck slot — so this transiently clobbers whatever the track
-/// editor had installed.
-///
-/// **Smell.** A deck has matched a *track*, not a score, so this still blends
-/// every score on the `(track, venue)` — the ambiguity the editor's stage no
-/// longer has. Which score a deck should play is a product question nobody has
-/// answered; when it is, this becomes `install_score_scene` like every other
-/// caller.
+/// Compile directly into the matched deck. Until decks select a specific
+/// score, preserve their existing policy of combining scores for the track and
+/// venue; both migrated and legacy documents participate.
 pub async fn render_composite_deck(
     services: &AppServices,
     deck_id: u8,
     track_id: String,
     venue_id: String,
 ) -> Result<(), CommandError> {
-    let clips = crate::compositor::scores_for_track(&services.db.0, &venue_id, &track_id).await?;
-    crate::compositor::install_track_scene(
-        &services.db.0,
-        &services.storage,
-        &services.fixtures_root,
-        &services.render_engine,
-        &track_id,
-        &venue_id,
-        clips,
-    )
-    .await?;
-    services.render_engine.promote_active_scene_to_deck(deck_id);
+    let update = services
+        .render_engine
+        .begin_scene_update(crate::render_engine::SceneTarget::Deck(deck_id));
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    let scores =
+        crate::database::local::scores::list_scores_for_track(&mut access, &track_id).await?;
+    drop(access);
+    let mut annotations = Vec::new();
+    for score in scores {
+        let scene = crate::compositor::build_score_scene(
+            &services.db.0,
+            &services.storage,
+            &services.fixtures_root,
+            &score.id,
+            None,
+            None,
+            false,
+        )
+        .await?;
+        annotations.extend(scene.annotations);
+    }
+    services
+        .render_engine
+        .finish_scene_update(update, crate::eval::Scene::new(annotations));
     Ok(())
 }
 

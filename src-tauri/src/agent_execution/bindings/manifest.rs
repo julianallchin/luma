@@ -607,6 +607,7 @@ pub enum BindingValue {
     Null,
     Bool(bool),
     I64(i64),
+    U64(u64),
     F64(f64),
     String(String),
     List(Vec<BindingValue>),
@@ -657,6 +658,8 @@ impl BindingValue {
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
                     Ok(BindingValue::I64(i))
+                } else if let Some(u) = n.as_u64() {
+                    Ok(BindingValue::U64(u))
                 } else if let Some(f) = n.as_f64() {
                     Ok(BindingValue::F64(f))
                 } else {
@@ -756,6 +759,7 @@ impl Serialize for BindingValue {
             BindingValue::Null => s.serialize_unit(),
             BindingValue::Bool(b) => s.serialize_bool(*b),
             BindingValue::I64(i) => s.serialize_i64(*i),
+            BindingValue::U64(u) => s.serialize_u64(*u),
             BindingValue::F64(f) => s.serialize_f64(*f),
             BindingValue::String(v) => s.serialize_str(v),
             BindingValue::List(items) => s.collect_seq(items),

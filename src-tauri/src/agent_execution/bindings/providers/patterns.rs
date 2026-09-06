@@ -31,6 +31,12 @@ struct PatternBinding {
 }
 
 pub async fn provide(b: &mut BindingBuilder, ctx: &ProviderCtx<'_>) -> Result<(), String> {
+    if matches!(
+        &ctx.score_document,
+        Ok(Some(crate::services::graph_scores::ScoreDocument::Graph(_)))
+    ) {
+        return inline(b, "nodes", &luma_patterns::standard_library().definitions);
+    }
     let mut patterns = match local::patterns::list_patterns_pool(ctx.pool).await {
         Ok(p) => p,
         Err(e) => {

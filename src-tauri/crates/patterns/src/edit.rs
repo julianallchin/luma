@@ -1,6 +1,7 @@
 //! Typed graph gestures shared by interactive editors and programmatic authors.
 //! A draft may have unfinished wires. Saving/executing still validates the whole
 //! score, so an incomplete gesture can never replace the installed show.
+use crate::graph::{identity, MAX_GRAPH_NODES};
 use crate::{Binding, Body, Definition, Error, Graph, Library, Node, Rate, Result, ValueType};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -51,6 +52,11 @@ impl Definition {
         let Body::Graph(graph) = &mut next.body else {
             return Err(Error("fundamental operations are immutable".into()));
         };
+        if graph.nodes.len() > MAX_GRAPH_NODES {
+            return Err(Error(format!(
+                "a graph supports at most {MAX_GRAPH_NODES} nodes"
+            )));
+        }
         match edit {
             GraphEdit::Move { positions } => {
                 for (id, position) in positions {
@@ -71,6 +77,11 @@ impl Definition {
                 }
                 if !library.definitions.contains_key(&definition) {
                     return Err(Error(format!("unknown definition {definition}")));
+                }
+                if graph.nodes.len() >= MAX_GRAPH_NODES {
+                    return Err(Error(format!(
+                        "a graph supports at most {MAX_GRAPH_NODES} nodes"
+                    )));
                 }
                 graph.nodes.insert(
                     id,
@@ -247,12 +258,6 @@ impl crate::Score {
     }
 }
 
-fn identity(id: &str) -> Result<()> {
-    if id.trim().is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
-        return Err(Error("identity must contain 1–256 printable bytes".into()));
-    }
-    Ok(())
-}
 fn input_spec<'a>(
     library: &'a Library,
     graph: &Graph,

@@ -556,6 +556,206 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
 }
 
 #[tokio::test]
+async fn python_edits_canonical_graph_scores_and_detached_workspaces() {
+    let Some(f) = Fixture::new("python_edits_canonical_graph_scores").await else {
+        return;
+    };
+    let thread = f.editable_thread().await;
+    let turn = "turn-graph-score";
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: "graph-score-turn".into(),
+            expected_head_message_id: None,
+            messages: vec![NewAgentThreadMessage {
+                id: Some(turn.into()),
+                role: "user".into(),
+                parts: json!([{"type":"text","text":"compose and place a graph"}]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    let current = f
+        .authored
+        .current_revision(&f.pool, Some("owner"), &thread)
+        .await
+        .unwrap();
+    let crate::models::authored_state::AuthoredProjectedDocument::TrackScore { revision } =
+        current.document
+    else {
+        panic!()
+    };
+    let scope = crate::services::track_edits::TrackScope {
+        score_id: SCORE_ID.into(),
+        track_id: TRACK_ID.into(),
+        venue_id: f.venue_id.clone(),
+    };
+    let empty =
+        crate::services::graph_scores::GraphScoreDocument::new(luma_patterns::Score::default())
+            .unwrap();
+    f.authored
+        .apply_score_source_for_scope(
+            &f.pool,
+            Some("owner"),
+            scope.clone(),
+            "graph-reset",
+            &empty.source().unwrap(),
+            &revision,
+            "Start graph score",
+        )
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM patterns")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let out = f.run_as_owner(&thread, turn, r#"
+import json, numpy as np
+assert 'patterns' not in dir(luma)
+edit = luma.track.edit()
+graph = edit.graph(id='effect')
+shape = graph.node('soft_edges', id='shape', softness=.3)
+chase = graph.node('chase', id='chase', shape=shape.output(), mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
+position = graph.node('write_position', id='aim')
+combined = graph.node('add_lighting', id='combined', a=chase.output(), b=position.output())
+graph.output(combined.output())
+graph.expose(chase, 'width', name='Stroke width')
+graph.expose(chase, 'color')
+first = edit.add_clip(graph, id='first', seed=(1 << 64)-1, seconds=(1.0, 2.0), inputs={'width': .8, 'color': '#4080ff'})
+edit.add_clip(graph, id='second', seconds=(2.0, 3.0), inputs={'width': .3})
+assert edit.check()
+rendered = edit.window(seconds=(1.0, 2.0)).output.tensor
+assert np.max(rendered.values) > 0
+raw = edit.source()
+edit.replace_source(raw)
+assert json.loads(edit.source()) == json.loads(raw)
+request = {'baseRevision': edit.base_revision, 'candidate': edit.candidate}
+revision = edit.apply()
+assert luma.track.revision == revision
+assert len(luma.track.clips) == 2
+assert luma.track.document['definitions']['effect']['body']['kind'] == 'graph'
+assert len(luma.track.edit().candidate['clips']) == 2
+(len(luma.track.clips), rendered.shape)
+"#).await;
+    expect_ok(
+        &out,
+        "compose, expose, render and save a canonical graph score",
+    );
+    assert_eq!(out.repr.as_deref(), Some("(2, (2, 32, 3))"));
+    let out = f.run_as_owner(&thread, turn, r#"
+assert luma.track.clips[0].seed == (1 << 64)-1
+edit = luma.track.edit()
+stale = luma.track.edit()
+independent = edit.make_independent('second', id='independent')
+edit.graph('effect').default('color', '#00ff00')
+edit.update_clip('first', inputs={'width': .5})
+edit.apply()
+assert stale.base_revision != luma.track.revision
+latest = luma.track.source()
+replay = _luma_host_call('track.score_apply', request)
+assert replay['revision'] == luma.track.revision
+assert json.loads(latest)['clips']['second']['graph'] == 'independent'
+assert luma.track.definition('independent')['inputs']['color']['default']['value'] == [1.0, 1.0, 1.0]
+bad = luma.track.edit()
+try:
+    bad.graph('chase').rename('mutated built-in')
+    raise AssertionError('built-in changed')
+except RuntimeError as error:
+    assert 'built-in' in str(error)
+len(luma.track.clips)
+"#).await;
+    expect_ok(
+        &out,
+        "reload, detach a shared graph and retry an earlier save",
+    );
+    assert_eq!(out.repr.as_deref(), Some("2"));
+    assert_eq!(
+        count,
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patterns")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        0,
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_scores WHERE score_id=?")
+            .bind(SCORE_ID)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    );
+    let current = f
+        .authored
+        .current_revision(&f.pool, Some("owner"), &thread)
+        .await
+        .unwrap();
+    let child = f
+        .authored
+        .create_workspace(
+            &f.pool,
+            Some("owner"),
+            CreateAuthoredWorkspaceInput {
+                thread_id: thread.clone(),
+                request_id: "graph-child".into(),
+                expected_base_revision_id: current.revision_id,
+            },
+        )
+        .await
+        .unwrap();
+    let out = f
+        .run_as_owner_in_workspace(
+            &thread,
+            &child.id,
+            turn,
+            r#"
+edit = luma.track.edit()
+edit.update_clip('first', inputs={'width': .2})
+edit.apply()
+float(luma.track.clips[0].inputs['width']['value'])
+"#,
+        )
+        .await;
+    assert!((repr_f64(&out, "edit the detached canonical score") - 0.2).abs() < 1e-9);
+    let out = f
+        .run_as_owner(
+            &thread,
+            turn,
+            "float(luma.track.clips[0].inputs['width']['value'])",
+        )
+        .await;
+    assert!((repr_f64(&out, "parent remains separate") - 0.5).abs() < 1e-9);
+    let checked = f
+        .authored
+        .check_workspace(&f.pool, Some("owner"), &thread, &child.id)
+        .await
+        .unwrap();
+    f.authored
+        .merge_workspace(
+            &f.pool,
+            Some("owner"),
+            crate::models::authored_state::MergeAuthoredWorkspaceInput {
+                thread_id: thread.clone(),
+                workspace_id: child.id,
+                expected_head_revision_id: checked.head_revision_id,
+                operation_id: "merge-graph-child".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let out = f
+        .run_as_owner(
+            &thread,
+            turn,
+            "float(luma.track.clips[0].inputs['width']['value'])",
+        )
+        .await;
+    assert!((repr_f64(&out, "merge the detached canonical score") - 0.2).abs() < 1e-9);
+}
+
+#[tokio::test]
 async fn python_authors_a_pattern_then_renders_and_places_it() {
     let Some(f) = Fixture::new("python_authors_a_pattern_then_renders_and_places_it").await else {
         return;

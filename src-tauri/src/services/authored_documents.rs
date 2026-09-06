@@ -132,7 +132,7 @@ pub struct AppliedAuthoredTrackEdit {
 #[derive(Clone)]
 pub(crate) struct AuthoredTrackWorkspace {
     pub scope: TrackScope,
-    pub document: TrackDocument,
+    pub document: crate::services::graph_scores::ScoreDocument,
 }
 
 /// Managed Tauri state. Per-document locks keep expensive decoding and merge

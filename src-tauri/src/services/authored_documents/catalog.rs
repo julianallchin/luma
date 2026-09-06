@@ -4,11 +4,10 @@ use sqlx::{SqliteConnection, SqlitePool};
 use super::edits::PatternForkSource;
 use super::{
     deterministic_creation_id, exact_graph_json, graph_files, normalized_creation_request_id,
-    operation_request_fingerprint, principal_key, revision_for_clips, serialize_track,
-    write_admission, AuthoredDocuments, AuthoredDocumentsError, AuthoredIdentitySwitch, FileMap,
-    ForkPatternInput, ForkPatternResult, Graph, NewAuthoredDocument, PatternNames, PatternSummary,
-    ResolvedScope, Result, Score, TrackDocument, TrackScope, VenueAccess, VenueResource, Write,
-    PATTERN_SUMMARY_COLUMNS, SCORE_PATH,
+    operation_request_fingerprint, principal_key, write_admission, AuthoredDocuments,
+    AuthoredDocumentsError, AuthoredIdentitySwitch, FileMap, ForkPatternInput, ForkPatternResult,
+    Graph, NewAuthoredDocument, PatternSummary, ResolvedScope, Result, Score, TrackScope,
+    VenueAccess, VenueResource, Write, PATTERN_SUMMARY_COLUMNS,
 };
 use crate::database::local::sync_delete;
 use crate::database::local::venue_access::AuthorizedVenue;
@@ -736,21 +735,27 @@ impl AuthoredDocuments {
             },
         )?;
         let _guard = self.document_guard(&scope.document_id).await;
-        let empty = TrackDocument {
-            revision: revision_for_clips(&[]),
-            clips: Vec::new(),
-        };
-        let source = serialize_track(&empty, &PatternNames::new(), None)?;
+        let empty = super::GraphScoreDocument::new(luma_patterns::Score::default())
+            .map_err(AuthoredDocumentsError::Invalid)?;
+        let files = super::projection::score_files(&empty)?;
         self.create_document_initial_revision(
             access.connection(),
             &scope,
-            &FileMap::from([(SCORE_PATH.to_owned(), source.into_bytes())]),
+            &files,
             "create_score",
             &request_id,
             &fingerprint,
             "Create track score",
         )
         .await?;
+        crate::services::graph_scores::project(
+            access.connection(),
+            scope.track_scope().expect("created a track score"),
+            owner.as_deref(),
+            &empty,
+        )
+        .await
+        .map_err(AuthoredDocumentsError::Storage)?;
         access
             .commit()
             .await

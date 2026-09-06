@@ -41,7 +41,7 @@ pub struct Node {
     /// Optional editor layout. Omitted by code authors; never read by execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<[f64; 2]>,
-    /// Immutable definition/revision ID, not a mutable library name.
+    /// Definition ID in this document version's fixed library, or a score-local ID.
     pub definition: String,
     #[serde(default)]
     pub inputs: BTreeMap<String, Binding>,
@@ -178,6 +178,29 @@ pub struct Library {
     pub definitions: BTreeMap<String, Definition>,
 }
 
+const MAX_DEFINITION_DEPTH: usize = 24;
+pub(crate) const MAX_GRAPH_NODES: usize = 128;
+const MAX_EXPANDED_NODES: usize = 8192;
+const MAX_EXECUTION_DEPTH: usize = 96;
+
+#[derive(Clone, Copy)]
+struct Complexity {
+    nodes: usize,
+    depth: usize,
+}
+
+pub(crate) fn identity(id: &str) -> Result<()> {
+    if id.trim().is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return Err(Error("identity must contain 1–256 printable bytes".into()));
+    }
+    if id.starts_with('@') {
+        return Err(Error(
+            "identities starting with @ are reserved for editor controls".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl Library {
     /// Anonymous one-node graphs inherit their node's label in every authoring
     /// surface. Identity remains the reference key, independently of the label.
@@ -202,7 +225,14 @@ impl Library {
         "Custom graph".into()
     }
     pub fn validate(&self, id: &str) -> Result<()> {
-        self.validate_definition(id, &mut BTreeSet::new(), &mut BTreeSet::new())
+        self.validate_many(std::iter::once(id))
+    }
+    pub(crate) fn validate_many<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
+        let mut done = BTreeMap::new();
+        for id in ids {
+            self.validate_definition(id, &mut BTreeSet::new(), &mut done)?;
+        }
+        Ok(())
     }
     fn definition(&self, id: &str) -> Result<&Definition> {
         self.definitions
@@ -213,15 +243,29 @@ impl Library {
         &self,
         id: &str,
         visiting: &mut BTreeSet<String>,
-        done: &mut BTreeSet<String>,
+        done: &mut BTreeMap<String, Complexity>,
     ) -> Result<()> {
-        if done.contains(id) {
+        if done.contains_key(id) {
             return Ok(());
+        }
+        identity(id)?;
+        if visiting.len() >= MAX_DEFINITION_DEPTH {
+            return Err(Error(format!(
+                "graph nesting exceeds {MAX_DEFINITION_DEPTH} definitions"
+            )));
         }
         if !visiting.insert(id.into()) {
             return Err(Error(format!("recursive graph definition {id}")));
         }
         let def = self.definition(id)?;
+        if def.inputs.len() > 64 || def.outputs.len() > 32 {
+            return Err(Error(format!(
+                "{id}: a definition supports at most 64 inputs and 32 outputs"
+            )));
+        }
+        for key in def.inputs.keys().chain(def.outputs.keys()) {
+            identity(key)?;
+        }
         for (name, input) in &def.inputs {
             if let Some(value) = &input.default {
                 value.validate()?;
@@ -230,7 +274,7 @@ impl Library {
                 }
             }
         }
-        match &def.body {
+        let complexity = match &def.body {
             Body::Primitive(p) => {
                 // Primitive interfaces are owned by the kernel catalog, not editable JSON.
                 let canonical = crate::catalog::primitive(*p);
@@ -243,9 +287,16 @@ impl Library {
                         "{id}: primitive interface differs from its kernel"
                     )));
                 }
+                Complexity { nodes: 1, depth: 1 }
             }
             Body::Graph(graph) => {
+                if graph.nodes.len() > MAX_GRAPH_NODES {
+                    return Err(Error(format!(
+                        "{id}: a graph supports at most {MAX_GRAPH_NODES} nodes"
+                    )));
+                }
                 for (name, node) in &graph.nodes {
+                    identity(name)?;
                     if node
                         .position
                         .is_some_and(|position| position.iter().any(|value| !value.is_finite()))
@@ -291,10 +342,31 @@ impl Library {
                 for name in graph.nodes.keys() {
                     check_cycle(graph, name, &mut BTreeSet::new(), &mut finished)?;
                 }
+                let nodes = 1 + graph
+                    .nodes
+                    .values()
+                    .map(|node| done[&node.definition].nodes)
+                    .sum::<usize>();
+                if nodes > MAX_EXPANDED_NODES {
+                    return Err(Error(format!(
+                        "{id}: graph expansion exceeds {MAX_EXPANDED_NODES} nodes"
+                    )));
+                }
+                let mut depths = BTreeMap::new();
+                let mut depth = 1;
+                for name in graph.nodes.keys() {
+                    depth = depth.max(1 + execution_depth(graph, name, done, &mut depths));
+                }
+                if depth > MAX_EXECUTION_DEPTH {
+                    return Err(Error(format!(
+                        "{id}: execution dependency depth exceeds {MAX_EXECUTION_DEPTH}"
+                    )));
+                }
+                Complexity { nodes, depth }
             }
-        }
+        };
         visiting.remove(id);
-        done.insert(id.into());
+        done.insert(id.into(), complexity);
         Ok(())
     }
     fn check_binding(
@@ -429,6 +501,34 @@ impl Library {
         }
     }
 }
+// Called only after wire cycles and child definitions have been validated.
+// Count nesting and upstream dependencies together before recursive lowering.
+fn execution_depth(
+    graph: &Graph,
+    id: &str,
+    definitions: &BTreeMap<String, Complexity>,
+    depths: &mut BTreeMap<String, usize>,
+) -> usize {
+    if let Some(depth) = depths.get(id) {
+        return *depth;
+    }
+    let node = &graph.nodes[id];
+    let upstream = node
+        .inputs
+        .values()
+        .filter_map(|binding| match binding {
+            Binding::Connection { node, .. } => {
+                Some(execution_depth(graph, node, definitions, depths))
+            }
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let depth = 1 + definitions[&node.definition].depth + upstream;
+    depths.insert(id.into(), depth);
+    depth
+}
+
 pub(crate) fn check_cycle(
     graph: &Graph,
     name: &str,
@@ -441,7 +541,11 @@ pub(crate) fn check_cycle(
     if !visiting.insert(name.into()) {
         return Err(Error(format!("wire cycle at {name}")));
     }
-    for b in graph.nodes[name].inputs.values() {
+    let current = graph
+        .nodes
+        .get(name)
+        .ok_or_else(|| Error(format!("unknown node {name}")))?;
+    for b in current.inputs.values() {
         if let Binding::Connection { node, .. } = b {
             check_cycle(graph, node, visiting, done)?;
         }

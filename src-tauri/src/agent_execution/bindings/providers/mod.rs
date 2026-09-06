@@ -35,7 +35,7 @@ use crate::agent_execution::bindings::manifest::{
     TensorRef,
 };
 use crate::models::tracks::TrackSummary;
-use crate::services::track_edits::TrackDocument;
+use crate::services::graph_scores::ScoreDocument;
 use crate::storage::StorageRoot;
 
 pub use graph::GraphRunContribution;
@@ -63,7 +63,7 @@ pub struct BindingScope {
     /// Detached authored score selected by the trusted execution adapter. When
     /// present, `luma.track` reads this document instead of the live relational
     /// projection while all other track/audio/features data remains shared.
-    pub track_document: Option<TrackDocument>,
+    pub track_document: Option<ScoreDocument>,
     pub pattern_id: Option<String>,
     pub implementation_id: Option<String>,
     /// Window of interest in absolute track seconds.
@@ -107,6 +107,7 @@ pub struct ProviderCtx<'a> {
     pub scope: &'a BindingScope,
     /// Resolved once; every track-derived provider needs the hash.
     pub track: Option<TrackSummary>,
+    pub score_document: Result<Option<ScoreDocument>, String>,
 }
 
 impl ProviderCtx<'_> {
@@ -150,6 +151,7 @@ pub async fn assemble_bindings(
         storage,
         resource_root,
         scope,
+        score_document: track::resolve_document(pool, scope).await,
         track,
     };
 

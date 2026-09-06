@@ -30,6 +30,7 @@ use sqlx::SqlitePool;
 use tokio::runtime::Handle;
 
 use crate::agent_execution::cell_host::{call_limit, decode, supervise};
+use crate::agent_execution::track_host::TrackHost;
 use crate::agent_execution::worker_process::{HostCallContext, HostCallError, HostCallHandler};
 use crate::agent_execution::workspace::Workspace;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Write};
@@ -39,9 +40,7 @@ use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups;
 use crate::services::stage_ops::{AimTarget, Draft, Filter, Stage, StageError};
-use crate::services::track_edits::TrackScope;
 use crate::stage_render::{self, Shot, VenueGeometry, MAX_DIMENSION};
-use crate::storage::StorageRoot;
 use luma_render::scene_desc::{SkyParams, VenueEnvironment};
 use luma_render::venue_tiles::TileMap;
 use luma_scene::View;
@@ -50,14 +49,13 @@ use luma_scene::View;
 pub struct VenueHost {
     runtime: Handle,
     pool: SqlitePool,
-    storage: StorageRoot,
     /// The fixtures root; the mesh root is derived from it.
     resource_root: PathBuf,
     workspace: Arc<Workspace>,
     venue_id: String,
     /// The score that lights the room, when the thread has one. Without it the
     /// rig is drawn on the editor's work light alone — geometry, no beams.
-    lighting: Option<TrackScope>,
+    lighting: Option<Arc<TrackHost>>,
     /// The scratch graphs open in this cell, by id.
     ///
     /// In memory and cell-scoped on purpose: a draft is a *component function
@@ -71,16 +69,14 @@ impl VenueHost {
     pub fn new(
         runtime: Handle,
         pool: SqlitePool,
-        storage: StorageRoot,
         resource_root: PathBuf,
         workspace: Arc<Workspace>,
         venue_id: String,
-        lighting: Option<TrackScope>,
+        lighting: Option<Arc<TrackHost>>,
     ) -> Self {
         Self {
             runtime,
             pool,
-            storage,
             resource_root,
             workspace,
             venue_id,
@@ -846,27 +842,10 @@ impl VenueHost {
     /// The evaluated universe at `time`, or `None` when this thread has no
     /// score to light the room with.
     async fn state_at(&self, time: f32) -> Result<Option<UniverseState>, HostCallError> {
-        let Some(scope) = self.lighting.as_ref() else {
+        let Some(track) = self.lighting.as_ref() else {
             return Ok(None);
         };
-        let scores =
-            crate::compositor::scores_for_track(&self.pool, &scope.venue_id, &scope.track_id)
-                .await
-                .map_err(|error| HostCallError::new("internal", error))?;
-        if scores.is_empty() {
-            return Ok(None);
-        }
-        let scene = crate::compositor::build_scene_strict(
-            &self.pool,
-            &self.pool,
-            &self.storage,
-            &self.resource_root,
-            &scope.track_id,
-            &scope.venue_id,
-            &scores,
-        )
-        .await
-        .map_err(|message| HostCallError::new("compile_error", message))?;
+        let scene = track.saved_scene().await?;
         let mut arena = Arena::default();
         Ok(scene
             .render(&[time], Scope::Composite, &mut arena)
@@ -881,8 +860,8 @@ impl VenueHost {
             return Err(HostCallError::new("invalid_time", "t must be finite"));
         }
         let end = match self.lighting.as_ref() {
-            Some(scope) => {
-                crate::database::local::tracks::get_track_duration(&self.pool, &scope.track_id)
+            Some(track) => {
+                crate::database::local::tracks::get_track_duration(&self.pool, track.track_id())
                     .await
                     .map_err(|error| HostCallError::new("internal", error))?
             }

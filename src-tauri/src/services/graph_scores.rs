@@ -9,6 +9,49 @@ use sqlx::SqliteConnection;
 
 pub(crate) mod merge;
 
+/// Authoring consumers keep an unmigrated score explicit. Graphs and legacy
+/// rows are never combined into a fictitious partial document.
+#[derive(Clone, Debug)]
+pub enum ScoreDocument {
+    Legacy(crate::services::track_edits::TrackDocument),
+    Graph(GraphScoreDocument),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GraphScoreEdit {
+    pub base_revision: String,
+    pub candidate: Score,
+}
+
+pub(crate) struct GraphScoreOperation<'a> {
+    pub thread_id: &'a str,
+    pub workspace_id: Option<&'a str>,
+    pub scope: &'a TrackScope,
+    pub id: &'a str,
+    pub fingerprint: &'a str,
+}
+
+pub(crate) async fn read_score_document(
+    access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    scope: &TrackScope,
+) -> Result<ScoreDocument, String> {
+    let metadata = crate::database::local::scores::get_score(access, &scope.score_id).await?;
+    if let Some(document) = load(access.connection(), scope, metadata.uid.as_deref()).await? {
+        return Ok(ScoreDocument::Graph(document));
+    }
+    let rows = crate::database::local::scores::get_clips_of_score(access, &scope.score_id).await?;
+    Ok(ScoreDocument::Legacy(
+        crate::services::track_edits::TrackDocument {
+            revision: crate::services::track_edits::track_revision(&rows),
+            clips: rows
+                .iter()
+                .map(crate::services::track_edits::TrackClip::from)
+                .collect(),
+        },
+    ))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GraphScoreDocument {
@@ -20,9 +63,6 @@ impl GraphScoreDocument {
         score
             .validate(&standard_library())
             .map_err(|error| error.to_string())?;
-        if score.clips.len() > 2048 {
-            return Err("a score may contain at most 2,048 clips".into());
-        }
         let source = source(&score)?;
         let mut hash = Sha256::new();
         hash.update(b"luma.graph-score.v2\0");
