@@ -62,12 +62,16 @@ pub enum Primitive {
         to: crate::ScalarKind,
     },
     FieldUnary(crate::UnaryMath),
+    FieldRank,
+    FieldReduce(crate::FieldReduction),
+    StageCoordinates,
     ClipTime,
     BandEnergy,
     DrumClock,
     Harmony,
     Noise,
     WriteMask,
+    WriteStrobeMask,
     SampleGradient,
     SampleGradientField,
     ColorField,
@@ -83,11 +87,10 @@ pub enum Primitive {
     ChooseNumber,
     ResolveMapping,
     Rhythm,
-    Motion,
+    TravelClock,
     CoordinateOffset,
     FieldEnvelope,
     WritePosition,
-    WriteStrobe,
     WriteSpeed,
     AddLighting,
     Envelope,
@@ -565,7 +568,9 @@ pub(crate) fn run_primitive(
     {
         return result;
     }
-    if let Some(result) = crate::field_ops::run(p, i, frame) {
+    if let Some(result) =
+        crate::field_ops::run(p, i, frame).or_else(|| crate::metrics::run(p, i, frame))
+    {
         return result;
     }
     let n = |key: &str| i[key].scalar();
@@ -594,14 +599,14 @@ pub(crate) fn run_primitive(
             } else {
                 frame.clip_start
             };
-            let elapsed = frame.beat - origin;
+            let elapsed = frame.beat - origin - n("delay");
             let cycle = (elapsed / period).floor();
             BTreeMap::from([
                 ("elapsed".into(), Value::Beats(elapsed.rem_euclid(period))),
                 ("cycle".into(), Value::Number(cycle)),
             ])
         }
-        Primitive::Motion => {
+        Primitive::TravelClock => {
             let travel = n("travel");
             let repeat = n("repeat");
             if travel <= 0.0 || repeat < travel {
@@ -610,10 +615,6 @@ pub(crate) fn run_primitive(
             let elapsed = n("elapsed");
             let progress = (elapsed / travel).clamp(0.0, 1.0);
             BTreeMap::from([
-                (
-                    "position".into(),
-                    Value::Position(n("start") + progress * (n("end") - n("start"))),
-                ),
                 ("progress".into(), Value::Proportion(progress)),
                 (
                     "active".into(),
@@ -683,14 +684,10 @@ pub(crate) fn run_primitive(
             }
             out("lighting", Value::Lighting(sum))
         }
-        Primitive::WritePosition | Primitive::WriteStrobe | Primitive::WriteSpeed => {
+        Primitive::WritePosition | Primitive::WriteSpeed => {
             let value = match p {
                 Primitive::WritePosition => crate::FixtureOutput {
                     position: Some([n("pan"), n("tilt")]),
-                    ..Default::default()
-                },
-                Primitive::WriteStrobe => crate::FixtureOutput {
-                    strobe: Some(n("value")),
                     ..Default::default()
                 },
                 Primitive::WriteSpeed => crate::FixtureOutput {

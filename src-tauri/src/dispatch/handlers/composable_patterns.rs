@@ -15,6 +15,7 @@ pub async fn preview_composable_pattern(
     let result = crate::services::composable_patterns::preview(
         &services.db.0,
         &services.fixtures_root,
+        &services.storage,
         request,
     )
     .await?;

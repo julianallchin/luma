@@ -182,3 +182,44 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
   stable, documented seed contract rather than reproducing an undocumented
   legacy random stream. Audio range calibration and curved-envelope translation
   must be recorded in the migration report.
+
+## Spatial recipes and complete-reference checkpoint
+
+- Captured all 1,225 EBF clips, 65 frames each, with per-head geometry, the exact
+  beat grid, output capabilities and frozen legacy range calibration. Files are
+  in `ebf-all-clips` beside the baseline library (182,359,909 bytes). All clips
+  resolve to 8 or 16 heads. The 72 strobe-only clips deliberately write no light;
+  the other 1,153 captures contain nonzero dimmer output.
+- Motion is now a graph of travel time, Envelope and scalar interpolation.
+  Chase exposes its travel curve independently of its stroke shape. A triangle
+  travel curve gives a bounce; outside start/end positions remain supported.
+  Rhythm has a beat-valued phase delay, inherited by Chase, Pulse and Dissolve.
+- Rank, selection reductions and raw stage coordinates are fundamental sources
+  and operations. Radius, selection normalization and field profiles compose
+  from them. Raw radial distance preserves the physical stage aspect ratio.
+- Random Heads is a graph that either draws fresh sets or walks a seeded shuffled
+  order. It floors and bounds requested counts and minimizes immediate repeats
+  when walking. Stable head IDs break ordering ties; seeking is independent of
+  previous frames and selection traversal order.
+- Rainbow, Harmony Color and Strobe are graphs. Strobe-only output remains
+  available separately, and uniform strobe now wraps the per-head writer.
+- Fixed an adjacent integration gap: standalone composable previews now load
+  the same authorized audio features as saved-score playback. The real Python
+  kernel test also exercises direct Drum/Frequency preview and missing-stem
+  diagnostics, without running a model.
+- Verified: 52 core tests, five native graph tests, the real Python kernel and
+  direct audio-preview test. No user-library migration has been applied yet.
+
+### Additional migration findings
+
+- Legacy color arguments lower to three-channel RGB, so their stored alpha is
+  ignored by the current evaluator. Preserve actual output; do not reinterpret
+  alpha-zero arguments as dimmer-only contributions during translation.
+- The misspelled `soild_strobe` only writes strobe. It must migrate to strobe-only
+  output, not a wash plus strobe.
+- Legacy gradients interpolate through OKLab; the new Gradient's channel-linear
+  interpolation needs an explicit conversion or design decision. Legacy beat
+  envelopes use the smallest analyzed pulse gap for their full duration, whereas
+  new timing follows the current grid interval. Quantify these differences.
+- Removed obsolete Tauri/TypeScript introductory comments from `agent_harness`;
+  its dispatch seam is shared with GPUI. No web interface is involved.

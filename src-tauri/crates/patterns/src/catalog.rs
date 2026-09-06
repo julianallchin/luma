@@ -27,7 +27,9 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
     {
         return definition;
     }
-    if let Some(definition) = crate::field_ops::definition(p) {
+    if let Some(definition) =
+        crate::field_ops::definition(p).or_else(|| crate::metrics::definition(p))
+    {
         return definition;
     }
     use Rate::{Fixed, Frame};
@@ -79,6 +81,15 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             "Rhythm",
             vec![
                 (
+                    "delay",
+                    field(
+                        "Phase delay",
+                        "Shift stroke starts later on the beat grid",
+                        Value::Beats(0.0),
+                        Fixed,
+                    ),
+                ),
+                (
                     "repeat",
                     field(
                         "Repeat",
@@ -102,8 +113,8 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                 ("cycle", ValueType::Number, Frame),
             ],
         ),
-        Primitive::Motion => (
-            "Motion",
+        Primitive::TravelClock => (
+            "Travel time",
             vec![
                 (
                     "elapsed",
@@ -132,27 +143,8 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                         Fixed,
                     ),
                 ),
-                (
-                    "start",
-                    field(
-                        "Start position",
-                        "Position in the mapped domain; outside values are allowed",
-                        Value::Position(0.0),
-                        Frame,
-                    ),
-                ),
-                (
-                    "end",
-                    field(
-                        "End position",
-                        "Position in the mapped domain; outside values are allowed",
-                        Value::Position(1.0),
-                        Frame,
-                    ),
-                ),
             ],
             vec![
-                ("position", ValueType::Position, Frame),
                 ("progress", ValueType::Proportion, Frame),
                 ("active", ValueType::Proportion, Frame),
             ],
@@ -234,11 +226,8 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             ],
             vec![("lighting", ValueType::Lighting, Frame)],
         ),
-        Primitive::WriteStrobe | Primitive::WriteSpeed => (
-            match p {
-                Primitive::WriteStrobe => "Strobe output",
-                _ => "Movement speed output",
-            },
+        Primitive::WriteSpeed => (
+            "Movement speed output",
             vec![("value", proportion("Value", 1.0))],
             vec![("lighting", ValueType::Lighting, Frame)],
         ),
@@ -350,11 +339,10 @@ pub fn standard_library() -> Library {
     for (id, p) in [
         ("resolve_mapping", Primitive::ResolveMapping),
         ("rhythm", Primitive::Rhythm),
-        ("motion", Primitive::Motion),
+        ("core/travel_time", Primitive::TravelClock),
         ("coordinate_offset", Primitive::CoordinateOffset),
         ("sample_field_envelope", Primitive::FieldEnvelope),
         ("write_position", Primitive::WritePosition),
-        ("write_strobe", Primitive::WriteStrobe),
         ("write_speed", Primitive::WriteSpeed),
         ("add_lighting", Primitive::AddLighting),
         ("envelope", Primitive::Envelope),
@@ -416,8 +404,8 @@ pub fn standard_library() -> Library {
         .insert("dissolve_mask".into(), dissolve_graph());
     let mut inputs = BTreeMap::new();
     for (id, names) in [
-        ("rhythm", vec!["repeat", "grid_aligned"]),
-        ("motion", vec!["travel", "start", "end"]),
+        ("rhythm", vec!["repeat", "grid_aligned", "delay"]),
+        ("motion", vec!["travel", "start", "end", "path"]),
         ("pill", vec!["mapping", "width", "shape", "boundary"]),
     ] {
         for name in names {
@@ -440,6 +428,7 @@ pub fn standard_library() -> Library {
                 &[
                     ("repeat", exposed("repeat")),
                     ("grid_aligned", exposed("grid_aligned")),
+                    ("delay", exposed("delay")),
                 ],
             ),
         ),
@@ -453,6 +442,7 @@ pub fn standard_library() -> Library {
                     ("repeat", exposed("repeat")),
                     ("start", exposed("start")),
                     ("end", exposed("end")),
+                    ("path", exposed("path")),
                 ],
             ),
         ),
@@ -521,7 +511,7 @@ pub fn standard_library() -> Library {
     );
     let mut inputs = BTreeMap::new();
     for (id, names) in [
-        ("rhythm", vec!["repeat", "grid_aligned"]),
+        ("rhythm", vec!["repeat", "grid_aligned", "delay"]),
         ("motion", vec!["travel"]),
         (
             "dissolve_mask",
@@ -552,6 +542,7 @@ pub fn standard_library() -> Library {
     nodes.remove("mapping");
     nodes.get_mut("motion").unwrap().inputs.remove("start");
     nodes.get_mut("motion").unwrap().inputs.remove("end");
+    nodes.get_mut("motion").unwrap().inputs.remove("path");
     nodes.insert(
         "dissolve".into(),
         node(

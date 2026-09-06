@@ -272,7 +272,7 @@ fn validate_parameters(op: Primitive, inputs: &BTreeMap<String, Value>) -> Resul
         Primitive::Rhythm if number("repeat").is_some_and(|v| v <= 0.0) => {
             Err(Error("repeat interval must be greater than zero".into()))
         }
-        Primitive::Motion
+        Primitive::TravelClock
             if number("travel")
                 .zip(number("repeat"))
                 .is_some_and(|(travel, repeat)| travel <= 0.0 || repeat < travel) =>
