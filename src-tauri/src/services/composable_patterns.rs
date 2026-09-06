@@ -98,6 +98,7 @@ pub(crate) async fn preview(
         .map(|time| clock.beat_at(*time))
         .collect::<luma_patterns::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
+    let mut writes = None;
     let frames = beats
         .iter()
         .map(|beat| {
@@ -105,6 +106,15 @@ pub(crate) async fn preview(
             let Some(Value::Lighting(light)) = output.remove(&lighting) else {
                 return Err("pattern did not produce Lighting".into());
             };
+            let layout = light
+                .values()
+                .next()
+                .map(|v| v.writes())
+                .unwrap_or([false; 5]);
+            if writes.is_some_and(|previous| previous != layout) {
+                return Err("pattern output capabilities changed during preview".into());
+            }
+            writes = Some(layout);
             Ok(universe(light))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -118,6 +128,11 @@ pub(crate) async fn preview(
         cells,
         beats,
         frames,
+        writes: ["color", "dimmer", "position", "strobe", "speed"]
+            .into_iter()
+            .zip(writes.unwrap_or([false; 5]))
+            .map(|(name, written)| (name.to_string(), written))
+            .collect(),
     })
 }
 /// Resolve the authored head domain once, shared by saved-score playback and

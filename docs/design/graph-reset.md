@@ -48,10 +48,11 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
 - [x] Unify core node contracts and graph-backed Chase/Dissolve.
 - [x] Complete existing output capabilities through the normal compositor.
 - [x] Remove the Pattern wrapper in the score document and support shared graph editing.
-- [ ] Replace production Pattern/Implementation persistence and consumers.
+- [x] Replace Pattern/Implementation persistence for migrated scores; retain legacy consumers for other venues.
 - [x] Native graph editing/navigation/exposure and matching Python operations.
-- [ ] Rebuild remaining built-ins; translate EBF graphs and clip overrides.
-- [ ] Verify migrated output, then adopt the working library in GPUI.
+- [x] Rebuild the required built-ins; translate EBF graphs and clip overrides.
+- [x] Verify migrated output, then adopt the working library in GPUI.
+- [ ] Finish remote sync after reconnecting the Supabase connector.
 
 ## Existing behavior requiring an explicit migration decision
 
@@ -117,7 +118,8 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
   are checked during host preparation. Dynamic expressions can still fail at
   another time, and not all such failures can be proven away statically.
 - Incomplete native graph drafts live in memory; closing their tab can lose
-  them. Other open graph tabs do not yet refresh after shared-definition edits.
+  them. Published graph tabs now refresh after shared-definition edits, while
+  drafts retain their merge base.
 - Render-slot generations are now per engine and installed atomically. A late
   update cannot reopen a closed score/deck; deck compilation preserves the
   editor scene and empty results clear prior deck output. The legacy plan cache
@@ -237,3 +239,67 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
 - Verification for shared OKLab: 53 core tests, six Gradient editor tests,
   the backend sampler comparison, native persisted-gradient test, core clippy
   and workspace all-target check pass.
+
+## EBF adoption — September 6
+
+The user explicitly approved fixing old flaws even when that changes output.
+The reference captures are evidence for intent, not a requirement to reproduce
+average-BPM drift, sampled Invert extrema, accidental stem fallback or pixel
+merging. No paid in-app model turns were run.
+
+- `scripts/library/ebf_graph_reset.py` contains the manually rebuilt recipes. It
+  uses a whitelist of local dispatch calls. Import verifies reviewed source
+  hashes and unchanged original sources, validates every score first, then
+  imports through authored history and compare-and-swap. It never writes score
+  JSON directly into SQLite. Live mode uses the regular stored identity, never
+  fixture admission. The regular venue-open upgrade prepares old stage geometry
+  before score validation acquires its read transaction.
+- Complete review: 1,225 clips × 65 times, matching head IDs and output capability
+  masks. Every light-producing clip has nonzero output; the 72 strobe-only clips
+  remain strobe-only. All 22 effect families also generated saved-score preview
+  strips, and four families were inspected with the production stage renderer.
+- Your 38 EBF scores are now version 2: 14 populated and 24 empty, with all
+  1,225 clips preserved. Ten empty EBF scores owned by other accounts were left
+  unchanged, as were all 1,952 legacy clips in other venues. Database integrity
+  and foreign keys pass after import. The regular GPUI app was launched against
+  `~/.config/com.luma.luma`, not a test library.
+- Full backup remains `~/luma-backups/graph-reset-20260906`. A fresh online
+  database/history backup immediately before live import is in
+  `~/luma-backups/graph-reset-pre-import-20260906` (both databases verified).
+- Comparison sources, per-clip previews and changes are under
+  `~/luma-migration/graph-reset-20260906/migration-review`. The working-copy
+  import ledger is `import-working-copy-05/applied.json`; the regular library
+  import ledger is `import-regular-library-02/applied.json` alongside it.
+
+Intentional corrections:
+
+- Rhythm follows the current beat grid, including clip-relative color/circle
+  motion. Beat-envelope duration no longer uses the shortest gap in the song.
+- Linear chases share one local graph with independent mapping, travel curve,
+  repeat, travel time, stroke width, stroke Envelope and color inputs. Stroke
+  profiles have lit centers and dark edges rather than frozen Invert extrema.
+- Major-axis Chase uses the actual fitted axis. Circle alternation addresses
+  heads individually rather than merging nearby pixels by a hidden distance.
+- Random Heads and noise use authored, stable per-head seeds. Kick retriggers
+  start a new envelope instead of inheriting the prior kick's tail.
+- Bass-band clips read the saved bass source. Sensitivity is explicitly authored
+  from its 95th-percentile sampled energy, with a floor to avoid amplifying
+  silence. This replaces the full-mix fallback in 26 clips and its mismatched
+  calibration.
+
+Native/Python customization now uses `Score::customize_node`. “Edit a copy”
+clones the called graph into the score and rebinds that call site; Python uses
+`node.customize()`. Fundamental ops remain immutable. Shared graph tabs refresh
+after publication, and undoing customization leaves a removed subgraph view.
+Verification: 53 core tests, five native lighting tests (including customization
+undo/redo), real Python editing/rendering test, core clippy, workspace check and
+regular app build pass.
+
+Startup exposed a remote sync blocker: `patterns.score_id` is absent in the
+server schema, but the retained legacy sync registry requests it. The matching
+remote migration is checked in but has not been applied by this run. Supabase
+MCP is listed but fails OAuth refresh (“Failed to parse server response”), and
+there is no configured CLI deployment credential. Reconnection was requested.
+No remote DDL has been attempted. Inspect the actual remote schema before
+applying the pending migration; do not assume its legacy `track_scores` table
+still exists.

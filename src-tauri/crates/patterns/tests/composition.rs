@@ -702,12 +702,14 @@ fn clips_share_graphs_until_made_independent_including_local_dependencies() {
         .unwrap();
     // Replace the built-in dependency with a local, editable copy.
     score
-        .definitions
-        .insert("local_chase".into(), lib.definitions["chase"].clone());
-    let Body::Graph(graph) = &mut score.definitions.get_mut("original").unwrap().body else {
-        panic!()
-    };
-    graph.nodes.get_mut("effect").unwrap().definition = "local_chase".into();
+        .customize_node(&lib, "original", "effect", "local_chase")
+        .unwrap();
+    assert_eq!(score.definitions["local_chase"], lib.definitions["chase"]);
+    let before = score.clone();
+    assert!(score
+        .customize_node(&lib, "original", "effect", "chase")
+        .is_err());
+    assert_eq!(score, before);
     let mut repeat = score.clips["original"].clone();
     repeat.start = 16.0;
     score.clips.insert("repeat".into(), repeat);

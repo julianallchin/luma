@@ -624,6 +624,10 @@ combined = graph.node('add_lighting', id='combined', a=chase.output(), b=positio
 graph.output(combined.output())
 graph.expose(chase, 'width', name='Stroke width')
 graph.expose(chase, 'color')
+custom = chase.customize(id='my-chase')
+custom.rename('My chase')
+assert graph.definition()['body']['body']['nodes']['chase']['definition'] == 'my-chase'
+assert edit.definition('chase')['name'] == 'Chase'
 first = edit.add_clip(graph, id='first', seed=(1 << 64)-1, seconds=(1.0, 2.0), inputs={'width': .8, 'color': '#4080ff'})
 edit.add_clip(graph, id='second', seconds=(2.0, 3.0), inputs={'width': .3})
 assert edit.check()

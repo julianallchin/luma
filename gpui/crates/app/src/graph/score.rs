@@ -273,6 +273,19 @@ impl Editor {
             luma_lib::node_graph::lighting::project_definition(&library, &source.root)
         {
             source.view = Rc::new(view);
+        } else {
+            source.view = Rc::new(Graph {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                args: Vec::new(),
+            });
+        }
+        if let Some(missing) = self
+            .inspection
+            .iter()
+            .position(|(id, _)| !library.definitions.contains_key(id))
+        {
+            self.inspection.truncate(missing);
         }
         for (id, view) in &mut self.inspection {
             if let Some(projected) =
@@ -295,6 +308,110 @@ impl Editor {
 }
 
 impl Luma {
+    /// Keep all views of shared definitions in step with the timeline. Drafts
+    /// retain their original base for the existing three-way merge on finish.
+    pub(crate) fn sync_score_graph_tabs(&mut self, owner: &Target, cx: &mut Context<Self>) {
+        let Some(TabBody::TrackEditor(timeline)) = self.workspace.body(owner) else {
+            return;
+        };
+        let Some(score_id) = timeline.score_id().map(str::to_string) else {
+            return;
+        };
+        let Ok(current) = timeline.graph_candidate() else {
+            return;
+        };
+        let targets: Vec<_> = self
+            .workspace
+            .iter()
+            .filter_map(|tab| {
+                let TabBody::Graph(editor) = &tab.body else {
+                    return None;
+                };
+                let Source::Score(source) = &editor.source else {
+                    return None;
+                };
+                (source.owner == *owner
+                    && source.score_id == score_id
+                    && source.draft.is_none()
+                    && source.published != current)
+                    .then(|| tab.target.clone())
+            })
+            .collect();
+        for target in targets {
+            self.edit_graph_tab(&target, cx, |editor| {
+                let Source::Score(source) = &mut editor.source else {
+                    return;
+                };
+                source.published = current.clone();
+                editor.error = (!current.definitions.contains_key(&source.root))
+                    .then(|| "This graph was removed from the score".to_string());
+                editor.preview = None;
+                editor.refresh_score_view();
+            });
+            self.refresh_score_graph_preview(&target, cx);
+        }
+    }
+
+    pub(super) fn customize_score_graph_node(
+        &mut self,
+        target: &Target,
+        node: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let result = (|| {
+            let Some(TabBody::Graph(editor)) = self.workspace.body(target) else {
+                return Ok(None);
+            };
+            let Some(graph) = editor.edited_definition() else {
+                return Ok(None);
+            };
+            let Source::Score(source) = &editor.source else {
+                return Ok(None);
+            };
+            if source.draft.is_some() {
+                return Err(
+                    "Finish connecting the current graph before customizing a node".to_string(),
+                );
+            }
+            let owner = source.owner.clone();
+            let score_id = source.score_id.clone();
+            let Some(TabBody::TrackEditor(timeline)) = self.workspace.body_mut(&owner) else {
+                return Ok(None);
+            };
+            if timeline.score_id() != Some(score_id.as_str()) {
+                return Ok(None);
+            }
+            let mut candidate = timeline.graph_candidate()?;
+            candidate
+                .customize_node(
+                    &p::standard_library(),
+                    &graph,
+                    node,
+                    &uuid::Uuid::new_v4().to_string(),
+                )
+                .map_err(|error| error.to_string())?;
+            timeline.publish_graph_edit(candidate.clone())?;
+            Ok(Some((owner, candidate)))
+        })();
+        match result {
+            Ok(Some((owner, candidate))) => {
+                self.edit_graph_tab(target, cx, |editor| {
+                    if let Source::Score(source) = &mut editor.source {
+                        source.published = candidate;
+                    }
+                    editor.error = None;
+                    editor.refresh_score_view();
+                    editor.inspect_node(node);
+                });
+                self.refresh_working_scene_for(&owner, cx);
+                self.commit_graph_score_for(owner, cx);
+                self.refresh_score_graph_preview(target, cx);
+            }
+            Err(error) => self.edit_graph_tab(target, cx, |editor| editor.error = Some(error)),
+            Ok(None) => (),
+        }
+    }
+
     pub(super) fn apply_score_graph_edit(
         &mut self,
         target: &Target,

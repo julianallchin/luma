@@ -192,6 +192,13 @@ impl TrackHost {
                         .map_err(|error| HostCallError::new("invalid_edit", error.to_string()))?;
                     Ok(json!(request.candidate))
                 }
+                "track.graph_customize" => {
+                    self.edit_scope.as_ref().ok_or_else(|| HostCallError::new("forbidden", "this score is read-only"))?;
+                    let mut request: Customize = decode(payload)?;
+                    request.candidate.customize_node(&luma_patterns::standard_library(), &request.graph, &request.node, &request.id)
+                        .map_err(|error| HostCallError::new("invalid_edit", error.to_string()))?;
+                    Ok(json!(request.candidate))
+                }
                 _ => Err(HostCallError::new("unknown_method", "unknown score operation")),
             }
         }, context, limit).await
@@ -218,5 +225,14 @@ struct Edit {
 struct Independent {
     candidate: luma_patterns::Score,
     clip: String,
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Customize {
+    candidate: luma_patterns::Score,
+    graph: String,
+    node: String,
     id: String,
 }

@@ -287,6 +287,7 @@ impl Luma {
     }
 
     pub(crate) fn commit_graph_score_for(&mut self, target: Target, cx: &mut Context<Self>) {
+        self.sync_score_graph_tabs(&target, cx);
         let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(&target) else {
             return;
         };
@@ -489,6 +490,7 @@ impl Editor {
 
 impl Luma {
     pub(crate) fn refresh_working_scene_for(&mut self, target: &Target, cx: &mut Context<Self>) {
+        self.sync_score_graph_tabs(target, cx);
         if let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(target) {
             super::sync_composite(editor, cx);
         }

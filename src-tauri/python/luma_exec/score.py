@@ -399,6 +399,16 @@ class Node:
         self.graph._bind(self.id, inputs)
         return self
 
+    def customize(self, *, id=None):
+        """Copy this node's graph into the score and edit that call site."""
+        edit = self.graph._edit
+        edit._open()
+        id = id or str(uuid.uuid4())
+        edit._candidate = edit._track._call("track.graph_customize", {
+            "candidate": edit.candidate, "graph": self.graph.id, "node": self.id, "id": id,
+        })
+        return Graph(edit, id)
+
 
 class Graph:
     def __init__(self, edit, id):

@@ -254,7 +254,24 @@ fn inspect_nested_builtin_graphs_without_an_inputs_box_or_mutating_them() {
         const afterDelete=app.snapshot().findAll({role:"card"}).map(n=>n.label);
         app.click(app.snapshot().find({role:"button",label:"Graph: Chase"}));
         until("back at root",s=>s.find({role:"card",label:"Chase"}));
-        ({root,rootShot,chaseShot,pill,afterDelete,rootAfter:app.snapshot().findAll({role:"card"}).map(n=>n.label)})
+        const rootAfter=app.snapshot().findAll({role:"card"}).map(n=>n.label);
+        app.click(app.snapshot().find({role:"card",label:"Chase"}));
+        until("customize",s=>s.find({role:"button",label:"Edit a copy"}));
+        app.click(app.snapshot().find({role:"button",label:"Edit a copy"}));
+        until("editable chase copy",s=>s.find({role:"card",label:"Chase Mask"})&&s.find({role:"button",label:"Add node"}));
+        app.key("secondary-z");
+        until("undo customization returns to parent",s=>s.find({role:"card",label:"Chase"})&&!s.find({role:"card",label:"Chase Mask"}));
+        app.key("secondary-shift-z");
+        app.click(app.snapshot().find({role:"card",label:"Chase"}),{count:2});
+        until("redo customization is editable",s=>s.find({role:"card",label:"Chase Mask"})&&s.find({role:"button",label:"Add node"}));
+        app.click(app.snapshot().find({role:"button",label:"Add node"}));
+        until("search copy",s=>s.find({role:"input",label:"Search nodes…"}));
+        app.type(app.snapshot().find({role:"input",label:"Search nodes…"}),"Position output");
+        until("add position",s=>s.find({role:"button",label:"Add Position output"}));
+        app.click(app.snapshot().find({role:"button",label:"Add Position output"}));
+        until("edited copy",s=>s.find({role:"card",label:"Position output"}));
+        app.frames(24,{waitMs:50});
+        ({root,rootShot,chaseShot,pill,afterDelete,rootAfter,customized:true})
     "#.replace("CAPTURE", if cfg!(all(feature = "pixel", target_os = "macos")) { "true" } else { "false" }).as_str()), Duration::from_secs(60));
     assert_eq!(result.error, None, "{}", result.stdout);
     for (key, filename) in [
@@ -277,6 +294,7 @@ fn inspect_nested_builtin_graphs_without_an_inputs_box_or_mutating_them() {
         .any(|v| v == "Coordinate offset"));
     assert_eq!(result.result["pill"], result.result["afterDelete"]);
     assert_eq!(result.result["root"], result.result["rootAfter"]);
+    assert_eq!(result.result["customized"], true);
 }
 
 #[test]
