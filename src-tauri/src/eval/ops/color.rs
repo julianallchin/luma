@@ -17,7 +17,7 @@ use super::KernelCtx;
 use crate::models::node_graph::Stops;
 // OKLab color science is reused transitively via `Stops::sample` /
 // `Stops::sample_uniform` (see `models::node_graph::Stops`), which call
-// `node_graph::oklab::{srgb_to_oklab, oklab_to_srgb}`. We do not reimplement it.
+// `luma_patterns::oklab::{srgb_to_oklab, oklab_to_srgb}`. We do not reimplement it.
 
 #[derive(Clone, Debug)]
 pub enum ColorOp {

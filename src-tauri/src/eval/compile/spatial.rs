@@ -15,7 +15,7 @@ use super::{CompileError, LowerCtx, Lowerer};
 use crate::eval::ops::spatial::{SpatialOp, ATTRIBUTES, AXES, LEGACY_ATTRIBUTES};
 use crate::eval::{OpKind, Phase};
 use crate::models::node_graph::Stops;
-use crate::node_graph::oklab::srgb_to_oklab;
+use luma_patterns::oklab::srgb_to_oklab;
 
 /// Chroma-rescue boost cap (ported from legacy `MAX_CHROMA_BOOST`).
 const MAX_CHROMA_BOOST: f32 = 10.0;

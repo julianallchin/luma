@@ -11,6 +11,7 @@ mod field_ops;
 mod graph;
 mod mapping;
 mod metrics;
+pub mod oklab;
 mod output;
 mod prepared;
 mod recipes;

@@ -819,11 +819,69 @@ except RuntimeError as error:
                 &f.pool,
                 &f.resource_root,
                 &f.storage,
-                request,
+                request.clone(),
             )
             .await
             .unwrap_err();
             assert!(error.contains("bass stem unavailable"), "{error}");
+            // A synced source without its disposable PCM cache is available
+            // audio, not missing analysis. Give this fixture a unique cache key.
+            let hash = format!("source-stem-{}", uuid::Uuid::new_v4());
+            crate::database::local::auth::arm_write_admission(&f.pool, None)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE tracks SET track_hash=? WHERE id=?")
+                .bind(&hash)
+                .bind(TRACK_ID)
+                .execute(&f.pool)
+                .await
+                .unwrap();
+            crate::database::local::auth::arm_write_admission(&f.pool, Some("owner"))
+                .await
+                .unwrap();
+            let samples: Vec<i16> = (0..16_000)
+                .map(|i| ((i as f32 * std::f32::consts::TAU / 8.).sin() * 16_000.) as i16)
+                .collect();
+            let bytes = (samples.len() * 2) as u32;
+            let mut wav = Vec::new();
+            wav.extend_from_slice(b"RIFF");
+            wav.extend_from_slice(&(36 + bytes).to_le_bytes());
+            wav.extend_from_slice(b"WAVEfmt ");
+            wav.extend_from_slice(&16_u32.to_le_bytes());
+            for value in [1_u16, 1] {
+                wav.extend_from_slice(&value.to_le_bytes());
+            }
+            for value in [8_000_u32, 16_000] {
+                wav.extend_from_slice(&value.to_le_bytes());
+            }
+            for value in [2_u16, 16] {
+                wav.extend_from_slice(&value.to_le_bytes());
+            }
+            wav.extend_from_slice(b"data");
+            wav.extend_from_slice(&bytes.to_le_bytes());
+            for sample in samples {
+                wav.extend_from_slice(&sample.to_le_bytes());
+            }
+            std::fs::create_dir_all(f.storage.stems_dir(&hash)).unwrap();
+            std::fs::write(f.storage.stems_dir(&hash).join("bass.wav"), wav).unwrap();
+            for (name, value) in [("low_hz", 800.), ("high_hz", 1200.)] {
+                request
+                    .inputs
+                    .insert(name.into(), luma_patterns::Value::Number(value));
+            }
+            let preview = crate::services::composable_patterns::preview(
+                &f.pool,
+                &f.resource_root,
+                &f.storage,
+                request,
+            )
+            .await
+            .unwrap();
+            assert!(preview
+                .frames
+                .iter()
+                .any(|frame| frame.primitives.values().any(|head| head.dimmer > 0.)));
+            assert!(f.storage.stem_pcm_path(&hash, "bass").is_file());
         }
     }
 }

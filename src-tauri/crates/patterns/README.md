@@ -19,6 +19,9 @@ Implemented examples:
   Envelope on an arbitrary offset field, with explicit outside darkness.
 - Rainbow, harmony color and strobe are graphs too. Uniform and per-head
   strobe output share the same capability writer.
+- Gradient preserves the existing library's perceptual OKLab interpolation.
+  The native bar and inserted stop colors use that same color path. Authored
+  colors are normalized sRGB channels, with no extra color-space setting.
 - `pill`, `multiply_mask`, `scale_mask`, and `dissolve_mask` are ordinary graphs
   built from arithmetic, geometry, comparison, curve sampling, and randomness.
 - `dissolve_mask` takes coverage (1 = all on, 0 = all off). It can hold a random

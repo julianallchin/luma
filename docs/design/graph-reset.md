@@ -156,7 +156,7 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
 
 ## Signal and audio checkpoint
 
-- Added one Gradient value (ordered linear RGB stops, including coincident stops
+- Added one Gradient value (ordered RGB stops, including coincident stops
   for hard color changes), color fields, field masking, color output, scalar
   arithmetic/unit conversions, field floor/fraction/absolute/sine and coherent
   spatial noise. Resolved color fields cannot be stored as authored values.
@@ -217,9 +217,23 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
   alpha-zero arguments as dimmer-only contributions during translation.
 - The misspelled `soild_strobe` only writes strobe. It must migrate to strobe-only
   output, not a wash plus strobe.
-- Legacy gradients interpolate through OKLab; the new Gradient's channel-linear
-  interpolation needs an explicit conversion or design decision. Legacy beat
-  envelopes use the smallest analyzed pulse gap for their full duration, whereas
+- Gradient now shares the existing OKLab interpolation. Native bar painting and
+  stop insertion use the same color space, so two-stop authored fades keep two
+  stops. A regression compares canonical gradients against the legacy sampler.
+- Legacy beat envelopes use the smallest analyzed pulse gap for their full duration, whereas
   new timing follows the current grid interval. Quantify these differences.
 - Removed obsolete Tauri/TypeScript introductory comments from `agent_harness`;
   its dispatch seam is shared with GPUI. No web interface is involved.
+
+- Synced compressed stems now rebuild their disposable PCM cache during preview
+  and score preparation. An unavailable source remains an explicit error; it is
+  never replaced with the full mix. The Python/preview regression passes with
+  a saved WAV stem and no decoded cache, without running a model.
+- During EBF capture, 26 of 40 bass-band clips silently used the mix because
+  their bass PCM cache was absent; 14 used bass. The migration records this
+  effective choice explicitly. The legacy loader's “evaluating as silence”
+  warning is misleading: the old audio kernel falls back to the mix. That old
+  path remains for unmigrated scores.
+- Verification for shared OKLab: 53 core tests, six Gradient editor tests,
+  the backend sampler comparison, native persisted-gradient test, core clippy
+  and workspace all-target check pass.

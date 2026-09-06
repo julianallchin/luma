@@ -98,27 +98,36 @@ pub(crate) async fn prepare(
                     )?
                 } else {
                     let file = storage.stem_pcm_path(&path.track_hash, source.name());
-                    let pcm = crate::audio::read_pcm_file(&file).map_err(|e| {
-                        format!(
-                            "{} stem unavailable; analyze the track's stems: {e}",
-                            source.name()
-                        )
-                    })?;
-                    if pcm.channels != 1 && pcm.channels != 2 {
+                    let decoded = match crate::audio::read_pcm_file(&file) {
+                        Ok(pcm) => Arc::new(crate::audio::decoder::DecodedAudio::from(pcm)),
+                        Err(cache_error) => {
+                            let source_file = storage.stem_source_path(&path.track_hash, source.name())
+                                .ok_or_else(|| format!("{} stem unavailable; analyze the track's stems: {cache_error}", source.name()))?;
+                            // Compressed stems sync; decoded PCM is a local cache.
+                            // Rebuild it from this exact source, never the full mix.
+                            crate::audio::load_or_decode_audio_shared(
+                                &source_file,
+                                &format!("{}_stem_{}", path.track_hash, source.name()),
+                                0,
+                            )
+                            .map_err(|e| format!("could not decode {} stem: {e}", source.name()))?
+                        }
+                    };
+                    if decoded.channels != 1 && decoded.channels != 2 {
                         return Err(format!(
                             "{} stem has unsupported channel count {}",
                             source.name(),
-                            pcm.channels
+                            decoded.channels
                         ));
                     }
-                    let mono = if pcm.channels == 2 {
-                        crate::audio::stereo_to_mono(&pcm.samples)
+                    let mono = if decoded.channels == 2 {
+                        crate::audio::stereo_to_mono(&decoded.samples)
                     } else {
-                        pcm.samples
+                        decoded.samples.clone()
                     };
                     super::ResidentAudio {
                         samples: Arc::new(mono),
-                        sample_rate: pcm.sample_rate,
+                        sample_rate: decoded.sample_rate,
                     }
                 };
                 if audio.samples.is_empty() || audio.sample_rate == 0 {
