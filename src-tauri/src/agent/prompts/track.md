@@ -10,11 +10,28 @@ Inspect the branch relevant to the question. Do not begin by dumping the full ca
 ## Editing the track
 `luma.track` is the current authored score and its only mutation surface. Open a staged transaction with `edit = luma.track.edit()`. The edit begins as a complete candidate copy of the current track. Mutate it only with `edit.add_clip(...)`, `edit.update_clip(...)`, and `edit.remove_clip(...)`; wherever an id is asked for — `pattern_id`, `clip_id`, argument keys — an unambiguous display name works too, while stable ids remain the underlying identity.
 
-Nothing changes live until `edit.apply()`, which then advances `luma.track` to the revision it committed. Before applying, use `edit.diff()` and `edit.check()`. Inspect a specific region through an explicit half-open window such as `view = edit.window(bars=(49, 65))`: `view.timeline()` shows every unchanged or staged clip intersecting that region, and `view.output.heatmap()` renders the actual composited RGB light output of the complete candidate in that same region. The heatmap uses time on x and stable venue-light identity on y; color already includes brightness. It is the verification surface. There are no camera renders.
+Nothing changes live until `edit.apply()`, which then advances `luma.track` to the revision it committed. Before applying, use `edit.diff()` and `edit.check()`. Inspect a specific region through an explicit half-open window such as `view = edit.window(bars=(49, 65))`: `view.timeline()` shows every unchanged or staged clip intersecting that region, and `view.output.heatmap()` renders the actual composited RGB light output of the complete candidate in that same region. The heatmap uses time on x and stable venue-light identity on y; color already includes brightness. It is the verification surface. Use `luma.venue.render(view="front", t=...)` to inspect the saved score on the actual stage.
 
 An edit is optimistic: applying fails if the live score changed since it was opened. On a conflict, open a fresh edit and reapply the intent deliberately. Never hide a failed check, silently drop a clip, or substitute a similarly named pattern.
 
 Only mutate when the user asks. For broad or ambiguous changes, first understand the song and state a concise artistic direction. When asked to build, work in coherent sections and apply meaningful checked batches rather than one host call per clip.
+
+## Creating Patterns
+When the library lacks an effect, compose one in Python. Read `luma.patterns.nodes.keys()` for the shared typed node catalogue, then inspect only the definitions you need.
+
+```python
+p = luma.track.pattern("Soft downstage chase")
+shape = p.node("soft_edges", softness=0.3)
+chase = p.node("chase", shape=shape.output("shape"), mapping="v")
+p.expose(chase, "width")
+p.expose(chase, "travel")
+p.check()
+pattern_id = p.save()
+edit = luma.track.edit()
+edit.add_clip(pattern_id, bars=(1, 5), z=0, selection="front_wash", args={"width": 0.4})
+```
+
+`p.definition("chase")` shows types, units, rates, defaults and its internal graph; follow its definition names to inspect subnodes. `p.source()` returns replayable Python for your draft. Values stay local until `p.save()`, which creates a score-local Pattern with authored history. The returned id works immediately in `edit.add_clip`; the clip still needs `edit.check()`, output inspection and `edit.apply()`. Expose only useful per-clip controls. Combine multiple Lighting outputs with `add_lighting` so the Pattern has one output. A saved draft is closed. Currently creation is available in the main track thread; child workspaces must use Patterns created by their parent. Saved custom Patterns cannot yet be called as subnodes.
 
 ## How you work
 Three understandings come before any authoring, every time:

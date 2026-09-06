@@ -32,14 +32,12 @@ pub fn lower(
 ) -> Result<(), CompileError> {
     build(nodes, edges, args, ctx, ids, low).map_err(CompileError::Graph)
 }
-fn build(
+/// The authoring check and playback lower exactly the same typed program.
+pub(crate) fn library_for_graph(
     nodes: &[NodeInstance],
     edges: &[Edge],
     args: &HashMap<String, serde_json::Value>,
-    ctx: &ResidentContext,
-    ids: &[String],
-    low: &mut Lowerer,
-) -> Result<(), String> {
+) -> Result<p::Library, String> {
     let mut library = p::standard_library();
     let mut graph = p::Graph {
         nodes: BTreeMap::new(),
@@ -60,6 +58,11 @@ fn build(
             .definitions
             .get(name)
             .ok_or_else(|| format!("Unknown lighting node {name}"))?;
+        for key in node.params.keys() {
+            if !def.inputs.contains_key(key) {
+                return Err(format!("Unknown input {}.{key}", node.id));
+            }
+        }
         let mut inputs = BTreeMap::new();
         for (id, input) in &def.inputs {
             let feeding: Vec<_> = edges
@@ -135,6 +138,21 @@ fn build(
             body: Body::Graph(graph),
         },
     );
+    library
+        .validate("__score_pattern")
+        .map_err(|e| e.to_string())?;
+    Ok(library)
+}
+
+fn build(
+    nodes: &[NodeInstance],
+    edges: &[Edge],
+    args: &HashMap<String, serde_json::Value>,
+    ctx: &ResidentContext,
+    ids: &[String],
+    low: &mut Lowerer,
+) -> Result<(), String> {
+    let library = library_for_graph(nodes, edges, args)?;
     let grid = ctx
         .beat_grid
         .as_ref()

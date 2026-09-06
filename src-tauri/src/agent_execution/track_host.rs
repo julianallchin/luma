@@ -31,6 +31,8 @@ use crate::services::track_edits::{
 };
 use crate::storage::StorageRoot;
 
+mod patterns;
+
 const SAMPLES_PER_BEAT: f64 = 16.0;
 const FALLBACK_SAMPLES_PER_SECOND: f64 = 32.0;
 const MIN_SAMPLES: usize = 2;
@@ -334,6 +336,9 @@ impl HostCallHandler for TrackHost {
         context.check()?;
         let limit = call_limit(context)?;
         self.runtime.block_on(async {
+            if matches!(method, "track.pattern_check" | "track.pattern_create") {
+                return self.pattern_call(method, payload, context).await;
+            }
             if method == "track.apply" {
                 let plan: TrackEditPlan = decode(payload)?;
                 let edit_scope = self.edit_scope.as_ref().ok_or_else(|| {
@@ -429,7 +434,7 @@ fn apply_request_fingerprint(
     ))
 }
 
-fn scoped_apply_digest(domain: &[u8], values: &[&str]) -> impl std::fmt::LowerHex {
+fn scoped_apply_digest(domain: &[u8], values: &[&str]) -> impl std::fmt::LowerHex + AsRef<[u8]> {
     let mut hash = Sha256::new();
     hash.update(domain);
     for value in values {

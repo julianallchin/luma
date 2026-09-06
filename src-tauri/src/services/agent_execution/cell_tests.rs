@@ -556,6 +556,106 @@ async fn a_thread_computes_over_its_track_and_keeps_its_namespace() {
 }
 
 #[tokio::test]
+async fn python_authors_a_pattern_then_renders_and_places_it() {
+    let Some(f) = Fixture::new("python_authors_a_pattern_then_renders_and_places_it").await else {
+        return;
+    };
+    let thread = f.editable_thread().await;
+    let turn = "turn-create-pattern";
+    crate::database::local::agent_threads::append_messages(
+        &f.pool,
+        &thread,
+        AppendAgentThreadMessagesInput {
+            operation_id: "create-pattern-turn".into(),
+            expected_head_message_id: None,
+            messages: vec![NewAgentThreadMessage {
+                id: Some(turn.into()),
+                role: "user".into(),
+                parts: json!([{ "type": "text", "text": "make a soft chase" }]),
+            }],
+        },
+        Some("owner"),
+    )
+    .await
+    .unwrap();
+    // Force a manifest refresh between opening the draft and saving it.
+    let opened = f
+        .run_as_owner(
+            &thread,
+            turn,
+            "draft = luma.track.pattern('Authored soft chase')",
+        )
+        .await;
+    expect_ok(&opened, "open Pattern draft");
+    let code = r#"
+import numpy as np
+p = draft
+shape = p.node("soft_edges", softness=0.3)
+chase = p.node("chase", shape=shape.output("shape"), mapping="order", boundary="wrap", width=1.0,
+               color=[0.2, 0.5, 1.0], grid_aligned=False)
+p.expose(chase, "width")
+assert p.definition("chase")["body"]["kind"] == "graph"
+original = p.graph()
+exec(p.source())
+assert p.graph() == original
+p = draft
+assert p.check()["valid"]
+request = p._request()
+pattern_id = p.save()
+assert p.save() == pattern_id
+edit = luma.track.edit()
+edit.add_clip(pattern_id, seconds=(1.0, 2.0), z=0, selection="all", args={"width": 0.8})
+rendered = edit.window(seconds=(1.0, 2.0)).output.tensor
+assert np.max(rendered.values) > 0
+applied = edit.apply()
+(applied.added, rendered.shape)
+"#;
+    let out = f.run_as_owner(&thread, turn, code).await;
+    expect_ok(
+        &out,
+        "author, roundtrip, check, save, render and place Pattern",
+    );
+    assert_eq!(out.repr.as_deref(), Some("(1, (2, 32, 3))"));
+    let replay = f
+        .run_as_owner(
+            &thread,
+            turn,
+            "_luma_host_call('track.pattern_create', request)['id'] == pattern_id",
+        )
+        .await;
+    expect_ok(&replay, "retry Pattern creation");
+    assert_eq!(replay.repr.as_deref(), Some("True"));
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM patterns WHERE name = 'Authored soft chase' AND score_id = ?",
+    )
+    .bind(SCORE_ID)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    // An invalid structured control must fail before a Pattern is persisted.
+    let invalid = f
+        .run_as_owner(
+            &thread,
+            turn,
+            r#"
+bad = luma.track.pattern("Invalid envelope")
+bad.node("chase", shape={"points": [[0, 1], [0, 0]]})
+bad.save()
+"#,
+        )
+        .await;
+    assert_eq!(invalid.status, "error");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM patterns WHERE name = 'Invalid envelope'")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    f.service.shutdown_all();
+}
+
+#[tokio::test]
 async fn python_track_edit_applies_through_the_real_worker_and_transaction() {
     let Some(f) =
         Fixture::new("python_track_edit_applies_through_the_real_worker_and_transaction").await

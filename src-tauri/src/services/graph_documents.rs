@@ -1315,6 +1315,30 @@ fn validate_params(
     node: &NodeInstance,
     definition: &NodeTypeDef,
 ) {
+    // Lighting ports are typed values, including structured Envelopes, Colors
+    // and Mappings. ParamType describes the native widget, not their schema.
+    if let Some(id) = node
+        .type_id
+        .strip_prefix(crate::node_graph::lighting::PREFIX)
+    {
+        let library = luma_patterns::standard_library();
+        if let Some(typed) = library.definitions.get(id) {
+            for (key, value) in &node.params {
+                let path = format!("{node_path}.params.{key}");
+                match typed.inputs.get(key) {
+                    Some(input) => {
+                        if let Err(error) =
+                            crate::node_graph::lighting::decode(input.value_type, value)
+                        {
+                            issue(issues, path, error);
+                        }
+                    }
+                    None => issue(issues, path, "unknown input"),
+                }
+            }
+            return;
+        }
+    }
     let params: HashMap<&str, _> = definition
         .params
         .iter()
