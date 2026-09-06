@@ -103,6 +103,8 @@ impl ParamType {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PatternArgType {
+    AudioSource,
+    Drum,
     Envelope,
     Beats,
     Proportion,

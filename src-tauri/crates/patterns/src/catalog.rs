@@ -20,6 +20,13 @@ fn field(name: &str, description: &str, value: Value, rate: Rate) -> Input {
     input(name, description, value.value_type(), rate, Some(value))
 }
 pub(crate) fn primitive(p: Primitive) -> Definition {
+    if let Some(definition) = crate::features::definition(p) {
+        return definition;
+    }
+    if let Some(definition) = crate::signals::definition(p).or_else(|| crate::color::definition(p))
+    {
+        return definition;
+    }
     if let Some(definition) = crate::field_ops::definition(p) {
         return definition;
     }
@@ -30,15 +37,6 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             "Resolved coordinates of independently controllable cells",
             ValueType::Coordinates,
             Fixed,
-            None,
-        )
-    };
-    let mask = || {
-        input(
-            "Mask",
-            "Coverage keyed by cell identity",
-            ValueType::Mask,
-            Frame,
             None,
         )
     };
@@ -212,22 +210,6 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             ],
             vec![("mask", ValueType::Mask, Frame)],
         ),
-        Primitive::Appearance => (
-            "Appearance",
-            vec![
-                ("mask", mask()),
-                (
-                    "color",
-                    field(
-                        "Color",
-                        "Linear RGB light color",
-                        Value::Color([1.0; 3]),
-                        Frame,
-                    ),
-                ),
-            ],
-            vec![("lighting", ValueType::Lighting, Frame)],
-        ),
         Primitive::WritePosition => (
             "Position output",
             vec![
@@ -252,9 +234,8 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
             ],
             vec![("lighting", ValueType::Lighting, Frame)],
         ),
-        Primitive::WriteDimmer | Primitive::WriteStrobe | Primitive::WriteSpeed => (
+        Primitive::WriteStrobe | Primitive::WriteSpeed => (
             match p {
-                Primitive::WriteDimmer => "Dimmer output",
                 Primitive::WriteStrobe => "Strobe output",
                 _ => "Movement speed output",
             },
@@ -372,9 +353,7 @@ pub fn standard_library() -> Library {
         ("motion", Primitive::Motion),
         ("coordinate_offset", Primitive::CoordinateOffset),
         ("sample_field_envelope", Primitive::FieldEnvelope),
-        ("appearance", Primitive::Appearance),
         ("write_position", Primitive::WritePosition),
-        ("write_dimmer", Primitive::WriteDimmer),
         ("write_strobe", Primitive::WriteStrobe),
         ("write_speed", Primitive::WriteSpeed),
         ("add_lighting", Primitive::AddLighting),
@@ -383,6 +362,7 @@ pub fn standard_library() -> Library {
     ] {
         library.definitions.insert(id.into(), primitive(p));
     }
+    crate::recipes::foundation(&mut library);
     library.definitions.insert(
         "multiply_mask".into(),
         Definition {
@@ -618,6 +598,7 @@ pub fn standard_library() -> Library {
             }),
         },
     );
+    crate::recipes::extend(&mut library);
     library
 }
 

@@ -1,4 +1,5 @@
-//! Reusable builder for the eval engine's per-`(track, venue, graph)` inputs.
+//! Legacy graph input assembly and shared physical-head resolution.
+//! Canonical score graphs load analyzed track sources through `track_features`.
 //!
 //! Assembles a [`crate::eval::ResidentContext`] plus the ordered `primitive_ids`
 //! the pattern covers. This is the single way the app (and the golden harness)
@@ -298,34 +299,37 @@ pub(crate) async fn resolve_selection_primitives_with_access(
 /// Decode a track's mono resident audio. Three tiers: process-wide in-memory
 /// cache (O(1) Arc clone) → on-disk mono PCM (fast read, skips decode/resample/
 /// downmix) → full decode (first time only, then written to disk).
-fn load_track_audio_cached(
+pub(crate) fn load_track_audio_cached(
     storage: &StorageRoot,
     file_path: &str,
     track_hash: &str,
-) -> Option<ResidentAudio> {
+) -> Result<ResidentAudio, String> {
     if let Ok(cache) = AUDIO_CACHE.lock() {
         if let Some(hit) = cache.get(track_hash) {
-            return Some(hit.clone());
+            return Ok(hit.clone());
         }
     }
     let mono_path = storage.eval_mono_pcm_path(track_hash);
 
     // Disk tier: a small mono-at-analysis-rate file from a previous session.
-    let audio = read_mono_pcm(&mono_path).or_else(|| {
-        // Cold: reuse the shared full decode (populated by playback when the
-        // track is open — no second decode), downmix once, persist the mono.
-        let decoded =
-            load_or_decode_audio_shared(Path::new(file_path), track_hash, TARGET_SAMPLE_RATE)
-                .ok()?;
-        let audio = ResidentAudio {
-            samples: Arc::new(stereo_to_mono(&decoded.samples)),
-            sample_rate: decoded.sample_rate,
-        };
-        if let Err(e) = write_pcm_file(&mono_path, &audio.samples, audio.sample_rate, 1) {
-            log::warn!("[ctx] failed to write mono audio cache: {e}");
+    let audio = match read_mono_pcm(&mono_path)
+        .or_else(|| read_mono_pcm(&storage.mix_pcm_path(track_hash)))
+    {
+        Some(audio) => audio,
+        None => {
+            let decoded =
+                load_or_decode_audio_shared(Path::new(file_path), track_hash, TARGET_SAMPLE_RATE)
+                    .map_err(|error| format!("track audio unavailable at {file_path}: {error}"))?;
+            let audio = ResidentAudio {
+                samples: Arc::new(stereo_to_mono(&decoded.samples)),
+                sample_rate: decoded.sample_rate,
+            };
+            if let Err(e) = write_pcm_file(&mono_path, &audio.samples, audio.sample_rate, 1) {
+                log::warn!("[ctx] failed to write mono audio cache: {e}");
+            }
+            audio
         }
-        Some(audio)
-    })?;
+    };
 
     if let Ok(mut cache) = AUDIO_CACHE.lock() {
         // Evict one entry when at capacity (LRU-ish; audio buffers are large).
@@ -336,7 +340,7 @@ fn load_track_audio_cached(
         }
         cache.insert(track_hash.to_string(), audio.clone());
     }
-    Some(audio)
+    Ok(audio)
 }
 
 /// Eval-side adapter over the shared PCM reader: the engine's `ResidentAudio` is
@@ -466,7 +470,7 @@ pub async fn build_resident_context(
     // re-decode the whole file each call.
     let audio = if needs_audio_context(nodes) {
         match crate::database::local::tracks::get_track_path_and_hash(local_pool, track_id).await {
-            Ok(info) => load_track_audio_cached(storage, &info.file_path, &info.track_hash),
+            Ok(info) => load_track_audio_cached(storage, &info.file_path, &info.track_hash).ok(),
             Err(_) => None,
         }
     } else {

@@ -69,6 +69,8 @@ class ScoreTests(unittest.TestCase):
     def test_rich_values_keep_their_units(self):
         self.assertEqual(_typed("color", "#ff0000"), {"type": "color", "value": [1., 0., 0.]})
         self.assertEqual(_typed("envelope", [[0, 1], [1, 0]])["value"], {"points": [[0, 1], [1, 0]]})
+        self.assertEqual(_typed("gradient", [(0, "#ff0000"), (1, "#0000ff")])["value"],
+                         {"stops": [{"t": 0, "color": [1., 0., 0.]}, {"t": 1, "color": [0., 0., 1.]}]})
         with self.assertRaises(ValueError):
             _typed("beats", {"type": "proportion", "value": .5})
 

@@ -1380,6 +1380,13 @@ fn validate_arg_default(issues: &mut Vec<GraphValidationIssue>, path: &str, arg:
         PatternArgType::Scalar | PatternArgType::Beats | PatternArgType::Position => {
             value.as_f64().is_some_and(f64::is_finite)
         }
+        PatternArgType::AudioSource => {
+            crate::node_graph::lighting::decode(luma_patterns::ValueType::AudioSource, value)
+                .is_ok()
+        }
+        PatternArgType::Drum => {
+            crate::node_graph::lighting::decode(luma_patterns::ValueType::Drum, value).is_ok()
+        }
         PatternArgType::Envelope => {
             serde_json::from_value::<luma_patterns::Envelope>(value.clone())
                 .is_ok_and(|v| v.validate().is_ok())
@@ -1473,6 +1480,8 @@ fn output_port_type(
 ) -> Option<PortType> {
     if node.id == PATTERN_ARGS_NODE_ID && node.type_id == PATTERN_ARGS_NODE_ID {
         return args.get(port).map(|arg| match arg.arg_type {
+            PatternArgType::AudioSource => PortType::Audio,
+            PatternArgType::Drum => PortType::Events,
             PatternArgType::Beats => PortType::Beats,
             PatternArgType::Proportion => PortType::Proportion,
             PatternArgType::Position => PortType::Position,

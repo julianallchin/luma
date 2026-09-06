@@ -199,23 +199,7 @@ pub(crate) fn run(
                     .iter()
                     .map(|(id, a)| {
                         let b = b[id];
-                        (
-                            id.clone(),
-                            match math {
-                                FieldMath::Add => a + b,
-                                FieldMath::Subtract => a - b,
-                                FieldMath::Multiply => a * b,
-                                FieldMath::Divide => {
-                                    if b == 0.0 {
-                                        0.0
-                                    } else {
-                                        a / b
-                                    }
-                                }
-                                FieldMath::Minimum => a.min(b),
-                                FieldMath::Maximum => a.max(b),
-                            },
-                        )
+                        (id.clone(), math.evaluate(*a, b))
                     })
                     .collect();
                 out("value", Value::Field(result))

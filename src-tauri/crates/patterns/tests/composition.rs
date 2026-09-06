@@ -23,9 +23,11 @@ fn cells() -> &'static [Cell] {
 }
 fn frame(beat: f64) -> Frame<'static> {
     Frame {
+        features: None,
         cells: cells(),
         beat,
         clip_start: 8.0,
+        clip_duration: 4.0,
         seed: 42,
     }
 }
@@ -181,6 +183,7 @@ fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
                 "dissolve_mask",
                 &values,
                 Frame {
+                    features: None,
                     cells,
                     ..frame(9.0)
                 },
@@ -906,6 +909,7 @@ fn pill(
                 ("boundary".into(), Value::Boundary(boundary)),
             ]),
             Frame {
+                features: None,
                 cells: &cells,
                 ..frame(9.0)
             },
@@ -938,6 +942,7 @@ fn preparation_rejects_duplicate_head_identities_for_every_effect() {
     let duplicate = vec![cells()[0].clone(), cells()[0].clone()];
     for id in ["chase", "dissolve_flash", "write_strobe"] {
         let frame = Frame {
+            features: None,
             cells: &duplicate,
             ..frame(8.0)
         };

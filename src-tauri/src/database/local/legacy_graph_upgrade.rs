@@ -314,7 +314,9 @@ fn upgrade_argument_values(implementation_id: &str, graph: &mut Graph) -> Result
                     changed = true;
                 }
             }
-            PatternArgType::Scalar
+            PatternArgType::AudioSource
+            | PatternArgType::Drum
+            | PatternArgType::Scalar
             | PatternArgType::Palette
             | PatternArgType::Gradient
             | PatternArgType::Beats

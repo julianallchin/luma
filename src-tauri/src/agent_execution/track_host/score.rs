@@ -95,6 +95,7 @@ impl TrackHost {
         graph_scores::prepare_scene(
             &mut access,
             &self.resource_root,
+            &self.storage,
             &self.scope.track_id,
             &plan.candidate,
         )

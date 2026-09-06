@@ -24,7 +24,10 @@ pub struct PreparedGraph {
     slots: usize,
     cells: Vec<Cell>,
     clip_start: f64,
+    clip_duration: f64,
     seed: u64,
+    features: Option<std::sync::Arc<dyn crate::FeatureSource>>,
+    requests: Vec<crate::FeatureRequest>,
 }
 impl PreparedGraph {
     pub fn new(
@@ -46,13 +49,21 @@ impl PreparedGraph {
         frame: Frame,
     ) -> Result<Self> {
         frame.validate()?;
+        if frame.features.is_some() {
+            return Err(Error(
+                "bind owned track data with PreparedGraph::with_features".into(),
+            ));
+        }
         let mut prepared = Self {
             steps: Vec::new(),
             outputs: BTreeMap::new(),
             slots: 0,
             cells: frame.cells.to_vec(),
             clip_start: frame.clip_start,
+            clip_duration: frame.clip_duration,
             seed: frame.seed,
+            features: None,
+            requests: Vec::new(),
         };
         let bound = inputs
             .iter()
@@ -61,8 +72,21 @@ impl PreparedGraph {
         prepared.outputs = prepared.lower(library, definition, bound)?;
         // Validate relationships such as travel <= repeat at preparation, not
         // on the first device tick. Dynamic errors still propagate from render.
-        prepared.evaluate(frame.clip_start)?;
+        if prepared.requests.is_empty() {
+            prepared.evaluate(frame.clip_start)?;
+        }
         Ok(prepared)
+    }
+    pub fn feature_requests(&self) -> &[crate::FeatureRequest] {
+        &self.requests
+    }
+    pub fn with_features(
+        mut self,
+        features: std::sync::Arc<dyn crate::FeatureSource>,
+    ) -> Result<Self> {
+        self.features = Some(features);
+        self.evaluate(self.clip_start)?;
+        Ok(self)
     }
     pub fn dynamic_step_count(&self) -> usize {
         self.steps.len()
@@ -85,8 +109,10 @@ impl PreparedGraph {
                 step.primitive,
                 &inputs,
                 Frame {
+                    features: self.features.as_deref(),
                     beat,
                     clip_start: self.clip_start,
+                    clip_duration: self.clip_duration,
                     seed: self.seed,
                     cells: &self.cells,
                 },
@@ -130,6 +156,19 @@ impl PreparedGraph {
         }
         match &definition.body {
             Body::Primitive(primitive) => {
+                let constants: BTreeMap<_, _> = inputs
+                    .iter()
+                    .filter_map(|(name, source)| match source {
+                        Source::Constant(value) => Some((name.clone(), value.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                validate_parameters(*primitive, &constants)?;
+                if let Some(request) = crate::features::request(*primitive, &constants)? {
+                    if !self.requests.contains(&request) {
+                        self.requests.push(request);
+                    }
+                }
                 if definition.outputs.values().all(|o| o.rate == Rate::Fixed)
                     || (!primitive.reads_time()
                         && inputs
@@ -144,8 +183,10 @@ impl PreparedGraph {
                         *primitive,
                         &values,
                         Frame {
+                            features: self.features.as_deref(),
                             beat: self.clip_start,
                             clip_start: self.clip_start,
+                            clip_duration: self.clip_duration,
                             seed: self.seed,
                             cells: &self.cells,
                         },
@@ -220,6 +261,27 @@ impl PreparedGraph {
                 Ok(nodes[node][output].clone())
             }
         }
+    }
+}
+
+/// Relations involving fixed controls are checked even when a graph's dynamic
+/// branch requires track data that is deliberately absent during source validation.
+fn validate_parameters(op: Primitive, inputs: &BTreeMap<String, Value>) -> Result<()> {
+    let number = |name| inputs.get(name).map(Value::scalar);
+    match op {
+        Primitive::Rhythm if number("repeat").is_some_and(|v| v <= 0.0) => {
+            Err(Error("repeat interval must be greater than zero".into()))
+        }
+        Primitive::Motion
+            if number("travel")
+                .zip(number("repeat"))
+                .is_some_and(|(travel, repeat)| travel <= 0.0 || repeat < travel) =>
+        {
+            Err(Error(
+                "travel must be positive and no longer than repeat".into(),
+            ))
+        }
+        _ => Ok(()),
     }
 }
 impl Source {

@@ -753,6 +753,31 @@ float(luma.track.clips[0].inputs['width']['value'])
         )
         .await;
     assert!((repr_f64(&out, "merge the detached canonical score") - 0.2).abs() < 1e-9);
+    let out = f.run_as_owner(&thread, turn, r#"
+edit = luma.track.edit()
+for clip in list(edit.candidate['clips']):
+    edit.remove_clip(clip)
+drum = edit.graph(node='drum_pulse', id='drum')
+edit.add_clip(drum, id='drum', seconds=(0.5, 2.0), inputs={'drum':'kick', 'duration':0.5})
+assert edit.check()
+assert np.max(edit.window(seconds=(0.5, 1.0)).output.tensor.values) > 0
+edit.remove_clip('drum')
+band = edit.graph(node='band_pulse', id='band')
+edit.add_clip(band, id='band', seconds=(0.5, 2.0), inputs={'source':'mix', 'low_hz':0, 'high_hz':10, 'gain':50})
+assert edit.check()
+assert np.max(edit.window(seconds=(1.0, 1.5)).output.tensor.values) > 0
+edit.update_clip('band', inputs={'source':'bass'})
+try:
+    edit.check()
+    raise AssertionError('missing stem silently used the mix')
+except RuntimeError as error:
+    assert 'bass stem unavailable' in str(error)
+'Audio graphs rendered without a model call'
+"#).await;
+    expect_ok(
+        &out,
+        "canonical graph audio, onsets and missing-stem diagnostics",
+    );
 }
 
 #[tokio::test]

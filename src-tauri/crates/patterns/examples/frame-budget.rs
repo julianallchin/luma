@@ -13,9 +13,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             definition,
             &BTreeMap::new(),
             Frame {
+                features: None,
                 cells: &cells,
                 beat: 0.0,
                 clip_start: 0.0,
+                clip_duration: 4.0,
                 seed: 42,
             },
         )?;
