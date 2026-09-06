@@ -135,6 +135,12 @@ pub async fn load_score_dsl_document_with_access(
     if access.venue_id() != scope.venue_id {
         return Err("Venue resource not found".into());
     }
+    if crate::services::graph_scores::load(access.connection(), scope, owner_user_id)
+        .await?
+        .is_some()
+    {
+        return Err("this score uses graph definitions; read its complete score document".into());
+    }
     let document = load_track_document_for_connection(access.connection(), scope, owner_user_id)
         .await
         .map_err(|error| error.to_string())?;
@@ -150,6 +156,15 @@ pub async fn export_score_source_with_access(
 ) -> Result<ScoreDslExport, String> {
     if access.venue_id() != scope.venue_id {
         return Err("Venue resource not found".into());
+    }
+    if let Some(document) =
+        crate::services::graph_scores::load(access.connection(), scope, owner_user_id).await?
+    {
+        return Ok(ScoreDslExport {
+            source: document.source()?,
+            revision: document.revision,
+            clip_count: document.score.clips.len(),
+        });
     }
     let document = load_track_document_for_connection(access.connection(), scope, owner_user_id)
         .await

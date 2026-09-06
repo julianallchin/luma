@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 227,
+    "commandCount": 230,
     "domainCount": 34,
     "unportedCount": 0,
     "eventCount": 18
@@ -136,7 +136,7 @@
     },
     {
       "domain": "scores",
-      "commandCount": 10,
+      "commandCount": 13,
       "handlers": "src-tauri/src/dispatch/handlers/scores.rs"
     },
     {
@@ -495,6 +495,36 @@
           "rotates $APPCONFIG/render-telemetry.log → render-telemetry.log.1 when it exceeds 5 MiB (removing any prior .1)",
           "appends one JSON line: { ts: RFC3339 UTC, entry: <payload> }"
         ]
+      }
+    },
+    {
+      "name": "apply_score_document",
+      "domain": "scores",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "line": 33
+      },
+      "args": [
+        {
+          "name": "scoreId",
+          "rust": "String"
+        },
+        {
+          "name": "score",
+          "rust": "luma_patterns::Score"
+        },
+        {
+          "name": "baseRevision",
+          "rust": "String"
+        },
+        {
+          "name": "operationId",
+          "rust": "String"
+        }
+      ],
+      "returns": "crate::models::authored_state::AppliedAuthoredState",
+      "prose": {
+        "returns": "crate::models::authored_state::AppliedAuthoredState"
       }
     },
     {
@@ -910,6 +940,10 @@
         {
           "name": "skipCache",
           "rust": "Option<bool>"
+        },
+        {
+          "name": "graphScore",
+          "rust": "Option<luma_patterns::Score>"
         }
       ],
       "returns": "()",
@@ -1271,7 +1305,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 36
+        "line": 130
       },
       "args": [
         {
@@ -1307,7 +1341,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 97
+        "line": 191
       },
       "args": [
         {
@@ -1416,7 +1450,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 78
+        "line": 172
       },
       "args": [
         {
@@ -1486,7 +1520,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 111
+        "line": 205
       },
       "args": [
         {
@@ -1808,7 +1842,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 57
+        "line": 151
       },
       "args": [
         {
@@ -2260,6 +2294,24 @@
       "returns": "ResolvedVenue",
       "prose": {
         "returns": "ResolvedVenue"
+      }
+    },
+    {
+      "name": "get_score_document",
+      "domain": "scores",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "line": 15
+      },
+      "args": [
+        {
+          "name": "scoreId",
+          "rust": "String"
+        }
+      ],
+      "returns": "Option<crate::services::graph_scores::GraphScoreDocument>",
+      "prose": {
+        "returns": "Option<crate::services::graph_scores::GraphScoreDocument>"
       }
     },
     {
@@ -2839,7 +2891,7 @@
       "domain": "compositor",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/compositor.rs",
-        "line": 45
+        "line": 47
       },
       "args": [
         {
@@ -2973,7 +3025,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 27
+        "line": 121
       },
       "args": [
         {
@@ -2992,7 +3044,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 13
+        "line": 107
       },
       "args": [
         {
@@ -3016,7 +3068,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 88
+        "line": 182
       },
       "args": [
         {
@@ -4060,6 +4112,32 @@
       }
     },
     {
+      "name": "preview_score_clip",
+      "domain": "scores",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "line": 68
+      },
+      "args": [
+        {
+          "name": "scoreId",
+          "rust": "String"
+        },
+        {
+          "name": "clipId",
+          "rust": "String"
+        },
+        {
+          "name": "score",
+          "rust": "Option<luma_patterns::Score>"
+        }
+      ],
+      "returns": "AnnotationPreview",
+      "prose": {
+        "returns": "AnnotationPreview"
+      }
+    },
+    {
       "name": "preview_selection_query",
       "domain": "groups",
       "handler": {
@@ -4648,7 +4726,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 121
+        "line": 215
       },
       "args": [
         {
@@ -4930,7 +5008,7 @@
       "domain": "score_dsl",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/score_dsl.rs",
-        "line": 205
+        "line": 249
       },
       "args": [
         {
@@ -5647,7 +5725,7 @@
       "domain": "scores",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/scores.rs",
-        "line": 104
+        "line": 198
       },
       "args": [
         {
@@ -5944,7 +6022,7 @@
         "src-tauri/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:150"
+        "gpui/crates/app/src/library.rs:160"
       ],
       "orphan": false,
       "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose."

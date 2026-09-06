@@ -8,7 +8,7 @@ pub enum Rate {
     Fixed,
     Frame,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
     pub name: String,
@@ -17,13 +17,13 @@ pub struct Input {
     pub rate: Rate,
     pub default: Option<Value>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
     pub value_type: ValueType,
     pub rate: Rate,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Binding {
     Value { value: Value },
@@ -35,21 +35,24 @@ impl From<Value> for Binding {
         Self::Value { value }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
+    /// Optional editor layout. Omitted by code authors; never read by execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 2]>,
     /// Immutable definition/revision ID, not a mutable library name.
     pub definition: String,
     #[serde(default)]
     pub inputs: BTreeMap<String, Binding>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Graph {
     pub nodes: BTreeMap<String, Node>,
     pub outputs: BTreeMap<String, Binding>,
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Primitive {
     FieldBinary(crate::FieldMath),
@@ -103,13 +106,13 @@ impl Primitive {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "body", rename_all = "snake_case")]
 pub enum Body {
     Primitive(Primitive),
     Graph(Graph),
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Definition {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -131,6 +134,7 @@ impl Definition {
                 nodes: BTreeMap::from([(
                     "effect".into(),
                     Node {
+                        position: None,
                         definition: definition.into(),
                         inputs: self
                             .inputs
@@ -168,13 +172,35 @@ impl Definition {
         self.lighting_output().is_some()
     }
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Library {
     pub definitions: BTreeMap<String, Definition>,
 }
 
 impl Library {
+    /// Anonymous one-node graphs inherit their node's label in every authoring
+    /// surface. Identity remains the reference key, independently of the label.
+    pub fn display_name(&self, id: &str) -> String {
+        let mut id = id;
+        let mut visited = BTreeSet::new();
+        while visited.insert(id) {
+            let Some(definition) = self.definitions.get(id) else {
+                return "Missing graph".into();
+            };
+            if !definition.name.is_empty() {
+                return definition.name.clone();
+            }
+            if let Body::Graph(graph) = &definition.body {
+                if graph.nodes.len() == 1 {
+                    id = &graph.nodes.values().next().unwrap().definition;
+                    continue;
+                }
+            }
+            break;
+        }
+        "Custom graph".into()
+    }
     pub fn validate(&self, id: &str) -> Result<()> {
         self.validate_definition(id, &mut BTreeSet::new(), &mut BTreeSet::new())
     }
@@ -220,6 +246,12 @@ impl Library {
             }
             Body::Graph(graph) => {
                 for (name, node) in &graph.nodes {
+                    if node
+                        .position
+                        .is_some_and(|position| position.iter().any(|value| !value.is_finite()))
+                    {
+                        return Err(Error(format!("{name}: node position must be finite")));
+                    }
                     self.validate_definition(&node.definition, visiting, done)?;
                     let child = self.definition(&node.definition)?;
                     for key in node.inputs.keys() {
@@ -397,7 +429,7 @@ impl Library {
         }
     }
 }
-fn check_cycle(
+pub(crate) fn check_cycle(
     graph: &Graph,
     name: &str,
     visiting: &mut BTreeSet<String>,

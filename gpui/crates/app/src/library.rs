@@ -96,6 +96,16 @@ use luma_lib::settings::AppSettings;
 use luma_lib::storage::StorageRoot;
 use luma_render::scene_desc::VenueEnvironment;
 
+/// A native timeline reads either the new whole score or an existing score
+/// still awaiting manual migration. The editor never infers its storage format.
+pub(crate) enum ScoreContents {
+    Graph {
+        document: luma_lib::services::graph_scores::GraphScoreDocument,
+        beats: Option<BeatGrid>,
+    },
+    Legacy(Vec<TrackScore>),
+}
+
 #[cfg(feature = "agent")]
 #[derive(Clone, Debug, Default)]
 pub struct NavigationFixture {
@@ -1585,17 +1595,6 @@ impl Library {
         self.call("list_patterns", json!({}))
     }
 
-    pub fn copy_pattern_to_library(
-        &self,
-        pattern_id: &str,
-        request_id: &str,
-    ) -> impl Future<Output = Result<PatternSummary, LibraryError>> + use<> {
-        self.call(
-            "copy_pattern_to_library",
-            json!({"patternId":pattern_id,"requestId":request_id}),
-        )
-    }
-
     pub fn create_lighting_pattern(
         &self,
         effect: &str,
@@ -1812,6 +1811,74 @@ impl Library {
                 "venueId": venue_id,
                 "name": name,
             }),
+        )
+    }
+
+    pub(crate) fn score_contents(
+        &self,
+        score_id: &str,
+        track_id: &str,
+    ) -> impl Future<Output = Result<ScoreContents, LibraryError>> + use<> {
+        let services = self.services.clone();
+        let score_id = score_id.to_owned();
+        let track_id = track_id.to_owned();
+        let task = self.runtime.spawn(async move {
+            let document: Option<luma_lib::services::graph_scores::GraphScoreDocument> = command(
+                &services,
+                "get_score_document",
+                &json!({"scoreId":score_id}),
+            )
+            .await?;
+            match document {
+                Some(document) => {
+                    let beats =
+                        command(&services, "get_track_beats", &json!({"trackId":track_id})).await?;
+                    Ok(ScoreContents::Graph { document, beats })
+                }
+                None => Ok(ScoreContents::Legacy(
+                    command(&services, "list_track_scores", &json!({"scoreId":score_id})).await?,
+                )),
+            }
+        });
+        async move {
+            task.await.map_err(|error| {
+                LibraryError::at("get_score_document", Cause::Cancelled(error.to_string()))
+            })?
+        }
+    }
+
+    pub(crate) fn apply_score_document(
+        &self,
+        score_id: &str,
+        score: &luma_patterns::Score,
+        base_revision: &str,
+        operation_id: &str,
+    ) -> impl Future<
+        Output = Result<luma_lib::models::authored_state::AppliedAuthoredState, LibraryError>,
+    > + use<> {
+        self.call("apply_score_document", json!({"scoreId":score_id,"score":score,"baseRevision":base_revision,"operationId":operation_id}))
+    }
+
+    pub(crate) fn preview_score_clip(
+        &self,
+        score_id: &str,
+        clip_id: &str,
+        score: &luma_patterns::Score,
+    ) -> impl Future<Output = Result<AnnotationPreview, LibraryError>> + use<> {
+        self.call(
+            "preview_score_clip",
+            json!({"scoreId":score_id,"clipId":clip_id,"score":score}),
+        )
+    }
+
+    pub(crate) fn composite_score_document(
+        &self,
+        score_id: &str,
+        score: &luma_patterns::Score,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "composite_track",
+            json!({"scoreId":score_id,"graphScore":score}),
         )
     }
 

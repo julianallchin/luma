@@ -47,6 +47,15 @@ impl GraphScoreDocument {
     }
 }
 
+/// Rebase a native draft onto edits made elsewhere in the same open score.
+/// Uses the authored-history merge rules, including indivisible typed values.
+pub fn merge_working_copy(base: &Score, current: &Score, draft: &Score) -> Result<Score, String> {
+    let base = GraphScoreDocument::new(base.clone())?;
+    let current = GraphScoreDocument::new(current.clone())?;
+    let draft = GraphScoreDocument::new(draft.clone())?;
+    merge::strict(&base,&current,&draft).map(|document|document.score).map_err(|_|"Another edit changed the same graph. Your draft is still open; undo the overlapping change to continue.".into())
+}
+
 fn source(score: &Score) -> Result<String, String> {
     let value = serde_json::to_value(score).map_err(|error| error.to_string())?;
     let source = format!("{}\n", crate::canonical_json::to_string(&value));
@@ -109,4 +118,101 @@ pub(crate) async fn project(
         .await
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Compile the canonical score directly into the existing compositor's plans.
+/// Geometry, group selections and the beat grid come from one authorized read.
+pub(crate) async fn prepare_scene(
+    access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    fixtures_root: &std::path::Path,
+    track_id: &str,
+    score: &Score,
+) -> Result<crate::eval::Scene, String> {
+    score
+        .validate(&standard_library())
+        .map_err(|error| error.to_string())?;
+    if score.clips.is_empty() {
+        return Ok(crate::eval::Scene::default());
+    }
+    let grid =
+        crate::services::tracks::get_track_beats_for_connection(access.connection(), track_id)
+            .await?
+            .ok_or("analyze the track before placing effects on its musical grid")?;
+    let clock = grid.timeline().map_err(|error| error.to_string())?;
+    let library = score
+        .library(&standard_library())
+        .map_err(|error| error.to_string())?;
+    let mut compiled = Vec::new();
+    let mut domains = std::collections::BTreeMap::new();
+    for (id, clip) in &score.clips {
+        let key = (
+            serde_json::to_string(&clip.selection).map_err(|error| error.to_string())?,
+            clip.seed,
+        );
+        let cells = if let Some(cells) = domains.get(&key) {
+            Vec::<luma_patterns::Cell>::clone(cells)
+        } else {
+            let cells = super::composable_patterns::resolve_cells(
+                access,
+                fixtures_root,
+                std::slice::from_ref(&clip.selection),
+                clip.seed,
+            )
+            .await?;
+            domains.insert(key, cells.clone());
+            cells
+        };
+        if cells.is_empty() {
+            continue;
+        }
+        let plan = crate::eval::lighting::compile_clip(&library, clip, clock.clone(), cells)
+            .map_err(|error| format!("clip {id}: {error}"))?;
+        compiled.push(crate::eval::CompiledAnnotation {
+            span: plan.ctx.span,
+            plan: std::sync::Arc::new(plan),
+            z_index: clip.z_index,
+            blend_mode: clip.blend_mode,
+        });
+    }
+    Ok(crate::eval::Scene::new(compiled))
+}
+
+pub(crate) async fn preview_clip(
+    access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
+    fixtures_root: &std::path::Path,
+    track_id: &str,
+    score: &Score,
+    clip_id: &str,
+) -> Result<crate::models::patterns::AnnotationPreview, String> {
+    let clip = score
+        .clips
+        .get(clip_id)
+        .ok_or_else(|| format!("unknown clip {clip_id}"))?;
+    let width = (clip.duration * 16.0).ceil().clamp(8.0, 512.0) as usize;
+    let mut single = score.clone();
+    single.clips.retain(|id, _| id == clip_id);
+    let scene = prepare_scene(access, fixtures_root, track_id, &single).await?;
+    let mut frames = Vec::new();
+    let mut span = (0.0, 0.0);
+    if let Some(annotation) = scene.annotations.first() {
+        if (annotation.plan.n as usize).saturating_mul(width) > 1_000_000 {
+            return Err("clip preview exceeds one million head samples".into());
+        }
+        span = annotation.span;
+        let times: Vec<_> = (0..width)
+            .map(|index| span.0 + (span.1 - span.0) * index as f32 / width as f32)
+            .collect();
+        frames = scene.render(
+            &times,
+            crate::eval::Scope::Single(0),
+            &mut crate::eval::Arena::default(),
+        );
+    }
+    Ok(crate::annotation_preview::render_preview(
+        clip_id.to_owned(),
+        &frames,
+        None,
+        span.0,
+        span.1,
+    ))
 }

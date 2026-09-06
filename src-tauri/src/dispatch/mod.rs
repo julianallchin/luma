@@ -421,6 +421,7 @@ commands! {
         score_id: String,
         annotations: Option<Vec<LiveAnnotation>>,
         skip_cache: Option<bool>,
+            graph_score: Option<luma_patterns::Score>,
     ) -> ();
     compositor::leave_track(score_id: String) -> ();
 
@@ -473,6 +474,9 @@ commands! {
     ) -> Score;
     scores::delete_score(id: String) -> ();
     scores::list_track_scores(score_id: String) -> Vec<TrackScore>;
+    scores::get_score_document(score_id: String) -> Option<crate::services::graph_scores::GraphScoreDocument>;
+    scores::apply_score_document(score_id: String, score: luma_patterns::Score, base_revision: String, operation_id: String) -> crate::models::authored_state::AppliedAuthoredState;
+    scores::preview_score_clip(score_id: String, clip_id: String, score: Option<luma_patterns::Score>) -> AnnotationPreview;
     scores::create_track_score(payload: CreateTrackScoreInput) -> TrackEditResult;
     scores::update_track_score(payload: UpdateTrackScoreInput) -> TrackEditResult;
     scores::delete_track_score(payload: DeleteTrackScoreInput) -> TrackEditResult;

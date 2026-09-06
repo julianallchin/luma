@@ -328,6 +328,7 @@ fn wire(node: &str, output: &str) -> Binding {
 }
 fn node(definition: &str, inputs: &[(&str, Binding)]) -> Node {
     Node {
+        position: None,
         definition: definition.into(),
         inputs: inputs
             .iter()
@@ -507,6 +508,7 @@ pub fn standard_library() -> Library {
     let mut inputs = library.definitions["chase_mask"].inputs.clone();
     let bindings: Vec<_> = inputs.keys().map(|k| (k.clone(), exposed(k))).collect();
     let mask_node = Node {
+        position: None,
         definition: "chase_mask".into(),
         inputs: bindings.into_iter().collect(),
     };

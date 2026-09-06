@@ -398,9 +398,46 @@ pub(crate) async fn install_score_scene(
     render_engine: &RenderEngine,
     score_id: &str,
     annotations: Option<Vec<LiveAnnotation>>,
+    graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), String> {
+    if annotations.is_some() && graph_score.is_some() {
+        return Err("provide one score working copy".into());
+    }
+    let generation = COMPOSITING_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let (mut access, track_id) = score_scope(pool, score_id).await?;
     let venue_id = access.venue_id().to_owned();
+    let source: Option<String> =
+        sqlx::query_scalar("SELECT graph_document_json FROM scores WHERE id = ?")
+            .bind(score_id)
+            .fetch_one(access.connection())
+            .await
+            .map_err(|error| error.to_string())?;
+    let document = match graph_score {
+        Some(score) => Some(crate::services::graph_scores::GraphScoreDocument::new(
+            score,
+        )?),
+        None => source
+            .as_deref()
+            .map(crate::services::graph_scores::GraphScoreDocument::from_source)
+            .transpose()?,
+    };
+    if let Some(document) = document {
+        if annotations.is_some() {
+            return Err("this score uses graphs; provide its complete score working copy".into());
+        }
+        let scene = crate::services::graph_scores::prepare_scene(
+            &mut access,
+            resource_root,
+            &track_id,
+            &document.score,
+        )
+        .await?;
+        if COMPOSITING_GENERATION.load(Ordering::SeqCst) == generation {
+            render_engine.set_active_scene(if scene.is_empty() { None } else { Some(scene) });
+        }
+        return Ok(());
+    }
+
     let clips: Vec<TrackScore> = match live_track_scores(annotations) {
         Some(live) => live,
         None => crate::database::local::scores::get_clips_of_score(&mut access, score_id).await?,

@@ -31,6 +31,20 @@ impl BeatTimeline {
         }
         Ok(self.raw_beat(seconds) - self.origin)
     }
+    /// Inverse of beat_at, including pickups and either end's extrapolation.
+    pub fn seconds_at(&self, beat: f64) -> Result<f64> {
+        if !beat.is_finite() {
+            return Err(Error("beat position must be finite".into()));
+        }
+        let raw = beat + self.origin;
+        let left = raw.floor().max(0.0).min((self.seconds.len() - 2) as f64) as usize;
+        let seconds = self.seconds[left]
+            + (raw - left as f64) * (self.seconds[left + 1] - self.seconds[left]);
+        if !seconds.is_finite() {
+            return Err(Error("beat position exceeds the timeline range".into()));
+        }
+        Ok(seconds)
+    }
     fn raw_beat(&self, seconds: f64) -> f64 {
         let next = self.seconds.partition_point(|t| *t <= seconds);
         let left = next.saturating_sub(1).min(self.seconds.len() - 2);
@@ -49,5 +63,11 @@ mod tests {
         assert_eq!(clock.beat_at(5.0).unwrap(), 4.0);
         assert_eq!(clock.beat_at(0.5).unwrap(), -2.0);
         assert!(BeatTimeline::new(vec![1.0, 1.0], 0.0).is_err());
+        for seconds in [-5.0, 0.5, 1.0, 1.75, 2.5, 3.25, 4.0, 10.0] {
+            assert!(
+                (clock.seconds_at(clock.beat_at(seconds).unwrap()).unwrap() - seconds).abs()
+                    < 1e-12
+            );
+        }
     }
 }

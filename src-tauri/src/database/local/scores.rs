@@ -104,10 +104,11 @@ pub async fn get_accessible_venue_for_track(
     let row: Option<(String,)> = sqlx::query_as(concat!(
         "SELECT score.venue_id
          FROM scores score
-         JOIN track_scores clip ON clip.score_id = score.id
+         LEFT JOIN track_scores clip ON clip.score_id = score.id
          JOIN venues venue ON venue.id = score.venue_id
          CROSS JOIN auth_write_admission admission
          WHERE score.track_id = ?
+           AND (clip.id IS NOT NULL OR EXISTS(SELECT 1 FROM json_each(score.graph_document_json, '$.clips')))
            AND admission.singleton = 1
            AND admission.armed = 1
            AND admission.accepting = 1
@@ -219,7 +220,8 @@ pub async fn list_scores_for_track(
                 ",
         score_ordinal!(),
         ",
-                COUNT(clip.id) AS annotation_count,
+                CASE WHEN score.graph_document_json IS NULL THEN COUNT(clip.id)
+                     ELSE (SELECT COUNT(*) FROM json_each(score.graph_document_json, '$.clips')) END AS annotation_count,
                 ",
         provenance!(),
         ",
@@ -251,7 +253,8 @@ pub async fn list_accessible_scores_for_track(
                 ",
         score_ordinal!(),
         ",
-                COUNT(clip.id) AS annotation_count,
+                CASE WHEN score.graph_document_json IS NULL THEN COUNT(clip.id)
+                     ELSE (SELECT COUNT(*) FROM json_each(score.graph_document_json, '$.clips')) END AS annotation_count,
                 ",
         provenance!(),
         ",

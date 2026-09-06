@@ -131,6 +131,50 @@ pub async fn score_dsl_validate(
         track_id,
         venue_id,
     };
+    let graph_score =
+        crate::services::graph_scores::load(access.connection(), &scope, owner_user_id.as_deref())
+            .await?;
+    if source.trim_start().starts_with('{') || graph_score.is_some() {
+        let base_revision = match graph_score {
+            Some(score) => score.revision,
+            None => {
+                export_score_source_with_access(
+                    &mut access,
+                    &scope,
+                    owner_user_id.as_deref(),
+                    ScoreDslExportKind::Canonical,
+                )
+                .await?
+                .revision
+            }
+        };
+        let checked = match crate::services::graph_scores::GraphScoreDocument::from_source(&source)
+        {
+            Ok(candidate) => crate::services::graph_scores::prepare_scene(
+                &mut access,
+                &services.fixtures_root,
+                &scope.track_id,
+                &candidate.score,
+            )
+            .await
+            .map(|_| candidate.score.clips.len()),
+            Err(error) => Err(error),
+        };
+        return Ok(match checked {
+            Ok(count) => ScoreDslValidationResponse {
+                valid: true,
+                base_revision,
+                clip_count: Some(count),
+                diagnostics: Vec::new(),
+            },
+            Err(error) => ScoreDslValidationResponse {
+                valid: false,
+                base_revision,
+                clip_count: None,
+                diagnostics: vec![diagnostic_without_span("invalid_score", error)],
+            },
+        });
+    }
     let (current, context) =
         load_score_dsl_document_with_access(&mut access, &scope, owner_user_id.as_deref()).await?;
     let base_revision = current.revision.clone();

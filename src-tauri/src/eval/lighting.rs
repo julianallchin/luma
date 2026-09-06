@@ -20,6 +20,7 @@ pub struct Program {
     prepared: p::PreparedGraph,
     clock: p::BeatTimeline,
     ids: Vec<String>,
+    output: String,
 }
 
 pub fn lower(
@@ -113,6 +114,7 @@ pub(crate) fn library_for_graph(
         graph.nodes.insert(
             node.id.clone(),
             p::Node {
+                position: None,
                 definition: name.into(),
                 inputs,
             },
@@ -157,16 +159,7 @@ fn build(
         .beat_grid
         .as_ref()
         .ok_or("Lighting patterns require an analyzed beat grid")?;
-    let clock = p::BeatTimeline::new(
-        grid.beats.iter().map(|t| f64::from(*t)).collect(),
-        f64::from(
-            grid.downbeats
-                .first()
-                .copied()
-                .unwrap_or(grid.downbeat_offset),
-        ),
-    )
-    .map_err(|e| e.to_string())?;
+    let clock = grid.timeline().map_err(|error| error.to_string())?;
     let start = clock
         .beat_at(f64::from(ctx.span.0))
         .map_err(|e| e.to_string())?;
@@ -192,8 +185,19 @@ fn build(
         },
     )
     .map_err(|e| e.to_string())?;
+    emit_prepared(prepared, clock, ids, start, "lighting", low)
+}
+
+fn emit_prepared(
+    prepared: p::PreparedGraph,
+    clock: p::BeatTimeline,
+    ids: &[String],
+    start: f64,
+    output: &str,
+    low: &mut Lowerer,
+) -> Result<(), String> {
     let initial = prepared.evaluate(start).map_err(|e| e.to_string())?;
-    let writes = match initial.get("lighting") {
+    let writes = match initial.get(output) {
         Some(p::Value::Lighting(values)) => values
             .values()
             .next()
@@ -206,6 +210,7 @@ fn build(
             prepared,
             clock,
             ids: ids.to_vec(),
+            output: output.to_owned(),
         })),
         vec![],
         low.n,
@@ -247,6 +252,67 @@ fn build(
     }
     Ok(())
 }
+/// Direct compilation of a score-local graph. No Pattern/Implementation row or
+/// legacy canvas projection participates in this path.
+pub(crate) fn compile_clip(
+    library: &p::Library,
+    clip: &p::Clip,
+    clock: p::BeatTimeline,
+    cells: Vec<p::Cell>,
+) -> Result<super::Plan, String> {
+    let definition = library
+        .definitions
+        .get(&clip.graph)
+        .ok_or_else(|| format!("unknown graph {}", clip.graph))?;
+    let output = definition
+        .lighting_output()
+        .ok_or("a clip graph must produce fixture output")?;
+    let ids: Vec<_> = cells.iter().map(|cell| cell.id.clone()).collect();
+    let start = clock
+        .seconds_at(clip.start)
+        .map_err(|error| error.to_string())?;
+    let end = clock
+        .seconds_at(clip.start + clip.duration)
+        .map_err(|error| error.to_string())?;
+    let span = (start as f32, end as f32);
+    if !span.0.is_finite() || !span.1.is_finite() || span.1 <= span.0 {
+        return Err("clip duration cannot be represented on the playback timeline".into());
+    }
+    let prepared = p::PreparedGraph::new(
+        library,
+        &clip.graph,
+        &clip.inputs,
+        p::Frame {
+            cells: &cells,
+            beat: clip.start,
+            clip_start: clip.start,
+            seed: clip.seed,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let mut low = Lowerer::new(ids.len() as u32);
+    emit_prepared(prepared, clock, &ids, clip.start, output, &mut low)?;
+    Ok(super::Plan {
+        ops: low.ops,
+        slots: low.slots,
+        slot_channels: low.slot_channels,
+        n: ids.len() as u32,
+        primitive_ids: ids,
+        outputs: low.outputs,
+        ctx: ResidentContext {
+            seed: clip.seed,
+            span,
+            positions: cells
+                .iter()
+                .map(|cell| cell.world.map(|value| value as f32))
+                .collect(),
+            ..Default::default()
+        },
+        prologue_baked: Vec::new(),
+        views: Vec::new(),
+    })
+}
+
 impl Program {
     pub fn run(&self, ctx: &KernelCtx) -> Vec<f32> {
         let mut out = ctx.out_buf();
@@ -257,7 +323,7 @@ impl Program {
                 .and_then(|beat| self.prepared.evaluate(beat));
             match frame {
                 Ok(frame) => {
-                    if let Some(p::Value::Lighting(values)) = frame.get("lighting") {
+                    if let Some(p::Value::Lighting(values)) = frame.get(&self.output) {
                         for (i, id) in self.ids.iter().enumerate() {
                             if let Some(value) = values.get(id) {
                                 let color = value.color.unwrap_or([1.0; 3]);
@@ -290,6 +356,72 @@ impl Program {
 mod tests {
     use super::*;
     use crate::models::node_graph::BeatGrid;
+    #[test]
+    fn graph_score_compiles_local_definitions_and_matches_seeked_core_output() {
+        let base = p::standard_library();
+        let mut score = p::Score::default();
+        score
+            .insert_effect(&base, "dissolve_flash", "flash", 1.0, 3.0)
+            .unwrap();
+        // The output name is author-owned; playback must follow the interface.
+        let graph = score.definitions.get_mut("flash").unwrap();
+        let output = graph.outputs.remove("lighting").unwrap();
+        graph.outputs.insert("heads".into(), output);
+        if let Body::Graph(graph) = &mut graph.body {
+            let output = graph.outputs.remove("lighting").unwrap();
+            graph.outputs.insert("heads".into(), output);
+        }
+        let clip = score.clips.get_mut("flash").unwrap();
+        clip.seed = 129;
+        clip.inputs
+            .insert("grid_aligned".into(), p::Value::Boolean(false));
+        let cells: Vec<_> = (0..24)
+            .map(|i| p::Cell {
+                id: format!("bar:{i}"),
+                group: "bars".into(),
+                world: [0.0, 0.0, i as f64],
+                uvz: [0.0, 0.0, i as f64],
+            })
+            .collect();
+        let library = score.library(&base).unwrap();
+        let clock = p::BeatTimeline::new(vec![0.0, 0.5, 1.0, 2.0, 3.0, 4.0], 0.0).unwrap();
+        let clip = &score.clips["flash"];
+        let plan = compile_clip(&library, clip, clock.clone(), cells.clone()).unwrap();
+        let prepared = score
+            .prepare_clip(&base, "flash", &BTreeMap::new(), &cells)
+            .unwrap();
+        let scene = crate::eval::Scene::new(vec![crate::eval::CompiledAnnotation {
+            span: plan.ctx.span,
+            plan: Arc::new(plan),
+            z_index: 0,
+            blend_mode: clip.blend_mode,
+        }]);
+        // Reverse order as well as forward: no frame history may be required.
+        for seconds in [2.75_f32, 0.5, 1.25, 0.875, 2.25, 3.0, 0.0] {
+            let frame = scene
+                .render(
+                    &[seconds],
+                    crate::eval::Scope::Composite,
+                    &mut crate::eval::Arena::default(),
+                )
+                .remove(0);
+            let direct = prepared
+                .evaluate(clock.beat_at(f64::from(seconds)).unwrap())
+                .unwrap();
+            let Some(p::Value::Lighting(values)) = direct.get("heads") else {
+                assert!(frame.primitives.is_empty());
+                continue;
+            };
+            assert_eq!(frame.primitives.len(), values.len());
+            for (id, value) in values {
+                assert_eq!(frame.primitives[id].dimmer, value.dimmer.unwrap() as f32);
+                assert_eq!(
+                    frame.primitives[id].color,
+                    value.color.unwrap().map(|v| v as f32)
+                );
+            }
+        }
+    }
     #[test]
     fn stage_mapping_keeps_downstage_and_height_independent() {
         let cells: Vec<_> = [[0., 10., 0.], [0., 0., 0.], [0., 10., 5.]]

@@ -119,8 +119,6 @@ pub(crate) fn subset_label(subset: Subset) -> SharedString {
 
 /// The sheet's own state, owned by the [`Editor`].
 pub(crate) struct State {
-    copying: HashSet<String>,
-    copied: HashSet<String>,
     /// How much of the sheet is on screen — see [`luma_ui::sheet`]. The one
     /// place "is the sheet up" is stored: [`PaneWidth::target`] is the
     /// destination and [`PaneWidth::current`] is the picture, so the two
@@ -149,8 +147,6 @@ pub(crate) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            copying: HashSet::new(),
-            copied: HashSet::new(),
             slide: PaneWidth::new(0.),
             groups: Groups::NotAsked,
             defs: HashMap::new(),
@@ -164,6 +160,10 @@ impl Default for State {
 }
 
 impl State {
+    pub(super) fn invalidate_defs(&mut self) {
+        self.defs.clear();
+        self.built = None;
+    }
     /// Whether the sheet is up — heading open, not merely still painted. What
     /// `Escape` asks before it decides the key meant "clear the selection".
     pub(crate) fn is_open(&self) -> bool {
@@ -383,7 +383,13 @@ fn primary_clip(editor: &Editor) -> Option<&Clip> {
 /// default — the same read the web panel makes.
 fn stored_arg(editor: &Editor, def: &PatternArgDef) -> serde_json::Value {
     primary_clip(editor)
-        .and_then(|clip| clip.args.get(&def.id).cloned())
+        .and_then(|clip| {
+            if def.id == document::SELECTION_INPUT {
+                clip.core.as_ref().map(|clip| clip.selection.to_value())
+            } else {
+                clip.args.get(&def.id).cloned()
+            }
+        })
         .unwrap_or_else(|| def.default_value.clone())
 }
 
@@ -486,6 +492,12 @@ fn ensure_defs(editor: &mut Editor, cx: &mut Context<Luma>) {
     };
     let key = pattern.to_string();
     if editor.sheet.defs.contains_key(&key) || editor.sheet.defs_inflight.contains(&key) {
+        return;
+    }
+    if editor.graph_score.is_some() {
+        if let Some(defs) = editor.graph_input_defs(&key) {
+            editor.sheet.defs.insert(key, defs.into());
+        }
         return;
     }
     editor.sheet.defs_inflight.insert(key.clone());
@@ -765,43 +777,6 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
 // -- the write paths ----------------------------------------------------------
 
 impl Luma {
-    fn copy_clip_pattern(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
-            return;
-        };
-        if editor.sheet.copying.contains(id) || editor.sheet.copied.contains(id) {
-            return;
-        }
-        let target = Target::TrackEditor {
-            track: editor.track_id.to_string(),
-            venue: editor.venue_id.clone(),
-        };
-        let id = id.to_string();
-        let pending = self
-            .library
-            .copy_pattern_to_library(&id, &uuid::Uuid::new_v4().to_string());
-        self.with_track_editor(cx, |editor| {
-            editor.sheet.copying.insert(id.clone());
-        });
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                this.edit_track_tab(&target, cx, |editor| {
-                    editor.sheet.copying.remove(&id);
-                    match result {
-                        Ok(pattern) => {
-                            editor.sheet.copied.insert(id);
-                            Rc::make_mut(&mut editor.patterns).push(pattern);
-                        }
-                        Err(error) => editor.error = Some(error.to_string()),
-                    }
-                })
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// A blend pick from the sheet: every selected clip takes the mode, in
     /// one committed write — the web's `updateAnnotationsBatch`.
     pub(crate) fn sheet_blend(&mut self, mode: BlendMode, cx: &mut Context<Self>) {
@@ -848,6 +823,19 @@ impl Luma {
             let mut clips: Vec<Clip> = editor.clips.iter().cloned().collect();
             for clip in &mut clips {
                 if !selected.contains(&clip.id) {
+                    continue;
+                }
+                if arg_id == document::SELECTION_INPUT {
+                    let Some(core) = clip.core.as_mut() else {
+                        continue;
+                    };
+                    let selection = selection_from_wire(&value);
+                    if let Err(error) = selection.validate() {
+                        editor.error = Some(error.to_string());
+                        continue;
+                    }
+                    core.selection = selection;
+                    touched.push(clip.id.clone());
                     continue;
                 }
                 match &mut clip.args {
@@ -921,25 +909,40 @@ impl Luma {
     /// [`Luma::commit_clips`]'s own in-flight discipline, so a burst that
     /// outruns a slow write queues exactly one follow-up.
     fn schedule_arg_flush(&mut self, cx: &mut Context<Self>) {
-        let mut gen = None;
-        self.with_track_editor(cx, |editor| {
-            editor.sheet.flush_gen += 1;
-            gen = Some(editor.sheet.flush_gen);
-        });
-        let Some(gen) = gen else { return };
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body_mut() else {
+            return;
+        };
+        let Some(score_id) = editor.score.as_ref().map(|score| score.id.clone()) else {
+            return;
+        };
+        let target = Target::TrackEditor {
+            track: editor.track_id.to_string(),
+            venue: editor.venue_id.clone(),
+        };
+        editor.sheet.flush_gen += 1;
+        let generation = editor.sheet.flush_gen;
         let pending = self.library.debounce(ARG_FLUSH);
         cx.spawn(async move |this, cx| {
             pending.await;
             this.update(cx, |this, cx| {
                 let mut flush = false;
-                this.with_track_editor(cx, |editor| {
-                    if editor.sheet.flush_gen == gen {
+                let mut graph = false;
+                this.edit_track_tab(&target, cx, |editor| {
+                    if editor.score.as_ref().map(|score| &score.id) != Some(&score_id) {
+                        return;
+                    }
+                    if editor.sheet.flush_gen == generation {
                         editor.sheet.burst = false;
                         flush = true;
+                        graph = editor.graph_score.is_some();
                     }
                 });
                 if flush {
-                    this.commit_clips(cx);
+                    if graph {
+                        this.commit_graph_score_for(target, cx);
+                    } else if this.workspace.active() == Some(&target) {
+                        this.commit_clips(cx);
+                    }
                 }
             })
             .ok();
@@ -1030,44 +1033,16 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .flex()
                     .flex_col()
                     .gap(px(ROW_GAP))
-                    .children(
-                        built
-                            .pattern
-                            .as_ref()
-                            .filter(|id| {
-                                state
-                                    .patterns
-                                    .iter()
-                                    .any(|p| p.id == id.as_ref() && p.score_id.is_some())
+                    .children(state.graph_score.as_ref().map(|_| {
+                        let app = app.clone();
+                        luma_ui::luma_button("Make independent", Enabled::Yes)
+                            .id("make-clip-independent")
+                            .on_click(move |_, _, cx| {
+                                app.update(cx, |this, cx| this.make_clips_independent(cx));
                             })
-                            .map(|id| {
-                                let id = id.to_string();
-                                let saving = state.sheet.copying.contains(&id);
-                                let copied = state.sheet.copied.contains(&id);
-                                let app = app.clone();
-                                luma_ui::luma_button(
-                                    if saving {
-                                        "Saving…"
-                                    } else if copied {
-                                        "Library copy saved"
-                                    } else {
-                                        "Save copy to library"
-                                    },
-                                    if saving || copied {
-                                        Enabled::No
-                                    } else {
-                                        Enabled::Yes
-                                    },
-                                )
-                                .id("save-pattern-library-copy")
-                                .on_click(move |_, _, cx| {
-                                    let id = id.clone();
-                                    app.update(cx, |this, cx| this.copy_clip_pattern(&id, cx));
-                                })
-                                .agent_node(Role::Button, "Save copy to library")
-                                .into_any_element()
-                            }),
-                    )
+                            .agent_node(Role::Button, "Make independent")
+                            .into_any_element()
+                    }))
                     .child(named("blend", blend_select(state, built, app)))
                     .children(args(state, built, app)),
             ),
@@ -1203,6 +1178,8 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
             let labels: Vec<&str> = options.iter().map(|option| option.label.as_str()).collect();
             let stored = cell
                 .synced
+                .pointer("/source/kind")
+                .unwrap_or(&cell.synced)
                 .as_str()
                 .map(str::to_string)
                 .unwrap_or_else(|| cell.synced.to_string());
@@ -1215,6 +1192,8 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
             let pick = app.clone();
             let options = options.clone();
             let id = cell.def.id.clone();
+            let previous = cell.synced.clone();
+            let mapping = cell.def.arg_type == PatternArgType::Mapping;
             one(luma_arg_select(
                 name,
                 selected,
@@ -1234,7 +1213,19 @@ fn arg_rows(state: &Editor, app: &Entity<Luma>, index: usize, cell: &Cell) -> Ve
                 move |selected, _, cx| {
                     pick.update(cx, |this, cx| {
                         this.with_track_editor(cx, |editor| editor.sheet.open = None);
-                        this.arg_live(&id, serde_json::json!(options[selected].id), cx);
+                        let mut value = serde_json::json!(options[selected].id);
+                        if mapping && previous.is_object() {
+                            if let Ok(luma_patterns::Value::Mapping(chosen)) =
+                                luma_lib::node_graph::lighting::decode(
+                                    luma_patterns::ValueType::Mapping,
+                                    &value,
+                                )
+                            {
+                                value = previous.clone();
+                                value["source"] = serde_json::to_value(chosen.source).unwrap();
+                            }
+                        }
+                        this.arg_live(&id, value, cx);
                     });
                 },
             ))

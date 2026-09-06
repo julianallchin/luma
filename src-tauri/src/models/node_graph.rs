@@ -228,6 +228,22 @@ pub struct BeatGrid {
     pub beats_per_bar: i32,
 }
 
+impl BeatGrid {
+    /// The same musical origin and variable-tempo clock for authored clips,
+    /// preview sampling, and playback.
+    pub fn timeline(&self) -> luma_patterns::Result<luma_patterns::BeatTimeline> {
+        luma_patterns::BeatTimeline::new(
+            self.beats.iter().map(|time| f64::from(*time)).collect(),
+            f64::from(
+                self.downbeats
+                    .first()
+                    .copied()
+                    .unwrap_or(self.downbeat_offset),
+            ),
+        )
+    }
+}
+
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
