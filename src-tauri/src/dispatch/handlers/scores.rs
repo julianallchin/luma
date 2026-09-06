@@ -95,6 +95,7 @@ pub async fn preview_score_clip(
     Ok(crate::services::graph_scores::preview_clip(
         &mut access,
         &services.fixtures_root,
+        &services.storage,
         &scope.track_id,
         &candidate.score,
         &clip_id,

@@ -12,6 +12,7 @@ pub mod graph_run;
 pub mod lighting;
 pub mod ops;
 pub mod scene;
+pub(crate) mod track_features;
 
 pub use scene::{CompiledAnnotation, Scene, Scope};
 

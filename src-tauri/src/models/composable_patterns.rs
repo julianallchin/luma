@@ -20,6 +20,8 @@ pub struct ComposablePreviewRequest {
     pub targets: Vec<Selection>,
     pub times: Vec<f64>,
     pub clip_start: f64,
+    /// Clip end in track seconds, used by clip-relative gradient/time nodes.
+    pub clip_end: f64,
     #[serde(default)]
     pub seed: u64,
 }

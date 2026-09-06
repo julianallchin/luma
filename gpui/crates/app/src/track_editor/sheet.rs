@@ -342,7 +342,20 @@ fn gradient_from_wire(value: &serde_json::Value, fallback: &serde_json::Value) -
             .filter_map(|stop| {
                 Some(GradientStop {
                     t: stop.get("t")?.as_f64()? as f32,
-                    color: hex_to_rgba(stop.get("color")?.as_str()?)?,
+                    color: {
+                        let color = stop.get("color")?;
+                        if let Some(hex) = color.as_str() {
+                            hex_to_rgba(hex)?
+                        } else {
+                            let c = color.as_array()?;
+                            Rgba {
+                                r: c.first()?.as_f64()? as f32,
+                                g: c.get(1)?.as_f64()? as f32,
+                                b: c.get(2)?.as_f64()? as f32,
+                                a: 1.0,
+                            }
+                        }
+                    },
                 })
             })
             .collect();
@@ -568,14 +581,16 @@ fn build(
                     let value = color_from_wire(&stored, &def.default_value);
                     let entity = cx.new(|cx| {
                         let control = ColorArgEditor::new(def.name.clone(), value, cx);
-                        if defs.iter().any(|input| {
-                            matches!(
-                                input.arg_type,
-                                PatternArgType::Beats
-                                    | PatternArgType::Proportion
-                                    | PatternArgType::Mapping
-                            )
-                        }) {
+                        if editor.graph_score.is_some()
+                            || defs.iter().any(|input| {
+                                matches!(
+                                    input.arg_type,
+                                    PatternArgType::Beats
+                                        | PatternArgType::Proportion
+                                        | PatternArgType::Mapping
+                                )
+                            })
+                        {
                             control.rgb_only()
                         } else {
                             control
@@ -591,7 +606,11 @@ fn build(
                     ));
                     Widget::Color(entity)
                 }
-                PatternArgType::Mapping | PatternArgType::Boundary | PatternArgType::Boolean => {
+                PatternArgType::Mapping
+                | PatternArgType::Boundary
+                | PatternArgType::Boolean
+                | PatternArgType::AudioSource
+                | PatternArgType::Drum => {
                     Widget::Choice(luma_lib::node_graph::lighting::arg_choices(&def.arg_type))
                 }
                 PatternArgType::Scalar

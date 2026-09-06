@@ -17,10 +17,6 @@
 //! `FreqAmplitude` already call the *same* windowing+FFT path — wiring the CSE
 //! later is "make FreqAmplitude read input(0) when present" with zero math change.
 //!
-//! ## What the compiler / ResidentContext must still provide (see report)
-//! - A shared `Stft` slot + input routing (CSE) — math is ready, plumbing isn't.
-//! - Cached per-stem resident audio for `StemSplit` — there is NO field on
-//!   `ResidentContext` for stems today, so `StemSplit` returns zeros (stub).
 
 use super::KernelCtx;
 use crate::audio::fft::{FftService, FFT_SIZE};
@@ -236,6 +232,27 @@ fn run_stft(ctx: &KernelCtx) -> Vec<f32> {
         }
     }
     out
+}
+
+/// Canonical graphs and legacy plans share exactly this causal FFT/band math.
+pub(crate) fn sample_band(
+    audio: &crate::eval::ResidentAudio,
+    seconds: f32,
+    range: [f32; 2],
+) -> f32 {
+    if !seconds.is_finite()
+        || seconds < 0.0
+        || seconds >= audio.samples.len() as f32 / audio.sample_rate as f32
+    {
+        return 0.0;
+    }
+    let mut spectrum = vec![0.0; FFT_SIZE / 2 + 1];
+    magnitude_spectrum(
+        &audio.samples,
+        anchor_sample(seconds, audio.sample_rate, audio.samples.len()),
+        &mut spectrum,
+    );
+    band_energy(&spectrum, &[range], audio.sample_rate)
 }
 
 fn run_freq_amplitude(ctx: &KernelCtx, ranges: &[[f32; 2]], stem: Option<&str>) -> Vec<f32> {

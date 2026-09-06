@@ -178,9 +178,14 @@ fn build(
         "__score_pattern",
         &BTreeMap::new(),
         p::Frame {
+            features: None,
             cells: &cells,
             beat: start,
             clip_start: start,
+            clip_duration: clock
+                .beat_at(f64::from(ctx.span.1))
+                .map_err(|e| e.to_string())?
+                - start,
             seed: ctx.seed,
         },
     )
@@ -255,18 +260,12 @@ fn emit_prepared(
 /// Direct compilation of a score-local graph. No Pattern/Implementation row or
 /// legacy canvas projection participates in this path.
 pub(crate) fn compile_clip(
-    library: &p::Library,
     clip: &p::Clip,
     clock: p::BeatTimeline,
     cells: Vec<p::Cell>,
+    prepared: p::PreparedGraph,
+    output: &str,
 ) -> Result<super::Plan, String> {
-    let definition = library
-        .definitions
-        .get(&clip.graph)
-        .ok_or_else(|| format!("unknown graph {}", clip.graph))?;
-    let output = definition
-        .lighting_output()
-        .ok_or("a clip graph must produce fixture output")?;
     let ids: Vec<_> = cells.iter().map(|cell| cell.id.clone()).collect();
     let start = clock
         .seconds_at(clip.start)
@@ -278,18 +277,6 @@ pub(crate) fn compile_clip(
     if !span.0.is_finite() || !span.1.is_finite() || span.1 <= span.0 {
         return Err("clip duration cannot be represented on the playback timeline".into());
     }
-    let prepared = p::PreparedGraph::new(
-        library,
-        &clip.graph,
-        &clip.inputs,
-        p::Frame {
-            cells: &cells,
-            beat: clip.start,
-            clip_start: clip.start,
-            seed: clip.seed,
-        },
-    )
-    .map_err(|error| error.to_string())?;
     let mut low = Lowerer::new(ids.len() as u32);
     emit_prepared(prepared, clock, &ids, clip.start, output, &mut low)?;
     Ok(super::Plan {
@@ -386,7 +373,21 @@ mod tests {
         let library = score.library(&base).unwrap();
         let clock = p::BeatTimeline::new(vec![0.0, 0.5, 1.0, 2.0, 3.0, 4.0], 0.0).unwrap();
         let clip = &score.clips["flash"];
-        let plan = compile_clip(&library, clip, clock.clone(), cells.clone()).unwrap();
+        let program = p::PreparedGraph::new(
+            &library,
+            &clip.graph,
+            &clip.inputs,
+            p::Frame {
+                cells: &cells,
+                features: None,
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .unwrap();
+        let plan = compile_clip(clip, clock.clone(), cells.clone(), program, "heads").unwrap();
         let prepared = score
             .prepare_clip(&base, "flash", &BTreeMap::new(), &cells)
             .unwrap();

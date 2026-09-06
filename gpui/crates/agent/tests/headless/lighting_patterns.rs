@@ -1,6 +1,74 @@
 use super::support::{self, Fixture};
 use gpui_agent::Mode;
 use std::time::Duration;
+
+#[test]
+fn edit_gradient_stops_in_a_canonical_graph() {
+    let mut harness = Fixture::new("lighting-gradient-edit", 20, vec![])
+        .with_graph_score(serde_json::json!({"version":2,"definitions":{},"clips":{}}))
+        .with_rig()
+        .open(Mode::Headless);
+    let result = harness.exec(&support::script(r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        until("waveform",s=>s.find({role:"card",label:"Waveform"}));
+        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
+        until("search",s=>s.find({role:"input",label:"Search lighting nodes and Patterns…"}));
+        const field=app.snapshot().find({role:"input",label:"Search lighting nodes and Patterns…"});
+        app.type(field,"color fade"); app.frames(2); app.key("enter");
+        until("Color fade clip",s=>s.find({role:"card",label:"Color fade"}));
+        const clip=app.snapshot().find({role:"card",label:"Color fade"});
+        app.click(clip,{count:2});
+        until("graph",s=>s.find({role:"card",label:"Pattern output preview"}));
+        app.click(app.snapshot().find({role:"card",label:"Color fade"}));
+        until("gradient stops",s=>s.findAll({role:"slider"}).find(n=>n.label.startsWith("graph-gradient:stop:0")));
+        const stop=app.snapshot().findAll({role:"slider"}).find(n=>n.label.startsWith("graph-gradient:stop:0"));
+        app.drag(stop,{dx:30,dy:0},{steps:5}); app.frames(24,{waitMs:80});
+        ({stops:app.snapshot().findAll({role:"slider"}).filter(n=>n.label.startsWith("graph-gradient:stop:")).map(n=>n.label),
+          errors:app.snapshot().findAll({role:"text"}).map(n=>n.label).filter(n=>n.includes("failed")||n.includes("invalid"))})
+    "#), Duration::from_secs(60));
+    assert_eq!(result.error, None, "{}", result.stdout);
+    assert!(
+        result.result["errors"].as_array().unwrap().is_empty(),
+        "{}",
+        result.result
+    );
+    let root = support::config_dir("lighting-gradient-edit");
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let pool =
+                sqlx::SqlitePool::connect(&format!("sqlite:{}", root.join("luma.db").display()))
+                    .await
+                    .unwrap();
+            let source: String = sqlx::query_scalar(
+                "SELECT graph_document_json FROM scores WHERE graph_document_json IS NOT NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let score: serde_json::Value = serde_json::from_str(&source).unwrap();
+            let definition = score["definitions"]
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap();
+            let stops = &definition["inputs"]["gradient"]["default"]["value"]["stops"];
+            assert!(
+                stops[0]["t"].as_f64().unwrap() > 0.01,
+                "gradient edit was not persisted: {stops}"
+            );
+            assert!(stops[0]["color"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c.as_f64() == Some(0.0)));
+            pool.close().await;
+        });
+}
+
 #[test]
 fn insert_a_dissolve_pattern_in_the_native_score_editor() {
     let mut harness = Fixture::new("lighting-pattern-insert", 20, vec![])

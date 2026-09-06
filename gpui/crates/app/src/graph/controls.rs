@@ -4,6 +4,8 @@ use luma_patterns as p;
 use luma_ui::arg::{
     color::{ColorArg, ColorArgEditor, ColorArgEvent},
     envelope::{EnvelopeChanged, EnvelopeEditor},
+    gradient::{Gradient, GradientStop},
+    gradient_editor::{GradientChanged, GradientEditor},
     number::{DraftedNumber, NumberEvent},
 };
 use luma_ui::Enabled;
@@ -25,6 +27,7 @@ enum Widget {
     Number(Entity<DraftedNumber>),
     Color(Entity<ColorArgEditor>),
     Envelope(Entity<EnvelopeEditor>),
+    Gradient(Entity<GradientEditor>),
     Choice,
     Connection,
 }
@@ -123,6 +126,11 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                             field.set_value(ColorArg::decode(rgb.map(|v| v as f32), 1.), cx)
                         })
                     }
+                    (Widget::Gradient(entity), Some(p::Value::Gradient(gradient))) => {
+                        entity.update(cx, |field, cx| {
+                            field.set_value(display_gradient(gradient), cx)
+                        });
+                    }
                     (Widget::Envelope(entity), Some(p::Value::Envelope(envelope))) => {
                         entity.update(cx, |field, cx| field.set_value(envelope.points.clone(), cx))
                     }
@@ -207,6 +215,31 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                 ));
                 Widget::Color(field)
             }
+            Some(p::Value::Gradient(gradient)) => {
+                let field = cx.new(|cx| GradientEditor::new(display_gradient(gradient), cx));
+                subscriptions.push(cx.subscribe(
+                    &field,
+                    move |this: &mut Luma, _, event: &GradientChanged, cx| {
+                        let stops = event
+                            .0
+                            .stops()
+                            .iter()
+                            .map(|stop| p::ColorStop {
+                                t: f64::from(stop.t),
+                                color: [stop.color.r, stop.color.g, stop.color.b].map(f64::from),
+                            })
+                            .collect();
+                        this.set_graph_input_value(
+                            &target,
+                            &node_id,
+                            &input,
+                            p::Value::Gradient(p::Gradient { stops }),
+                            cx,
+                        );
+                    },
+                ));
+                Widget::Gradient(field)
+            }
             Some(p::Value::Envelope(envelope)) => {
                 let field = cx.new(|_| EnvelopeEditor::new(envelope.points.clone()));
                 subscriptions.push(cx.subscribe(
@@ -225,9 +258,13 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                 ));
                 Widget::Envelope(field)
             }
-            Some(p::Value::Mapping(_) | p::Value::Boundary(_) | p::Value::Boolean(_)) => {
-                Widget::Choice
-            }
+            Some(
+                p::Value::Mapping(_)
+                | p::Value::Boundary(_)
+                | p::Value::Boolean(_)
+                | p::Value::AudioSource(_)
+                | p::Value::Drum(_),
+            ) => Widget::Choice,
             _ => Widget::Connection,
         };
         cells.push(InputControl {
@@ -426,6 +463,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             Widget::Number(field) => row.child(field.clone()),
             Widget::Color(field) => row.child(field.clone()),
             Widget::Envelope(field) => row.child(field.clone()),
+            Widget::Gradient(field) => row.child(field.clone()),
             Widget::Choice => {
                 let choices = luma_lib::node_graph::lighting::choices(cell.spec.value_type);
                 let labels: Vec<&str> =
@@ -557,4 +595,16 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
         content = content.child(row);
     }
     Some(content.into_any_element())
+}
+
+fn display_gradient(gradient: &p::Gradient) -> Gradient {
+    Gradient::new(gradient.stops.iter().map(|stop| GradientStop {
+        t: stop.t as f32,
+        color: Rgba {
+            r: stop.color[0] as f32,
+            g: stop.color[1] as f32,
+            b: stop.color[2] as f32,
+            a: 1.0,
+        },
+    }))
 }

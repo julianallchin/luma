@@ -9,6 +9,19 @@ pub const PREFIX: &str = "lighting/";
 
 pub fn choices(kind: ValueType) -> Vec<ParamOption> {
     let rows: &[(&str, &str)] = match kind {
+        ValueType::AudioSource => &[
+            ("mix", "Full mix"),
+            ("bass", "Bass"),
+            ("drums", "Drums"),
+            ("vocals", "Vocals"),
+            ("other", "Other instruments"),
+        ],
+        ValueType::Drum => &[
+            ("kick", "Kick"),
+            ("snare", "Snare"),
+            ("hihat", "Hi-hat"),
+            ("cymbal", "Cymbal"),
+        ],
         ValueType::Mapping => &[
             ("z", "Up (Z+)"),
             ("u", "Stage right (U+)"),
@@ -32,7 +45,10 @@ pub fn choices(kind: ValueType) -> Vec<ParamOption> {
 pub fn port_type(kind: ValueType) -> PortType {
     match kind {
         ValueType::Number | ValueType::Field => PortType::Signal,
-        ValueType::Color => PortType::Signal,
+        ValueType::Color | ValueType::ColorField => PortType::Signal,
+        ValueType::Gradient => PortType::Stops,
+        ValueType::AudioSource => PortType::Audio,
+        ValueType::Drum => PortType::Events,
         ValueType::Beats => PortType::Beats,
         ValueType::Proportion => PortType::Proportion,
         ValueType::Position => PortType::Position,
@@ -56,6 +72,9 @@ pub fn wire_value(value: &p::Value) -> Value {
             p::MappingSource::MajorAxis { .. } => "major_axis",
             p::MappingSource::Circle { .. } => "circle",
         }),
+        p::Value::Gradient(gradient) => {
+            json!({"stops": gradient.stops.iter().map(|stop| json!({"t":stop.t, "color":stop.color})).collect::<Vec<_>>()})
+        }
         p::Value::Color(rgb) => {
             json!({"r": rgb[0]*255., "g": rgb[1]*255., "b": rgb[2]*255., "a": 1.})
         }
@@ -65,6 +84,23 @@ pub fn wire_value(value: &p::Value) -> Value {
 
 pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
     let value = match kind {
+        ValueType::Gradient => {
+            let stops = value
+                .get("stops")
+                .and_then(Value::as_array)
+                .ok_or("Gradient needs stops")?;
+            let stops = stops
+                .iter()
+                .map(|stop| {
+                    let color = decode(ValueType::Color, &stop["color"])?;
+                    let p::Value::Color(color) = color else {
+                        unreachable!()
+                    };
+                    Ok(json!({"t":stop["t"], "color":color}))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            json!({"stops":stops})
+        }
         ValueType::Mapping if value.is_string() => {
             let source = match value.as_str().unwrap() {
                 "u" => p::MappingSource::U,
@@ -252,6 +288,9 @@ pub fn pattern(effect: &str) -> Result<Graph, String> {
             ValueType::Proportion => PatternArgType::Proportion,
             ValueType::Position => PatternArgType::Position,
             ValueType::Color => PatternArgType::Color,
+            ValueType::Gradient => PatternArgType::Gradient,
+            ValueType::AudioSource => PatternArgType::AudioSource,
+            ValueType::Drum => PatternArgType::Drum,
             ValueType::Mapping => PatternArgType::Mapping,
             ValueType::Boundary => PatternArgType::Boundary,
             ValueType::Envelope => PatternArgType::Envelope,
@@ -317,6 +356,8 @@ pub fn pattern(effect: &str) -> Result<Graph, String> {
 pub fn arg_choices(kind: &PatternArgType) -> Vec<ParamOption> {
     choices(match kind {
         PatternArgType::Mapping => ValueType::Mapping,
+        PatternArgType::AudioSource => ValueType::AudioSource,
+        PatternArgType::Drum => ValueType::Drum,
         PatternArgType::Boundary => ValueType::Boundary,
         PatternArgType::Boolean => ValueType::Boolean,
         _ => return Vec::new(),

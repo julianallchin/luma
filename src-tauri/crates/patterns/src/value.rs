@@ -10,7 +10,11 @@ pub enum ValueType {
     Proportion,
     Position,
     Boolean,
+    AudioSource,
+    Drum,
     Color,
+    Gradient,
+    ColorField,
     Mapping,
     Coordinates,
     Boundary,
@@ -88,7 +92,11 @@ pub enum Value {
     Proportion(f64),
     Position(f64),
     Boolean(bool),
+    AudioSource(crate::AudioSource),
+    Drum(crate::Drum),
     Color([f64; 3]),
+    Gradient(crate::Gradient),
+    ColorField(BTreeMap<String, [f64; 3]>),
     Mapping(MappingSpec),
     Coordinates(Mapping),
     Boundary(Boundary),
@@ -105,7 +113,11 @@ impl Value {
             Self::Proportion(_) => ValueType::Proportion,
             Self::Position(_) => ValueType::Position,
             Self::Boolean(_) => ValueType::Boolean,
+            Self::AudioSource(_) => ValueType::AudioSource,
+            Self::Drum(_) => ValueType::Drum,
             Self::Color(_) => ValueType::Color,
+            Self::Gradient(_) => ValueType::Gradient,
+            Self::ColorField(_) => ValueType::ColorField,
             Self::Mapping(_) => ValueType::Mapping,
             Self::Coordinates(_) => ValueType::Coordinates,
             Self::Boundary(_) => ValueType::Boundary,
@@ -121,6 +133,16 @@ impl Value {
             Self::Beats(v) => v.is_finite() && *v >= 0.0,
             Self::Proportion(v) => v.is_finite() && (0.0..=1.0).contains(v),
             Self::Color(c) => c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+            Self::Gradient(g) => return g.validate(),
+            Self::ColorField(colors) => {
+                for (id, color) in colors {
+                    if id.is_empty() {
+                        return Err(Error("color field requires head identities".into()));
+                    }
+                    Self::Color(*color).validate()?;
+                }
+                true
+            }
             Self::Envelope(e) => return e.validate(),
             Self::Mapping(m) => return m.validate(),
             Self::Coordinates(m) => return m.validate(),
@@ -162,9 +184,12 @@ impl Value {
 #[derive(Clone, Copy, Debug)]
 pub struct Frame<'a> {
     pub cells: &'a [Cell],
+    pub features: Option<&'a dyn crate::FeatureSource>,
     /// Absolute musical position; host maps track seconds through its beat grid.
     pub beat: f64,
     pub clip_start: f64,
+    /// Duration in beats; clip-relative progress always follows the placed clip.
+    pub clip_duration: f64,
     pub seed: u64,
 }
 
@@ -172,6 +197,9 @@ impl Frame<'_> {
     pub fn validate(&self) -> Result<()> {
         if !self.beat.is_finite() || !self.clip_start.is_finite() {
             return Err(Error("musical time must be finite".into()));
+        }
+        if !self.clip_duration.is_finite() || self.clip_duration <= 0.0 {
+            return Err(Error("clip duration must be finite and positive".into()));
         }
         let mut seen = std::collections::BTreeSet::new();
         for cell in self.cells {

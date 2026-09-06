@@ -23,6 +23,7 @@ enum Request {
         beats: Vec<f64>,
         #[serde(default)]
         clip_start: f64,
+        clip_duration: f64,
         #[serde(default)]
         seed: u64,
     },
@@ -51,6 +52,7 @@ fn run() -> Result<serde_json::Value, String> {
             inputs,
             beats,
             clip_start,
+            clip_duration,
             seed,
         } => {
             if beats.len() > 10000 {
@@ -62,8 +64,10 @@ fn run() -> Result<serde_json::Value, String> {
                 &definition,
                 &inputs,
                 Frame {
+                    features: None,
                     beat: clip_start,
                     clip_start,
+                    clip_duration,
                     seed,
                     cells: &cells,
                 },

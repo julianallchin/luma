@@ -20,6 +20,8 @@ pub(crate) async fn preview(
         || request.times.len() > 256
         || request.times.iter().any(|t| !t.is_finite())
         || !request.clip_start.is_finite()
+        || !request.clip_end.is_finite()
+        || request.clip_end <= request.clip_start
     {
         return Err("preview requires 1–256 finite sample times and a finite clip start".into());
     }
@@ -65,8 +67,10 @@ pub(crate) async fn preview(
         &request.definition,
         &request.inputs,
         Frame {
+            features: None,
             beat: start,
             clip_start: start,
+            clip_duration: clock.beat_at(request.clip_end).map_err(|e| e.to_string())? - start,
             seed: request.seed,
             cells: &cells,
         },

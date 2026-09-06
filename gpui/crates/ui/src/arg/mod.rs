@@ -31,6 +31,7 @@ pub mod color;
 pub mod envelope;
 pub mod expression;
 pub mod gradient;
+pub mod gradient_editor;
 pub mod number;
 pub mod palette;
 pub mod select;

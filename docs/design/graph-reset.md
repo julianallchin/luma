@@ -153,3 +153,32 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
   with joint-direction errors outside the changed graph code. The third failure
   regenerated the IPC manifest and passed on rerun. Workspace all-target checks,
   four native graph tests, 41 core tests and 96 Python unit tests pass.
+
+## Signal and audio checkpoint
+
+- Added one Gradient value (ordered linear RGB stops, including coincident stops
+  for hard color changes), color fields, field masking, color output, scalar
+  arithmetic/unit conversions, field floor/fraction/absolute/sine and coherent
+  spatial noise. Resolved color fields cannot be stored as authored values.
+- Wash, Pulse, dimmer-only Pulse, Color Fade, Spatial Gradient, Noise Wash,
+  Frequency Pulse and Drum Pulse are ordinary graphs. Appearance and uniform
+  dimmer output are now graphs too; their old dedicated kernels were removed.
+- Clip Time reads the placed clip's duration. Gradient timing therefore follows
+  clip resizing and variable tempo. Envelope controls temporal and spatial
+  response. Native graph and clip controls edit Gradient values; graph stop
+  dragging is verified through save. Color-only score graphs use RGB controls.
+- A prepared graph reports its required audio stems, drum events and harmony.
+  The authorized score preparation loads a shared immutable source. Band energy
+  uses the existing causal FFT math; onset clocks use absolute analyzed events.
+  Missing stems/analysis fail explicitly, with no full-mix fallback. Save-time
+  timing validation still works when audio has not been bound yet.
+- Verified: 46 core tests, 96 Python unit tests, four backend lighting tests,
+  the existing four native graph tests and the new persisted-gradient test.
+  The real Python-kernel check now also renders Drum Pulse and Frequency Pulse
+  and rejects an unavailable bass stem. Workspace all-target check passes.
+- No live in-app model runs are authorized: the user explicitly ruled those
+  out because of cost. Test harness/Python execution does not call a model.
+- EBF migration remains pending. The new noise kernel intentionally has a
+  stable, documented seed contract rather than reproducing an undocumented
+  legacy random stream. Audio range calibration and curved-envelope translation
+  must be recorded in the migration report.

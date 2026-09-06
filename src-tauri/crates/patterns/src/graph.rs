@@ -56,6 +56,24 @@ pub struct Graph {
 #[serde(rename_all = "snake_case")]
 pub enum Primitive {
     FieldBinary(crate::FieldMath),
+    ScalarBinary(crate::FieldMath),
+    ScalarConvert {
+        from: crate::ScalarKind,
+        to: crate::ScalarKind,
+    },
+    FieldUnary(crate::UnaryMath),
+    ClipTime,
+    BandEnergy,
+    DrumClock,
+    Harmony,
+    Noise,
+    WriteMask,
+    SampleGradient,
+    SampleGradientField,
+    ColorField,
+    MaskColor,
+    WriteColor,
+    Hsv,
     Broadcast(crate::ScalarKind),
     FieldClamp,
     MaskToField,
@@ -68,9 +86,7 @@ pub enum Primitive {
     Motion,
     CoordinateOffset,
     FieldEnvelope,
-    Appearance,
     WritePosition,
-    WriteDimmer,
     WriteStrobe,
     WriteSpeed,
     AddLighting,
@@ -78,32 +94,13 @@ pub enum Primitive {
     SoftEdges,
 }
 impl Primitive {
+    pub(crate) fn reads_track(self) -> bool {
+        matches!(self, Self::BandEnergy | Self::DrumClock | Self::Harmony)
+    }
     /// All other primitives are pure functions of inputs and the prepared
     /// head domain/seed, and may be folded when their inputs are constant.
     pub(crate) fn reads_time(self) -> bool {
-        match self {
-            Self::Rhythm => true,
-            Self::FieldBinary(_)
-            | Self::Broadcast(_)
-            | Self::FieldClamp
-            | Self::MaskToField
-            | Self::FieldGreater
-            | Self::FieldSelect
-            | Self::RandomField
-            | Self::ChooseNumber
-            | Self::ResolveMapping
-            | Self::Motion
-            | Self::CoordinateOffset
-            | Self::FieldEnvelope
-            | Self::Appearance
-            | Self::WritePosition
-            | Self::WriteDimmer
-            | Self::WriteStrobe
-            | Self::WriteSpeed
-            | Self::AddLighting
-            | Self::Envelope
-            | Self::SoftEdges => false,
-        }
+        matches!(self, Self::Rhythm | Self::ClipTime) || self.reads_track()
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -560,16 +557,20 @@ pub(crate) fn run_primitive(
     i: &BTreeMap<String, Value>,
     frame: Frame,
 ) -> Result<BTreeMap<String, Value>> {
+    if let Some(result) = crate::features::run(p, i, frame) {
+        return result;
+    }
+    if let Some(result) =
+        crate::signals::run(p, i, frame).or_else(|| crate::color::run(p, i, frame))
+    {
+        return result;
+    }
     if let Some(result) = crate::field_ops::run(p, i, frame) {
         return result;
     }
     let n = |key: &str| i[key].scalar();
     let mapping = |key: &str| match &i[key] {
         Value::Coordinates(m) => m,
-        _ => unreachable!(),
-    };
-    let mask = |key: &str| match &i[key] {
-        Value::Mask(m) => m,
         _ => unreachable!(),
     };
     let out = |name: &str, value| BTreeMap::from([(name.into(), value)]);
@@ -663,25 +664,6 @@ pub(crate) fn run_primitive(
                 ),
             )
         }
-        Primitive::Appearance => {
-            let Value::Color(color) = i["color"] else {
-                unreachable!()
-            };
-            out(
-                "lighting",
-                Value::Lighting(
-                    mask("mask")
-                        .iter()
-                        .map(|(cell, coverage)| {
-                            (
-                                cell.clone(),
-                                crate::FixtureOutput::from_rgb(color.map(|v| v * coverage)),
-                            )
-                        })
-                        .collect(),
-                ),
-            )
-        }
         Primitive::AddLighting => {
             let Value::Lighting(a) = &i["a"] else {
                 unreachable!()
@@ -701,17 +683,10 @@ pub(crate) fn run_primitive(
             }
             out("lighting", Value::Lighting(sum))
         }
-        Primitive::WritePosition
-        | Primitive::WriteDimmer
-        | Primitive::WriteStrobe
-        | Primitive::WriteSpeed => {
+        Primitive::WritePosition | Primitive::WriteStrobe | Primitive::WriteSpeed => {
             let value = match p {
                 Primitive::WritePosition => crate::FixtureOutput {
                     position: Some([n("pan"), n("tilt")]),
-                    ..Default::default()
-                },
-                Primitive::WriteDimmer => crate::FixtureOutput {
-                    dimmer: Some(n("value")),
                     ..Default::default()
                 },
                 Primitive::WriteStrobe => crate::FixtureOutput {

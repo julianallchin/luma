@@ -155,6 +155,8 @@ pub fn pattern_args_def(args: &[PatternArgDef]) -> Option<NodeTypeDef> {
                 id: arg.id.clone(),
                 name: arg.name.clone(),
                 port_type: match arg.arg_type {
+                    PatternArgType::AudioSource => PortType::Audio,
+                    PatternArgType::Drum => PortType::Events,
                     PatternArgType::Beats => PortType::Beats,
                     PatternArgType::Proportion => PortType::Proportion,
                     PatternArgType::Position => PortType::Position,

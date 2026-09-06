@@ -128,9 +128,11 @@ impl Score {
                 &clip.graph,
                 &clip.inputs,
                 Frame {
+                    features: None,
                     cells: &[],
                     beat: clip.start,
                     clip_start: clip.start,
+                    clip_duration: clip.duration,
                     seed: clip.seed,
                 },
             )
@@ -300,9 +302,11 @@ impl Score {
             &clip.graph,
             &inputs,
             Frame {
+                features: None,
                 cells,
                 beat: clip.start,
                 clip_start: clip.start,
+                clip_duration: clip.duration,
                 seed: clip.seed,
             },
         )?;
@@ -329,7 +333,11 @@ fn authored_value(value: &Value) -> Result<()> {
     value.validate()?;
     if matches!(
         value,
-        Value::Coordinates(_) | Value::Field(_) | Value::Mask(_) | Value::Lighting(_)
+        Value::Coordinates(_)
+            | Value::ColorField(_)
+            | Value::Field(_)
+            | Value::Mask(_)
+            | Value::Lighting(_)
     ) {
         return Err(Error(
             "resolved cell values belong to execution, not a saved score".into(),

@@ -165,6 +165,7 @@ pub(crate) async fn project(
 pub(crate) async fn prepare_scene(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
+    storage: &crate::storage::StorageRoot,
     track_id: &str,
     score: &Score,
 ) -> Result<crate::eval::Scene, String> {
@@ -183,6 +184,8 @@ pub(crate) async fn prepare_scene(
         .library(&standard_library())
         .map_err(|error| error.to_string())?;
     let mut compiled = Vec::new();
+    let mut prepared_clips = Vec::new();
+    let mut requests = Vec::new();
     let mut domains = std::collections::BTreeMap::new();
     for (id, clip) in &score.clips {
         let key = (
@@ -205,8 +208,54 @@ pub(crate) async fn prepare_scene(
         if cells.is_empty() {
             continue;
         }
-        let plan = crate::eval::lighting::compile_clip(&library, clip, clock.clone(), cells)
-            .map_err(|error| format!("clip {id}: {error}"))?;
+        let prepared = luma_patterns::PreparedGraph::new(
+            &library,
+            &clip.graph,
+            &clip.inputs,
+            luma_patterns::Frame {
+                cells: &cells,
+                features: None,
+                beat: clip.start,
+                clip_start: clip.start,
+                clip_duration: clip.duration,
+                seed: clip.seed,
+            },
+        )
+        .map_err(|e| format!("clip {id}: {e}"))?;
+        for request in prepared.feature_requests() {
+            if !requests.contains(request) {
+                requests.push(request.clone());
+            }
+        }
+        prepared_clips.push((id, clip, cells, prepared));
+    }
+    let features = if requests.is_empty() {
+        None
+    } else {
+        Some(
+            crate::eval::track_features::prepare(
+                access,
+                storage,
+                track_id,
+                clock.clone(),
+                &requests,
+            )
+            .await?,
+        )
+    };
+    for (id, clip, cells, prepared) in prepared_clips {
+        let prepared = match &features {
+            Some(features) => prepared
+                .with_features(features.clone())
+                .map_err(|e| format!("clip {id}: {e}"))?,
+            None => prepared,
+        };
+        let output = library.definitions[&clip.graph]
+            .lighting_output()
+            .ok_or("clip graph must produce fixture output")?;
+        let plan =
+            crate::eval::lighting::compile_clip(clip, clock.clone(), cells, prepared, output)
+                .map_err(|error| format!("clip {id}: {error}"))?;
         compiled.push(crate::eval::CompiledAnnotation {
             span: plan.ctx.span,
             plan: std::sync::Arc::new(plan),
@@ -220,6 +269,7 @@ pub(crate) async fn prepare_scene(
 pub(crate) async fn preview_clip(
     access: &mut impl crate::database::local::venue_access::AuthorizedVenue,
     fixtures_root: &std::path::Path,
+    storage: &crate::storage::StorageRoot,
     track_id: &str,
     score: &Score,
     clip_id: &str,
@@ -231,7 +281,7 @@ pub(crate) async fn preview_clip(
     let width = (clip.duration * 16.0).ceil().clamp(8.0, 512.0) as usize;
     let mut single = score.clone();
     single.clips.retain(|id, _| id == clip_id);
-    let scene = prepare_scene(access, fixtures_root, track_id, &single).await?;
+    let scene = prepare_scene(access, fixtures_root, storage, track_id, &single).await?;
     let mut frames = Vec::new();
     let mut span = (0.0, 0.0);
     if let Some(annotation) = scene.annotations.first() {

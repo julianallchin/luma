@@ -25,7 +25,7 @@ bundle; intermediate graphs remain composable nodes.
 ## Evaluation contract
 
 Evaluation is seek-safe: a frame is a pure function of graph, clip inputs,
-resolved venue cells, musical time, and instance seed. Runtime cell IDs are
+resolved venue cells, musical time, immutable analyzed track data, and instance seed. Runtime cell IDs are
 not authored fixture references. Score selections continue to name venue groups.
 All masks operate on independently controllable cells/heads, including bar pixels.
 
@@ -111,3 +111,15 @@ Saving validates fixed input relationships without venue geometry. Host checks
 also prepare the actual selected domain. Resource bounds reject excessive
 nesting and expansion before recursive execution; see the execution ledger for
 the current limits. A dynamic expression may still fail at another sampled time.
+
+Gradient is the color equivalent of Envelope: the same ordered stops may be
+sampled along clip progress or a mapped per-head coordinate. Colors are linear
+RGB, and masks multiply color before output separates chromaticity and dimmer.
+A dimmer-only output preserves underlying color. Noise is a deterministic
+function of spatial coordinates, musical time and the clip seed.
+
+Track data is a read-only source, bound once during score preparation. Frequency
+energy, drum-event time and harmony are fundamental sources; their response
+curves and complete effects are ordinary graphs. Selecting an unavailable stem
+or analysis is a preparation error. Audio source and drum choices remain typed
+inputs, with the same choices in Python, graph controls and clip controls.

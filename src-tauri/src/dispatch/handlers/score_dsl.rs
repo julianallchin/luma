@@ -153,6 +153,7 @@ pub async fn score_dsl_validate(
             Ok(candidate) => crate::services::graph_scores::prepare_scene(
                 &mut access,
                 &services.fixtures_root,
+                &services.storage,
                 &scope.track_id,
                 &candidate.score,
             )

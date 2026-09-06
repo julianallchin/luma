@@ -47,6 +47,13 @@ def _typed(kind, value):
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
             raise TrackError("color must be #RRGGBB or three normalized channels")
         value = [int(value[index:index+2], 16) / 255 for index in (1, 3, 5)]
+    if kind == "gradient":
+        if isinstance(value, list):
+            value = {"stops": [{"t": stop[0], "color": stop[1]} for stop in value]}
+        if not isinstance(value, dict) or "stops" not in value:
+            raise TrackError("gradient needs stops with position and color")
+        value = {"stops": [{"t": stop["t"], "color": _typed("color", stop["color"])["value"]}
+                           for stop in value["stops"]]}
     if kind == "mapping" and isinstance(value, str):
         source = {"kind": value}
         if value == "circle":

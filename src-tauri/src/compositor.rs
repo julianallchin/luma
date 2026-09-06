@@ -442,6 +442,7 @@ pub(crate) async fn build_score_scene(
         return crate::services::graph_scores::prepare_scene(
             &mut access,
             resource_root,
+            storage,
             &track_id,
             &document.score,
         )
