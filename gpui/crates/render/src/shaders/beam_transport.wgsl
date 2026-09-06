@@ -17,6 +17,7 @@
 // one beam pipeline is a hard rule (a shipping previz product measured 63+63
 // fps fixtures collapsing to 3 fps purely on per-beam-type pipeline swaps).
 
+override GRID_FOG: bool = false;
 const MAX_SAMPLES: i32 = 32;
 
 struct LightCore {
@@ -60,9 +61,9 @@ struct Haze {
     // xy: this pass's pixel → full-resolution pixel scale (the light index is
     // defined in full-res space), z: unused, w: fixed capture seed.
     tiles: vec4<f32>,
-    // xy: camera near/far planes, z: mean extinction sigma in 1/metres.
+    // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: light sampling group size.
     depth: vec4<f32>,
-    // x: shadowed fixture count, y: shadow texel size.
+    // x: shadowed fixture count, y: shadow texel size, z: reference tracer sample budget, w: fog-grid radial extent.
     shadow: vec4<f32>,
 };
 
@@ -83,43 +84,21 @@ struct FixtureShadowMatrix {
 @group(0) @binding(5) var haze_noise_sampler: sampler;
 @group(0) @binding(6) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
 @group(0) @binding(7) var fixture_shadow_map: texture_depth_2d_array;
+@group(0) @binding(9) var fixture_shadow_map_extra: texture_depth_2d_array;
 
-/// Multiplicative density field, centred on 1. The same turbulence exists
-/// everywhere including the near field; it reads clean at the source only
-/// because the core is overexposed. No spatial gate anywhere.
-///
-/// Two octaves of gradient noise, read from a baked wrapping texture rather
-/// than re-derived per sample. Evaluating the lattice here cost 87-95% of a
-/// volumetric sample and therefore of the whole march; the texture fetch hides
-/// under the transport's own arithmetic and costs no more than deleting the
-/// density term (`docs/design/haze-noise-field.md`).
-fn haze_noise(p_world: vec3<f32>, elapsed: f32) -> f32 {
-    // The turbulence is anisotropic — the field mixes each axis differently
-    // and the drift is per-axis — so it is only the same field if it is
-    // sampled in the basis it was authored in. Everything else here is Z-up
-    // world space; the noise alone is evaluated in three's Y-up basis
-    // (`coords::world_from_three` inverted).
-    let p = vec3<f32>(p_world.x, p_world.z, -p_world.y);
-    let drift = vec3<f32>(elapsed * 0.4, elapsed * 0.25, elapsed * 0.15);
-    let q = p * 2.0 + drift;
-    // The field repeats every FIELD_CELLS units of q, so the divide is the
-    // whole mapping. The octaves keep their own coordinates rather than
-    // sharing a baked sum: that is what keeps them drifting at different rates
-    // relative to each other, and so what reads as smoke rather than as a
-    // sliding photograph.
-    let a = textureSampleLevel(
-        haze_noise_field,
-        haze_noise_sampler,
-        q * FIELD_INV_CELLS,
-        0.0,
-    ).x;
-    let b = textureSampleLevel(
-        haze_noise_field,
-        haze_noise_sampler,
-        (q * 3.0 + drift + 3.7) * FIELD_INV_CELLS,
-        0.0,
-    ).x;
-    return max(1.0 + 1.1 * (a * 0.6 + b * 0.4), 0.05);
+// Slowly advected world-space pockets carry finer, stretched wisps. Keep the
+// baked field: evaluating procedural lattice noise per march sample is costly.
+fn haze_noise(p: vec3<f32>, elapsed: f32) -> f32 {
+    let q = p - vec3<f32>(0.12, 0.065, 0.025) * elapsed;
+    let broad = textureSampleLevel(haze_noise_field, haze_noise_sampler,
+        q * 0.45 * FIELD_INV_CELLS, 0.0).x;
+    // Independent coordinates let the GPU issue both texture reads together.
+    // Anisotropic fine detail supplies wisps without a third micro-noise tap.
+    let wisp = textureSampleLevel(haze_noise_field, haze_noise_sampler,
+        (q * vec3<f32>(3.0, 2.0, 6.0) + vec3<f32>(0.0, 0.03, -0.06) * elapsed)
+        * FIELD_INV_CELLS, 0.0).x;
+    let pocket = smoothstep(-0.35, 0.05, broad);
+    return max(0.04, (0.3 + 0.9 * pocket) * (1.0 + 0.6 * wisp));
 }
 
 fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
@@ -128,10 +107,10 @@ fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
 }
 
 fn fixture_shadow_visibility(world: vec3<f32>, light_index: u32) -> f32 {
-    // A cone without a slot casts no shadow rather than borrowing another's.
+    // Reference-only triangle visibility; production supplies cached maps.
     let slot = light_rest[light_index].shadow_slot;
     if slot < 0.0 {
-        return 1.0;
+        return stage_visibility(world, light_core[light_index].position);
     }
     let layer = i32(slot);
     let clip = fixture_shadow_matrices[layer].view_proj * vec4<f32>(world, 1.0);
@@ -152,7 +131,9 @@ fn fixture_shadow_visibility(world: vec3<f32>, light_index: u32) -> f32 {
     // is purely a precision guard and stays tight.
     let dimensions = vec2<i32>(textureDimensions(fixture_shadow_map));
     let coord = clamp(vec2<i32>(uv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - 1);
-    let stored = textureLoad(fixture_shadow_map, coord, layer, 0);
+    var stored: f32;
+    if layer < 256 { stored = textureLoad(fixture_shadow_map, coord, layer, 0); }
+    else { stored = textureLoad(fixture_shadow_map_extra, coord, layer - 256, 0); }
     let planes = fixture_shadow_matrices[layer].params;
     let reference = shadow_compare_reference(ndc.z, planes.x, planes.y, 0.02);
     return select(0.0, 1.0, reference >= stored);
@@ -256,36 +237,25 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
     return SceneRay(ray_dir, hit_dist, view_depth, j);
 }
 
-/// Single-scattering radiance this ray receives from light `li`, already
-/// multiplied by sigma. Returns zero when the ray misses the light's
-/// cone∩ball, or the span it does cross is occluded by geometry.
-fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
-    // A source that does not scatter leaves before the sphere test. House
-    // downlights reach every pixel in the room, so this is the first branch,
-    // not a factor folded into the radiance at the end.
-    let haze_gain = light_rest[li].haze_gain;
-    if haze_gain <= 0.0 {
-        return vec3<f32>(0.0);
-    }
-
+fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
     let ray_dir = ray.dir;
     let hit_dist = ray.hit_dist;
-    let near_clamp = haze.tuning.z;
-    let beam_gain = haze.tuning.w * haze_gain;
 
     let core = light_core[li];
     let oc = haze.camera_pos.xyz - core.position;
     let b = dot(oc, ray_dir);
     let oo = dot(oc, oc);
-    let disc = b * b - (oo - core.range * core.range);
+    let near_only = GRID_FOG && light_rest[li].wash >= FOG_BROAD_WASH && light_rest[li].gobo < 0.5;
+    let range = select(core.range, min(core.range, FOG_SOURCE_OUTER), near_only);
+    let disc = b * b - (oo - range * range);
     if disc <= 0.0 {
-        return vec3<f32>(0.0);
+        return vec2<f32>(0.0);
     }
     let sq = sqrt(disc);
     let s0 = max(-b - sq, 0.0);
     let s1 = min(-b + sq, hit_dist);   // geometry occludes the beam
     if s1 <= s0 {
-        return vec3<f32>(0.0);
+        return vec2<f32>(0.0);
     }
 
     let rest = light_rest[li];
@@ -345,11 +315,68 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         }
     }
     if t_b <= t_a {
+        return vec2<f32>(0.0);
+    }
+    return vec2<f32>(t_a, t_b);
+}
+
+// Unshadowed equiangular midpoint estimate guides light selection. It costs
+// no texture reads. Positive support over the complete analytic span keeps
+// selection unbiased even where haze pockets or blockers defeat the estimate.
+fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
+    let span = beam_span(li, ray);
+    if span.y <= span.x { return 0.0; }
+    let core = light_core[li];
+    let rest = light_rest[li];
+    let oc = haze.camera_pos.xyz - core.position;
+    let b = dot(oc, ray.dir);
+    let h = sqrt(max(dot(oc, oc) - b * b, haze.tuning.z));
+    let theta_a = atan((span.x + b) / h);
+    let theta_b = atan((span.y + b) / h);
+    let t = -b + h * tan((theta_a + theta_b) * 0.5);
+    let q = oc + ray.dir * t;
+    let dist = max(length(q), 1e-4);
+    let angular = angular_profile(dot(q, rest.direction) / dist, rest.cos_beam, rest.cos_field);
+    let phase = henyey_greenstein(-(b + t) / dist, mix(haze.transport.y, haze.transport.y * 0.3, rest.wash));
+    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    let spectrum = max(max(tint.r, tint.g), tint.b);
+    let energy = rest.intensity * rest.haze_gain * spectrum;
+    return energy * max(1e-6, (theta_b - theta_a) / h * angular
+        * beam_range_falloff(dist, core.range) * phase * exp(-sigma * (t + dist)));
+}
+
+/// Single-scattering radiance this ray receives from light `li`, already
+/// multiplied by sigma. Returns zero when the ray misses the light's
+/// cone∩ball, or the span it does cross is occluded by geometry.
+fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
+    // A source that does not scatter leaves before the sphere test. House
+    // downlights reach every pixel in the room, so this is the first branch,
+    // not a factor folded into the radiance at the end.
+    let haze_gain = light_rest[li].haze_gain;
+    if haze_gain <= 0.0 {
         return vec3<f32>(0.0);
     }
+
+    let span = beam_span(li, ray);
+    let t_a = span.x;
+    let t_b = span.y;
+    if t_b <= t_a { return vec3<f32>(0.0); }
+    let ray_dir = ray.dir;
+    let near_clamp = haze.tuning.z;
+    let beam_gain = haze.tuning.w * haze_gain;
+    let core = light_core[li];
+    let rest = light_rest[li];
+    let oc = haze.camera_pos.xyz - core.position;
+    let b = dot(oc, ray_dir);
+    let oo = dot(oc, oc);
     let seg_len = t_b - t_a;
 
-    let sample_count = i32(clamp(haze.params.z, 1.0, f32(MAX_SAMPLES)));
+    var sample_count = i32(clamp(haze.params.z, 1.0, f32(MAX_SAMPLES)));
+    if rest.shadow_slot < 0.0 && haze.shadow.z > 0.0 {
+        // Same MIS estimator and exact visibility, fewer samples for the
+        // software-traced fallback. Temporal reconstruction reduces variance.
+        sample_count = min(sample_count, i32(haze.shadow.z));
+    }
     // MIS split: equiangular samples own the hot near field (their density
     // cancels 1/d² exactly), uniform samples own the dim far tail where the
     // turbulence lives. Balance-heuristic weights combine them.
@@ -408,7 +435,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
 
         // Soft range taper — the beam dissolves into the dark instead of
         // popping at the hard cull sphere.
-        let taper = 1.0 - smoothstep(core.range * 0.7, core.range, dist);
+        let taper = beam_range_falloff(dist, core.range);
         let gobo = gobo_transmission(
             q,
             rest.direction,
@@ -429,10 +456,13 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         if haze.shadow.x > 0.0 {
             radiance *= fixture_shadow_visibility(sample_world, li);
         }
+        if GRID_FOG && rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5 {
+            radiance *= 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist);
+        }
         let nz = haze_noise(sample_world, haze.params.w);
         // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
         let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
-        acc += tint * (radiance * phase * nz * exp(-sigma * t) * mis_w);
+        acc += tint * (radiance * phase * nz * exp(-sigma * (t + dist)) * mis_w);
     }
 
     return acc * sigma;

@@ -124,3 +124,5 @@ struct FixtureShadowMatrix {
 @group(3) @binding(5) var<storage, read> fixture_shadow_matrices: array<FixtureShadowMatrix>;
 @group(3) @binding(6) var fixture_shadow_map: texture_depth_2d_array;
 @group(3) @binding(7) var fixture_shadow_sampler: sampler_comparison;
+
+@group(3) @binding(12) var fixture_shadow_map_extra: texture_depth_2d_array;

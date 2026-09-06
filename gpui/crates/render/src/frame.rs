@@ -89,7 +89,7 @@ pub struct MaterialTextures {
 pub struct FixtureCone {
     /// Apex of the cone, in world space.
     pub position: Vec3,
-    /// Cull radius; the beam tapers to nothing over its last 30%.
+    /// Cull radius, including the smoothly fading beam tail.
     pub range: f32,
     /// Unit beam axis.
     pub direction: Vec3,
@@ -228,6 +228,8 @@ pub struct Frame {
     pub beam_proxy: bool,
     /// Whether opaque venue geometry casts into fixture cones and haze.
     pub fixture_shadows: bool,
+    /// Retained shadow maps for every fixture, beyond the legacy 16-map budget.
+    pub geometry_shadows: bool,
     /// Whether the surface shader visualizes cluster occupancy.
     pub cluster_debug: bool,
     /// Linear, the `<color attach="background">` value.
@@ -1033,6 +1035,7 @@ pub fn build_with(
         fixture_surface_lighting: scene.render.fixture_surface_lighting,
         beam_proxy: false,
         fixture_shadows: scene.render.fixture_shadows,
+        geometry_shadows: scene.render.geometry_shadows,
         cluster_debug: scene.render.cluster_debug,
         clear_color: Vec3::from(scene.render.environment.background),
         room: lit_room,

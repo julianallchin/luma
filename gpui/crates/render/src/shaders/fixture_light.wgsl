@@ -68,3 +68,12 @@ fn gobo_transmission(
     let breakup = sin(rotated.x * 15.0) * sin(rotated.y * 11.0);
     return smoothstep(-0.15, 0.25, breakup);
 }
+
+// Numerical support taper shared with inverse-square surface illumination.
+// Preserve the near and middle beam; only remove the already faint tail.
+fn beam_range_falloff(distance: f32, range: f32) -> f32 {
+    let relative = clamp(distance / max(range, 0.001), 0.0, 1.0);
+    let squared = relative * relative;
+    let shoulder = 1.0 - squared * squared;
+    return shoulder * shoulder;
+}

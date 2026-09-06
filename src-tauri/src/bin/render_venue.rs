@@ -15,17 +15,19 @@ async fn main() -> Result<(), String> {
     let mut venue = None;
     let mut output = None;
     let mut view = View::Front;
+    let mut format = String::from("png");
     let mut width = 1600u32;
     let mut height = 1000u32;
     while let Some(arg) = args.next() {
         if arg == "--help" {
-            println!("render_venue --venue-id UUID --output PATH [--db PATH] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
+            println!("render_venue --venue-id UUID --output PATH [--db PATH] [--format png|catalogue] [--view front|audience|overhead|quarter_left|quarter_right|dj] [--width PX] [--height PX]");
             return Ok(());
         }
         let value = args
             .next()
             .ok_or_else(|| format!("{arg} requires a value"))?;
         match arg.as_str() {
+            "--format" => format = value,
             "--db" => db = PathBuf::from(value),
             "--venue-id" => venue = Some(value),
             "--output" => output = Some(PathBuf::from(value)),
@@ -52,6 +54,26 @@ async fn main() -> Result<(), String> {
     let fixtures_root = luma_lib::headless_host::HostConfig::default().fixtures_root()?;
     let geometry = VenueGeometry::load(&pool, &fixtures_root, &venue).await?;
     let (scene, definitions) = geometry.scene();
+    if format == "catalogue" {
+        let catalogue = luma_render::scene_desc::Catalogue {
+            warmup_frames: 30,
+            viewport: luma_render::scene_desc::Viewport { width, height },
+            device_scale_factor: 1.0,
+            definitions,
+            scenes: vec![scene],
+        };
+        let bytes = serde_json::to_vec_pretty(&catalogue).map_err(|e| e.to_string())?;
+        std::fs::write(&output, bytes).map_err(|e| e.to_string())?;
+        println!(
+            "{}",
+            serde_json::json!({"output": output, "venueId": venue, "format": format})
+        );
+        return Ok(());
+    }
+    if format != "png" {
+        return Err("--format must be png or catalogue".into());
+    }
+
     let environment = geometry.environment;
     let fixture_count = geometry.fixtures.len();
     let shot = Shot {

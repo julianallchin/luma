@@ -3,6 +3,11 @@
 //! Run from `gpui/` with `cargo run -p luma-render --release --bin
 //! profile-volumetrics`. Hardware pass-boundary timestamps measure GPU work;
 //! CPU encode time ends at queue submission and excludes waits/readback.
+//! Saved venues: `--catalogue=PATH`; `--image=PATH` captures independently
+//! after timing. Add `--image-live --image-subframes=1` to retain live history.
+//! `LUMA_GRID_FOG=0` compares the prior per-ray fog path; default enables the
+//! shared grid for dense shadowed rigs. Multi-subframe standalone captures
+//! retain per-ray integration for converged detail.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -101,11 +106,15 @@ struct CaseResult {
     fixture_shadows: bool,
     camera_radius: f32,
     opaque_draws: usize,
+    opaque_triangles: usize,
     shadowed_fixtures: usize,
     samples: usize,
     samples_fnv64: String,
     gpu_total: MetricSummary,
     gpu_volumetric: MetricSummary,
+    gpu_scene: MetricSummary,
+    gpu_composite: MetricSummary,
+    gpu_index: MetricSummary,
     cpu_encode_submit: MetricSummary,
     cpu_cluster: MetricSummary,
     cold_cluster_build_ms: f64,
@@ -143,6 +152,27 @@ fn main() -> anyhow::Result<()> {
         "acceptance timings require a --release build"
     );
     let arguments: Vec<_> = std::env::args().collect();
+    let range_scale: f32 = arguments
+        .iter()
+        .find_map(|argument| argument.strip_prefix("--range-scale="))
+        .unwrap_or("1")
+        .parse()?;
+    anyhow::ensure!(
+        range_scale.is_finite() && range_scale > 0.0 && range_scale <= 12.0,
+        "range scale must be finite and in (0, 12]"
+    );
+    let count_arg = |name: &str| -> anyhow::Result<Option<usize>> {
+        arguments
+            .iter()
+            .find_map(|a| a.strip_prefix(name))
+            .map(|v| v.parse::<usize>().map_err(anyhow::Error::from))
+            .transpose()
+    };
+    let cone_override = count_arg("--cones=")?;
+    anyhow::ensure!(
+        cone_override.is_none_or(|n| (1..=512).contains(&n)),
+        "cones must be in 1..=512"
+    );
     let smoke_clusters = arguments
         .iter()
         .any(|argument| argument == "--smoke-clusters");
@@ -158,36 +188,56 @@ fn main() -> anyhow::Result<()> {
     } else {
         Motion::Show
     };
-    let warmup_frames = if smoke { 2 } else { WARMUP_FRAMES };
-    let measured_frames = if smoke { 20 } else { MEASURED_FRAMES };
+    let warmup_frames =
+        count_arg("--warmup-frames=")?.unwrap_or(if smoke { 2 } else { WARMUP_FRAMES });
+    let measured_frames =
+        count_arg("--measured-frames=")?.unwrap_or(if smoke { 20 } else { MEASURED_FRAMES });
+    anyhow::ensure!(
+        (1..=10000).contains(&measured_frames) && warmup_frames <= 10000,
+        "invalid frame count"
+    );
     // `--capture` writes one frame per case next to the artifact. A timing
     // benchmark that is not looking at what it renders can measure the wrong
     // scene forever and never say so; the zoom cases in particular are only
     // meaningful if the beams really do fill the frame.
     if arguments.iter().any(|argument| argument == "--capture") {
-        return capture_cases(&base_frame(false)?, &base_frame(true)?);
+        return capture_cases(&base_frame(false)?, &base_frame(true)?, range_scale);
+    }
+    if let Some(path) = arguments
+        .iter()
+        .find_map(|a| a.strip_prefix("--catalogue="))
+    {
+        return profile_catalogue(Path::new(path), warmup_frames, measured_frames, &arguments);
     }
     let base = base_frame(false)?;
     let shadow_base = base_frame(true)?;
     let mut renderer = Renderer::new_profiled()?;
+    renderer
+        .set_geometry_shadows(std::env::var_os("LUMA_GEOMETRY_SHADOWS").is_some_and(|v| v == "1"));
     let adapter = renderer.gpu().adapter_profile().clone();
     let mut cases = Vec::new();
     // The zoomed-out radius every case used before the zoom axis existed.
     const WIDE: f32 = 7.4;
-    let mut run =
-        |renderer: &mut Renderer, base: &luma_render::Frame, case: Case| -> anyhow::Result<()> {
-            if wants(case.id) {
-                cases.push(profile_case(
-                    renderer,
-                    base,
-                    &case,
-                    warmup_frames,
-                    measured_frames,
-                    motion,
-                )?);
+    let mut run = |renderer: &mut Renderer,
+                   base: &luma_render::Frame,
+                   mut case: Case|
+     -> anyhow::Result<()> {
+        if wants(case.id) {
+            if let Some(cones) = cone_override {
+                case.cones = cones;
             }
-            Ok(())
-        };
+            cases.push(profile_case(
+                renderer,
+                base,
+                &case,
+                warmup_frames,
+                measured_frames,
+                motion,
+                range_scale,
+            )?);
+        }
+        Ok(())
+    };
 
     run(
         &mut renderer,
@@ -218,7 +268,7 @@ fn main() -> anyhow::Result<()> {
             },
         },
     )?;
-    if !smoke || smoke_clusters {
+    if !smoke || smoke_clusters || case_filter.is_some() {
         run(
             &mut renderer,
             &base,
@@ -529,6 +579,10 @@ fn main() -> anyhow::Result<()> {
             "measured_frames": measured_frames,
             "motion": if motion == Motion::Orbit { "orbit (camera only)" } else { "show (camera + heads)" },
             "time_step_seconds": 1.0 / 60.0,
+            "range_scale": range_scale,
+            "geometry_shadow_samples": std::env::var("LUMA_GEOMETRY_SHADOW_SAMPLES").unwrap_or_else(|_| "2".into()),
+            "geometry_shadows": std::env::var_os("LUMA_GEOMETRY_SHADOWS").is_some_and(|v| v == "1"),
+            "arguments": &arguments[1..],
             "percentile": "nearest-rank ceil(q*n)-1",
         },
         "cases": cases,
@@ -539,6 +593,163 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Saved venue geometry, resolved by the backend's read-only exporter. This
+/// deliberately pins full fixture output rather than claiming to replay a score.
+fn profile_catalogue(
+    path: &Path,
+    warmup: usize,
+    measured: usize,
+    arguments: &[String],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !arguments.iter().any(|a| a.starts_with("--cones=") || a.starts_with("--case=") || a.starts_with("--range-scale=") || a == "--orbit"),
+        "saved-venue mode preserves its fixtures and geometry; synthetic scene overrides are unsupported"
+    );
+    anyhow::ensure!(
+        !(arguments.iter().any(|a| a == "--surface-only")
+            && arguments.iter().any(|a| a == "--haze-only")),
+        "choose at most one lighting isolation mode"
+    );
+    let catalogue = luma_render::Catalogue::load(path)?;
+    let scene = catalogue
+        .scenes
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("empty catalogue"))?;
+    let (width, height) = catalogue.frame_size();
+    let mut library = Library::new(git_repository_root()?.join("resources/meshes"));
+    let mut frame = build_frame_with(
+        scene,
+        &catalogue.definitions,
+        &|_, _| {
+            Some(luma_render::scene_desc::PrimitiveState {
+                dimmer: 1.0,
+                color: [1.0, 0.03, 0.01],
+                strobe: 0.0,
+                position: [0.0, 0.0],
+                gobo: 0,
+                gobo_rotation: 0.0,
+            })
+        },
+        0.0,
+        &mut library,
+    )?;
+    frame.haze_density = if arguments.iter().any(|a| a == "--surface-only") {
+        0.0
+    } else {
+        0.8
+    };
+    frame.haze_resolution = luma_render::LIVE_HAZE_RESOLUTION;
+    frame.haze_steps = 8;
+    frame.fixture_surface_lighting = !arguments.iter().any(|a| a == "--haze-only");
+    frame.fixture_shadows = true;
+    let framing = scene.framing(&catalogue.definitions);
+    let viewfinder = luma_scene::Viewfinder::new(50.0, width as f32 / height as f32)
+        .open_air(scene.render.sky.is_some());
+    let camera =
+        luma_scene::Camera::for_view("quarter_right".parse()?, &framing, None, &viewfinder);
+    frame.camera = luma_render::frame::Camera {
+        eye: camera.position(),
+        target: camera.target,
+        fov_y_deg: camera.fov_y_deg,
+    };
+    let enabled = std::env::var_os("LUMA_GEOMETRY_SHADOWS").is_some_and(|v| v == "1");
+    let mut renderer = Renderer::new_profiled()?;
+    renderer.set_geometry_shadows(enabled);
+    let moving_cones: usize = arguments
+        .iter()
+        .find_map(|a| a.strip_prefix("--moving-cones="))
+        .unwrap_or("0")
+        .parse()?;
+    anyhow::ensure!(
+        moving_cones <= frame.fixture_cones.len(),
+        "moving-cones exceeds the scene's cone count"
+    );
+    let original_cones = frame.fixture_cones.clone();
+    let blackout = arguments.iter().any(|a| a == "--blackout");
+    let mut samples = Vec::new();
+    let mut cold = None;
+    let mut redraws = Vec::new();
+    for i in 0..warmup + measured {
+        frame.time = i as f32 / 60.0;
+        frame.fixture_cones.clone_from(&original_cones);
+        for (index, cone) in frame
+            .fixture_cones
+            .iter_mut()
+            .take(moving_cones)
+            .enumerate()
+        {
+            let phase = frame.time * 1.7 + index as f32 * 0.31;
+            cone.direction = glam::Quat::from_rotation_y(0.35 * phase.sin())
+                * glam::Quat::from_rotation_x(0.25 * phase.cos())
+                * cone.direction;
+        }
+        if blackout && (i / 15) % 2 == 1 {
+            frame.fixture_cones.clear();
+        }
+        let timing = renderer.profile_live_frame(&frame, width, height, LIVE_SUBFRAMES)?;
+        if i == 0 {
+            cold = Some(
+                serde_json::json!({"gpu_ms": timing.gpu_total_ms, "cpu_encode_ms": timing.cpu_encode_submit_ms, "shadow_maps": renderer.shadow_stats().redrawn_maps}),
+            );
+        }
+        if i >= warmup {
+            redraws.push(renderer.shadow_stats().redrawn_maps);
+            samples.push(timing);
+        }
+    }
+    if let Some(output) = arguments.iter().find_map(|a| a.strip_prefix("--image=")) {
+        let subframes = arguments
+            .iter()
+            .find_map(|a| a.strip_prefix("--image-subframes="))
+            .map(str::parse::<u32>)
+            .transpose()?
+            .unwrap_or(luma_render::DEFAULT_SUBFRAMES);
+        anyhow::ensure!(
+            (1..=128).contains(&subframes),
+            "image-subframes must be in 1..=128"
+        );
+        let pixels = if arguments.iter().any(|a| a == "--image-live") {
+            renderer.render_next(&frame, width, height, subframes)?
+        } else {
+            renderer.render(&frame, width, height, subframes)?
+        };
+        let mut encoder = png::Encoder::new(fs::File::create(output)?, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header()?.write_image_data(&pixels)?;
+    }
+    let opaque = frame.draws.len() - frame.transparent.len();
+    let artifact = serde_json::json!({
+        "source": path, "source_fnv64": format!("0x{:016x}", fnv64(&fs::read(path)?)),
+        "captured_at_utc": command_output("date", &["-u", "+%Y-%m-%dT%H:%M:%SZ"]),
+        "source_provenance": source_provenance(&git_repository_root()?)?,
+        "arguments": arguments, "adapter": {"name": renderer.gpu().adapter_profile().name, "backend": format!("{:?}", renderer.gpu().adapter_profile().backend)},
+        "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+        "width": width, "height": height, "geometry_shadows": enabled,
+        "grid_fog_enabled": !std::env::var_os("LUMA_GRID_FOG").is_some_and(|v| v == "0"),
+        "image_live": arguments.iter().any(|a| a == "--image-live"),
+        "wide_light_group": std::env::var("LUMA_WIDE_LIGHT_GROUP").unwrap_or_else(|_| "8".into()),
+        "visibility_reference": std::env::var_os("LUMA_VISIBILITY_REFERENCE").is_some_and(|v| v == "1"),
+        "moving_cones": moving_cones, "blackout": blackout,
+        "cold_frame": cold, "resident_shadow_maps": renderer.shadowed_fixture_count(),
+        "redrawn_maps_max": redraws.iter().max(),
+        "haze_steps": frame.haze_steps, "haze_resolution": frame.haze_resolution,
+        "haze_density": frame.haze_density, "surface_lighting": frame.fixture_surface_lighting,
+        "camera": { "eye": frame.camera.eye.to_array(), "target": frame.camera.target.to_array(), "fov": frame.camera.fov_y_deg },
+        "warmup_frames": warmup, "measured_frames": measured,
+        "cones": frame.fixture_cones.len(), "opaque_draws": opaque,
+        "opaque_triangles": frame.draws.iter().take(opaque).map(|d| frame.meshes[d.mesh].indices.len()/3).sum::<usize>(),
+        "gpu_total": summarize(samples.iter().map(|s| s.gpu_total_ms)),
+        "gpu_scene": summarize(samples.iter().map(|s| s.gpu_scene_ms)),
+        "gpu_fog_grid": summarize(samples.iter().map(|s| s.gpu_fog_grid_ms)),
+        "gpu_volumetric": summarize(samples.iter().map(|s| s.gpu_volumetric_ms)),
+        "cpu_encode_submit": summarize(samples.iter().map(|s| s.cpu_encode_submit_ms)),
+        "light_index": renderer.light_index_stats(),
+    });
+    println!("{}", serde_json::to_string_pretty(&artifact)?);
+    Ok(())
+}
+
 fn profile_case(
     renderer: &mut Renderer,
     base: &luma_render::Frame,
@@ -546,6 +757,7 @@ fn profile_case(
     warmup_frames: usize,
     measured_frames: usize,
     motion: Motion,
+    range_scale: f32,
 ) -> anyhow::Result<CaseResult> {
     let Case {
         id: case_id,
@@ -557,15 +769,14 @@ fn profile_case(
         aim_at_camera,
         budgets,
     } = *case;
-    let mut frame = frame_with_lights(base, cones);
+    let mut frame = frame_with_lights(base, cones, range_scale);
     multiply_geometry(&mut frame, geometry_copies);
     frame.fixture_shadows = fixture_shadows;
     let opaque_draws = frame.draws.len() - frame.transparent.len();
-    let shadowed_fixtures = usize::from(fixture_shadows) * cones.min(128);
     if fixture_shadows {
         anyhow::ensure!(
-            opaque_draws > 1 && shadowed_fixtures == 120,
-            "fixture-shadow profile must exercise representative geometry and all 120 lights"
+            opaque_draws > 1 && cones > 0,
+            "fixture-shadow profile must request lights and representative geometry"
         );
     }
     let mut cold_cluster_build_ms = 0.0;
@@ -637,6 +848,7 @@ fn profile_case(
         // A subdivision like scene/composite, and it runs outside
         // `gpu_total_ms` — covered by the wall-clocked encode span instead.
         gpu_index_ms: _,
+        gpu_fog_grid_ms: _,
         cpu_encode_submit_ms,
         cpu_cluster_ms,
     } in &samples
@@ -652,11 +864,21 @@ fn profile_case(
         fixture_shadows,
         camera_radius,
         opaque_draws,
-        shadowed_fixtures,
+        opaque_triangles: frame
+            .draws
+            .iter()
+            .take(opaque_draws)
+            .map(|d| frame.meshes[d.mesh].indices.len() / 3)
+            .sum(),
+        shadowed_fixtures: renderer.shadowed_fixture_count(),
         samples: samples.len(),
         samples_fnv64: format!("0x{:016x}", fnv64(&sample_bytes)),
         gpu_total: total,
         gpu_volumetric: volumetric,
+        gpu_scene: summarize(samples.iter().map(|sample| sample.gpu_scene_ms)),
+        gpu_composite: summarize(samples.iter().map(|sample| sample.gpu_composite_ms)),
+        // Index work is also reported separately; it overlaps the scene span.
+        gpu_index: summarize(samples.iter().map(|sample| sample.gpu_index_ms)),
         cpu_encode_submit: cpu,
         cpu_cluster: cluster,
         cold_cluster_build_ms,
@@ -731,6 +953,7 @@ fn animate(
 fn capture_cases(
     base: &luma_render::Frame,
     shadow_base: &luma_render::Frame,
+    range_scale: f32,
 ) -> anyhow::Result<()> {
     let mut viewport = luma_render::Viewport::new()?;
     let out = std::path::Path::new("target/profile-capture");
@@ -750,7 +973,7 @@ fn capture_cases(
         ),
         ("beams-at-camera-128", base, 128, false, 7.4, 0.8, true),
     ] {
-        let mut frame = frame_with_lights(source, cones);
+        let mut frame = frame_with_lights(source, cones, range_scale);
         frame.fixture_shadows = shadows;
         // Warm the temporal history so the capture is a settled frame, not the
         // first one.
@@ -1138,7 +1361,11 @@ fn multiply_geometry(frame: &mut luma_render::Frame, copies: usize) {
     frame.draws.extend(grid);
 }
 
-fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Frame {
+fn frame_with_lights(
+    base: &luma_render::Frame,
+    count: usize,
+    range_scale: f32,
+) -> luma_render::Frame {
     let mut frame = luma_render::Frame {
         meshes: base
             .meshes
@@ -1169,6 +1396,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         fixture_surface_lighting: true,
         beam_proxy: false,
         fixture_shadows: true,
+        geometry_shadows: false,
         cluster_debug: false,
         clear_color: base.clear_color,
         room: None,
@@ -1188,7 +1416,7 @@ fn frame_with_lights(base: &luma_render::Frame, count: usize) -> luma_render::Fr
         let row = (index / 32) as f32;
         frame.fixture_cones.push(FixtureCone {
             position: Vec3::new((column - 15.5) * 0.18, (row - 7.5) * 0.18, 0.15),
-            range: 8.0,
+            range: 8.0 * range_scale,
             direction: Vec3::Z,
             cos_beam: 0.975,
             color: Vec3::new(0.2, 0.55, 1.0),

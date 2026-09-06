@@ -98,7 +98,7 @@ pub struct Cone {
     pub cos_beam: f32,
     /// Cosine of the half-angle where the profile reaches zero.
     pub cos_field: f32,
-    /// Throw distance, in metres.
+    /// Conservative cull distance in metres, including the fading tail.
     pub range: f32,
     /// 0 for a hard beam, 1 for a near-isotropic wash.
     pub wash: f32,
@@ -119,7 +119,7 @@ fn smoothstep01(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// hotter, whiter and throws further; everything below follows from that.
 #[must_use]
 pub fn cone_from_opening(l: Luminaire) -> Cone {
-    // Concentration reference: a 30 degree spot has gain 1.5 and 12 m of throw.
+    // Concentration reference: a 30 degree spot has gain 1.5.
     let reference = cone_solid_angle(30.0);
     let field_deg = clamp_opening(l.field_angle_deg);
     // Same energy through a smaller solid angle = hotter, whiter, longer throw.
@@ -132,7 +132,10 @@ pub fn cone_from_opening(l: Luminaire) -> Cone {
     Cone {
         cos_field: half.cos(),
         cos_beam: (half * beam_ratio).cos(),
-        range: (12.0 * concentration.sqrt()).clamp(3.0, 18.0),
+        // This is a numerical integration bound, not an optical throw.
+        // Wide washes still illuminate distant surfaces; cutting their support
+        // to three metres produced a visible glowing ball around the lens.
+        range: (30.0 * concentration.sqrt()).clamp(24.0, 60.0),
         wash,
         gain: 1.5 * l.lumens * concentration.clamp(0.1, 6.0),
     }
@@ -348,7 +351,7 @@ mod tests {
             lumens: 1.0,
         });
         assert!((cone.gain - 1.5).abs() < 1e-4);
-        assert!((cone.range - 12.0).abs() < 1e-3);
+        assert!((cone.range - 30.0).abs() < 1e-3);
         assert!((cone.cos_field - 15f32.to_radians().cos()).abs() < 1e-6);
     }
 }
