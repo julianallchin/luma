@@ -3,16 +3,16 @@
 use crate::*;
 use std::collections::BTreeMap;
 
-fn wire(node: &str, output: &str) -> Binding {
+pub(super) fn wire(node: &str, output: &str) -> Binding {
     Binding::Connection {
         node: node.into(),
         output: output.into(),
     }
 }
-fn input(key: &str) -> Binding {
+pub(super) fn input(key: &str) -> Binding {
     Binding::Input { input: key.into() }
 }
-fn node(definition: &str, inputs: &[(&str, Binding)]) -> Node {
+pub(super) fn node(definition: &str, inputs: &[(&str, Binding)]) -> Node {
     Node {
         definition: definition.into(),
         inputs: inputs
@@ -22,7 +22,7 @@ fn node(definition: &str, inputs: &[(&str, Binding)]) -> Node {
         position: None,
     }
 }
-fn graph(
+pub(super) fn graph(
     library: &mut Library,
     id: &str,
     name: &str,
@@ -34,8 +34,15 @@ fn graph(
         for (port, binding) in &n.inputs {
             if let Binding::Input { input } = binding {
                 let spec = library.definitions[&n.definition].inputs[port].clone();
-                if let Some(old) = inputs.insert(input.clone(), spec.clone()) {
-                    assert_eq!(old.value_type, spec.value_type, "recipe input {id}.{input}");
+                let old = inputs.entry(input.clone()).or_insert_with(|| spec.clone());
+                assert_eq!(old.value_type, spec.value_type, "recipe input {id}.{input}");
+                // One exposed value may drive several child ports. Preserve its
+                // default and satisfy the strictest consumer's update rate.
+                if old.default.is_none() {
+                    old.default = spec.default;
+                }
+                if spec.rate == Rate::Fixed {
+                    old.rate = Rate::Fixed;
                 }
             }
         }
@@ -66,7 +73,7 @@ fn graph(
         },
     );
 }
-fn default(library: &mut Library, id: &str, key: &str, name: &str, value: Value) {
+pub(super) fn default(library: &mut Library, id: &str, key: &str, name: &str, value: Value) {
     let spec = library
         .definitions
         .get_mut(id)
@@ -89,8 +96,31 @@ pub(crate) fn foundation(library: &mut Library) {
         ("core/floor", Primitive::FieldUnary(UnaryMath::Floor)),
         ("core/fraction", Primitive::FieldUnary(UnaryMath::Fraction)),
         ("core/sine", Primitive::FieldUnary(UnaryMath::Sine)),
+        (
+            "core/square_root",
+            Primitive::FieldUnary(UnaryMath::SquareRoot),
+        ),
+        ("core/rank", Primitive::FieldRank),
+        (
+            "core/field_minimum",
+            Primitive::FieldReduce(FieldReduction::Minimum),
+        ),
+        (
+            "core/field_maximum",
+            Primitive::FieldReduce(FieldReduction::Maximum),
+        ),
+        (
+            "core/field_mean",
+            Primitive::FieldReduce(FieldReduction::Mean),
+        ),
+        (
+            "core/head_count",
+            Primitive::FieldReduce(FieldReduction::Count),
+        ),
+        ("stage_coordinates", Primitive::StageCoordinates),
         ("core/noise", Primitive::Noise),
         ("core/dimmer_output", Primitive::WriteMask),
+        ("core/strobe_output", Primitive::WriteStrobeMask),
         ("sample_gradient", Primitive::SampleGradient),
         ("sample_field_gradient", Primitive::SampleGradientField),
         ("core/color_field", Primitive::ColorField),
@@ -138,6 +168,114 @@ pub(crate) fn foundation(library: &mut Library) {
             format!("core/{id}"),
             primitive(Primitive::ScalarConvert { from, to }),
         );
+    }
+
+    graph(
+        library,
+        "motion",
+        "Motion",
+        &[
+            (
+                "clock",
+                node(
+                    "core/travel_time",
+                    &[
+                        ("elapsed", input("elapsed")),
+                        ("travel", input("travel")),
+                        ("repeat", input("repeat")),
+                    ],
+                ),
+            ),
+            (
+                "curve",
+                node(
+                    "envelope",
+                    &[
+                        ("progress", wire("clock", "progress")),
+                        ("shape", input("path")),
+                    ],
+                ),
+            ),
+            (
+                "progress",
+                node("core/coverage_number", &[("value", wire("curve", "value"))]),
+            ),
+            (
+                "start",
+                node("core/position_number", &[("value", input("start"))]),
+            ),
+            (
+                "end",
+                node("core/position_number", &[("value", input("end"))]),
+            ),
+            (
+                "distance",
+                node(
+                    "core/subtract_number",
+                    &[("a", wire("end", "value")), ("b", wire("start", "value"))],
+                ),
+            ),
+            (
+                "traveled",
+                node(
+                    "core/multiply_number",
+                    &[
+                        ("a", wire("distance", "value")),
+                        ("b", wire("progress", "value")),
+                    ],
+                ),
+            ),
+            (
+                "offset",
+                node(
+                    "core/add_number",
+                    &[
+                        ("a", wire("start", "value")),
+                        ("b", wire("traveled", "value")),
+                    ],
+                ),
+            ),
+            (
+                "position",
+                node(
+                    "core/number_position",
+                    &[("value", wire("offset", "value"))],
+                ),
+            ),
+        ],
+        ("position", "position", "value"),
+    );
+    default(
+        library,
+        "motion",
+        "start",
+        "Start position",
+        Value::Position(0.0),
+    );
+    default(
+        library,
+        "motion",
+        "end",
+        "End position",
+        Value::Position(1.0),
+    );
+    default(
+        library,
+        "motion",
+        "path",
+        "Travel curve",
+        Value::Envelope(Envelope {
+            points: vec![[0., 0.], [1., 1.]],
+        }),
+    );
+    for key in ["progress", "active"] {
+        let spec = library.definitions["core/travel_time"].outputs[key].clone();
+        let motion = library.definitions.get_mut("motion").unwrap();
+        motion.outputs.insert(key.into(), spec);
+        let Body::Graph(body) = &mut motion.body else {
+            unreachable!()
+        };
+        body.outputs.insert(key.into(), wire("clock", key));
     }
 
     graph(
@@ -202,22 +340,24 @@ pub(crate) fn foundation(library: &mut Library) {
         ],
         ("lighting", "color", "lighting"),
     );
-    graph(
-        library,
-        "write_dimmer",
-        "Dimmer output",
-        &[
-            (
-                "mask",
-                node("uniform_mask", &[("coverage", input("value"))]),
-            ),
-            (
-                "output",
-                node("core/dimmer_output", &[("mask", wire("mask", "mask"))]),
-            ),
-        ],
-        ("lighting", "output", "lighting"),
-    );
+    for (id, name, sink) in [
+        ("write_dimmer", "Dimmer output", "core/dimmer_output"),
+        ("write_strobe", "Strobe output", "core/strobe_output"),
+    ] {
+        graph(
+            library,
+            id,
+            name,
+            &[
+                (
+                    "mask",
+                    node("uniform_mask", &[("coverage", input("value"))]),
+                ),
+                ("output", node(sink, &[("mask", wire("mask", "mask"))])),
+            ],
+            ("lighting", "output", "lighting"),
+        );
+    }
 }
 pub(crate) fn extend(library: &mut Library) {
     graph(
@@ -232,6 +372,7 @@ pub(crate) fn extend(library: &mut Library) {
                     &[
                         ("repeat", input("repeat")),
                         ("grid_aligned", input("grid_aligned")),
+                        ("delay", input("delay")),
                     ],
                 ),
             ),
@@ -284,6 +425,7 @@ pub(crate) fn extend(library: &mut Library) {
                 &[
                     ("repeat", input("repeat")),
                     ("grid_aligned", input("grid_aligned")),
+                    ("delay", input("delay")),
                     ("travel", input("travel")),
                     ("shape", input("shape")),
                 ],
@@ -711,4 +853,5 @@ pub(crate) fn extend(library: &mut Library) {
         ],
         ("lighting", "output", "lighting"),
     );
+    crate::spatial_recipes::extend(library);
 }

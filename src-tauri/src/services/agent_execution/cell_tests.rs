@@ -778,6 +778,54 @@ except RuntimeError as error:
         &out,
         "canonical graph audio, onsets and missing-stem diagnostics",
     );
+    // The standalone graph preview is another consumer of the same prepared
+    // program; it must bind audio just as a score window does. No model runs.
+    for effect in ["drum_pulse", "band_pulse"] {
+        let mut request: crate::models::composable_patterns::ComposablePreviewRequest =
+            serde_json::from_value(json!({
+                "venueId":f.venue_id,"trackId":TRACK_ID,"definition":effect,
+                "targets":[{"expression":"all"}],"clipStart":0.5,"clipEnd":2.0,
+                "times":[0.5,0.6,1.0],"seed":1,
+            }))
+            .unwrap();
+        if effect == "band_pulse" {
+            for (name, value) in [("low_hz", 0.), ("high_hz", 10.), ("gain", 50.)] {
+                request
+                    .inputs
+                    .insert(name.into(), luma_patterns::Value::Number(value));
+            }
+        }
+        let preview = crate::services::composable_patterns::preview(
+            &f.pool,
+            &f.resource_root,
+            &f.storage,
+            request.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            preview
+                .frames
+                .iter()
+                .any(|frame| frame.primitives.values().any(|head| head.dimmer > 0.0)),
+            "{effect}"
+        );
+        if effect == "band_pulse" {
+            request.inputs.insert(
+                "source".into(),
+                luma_patterns::Value::AudioSource(luma_patterns::AudioSource::Bass),
+            );
+            let error = crate::services::composable_patterns::preview(
+                &f.pool,
+                &f.resource_root,
+                &f.storage,
+                request,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains("bass stem unavailable"), "{error}");
+        }
+    }
 }
 
 #[tokio::test]

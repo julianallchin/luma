@@ -1,11 +1,9 @@
 //! Headless JSON-RPC harness over Luma's backend command surface.
 //!
-//! The desktop app reaches the Rust core through Tauri's IPC. Agent code — the
-//! track copilot, the graph agent — is ordinary TypeScript that calls
-//! `invoke("command_name", args)`. To exercise that code outside a window we
-//! need the same command surface without an `AppHandle`, a WebView, or an
-//! NSApplication. This binary is that surface: one JSON request per line on
-//! stdin, one JSON response per line on stdout.
+//! GPUI and local programs share `luma_lib::dispatch`. This binary makes that
+//! command surface available without a window: one JSON request per line on
+//! stdin, one JSON response per line on stdout. Calling inspection, editing or
+//! rendering commands does not start a model turn.
 //!
 //! ```text
 //! ->  {"id": 1, "cmd": "list_patterns", "args": {}}
@@ -13,14 +11,7 @@
 //! <-  {"id": 1, "err": "message"}
 //! ```
 //!
-//! Paired with `scripts/headless/shim.ts`, which installs
-//! `window.__TAURI_INTERNALS__.invoke` on top of this pipe, unmodified frontend
-//! modules run under Bun against a real `luma.db`.
-//!
-//! This binary is a **thin adapter over `luma_lib::dispatch`**, the same seam
-//! the desktop app's `#[tauri::command]` wrappers sit on: every command it
-//! serves is the shared handler, so command *names* and *argument shapes* match
-//! the Tauri registration by construction and the frontend is oblivious.
+//! Every command uses the same handler and argument schema as the native app.
 //!
 //! Deliberately absent: ArtNet (its manager needs an `AppHandle`), audio
 //! devices, and the loops — nothing spawns a render loop or a sync loop here,
@@ -54,8 +45,8 @@ async fn run() -> Result<(), String> {
         services.fixtures_root().display()
     );
 
-    // Requests are dispatched concurrently, one task each, because Tauri's IPC
-    // is concurrent and some pairs of commands only make sense that way:
+    // Requests are dispatched concurrently, one task each, because some pairs
+    // of commands only make sense that way:
     // `cancel_python_cell` exists precisely to interrupt a `run_python_cell`
     // that is still in flight, and a strictly serial loop could never deliver
     // it. Responses are matched by `id`, so completion order is free.

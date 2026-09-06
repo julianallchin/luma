@@ -10,6 +10,7 @@ pub enum UnaryMath {
     Floor,
     Fraction,
     Sine,
+    SquareRoot,
 }
 
 pub(crate) fn port(name: &str, kind: ValueType, default: Option<Value>) -> Input {
@@ -58,6 +59,7 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
                 UnaryMath::Floor => "Floor",
                 UnaryMath::Fraction => "Fraction (wrap)",
                 UnaryMath::Sine => "Sine (turns)",
+                UnaryMath::SquareRoot => "Square root",
             },
             vec![("value", field("Value"))],
             vec![("value", ValueType::Field)],
@@ -71,8 +73,12 @@ pub(crate) fn definition(op: Primitive) -> Option<Definition> {
             ],
             vec![("value", ValueType::Field)],
         ),
-        Primitive::WriteMask => (
-            "Dimmer mask output",
+        Primitive::WriteMask | Primitive::WriteStrobeMask => (
+            if op == Primitive::WriteMask {
+                "Dimmer mask output"
+            } else {
+                "Strobe mask output"
+            },
             vec![("mask", port("Mask", ValueType::Mask, None))],
             vec![("lighting", ValueType::Lighting)],
         ),
@@ -167,6 +173,7 @@ pub(crate) fn run(
                             UnaryMath::Floor => v.floor(),
                             UnaryMath::Fraction => v.rem_euclid(1.0),
                             UnaryMath::Sine => (v * std::f64::consts::TAU).sin(),
+                            UnaryMath::SquareRoot => v.sqrt(),
                         },
                     )
                 })
@@ -190,7 +197,7 @@ pub(crate) fn run(
                 Err(e) => return Some(Err(e)),
             }
         }
-        Primitive::WriteMask => {
+        Primitive::WriteMask | Primitive::WriteStrobeMask => {
             return Some(Ok(BTreeMap::from([(
                 "lighting".into(),
                 Value::Lighting(
@@ -199,9 +206,16 @@ pub(crate) fn run(
                         .map(|(id, value)| {
                             (
                                 id.clone(),
-                                FixtureOutput {
-                                    dimmer: Some(*value),
-                                    ..Default::default()
+                                if op == Primitive::WriteMask {
+                                    FixtureOutput {
+                                        dimmer: Some(*value),
+                                        ..Default::default()
+                                    }
+                                } else {
+                                    FixtureOutput {
+                                        strobe: Some(*value),
+                                        ..Default::default()
+                                    }
                                 },
                             )
                         })

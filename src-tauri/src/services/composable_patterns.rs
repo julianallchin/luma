@@ -14,6 +14,7 @@ use std::{
 pub(crate) async fn preview(
     pool: &sqlx::SqlitePool,
     fixtures_root: &Path,
+    storage: &crate::storage::StorageRoot,
     request: ComposablePreviewRequest,
 ) -> Result<ComposablePreview, String> {
     if request.times.is_empty()
@@ -48,9 +49,6 @@ pub(crate) async fn preview(
     if cells.len().saturating_mul(request.times.len()) > 1_000_000 {
         return Err("preview exceeds one million cell samples; request fewer times".into());
     }
-    // The complete data snapshot has been acquired; expensive evaluation does
-    // not hold a SQLite transaction or change the active render scene.
-    drop(access);
     let library = request.library.unwrap_or_else(standard_library);
     let definition = library
         .definitions
@@ -76,6 +74,24 @@ pub(crate) async fn preview(
         },
     )
     .map_err(|e| e.to_string())?;
+    let prepared = if prepared.feature_requests().is_empty() {
+        prepared
+    } else {
+        let features = crate::eval::track_features::prepare(
+            &mut access,
+            storage,
+            &request.track_id,
+            clock.clone(),
+            prepared.feature_requests(),
+        )
+        .await?;
+        prepared
+            .with_features(features)
+            .map_err(|e| e.to_string())?
+    };
+    // Geometry and track data now belong to one authorized snapshot. Frame
+    // evaluation holds no SQLite transaction and cannot change live playback.
+    drop(access);
     let beats = request
         .times
         .iter()

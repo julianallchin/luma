@@ -8,6 +8,17 @@ device access. The existing evaluator shares its circle solver with this crate.
 Implemented examples:
 
 - `chase` combines `chase_mask` and `appearance`.
+- `motion` is a graph: travel time samples an Envelope, then maps it between
+  start and end positions. A triangle travel curve makes a bounce. Rhythm's
+  beat-valued phase delay shifts its grid anchor without accumulating time.
+- `random_heads` selects an exact bounded head count. It can draw fresh sets or
+  walk a seeded shuffled order to minimize repeats. Ranking breaks ties by head
+  identity; seeking and selection traversal order do not change the result.
+- Field reductions, raw stage coordinates and arithmetic compose radial
+  distances and selection normalization. `profile_mask` samples the same
+  Envelope on an arbitrary offset field, with explicit outside darkness.
+- Rainbow, harmony color and strobe are graphs too. Uniform and per-head
+  strobe output share the same capability writer.
 - `pill`, `multiply_mask`, `scale_mask`, and `dissolve_mask` are ordinary graphs
   built from arithmetic, geometry, comparison, curve sampling, and randomness.
 - `dissolve_mask` takes coverage (1 = all on, 0 = all off). It can hold a random
@@ -47,6 +58,7 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
     {"id":"head-b","group":"bar","world":[0,0,1],"uvz":[0,0,1]}
   ],
   "beats": [0, 1, 2, 3, 4],
+  "clip_duration": 8,
   "seed": 42,
   "inputs": {
     "width": {"type":"proportion","value":0.5}
@@ -64,8 +76,8 @@ Typed built-ins already run through the app's normal score evaluator and can be
 inserted from its native picker. The native graph canvas hides synthetic input
 wiring and supports read-only navigation into built-in graph definitions. The
 version-2 score document is supported by authored revision storage, restoration,
-agent workspace merges and history sync. The native/Python consumers and the
-manual legacy migration still need to move together before adopting the reset.
+agent workspace merges and history sync. Native and Python editing now share
+the canonical document. Manual legacy migration remains before adopting the reset.
 Its SQLite cache is local-only; Supabase transports the existing score.luma
 revision file.
 The built-in library is fixed; account-level library promotion is being removed. The reference
