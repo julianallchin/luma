@@ -11,7 +11,7 @@
 
 use super::KernelCtx;
 use luma_patterns::circle_fit;
-use crate::node_graph::oklab::oklab_to_srgb;
+use luma_patterns::oklab::oklab_to_srgb;
 
 /// World axis selector. `pos_*`/`rel_*`/`mirror` all parameterize over this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -113,8 +113,10 @@ nesting and expansion before recursive execution; see the execution ledger for
 the current limits. A dynamic expression may still fail at another sampled time.
 
 Gradient is the color equivalent of Envelope: the same ordered stops may be
-sampled along clip progress or a mapped per-head coordinate. Colors are linear
-RGB, and masks multiply color before output separates chromaticity and dimmer.
+sampled along clip progress or a mapped per-head coordinate. Colors use normalized
+sRGB channels, and Gradient interpolates perceptually in OKLab, matching the
+existing library and the native editor. Masks multiply color before output
+separates chromaticity and dimmer.
 A dimmer-only output preserves underlying color. Noise is a deterministic
 function of spatial coordinates, musical time and the clip seed.
 

@@ -299,7 +299,7 @@ impl Stops {
     /// Sample the color function at `u ∈ [0,1]`. Linear OKLab interpolation
     /// between bracketing stops. Clamps to the endpoints outside [0,1].
     pub fn sample(&self, u: f32) -> [f32; 4] {
-        use crate::node_graph::oklab::{oklab_to_srgb, srgb_to_oklab};
+        use luma_patterns::oklab::{oklab_to_srgb, srgb_to_oklab};
         if self.stops.is_empty() {
             return [0.0, 0.0, 0.0, 1.0];
         }
@@ -396,4 +396,46 @@ pub struct RunResult {
     pub mel_specs: HashMap<String, crate::models::tracks::MelSpec>,
     pub color_views: HashMap<String, String>,
     pub universe_state: Option<crate::models::universe::UniverseState>,
+}
+
+#[cfg(test)]
+mod gradient_contract_tests {
+    use super::Stops;
+
+    #[test]
+    fn canonical_gradients_preserve_existing_perceptual_fades() {
+        for colors in [
+            [[1., 0., 0.], [0., 0., 1.], [0., 1., 0.]],
+            [[0., 0., 0.], [0.2, 0.5, 0.9], [1., 1., 1.]],
+        ] {
+            let legacy = Stops {
+                stops: [0., 0.3, 1.]
+                    .into_iter()
+                    .zip(colors)
+                    .map(|(t, c)| (t, [c[0], c[1], c[2], 1.]))
+                    .collect(),
+            };
+            let graph = luma_patterns::Gradient {
+                stops: legacy
+                    .stops
+                    .iter()
+                    .map(|(t, c)| luma_patterns::ColorStop {
+                        t: f64::from(*t),
+                        color: [c[0], c[1], c[2]].map(f64::from),
+                    })
+                    .collect(),
+            };
+            for step in 0..=256 {
+                let t = step as f32 / 256.;
+                let old = legacy.sample(t);
+                let new = graph.sample(f64::from(t));
+                for channel in 0..3 {
+                    assert!(
+                        (f64::from(old[channel]) - new[channel]).abs() < 2e-6,
+                        "t={t}: {old:?} {new:?}"
+                    );
+                }
+            }
+        }
+    }
 }

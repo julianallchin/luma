@@ -49,9 +49,14 @@ fn fade_uses_placed_clip_duration_and_spatial_gradient_uses_mapping() {
     let Value::Lighting(light) = &sample["lighting"] else {
         panic!()
     };
-    assert!(light
-        .values()
-        .all(|v| v.color == Some([1., 0., 1.]) && v.dimmer == Some(0.5)));
+    // Existing OKLab red/blue midpoint, sampled halfway through the placed
+    // clip. Brightness is still carried by the color's maximum channel.
+    for value in light.values() {
+        let rgb = value.color.unwrap().map(|v| v * value.dimmer.unwrap());
+        for (actual, expected) in rgb.into_iter().zip([0.550441, 0.325621, 0.636501]) {
+            assert!((actual - expected).abs() < 1e-5, "{rgb:?}");
+        }
+    }
     assert_eq!(fade.evaluate(3.).unwrap(), fade.evaluate(3.).unwrap());
     let spatial = PreparedGraph::new(
         &library,

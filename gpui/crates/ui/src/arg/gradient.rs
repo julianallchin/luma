@@ -14,9 +14,8 @@
 //!
 //! # The bar is exact, not sampled
 //!
-//! gpui draws 2-stop gradients only, and a gradient between adjacent stops is
-//! precisely 2-stop — so the bar is flat before the first stop, one gradient
-//! segment per adjacent pair, flat after the last. No approximation.
+//! GPUI draws each adjacent pair in OKLab, matching the runtime's perceptual
+//! interpolation. The bar is flat before the first stop and after the last.
 
 use gpui::prelude::*;
 use gpui::{
@@ -90,33 +89,33 @@ impl Gradient {
         &self.stops
     }
 
-    /// The interpolated color at `t`: flat past either end, linear between the
-    /// stops that bracket it.
+    /// The interpolated color at `t`: flat past either end, perceptual OKLab
+    /// interpolation between stops, matching playback and the painted bar.
     #[must_use]
     pub fn color_at(&self, t: f32) -> Rgba {
         let t = t.clamp(0., 1.);
         let first = self.stops.first().expect("a gradient has two stops");
         let last = self.stops.last().expect("a gradient has two stops");
-        if t <= first.t {
+        if t < first.t {
             return first.color;
         }
         if t >= last.t {
             return last.color;
         }
-        for pair in self.stops.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            if t <= b.t {
-                let span = b.t - a.t;
-                let mix = if span > 0. { (t - a.t) / span } else { 0. };
-                return Rgba {
-                    r: a.color.r + (b.color.r - a.color.r) * mix,
-                    g: a.color.g + (b.color.g - a.color.g) * mix,
-                    b: a.color.b + (b.color.b - a.color.b) * mix,
-                    a: a.color.a + (b.color.a - a.color.a) * mix,
-                };
-            }
+        let right = self.stops.partition_point(|stop| stop.t <= t);
+        let (a, b) = (self.stops[right - 1], self.stops[right]);
+        let mix = (t - a.t) / (b.t - a.t);
+        let [r, g, blue] = luma_patterns::oklab::interpolate(
+            [a.color.r, a.color.g, a.color.b],
+            [b.color.r, b.color.g, b.color.b],
+            mix,
+        );
+        Rgba {
+            r,
+            g,
+            b: blue,
+            a: a.color.a + (b.color.a - a.color.a) * mix,
         }
-        last.color
     }
 
     /// Add a stop at `t` carrying the gradient's own color there — a new stop
@@ -226,7 +225,8 @@ pub fn luma_gradient_bar(
                     90.,
                     linear_color_stop(pair[0].color, 0.),
                     linear_color_stop(pair[1].color, 1.),
-                ))
+                )
+                .color_space(gpui::ColorSpace::Oklab))
                 .into_any_element(),
         );
     }
@@ -392,10 +392,15 @@ mod tests {
     #[test]
     fn insertion_keeps_order_and_samples_the_bar() {
         let mut g = Gradient::new([stop(0., 0.), stop(1., 1.)]);
+        let before = g.clone();
+        let inserted_color = g.color_at(0.25);
         let index = g.insert(0.25);
         assert_eq!(index, 1);
         assert_sorted(&g);
-        assert!((g.stops()[1].color.r - 0.25).abs() < 1e-6);
+        assert_eq!(g.stops()[1].color, inserted_color);
+        for t in [0.1, 0.5, 0.75, 0.9] {
+            assert!((g.color_at(t).r - before.color_at(t).r).abs() < 1e-5);
+        }
     }
 
     /// Two stops are the floor: removal below it is refused, above it works.
@@ -407,12 +412,19 @@ mod tests {
         assert_eq!(g.stops().len(), 2);
     }
 
-    /// The sampler: flat past the ends, linear between.
+    /// The sampler: flat past the ends, perceptual between.
     #[test]
     fn color_at_interpolates() {
         let g = Gradient::new([stop(0.25, 0.), stop(0.75, 1.)]);
         assert_eq!(g.color_at(0.).r, 0.);
         assert_eq!(g.color_at(1.).r, 1.);
-        assert!((g.color_at(0.5).r - 0.5).abs() < 1e-6);
+        assert!((g.color_at(0.5).r - 0.388573).abs() < 1e-5);
+    }
+
+    #[test]
+    fn coincident_stops_select_the_color_after_the_jump() {
+        let g = Gradient::new([stop(0., 0.), stop(0.5, 0.), stop(0.5, 1.), stop(1., 1.)]);
+        assert_eq!(g.color_at(0.499).r, 0.);
+        assert_eq!(g.color_at(0.5).r, 1.);
     }
 }

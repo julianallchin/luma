@@ -1,3 +1,6 @@
+//! Shared perceptual interpolation for authored RGB colors.
+// The published matrix coefficients intentionally retain their source precision.
+#![allow(clippy::excessive_precision)]
 // Björn Ottosson's OKLab. sRGB values are in [0,1] (gamma-encoded);
 // linear and OKLab use the same float scale, no clamping inside conversion.
 
@@ -57,6 +60,25 @@ pub fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
         linear_to_srgb(lg.clamp(0.0, 1.0)),
         linear_to_srgb(lb.clamp(0.0, 1.0)),
     )
+}
+
+/// Interpolate normalized, gamma-encoded RGB with the same perceptual path in
+/// the editor and runtime. Endpoints remain exact authored colors.
+pub fn interpolate(from: [f32; 3], to: [f32; 3], amount: f32) -> [f32; 3] {
+    if amount <= 0.0 {
+        return from;
+    }
+    if amount >= 1.0 {
+        return to;
+    }
+    let (l0, a0, b0) = srgb_to_oklab(from[0], from[1], from[2]);
+    let (l1, a1, b1) = srgb_to_oklab(to[0], to[1], to[2]);
+    let (r, g, b) = oklab_to_srgb(
+        l0 + (l1 - l0) * amount,
+        a0 + (a1 - a0) * amount,
+        b0 + (b1 - b0) * amount,
+    );
+    [r, g, b]
 }
 
 #[cfg(test)]

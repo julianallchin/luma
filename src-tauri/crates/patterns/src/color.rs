@@ -1,5 +1,6 @@
-//! One gradient value works in time and across a head field. RGB is linear;
-//! sampling and masking happen before the output's color/dimmer split.
+//! One gradient value works in time and across a head field. Colors use
+//! normalized sRGB channels; gradients interpolate perceptually in OKLab.
+//! Sampling and masking happen before the output's color/dimmer split.
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -58,8 +59,16 @@ impl Gradient {
         }
         let a = &self.stops[right - 1];
         let b = &self.stops[right];
+        if position == a.t {
+            return a.color;
+        }
         let t = (position - a.t) / (b.t - a.t);
-        std::array::from_fn(|i| a.color[i] + t * (b.color[i] - a.color[i]))
+        crate::oklab::interpolate(
+            a.color.map(|v| v as f32),
+            b.color.map(|v| v as f32),
+            t as f32,
+        )
+        .map(f64::from)
     }
 }
 

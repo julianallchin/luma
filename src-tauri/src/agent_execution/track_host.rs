@@ -222,9 +222,8 @@ impl TrackHost {
                 AxisSpec::coordinates("time", times, Some("s".into())),
                 AxisSpec::labels("channel", vec!["r".into(), "g".into(), "b".into()]),
             ],
-            Provenance::new("track_candidate_compositor").with_note(
-                "production Scene composite; normalized linear RGB multiplied by dimmer",
-            ),
+            Provenance::new("track_candidate_compositor")
+                .with_note("production Scene composite; normalized RGB multiplied by dimmer"),
         );
 
         // ArtifactDescriptor uses its id as the manifest map key and therefore
