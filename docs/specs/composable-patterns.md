@@ -90,8 +90,9 @@ legacy history clears the graph projection before recreating the old clip rows.
 ## Delivery state
 
 See `docs/design/graph-reset.md` for the verified ledger. Native port wiring,
-node addition, exposed-input editing, score document consumers, the replacement
-Python API and the remaining EBF effects must still move together. The old
+node addition, exposed-input editing, layout and clip playback now use the score
+document. New-score/perform consumers, the replacement Python API and the
+remaining EBF effects still need that path. The old
 production editor/runtime remains only for scores awaiting manual migration;
 it is not the destination model. No React/Tauri webview interface is involved.
 

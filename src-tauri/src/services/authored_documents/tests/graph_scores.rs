@@ -118,6 +118,33 @@ async fn graph_score_migration_edit_retry_and_restore_share_one_history() {
             .unwrap(),
         0
     );
+    let mut access = crate::database::local::venue_access::VenueAccess::<
+        crate::database::local::venue_access::Read,
+    >::read(
+        &fixture.pool,
+        crate::database::local::venue_access::VenueResource::Score(&scope.score_id),
+    )
+    .await
+    .unwrap();
+    let scores =
+        crate::database::local::scores::list_scores_for_track(&mut access, &scope.track_id)
+            .await
+            .unwrap();
+    assert_eq!(scores[0].annotation_count, 2);
+    let counts = crate::database::local::tracks::get_venue_annotation_counts(&mut access)
+        .await
+        .unwrap();
+    assert_eq!(counts[&scope.track_id], 2);
+    drop(access);
+    assert_eq!(
+        crate::database::local::scores::get_accessible_venue_for_track(
+            &fixture.pool,
+            &scope.track_id
+        )
+        .await
+        .unwrap(),
+        Some(scope.venue_id.clone())
+    );
     let migrated = current(&fixture, &scope).await;
     assert_eq!(migrated.files.len(), 1);
     assert_eq!(migrated.files[SCORE_PATH], source.as_bytes());

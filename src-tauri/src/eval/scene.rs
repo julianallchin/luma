@@ -27,7 +27,7 @@ pub struct CompiledAnnotation {
     /// `Arc` so an unchanged annotation's plan is reused (incremental composite)
     /// and the preview generator can share it — both are O(1) clones.
     pub plan: Arc<Plan>,
-    /// Absolute `[start, end]` the annotation is active over.
+    /// Absolute `[start, end)` the annotation is active over.
     pub span: (f32, f32),
     pub z_index: i64,
     pub blend_mode: BlendMode,
@@ -89,12 +89,12 @@ impl Scene {
             // (one frame) only the few under the playhead evaluate, instead of
             // every annotation on the track every frame. This is the dominant
             // per-frame cost on large tracks/venues.
-            if !times.iter().any(|&t| t >= ann.span.0 && t <= ann.span.1) {
+            if !times.iter().any(|&t| t >= ann.span.0 && t < ann.span.1) {
                 continue;
             }
             let got = eval(ann.plan.as_ref(), times, scratch);
             for (k, &t) in times.iter().enumerate() {
-                if t >= ann.span.0 && t <= ann.span.1 {
+                if t >= ann.span.0 && t < ann.span.1 {
                     composite_frame(
                         &mut frames[k],
                         &got[k],

@@ -54,6 +54,9 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
         _ => {}
     }
     if let Some(Body::Graph(editor)) = app.workspace.active_body() {
+        if let Some((track, venue, score)) = editor.score_subject() {
+            return Some(ThreadScope::track(track, venue, score));
+        }
         let (pattern, implementation) = editor.subject()?;
         return Some(ThreadScope {
             agent_kind: AgentKind::PatternGraph,

@@ -527,7 +527,8 @@ pub enum AuthoredWorkspaceMerge {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppliedAuthoredState {
     pub document_id: String,
     pub revision_id: String,

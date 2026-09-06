@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**227 commands** across **34 domains** · **18 events** · **0 commands not on the seam**
+**230 commands** across **34 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -39,7 +39,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `rekordbox` | 6 | `src-tauri/src/dispatch/handlers/rekordbox.rs` |
 | `render_engine` | 4 | `src-tauri/src/dispatch/handlers/render_engine.rs` |
 | `score_dsl` | 3 | `src-tauri/src/dispatch/handlers/score_dsl.rs` |
-| `scores` | 10 | `src-tauri/src/dispatch/handlers/scores.rs` |
+| `scores` | 13 | `src-tauri/src/dispatch/handlers/scores.rs` |
 | `settings` | 2 | `src-tauri/src/dispatch/handlers/settings.rs` |
 | `skills` | 2 | `src-tauri/src/dispatch/handlers/skills.rs` |
 | `stage` | 16 | `src-tauri/src/dispatch/handlers/stage.rs` |
@@ -48,7 +48,7 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `tracks` | 12 | `src-tauri/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `src-tauri/src/dispatch/handlers/venues.rs` |
 | `waveforms` | 3 | `src-tauri/src/dispatch/handlers/waveforms.rs` |
-| **total** | **227** | |
+| **total** | **230** | |
 
 ## Commands
 
@@ -157,7 +157,7 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
-| `composite_track` | `scoreId: String`<br>`annotations: Option<Vec<LiveAnnotation>>`<br>`skipCache: Option<bool>` | `()` |
+| `composite_track` | `scoreId: String`<br>`annotations: Option<Vec<LiveAnnotation>>`<br>`skipCache: Option<bool>`<br>`graphScore: Option<luma_patterns::Score>` | `()` |
 | `leave_track` | `scoreId: String` | `()` |
 
 ### `controller`
@@ -357,6 +357,9 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `ensure_venue_score` | `requestId: String`<br>`trackId: String`<br>`venueId: String`<br>`name: Option<String>` | `Score` |
 | `delete_score` | `id: String` | `()` |
 | `list_track_scores` | `scoreId: String` | `Vec<TrackScore>` |
+| `get_score_document` | `scoreId: String` | `Option<crate::services::graph_scores::GraphScoreDocument>` |
+| `apply_score_document` | `scoreId: String`<br>`score: luma_patterns::Score`<br>`baseRevision: String`<br>`operationId: String` | `crate::models::authored_state::AppliedAuthoredState` |
+| `preview_score_clip` | `scoreId: String`<br>`clipId: String`<br>`score: Option<luma_patterns::Score>` | `AnnotationPreview` |
 | `create_track_score` | `payload: CreateTrackScoreInput` | `TrackEditResult` |
 | `update_track_score` | `payload: UpdateTrackScoreInput` | `TrackEditResult` |
 | `delete_track_score` | `payload: DeleteTrackScoreInput` | `TrackEditResult` |

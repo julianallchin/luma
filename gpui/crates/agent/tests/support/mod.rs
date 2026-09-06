@@ -169,6 +169,7 @@ pub struct Fixture {
     album_art: Option<usize>,
     extra_scores: usize,
     seeded_threads: bool,
+    graph_score: Option<Value>,
 }
 
 impl Fixture {
@@ -193,6 +194,7 @@ impl Fixture {
             album_art: None,
             extra_scores: 0,
             seeded_threads: false,
+            graph_score: None,
         }
     }
 
@@ -232,6 +234,15 @@ impl Fixture {
     #[allow(dead_code)]
     pub fn window(mut self, width: f32, height: f32) -> Self {
         self.window = Some(gpui::size(gpui::px(width), gpui::px(height)));
+        self
+    }
+
+    pub fn with_graph_score(mut self, score: Value) -> Self {
+        assert!(
+            self.clips.is_empty(),
+            "graph fixture uses its canonical document"
+        );
+        self.graph_score = Some(score);
         self
     }
 
@@ -681,6 +692,16 @@ impl Fixture {
                 }}),
             )
             .await;
+        }
+        if let Some(document) = &self.graph_score {
+            let score_id = score_id.as_ref().expect("graph fixture has a score");
+            let base = call(
+                &services,
+                "score_dsl_export",
+                json!({"scoreId":score_id,"trackId":TRACK,"venueId":VENUE,"includeClipIds":true}),
+            )
+            .await;
+            call(&services, "apply_score_document", json!({"scoreId":score_id,"score":document,"baseRevision":base["revision"],"operationId":request_id(3000)})).await;
         }
     }
 

@@ -89,3 +89,34 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
   migrations guard against writing legacy clips into a migrated score. No
   Supabase schema change is needed for this payload: it travels in the existing
   `score.luma` revision file.
+
+- Version-2 scores now render directly through the existing compositor. Timeline
+  placement, clip previews, save/reopen and shared graph edits use that same
+  document. A tempo-aware beat/seconds inverse preserves authored positions;
+  active clips have half-open intervals. The 22 EBF numeric reference captures
+  still match exactly (`ebf-after-native`, `ebf-native-comparison.json`).
+- Native score graphs support adding and removing nodes, typed port wiring,
+  output selection, input exposure/defaults, per-clip controls, node layout and
+  undo/redo. Double-click follows graph definitions; fixed definitions are
+  read-only. Incomplete wiring stays in an in-memory draft while the last valid
+  show keeps playing. Completing a draft merges against other score edits.
+- The four native graph tests cover insertion, the per-clip Envelope editor,
+  nested inspection, composition, exposure, layout and undo/redo. Linux pixel
+  mode verifies actual text geometry but this GPUI pin cannot capture screenshots
+  through its headless renderer.
+
+## Remaining integration risks
+
+- New-score creation, perform playback and the Python authoring API still need
+  the version-2 document path. Existing migrated scores must not fall back to
+  legacy clip rows in these consumers.
+- Graph size/expansion limits and validation of related runtime inputs are not
+  complete. There is no incremental plan cache for version-2 scores yet.
+- Incomplete native graph drafts live in memory; closing their tab can lose
+  them. Other open graph tabs do not yet refresh after shared-definition edits.
+- The legacy compositor has a process-global generation/cache and a stale
+  install window between score resolution and its legacy install call.
+- The full backend run had two rig-chain Python failures (joint direction
+  mismatch) outside this graph work; their status on the base branch is not yet
+  verified. Graph/storage/count regressions found in that run were fixed and
+  their focused checks passed.

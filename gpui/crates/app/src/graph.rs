@@ -64,6 +64,9 @@
 //! page seeds its store with. With no signal, the plot is drawn at its full
 //! 720 × 140 box with the web node's own empty-state line in it.
 
+mod controls;
+mod score;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -107,7 +110,7 @@ pub(crate) struct TrackContext {
 /// The screen's whole state: the pattern it is editing, the document it read,
 /// the resolved geometry of that document, and where the eye and the hand are.
 pub struct Editor {
-    pattern: PatternSummary,
+    source: Source,
     /// See [`TrackContext`]. A field rather than part of the tab's identity:
     /// the tab stays keyed on the pattern alone, so one document never has two
     /// writers racing through the CAS.
@@ -168,6 +171,11 @@ pub struct Editor {
     preview_error: Option<String>,
     preview_generation: u64,
     preview_running: bool,
+}
+
+enum Source {
+    Legacy(PatternSummary),
+    Score(score::ScoreGraph),
 }
 
 /// The view-data store: the latest [`Signal`] each view node has been handed,
@@ -329,7 +337,10 @@ impl Editor {
     /// The pattern being edited. The window title is the only reader outside
     /// this module.
     pub(crate) fn pattern_name(&self) -> &str {
-        &self.pattern.name
+        match &self.source {
+            Source::Legacy(pattern) => &pattern.name,
+            Source::Score(score) => &score.label,
+        }
     }
 
     /// The pattern and implementation this editor is showing, once the
@@ -337,7 +348,10 @@ impl Editor {
     /// conversation is about (see `crate::agent`).
     pub(crate) fn subject(&self) -> Option<(String, String)> {
         let document = self.document.as_ref()?;
-        Some((self.pattern.id.clone(), document.implementation_id.clone()))
+        let Source::Legacy(pattern) = &self.source else {
+            return None;
+        };
+        Some((pattern.id.clone(), document.implementation_id.clone()))
     }
 
     /// Rebuild the resolved geometry from the document. Called on load, and
@@ -348,7 +362,10 @@ impl Editor {
         self.inspection
             .last()
             .map(|(_, graph)| graph.as_ref())
-            .or_else(|| self.document.as_ref().map(|d| d.graph.as_ref()))
+            .or_else(|| match &self.source {
+                Source::Legacy(_) => self.document.as_ref().map(|d| d.graph.as_ref()),
+                Source::Score(score) => Some(score.view.as_ref()),
+            })
     }
 
     fn rebuild(&mut self) {
@@ -374,7 +391,13 @@ impl Editor {
         else {
             return false;
         };
-        let Some(graph) = luma_lib::node_graph::lighting::inspect_definition(definition) else {
+        let graph = match &self.source {
+            Source::Legacy(_) => luma_lib::node_graph::lighting::inspect_definition(definition),
+            Source::Score(score) => {
+                luma_lib::node_graph::lighting::project_definition(&score.library, definition)
+            }
+        };
+        let Some(graph) = graph else {
             return false;
         };
         self.inspection
@@ -398,19 +421,38 @@ impl Editor {
     /// Routed through [`apply`] like every other mutation — position is the
     /// one edit cheap enough to run per drag tick, but it is still an edit.
     fn move_node(&mut self, node: &SharedString, origin: Point<f32>) {
-        if !self.inspection.is_empty() {
+        if self.inspecting_builtin() {
             return;
         }
-        let types = Rc::clone(&self.types);
-        let Some(document) = &mut self.document else {
-            return;
-        };
-        let edit = Edit::MoveNode {
-            id: node.to_string(),
-            to: (f64::from(origin.x), f64::from(origin.y)),
-        };
-        if apply(Rc::make_mut(&mut document.graph), &types, edit).is_err() {
-            return;
+        match &mut self.source {
+            Source::Legacy(_) => {
+                let Some(document) = &mut self.document else {
+                    return;
+                };
+                let edit = Edit::MoveNode {
+                    id: node.to_string(),
+                    to: (f64::from(origin.x), f64::from(origin.y)),
+                };
+                if apply(Rc::make_mut(&mut document.graph), &self.types, edit).is_err() {
+                    return;
+                }
+            }
+            Source::Score(source) => {
+                let view = self
+                    .inspection
+                    .last_mut()
+                    .map(|(_, graph)| graph)
+                    .unwrap_or(&mut source.view);
+                let Some(instance) = Rc::make_mut(view)
+                    .nodes
+                    .iter_mut()
+                    .find(|instance| instance.id == node.as_ref())
+                else {
+                    return;
+                };
+                instance.position_x = Some(f64::from(origin.x));
+                instance.position_y = Some(f64::from(origin.y));
+            }
         }
         if let Some(card) = self
             .scene
@@ -613,7 +655,7 @@ impl Luma {
         let types = self.library.node_types();
         let document = self.library.pattern_graph(&pattern.id);
         let state = Box::new(Editor {
-            pattern,
+            source: Source::Legacy(pattern),
             context,
             types: Rc::new(HashMap::new()),
             views: ViewData::snapshot(cx),
@@ -673,6 +715,10 @@ impl Luma {
         let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
             return;
         };
+        if matches!(editor.source, Source::Score(_)) {
+            self.refresh_score_graph_preview(target, cx);
+            return;
+        }
         let Some(document) = &editor.document else {
             return;
         };
@@ -751,6 +797,9 @@ impl Luma {
         clicks: usize,
         cx: &mut Context<Self>,
     ) {
+        if self.score_graph_port_press(target, at, cx) {
+            return;
+        }
         self.edit_graph_tab(target, cx, |editor| {
             let origin = editor.origin.get();
             let view = editor.view.get();
@@ -773,7 +822,7 @@ impl Luma {
                         editor.selected = vec![node];
                         return;
                     }
-                    if !editor.inspection.is_empty() {
+                    if editor.inspecting_builtin() {
                         editor.selected = vec![node];
                         return;
                     }
@@ -909,17 +958,38 @@ impl Luma {
             _ => return,
         }
         let mut save = false;
+        let mut positions = None;
         self.edit_graph_tab(target, cx, |editor| match editor.gesture.take() {
-            Some(Gesture::Move { moved, .. }) => {
+            Some(Gesture::Move { moved, initial, .. }) => {
                 if moved {
-                    save = true;
+                    if matches!(editor.source, Source::Score(_)) {
+                        positions = Some(
+                            editor
+                                .scene
+                                .borrow()
+                                .cards
+                                .iter()
+                                .filter(|card| initial.iter().any(|(id, _)| *id == card.node_id))
+                                .map(|card| {
+                                    (
+                                        card.node_id.to_string(),
+                                        [f64::from(card.origin.x), f64::from(card.origin.y)],
+                                    )
+                                })
+                                .collect(),
+                        );
+                    } else {
+                        save = true;
+                    }
                 } else {
                     editor.abandon_checkpoint();
                 }
             }
             _ => {}
         });
-        if save {
+        if let Some(positions) = positions {
+            self.apply_score_graph_edit(target, luma_patterns::GraphEdit::Move { positions }, cx);
+        } else if save {
             self.save_graph(target, cx);
         }
     }
@@ -948,7 +1018,7 @@ impl Luma {
     fn active_graph_target(&self) -> Option<Target> {
         self.workspace
             .active()
-            .filter(|target| matches!(target, Target::Graph { .. }))
+            .filter(|target| matches!(target, Target::Graph { .. } | Target::ScoreGraph { .. }))
             .cloned()
     }
 
@@ -958,6 +1028,22 @@ impl Luma {
         let Some(target) = self.active_graph_target() else {
             return;
         };
+        if matches!(target, Target::ScoreGraph { .. }) {
+            let selected = match self.workspace.body(&target) {
+                Some(TabBody::Graph(editor)) if !editor.inspecting_builtin() => {
+                    editor.selected.clone()
+                }
+                _ => return,
+            };
+            for id in selected {
+                self.apply_score_graph_edit(
+                    &target,
+                    luma_patterns::GraphEdit::Remove { id: id.to_string() },
+                    cx,
+                );
+            }
+            return;
+        }
         let mut removed = false;
         self.edit_graph_tab(&target, cx, |editor| removed = editor.delete_selected());
         if removed {
@@ -971,6 +1057,10 @@ impl Luma {
         let Some(target) = self.active_graph_target() else {
             return;
         };
+        if matches!(target, Target::ScoreGraph { .. }) {
+            self.step_score_graph_history(&target, false, cx);
+            return;
+        }
         let mut stepped = false;
         self.edit_graph_tab(&target, cx, |editor| stepped = editor.undo());
         if stepped {
@@ -982,6 +1072,10 @@ impl Luma {
         let Some(target) = self.active_graph_target() else {
             return;
         };
+        if matches!(target, Target::ScoreGraph { .. }) {
+            self.step_score_graph_history(&target, true, cx);
+            return;
+        }
         let mut stepped = false;
         self.edit_graph_tab(&target, cx, |editor| stepped = editor.redo());
         if stepped {
@@ -1016,7 +1110,10 @@ impl Luma {
         // replay a durable outcome rather than guess from a later snapshot.
         let operation = uuid::Uuid::new_v4().to_string();
         let pending = self.library.save_pattern_graph(
-            &editor.pattern.id,
+            match &editor.source {
+                Source::Legacy(pattern) => &pattern.id,
+                Source::Score(_) => return,
+            },
             &document.implementation_id,
             &operation,
             &document.revision,
@@ -1085,7 +1182,10 @@ impl Luma {
         let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
             return;
         };
-        let pending = self.library.pattern_graph(&editor.pattern.id);
+        let Source::Legacy(pattern) = &editor.source else {
+            return;
+        };
+        let pending = self.library.pattern_graph(&pattern.id);
         let target = target.clone();
         cx.spawn(async move |this, cx| {
             let result = pending.await;
@@ -2262,7 +2362,13 @@ fn placement(x: Option<f64>, y: Option<f64>, index: usize) -> Point<f32> {
 /// That split is the whole layout decision — a panel is a stack of boxes and
 /// gpui already lays boxes out well, while a graph is a coordinate system and
 /// nothing gpui lays out could express it without a box per node.
-pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
+pub fn graph(
+    state: &mut Editor,
+    app: &Entity<Luma>,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> Div {
+    controls::sync(state, window, cx);
     div()
         .size_full()
         .flex()
@@ -2270,12 +2376,21 @@ pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
         .bg(ladder::background())
         .text_color(ladder::foreground())
         .child(toolbar(state, app))
-        .child(match (&state.error, &state.document) {
-            (Some(message), _) => luma_ui::plate(message.clone(), ladder::danger()),
+        .when_some(state.error.clone(), |el, error| {
+            el.child(luma_ui::silkscreen(error))
+        })
+        .child(match (&state.error, state.shown_graph()) {
+            (Some(message), None) => luma_ui::plate(message.clone(), ladder::danger()),
             (None, None) => {
                 luma_ui::plate("Loading graph…".to_string(), ladder::muted_foreground())
             }
-            (None, Some(_)) => canvas_element(state, app).into_any_element(),
+            (_, Some(_)) => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(canvas_element(state, app))
+                .children(controls::panel(state, app))
+                .into_any_element(),
         })
         .child(
             div()
@@ -2289,7 +2404,11 @@ pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
                 .h(px(120.))
                 .overflow_hidden()
                 .child(luma_ui::silkscreen(
-                    "PATTERN DEFAULTS · 0–8 SECONDS · TIME →".to_string(),
+                    match &state.source {
+                        Source::Legacy(_) => "PATTERN DEFAULTS · 0–8 SECONDS · TIME →",
+                        Source::Score(_) => "CLIP OUTPUT · TIME →",
+                    }
+                    .to_string(),
                 ))
                 .when_some(state.preview.clone(), |el, image| {
                     el.child(
@@ -2316,9 +2435,7 @@ pub fn graph(state: &Editor, app: &Entity<Luma>) -> Div {
 /// so the strip stays a readout. Closing lives on the tab's chip.
 fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
     let preview_app = app.clone();
-    let target = Target::Graph {
-        pattern: state.pattern.id.clone(),
-    };
+    let target = state.target();
     let nodes = state.scene.borrow().cards.len();
     div()
         .flex()
@@ -2330,7 +2447,8 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .children(graph_breadcrumbs(state, app))
-        .when(!state.inspection.is_empty(), |el| {
+        .children(controls::add_button(state, app))
+        .when(state.inspecting_builtin(), |el| {
             el.child(luma_ui::silkscreen("BUILT-IN · READ ONLY".to_owned()))
         })
         .child(luma_ui::silkscreen(format!("{nodes} NODES")))
@@ -2365,22 +2483,20 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
 }
 
 fn graph_breadcrumbs(state: &Editor, app: &Entity<Luma>) -> Vec<AnyElement> {
-    let labels = std::iter::once(state.pattern.name.clone()).chain(state.inspection.iter().map(
-        |(id, _)| {
+    let labels = std::iter::once(state.pattern_name().to_string()).chain(
+        state.inspection.iter().map(|(id, _)| {
             state
                 .types
                 .get(&format!("{}{id}", luma_lib::node_graph::lighting::PREFIX))
                 .map(|def| def.name.clone())
                 .unwrap_or_else(|| id.clone())
-        },
-    ));
+        }),
+    );
     labels
         .enumerate()
         .map(|(depth, label)| {
             let app = app.clone();
-            let target = Target::Graph {
-                pattern: state.pattern.id.clone(),
-            };
+            let target = state.target();
             luma_ui::luma_button(&label, luma_ui::Enabled::Yes)
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     app.update(cx, |this, cx| {
@@ -2420,9 +2536,7 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
     let fitted_size = Rc::clone(&state.fitted_size);
     // The tab the canvas belongs to: every handler this frame registers is
     // addressed to it, not to whatever tab is visible when the event lands.
-    let target = Target::Graph {
-        pattern: state.pattern.id.clone(),
-    };
+    let target = state.target();
     let app = app.clone();
 
     div().flex_1().overflow_hidden().child(

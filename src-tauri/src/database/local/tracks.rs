@@ -68,12 +68,13 @@ pub async fn get_venue_annotation_counts(
 ) -> Result<HashMap<String, i64>, String> {
     let venue_id = access.venue_id().to_string();
     let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT s.track_id, COUNT(tsc.id) AS cnt
+        "SELECT s.track_id, SUM(CASE WHEN s.graph_document_json IS NULL
+                 THEN (SELECT COUNT(*) FROM track_scores WHERE score_id = s.id)
+                 ELSE (SELECT COUNT(*) FROM json_each(s.graph_document_json, '$.clips')) END) AS cnt
          FROM scores s
-         JOIN track_scores tsc ON tsc.score_id = s.id
          JOIN auth_venue_access access ON access.venue_id = s.venue_id
          WHERE s.venue_id = ?
-         GROUP BY s.track_id",
+         GROUP BY s.track_id HAVING cnt > 0",
     )
     .bind(&venue_id)
     .fetch_all(access.connection())
@@ -122,16 +123,18 @@ pub async fn list_tracks_enriched_for_connection(
          JOIN auth_visible_tracks visible ON visible.track_id = t.id
          LEFT JOIN track_beats tb ON tb.track_id = t.id
          LEFT JOIN (
-             SELECT s.track_id, COUNT(tsc.id) AS cnt
+             SELECT s.track_id, SUM(CASE WHEN s.graph_document_json IS NULL
+                 THEN (SELECT COUNT(*) FROM track_scores WHERE score_id = s.id)
+                 ELSE (SELECT COUNT(*) FROM json_each(s.graph_document_json, '$.clips')) END) AS cnt
              FROM scores s
-             JOIN track_scores tsc ON tsc.score_id = s.id
              JOIN auth_venue_access access ON access.venue_id = s.venue_id
              GROUP BY s.track_id
          ) ac ON ac.track_id = t.id
          LEFT JOIN (
-             SELECT s.track_id, COUNT(tsc.id) AS cnt
+             SELECT s.track_id, SUM(CASE WHEN s.graph_document_json IS NULL
+                 THEN (SELECT COUNT(*) FROM track_scores WHERE score_id = s.id)
+                 ELSE (SELECT COUNT(*) FROM json_each(s.graph_document_json, '$.clips')) END) AS cnt
              FROM scores s
-             JOIN track_scores tsc ON tsc.score_id = s.id
              JOIN auth_venue_access access ON access.venue_id = s.venue_id
              WHERE s.venue_id = ?
              GROUP BY s.track_id
@@ -161,7 +164,7 @@ pub async fn list_tracks_enriched_for_connection(
     // active venue. Done in Rust because SQLite gaps-and-islands SQL is
     // noisy and this set is small.
     if !vid.is_empty() {
-        let intervals: Vec<(String, f64, f64)> = sqlx::query_as(
+        let mut intervals: Vec<(String, f64, f64)> = sqlx::query_as(
             "SELECT s.track_id, tsc.start_time, tsc.end_time
              FROM scores s
              JOIN track_scores tsc ON tsc.score_id = s.id
@@ -173,7 +176,51 @@ pub async fn list_tracks_enriched_for_connection(
         .fetch_all(&mut *connection)
         .await
         .map_err(|e| format!("Failed to load annotation intervals: {}", e))?;
+        let graph_scores: Vec<(String, String)> = sqlx::query_as(
+            "SELECT s.track_id, s.graph_document_json FROM scores s
+             JOIN auth_venue_access access ON access.venue_id = s.venue_id
+             WHERE s.venue_id = ? AND s.graph_document_json IS NOT NULL",
+        )
+        .bind(vid)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        let mut clocks = HashMap::new();
+        for (track_id, source) in graph_scores {
+            if !clocks.contains_key(&track_id) {
+                let grid =
+                    crate::services::tracks::get_track_beats_for_connection(connection, &track_id)
+                        .await?;
+                clocks.insert(
+                    track_id.clone(),
+                    grid.map(|grid| grid.timeline())
+                        .transpose()
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+            let score = crate::services::graph_scores::GraphScoreDocument::from_source(&source)?;
+            if score.score.clips.is_empty() {
+                continue;
+            }
+            // A score may arrive before its beat metadata during sync. Its
+            // clip count is already known; time coverage waits for that grid.
+            let Some(clock) = clocks[&track_id].as_ref() else {
+                continue;
+            };
+            for clip in score.score.clips.values() {
+                intervals.push((
+                    track_id.clone(),
+                    clock
+                        .seconds_at(clip.start)
+                        .map_err(|error| error.to_string())?,
+                    clock
+                        .seconds_at(clip.start + clip.duration)
+                        .map_err(|error| error.to_string())?,
+                ));
+            }
+        }
 
+        intervals.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.total_cmp(&right.1)));
         let mut coverage: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         let mut cur_track: Option<String> = None;
         let mut cur_start = 0.0_f64;

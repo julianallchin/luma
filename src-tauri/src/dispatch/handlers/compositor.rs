@@ -24,6 +24,7 @@ pub async fn composite_track(
     score_id: String,
     annotations: Option<Vec<LiveAnnotation>>,
     _skip_cache: Option<bool>,
+    graph_score: Option<luma_patterns::Score>,
 ) -> Result<(), CommandError> {
     compositor::install_score_scene(
         &services.db.0,
@@ -32,6 +33,7 @@ pub async fn composite_track(
         &services.render_engine,
         &score_id,
         annotations,
+        graph_score,
     )
     .await?;
     Ok(())

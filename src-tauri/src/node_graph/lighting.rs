@@ -127,9 +127,28 @@ pub fn decode(kind: ValueType, value: &Value) -> Result<p::Value, String> {
 }
 
 pub fn node_types() -> Vec<NodeTypeDef> {
-    p::standard_library()
+    let mut types = types_for(&p::standard_library());
+    // Only legacy graphs bind their execution domain through a Selection port.
+    for node in &mut types {
+        if node
+            .outputs
+            .iter()
+            .any(|output| output.port_type == PortType::Lighting)
+        {
+            node.inputs.push(PortDef {
+                id: "selection".into(),
+                name: "Selection".into(),
+                port_type: PortType::Selection,
+            });
+        }
+    }
+    types
+}
+
+pub fn types_for(library: &p::Library) -> Vec<NodeTypeDef> {
+    library
         .definitions
-        .into_iter()
+        .iter()
         .map(|(id, def)| {
             let params = def
                 .inputs
@@ -166,7 +185,7 @@ pub fn node_types() -> Vec<NodeTypeDef> {
                     })
                 })
                 .collect();
-            let mut inputs: Vec<_> = def
+            let inputs: Vec<_> = def
                 .inputs
                 .iter()
                 .map(|(id, input)| PortDef {
@@ -175,16 +194,9 @@ pub fn node_types() -> Vec<NodeTypeDef> {
                     port_type: port_type(input.value_type),
                 })
                 .collect();
-            if def.lighting_output().is_some() {
-                inputs.push(PortDef {
-                    id: "selection".into(),
-                    name: "Selection".into(),
-                    port_type: PortType::Selection,
-                });
-            }
             NodeTypeDef {
                 id: format!("{PREFIX}{id}"),
-                name: def.name.clone(),
+                name: library.display_name(id),
                 description: Some(
                     "Typed lighting node. Every input accepts a value or a connection.".into(),
                 ),
@@ -378,7 +390,10 @@ pub fn upgrade_shape_inputs(graph: &mut Graph) -> bool {
 /// Read-only canvas projection of a built-in definition. This is never saved
 /// or compiled: the canonical graph remains the typed library definition.
 pub fn inspect_definition(id: &str) -> Option<Graph> {
-    let library = p::standard_library();
+    project_definition(&p::standard_library(), id)
+}
+
+pub fn project_definition(library: &p::Library, id: &str) -> Option<Graph> {
     let definition = library.definitions.get(id)?;
     let p::Body::Graph(body) = &definition.body else {
         return None;
@@ -431,8 +446,8 @@ pub fn inspect_definition(id: &str) -> Option<Graph> {
             id: id.clone(),
             type_id: format!("{PREFIX}{}", node.definition),
             params,
-            position_x: Some(column as f64 * 520.0),
-            position_y: Some(*row as f64 * 360.0),
+            position_x: Some(node.position.map_or(column as f64 * 520.0, |p| p[0])),
+            position_y: Some(node.position.map_or(*row as f64 * 360.0, |p| p[1])),
         });
         *row += 1;
     }

@@ -2,7 +2,7 @@ use crate::{Binding, Body, Definition, Error, Frame, Library, PreparedGraph, Res
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Clip {
     /// A score-local graph or an immutable built-in node definition.
@@ -29,7 +29,7 @@ fn replace_blend() -> crate::BlendMode {
 
 /// New score document format. Local definitions travel with the score. This is
 /// deliberately not written into old SQL projections before migration exists.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Score {
     version: u32,

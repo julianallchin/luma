@@ -135,6 +135,7 @@ use crate::shell::Body;
 use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
+mod document;
 mod sheet;
 
 /// The subset ladder and its reading, shared with the fixture picker so the
@@ -196,6 +197,7 @@ pub struct Editor {
     /// write has to name both. It is also what makes "nothing changed" a
     /// comparison rather than a guess.
     base: Rc<[TrackClip]>,
+    graph_score: Option<document::GraphState>,
     /// Every pattern in the library, by id: the clip labels, and what a
     /// right-click offers to insert.
     patterns: Rc<Vec<PatternSummary>>,
@@ -320,6 +322,8 @@ fn rebase(editor: &mut Editor, score: Option<Score>) {
     editor.clipboard = None;
     editor.clips = Vec::new().into();
     editor.base = Vec::new().into();
+    editor.graph_score = None;
+    editor.sheet.invalidate_defs();
     editor.composited = None;
     editor.dirty = false;
 }
@@ -345,6 +349,7 @@ struct Clip {
     z: i64,
     blend: BlendMode,
     args: serde_json::Value,
+    core: Option<luma_patterns::Clip>,
 }
 
 impl Clip {
@@ -516,6 +521,7 @@ struct Clipboard {
 #[derive(Clone)]
 struct Snapshot {
     clips: Rc<[Clip]>,
+    definitions: Option<Rc<std::collections::BTreeMap<String, luma_patterns::Definition>>>,
     selected: Vec<SharedString>,
     cursor: Option<Cursor>,
 }
@@ -543,11 +549,12 @@ struct InsertMenu {
 enum InsertChoice {
     Node { effect: String, name: String },
     Pattern(PatternSummary),
+    Graph { id: String, name: String },
 }
 impl InsertChoice {
     fn name(&self) -> &str {
         match self {
-            Self::Node { name, .. } => name,
+            Self::Node { name, .. } | Self::Graph { name, .. } => name,
             Self::Pattern(p) => &p.name,
         }
     }
@@ -555,11 +562,13 @@ impl InsertChoice {
         match self {
             Self::Node { effect, .. } => format!("node-{effect}"),
             Self::Pattern(p) => p.id.clone(),
+            Self::Graph { id, .. } => id.clone(),
         }
     }
     fn origin(&self) -> &str {
         match self {
-            Self::Node { .. } => "Lighting node",
+            Self::Node { .. } => "Built-in",
+            Self::Graph { .. } => "This score",
             Self::Pattern(p) if p.score_id.is_some() => "This score",
             Self::Pattern(_) => "Library",
         }
@@ -1214,6 +1223,9 @@ impl Editor {
     /// makes "an undo is just a list this screen used to have" true rather
     /// than nearly true.
     fn mint_unknown_ids(&mut self, clips: &mut [Clip]) {
+        if self.graph_score.is_some() {
+            return;
+        }
         let stored: std::collections::HashSet<&str> =
             self.base.iter().map(|clip| clip.id.as_str()).collect();
         let mut minted: HashMap<SharedString, SharedString> = HashMap::new();
@@ -1239,6 +1251,10 @@ impl Editor {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             clips: Rc::clone(&self.clips),
+            definitions: self
+                .graph_score
+                .as_ref()
+                .map(|graph| graph.definitions.clone()),
             selected: self.selected.clone(),
             cursor: self.cursor,
         }
@@ -1258,8 +1274,18 @@ impl Editor {
     /// the question "did anything run".
     fn abandon_checkpoint(&mut self) {
         let clips = Rc::clone(&self.clips);
-        self.history
-            .abandon_if(|was| Rc::ptr_eq(&was.clips, &clips));
+        let definitions = self
+            .graph_score
+            .as_ref()
+            .map(|score| score.definitions.clone());
+        self.history.abandon_if(|was| {
+            Rc::ptr_eq(&was.clips, &clips)
+                && match (&was.definitions, &definitions) {
+                    (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        });
     }
 
     /// Step back, or forward. `false` when there is nowhere to go.
@@ -1284,6 +1310,10 @@ impl Editor {
     fn restore(&mut self, snapshot: Snapshot) {
         self.selected = snapshot.selected;
         self.cursor = snapshot.cursor;
+        if let (Some(graph), Some(definitions)) = (&mut self.graph_score, snapshot.definitions) {
+            graph.definitions = definitions;
+            self.sheet.invalidate_defs();
+        }
         self.replace_clips(snapshot.clips.to_vec());
     }
 
@@ -1431,7 +1461,10 @@ impl Editor {
     fn relabel(&mut self) {
         let mut clips: Vec<Clip> = self.clips.iter().cloned().collect();
         for clip in &mut clips {
-            clip.label = label_of(&clip.pattern, &self.patterns);
+            clip.label = self
+                .graph_label(&clip.pattern)
+                .map(Into::into)
+                .unwrap_or_else(|| label_of(&clip.pattern, &self.patterns));
         }
         self.clips = clips.into();
     }
@@ -1734,30 +1767,53 @@ impl Editor {
     /// The pattern `Enter` would put down, with the insertion it belongs to.
     fn insertion_choices(&self) -> Vec<InsertChoice> {
         let query = self.menu_query.to_lowercase();
-        let mut choices: Vec<_> = luma_lib::node_graph::lighting::node_types()
+        let mut choices: Vec<_> = luma_patterns::standard_library()
+            .definitions
             .into_iter()
-            .filter_map(|node| {
-                let effect = node
-                    .id
-                    .strip_prefix(luma_lib::node_graph::lighting::PREFIX)?;
-                luma_lib::node_graph::lighting::pattern(effect).ok()?;
-                Some(InsertChoice::Node {
-                    effect: effect.to_string(),
-                    name: node.name,
-                })
+            .filter(|(_, definition)| {
+                definition.playable()
+                    && definition
+                        .inputs
+                        .values()
+                        .all(|input| input.default.is_some())
+            })
+            .map(|(effect, definition)| InsertChoice::Node {
+                effect,
+                name: definition.name,
             })
             .collect();
-        choices.extend(
-            self.patterns
-                .iter()
-                .filter(|pattern| {
-                    pattern.score_id.is_none()
-                        || pattern.score_id.as_deref()
-                            == self.score.as_ref().map(|score| score.id.as_str())
-                })
-                .cloned()
-                .map(InsertChoice::Pattern),
-        );
+        if let Some(score) = &self.graph_score {
+            if let Ok(library) = score.library() {
+                choices.extend(
+                    score
+                        .definitions
+                        .iter()
+                        .filter(|(_, definition)| {
+                            definition.playable()
+                                && definition
+                                    .inputs
+                                    .values()
+                                    .all(|input| input.default.is_some())
+                        })
+                        .map(|(id, _)| InsertChoice::Graph {
+                            id: id.clone(),
+                            name: library.display_name(id),
+                        }),
+                );
+            }
+        } else {
+            choices.extend(
+                self.patterns
+                    .iter()
+                    .filter(|pattern| {
+                        pattern.score_id.is_none()
+                            || pattern.score_id.as_deref()
+                                == self.score.as_ref().map(|score| score.id.as_str())
+                    })
+                    .cloned()
+                    .map(InsertChoice::Pattern),
+            );
+        }
         choices.retain(|choice| choice.name().to_lowercase().contains(&query));
         choices
     }
@@ -1800,6 +1856,7 @@ impl Editor {
             z,
             blend: BlendMode::Replace,
             args: serde_json::Value::Object(serde_json::Map::new()),
+            core: None,
         };
         self.selected = vec![minted.id.clone()];
         self.cursor = Some(Cursor {
@@ -1950,6 +2007,7 @@ fn resolve(clips: &[TrackClip], patterns: &[PatternSummary]) -> Rc<[Clip]> {
             z: clip.z_index,
             blend: clip.blend_mode,
             args: clip.args.clone(),
+            core: None,
         })
         .collect()
 }
@@ -2043,6 +2101,7 @@ impl Luma {
             beats: None,
             clips: Vec::new().into(),
             base: Vec::new().into(),
+            graph_score: None,
             patterns: Rc::new(Vec::new()),
             previews: Rc::new(RefCell::new(HashMap::new())),
             preview_inflight: HashSet::new(),
@@ -2094,12 +2153,14 @@ impl Luma {
             let result = previews.await;
             this.update(cx, |this, cx| {
                 this.edit_track_tab(&preview_target, cx, |editor| match result {
-                    Ok(rows) => editor.install_previews(rows),
-                    Err(error) => {
+                    Ok(rows) if editor.graph_score.is_none() => editor.install_previews(rows),
+                    Ok(_) => {}
+                    Err(error) if editor.graph_score.is_none() => {
                         editor
                             .preview_errors
                             .insert("initial".into(), format!("Preview: {error}"));
                     }
+                    Err(_) => {}
                 });
             })
             .ok();
@@ -2200,12 +2261,16 @@ impl Luma {
         // names its own score, so it lands on the document it was made
         // against however long it takes to return.
         self.commit_clips(cx);
-        let pending = self.library.track_scores(&score.id);
+        let Target::TrackEditor { track, .. } = &target else {
+            return;
+        };
+        let pending = self.library.score_contents(&score.id, track);
         let score_id = score.id.clone();
         self.edit_track_tab(&target, cx, |editor| rebase(editor, Some(score)));
         cx.spawn(async move |this, cx| {
-            let clips = pending.await;
+            let contents = pending.await;
             this.update(cx, |this, cx| {
+                let mut previews = Vec::new();
                 this.edit_track_tab(&target, cx, |editor| {
                     // The tab may have moved on — onto another score, or off
                     // every score because this one was deleted while the read
@@ -2216,16 +2281,22 @@ impl Luma {
                     {
                         return;
                     }
-                    match clips {
-                        Ok(clips) => {
-                            let clips: Vec<TrackClip> = clips.iter().map(TrackClip::from).collect();
-                            editor.clips = resolve(&clips, &editor.patterns);
-                            editor.base = clips.into();
-                            editor.composited = Some(Rc::clone(&editor.clips));
+                    match contents {
+                        Ok(contents) => {
+                            if let Err(error) = editor.install_contents(contents) {
+                                editor.error = Some(error);
+                            }
+                            if editor.graph_score.is_some() {
+                                previews =
+                                    editor.clips.iter().map(|clip| clip.id.clone()).collect();
+                            }
                         }
                         Err(error) => editor.error = Some(error.to_string()),
                     }
                 });
+                for id in previews {
+                    this.refresh_clip_preview_for(target.clone(), id, cx);
+                }
             })
             .ok();
         })
@@ -2573,6 +2644,16 @@ impl Luma {
         else {
             return;
         };
+        if state.graph_score.is_some() {
+            let owner = Target::TrackEditor {
+                track: state.track_id.to_string(),
+                venue: state.venue_id.clone(),
+            };
+            let id = clip.id.to_string();
+            self.commit_clips(cx);
+            self.open_score_graph(owner, id, cx);
+            return;
+        }
         let Some(pattern) = state
             .patterns
             .iter()
@@ -2650,7 +2731,20 @@ impl Luma {
 
     /// Commit an insertion on the pattern the pointer chose.
     fn insert_pattern(&mut self, menu: InsertMenu, choice: InsertChoice, cx: &mut Context<Self>) {
+        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(editor)) if editor.graph_score.is_some())
+        {
+            self.track_command(
+                |editor| {
+                    if let Err(error) = editor.insert_graph(menu, &choice) {
+                        editor.error = Some(error);
+                    }
+                },
+                cx,
+            );
+            return;
+        }
         match choice {
+            InsertChoice::Graph { .. } => {}
             InsertChoice::Pattern(pattern) => {
                 self.track_command(|editor| editor.insert(menu, &pattern), cx)
             }
@@ -3097,6 +3191,13 @@ impl Luma {
     /// base would be refused by whichever landed later — and anything the user
     /// did meanwhile is still on [`Editor::dirty`] and goes out on its return.
     fn commit_clips(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(editor)) if editor.graph_score.is_some())
+        {
+            if let Some(target) = self.workspace.active().cloned() {
+                self.commit_graph_score_for(target, cx);
+            }
+            return;
+        }
         let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
             return;
         };
@@ -3247,22 +3348,11 @@ impl Luma {
         let Some(score) = state.score.as_ref().map(|score| score.id.clone()) else {
             return;
         };
-        let pending = self.library.track_scores(&score);
-        cx.spawn(async move |this, cx| {
-            let result = pending.await;
-            this.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| match result {
-                    Ok(rows) => {
-                        let clips: Vec<TrackClip> = rows.iter().map(TrackClip::from).collect();
-                        editor.clips = resolve(&clips, &editor.patterns);
-                        editor.base = clips.into();
-                    }
-                    Err(error) => editor.error = Some(error.to_string()),
-                });
-            })
-            .ok();
-        })
-        .detach();
+        let target = Target::TrackEditor {
+            track: state.track_id.to_string(),
+            venue: state.venue_id.clone(),
+        };
+        self.reload_score_contents(target, score, cx);
     }
 
     /// Run `edit` against the track editor, if that is still what is showing.
@@ -3298,27 +3388,46 @@ impl Luma {
         let Some(clip) = state.clips.iter().find(|clip| clip.id == id) else {
             return;
         };
-        let (pattern, start, end, args) = (
-            clip.pattern.clone(),
-            clip.start,
-            clip.end,
-            clip.args.clone(),
-        );
+        let score_id = state.score.as_ref().map(|score| score.id.clone());
+        let pending: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<AnnotationPreview, LibraryError>>>,
+        > = if state.graph_score.is_some() {
+            let candidate = match state.graph_candidate() {
+                Ok(score) => score,
+                Err(error) => {
+                    state.preview_errors.insert(id, error);
+                    return;
+                }
+            };
+            let Some(score_id) = score_id.as_ref() else {
+                return;
+            };
+            Box::pin(self.library.preview_score_clip(score_id, &id, &candidate))
+        } else {
+            Box::pin(self.library.preview_clip(
+                &state.track_id,
+                &state.venue_id,
+                &id,
+                &clip.pattern,
+                clip.start,
+                clip.end,
+                &clip.args,
+            ))
+        };
         state.preview_inflight.insert(id.clone());
-        let pending = self.library.preview_clip(
-            &state.track_id,
-            &state.venue_id,
-            &id,
-            &pattern,
-            start,
-            end,
-            &args,
-        );
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
                 let mut again = false;
                 this.edit_track_tab(&target, cx, |editor| {
+                    if editor.score.as_ref().map(|score| &score.id) != score_id.as_ref() {
+                        return;
+                    }
+                    if !editor.clips.iter().any(|clip| clip.id == id) {
+                        editor.preview_inflight.remove(&id);
+                        editor.preview_queued.remove(&id);
+                        return;
+                    }
                     editor.preview_inflight.remove(&id);
                     again = editor.preview_queued.remove(&id);
                     match result {
@@ -3522,30 +3631,69 @@ fn sync_composite(editor: &mut Editor, cx: &mut Context<Luma>) {
     let Some(last) = editor.composited.as_ref() else {
         return;
     };
-    if same_scene(last, &editor.clips) {
+    let definitions_changed = editor
+        .graph_score
+        .as_ref()
+        .is_some_and(|graph| graph.definitions != graph.composited_definitions);
+    if !definitions_changed && same_scene(last, &editor.clips) {
         return;
     }
-    let sent = Rc::clone(&editor.clips);
-    let clips: Vec<TrackClip> = sent.iter().map(Clip::to_track_clip).collect();
-    // Addressed to the score, so a working copy can never land on the document
-    // next to the one it was edited against.
     let Some(score) = editor.score.as_ref().map(|score| score.id.clone()) else {
         return;
     };
+    let graph_candidate = if editor.graph_score.is_some() {
+        match editor.graph_candidate() {
+            Ok(score) => Some(score),
+            Err(error) => {
+                editor.error = Some(error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let sent = editor.clips.clone();
+    let definitions = editor
+        .graph_score
+        .as_ref()
+        .map(|graph| graph.definitions.clone());
+    let target = Target::TrackEditor {
+        track: editor.track_id.to_string(),
+        venue: editor.venue_id.clone(),
+    };
     editor.compositing = true;
     cx.spawn(async move |this, cx| {
-        let Ok(pending) = this.update(cx, |this, _| {
-            this.library.composite_score(&score, Some(clips))
-        }) else {
+        let Ok(pending) =
+            this.update(cx, |this, _| -> Transition {
+                match graph_candidate {
+                    Some(candidate) => {
+                        Box::pin(this.library.composite_score_document(&score, &candidate))
+                    }
+                    None => Box::pin(this.library.composite_score(
+                        &score,
+                        Some(sent.iter().map(Clip::to_track_clip).collect()),
+                    )),
+                }
+            })
+        else {
             return;
         };
-        pending.await.ok();
+        let result = pending.await;
         this.update(cx, |this, cx| {
-            this.with_track_editor(cx, |editor| {
+            this.edit_track_tab(&target, cx, |editor| {
+                if editor.score.as_ref().map(|s| &s.id) != Some(&score) {
+                    return;
+                }
                 editor.compositing = false;
-                // What was sent, not what is current: an edit made while this
-                // was in flight is exactly what the next reconcile must see.
+                // Remember this attempt, including a failure, so a bad input
+                // produces one useful error instead of a retry every frame.
                 editor.composited = Some(sent);
+                if let (Some(graph), Some(definitions)) = (&mut editor.graph_score, definitions) {
+                    graph.composited_definitions = definitions;
+                }
+                if let Err(error) = result {
+                    editor.error = Some(format!("Playback: {error}"));
+                }
             });
         })
         .ok();
@@ -3567,6 +3715,7 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
                 && a.z == b.z
                 && a.blend == b.blend
                 && a.args == b.args
+                && a.core == b.core
         })
 }
 

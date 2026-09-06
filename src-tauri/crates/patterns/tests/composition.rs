@@ -235,6 +235,7 @@ fn nested_pattern_exposes_inputs_without_flattening_their_types() {
     let exposed_inputs = chase.inputs.clone();
     let outputs = chase.outputs.clone();
     let node = Node {
+        position: None,
         definition: "chase".into(),
         inputs: exposed_inputs
             .keys()
@@ -387,6 +388,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
             (
                 "chase".into(),
                 Node {
+                    position: None,
                     definition: "chase_mask".into(),
                     inputs: source
                         .inputs
@@ -398,6 +400,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
             (
                 "dissolve".into(),
                 Node {
+                    position: None,
                     definition: "dissolve_mask".into(),
                     inputs: BTreeMap::from([("coverage".into(), Value::Proportion(0.5).into())]),
                 },
@@ -405,6 +408,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
             (
                 "combine".into(),
                 Node {
+                    position: None,
                     definition: "multiply_mask".into(),
                     inputs: BTreeMap::from([
                         (
@@ -427,6 +431,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
             (
                 "color".into(),
                 Node {
+                    position: None,
                     definition: "appearance".into(),
                     inputs: BTreeMap::from([(
                         "mask".into(),

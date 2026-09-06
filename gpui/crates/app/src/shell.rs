@@ -1063,7 +1063,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         Body::TrackEditor(state) => {
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
-        Body::Graph(state) => graph::graph(state, &entity).into_any_element(),
+        Body::Graph(state) => graph::graph(state, &entity, window, cx).into_any_element(),
         Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
         Body::Stage(state) => {
             stage::stage_page(state, &entity, stage_view.as_ref(), window).into_any_element()

@@ -1,5 +1,7 @@
 use crate::database::local::scores as db;
-use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
+use crate::database::local::venue_access::{
+    AuthorizedVenue, Read, VenueAccess, VenueResource, Write,
+};
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::scores::{
     CreateTrackScoreInput, DeleteTrackScoreInput, Score, ScoreSummary, TrackScore,
@@ -7,6 +9,98 @@ use crate::models::scores::{
 };
 use crate::services::score_mutations;
 use crate::services::track_edits::TrackEditResult;
+
+/// None marks a score still awaiting manual migration. Reading another visible
+/// member's score uses its actual owner; writing requires the admitted owner.
+pub async fn get_score_document(
+    services: &AppServices,
+    score_id: String,
+) -> Result<Option<crate::services::graph_scores::GraphScoreDocument>, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Score(&score_id)).await?;
+    let score = db::get_score(&mut access, &score_id).await?;
+    let scope = crate::services::track_edits::TrackScope {
+        score_id,
+        track_id: score.track_id,
+        venue_id: score.venue_id,
+    };
+    Ok(
+        crate::services::graph_scores::load(access.connection(), &scope, score.uid.as_deref())
+            .await?,
+    )
+}
+
+pub async fn apply_score_document(
+    services: &AppServices,
+    score_id: String,
+    score: luma_patterns::Score,
+    base_revision: String,
+    operation_id: String,
+) -> Result<crate::models::authored_state::AppliedAuthoredState, CommandError> {
+    let candidate = crate::services::graph_scores::GraphScoreDocument::new(score)
+        .map_err(CommandError::Invalid)?;
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Score(&score_id)).await?;
+    let metadata = db::get_score(&mut access, &score_id).await?;
+    let owner = access.principal().map(str::to_owned);
+    let scope = crate::services::track_edits::TrackScope {
+        score_id,
+        track_id: metadata.track_id,
+        venue_id: metadata.venue_id,
+    };
+    drop(access);
+    let result = services
+        .authored
+        .apply_score_source_for_scope(
+            &services.db.0,
+            owner.as_deref(),
+            scope,
+            &operation_id,
+            &candidate.source().map_err(CommandError::Invalid)?,
+            &base_revision,
+            "Edit score",
+        )
+        .await?;
+    services.sync.push_notify.notify_one();
+    Ok(result)
+}
+
+pub async fn preview_score_clip(
+    services: &AppServices,
+    score_id: String,
+    clip_id: String,
+    score: Option<luma_patterns::Score>,
+) -> Result<crate::models::patterns::AnnotationPreview, CommandError> {
+    let mut access =
+        VenueAccess::<Read>::read(&services.db.0, VenueResource::Score(&score_id)).await?;
+    let metadata = db::get_score(&mut access, &score_id).await?;
+    let scope = crate::services::track_edits::TrackScope {
+        score_id,
+        track_id: metadata.track_id,
+        venue_id: metadata.venue_id,
+    };
+    let candidate = match score {
+        Some(score) => crate::services::graph_scores::GraphScoreDocument::new(score)
+            .map_err(CommandError::Invalid)?,
+        None => crate::services::graph_scores::load(
+            access.connection(),
+            &scope,
+            metadata.uid.as_deref(),
+        )
+        .await?
+        .ok_or_else(|| {
+            CommandError::Invalid("this score has not been migrated to graphs".into())
+        })?,
+    };
+    Ok(crate::services::graph_scores::preview_clip(
+        &mut access,
+        &services.fixtures_root,
+        &scope.track_id,
+        &candidate.score,
+        &clip_id,
+    )
+    .await?)
+}
 
 /// This track's scores in one venue, newest first. A track/venue pair holds
 /// more than one score whenever more than one principal has annotated it.

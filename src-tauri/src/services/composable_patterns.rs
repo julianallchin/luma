@@ -4,7 +4,7 @@ use crate::database::local::venue_access::{AuthorizedVenue, Read, VenueAccess, V
 use crate::models::composable_patterns::{ComposablePreview, ComposablePreviewRequest};
 use crate::models::selection::{Selection, Subset};
 use crate::models::universe::{PrimitiveState, UniverseState};
-use luma_patterns::{standard_library, BeatTimeline, Cell, Frame, PreparedGraph, Value};
+use luma_patterns::{standard_library, Cell, Frame, PreparedGraph, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -38,46 +38,8 @@ pub(crate) async fn preview(
         "track has no available beat grid; analyze the track before previewing a musical pattern"
             .to_string()
     })?;
-    let origin = beat_grid
-        .downbeats
-        .first()
-        .or_else(|| beat_grid.beats.first())
-        .copied()
-        .unwrap_or(0.0);
-    let clock = BeatTimeline::new(
-        beat_grid.beats.into_iter().map(f64::from).collect(),
-        f64::from(origin),
-    )
-    .map_err(|e| e.to_string())?;
-    let mut cells = Vec::new();
-    let mut seen = BTreeSet::new();
-    for target in &request.targets {
-        let whole = Selection {
-            expression: target.expression.clone(),
-            subset: Subset::All,
-        };
-        let primitives = crate::eval::context::resolve_selection_primitives_with_access(
-            &mut access,
-            fixtures_root,
-            &whole,
-            request.seed,
-        )
-        .await?;
-        let primitives = select_heads(primitives, target.subset, request.seed);
-        for (id, position) in primitives {
-            if !seen.insert(id.clone()) {
-                return Err(format!(
-                    "target groups overlap at cell {id}; choose disjoint mapping groups"
-                ));
-            }
-            cells.push(Cell {
-                id,
-                group: target.expression.clone(),
-                world: position.map(f64::from),
-                uvz: luma_patterns::Cell::stage_coordinates(position.map(f64::from)),
-            });
-        }
-    }
+    let clock = beat_grid.timeline().map_err(|error| error.to_string())?;
+    let cells = resolve_cells(&mut access, fixtures_root, &request.targets, request.seed).await?;
     if cells.is_empty() {
         return Err("the targets contain no placed, controllable cells".into());
     }
@@ -138,6 +100,47 @@ pub(crate) async fn preview(
         frames,
     })
 }
+/// Resolve the authored head domain once, shared by saved-score playback and
+/// previews. Subsets are applied after expanding fixture housings into heads.
+pub(crate) async fn resolve_cells(
+    access: &mut impl AuthorizedVenue,
+    fixtures_root: &Path,
+    targets: &[Selection],
+    seed: u64,
+) -> Result<Vec<Cell>, String> {
+    let mut cells = Vec::new();
+    let mut seen = BTreeSet::new();
+    for target in targets {
+        target.validate().map_err(|error| error.to_string())?;
+        let whole = Selection {
+            expression: target.expression.clone(),
+            subset: Subset::All,
+        };
+        let primitives = crate::eval::context::resolve_selection_primitives_with_access(
+            access,
+            fixtures_root,
+            &whole,
+            seed,
+        )
+        .await?;
+        let primitives = select_heads(primitives, target.subset, seed);
+        for (id, position) in primitives {
+            if !seen.insert(id.clone()) {
+                return Err(format!(
+                    "target groups overlap at cell {id}; choose disjoint mapping groups"
+                ));
+            }
+            cells.push(Cell {
+                id,
+                group: target.expression.clone(),
+                world: position.map(f64::from),
+                uvz: luma_patterns::Cell::stage_coordinates(position.map(f64::from)),
+            });
+        }
+    }
+    Ok(cells)
+}
+
 fn select_heads(
     mut heads: Vec<(String, [f32; 3])>,
     subset: Subset,

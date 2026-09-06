@@ -55,14 +55,27 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Target {
     /// One track's timeline, against the named venue's score for it.
-    TrackEditor { track: String, venue: String },
+    TrackEditor {
+        track: String,
+        venue: String,
+    },
     /// One pattern's node graph.
-    Graph { pattern: String },
+    Graph {
+        pattern: String,
+    },
+    ScoreGraph {
+        score: String,
+        graph: String,
+    },
     /// One venue's DMX patch. Singleton per venue.
-    Patch { venue: String },
+    Patch {
+        venue: String,
+    },
     /// One venue's builder — the room, and everything that puts things in it.
     /// Singleton per venue, like the patch: a venue has one shape.
-    Stage { venue: String },
+    Stage {
+        venue: String,
+    },
 }
 
 impl Target {
@@ -73,7 +86,7 @@ impl Target {
     pub(crate) fn key_context(&self) -> &'static str {
         match self {
             Self::TrackEditor { .. } => crate::keymap::context::TRACK_EDITOR,
-            Self::Graph { .. } => crate::keymap::context::GRAPH,
+            Self::Graph { .. } | Self::ScoreGraph { .. } => crate::keymap::context::GRAPH,
             Self::Patch { .. } => crate::keymap::context::PATCH,
             Self::Stage { .. } => crate::keymap::context::STAGE,
         }
@@ -88,6 +101,7 @@ impl Target {
         match self {
             Self::TrackEditor { track, venue } => format!("track:{track}:{venue}"),
             Self::Graph { pattern } => format!("graph:{pattern}"),
+            Self::ScoreGraph { score, graph } => format!("score-graph:{score}:{graph}"),
             Self::Patch { venue } => format!("patch:{venue}"),
             Self::Stage { venue } => format!("stage:{venue}"),
         }
@@ -104,7 +118,7 @@ impl Target {
     pub(crate) fn venue(&self) -> Option<&str> {
         match self {
             Self::Patch { venue } | Self::Stage { venue } => Some(venue),
-            Self::TrackEditor { .. } | Self::Graph { .. } => None,
+            Self::TrackEditor { .. } | Self::Graph { .. } | Self::ScoreGraph { .. } => None,
         }
     }
 }
