@@ -130,10 +130,10 @@ fn occupancy_color(count: u32) -> vec3<f32> {
 }
 
 fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u32) -> f32 {
-    // A cone without a slot casts no shadow rather than borrowing another's.
+    // The software oracle is populated only by the reference harness.
     let slot = fixture_rests[light_index].shadow_slot;
     if slot < 0.0 {
-        return 1.0;
+        return stage_visibility(world + normal * 0.006, fixture_cores[light_index].position);
     }
     let layer = i32(slot);
     let clip = fixture_shadow_matrices[layer].view_proj
@@ -153,6 +153,7 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
     var visible = 0.0;
     for (var y = -1; y <= 1; y = y + 1) {
         for (var x = -1; x <= 1; x = x + 1) {
+            if layer < 256 {
             visible += textureSampleCompareLevel(
                 fixture_shadow_map,
                 fixture_shadow_sampler,
@@ -160,6 +161,15 @@ fn fixture_shadow_visibility(world: vec3<f32>, normal: vec3<f32>, light_index: u
                 layer,
                 reference,
             );
+            } else {
+            visible += textureSampleCompareLevel(
+                fixture_shadow_map_extra,
+                fixture_shadow_sampler,
+                uv + vec2<f32>(f32(x), f32(y)) * surface_clusters.shadow.y,
+                layer - 256,
+                reference,
+            );
+            }
         }
     }
     return visible / 9.0;

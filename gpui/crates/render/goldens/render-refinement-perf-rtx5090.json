@@ -1,0 +1,176 @@
+{
+  "date": "2026-09-05",
+  "adapter": {
+    "backend": "Vulkan",
+    "device_type": "DiscreteGpu",
+    "driver": "NVIDIA",
+    "driver_info": "595.84",
+    "name": "NVIDIA GeForce RTX 5090",
+    "timestamp_period_ns": 1.0,
+    "timestamp_query_supported": true
+  },
+  "resolution": [
+    1920,
+    1080
+  ],
+  "warmup_frames": 120,
+  "measured_frames": 600,
+  "haze_resolution": 0.5,
+  "haze_steps": 8,
+  "scope": "Controlled offscreen renderer comparison, not whole-app FPS or Mac validation.",
+  "reference": "Copied native render/scene crates; beam_transport.wgsl and scene.wgsl restored from git HEAD; bounce estimate disabled. Same profiler instrumentation and light ranges.",
+  "results": [
+    {
+      "variant": "original",
+      "case": "transport-512",
+      "run": 1,
+      "gpu_total": {
+        "max_ms": 9.1808,
+        "p50_ms": 8.285599999999999,
+        "p95_ms": 8.6672
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.5046039999999999,
+        "p50_ms": 0.271372,
+        "p95_ms": 0.335042
+      },
+      "shadowed_fixtures": 0,
+      "opaque_draws": 1,
+      "artifact": "/tmp/luma-perf-original-512.json",
+      "artifact_sha256": "2ec704e001869ce00c477613da5ffef36e6ec663ce7d9bb2b7ec360db634e8f5"
+    },
+    {
+      "variant": "current",
+      "case": "transport-512",
+      "run": 1,
+      "gpu_total": {
+        "max_ms": 8.364288,
+        "p50_ms": 7.552,
+        "p95_ms": 8.096672
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.5182140000000001,
+        "p50_ms": 0.258802,
+        "p95_ms": 0.362082
+      },
+      "shadowed_fixtures": 0,
+      "opaque_draws": 1,
+      "artifact": "/tmp/luma-perf-current-512.json",
+      "artifact_sha256": "78375b4d335b8afe7f983cf1b91d84e5bf95b441b8cda14c50a3a95ffe8f1021"
+    },
+    {
+      "variant": "original",
+      "case": "zoom-near-128",
+      "run": 1,
+      "gpu_total": {
+        "max_ms": 5.837344,
+        "p50_ms": 4.89232,
+        "p95_ms": 5.669216
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.378742,
+        "p50_ms": 0.15471100000000002,
+        "p95_ms": 0.215862
+      },
+      "shadowed_fixtures": 0,
+      "opaque_draws": 1,
+      "artifact": "/tmp/luma-perf-original-zoom.json",
+      "artifact_sha256": "a7a6792a7dd158059997f3efa64544a9f917da9c6af06a06d18abac75d6673e9"
+    },
+    {
+      "variant": "current",
+      "case": "zoom-near-128",
+      "run": 1,
+      "gpu_total": {
+        "max_ms": 4.848992,
+        "p50_ms": 4.3120639999999995,
+        "p95_ms": 4.715552
+      },
+      "cpu_encode_submit": {
+        "max_ms": 0.281072,
+        "p50_ms": 0.180861,
+        "p95_ms": 0.21177100000000001
+      },
+      "shadowed_fixtures": 0,
+      "opaque_draws": 1,
+      "artifact": "/tmp/luma-perf-current-zoom.json",
+      "artifact_sha256": "5d0d044db7593d211c4106346edd54b93dfb94fb60f21a04d7e358e6f496e113"
+    },
+    {
+      "variant": "original",
+      "case": "dense-geometry-120",
+      "run": 1,
+      "gpu_total": {
+        "max_ms": 7.027424,
+        "p50_ms": 5.754848,
+        "p95_ms": 6.433184
+      },
+      "cpu_encode_submit": {
+        "max_ms": 6.63376,
+        "p50_ms": 2.048676,
+        "p95_ms": 2.3130070000000003
+      },
+      "shadowed_fixtures": 16,
+      "opaque_draws": 2057,
+      "artifact": "/tmp/luma-perf-original-dense.json",
+      "artifact_sha256": "40efe7f8323adf479129653af893e7b85e7f70c2d039b425f3ad9c503dec7de0"
+    },
+    {
+      "variant": "current",
+      "case": "dense-geometry-120",
+      "run": 1,
+      "gpu_total": {
+        "max_ms": 7.734432,
+        "p50_ms": 5.712192,
+        "p95_ms": 6.87264
+      },
+      "cpu_encode_submit": {
+        "max_ms": 2.995013,
+        "p50_ms": 2.093836,
+        "p95_ms": 2.382238
+      },
+      "shadowed_fixtures": 16,
+      "opaque_draws": 2057,
+      "artifact": "/tmp/luma-perf-current-dense.json",
+      "artifact_sha256": "1b0c626ed3245aae82a24d88cd084fba377eca0f5ad07c60ef300dd7c4dc08a0"
+    },
+    {
+      "variant": "original",
+      "case": "dense-geometry-120",
+      "run": 2,
+      "gpu_total": {
+        "max_ms": 6.623392,
+        "p50_ms": 5.471296,
+        "p95_ms": 6.119199999999999
+      },
+      "cpu_encode_submit": {
+        "max_ms": 2.74121,
+        "p50_ms": 1.9502140000000001,
+        "p95_ms": 2.0746160000000002
+      },
+      "shadowed_fixtures": 16,
+      "opaque_draws": 2057,
+      "artifact": "/tmp/luma-perf-original-dense-repeat.json",
+      "artifact_sha256": "6471bf4fe015661ab1f8d702924553073192c92d0a2e22ad79e21f556274baec"
+    },
+    {
+      "variant": "current",
+      "case": "dense-geometry-120",
+      "run": 2,
+      "gpu_total": {
+        "max_ms": 6.363487999999999,
+        "p50_ms": 5.251583999999999,
+        "p95_ms": 5.939039999999999
+      },
+      "cpu_encode_submit": {
+        "max_ms": 2.551169,
+        "p50_ms": 1.901814,
+        "p95_ms": 2.008355
+      },
+      "shadowed_fixtures": 16,
+      "opaque_draws": 2057,
+      "artifact": "/tmp/luma-perf-current-dense-repeat.json",
+      "artifact_sha256": "01741449b6532659d71a1707bf73c168349f92d5b3d5bb2d11410ddd3d03558c"
+    }
+  ]
+}

@@ -652,6 +652,7 @@ struct RenderLab {
     probe_visible: bool,
     fixture_surface_lighting: bool,
     fixture_shadows: bool,
+    geometry_shadows: bool,
     cluster_debug: bool,
     haze_enabled: bool,
     haze_density: f32,
@@ -703,6 +704,7 @@ impl RenderLab {
             probe_visible: false,
             fixture_surface_lighting: true,
             fixture_shadows: true,
+            geometry_shadows: true,
             cluster_debug: false,
             haze_enabled: true,
             haze_density: 0.8,
@@ -788,6 +790,7 @@ enum LabToggle {
     ProbeVisible,
     FixtureSurfaceLighting,
     FixtureShadows,
+    GeometryShadows,
     ClusterDebug,
     Haze,
     Grid,
@@ -820,6 +823,7 @@ impl RenderLab {
             LabToggle::ProbeVisible => &mut self.probe_visible,
             LabToggle::FixtureSurfaceLighting => &mut self.fixture_surface_lighting,
             LabToggle::FixtureShadows => &mut self.fixture_shadows,
+            LabToggle::GeometryShadows => &mut self.geometry_shadows,
             LabToggle::ClusterDebug => &mut self.cluster_debug,
             LabToggle::Haze => &mut self.haze_enabled,
             LabToggle::Grid => &mut self.grid_enabled,
@@ -1133,6 +1137,7 @@ impl Visualizer {
             assets: assets::Library::new(stage_render::meshes_root(None)),
             picks: PickTimeline::default(),
             pick_meshes: HashMap::new(),
+            haze_started_at: Instant::now(),
         });
         true
     }
@@ -1903,6 +1908,7 @@ struct Gpu {
     picks: PickTimeline,
     /// Immutable per-asset CPU BVHs; frame snapshots only carry Arc handles.
     pick_meshes: HashMap<String, Arc<TriMesh>>,
+    haze_started_at: Instant,
 }
 
 /// What the presentation seam did with one submitted frame.
@@ -2291,7 +2297,7 @@ impl Gpu {
             spans,
         } = input;
         let built = std::time::Instant::now();
-        let frame = build_frame_with(
+        let mut frame = build_frame_with(
             scene,
             definitions,
             &|id, head| stage_render::primitive_state(state, id, head),
@@ -2299,6 +2305,9 @@ impl Gpu {
             &mut self.assets,
         )
         .map_err(|error| format!("Could not assemble the frame: {error}"))?;
+        // Fixture state/strobe uses transport time above; air keeps moving
+        // while playback is paused. Offline captures retain their pinned time.
+        frame.time = self.haze_started_at.elapsed().as_secs_f32();
         self.work.build_ms = built.elapsed().as_secs_f32() * 1_000.0;
         let picked = std::time::Instant::now();
         let pick = PickSnapshot::from_frame(&frame, scene, camera, &mut self.pick_meshes);
@@ -2849,6 +2858,12 @@ fn lab_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             "Fixture shadows",
             lab.fixture_shadows,
             LabToggle::FixtureShadows,
+        ))
+        .child(lab_toggle(
+            app,
+            "All fixture shadows",
+            lab.geometry_shadows,
+            LabToggle::GeometryShadows,
         ))
         .child(lab_toggle(
             app,
@@ -3471,6 +3486,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let probe_visible = state.render_lab.probe_visible;
     let fixture_surface_lighting = state.render_lab.fixture_surface_lighting;
     let fixture_shadows = state.render_lab.fixture_shadows;
+    let geometry_shadows = state.render_lab.geometry_shadows;
     let cluster_debug = state.render_lab.cluster_debug;
     let haze_enabled = state.render_lab.haze_enabled;
     let haze_density = state.render_lab.haze_density;
@@ -3689,6 +3705,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             scene.render.debug_view = debug_view;
                             scene.render.fixture_surface_lighting = fixture_surface_lighting;
                             scene.render.fixture_shadows = fixture_shadows;
+                            scene.render.geometry_shadows = geometry_shadows;
                             scene.render.cluster_debug = cluster_debug;
                             scene.selected_fixture_ids = selected_fixture_ids.clone();
                             scene.editor = scene_desc::Editor {

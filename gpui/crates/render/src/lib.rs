@@ -37,6 +37,7 @@ pub mod coords;
 mod environment;
 pub mod face;
 pub mod frame;
+mod fog_grid;
 mod gpu;
 mod haze_field;
 pub mod house;
@@ -75,3 +76,5 @@ pub use warmup::{warm, warming, Warming};
 ///
 /// The live path has its own, much smaller, budget: [`LIVE_SUBFRAMES`].
 pub const DEFAULT_SUBFRAMES: u32 = 16;
+
+mod visibility;

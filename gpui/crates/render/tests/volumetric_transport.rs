@@ -312,20 +312,10 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
     let gobo = renderer
         .render(&frame(Vec::new(), vec![light(1)]), WIDTH, HEIGHT, 4)
         .unwrap();
-    // Provisional 2026-08-25: re-baselined for the baked haze density field
-    // (`haze_field.rs`), which is a different realization of the same noise
-    // process, not a different picture. Accepted from stills; the temporal
-    // delta distribution was measured to match the previous field to within
-    // 8% and stay flat across texel boundaries. If the look is later rejected,
-    // these three and the two below are the revert candidates — the invariants
-    // asserted after this point never moved.
+    // Updated for advected pockets, source extinction and quartic range taper (2026-09-05).
     assert_eq!(
         (hash(&one), hash(&overlap), hash(&gobo)),
-        (
-            0x2f6f_fe9f_972f_c988,
-            0x6f91_c14f_777d_8cca,
-            0xb064_ab17_5c43_29ac,
-        ),
+        (0xfb6c90cb2c7285bc, 0x2c727ea1b208f7bc, 0xc05236f2e2194da4,),
         "one/overlap/gobo transport golden drifted"
     );
 
@@ -350,10 +340,10 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
     let blocked = renderer
         .render(&frame(vec![blocker()], vec![light(0)]), WIDTH, HEIGHT, 2)
         .unwrap();
-    // Provisional 2026-08-25, same re-baseline as above.
+    // Same density and tail update as above; occlusion invariants stay unchanged.
     assert_eq!(
         (hash(&open), hash(&blocked)),
-        (0xec44_6591_4338_0f1e, 0xbb65_661d_35cd_8d5e),
+        (0x735c17dcdfb50352, 0x9a5a721f72ac8c93),
         "depth-occlusion transport golden drifted"
     );
     assert!(mean_rgb(&blocked) < mean_rgb(&open));
@@ -642,5 +632,50 @@ fn async_viewport_coalesces_in_flight_work_and_presents_the_newest_descriptor() 
         newest.image.to_bytes(),
         expected.image.to_bytes(),
         "newest-wins coalescing must render the last submitted descriptor"
+    );
+}
+
+#[test]
+fn broad_grid_resets_colour_and_blackout_without_retaining_light() {
+    let mut cone = light(0);
+    cone.wash = 0.9;
+    cone.cos_field = 0.5;
+    cone.cos_beam = 0.85;
+    cone.range = 24.0;
+    cone.intensity = 0.03;
+    let mut frame = frame(Vec::new(), vec![cone; 129]);
+    frame.geometry_shadows = true;
+    frame.fixture_shadows = true;
+    let mut renderer = Renderer::new().unwrap();
+    for i in 0..4 {
+        frame.time = i as f32 / 60.0;
+        renderer.render_next(&frame, WIDTH, HEIGHT, 1).unwrap();
+    }
+    for cone in &mut frame.fixture_cones {
+        cone.color = Vec3::new(0.0, 1.0, 0.0);
+    }
+    frame.time += 1.0 / 60.0;
+    let green = renderer.render_next(&frame, WIDTH, HEIGHT, 1).unwrap();
+    let mut fresh = Renderer::new().unwrap();
+    assert_eq!(
+        green,
+        fresh.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
+        "colour cue retained red history"
+    );
+    let cones = std::mem::take(&mut frame.fixture_cones);
+    frame.time += 1.0 / 60.0;
+    let dark = renderer.render_next(&frame, WIDTH, HEIGHT, 1).unwrap();
+    assert_eq!(
+        dark,
+        fresh.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
+        "blackout retained grid lighting"
+    );
+    assert!(mean_rgb(&dark) < mean_rgb(&green));
+    frame.fixture_cones = cones;
+    frame.time += 1.0 / 60.0;
+    assert_eq!(
+        renderer.render_next(&frame, WIDTH, HEIGHT, 1).unwrap(),
+        fresh.render(&frame, WIDTH, HEIGHT, 1).unwrap(),
+        "restoring fixtures reused stale grid cells"
     );
 }

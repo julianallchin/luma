@@ -1,0 +1,291 @@
+{
+  "status": "rejected for interactive use; experimental mode remains disabled by default",
+  "scenario": "Gasworks Park saved geometry, static full-output rig, fitted quarter-right camera; not a live score replay",
+  "app_left_running": false,
+  "runs": [
+    {
+      "label": "gasworks-off",
+      "raw_path": "/tmp/luma-harness-visibility/gasworks-off.json",
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=30",
+        "--measured-frames=120",
+        "--image=/tmp/luma-harness-visibility/gasworks-off.png"
+      ],
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-05T23:37:43Z",
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 1.2694699999999999,
+        "p50_ms": 0.679165,
+        "p95_ms": 0.890267
+      },
+      "geometry_shadows": false,
+      "gpu_scene": {
+        "max_ms": 2.9624639999999998,
+        "p50_ms": 2.32848,
+        "p95_ms": 2.8371839999999997
+      },
+      "gpu_total": {
+        "max_ms": 24.761632,
+        "p50_ms": 23.492704,
+        "p95_ms": 24.30208
+      },
+      "gpu_volumetric": {
+        "max_ms": 22.009024,
+        "p50_ms": 21.065663999999998,
+        "p95_ms": 21.738272
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 355.20554503367003,
+        "tile_references": 6751747,
+        "total_tiles": 19008
+      },
+      "measured_frames": 120,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "surface_lighting": true,
+      "warmup_frames": 30,
+      "width": 1146
+    },
+    {
+      "label": "gasworks-on",
+      "raw_path": "/tmp/luma-harness-visibility/gasworks-on.json",
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=30",
+        "--measured-frames=120",
+        "--image=/tmp/luma-harness-visibility/gasworks-on.png"
+      ],
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-05T23:38:46Z",
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 1.2045890000000001,
+        "p50_ms": 0.7209249999999999,
+        "p95_ms": 0.986488
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 139.58934399999998,
+        "p50_ms": 114.00031999999999,
+        "p95_ms": 123.88188799999999
+      },
+      "gpu_total": {
+        "max_ms": 421.643648,
+        "p50_ms": 395.647648,
+        "p95_ms": 413.69388799999996
+      },
+      "gpu_volumetric": {
+        "max_ms": 303.892608,
+        "p50_ms": 281.74304,
+        "p95_ms": 296.364224
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 355.20554503367003,
+        "tile_references": 6751747,
+        "total_tiles": 19008
+      },
+      "measured_frames": 120,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "surface_lighting": true,
+      "warmup_frames": 30,
+      "width": 1146
+    },
+    {
+      "label": "gasworks-surface-only",
+      "raw_path": "/tmp/luma-harness-visibility/gasworks-surface-only.json",
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=30",
+        "--measured-frames=120",
+        "--surface-only"
+      ],
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-05T23:39:56Z",
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 1.29136,
+        "p50_ms": 0.729205,
+        "p95_ms": 0.950127
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 132.313152,
+        "p50_ms": 114.41452799999999,
+        "p95_ms": 127.03711999999999
+      },
+      "gpu_total": {
+        "max_ms": 132.366944,
+        "p50_ms": 114.48303999999999,
+        "p95_ms": 127.08572799999999
+      },
+      "gpu_volumetric": {
+        "max_ms": 0.17808,
+        "p50_ms": 0.029632,
+        "p95_ms": 0.173504
+      },
+      "haze_density": 0.0,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 355.20554503367003,
+        "tile_references": 6751747,
+        "total_tiles": 19008
+      },
+      "measured_frames": 120,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "surface_lighting": true,
+      "warmup_frames": 30,
+      "width": 1146
+    },
+    {
+      "label": "gasworks-haze-only",
+      "raw_path": "/tmp/luma-harness-visibility/gasworks-haze-only.json",
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=30",
+        "--measured-frames=120",
+        "--haze-only"
+      ],
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-05T23:40:39Z",
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 1.155559,
+        "p50_ms": 0.739966,
+        "p95_ms": 1.023977
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 0.150816,
+        "p50_ms": 0.142144,
+        "p95_ms": 0.143296
+      },
+      "gpu_total": {
+        "max_ms": 306.36332799999997,
+        "p50_ms": 282.215712,
+        "p95_ms": 294.365472
+      },
+      "gpu_volumetric": {
+        "max_ms": 306.201984,
+        "p50_ms": 282.054496,
+        "p95_ms": 294.20041599999996
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 355.20554503367003,
+        "tile_references": 6751747,
+        "total_tiles": 19008
+      },
+      "measured_frames": 120,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "surface_lighting": false,
+      "warmup_frames": 30,
+      "width": 1146
+    }
+  ]
+}

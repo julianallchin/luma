@@ -1,0 +1,251 @@
+{
+  "description": "Experimental software stage visibility; not GI. See docs/design/stage-rendering-quality.md.",
+  "runs": [
+    {
+      "raw_path": "/tmp/luma-bvh-dense-off.json",
+      "adapter": {
+        "backend": "Vulkan",
+        "device_type": "DiscreteGpu",
+        "driver": "NVIDIA",
+        "driver_info": "595.84",
+        "name": "NVIDIA GeForce RTX 5090",
+        "timestamp_period_ns": 1.0,
+        "timestamp_query_supported": true
+      },
+      "cases": [
+        {
+          "budgets_ms": {
+            "cpu_encode_submit_p95": 14.0,
+            "gpu_total_max": 141.0,
+            "gpu_total_p95": 121.0,
+            "gpu_volumetric_p95": 108.0,
+            "mean_lights_per_tile": 100.0
+          },
+          "camera_radius": 7.400000095367432,
+          "case_id": "dense-geometry-120",
+          "cold_cluster_build_ms": 0.065761,
+          "cones": 120,
+          "cpu_cluster": {
+            "max_ms": 0.09985100000000001,
+            "p50_ms": 0.03895,
+            "p95_ms": 0.05992
+          },
+          "cpu_encode_submit": {
+            "max_ms": 4.10389,
+            "p50_ms": 2.222677,
+            "p95_ms": 3.069033
+          },
+          "fixture_shadows": true,
+          "gpu_composite": {
+            "max_ms": 0.24099199999999998,
+            "p50_ms": 0.01696,
+            "p95_ms": 0.017504
+          },
+          "gpu_index": {
+            "max_ms": 0.059039999999999995,
+            "p50_ms": 0.0496,
+            "p95_ms": 0.053536
+          },
+          "gpu_scene": {
+            "max_ms": 5.3893759999999995,
+            "p50_ms": 4.187936,
+            "p95_ms": 4.891616
+          },
+          "gpu_total": {
+            "max_ms": 8.145024,
+            "p50_ms": 6.443391999999999,
+            "p95_ms": 7.1957439999999995
+          },
+          "gpu_volumetric": {
+            "max_ms": 3.0449599999999997,
+            "p50_ms": 2.1676159999999998,
+            "p95_ms": 2.711424
+          },
+          "light_index_stats": {
+            "lights_on_screen": 120,
+            "lights_total": 120,
+            "mean_lights_per_tile": 91.548487654321,
+            "tile_references": 2966171,
+            "total_tiles": 32400
+          },
+          "mean_lights_per_fragment": 56.46956496884256,
+          "opaque_draws": 2057,
+          "samples": 600,
+          "samples_fnv64": "0x74824d9fc9f83121",
+          "shadow_stats": {
+            "caster_draws": 3460,
+            "mesh_draws": 106,
+            "redrawn_maps": 16,
+            "unculled_draws": 32912
+          },
+          "shadowed_fixtures": 16,
+          "within_budget": true
+        }
+      ]
+    },
+    {
+      "raw_path": "/tmp/luma-bvh-dense-on.json",
+      "adapter": {
+        "backend": "Vulkan",
+        "device_type": "DiscreteGpu",
+        "driver": "NVIDIA",
+        "driver_info": "595.84",
+        "name": "NVIDIA GeForce RTX 5090",
+        "timestamp_period_ns": 1.0,
+        "timestamp_query_supported": true
+      },
+      "cases": [
+        {
+          "budgets_ms": {
+            "cpu_encode_submit_p95": 14.0,
+            "gpu_total_max": 141.0,
+            "gpu_total_p95": 121.0,
+            "gpu_volumetric_p95": 108.0,
+            "mean_lights_per_tile": 100.0
+          },
+          "camera_radius": 7.400000095367432,
+          "case_id": "dense-geometry-120",
+          "cold_cluster_build_ms": 0.05729,
+          "cones": 120,
+          "cpu_cluster": {
+            "max_ms": 0.09161,
+            "p50_ms": 0.038521,
+            "p95_ms": 0.0535
+          },
+          "cpu_encode_submit": {
+            "max_ms": 3.383665,
+            "p50_ms": 2.1649260000000004,
+            "p95_ms": 2.619659
+          },
+          "fixture_shadows": true,
+          "gpu_composite": {
+            "max_ms": 0.329792,
+            "p50_ms": 0.017696,
+            "p95_ms": 0.019615999999999998
+          },
+          "gpu_index": {
+            "max_ms": 0.059359999999999996,
+            "p50_ms": 0.049504,
+            "p95_ms": 0.053023999999999995
+          },
+          "gpu_scene": {
+            "max_ms": 6.61328,
+            "p50_ms": 5.26208,
+            "p95_ms": 6.192448
+          },
+          "gpu_total": {
+            "max_ms": 12.886752,
+            "p50_ms": 10.398016,
+            "p95_ms": 11.711039999999999
+          },
+          "gpu_volumetric": {
+            "max_ms": 7.020384,
+            "p50_ms": 5.155328,
+            "p95_ms": 6.139168
+          },
+          "light_index_stats": {
+            "lights_on_screen": 120,
+            "lights_total": 120,
+            "mean_lights_per_tile": 91.548487654321,
+            "tile_references": 2966171,
+            "total_tiles": 32400
+          },
+          "mean_lights_per_fragment": 56.46956496884256,
+          "opaque_draws": 2057,
+          "samples": 600,
+          "samples_fnv64": "0xe594011af0326ff4",
+          "shadow_stats": {
+            "caster_draws": 3460,
+            "mesh_draws": 106,
+            "redrawn_maps": 16,
+            "unculled_draws": 32912
+          },
+          "shadowed_fixtures": 16,
+          "within_budget": true
+        }
+      ]
+    },
+    {
+      "raw_path": "/tmp/luma-bvh-dense-24m-smoke.json",
+      "adapter": {
+        "backend": "Vulkan",
+        "device_type": "DiscreteGpu",
+        "driver": "NVIDIA",
+        "driver_info": "595.84",
+        "name": "NVIDIA GeForce RTX 5090",
+        "timestamp_period_ns": 1.0,
+        "timestamp_query_supported": true
+      },
+      "cases": [
+        {
+          "budgets_ms": {
+            "cpu_encode_submit_p95": 14.0,
+            "gpu_total_max": 141.0,
+            "gpu_total_p95": 121.0,
+            "gpu_volumetric_p95": 108.0,
+            "mean_lights_per_tile": 100.0
+          },
+          "camera_radius": 7.400000095367432,
+          "case_id": "dense-geometry-120",
+          "cold_cluster_build_ms": 0.05516,
+          "cones": 120,
+          "cpu_cluster": {
+            "max_ms": 0.06245,
+            "p50_ms": 0.045001,
+            "p95_ms": 0.057761
+          },
+          "cpu_encode_submit": {
+            "max_ms": 2.820911,
+            "p50_ms": 2.374928,
+            "p95_ms": 2.819361
+          },
+          "fixture_shadows": true,
+          "gpu_composite": {
+            "max_ms": 0.023039999999999998,
+            "p50_ms": 0.018112,
+            "p95_ms": 0.020416
+          },
+          "gpu_index": {
+            "max_ms": 0.054976,
+            "p50_ms": 0.05296,
+            "p95_ms": 0.054688
+          },
+          "gpu_scene": {
+            "max_ms": 7.374047999999999,
+            "p50_ms": 6.7336,
+            "p95_ms": 7.199616
+          },
+          "gpu_total": {
+            "max_ms": 12.580255999999999,
+            "p50_ms": 11.781215999999999,
+            "p95_ms": 12.385024
+          },
+          "gpu_volumetric": {
+            "max_ms": 5.36288,
+            "p50_ms": 5.038304,
+            "p95_ms": 5.338112
+          },
+          "light_index_stats": {
+            "lights_on_screen": 120,
+            "lights_total": 120,
+            "mean_lights_per_tile": 111.5837962962963,
+            "tile_references": 3615315,
+            "total_tiles": 32400
+          },
+          "mean_lights_per_fragment": 94.79588306113902,
+          "opaque_draws": 2057,
+          "samples": 20,
+          "samples_fnv64": "0x72472aab53bf5d45",
+          "shadow_stats": {
+            "caster_draws": 4300,
+            "mesh_draws": 208,
+            "redrawn_maps": 16,
+            "unculled_draws": 32912
+          },
+          "shadowed_fixtures": 16,
+          "within_budget": false
+        }
+      ]
+    }
+  ]
+}

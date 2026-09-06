@@ -6,7 +6,9 @@
 //! light mask, and 4096 uniform view-depth bins each holding a `min|max`
 //! range of *depth-sorted* light ids. Point consumers intersect mask with the
 //! bin range; ray consumers walk the mask alone. The structure is fixed-size,
-//! so building it cannot fail and never allocates per frame.
+//! so building it cannot fail and never allocates per frame. A second mask
+//! plane retains only the analytic source regions used by shared fog lighting;
+//! it uses the same tiles, sort order, and SoA as the full-range plane.
 //!
 //! The sort order is private. Consumers receive light ids in sorted space and
 //! index a reordered SoA this module uploads; source order stays canonical for
@@ -335,6 +337,8 @@ struct IndexParams {
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 struct LightCull {
     rect: [u32; 4],
+    /// Analytic source-region bounds for broad washes; full rect otherwise.
+    near_rect: [u32; 4],
     apex_range: [f32; 4],
     dir_cos: [f32; 4],
     span: [f32; 4],
@@ -767,7 +771,16 @@ impl LightIndex {
         let lights: Vec<LightCull> = prepared
             .extents
             .iter()
-            .map(|(_, cone, extent)| LightCull {
+            .map(|(source, cone, extent)| LightCull {
+                near_rect: {
+                    let rest = rests[*source as usize];
+                    let mut near = *cone;
+                    if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
+                        near.range = near.range.min(crate::fog_grid::SOURCE_OUTER);
+                    }
+                    view.extent_for(&near)
+                        .map_or([u32::MAX, u32::MAX, 0, 0], |r| [r.x0, r.y0, r.x1, r.y1])
+                },
                 rect: [extent.x0, extent.y0, extent.x1, extent.y1],
                 apex_range: [
                     cone.position.x,
@@ -789,7 +802,7 @@ impl LightIndex {
             let (sorted_cores, sorted_rests): (Vec<LightCore>, Vec<LightRest>) = prepared
                 .extents
                 .iter()
-                .map(|&(source, ..)| (cores[source as usize], rests[source as usize]))
+                .map(|&(source, _, _)| (cores[source as usize], rests[source as usize]))
                 .unzip();
             queue.write_buffer(&self.core, 0, bytemuck::cast_slice(&sorted_cores));
             queue.write_buffer(&self.rest, 0, bytemuck::cast_slice(&sorted_rests));
@@ -828,7 +841,8 @@ impl LightIndex {
         });
         let tile_masks = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("light-index-tile-masks"),
-            size: words(u64::from(columns) * u64::from(rows)),
+            // Full-range plane followed by analytic-source plane, with identical ids.
+            size: 2 * words(u64::from(columns) * u64::from(rows)),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -1420,7 +1434,17 @@ mod tests {
                 range: light.range,
             })
             .collect();
-        let rests = vec![LightRest::zeroed(); lights.len()];
+        let rests: Vec<_> = lights
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let mut rest = LightRest::zeroed();
+                rest.wash = if i % 2 == 0 { 0.9 } else { 0.0 };
+                rest.gobo = if i % 3 == 0 { 1.0 } else { 0.0 };
+                rest.haze_gain = 1.0;
+                rest
+            })
+            .collect();
         let pipelines = LightIndexPipelines::new(&device);
         let mut index = LightIndex::new(&device);
         let mut encoder =
@@ -1453,8 +1477,71 @@ mod tests {
             .expect("poll");
         let view = readback.slice(..).get_mapped_range().expect("mapped");
         let gpu_masks: &[u32] = bytemuck::cast_slice(&view);
-        assert_eq!(gpu_masks.len(), reference.tile_masks.len());
-        assert_eq!(gpu_masks, &reference.tile_masks[..], "tile masks diverged");
+        let words = reference.tile_masks.len();
+        assert_eq!(gpu_masks.len(), words * 2);
+        assert_eq!(
+            &gpu_masks[..words],
+            &reference.tile_masks[..],
+            "tile masks diverged"
+        );
+        let near_masks = &gpu_masks[words..];
+        let mut clipped = lights.clone();
+        for (light, rest) in clipped.iter_mut().zip(&rests) {
+            if rest.wash >= crate::fog_grid::BROAD_WASH && rest.gobo < 0.5 {
+                light.range = finite(light.range, 0.05)
+                    .clamp(0.05, 100.0)
+                    .min(crate::fog_grid::SOURCE_OUTER);
+            }
+        }
+        // Independently build fully clipped cones, including a different depth
+        // sort and narrow phase. Candidates also retained by the full-range
+        // reference must survive the cheaper near-rectangle mask.
+        let near_reference = CpuLightIndex::build(&LightIndexInput {
+            cones: &clipped,
+            ..input
+        });
+        for y in 0..reference.rows {
+            for x in 0..reference.columns {
+                let base = (y * reference.columns + x) as usize * MASK_WORDS;
+                for source in near_reference.lights_along(x * TILE_SIZE, y * TILE_SIZE) {
+                    let sorted = reference
+                        .sorted_to_source
+                        .iter()
+                        .position(|&i| i == source)
+                        .unwrap();
+                    if gpu_masks[base + sorted / 32] & (1 << (sorted % 32)) == 0 {
+                        continue;
+                    }
+                    assert_ne!(
+                        near_masks[base + sorted / 32] & (1 << (sorted % 32)),
+                        0,
+                        "near mask lost source {source} at tile {x},{y}"
+                    );
+                }
+                for (sorted, &source) in reference.sorted_to_source.iter().enumerate() {
+                    let rest = rests[source as usize];
+                    let bit = 1 << (sorted % 32);
+                    let at = base + sorted / 32;
+                    assert_eq!(
+                        near_masks[at] & !gpu_masks[at],
+                        0,
+                        "near mask added a full-range rejection"
+                    );
+                    if rest.wash < crate::fog_grid::BROAD_WASH || rest.gobo >= 0.5 {
+                        assert_eq!(
+                            near_masks[at] & bit,
+                            gpu_masks[at] & bit,
+                            "a narrow or gobo cone was shortened"
+                        );
+                    }
+                }
+            }
+        }
+        assert_ne!(
+            near_masks,
+            &gpu_masks[..words],
+            "source-region culling did no work"
+        );
     }
 
     #[test]

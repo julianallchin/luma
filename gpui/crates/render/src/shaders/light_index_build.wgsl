@@ -41,6 +41,8 @@ struct IndexParams {
 struct LightCull {
     // Inclusive 8 px tile rect: x0, y0, x1, y1.
     rect: vec4<u32>,
+    // Source region for broad washes, full range for narrow/gobo lights.
+    near_rect: vec4<u32>,
     // xyz apex, w range.
     apex_range: vec4<f32>,
     // xyz direction, w cos_field.
@@ -156,6 +158,7 @@ fn tile_fill(
     for (var word = 0u; word < MASK_WORDS; word = word + 1u) {
         var candidates = big_masks[big_base + word];
         var bits = 0u;
+        var near_bits = 0u;
         while candidates != 0u {
             let bit = firstTrailingBit(candidates);
             candidates &= candidates - 1u;
@@ -176,8 +179,11 @@ fn tile_fill(
                     }
                 }
                 bits |= 1u << bit;
+                let n = light.near_rect;
+                if n.x <= tile_x && tile_x <= n.z && n.y <= tile_y && tile_y <= n.w { near_bits |= 1u << bit; }
             }
         }
         tile_masks[out_base + word] = bits;
+        tile_masks[params.grid.x * params.grid.y * MASK_WORDS + out_base + word] = near_bits;
     }
 }

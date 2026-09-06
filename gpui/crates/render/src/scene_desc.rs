@@ -252,6 +252,8 @@ pub struct RenderSettings {
     pub fixture_surface_lighting: bool,
     /// Whether opaque venue geometry casts shadows into fixture light and haze.
     pub fixture_shadows: bool,
+    /// Retained shadow maps for all fixtures instead of the legacy limited set.
+    pub geometry_shadows: bool,
     /// Paint cluster occupancy instead of authored PBR shading.
     pub cluster_debug: bool,
     /// Vertical field of view, degrees.
@@ -652,6 +654,7 @@ impl RenderSettings {
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
+            geometry_shadows: false,
             cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
@@ -684,6 +687,7 @@ impl RenderSettings {
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
+            geometry_shadows: false,
             cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
@@ -722,6 +726,7 @@ impl RenderSettings {
             debug_view: DebugView::Pbr,
             fixture_surface_lighting: true,
             fixture_shadows: true,
+            geometry_shadows: false,
             cluster_debug: false,
             fov,
             legacy_shadow_eye: None,
@@ -757,6 +762,8 @@ struct RenderSettingsWire {
     fixture_surface_lighting: Option<bool>,
     #[serde(default)]
     fixture_shadows: Option<bool>,
+    #[serde(default)]
+    geometry_shadows: bool,
     #[serde(default)]
     cluster_debug: bool,
     fov: f32,
@@ -807,6 +814,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
                 // own justification.
                 fixture_surface_lighting: wire.fixture_surface_lighting.unwrap_or(true),
                 fixture_shadows: wire.fixture_shadows.unwrap_or(true),
+                geometry_shadows: wire.geometry_shadows,
                 cluster_debug: wire.cluster_debug,
                 fov: wire.fov,
                 legacy_shadow_eye: None,
@@ -833,6 +841,7 @@ impl<'de> Deserialize<'de> for RenderSettings {
         settings.sky = wire.sky;
         settings.fixture_surface_lighting = wire.fixture_surface_lighting.unwrap_or(false);
         settings.fixture_shadows = wire.fixture_shadows.unwrap_or(false);
+        settings.geometry_shadows = wire.geometry_shadows;
         settings.cluster_debug = wire.cluster_debug;
         settings.legacy_shadow_eye = (!dark).then_some(DirectionalLight::EDITOR.direction);
         Ok(settings)

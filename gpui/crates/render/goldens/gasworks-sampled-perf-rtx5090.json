@@ -1,0 +1,1035 @@
+{
+  "schema": "luma.gasworks-render-performance/1",
+  "change": "Retained all-emitter shadow maps; weighted broad-wash light sampling; separate depth-guided spatial reconstruction; cue history rejection",
+  "setup": {
+    "venue": "Gasworks Park",
+    "patched_fixtures": 92,
+    "stage_pieces": 83,
+    "full_output_emitters": 470,
+    "opaque_triangles": 215059,
+    "output": [
+      1146,
+      1051
+    ],
+    "haze_resolution": 0.5,
+    "integration_samples": 8,
+    "wide_light_group": 8,
+    "warmup_frames": 60,
+    "measured_frames": 600,
+    "app_running": false
+  },
+  "runs": {
+    "static": {
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=60",
+        "--measured-frames=600",
+        "--image=/tmp/luma-harness-visibility/gasworks-sampled-final.png"
+      ],
+      "blackout": false,
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-06T00:16:01Z",
+      "cold_frame": {
+        "cpu_encode_ms": 242.224912,
+        "gpu_ms": 13.557024,
+        "shadow_maps": 470
+      },
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 2.474269,
+        "p50_ms": 0.7948360000000001,
+        "p95_ms": 0.9829280000000001
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 4.4160319999999995,
+        "p50_ms": 3.551328,
+        "p95_ms": 4.113888
+      },
+      "gpu_total": {
+        "max_ms": 12.864352,
+        "p50_ms": 11.89456,
+        "p95_ms": 12.471967999999999
+      },
+      "gpu_volumetric": {
+        "max_ms": 8.814176,
+        "p50_ms": 8.302112,
+        "p95_ms": 8.557824
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 355.20554503367003,
+        "tile_references": 6751747,
+        "total_tiles": 19008
+      },
+      "measured_frames": 600,
+      "moving_cones": 0,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "redrawn_maps_max": 0,
+      "resident_shadow_maps": 470,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "source_provenance": {
+        "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
+        "entries": [
+          {
+            "bytes": 193977,
+            "content_fnv64": "0x209670ad1e5d2245",
+            "path": "gpui/crates/app/src/visualizer.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 8415,
+            "content_fnv64": "0x5c5ac2a733df1b7c",
+            "path": "gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 7539,
+            "content_fnv64": "0x2821b7570dc8c426",
+            "path": "gpui/crates/render/goldens/geometry-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 5063,
+            "content_fnv64": "0x40288e11ceda47c5",
+            "path": "gpui/crates/render/goldens/render-refinement-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 3772,
+            "content_fnv64": "0x4a7a01c1f21a8e42",
+            "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2802,
+            "content_fnv64": "0x4c7aa359fa84bbfa",
+            "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 4499,
+            "content_fnv64": "0xe9246bc8fa98f389",
+            "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1085,
+            "content_fnv64": "0x4c96026700235f0a",
+            "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+            "state": "tracked"
+          },
+          {
+            "bytes": 55360,
+            "content_fnv64": "0x83ece4a17d9a5f1d",
+            "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 45014,
+            "content_fnv64": "0xab626fa2683b4775",
+            "path": "gpui/crates/render/src/frame.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 221817,
+            "content_fnv64": "0x6f6af54784b49ad3",
+            "path": "gpui/crates/render/src/gpu.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2981,
+            "content_fnv64": "0x4a547b4f879462a6",
+            "path": "gpui/crates/render/src/lib.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 13519,
+            "content_fnv64": "0x6159845f7832901f",
+            "path": "gpui/crates/render/src/luminaire.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 59139,
+            "content_fnv64": "0x6343303f361913a6",
+            "path": "gpui/crates/render/src/scene_desc.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19849,
+            "content_fnv64": "0x0a8031fc1e18c64a",
+            "path": "gpui/crates/render/src/shaders/beam_transport.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 3429,
+            "content_fnv64": "0xb7ee3bb24171995f",
+            "path": "gpui/crates/render/src/shaders/fixture_light.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5491,
+            "content_fnv64": "0x8c50bef30a3f8baf",
+            "path": "gpui/crates/render/src/shaders/haze.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2556,
+            "content_fnv64": "0xa0f25a9be9e6aae2",
+            "path": "gpui/crates/render/src/shaders/haze_temporal.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19291,
+            "content_fnv64": "0x2811fa05fa8c42f2",
+            "path": "gpui/crates/render/src/shaders/scene.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5265,
+            "content_fnv64": "0x5f775cf5f3ec9315",
+            "path": "gpui/crates/render/src/shaders/scene_bindings.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1850,
+            "content_fnv64": "0x8ce43cdc969eb4ae",
+            "path": "gpui/crates/render/src/shaders/visibility.wgsl",
+            "state": "untracked"
+          },
+          {
+            "bytes": 15417,
+            "content_fnv64": "0x521c066a05ef0dae",
+            "path": "gpui/crates/render/src/shadow.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5062,
+            "content_fnv64": "0x795698135ac07951",
+            "path": "gpui/crates/render/src/visibility.rs",
+            "state": "untracked"
+          },
+          {
+            "bytes": 20860,
+            "content_fnv64": "0xb7b62dcd47ff8cfb",
+            "path": "gpui/crates/render/tests/volumetric_transport.rs",
+            "state": "tracked"
+          }
+        ],
+        "excluded": [
+          "gpui/crates/render/goldens/volumetric-profile-m3-max.json",
+          ".husky/**"
+        ],
+        "extensions": [
+          "rs",
+          "wgsl",
+          "json",
+          "png"
+        ],
+        "manifest_fnv64": "0xd34a0c0f58fb28ca",
+        "scopes": [
+          "gpui/crates/render",
+          "gpui/crates/app"
+        ]
+      },
+      "surface_lighting": true,
+      "visibility_reference": false,
+      "warmup_frames": 60,
+      "wide_light_group": "8",
+      "width": 1146
+    },
+    "moving_32": {
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=60",
+        "--measured-frames=600",
+        "--moving-cones=32",
+        "--image-subframes=1",
+        "--image=/tmp/luma-harness-visibility/gasworks-moving-final.png"
+      ],
+      "blackout": false,
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-06T00:16:31Z",
+      "cold_frame": {
+        "cpu_encode_ms": 243.94286400000001,
+        "gpu_ms": 13.766976,
+        "shadow_maps": 470
+      },
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 3.170174,
+        "p50_ms": 1.6570319999999998,
+        "p95_ms": 1.8898840000000001
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 4.636896,
+        "p50_ms": 3.716544,
+        "p95_ms": 4.334656
+      },
+      "gpu_total": {
+        "max_ms": 13.067328,
+        "p50_ms": 12.199648,
+        "p95_ms": 12.836383999999999
+      },
+      "gpu_volumetric": {
+        "max_ms": 8.860576,
+        "p50_ms": 8.429248,
+        "p95_ms": 8.66096
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 354.15661826599325,
+        "tile_references": 6731809,
+        "total_tiles": 19008
+      },
+      "measured_frames": 600,
+      "moving_cones": 32,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "redrawn_maps_max": 32,
+      "resident_shadow_maps": 470,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "source_provenance": {
+        "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
+        "entries": [
+          {
+            "bytes": 193977,
+            "content_fnv64": "0x209670ad1e5d2245",
+            "path": "gpui/crates/app/src/visualizer.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 8415,
+            "content_fnv64": "0x5c5ac2a733df1b7c",
+            "path": "gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 7539,
+            "content_fnv64": "0x2821b7570dc8c426",
+            "path": "gpui/crates/render/goldens/geometry-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 5063,
+            "content_fnv64": "0x40288e11ceda47c5",
+            "path": "gpui/crates/render/goldens/render-refinement-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 3772,
+            "content_fnv64": "0x4a7a01c1f21a8e42",
+            "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2802,
+            "content_fnv64": "0x4c7aa359fa84bbfa",
+            "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 4499,
+            "content_fnv64": "0xe9246bc8fa98f389",
+            "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1085,
+            "content_fnv64": "0x4c96026700235f0a",
+            "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+            "state": "tracked"
+          },
+          {
+            "bytes": 55360,
+            "content_fnv64": "0x83ece4a17d9a5f1d",
+            "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 45014,
+            "content_fnv64": "0xab626fa2683b4775",
+            "path": "gpui/crates/render/src/frame.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 221817,
+            "content_fnv64": "0x6f6af54784b49ad3",
+            "path": "gpui/crates/render/src/gpu.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2981,
+            "content_fnv64": "0x4a547b4f879462a6",
+            "path": "gpui/crates/render/src/lib.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 13519,
+            "content_fnv64": "0x6159845f7832901f",
+            "path": "gpui/crates/render/src/luminaire.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 59139,
+            "content_fnv64": "0x6343303f361913a6",
+            "path": "gpui/crates/render/src/scene_desc.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19849,
+            "content_fnv64": "0x0a8031fc1e18c64a",
+            "path": "gpui/crates/render/src/shaders/beam_transport.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 3429,
+            "content_fnv64": "0xb7ee3bb24171995f",
+            "path": "gpui/crates/render/src/shaders/fixture_light.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5491,
+            "content_fnv64": "0x8c50bef30a3f8baf",
+            "path": "gpui/crates/render/src/shaders/haze.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2556,
+            "content_fnv64": "0xa0f25a9be9e6aae2",
+            "path": "gpui/crates/render/src/shaders/haze_temporal.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19291,
+            "content_fnv64": "0x2811fa05fa8c42f2",
+            "path": "gpui/crates/render/src/shaders/scene.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5265,
+            "content_fnv64": "0x5f775cf5f3ec9315",
+            "path": "gpui/crates/render/src/shaders/scene_bindings.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1850,
+            "content_fnv64": "0x8ce43cdc969eb4ae",
+            "path": "gpui/crates/render/src/shaders/visibility.wgsl",
+            "state": "untracked"
+          },
+          {
+            "bytes": 15417,
+            "content_fnv64": "0x521c066a05ef0dae",
+            "path": "gpui/crates/render/src/shadow.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5062,
+            "content_fnv64": "0x795698135ac07951",
+            "path": "gpui/crates/render/src/visibility.rs",
+            "state": "untracked"
+          },
+          {
+            "bytes": 20860,
+            "content_fnv64": "0xb7b62dcd47ff8cfb",
+            "path": "gpui/crates/render/tests/volumetric_transport.rs",
+            "state": "tracked"
+          }
+        ],
+        "excluded": [
+          "gpui/crates/render/goldens/volumetric-profile-m3-max.json",
+          ".husky/**"
+        ],
+        "extensions": [
+          "rs",
+          "wgsl",
+          "json",
+          "png"
+        ],
+        "manifest_fnv64": "0xd34a0c0f58fb28ca",
+        "scopes": [
+          "gpui/crates/render",
+          "gpui/crates/app"
+        ]
+      },
+      "surface_lighting": true,
+      "visibility_reference": false,
+      "warmup_frames": 60,
+      "wide_light_group": "8",
+      "width": 1146
+    },
+    "moving_470_stress": {
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=60",
+        "--measured-frames=600",
+        "--moving-cones=470"
+      ],
+      "blackout": false,
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-06T00:17:08Z",
+      "cold_frame": {
+        "cpu_encode_ms": 237.269394,
+        "gpu_ms": 13.915776,
+        "shadow_maps": 470
+      },
+      "cones": 470,
+      "cpu_encode_submit": {
+        "max_ms": 15.276615,
+        "p50_ms": 11.85985,
+        "p95_ms": 13.066328
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 7.340768,
+        "p50_ms": 6.622815999999999,
+        "p95_ms": 6.987648
+      },
+      "gpu_total": {
+        "max_ms": 16.30432,
+        "p50_ms": 15.442143999999999,
+        "p95_ms": 15.908703999999998
+      },
+      "gpu_volumetric": {
+        "max_ms": 9.288224,
+        "p50_ms": 8.8264,
+        "p95_ms": 9.049472
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 470,
+        "lights_total": 470,
+        "mean_lights_per_tile": 336.8743686868687,
+        "tile_references": 6403308,
+        "total_tiles": 19008
+      },
+      "measured_frames": 600,
+      "moving_cones": 470,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "redrawn_maps_max": 470,
+      "resident_shadow_maps": 470,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "source_provenance": {
+        "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
+        "entries": [
+          {
+            "bytes": 193977,
+            "content_fnv64": "0x209670ad1e5d2245",
+            "path": "gpui/crates/app/src/visualizer.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 8415,
+            "content_fnv64": "0x5c5ac2a733df1b7c",
+            "path": "gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 7539,
+            "content_fnv64": "0x2821b7570dc8c426",
+            "path": "gpui/crates/render/goldens/geometry-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 5063,
+            "content_fnv64": "0x40288e11ceda47c5",
+            "path": "gpui/crates/render/goldens/render-refinement-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 3772,
+            "content_fnv64": "0x4a7a01c1f21a8e42",
+            "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2802,
+            "content_fnv64": "0x4c7aa359fa84bbfa",
+            "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 4499,
+            "content_fnv64": "0xe9246bc8fa98f389",
+            "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1085,
+            "content_fnv64": "0x4c96026700235f0a",
+            "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+            "state": "tracked"
+          },
+          {
+            "bytes": 55360,
+            "content_fnv64": "0x83ece4a17d9a5f1d",
+            "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 45014,
+            "content_fnv64": "0xab626fa2683b4775",
+            "path": "gpui/crates/render/src/frame.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 221817,
+            "content_fnv64": "0x6f6af54784b49ad3",
+            "path": "gpui/crates/render/src/gpu.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2981,
+            "content_fnv64": "0x4a547b4f879462a6",
+            "path": "gpui/crates/render/src/lib.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 13519,
+            "content_fnv64": "0x6159845f7832901f",
+            "path": "gpui/crates/render/src/luminaire.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 59139,
+            "content_fnv64": "0x6343303f361913a6",
+            "path": "gpui/crates/render/src/scene_desc.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19849,
+            "content_fnv64": "0x0a8031fc1e18c64a",
+            "path": "gpui/crates/render/src/shaders/beam_transport.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 3429,
+            "content_fnv64": "0xb7ee3bb24171995f",
+            "path": "gpui/crates/render/src/shaders/fixture_light.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5491,
+            "content_fnv64": "0x8c50bef30a3f8baf",
+            "path": "gpui/crates/render/src/shaders/haze.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2556,
+            "content_fnv64": "0xa0f25a9be9e6aae2",
+            "path": "gpui/crates/render/src/shaders/haze_temporal.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19291,
+            "content_fnv64": "0x2811fa05fa8c42f2",
+            "path": "gpui/crates/render/src/shaders/scene.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5265,
+            "content_fnv64": "0x5f775cf5f3ec9315",
+            "path": "gpui/crates/render/src/shaders/scene_bindings.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1850,
+            "content_fnv64": "0x8ce43cdc969eb4ae",
+            "path": "gpui/crates/render/src/shaders/visibility.wgsl",
+            "state": "untracked"
+          },
+          {
+            "bytes": 15417,
+            "content_fnv64": "0x521c066a05ef0dae",
+            "path": "gpui/crates/render/src/shadow.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5062,
+            "content_fnv64": "0x795698135ac07951",
+            "path": "gpui/crates/render/src/visibility.rs",
+            "state": "untracked"
+          },
+          {
+            "bytes": 20860,
+            "content_fnv64": "0xb7b62dcd47ff8cfb",
+            "path": "gpui/crates/render/tests/volumetric_transport.rs",
+            "state": "tracked"
+          }
+        ],
+        "excluded": [
+          "gpui/crates/render/goldens/volumetric-profile-m3-max.json",
+          ".husky/**"
+        ],
+        "extensions": [
+          "rs",
+          "wgsl",
+          "json",
+          "png"
+        ],
+        "manifest_fnv64": "0xd34a0c0f58fb28ca",
+        "scopes": [
+          "gpui/crates/render",
+          "gpui/crates/app"
+        ]
+      },
+      "surface_lighting": true,
+      "visibility_reference": false,
+      "warmup_frames": 60,
+      "wide_light_group": "8",
+      "width": 1146
+    },
+    "blackout": {
+      "adapter": {
+        "backend": "\"Vulkan\"",
+        "name": "NVIDIA GeForce RTX 5090"
+      },
+      "arguments": [
+        "./target/release/profile-volumetrics",
+        "--catalogue=/tmp/luma-harness-visibility/gasworks.json",
+        "--warmup-frames=60",
+        "--measured-frames=600",
+        "--blackout"
+      ],
+      "blackout": true,
+      "camera": {
+        "eye": [
+          -31.06558609008789,
+          26.56558609008789,
+          14.828817367553711
+        ],
+        "fov": 50.0,
+        "target": [
+          0.0,
+          -4.5,
+          8.0
+        ]
+      },
+      "captured_at_utc": "2026-09-06T00:17:39Z",
+      "cold_frame": {
+        "cpu_encode_ms": 237.263444,
+        "gpu_ms": 13.68592,
+        "shadow_maps": 470
+      },
+      "cones": 0,
+      "cpu_encode_submit": {
+        "max_ms": 2.0955150000000002,
+        "p50_ms": 0.6280450000000001,
+        "p95_ms": 0.926237
+      },
+      "geometry_shadows": true,
+      "gpu_scene": {
+        "max_ms": 4.299776,
+        "p50_ms": 0.150272,
+        "p95_ms": 4.030784
+      },
+      "gpu_total": {
+        "max_ms": 12.792639999999999,
+        "p50_ms": 0.290016,
+        "p95_ms": 12.486816
+      },
+      "gpu_volumetric": {
+        "max_ms": 9.01792,
+        "p50_ms": 0.12415999999999999,
+        "p95_ms": 8.581056
+      },
+      "haze_density": 0.800000011920929,
+      "haze_resolution": 0.5,
+      "haze_steps": 8,
+      "height": 1051,
+      "light_index": {
+        "lights_on_screen": 0,
+        "lights_total": 0,
+        "mean_lights_per_tile": 0.0,
+        "tile_references": 0,
+        "total_tiles": 19008
+      },
+      "measured_frames": 600,
+      "moving_cones": 0,
+      "opaque_draws": 860,
+      "opaque_triangles": 215059,
+      "redrawn_maps_max": 0,
+      "resident_shadow_maps": 0,
+      "scenario": "saved venue, static full-output red fixtures, fitted quarter-right camera; not a score replay",
+      "source": "/tmp/luma-harness-visibility/gasworks.json",
+      "source_fnv64": "0xc701ff47c3ed6cf4",
+      "source_provenance": {
+        "algorithm": "fnv1a64(length(path),path,length(state),state,content_length,length(content_fnv64),content_fnv64)",
+        "entries": [
+          {
+            "bytes": 193977,
+            "content_fnv64": "0x209670ad1e5d2245",
+            "path": "gpui/crates/app/src/visualizer.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 8415,
+            "content_fnv64": "0x5c5ac2a733df1b7c",
+            "path": "gpui/crates/render/goldens/gasworks-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 7539,
+            "content_fnv64": "0x2821b7570dc8c426",
+            "path": "gpui/crates/render/goldens/geometry-visibility-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 5063,
+            "content_fnv64": "0x40288e11ceda47c5",
+            "path": "gpui/crates/render/goldens/render-refinement-perf-rtx5090.json",
+            "state": "untracked"
+          },
+          {
+            "bytes": 3772,
+            "content_fnv64": "0x4a7a01c1f21a8e42",
+            "path": "gpui/crates/render/goldens/volumetric-stress-128.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2802,
+            "content_fnv64": "0x4c7aa359fa84bbfa",
+            "path": "gpui/crates/render/goldens/volumetric-stress-32.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 4499,
+            "content_fnv64": "0xe9246bc8fa98f389",
+            "path": "gpui/crates/render/goldens/volumetric-stress-512.png",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1085,
+            "content_fnv64": "0x4c96026700235f0a",
+            "path": "gpui/crates/render/goldens/volumetric-stress-scenes.json",
+            "state": "tracked"
+          },
+          {
+            "bytes": 55360,
+            "content_fnv64": "0x83ece4a17d9a5f1d",
+            "path": "gpui/crates/render/src/bin/profile-volumetrics.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 45014,
+            "content_fnv64": "0xab626fa2683b4775",
+            "path": "gpui/crates/render/src/frame.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 221817,
+            "content_fnv64": "0x6f6af54784b49ad3",
+            "path": "gpui/crates/render/src/gpu.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2981,
+            "content_fnv64": "0x4a547b4f879462a6",
+            "path": "gpui/crates/render/src/lib.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 13519,
+            "content_fnv64": "0x6159845f7832901f",
+            "path": "gpui/crates/render/src/luminaire.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 59139,
+            "content_fnv64": "0x6343303f361913a6",
+            "path": "gpui/crates/render/src/scene_desc.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19849,
+            "content_fnv64": "0x0a8031fc1e18c64a",
+            "path": "gpui/crates/render/src/shaders/beam_transport.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 3429,
+            "content_fnv64": "0xb7ee3bb24171995f",
+            "path": "gpui/crates/render/src/shaders/fixture_light.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5491,
+            "content_fnv64": "0x8c50bef30a3f8baf",
+            "path": "gpui/crates/render/src/shaders/haze.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 2556,
+            "content_fnv64": "0xa0f25a9be9e6aae2",
+            "path": "gpui/crates/render/src/shaders/haze_temporal.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 19291,
+            "content_fnv64": "0x2811fa05fa8c42f2",
+            "path": "gpui/crates/render/src/shaders/scene.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5265,
+            "content_fnv64": "0x5f775cf5f3ec9315",
+            "path": "gpui/crates/render/src/shaders/scene_bindings.wgsl",
+            "state": "tracked"
+          },
+          {
+            "bytes": 1850,
+            "content_fnv64": "0x8ce43cdc969eb4ae",
+            "path": "gpui/crates/render/src/shaders/visibility.wgsl",
+            "state": "untracked"
+          },
+          {
+            "bytes": 15417,
+            "content_fnv64": "0x521c066a05ef0dae",
+            "path": "gpui/crates/render/src/shadow.rs",
+            "state": "tracked"
+          },
+          {
+            "bytes": 5062,
+            "content_fnv64": "0x795698135ac07951",
+            "path": "gpui/crates/render/src/visibility.rs",
+            "state": "untracked"
+          },
+          {
+            "bytes": 20860,
+            "content_fnv64": "0xb7b62dcd47ff8cfb",
+            "path": "gpui/crates/render/tests/volumetric_transport.rs",
+            "state": "tracked"
+          }
+        ],
+        "excluded": [
+          "gpui/crates/render/goldens/volumetric-profile-m3-max.json",
+          ".husky/**"
+        ],
+        "extensions": [
+          "rs",
+          "wgsl",
+          "json",
+          "png"
+        ],
+        "manifest_fnv64": "0xd34a0c0f58fb28ca",
+        "scopes": [
+          "gpui/crates/render",
+          "gpui/crates/app"
+        ]
+      },
+      "surface_lighting": true,
+      "visibility_reference": false,
+      "warmup_frames": 60,
+      "wide_light_group": "8",
+      "width": 1146
+    }
+  },
+  "quality": {
+    "time_seconds": 0,
+    "standalone_subframes": 16,
+    "mean_absolute_rgb_error_on_0_255": {
+      "gasworks-exhaustive-final-t0.png": [
+        0.3723338364692149,
+        0.183788231269812,
+        0.16084158193891632
+      ],
+      "gasworks-reference8.png": [
+        0.492105083997124,
+        0.20835305194255285,
+        0.1784820573109961
+      ]
+    },
+    "sampled_image": "/tmp/luma-harness-visibility/gasworks-quality-final-t0.png",
+    "fresh_moving_image": "/tmp/luma-harness-visibility/gasworks-moving-final.png",
+    "limits": "Image means are supporting evidence, not a proof of localized shadow accuracy or motion quality. Fresh one-subframe motion captures were also visually inspected; they retain some grain."
+  },
+  "validation": {
+    "renderer_unit_tests": "121 passed, including partial reservoir/mixed-colour energy, cue reset, cache blackout/reorder, and second shadow bank",
+    "volumetric_transport": "7 passed",
+    "other_contract_tests": "28 passed; environment_controls 9 passed / 2 previously documented hash failures; textured-pbr capture mismatch; portal build refusal. Expected images and assertions were not rewritten.",
+    "workspace_all_targets": "passed",
+    "gpui_app_build": "passed; not launched"
+  },
+  "limits": [
+    "GPU timings exclude GPUI composition and application work; reciprocal GPU times are not measured application FPS.",
+    "Fixed full-output scene with fitted camera; moving stress rotates directions and is not a score replay or fixture housing animation.",
+    "Initial 470-map allocation/preparation cost about 242 ms CPU. Static cache redraws zero maps; moving all 470 directions reaches 13.1 ms CPU p95 and 15.9 ms GPU p95.",
+    "Retained shadow maps use 256-square depth layers, up to 128 MiB at 512 emitters. Small rigs allocate fewer layers. This is raster visibility, not hardware ray tracing.",
+    "This change does not implement GI.",
+    "Mac performance and motion acceptance in the actual GPUI viewport remain unmeasured."
+  ]
+}

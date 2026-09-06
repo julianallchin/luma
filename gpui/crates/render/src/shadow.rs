@@ -17,16 +17,9 @@ use crate::gpu::DEPTH_FORMAT;
 /// cost 32 MiB instead of multiplying the directional cascade allocation.
 pub(crate) const FIXTURE_SHADOW_SIZE: u32 = 256;
 
-/// How many fixture shadow maps exist at once.
-///
-/// Each one is a full opaque render pass, so this is a per-frame cost ceiling,
-/// not a memory one: at 120 moving heads the uncapped path spent ~5 ms of GPU
-/// and ~7.4 ms of CPU encode per frame drawing 120 of them. Fixtures beyond the
-/// cap cast no shadow rather than casting a stale one — a shadow lagging its
-/// own beam reads as broken, where a missing one reads as unlit.
-///
-/// Unity HDRP's `k_DefaultMaxShadowRequests` is 128 for a whole AAA frame; 16
-/// local shadow casters is the same order for one instrument.
+/// Legacy comparison mode's map budget and the minimum cache allocation.
+/// All-fixture mode grows retained maps to the light count (up to 512) and
+/// redraws only changed projections or geometry.
 pub(crate) const MAX_FIXTURE_SHADOWS: usize = 16;
 
 /// Identity of a rendered shadow map: the matrix it was projected with and the
@@ -137,6 +130,51 @@ pub(crate) fn assign_shadow_slots(
             break;
         }
         slots[slot] = Some(index);
+    }
+    slots
+}
+
+/// Retain visibility by projection and caster geometry, not the compacted
+/// light-list index. Colour/dimmer changes and a blackout must not evict a
+/// stationary emitter's already rendered depth map.
+pub(crate) fn assign_cached_slots(
+    cones: &[FixtureCone],
+    cache: &[Option<ShadowCacheKey>],
+    caster_hash: u64,
+) -> Vec<Option<usize>> {
+    let keys: Vec<_> = cones
+        .iter()
+        .map(|cone| ShadowCacheKey {
+            matrix_bits: shadow_matrix_bits(&fixture_shadow_matrix(cone).to_cols_array_2d()),
+            caster_hash,
+        })
+        .collect();
+    let mut slots = vec![None; cache.len()];
+    let mut pending = Vec::new();
+    for (index, cone) in cones.iter().enumerate() {
+        if cone.intensity <= 0.0 {
+            continue;
+        }
+        if let Some(slot) = cache.iter().enumerate().find_map(|(slot, key)| {
+            (slots[slot].is_none() && *key == Some(keys[index])).then_some(slot)
+        }) {
+            slots[slot] = Some(index);
+        } else {
+            pending.push(index);
+        }
+    }
+    for index in pending {
+        // Prefer empty storage to evicting a currently dark emitter's map.
+        let free = slots
+            .iter()
+            .enumerate()
+            .find_map(|(slot, resident)| {
+                (resident.is_none() && cache[slot].is_none()).then_some(slot)
+            })
+            .or_else(|| slots.iter().position(Option::is_none));
+        if let Some(slot) = free {
+            slots[slot] = Some(index);
+        }
     }
     slots
 }
