@@ -3,7 +3,6 @@ use ts_rs::TS;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/engine_dj.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct EngineDjTrack {
     #[ts(type = "number")]
@@ -22,7 +21,6 @@ pub struct EngineDjTrack {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/engine_dj.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct EngineDjPlaylist {
     #[ts(type = "number")]
@@ -36,7 +34,6 @@ pub struct EngineDjPlaylist {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/engine_dj.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct EngineDjLibraryInfo {
     pub database_uuid: String,

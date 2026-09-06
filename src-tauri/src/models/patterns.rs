@@ -4,7 +4,6 @@ use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AnnotationPreview {
     pub annotation_id: String,
@@ -16,7 +15,6 @@ pub struct AnnotationPreview {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternSummary {
     pub id: String,
@@ -38,7 +36,6 @@ pub struct PatternSummary {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ForkPatternInput {
     pub source_pattern_id: String,
@@ -50,7 +47,6 @@ pub struct ForkPatternInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ForkPatternResult {
     pub pattern: PatternSummary,
@@ -62,7 +58,6 @@ pub struct ForkPatternResult {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternCategory {
     pub id: String,
@@ -77,7 +72,6 @@ pub struct PatternCategory {
 #[allow(dead_code)]
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatternDetail {
     pub id: String,

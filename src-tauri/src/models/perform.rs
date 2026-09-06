@@ -15,7 +15,6 @@ use ts_rs::TS;
 /// defaults rather than made optional — see `prodjlink_manager`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/bindings/perform.ts")]
 pub struct DeckState {
     pub id: u8,
     pub title: String,
@@ -38,7 +37,6 @@ pub struct DeckState {
 /// Every deck plus the mixer state, as of one telemetry frame.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/bindings/perform.ts")]
 pub struct DeckSnapshot {
     pub decks: Vec<DeckState>,
     pub crossfader: f64,
@@ -48,7 +46,6 @@ pub struct DeckSnapshot {
 /// The `perform_event` payload. Tagged by `type`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/bindings/perform.ts")]
 #[serde(tag = "type")]
 pub enum DeckEvent {
     DeviceDiscovered {
@@ -73,7 +70,6 @@ pub enum DeckEvent {
 /// A miss is not an error: `track_id` is the only nullability signal, and
 /// `filename` is `""` rather than null when nothing could be parsed or matched.
 #[derive(Serialize, TS)]
-#[ts(export, export_to = "../../src/bindings/perform.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PerformTrackMatch {
     pub track_id: Option<String>,

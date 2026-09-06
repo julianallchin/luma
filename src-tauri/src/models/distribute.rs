@@ -18,7 +18,6 @@ use crate::services::distribute::{Occupied, Placed, Refusal, Report};
 /// anybody can send. `even` carries nothing: it is the whole face.
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase", tag = "kind")]
-#[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase")]
 pub enum DistributeLayout {
     /// Evenly across the whole face, a half-fixture margin at each end.
@@ -61,7 +60,6 @@ impl From<Layout> for DistributeLayout {
 /// One fixture a distribution created.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct DistributedFixture {
     /// The `fixtures` row id, which is also its venue-graph node id.
@@ -99,7 +97,6 @@ impl From<&Placed> for DistributedFixture {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-#[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DistributeRefusal {
     /// The row is longer than the face.
@@ -130,7 +127,6 @@ pub enum DistributeRefusal {
 /// One stretch of a host face that is already spoken for.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct DistributeOccupied {
     pub label: String,
@@ -185,7 +181,6 @@ impl From<&Refusal> for DistributeRefusal {
 /// What one distribution did.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/distribute.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct DistributeReport {
     pub host_node_id: String,

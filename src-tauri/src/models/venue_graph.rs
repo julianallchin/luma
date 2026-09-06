@@ -21,7 +21,6 @@ use luma_scene::venue::{
 /// One `venue_nodes` row.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueNode {
     pub id: String,
@@ -38,7 +37,6 @@ pub struct VenueNode {
 /// One `venue_edges` row: the relation that produces a pose.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueEdge {
     pub child_id: String,
@@ -52,7 +50,6 @@ pub struct VenueEdge {
 /// One `venue_constraints` row: a far end, checked after the solve.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueConstraint {
     pub node_id: String,
@@ -68,7 +65,6 @@ pub struct VenueConstraint {
 /// its own business.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueGraphRows {
     pub nodes: Vec<VenueNode>,
@@ -172,7 +168,6 @@ impl VenueGraphRows {
 /// doc's "Live graph, no baked poses, no hybrid."
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ResolvedNode {
     /// The node id, or `"<array id>#<index>"` for a derived array member.
@@ -226,7 +221,6 @@ impl From<&NodePose> for ResolvedNode {
 /// A far end, evaluated.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ResolvedConstraint {
     pub node_id: String,
@@ -243,7 +237,6 @@ pub struct ResolvedConstraint {
 /// `detach` leaves behind. See [`luma_scene::venue::UnplacedNode`].
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ResolvedUnplaced {
     pub node_id: String,
@@ -267,7 +260,6 @@ impl From<&UnplacedNode> for ResolvedUnplaced {
 /// An open structural socket.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ResolvedDangling {
     pub node_id: String,
@@ -289,7 +281,6 @@ impl From<&DanglingSocket> for ResolvedDangling {
 /// consumer draws from.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ResolvedVenue {
     /// Depth-first from the root, children in id order. Deterministic.
@@ -374,7 +365,6 @@ fn describe(warning: &Warning) -> String {
 /// graph.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PlacementReport {
     pub node_id: String,
@@ -391,7 +381,6 @@ pub struct PlacementReport {
 /// [`luma_scene::venue::Outcome`] on the wire.
 #[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub enum PlacementOutcome {
     /// The solve reached it: it has a pose, and it is in the room.
@@ -454,7 +443,6 @@ impl PlacementReport {
 /// anything longer than it.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Reach {
     pub node_id: String,
@@ -472,7 +460,6 @@ pub struct Reach {
 /// is no hand-written table anywhere for this to drift from.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct StageCatalog {
     /// The node-kind alphabet a caller may place, root excluded — the root is
@@ -490,7 +477,6 @@ pub struct StageCatalog {
 /// One catalog entry, with the sockets it actually resolves to.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CatalogPiece {
     /// The short name the authoring surface names this piece by — `truss`,
@@ -524,7 +510,6 @@ pub struct CatalogPiece {
 /// One socket, in the vocabulary `attach` checks against.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/venue-graph.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CatalogSocket {
     pub name: String,

@@ -16,7 +16,6 @@ use ts_rs::TS;
 /// We use an inner struct for deserialization and convert.
 #[derive(TS, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct SearchPatternRow {
     pub id: String,

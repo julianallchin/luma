@@ -176,7 +176,6 @@ impl HostAudioState {
 /// Snapshot of playback state sent to frontend
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 pub struct HostAudioSnapshot {
     /// Whether audio is currently loaded
     pub is_loaded: bool,

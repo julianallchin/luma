@@ -14,7 +14,6 @@ use ts_rs::TS;
 /// One fixture's place in the patch.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatchAssignment {
     /// The `fixtures` row id.
@@ -50,7 +49,6 @@ impl From<&Assignment> for PatchAssignment {
 /// would be a second copy of an enum that already exists in `luma_scene`.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatchNote {
     pub message: String,
@@ -86,7 +84,6 @@ impl From<&Note> for PatchNote {
 /// What one auto-patch did.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct AutoPatchReport {
     /// How many fixtures ended up somewhere other than where they were.
@@ -99,7 +96,6 @@ pub struct AutoPatchReport {
 /// One DMX channel of one universe, as the footprint strip draws it.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UniverseCell {
     /// `1..=512`.
@@ -144,7 +140,6 @@ impl UniverseCell {
 /// Luma universe number.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ArtNetNode {
     pub ip: String,
@@ -162,7 +157,6 @@ pub struct ArtNetNode {
 /// node at all; a binding names one.
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UniverseOutput {
     pub universe: i64,
@@ -177,7 +171,6 @@ pub struct UniverseOutput {
 /// caller whose fixtures do not exist yet.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/patch.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct PatchAddress {
     pub universe: u16,

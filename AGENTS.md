@@ -1,35 +1,23 @@
 # Repository Guidelines
 
-Luma is a Tauri desktop app: a React/TypeScript frontend in `src/` backed by a Rust core in `src-tauri/`. Most features span both halves via Tauri `invoke()` commands and shared TypeScript bindings.
+Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`. GPUI consumes the shared Rust backend in `src-tauri/` through its dispatch seam. The former React frontend has been deleted. `www/` is a separate documentation website.
 
 ## Shared checkout
 
 Several agents work in this tree at once. Never run `git stash`, `git checkout --`, `git reset`, `git clean`, or tree-wide `cargo fmt` — each reverts or rewrites other agents' uncommitted work. Stage by path, format only files you touched, commit only your own files.
 
-## Project Structure & Module Organization
+## Project Structure and Commands
 
-- `src/`: React 19 + TypeScript UI, Zustand stores, React Flow-based graph editors, Tailwind styling.
-  - Feature modules live in `src/features/*` (e.g., `patterns/`, `track-editor/`, `app/`).
-  - Shared UI/components in `src/shared/`.
-- `src-tauri/`: Rust backend (entry `src-tauri/src/main.rs`, app setup in `src-tauri/src/lib.rs`).
-  - Models in `src-tauri/src/models/`.
-  - SQLite migrations in `src-tauri/migrations/` (one flat, timestamp-ordered directory).
-  - Python workers in `src-tauri/python/` for beats/roots/stems analysis.
-- `resources/fixtures/`: fixture definitions bundled into the app.
-- `experiments/`: research notebooks and test data.
+- `gpui/`: native UI, renderer, scene model, and test harness. Read `gpui/BUILD.md` for prerequisites and build-cache conventions.
+- `src-tauri/`: shared backend, models, append-only SQLite migrations, and Python analysis workers.
+- `resources/`: shared fixture definitions and meshes.
+- `harness/`: native renderer goldens, reference captures, fonts, and image comparison tools.
+- `www/`: independent documentation site; use Bun for its JavaScript tooling.
 
-## Build, Test, and Development Commands
-
-Use **Bun only** for JS tooling.
-
-- `bun install`: install JS deps.
-- `bun run dev`: run Vite dev server.
-- `bun run tauri dev`: run desktop app with hot reload (Vite + Tauri).
-- `bun run build`: typecheck + build frontend to `dist/`.
-- `bun run tauri build`: produce distributable desktop build.
-- `bun run lint`: Biome lint for TS + `cargo clippy` for Rust.
-- `bun run format`: Biome format + `cargo fmt`.
-- `cargo test --manifest-path src-tauri/Cargo.toml`: run Rust tests and regenerate TS bindings (see below).
+Run the app with `cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-app`.
+Check it with `cargo +1.97.1 check --manifest-path gpui/Cargo.toml --workspace --all-targets`.
+Run targeted tests with `cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p <crate>`.
+Format only touched Rust files; never run tree-wide formatting in this shared checkout.
 
 ## Code Philosophy
 
@@ -39,21 +27,11 @@ Every change earns its complexity. Aim for elegant, simple diffs that compose we
 
 When you spot a smell adjacent to your work — a leaky abstraction, a guard that only fires on the happy path, error handling that hides the original cause, a comment papering over rot, dead branches — flag it explicitly in your response. You don't have to fix everything in one pass, but the human reviewing your work should know what you saw and chose not to touch.
 
-## Coding Style & Naming Conventions
+## Coding Style
 
-- TypeScript/React: formatted and linted by Biome (`biome.json`). Prefer functional components, hooks, and Zustand stores named `use-*-store.ts`. Files and folders are generally kebab-case; components are PascalCase.
-- Rust: standard `rustfmt` + `clippy`. Keep backend modules cohesive around domains (`tracks`, `patterns`, `annotations`, `host_audio`).
-- Cross-boundary API: add/rename Tauri commands in `src-tauri/src/lib.rs` and update frontend call sites under `src/features/**`.
+Use standard Rust formatting and clippy. Keep backend modules cohesive around domains. Native frontend calls go through `luma_lib::dispatch`; do not add React or Tauri webview UI.
 
-## TypeScript Bindings (`ts-rs`)
-
-Bindings are auto-generated from Rust structs in `src-tauri/src/models/` using `ts-rs`.
-
-- Output file: `src/bindings/schema.ts` (ignored by git).
-- Regeneration: happens automatically on `cargo test`.
-- If you change exported Rust models, run `cargo test --manifest-path src-tauri/Cargo.toml` to refresh bindings.
-- Do **not** commit generated `src/bindings/schema.ts`.
-- A **filtered** run (`cargo test --lib <filter>`) rewrites `schema.ts` with only the types the filtered tests touched, so `bun run build` then fails on missing types. Run the full suite before building the frontend.
+The backend retains `ts-rs` type metadata for shared schemas, but there is no desktop TypeScript consumer. Do not recreate `src/` for frontend work.
 
 ## Migrations
 
@@ -63,7 +41,7 @@ Bindings are auto-generated from Rust structs in `src-tauri/src/models/` using `
 
 ## Testing Guidelines
 
-There is no dedicated JS test suite yet. Validate UI changes manually via `bun run tauri dev`. Rust changes should be covered with `cargo test` when possible. Keep migrations consistent with model changes.
+Use the GPUI harness for UI verification and `luma-render` tests/captures for rendering. Run backend tests for backend changes. Keep migrations consistent with model changes.
 
 ## Data & File Locations
 
@@ -77,19 +55,11 @@ Venues, scores, patterns and authored history all live in that one database — 
 
 ## UI Conventions
 
-- **Confirmation dialogs**: Use the `AlertDialog` component from `@/shared/components/ui/alert-dialog` for destructive confirmations (delete, discard, etc.). Do **not** use the native Tauri `ask()` dialog from `@tauri-apps/plugin-dialog`.
+Use native GPUI confirmation dialogs for destructive actions.
 
-## Version Bumps & Releases
+## Releases
 
-When bumping the version, update **all three files** together: `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. They can drift out of sync if any one is missed.
-
-To trigger a production release build, push a version tag after committing:
-
-```
-git tag v0.x.y && git push origin v0.x.y
-```
-
-Pushing to `main` alone does **not** trigger a build — the tag is required.
+The obsolete Tauri webview release workflow has been removed. Native GPUI packaging must be configured before publishing a new release.
 
 ## Commit & Pull Request Guidelines
 
@@ -120,8 +90,8 @@ Group names are automatically normalized to snake_case: lowercase, spaces/hyphen
 - `src-tauri/src/services/groups.rs` — hierarchy building, selection expression parser/evaluator, spatial filtering
 - `src-tauri/src/database/local/groups.rs` — group CRUD, membership
 - `src-tauri/src/commands/groups.rs` — Tauri commands for groups
-- `src/features/universe/components/grouped-fixture-tree.tsx` — UI for managing groups
-- `src/features/universe/components/group-expression-editor.tsx` — autocomplete editor for group selection expressions
+- `gpui/crates/app/` — native group management UI
+- `gpui/crates/ui/src/arg/expression.rs` — group selection expression editor
 
 ---
 

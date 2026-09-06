@@ -10,7 +10,6 @@ use super::node_graph::BlendMode;
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 pub enum MidiInput {
     /// Pad/button — note on/off on a channel
     Note { channel: u8, note: u8 },
@@ -26,7 +25,6 @@ pub enum MidiInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 pub enum Target {
     /// All fixtures
     All,
@@ -42,7 +40,6 @@ pub enum Target {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 pub enum CueExecutionMode {
     /// Compile N bars at track BPM; loop `elapsed % loop_duration`
     Loop { bars: u8 },
@@ -65,7 +62,6 @@ impl Default for CueExecutionMode {
 /// A named pre-configured pattern instance — the live equivalent of a score annotation.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Cue {
     pub id: String,
@@ -90,7 +86,6 @@ pub struct Cue {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateCueInput {
     pub venue_id: String,
@@ -115,7 +110,6 @@ pub struct CreateCueInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateCueInput {
     pub id: String,
@@ -142,7 +136,6 @@ pub struct UpdateCueInput {
 /// A held input that routes subsequent pad presses to specific groups.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ModifierDef {
     pub id: String,
@@ -158,7 +151,6 @@ pub struct ModifierDef {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateModifierInput {
     pub venue_id: String,
@@ -169,7 +161,6 @@ pub struct CreateModifierInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateModifierInput {
     pub id: String,
@@ -184,7 +175,6 @@ pub struct UpdateModifierInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 pub enum TriggerMode {
     Toggle,
     /// On while held (note-on / cc>0), off on release
@@ -204,7 +194,6 @@ impl Default for TriggerMode {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 pub enum MidiAction {
     FireCue {
         cue_id: String,
@@ -220,7 +209,6 @@ pub enum MidiAction {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct MidiBinding {
     pub id: String,
@@ -243,7 +231,6 @@ pub struct MidiBinding {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateBindingInput {
     pub venue_id: String,
@@ -262,7 +249,6 @@ pub struct CreateBindingInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateBindingInput {
     pub id: String,
@@ -282,7 +268,6 @@ pub struct UpdateBindingInput {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ControllerState {
     pub active: bool,
@@ -299,7 +284,6 @@ pub struct ControllerState {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/midi.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ControllerStatus {
     pub connected: bool,

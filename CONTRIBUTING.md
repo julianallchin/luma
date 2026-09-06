@@ -7,15 +7,15 @@ Thanks for your interest in contributing to Luma! Here's how to get started.
 1. Fork the repository
 2. Create a feature branch (`git checkout -b my-feature`)
 3. Make your changes
-4. Run checks: `bun run lint && bun run typecheck`
+4. Run checks: `cargo +1.97.1 check --manifest-path gpui/Cargo.toml --workspace --all-targets`
 5. Commit and push your branch
 6. Open a pull request against `main`
 
 ## Code Style
 
-- **TypeScript/JS**: Formatted and linted by [Biome](https://biomejs.dev/)
 - **Rust**: Formatted by `cargo fmt`, linted by `cargo clippy`
-- Pre-commit hooks run automatically via Husky + lint-staged
+- Git LFS hooks live in `.githooks/`; enable them with `git config core.hooksPath .githooks`.
+- Format only Rust files you changed; this checkout may be shared with other contributors.
 
 ## Contributor License Agreement
 

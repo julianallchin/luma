@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use ts_rs::TS;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
-#[ts(export, export_to = "../../src/bindings/universe.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PrimitiveState {
     pub dimmer: f32,        // 0.0 - 1.0
@@ -14,7 +13,6 @@ pub struct PrimitiveState {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
-#[ts(export, export_to = "../../src/bindings/universe.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct UniverseState {
     // Key: "fixture-uuid" OR "fixture-uuid:head-index"

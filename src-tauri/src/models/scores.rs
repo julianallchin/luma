@@ -9,7 +9,6 @@ use super::node_graph::BlendMode;
 /// A score is a named collection of pattern placements for a track
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct Score {
     pub id: String,
@@ -28,7 +27,6 @@ pub struct Score {
 /// A track score represents a pattern placed on a score's timeline
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct TrackScore {
     pub id: String,
@@ -86,7 +84,6 @@ impl<'r> FromRow<'r, SqliteRow> for TrackScore {
 
 #[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ScoreSummary {
     pub id: String,
@@ -150,7 +147,6 @@ pub struct ScoreSummary {
 /// Input for creating a track score
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct CreateTrackScoreInput {
     /// Caller-owned idempotency key. Retries must reuse this UUID.
@@ -172,7 +168,6 @@ pub struct CreateTrackScoreInput {
 /// Input for updating a track score.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct UpdateTrackScoreInput {
     /// Caller-owned idempotency key. Retries must reuse this UUID.
@@ -197,7 +192,6 @@ pub struct UpdateTrackScoreInput {
 /// resolvable after the clip itself has been removed.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct DeleteTrackScoreInput {
     /// Caller-owned idempotency key. Retries must reuse this UUID.

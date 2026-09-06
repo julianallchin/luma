@@ -3,31 +3,17 @@
 	"productName": "luma",
 	"version": "0.5.19",
 	"identifier": "com.luma.luma",
-	"build": {
-		"beforeDevCommand": "bun run dev",
-		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "bun run build",
-		"frontendDist": "../dist"
-	},
+	"build": {},
 	"app": {
 		"macOSPrivateApi": true,
-		"windows": [
-			{
-				"label": "main",
-				"title": "luma",
-				"width": 1100,
-				"height": 800,
-				"decorations": false,
-				"transparent": false,
-				"dragDropEnabled": false,
-				"url": "index.html#/"
-			}
-		],
+		"windows": [],
 		"security": {
 			"csp": null,
 			"assetProtocol": {
 				"enable": true,
-				"scope": ["$APPCONFIG/tracks/art/**"]
+				"scope": [
+					"$APPCONFIG/tracks/art/**"
+				]
 			}
 		}
 	},

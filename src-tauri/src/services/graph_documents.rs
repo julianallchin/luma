@@ -225,7 +225,6 @@ pub struct GraphScope {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct GraphDocument {
     pub implementation_id: String,
@@ -235,7 +234,6 @@ pub struct GraphDocument {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct GraphEditPlan {
     pub base_revision: String,
@@ -244,7 +242,6 @@ pub struct GraphEditPlan {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct GraphEditResult {
     pub revision: String,

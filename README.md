@@ -31,22 +31,20 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 
 ## Project Structure
 
-- **`src/`** — React/TypeScript frontend (Zustand, React Flow graph editor, Three.js 3D visualizer)
-- **`src-tauri/`** — Rust backend (Tauri 2, SQLite, petgraph node engine, audio DSP, ArtNet)
+- **`gpui/`** — Native Rust desktop UI and wgpu stage renderer
+- **`src-tauri/`** — Shared Rust backend (SQLite, node engine, audio DSP, ArtNet)
 - **`www/`** — Documentation site ([luma.show](https://luma.show))
 - **`resources/fixtures/`** — QLC+ fixture definition library (thousands of fixtures)
 - **`experiments/`** — Research code and test data
 
 ## Getting Started
 
-1. Install [Bun](https://bun.sh): `curl -fsSL https://bun.sh/install | bash`
+1. Install [Rust](https://rust-lang.org/tools/install/).
+2. Initialize submodules: `git submodule update --init --recursive`.
+3. Enable the Git LFS hooks: `git config core.hooksPath .githooks`.
+4. Follow [GPUI build prerequisites](gpui/BUILD.md).
+5. Start development: `cargo +1.97.1 run --manifest-path gpui/Cargo.toml -p luma-app`.
 
-2. Install [Rust](https://rust-lang.org/tools/install/)
-
-3. Clone with submodules: `git submodule update --init --recursive`
-
-4. Install JS dependencies: `bun install`
-
-5. Start development: `bun run tauri dev`
+The React desktop frontend has been removed. `www/` remains the independent documentation site. Renderer comparison tools live in `harness/` (`cd harness && bun install`).
 
 Python 3.12 is required for ML analysis workers (beat detection, stem separation, chord analysis). The app will prompt you to set up the Python environment on first track import.

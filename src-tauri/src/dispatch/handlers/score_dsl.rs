@@ -24,7 +24,6 @@ const MAX_SOURCE_BYTES: usize = 6 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ScoreDslExportResponse {
     pub source: String,
@@ -34,7 +33,6 @@ pub struct ScoreDslExportResponse {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "snake_case")]
 pub enum ScoreDslDiagnosticSeverity {
     Error,
@@ -43,7 +41,6 @@ pub enum ScoreDslDiagnosticSeverity {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ScoreDslDiagnostic {
     pub severity: ScoreDslDiagnosticSeverity,
@@ -59,7 +56,6 @@ pub struct ScoreDslDiagnostic {
 
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ScoreDslValidationResponse {
     pub valid: bool,
@@ -70,7 +66,6 @@ pub struct ScoreDslValidationResponse {
 
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/schema.ts")]
 #[ts(rename_all = "camelCase")]
 pub struct ScoreDslImportResponse {
     pub document_id: String,
