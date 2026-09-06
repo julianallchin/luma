@@ -31,4 +31,6 @@ pub struct ComposablePreview {
     pub cells: Vec<Cell>,
     pub beats: Vec<f64>,
     pub frames: Vec<UniverseState>,
+    /// Authored output capabilities, before preview fills display defaults.
+    pub writes: BTreeMap<String, bool>,
 }

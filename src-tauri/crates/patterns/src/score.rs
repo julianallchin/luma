@@ -260,6 +260,49 @@ impl Score {
         Ok(())
     }
 
+    /// Customize one call site. Copy the called graph and rebind this node;
+    /// its own dependencies stay shared until the author customizes them too.
+    pub fn customize_node(
+        &mut self,
+        base: &Library,
+        graph: &str,
+        node: &str,
+        id: &str,
+    ) -> Result<()> {
+        self.validate(base)?;
+        crate::graph::identity(id)?;
+        let library = self.library(base)?;
+        if library.definitions.contains_key(id) {
+            return Err(Error(format!("graph identity {id} already exists")));
+        }
+        let parent = self
+            .definitions
+            .get(graph)
+            .ok_or_else(|| Error("customize a node inside a score-local graph".into()))?;
+        let Body::Graph(parent) = &parent.body else {
+            unreachable!("validated local graph")
+        };
+        let instance = parent
+            .nodes
+            .get(node)
+            .ok_or_else(|| Error(format!("unknown node {node}")))?;
+        let definition = &library.definitions[&instance.definition];
+        if matches!(definition.body, Body::Primitive(_)) {
+            return Err(Error(
+                "fundamental operations are immutable; compose around this node".into(),
+            ));
+        }
+        let mut candidate = self.clone();
+        candidate.definitions.insert(id.into(), definition.clone());
+        let Body::Graph(parent) = &mut candidate.definitions.get_mut(graph).unwrap().body else {
+            unreachable!()
+        };
+        parent.nodes.get_mut(node).unwrap().definition = id.into();
+        candidate.validate(base)?;
+        *self = candidate;
+        Ok(())
+    }
+
     pub fn library(&self, base: &Library) -> Result<Library> {
         if self.definitions.len() > 512 || self.clips.len() > 2048 {
             return Err(Error(

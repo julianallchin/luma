@@ -352,6 +352,7 @@ impl HostCallHandler for TrackHost {
                     | "track.score_apply"
                     | "track.score_render"
                     | "track.graph_edit"
+                    | "track.graph_customize"
                     | "track.score_independent"
             ) {
                 return self.score_call(method, payload, context).await;

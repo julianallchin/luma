@@ -453,6 +453,34 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
                 .agent_node(Role::Button, "Use as graph output"),
         );
     }
+    let called = source
+        .library
+        .definitions
+        .get(&controls.definition)
+        .and_then(|parent| {
+            let p::Body::Graph(graph) = &parent.body else {
+                return None;
+            };
+            graph
+                .nodes
+                .get(&controls.node)
+                .and_then(|node| source.library.definitions.get(&node.definition))
+        });
+    if called.is_some_and(|definition| matches!(definition.body, p::Body::Graph(_))) {
+        let app = app.clone();
+        let target = target.clone();
+        let node = controls.node.clone();
+        content = content.child(
+            luma_ui::luma_button("Edit a copy", Enabled::from(source.draft.is_none()))
+                .id("graph-customize-node")
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        this.customize_score_graph_node(&target, &node, cx)
+                    })
+                })
+                .agent_node(Role::Button, "Edit a copy"),
+        );
+    }
     for cell in &controls.cells {
         let mut row = div()
             .flex()
