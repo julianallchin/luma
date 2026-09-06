@@ -303,3 +303,16 @@ there is no configured CLI deployment credential. Reconnection was requested.
 No remote DDL has been attempted. Inspect the actual remote schema before
 applying the pending migration; do not assume its legacy `track_scores` table
 still exists.
+
+The regular app also exposed a local uploader bug: composite keys were decoded
+as strings even when one component was an INTEGER (`parent_order`). Dirty scans
+now project identity components as text; transmitted row values keep their SQL
+types. A regression reproduces the original failure and verifies the numeric
+payload, receipt, and empty second flush. All 65 sync tests pass.
+
+After rebuilding and restarting the regular app, it uploaded 186 records and
+cleared all 45 waiting revision-parent receipts. All 38 EBF migration proposals
+have server sequence numbers and terminal integration records; no live authored
+proposals remain pending. The legacy `patterns.score_id` pull error still needs
+the remote schema fix. No remote DDL was attempted. App log:
+`/tmp/luma-graph-reset-regular-app-sync-fixed.log`.

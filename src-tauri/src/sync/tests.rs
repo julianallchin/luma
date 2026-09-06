@@ -250,6 +250,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authored_revision_parent_integer_keys_upload_and_receive_a_receipt() {
+        let (_directory, pool) = test_pool().await;
+        authenticate(&pool, "u-1").await;
+        let document =
+            NewAuthoredDocument::pattern_graph("signed-in:u-1", "pattern", "implementation")
+                .unwrap();
+        let store = AuthoredRevisionStore;
+        let mut connection = pool.acquire().await.unwrap();
+        store
+            .insert_document(&mut connection, &document)
+            .await
+            .unwrap();
+        let metadata = RevisionMetadata {
+            operation_kind: "initial_import".into(),
+            operation_id: None,
+            message: "Initial".into(),
+            actor: Actor::user(),
+            author_name: "Luma".into(),
+            author_email: "test@luma.local".into(),
+            authored_at: "2026-09-06T00:00:00Z".into(),
+            thread_id: None,
+            assistant_message_id: None,
+            restored_revision_id: None,
+        };
+        let files = std::collections::BTreeMap::from([("graph.json".into(), b"{}".to_vec())]);
+        let root = store
+            .insert_revision(&mut connection, &document.id, &[], &files, &metadata)
+            .await
+            .unwrap();
+        let child = store
+            .insert_revision(
+                &mut connection,
+                &document.id,
+                &[root.id.clone()],
+                &files,
+                &RevisionMetadata {
+                    message: "Edit".into(),
+                    ..metadata
+                },
+            )
+            .await
+            .unwrap();
+        drop(connection);
+        let remote = MockRemoteClient::new();
+        push::flush_pending(&pool, &pool, &remote).await.unwrap();
+        let sent = remote
+            .upserted
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(table, _)| table == "authored_revision_parents")
+            .unwrap()
+            .1
+            .clone();
+        assert_eq!(
+            sent["parent_order"],
+            json!(0),
+            "the payload keeps its numeric key type"
+        );
+        assert_eq!(sent["revision_id"], json!(child.id.to_string()));
+        let receipt: Option<String> = sqlx::query_scalar("SELECT synced_at FROM authored_revision_parents WHERE revision_id=? AND parent_order=0")
+            .bind(child.id.to_string()).fetch_one(&pool).await.unwrap();
+        assert!(
+            receipt.is_some(),
+            "delivery acknowledges the full composite identity"
+        );
+        assert_eq!(push::flush_pending(&pool, &pool, &remote).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn archive_receipt_converges_a_losing_device_timestamp() {
         let (_directory, pool) = migrated_pool().await;
         crate::database::local::auth::arm_write_admission(&pool, Some("archive-owner"))

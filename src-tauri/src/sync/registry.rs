@@ -323,13 +323,15 @@ impl TableMeta {
     /// Every row of this table that push owes the server right now.
     ///
     /// Binds, in order: the principal key (`signed-in:<uid>`) for the retry
-    /// join, then the uid. Selects the primary-key columns, the row's `version`
-    /// (or NULL), then its `updated_at` stamp (or NULL).
+    /// join, then the uid. Selects the primary-key columns as text, the row's
+    /// `version` (or NULL), then its `updated_at` stamp (or NULL).
     pub fn dirty_scan_sql(&self, limit: u32) -> String {
         let selected: Vec<String> = self
             .pk_columns()
             .iter()
-            .map(|column| format!("subject.{column}"))
+            // Delivery identities are textual, including numeric composite keys.
+            // The separately loaded row payload retains its original SQL types.
+            .map(|column| format!("CAST(subject.{column} AS TEXT)"))
             .collect();
         let version = self.version_expr("subject");
         let mut conditions = vec![
