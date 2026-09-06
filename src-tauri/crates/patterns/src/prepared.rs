@@ -34,6 +34,17 @@ impl PreparedGraph {
         frame: Frame,
     ) -> Result<Self> {
         library.validate(definition)?;
+        Self::new_validated(library, definition, inputs, frame)
+    }
+
+    /// The caller has already validated this library's reachable definitions.
+    /// Used by whole-score validation to share that work across repeated clips.
+    pub(crate) fn new_validated(
+        library: &Library,
+        definition: &str,
+        inputs: &BTreeMap<String, Value>,
+        frame: Frame,
+    ) -> Result<Self> {
         frame.validate()?;
         let mut prepared = Self {
             steps: Vec::new(),

@@ -160,6 +160,17 @@ pub struct RenderEngine {
     inner: Arc<Mutex<RenderEngineInner>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SceneTarget {
+    Active,
+    Deck(u8),
+}
+
+pub(crate) struct SceneUpdate {
+    target: SceneTarget,
+    generation: u64,
+}
+
 /// Blink-twice identify sequence for one or more targets. A target is a
 /// member key: `"{fixture_id}"` (whole fixture) or `"{fixture_id}:{head}"`
 /// (single head).
@@ -180,6 +191,8 @@ fn identify_dimmer(elapsed: f32) -> f32 {
 }
 
 pub(crate) struct RenderEngineInner {
+    scene_generation: u64,
+    pending_scenes: HashMap<SceneTarget, u64>,
     /// Active scene for track editor / pattern editor (composited per frame).
     active_scene: Option<Scene>,
     /// Per-deck scenes for perform mode (the track's full composite per deck).
@@ -206,6 +219,8 @@ impl Default for RenderEngine {
     fn default() -> Self {
         Self {
             inner: Arc::new(Mutex::new(RenderEngineInner {
+                scene_generation: 0,
+                pending_scenes: HashMap::new(),
                 active_scene: None,
                 perform_layers: HashMap::new(),
                 perform_deck_states: Vec::new(),
@@ -224,6 +239,7 @@ impl RenderEngine {
     pub fn reset_for_identity_switch(&self) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.active_scene = None;
+        guard.pending_scenes.clear();
         guard.perform_layers.clear();
         guard.perform_deck_states.clear();
         guard.identify = None;
@@ -252,23 +268,44 @@ impl RenderEngine {
 
     pub fn set_active_scene(&self, scene: Option<Scene>) {
         let mut guard = self.inner.lock().expect("render engine poisoned");
+        guard.pending_scenes.remove(&SceneTarget::Active);
         guard.active_scene = scene;
+    }
+
+    /// Updates belong to one engine and one render slot. Starting a newer
+    /// update invalidates the previous one before its asynchronous reads begin.
+    pub(crate) fn begin_scene_update(&self, target: SceneTarget) -> SceneUpdate {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        guard.scene_generation += 1;
+        let generation = guard.scene_generation;
+        guard.pending_scenes.insert(target, generation);
+        SceneUpdate { target, generation }
+    }
+
+    /// Check and install under the same lock; a late result cannot resurrect a
+    /// closed score/deck or clear the editor while compiling performance output.
+    pub(crate) fn finish_scene_update(&self, update: SceneUpdate, scene: Scene) {
+        let mut guard = self.inner.lock().expect("render engine poisoned");
+        if guard.pending_scenes.get(&update.target) != Some(&update.generation) {
+            return;
+        }
+        guard.pending_scenes.remove(&update.target);
+        match update.target {
+            SceneTarget::Active => guard.active_scene = (!scene.is_empty()).then_some(scene),
+            SceneTarget::Deck(id) => {
+                if scene.is_empty() {
+                    guard.perform_layers.remove(&id);
+                } else {
+                    guard.perform_layers.insert(id, scene);
+                }
+            }
+        }
     }
 
     pub fn set_perform_deck_states(&self, states: Vec<PerformDeckInput>) {
         log::debug!("[render] set_perform_deck_states: {} decks", states.len());
         let mut guard = self.inner.lock().expect("render engine poisoned");
         guard.perform_deck_states = states;
-    }
-
-    /// Move the current active_scene into a perform deck slot.
-    /// Called after compositing a track to redirect the result to a specific deck.
-    pub fn promote_active_scene_to_deck(&self, deck_id: u8) {
-        log::info!("[render] promoting active_scene to deck {deck_id}");
-        let mut guard = self.inner.lock().expect("render engine poisoned");
-        if let Some(scene) = guard.active_scene.take() {
-            guard.perform_layers.insert(deck_id, scene);
-        }
     }
 
     pub fn clear_perform(&self) {
@@ -279,6 +316,9 @@ impl RenderEngine {
             guard.perform_deck_states.len()
         );
         guard.perform_layers.clear();
+        guard
+            .pending_scenes
+            .retain(|target, _| *target == SceneTarget::Active);
         guard.perform_deck_states.clear();
         // Clear cue buffers for all decks; keep manual_layer state
         guard.cue_buffers.clear();
@@ -990,6 +1030,57 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
     use super::{authorize_identify_targets, identify_fixture_id};
+
+    #[test]
+    fn scene_updates_cannot_overwrite_newer_scores_or_reopen_closed_slots() {
+        use super::{RenderEngine, SceneTarget};
+        use crate::eval::Scene;
+        let engine = RenderEngine::default();
+        let stale = engine.begin_scene_update(SceneTarget::Active);
+        let current = engine.begin_scene_update(SceneTarget::Active);
+        engine.set_active_scene(Some(Scene::default()));
+        engine.finish_scene_update(stale, Scene::default());
+        engine.finish_scene_update(current, Scene::default());
+        assert!(
+            engine.sample(0.0).is_some(),
+            "direct scene replacement invalidates pending compilation"
+        );
+
+        let pending = engine.begin_scene_update(SceneTarget::Active);
+        engine.set_active_scene(None);
+        engine.finish_scene_update(pending, Scene::default());
+        assert!(engine.sample(0.0).is_none());
+        assert!(engine.inner.lock().unwrap().pending_scenes.is_empty());
+    }
+
+    #[test]
+    fn deck_scene_updates_are_independent_and_empty_results_clear_old_output() {
+        use super::{RenderEngine, SceneTarget};
+        use crate::eval::Scene;
+        let engine = RenderEngine::default();
+        engine.set_active_scene(Some(Scene::default()));
+        engine
+            .inner
+            .lock()
+            .unwrap()
+            .perform_layers
+            .insert(1, Scene::default());
+        let old = engine.begin_scene_update(SceneTarget::Deck(1));
+        let current = engine.begin_scene_update(SceneTarget::Deck(1));
+        let other = engine.begin_scene_update(SceneTarget::Deck(2));
+        engine.finish_scene_update(old, Scene::default());
+        assert!(engine.inner.lock().unwrap().perform_layers.contains_key(&1));
+        engine.finish_scene_update(current, Scene::default());
+        assert!(!engine.inner.lock().unwrap().perform_layers.contains_key(&1));
+        assert!(
+            engine.sample(0.0).is_some(),
+            "deck changes preserve the editor"
+        );
+        engine.clear_perform();
+        engine.finish_scene_update(other, Scene::default());
+        assert!(engine.inner.lock().unwrap().pending_scenes.is_empty());
+        assert!(engine.sample(0.0).is_some());
+    }
 
     async fn identify_test_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
         let directory = tempfile::tempdir().unwrap();

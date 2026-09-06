@@ -44,12 +44,12 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
 - [x] Full independent library backup and verification.
 - [x] Audit saved graphs, including upstream paths reaching output sinks.
 - [x] Capture EBF reference numeric outputs (22 effects, 65 frames each).
-- [ ] Capture representative stage renders.
-- [ ] Unify core node contracts and graph-backed Chase/Dissolve.
-- [ ] Complete existing output capabilities through the normal compositor.
-- [ ] Remove the Pattern wrapper in the score document and support shared graph editing.
+- [x] Capture representative stage renders (Chase, circle, gradient, random mask).
+- [x] Unify core node contracts and graph-backed Chase/Dissolve.
+- [x] Complete existing output capabilities through the normal compositor.
+- [x] Remove the Pattern wrapper in the score document and support shared graph editing.
 - [ ] Replace production Pattern/Implementation persistence and consumers.
-- [ ] Native graph editing/navigation/exposure and matching Python operations.
+- [x] Native graph editing/navigation/exposure and matching Python operations.
 - [ ] Rebuild remaining built-ins; translate EBF graphs and clip overrides.
 - [ ] Verify migrated output, then adopt the working library in GPUI.
 
@@ -61,8 +61,9 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
 - Legacy within-graph OpKind::Blend is a placeholder. The new output path shares
   the existing cross-clip blend math and preserves unwritten capabilities.
 - Structured Mapping values validate but the native widget only edits simple choices.
-- The newly added Python Pattern API uses the old storage projection and will
-  be replaced together with native authoring; it is not a second permanent model.
+- Unmigrated scores retain the legacy Python Pattern API. New scores expose
+  graph definitions, clips and typed inputs directly; no Pattern/Implementation
+  records are written by their native or Python editing paths.
 
 ## Verified implementation checkpoints
 
@@ -107,16 +108,48 @@ Working baseline: `/home/julian/luma-migration/graph-reset-20260906/baseline-lib
 
 ## Remaining integration risks
 
-- New-score creation, perform playback and the Python authoring API still need
-  the version-2 document path. Existing migrated scores must not fall back to
-  legacy clip rows in these consumers.
-- Graph size/expansion limits and validation of related runtime inputs are not
-  complete. There is no incremental plan cache for version-2 scores yet.
+- New-score creation, perform playback and Python now consume graph documents.
+  Other legacy-only surfaces still need review before removing old storage.
+  Perform still combines all scores for a matched track/venue; selecting the
+  intended score on a deck remains an unresolved product behavior.
+- There is no incremental plan cache for version-2 scores yet. Timing relations
+  are checked without geometry at save time; actual mapping-domain requirements
+  are checked during host preparation. Dynamic expressions can still fail at
+  another time, and not all such failures can be proven away statically.
 - Incomplete native graph drafts live in memory; closing their tab can lose
   them. Other open graph tabs do not yet refresh after shared-definition edits.
-- The legacy compositor has a process-global generation/cache and a stale
-  install window between score resolution and its legacy install call.
+- Render-slot generations are now per engine and installed atomically. A late
+  update cannot reopen a closed score/deck; deck compilation preserves the
+  editor scene and empty results clear prior deck output. The legacy plan cache
+  remains process-global until its consumers are retired.
 - The full backend run had two rig-chain Python failures (joint direction
   mismatch) outside this graph work; their status on the base branch is not yet
   verified. Graph/storage/count regressions found in that run were fixed and
   their focused checks passed.
+
+## Python and validation checkpoint
+
+- `luma.track.edit()` owns both graphs and clips. `edit.graph(node="chase")`
+  creates the same one-node wrapper as the native picker. `graph.node`, port
+  binding, exposure, defaults, output selection and removal use core GraphEdit.
+  `edit.make_independent` uses the same reachable-definition clone as GPUI.
+- `edit.source()` is the canonical score.luma JSON. `replace_source` accepts it
+  as a draft; check/apply use the shared validator and production compositor.
+  Definitions are inspectable by reference through `definition(id)`; shipped
+  nodes are fixed, local graphs can call other local graphs.
+- A real Python-kernel test composes Chase and movement, exposes inputs, renders,
+  saves/reopens, detaches a shared graph, retries a save, edits a detached
+  workspace and merges it. It verifies no Pattern or old clip rows are created.
+  A u64 seed at its maximum value survives the manifest and a second cell;
+  the binding number codec previously converted large unsigned integers to f64.
+- Core validation bounds local definitions (512), clips (2,048), nodes per
+  graph (128), graph nesting (24), expanded nodes (8,192), execution dependency
+  depth (96), interface inputs/outputs (64/32) and envelope knots (256). Identity
+  keys contain 1–256 printable bytes; `@` prefixes are reserved for UI controls.
+  Three tests reject compact exponential expansion, deep dependencies and
+  invalid timing before scene preparation.
+
+- Latest backend checkpoint: 921 tests passed; two rig-chain Python tests failed
+  with joint-direction errors outside the changed graph code. The third failure
+  regenerated the IPC manifest and passed on rerun. Workspace all-target checks,
+  four native graph tests, 41 core tests and 96 Python unit tests pass.

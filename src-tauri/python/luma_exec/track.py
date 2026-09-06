@@ -959,6 +959,14 @@ class TrackWindow(_ImmutableSnapshot):
         self.output = TrackOutput(self)
         self._seal()
 
+    def _render(self):
+        return self._track._call("track.render", {
+            "baseRevision": self._track.revision,
+            "candidate": [clip.to_wire() for clip in self._candidate],
+            "startTime": self.start_s,
+            "endTime": self.end_s,
+        })
+
     def timeline(self) -> Any:
         """Draw authored clips with x=time and y=explicit stack order."""
         import matplotlib.patches as patches
@@ -1097,14 +1105,7 @@ class TrackOutput:
     def _load(self) -> None:
         if self._values is not None:
             return
-        window = self._window
-        payload = {
-            "baseRevision": window._track.revision,
-            "candidate": [clip.to_wire() for clip in window._candidate],
-            "startTime": window.start_s,
-            "endTime": window.end_s,
-        }
-        response = window._track._call("track.render", payload)
+        response = self._window._render()
         self._install(response)
 
     def _install(self, response: Any) -> None:

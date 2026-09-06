@@ -12,7 +12,8 @@ use crate::agent_execution::bindings::assembler::BindingBuilder;
 use crate::database::local;
 use crate::database::local::venue_access::{Read, VenueAccess, VenueResource};
 use crate::models::node_graph::BlendMode;
-use crate::services::track_edits::TrackClip;
+use crate::services::graph_scores::{read_score_document, ScoreDocument};
+use crate::services::track_edits::{TrackClip, TrackScope};
 
 /// A track can exist without a score selected (notably in graph-agent scope).
 const NO_TIMELINE: &str = "no authored lighting timeline is in scope for this agent thread";
@@ -57,76 +58,67 @@ pub async fn provide(b: &mut BindingBuilder, ctx: &ProviderCtx<'_>) -> Result<()
     provide_timeline(b, ctx, &track.id).await
 }
 
+pub(super) async fn resolve_document(
+    pool: &sqlx::SqlitePool,
+    scope: &super::BindingScope,
+) -> Result<Option<ScoreDocument>, String> {
+    if let Some(document) = &scope.track_document {
+        return Ok(Some(document.clone()));
+    }
+    let (Some(score_id), Some(track_id), Some(venue_id)) =
+        (&scope.score_id, &scope.track_id, &scope.venue_id)
+    else {
+        return Ok(None);
+    };
+    let mut access = VenueAccess::<Read>::read(pool, VenueResource::Score(score_id)).await?;
+    access.require_venue(venue_id)?;
+    read_score_document(
+        &mut access,
+        &TrackScope {
+            score_id: score_id.clone(),
+            track_id: track_id.clone(),
+            venue_id: venue_id.clone(),
+        },
+    )
+    .await
+    .map(Some)
+}
+
 async fn provide_timeline(
     b: &mut BindingBuilder,
     ctx: &ProviderCtx<'_>,
-    track_id: &str,
+    _track_id: &str,
 ) -> Result<(), String> {
-    let Some(score_id) = ctx.scope.score_id.as_deref() else {
-        unavailable(b, "track.revision", NO_TIMELINE)?;
-        unavailable(b, "track.clips", NO_TIMELINE)?;
-        return inline(b, "track.editable", false);
-    };
-    let Some(venue_id) = ctx.scope.venue_id.as_deref() else {
-        let reason = "the selected lighting timeline has no venue scope";
-        unavailable(b, "track.revision", reason)?;
-        unavailable(b, "track.clips", reason)?;
-        return inline(b, "track.editable", false);
-    };
-
-    if let Some(document) = ctx.scope.track_document.as_ref() {
-        return publish_timeline(b, ctx, document.revision.clone(), document.clips.clone()).await;
-    }
-    let mut access = match VenueAccess::<Read>::read(ctx.pool, VenueResource::Score(score_id)).await
-    {
-        Ok(access) => access,
-        Err(error) => {
-            let reason = format!("the authored lighting timeline is not available: {error}");
-            unavailable(b, "track.revision", &reason)?;
-            unavailable(b, "track.clips", reason)?;
-            return inline(b, "track.editable", false);
+    match &ctx.score_document {
+        Ok(Some(ScoreDocument::Graph(document))) => {
+            inline(b, "track.revision", &document.revision)?;
+            inline(b, "track.document", &document.score)?;
+            let grid = crate::services::tracks::get_track_beats(ctx.pool, _track_id).await?;
+            inline(
+                b,
+                "track.beat_origin_s",
+                grid.map(|grid| {
+                    grid.downbeats
+                        .first()
+                        .copied()
+                        .unwrap_or(grid.downbeat_offset)
+                }),
+            )?;
+            inline(b, "track.editable", ctx.scope.track_editable)
         }
-    };
-    if access.require_venue(venue_id).is_err() {
-        let reason = "the selected lighting timeline does not belong to this venue";
-        unavailable(b, "track.revision", reason)?;
-        unavailable(b, "track.clips", reason)?;
-        return inline(b, "track.editable", false);
-    }
-
-    // Do not publish a caller-mismatched document under this track. Mutation
-    // authorization is still rechecked transactionally by the host service;
-    // this is the read-side scope invariant.
-    let score = match local::scores::get_score(&mut access, score_id).await {
-        Ok(score) => score,
-        Err(error) => {
-            let reason = format!("the authored lighting timeline could not be loaded: {error}");
-            unavailable(b, "track.revision", &reason)?;
-            unavailable(b, "track.clips", reason)?;
-            return inline(b, "track.editable", false);
+        Ok(Some(ScoreDocument::Legacy(document))) => {
+            publish_timeline(b, ctx, document.revision.clone(), document.clips.clone()).await
         }
-    };
-    let venue_matches = venue_id == score.venue_id.as_str();
-    if score.track_id.as_str() != track_id || !venue_matches {
-        let reason = "the selected lighting timeline does not belong to this track and venue";
-        unavailable(b, "track.revision", reason)?;
-        unavailable(b, "track.clips", reason)?;
-        return inline(b, "track.editable", false);
-    }
-
-    let scores = match local::scores::list_track_scores_for_score(&mut access, score_id).await {
-        Ok(scores) => scores,
-        Err(error) => {
-            let reason = format!("the authored lighting clips could not be loaded: {error}");
-            unavailable(b, "track.revision", &reason)?;
+        result => {
+            let reason = match result {
+                Err(error) => error.as_str(),
+                _ => NO_TIMELINE,
+            };
+            unavailable(b, "track.revision", reason)?;
             unavailable(b, "track.clips", reason)?;
-            return inline(b, "track.editable", false);
+            inline(b, "track.editable", false)
         }
-    };
-    let revision = crate::services::track_edits::track_revision(&scores);
-    let clips = scores.iter().map(TrackClip::from).collect();
-
-    publish_timeline(b, ctx, revision, clips).await
+    }
 }
 
 async fn publish_timeline(

@@ -387,19 +387,8 @@ pub async fn run_python_cell_inner(
     // A room is renderable whenever one is in scope, whether or not this thread
     // may edit a track in it — a graph agent working against a venue still gets
     // to look at it. When a score *is* pinned, that score is what lights it.
-    let venue = scope.venue_id.clone().map(|venue_id| {
-        VenueHost::new(
-            tokio::runtime::Handle::current(),
-            pool.clone(),
-            storage.clone(),
-            resource_root.to_path_buf(),
-            Arc::clone(&workspace),
-            venue_id,
-            resolved.track.clone(),
-        )
-    });
     let track = resolved.track.map(|track_scope| {
-        TrackHost::new(
+        Arc::new(TrackHost::new(
             tokio::runtime::Handle::current(),
             pool.clone(),
             storage.clone(),
@@ -410,6 +399,16 @@ pub async fn run_python_cell_inner(
             track_scope,
             edit_scope,
             authored_workspace_id.clone(),
+        ))
+    });
+    let venue = scope.venue_id.clone().map(|venue_id| {
+        VenueHost::new(
+            tokio::runtime::Handle::current(),
+            pool.clone(),
+            resource_root.to_path_buf(),
+            Arc::clone(&workspace),
+            venue_id,
+            track.clone(),
         )
     });
     let host = CellHost::new(track, venue);

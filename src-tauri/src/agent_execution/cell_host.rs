@@ -28,7 +28,7 @@ const HOST_CANCEL_POLL: Duration = Duration::from_millis(25);
 /// Absent domains are absent *capabilities*: a thread with no venue in scope
 /// gets a `forbidden`, never a silently empty picture.
 pub struct CellHost {
-    track: Option<TrackHost>,
+    track: Option<std::sync::Arc<TrackHost>>,
     venue: Option<VenueHost>,
 }
 
@@ -36,7 +36,7 @@ impl CellHost {
     /// `None` when the cell has no host capability at all, which is the
     /// difference between `run_cell_with_host` and `run_cell`.
     #[must_use]
-    pub fn new(track: Option<TrackHost>, venue: Option<VenueHost>) -> Option<Self> {
+    pub fn new(track: Option<std::sync::Arc<TrackHost>>, venue: Option<VenueHost>) -> Option<Self> {
         (track.is_some() || venue.is_some()).then_some(Self { track, venue })
     }
 }

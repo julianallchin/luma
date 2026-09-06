@@ -4602,7 +4602,7 @@
       "domain": "perform",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/perform.rs",
-        "line": 235
+        "line": 227
       },
       "args": [
         {
@@ -4634,7 +4634,7 @@
       "domain": "perform",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/perform.rs",
-        "line": 263
+        "line": 268
       },
       "args": [
         {

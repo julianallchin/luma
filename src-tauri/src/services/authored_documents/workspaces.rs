@@ -34,6 +34,147 @@ const MAX_WORKSPACE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_WORKSPACE_BYTES: u64 = 64 * 1024 * 1024;
 
 impl AuthoredDocuments {
+    /// Canonical Python edits use the same score source as GPUI and raw-file
+    /// workspaces. With no candidate, look up a receipt before cancellable
+    /// compilation; with a candidate, recheck receipt and CAS atomically.
+    pub(crate) async fn graph_score_operation(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        request: &crate::services::graph_scores::GraphScoreOperation<'_>,
+        plan: Option<crate::services::graph_scores::GraphScoreEdit>,
+    ) -> Result<Option<super::GraphScoreDocument>> {
+        super::validate_token(request.id, "Python graph score edit operation id")?;
+        let (_thread, scope, _guard) = self
+            .lock_active_thread(pool, principal, request.thread_id)
+            .await?;
+        if scope.track_scope() != Some(request.scope) {
+            return Err(AuthoredDocumentsError::Scope(
+                "agent thread does not own this score".into(),
+            ));
+        }
+        let operation = OperationSpec {
+            kind: "score_edit",
+            id: request.id,
+            fingerprint: request.fingerprint,
+            result_json: None,
+        };
+        let workspace = match request.workspace_id {
+            Some(id) => Some(
+                self.active_workspace_row(pool, &scope, request.thread_id, id)
+                    .await?,
+            ),
+            None => None,
+        };
+        let outcome = self
+            .operation_outcome(pool, &scope, operation.kind, operation.id)
+            .await?;
+        if let Some(outcome) = &outcome {
+            require_outcome_fingerprint(outcome, operation.fingerprint)?;
+            if outcome.status != "committed" {
+                return Err(AuthoredDocumentsError::Invalid(
+                    "score edit did not commit".into(),
+                ));
+            }
+        } else if plan.is_none() {
+            return Ok(None);
+        }
+        let (head, parent_files, current) = if let Some(row) = &workspace {
+            let head = RevisionId::parse(&row.head_revision_id)?;
+            let mut connection = pool
+                .acquire()
+                .await
+                .map_err(storage("read graph score workspace"))?;
+            let (_, files) = self
+                .store
+                .read_revision(&mut connection, &scope.document_id, &head)
+                .await?;
+            let current = self.decode_files(&scope, &files)?;
+            (head, files, current)
+        } else {
+            let current = self.load_current_locked(pool, &scope).await?;
+            (current.head, current.files, current.document)
+        };
+        let AuthoredDocument::GraphScore(current) = current else {
+            return Err(AuthoredDocumentsError::Invalid(
+                "this score is not a graph document; reload its current format".into(),
+            ));
+        };
+        if outcome.is_some() {
+            return Ok(Some(current));
+        }
+        let plan = plan.expect("receipt miss with a candidate");
+        if plan.base_revision != current.revision {
+            return Err(AuthoredDocumentsError::Track(TrackEditError::Conflict {
+                expected_revision: plan.base_revision,
+                current_revision: current.revision,
+            }));
+        }
+        let candidate = super::GraphScoreDocument::new(plan.candidate)
+            .map_err(AuthoredDocumentsError::Invalid)?;
+        let files = super::projection::score_files(&candidate)?;
+        if let Some(row) = workspace {
+            let path = self.workspace_path(&scope, &row.workspace_id)?;
+            if read_workspace_files_or_restore_missing(&path, required_paths(&scope), &parent_files)
+                .await?
+                != parent_files
+            {
+                return Err(AuthoredDocumentsError::Invalid("workspace has uncommitted score.luma changes; commit them before applying a Python edit".into()));
+            }
+            let metadata = self.revision_metadata(
+                &scope,
+                operation.kind,
+                Some(operation.id),
+                "Edit score graphs",
+                None,
+                None,
+            )?;
+            let mut write = self.scope_write(pool, &scope).await?;
+            let connection = write.connection();
+            self.ensure_current_on_connection(connection, &scope)
+                .await?;
+            let revision = self
+                .store
+                .insert_revision(
+                    connection,
+                    &scope.document_id,
+                    std::slice::from_ref(&head),
+                    &files,
+                    &metadata,
+                )
+                .await?;
+            let advanced = sqlx::query("UPDATE authored_subagent_workspaces SET head_revision_id = ?, generation = generation + 1 WHERE workspace_id = ? AND owner_thread_id = ? AND document_id = ? AND status = 'active' AND head_revision_id = ?")
+                .bind(revision.id.as_str()).bind(&row.workspace_id).bind(request.thread_id).bind(scope.document_id.as_str()).bind(head.as_str())
+                .execute(&mut *connection).await.map_err(storage("advance graph score workspace"))?.rows_affected();
+            if advanced != 1 {
+                return Err(AuthoredDocumentsError::Invalid(
+                    "workspace head moved before commit".into(),
+                ));
+            }
+            insert_committed_operation(connection, &scope, operation, Some(&head), &revision.id)
+                .await?;
+            write.commit().await?;
+            replace_workspace_files(&path, &files).await?;
+        } else {
+            self.apply_candidate_locked(
+                pool,
+                &scope,
+                &head,
+                &plan.base_revision,
+                files,
+                AuthoredDocument::GraphScore(candidate.clone()),
+                TrackProjectionAuthority::ExistingOnly,
+                operation,
+                "Edit score graphs",
+                None,
+                None,
+                None,
+            )
+            .await?;
+        }
+        Ok(Some(candidate))
+    }
+
     /// Resolve the live relational head for an authenticated agent thread. The
     /// revision id is the only valid base for a newly supervised workspace.
     pub async fn current_revision(
@@ -367,16 +508,31 @@ impl AuthoredDocuments {
             .store
             .read_revision(&mut connection, &scope.document_id, &head)
             .await?;
+        let document = self.decode_files(&scope, &files)?;
         let path = self.workspace_path(&scope, workspace_id)?;
         if read_workspace_files_or_restore_missing(&path, required_paths(&scope), &files).await?
             != files
         {
+            if matches!(document, AuthoredDocument::GraphScore(_)) {
+                return Err(AuthoredDocumentsError::Invalid("workspace has uncommitted score.luma changes; check and commit them before opening a Python edit".into()));
+            }
             // Detached revisions are authoritative. Repair a materialization
             // left stale by a lost/failed post-commit filesystem response.
             replace_workspace_files(&path, &files).await?;
         }
-        let document = self.decode_files(&scope, &files)?;
-        let document = require_track_document(&document)?.clone();
+        let document = match document {
+            AuthoredDocument::Track(document) => {
+                crate::services::graph_scores::ScoreDocument::Legacy(document)
+            }
+            AuthoredDocument::GraphScore(document) => {
+                crate::services::graph_scores::ScoreDocument::Graph(document)
+            }
+            _ => {
+                return Err(AuthoredDocumentsError::Scope(
+                    "a score workspace must contain a score".into(),
+                ))
+            }
+        };
         Ok(AuthoredTrackWorkspace {
             scope: track_scope,
             document,

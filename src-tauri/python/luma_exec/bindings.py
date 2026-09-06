@@ -850,21 +850,20 @@ def build_namespace(
     ):
         clips = track_values.get("clips")
         revision = track_values.get("revision")
-        if (
-            clips is not None
-            and revision is not None
-            and not isinstance(clips, Unavailable)
-            and not isinstance(revision, Unavailable)
-        ):
-            from .track import Track
-
-            items["track"] = Track(
-                track_values,
-                patterns=items.get("patterns"),
-                features=items.get("features"),
-                host_call=host_call,
-                artifact_store=store,
-            )
+        document = track_values.get("document")
+        if revision is not None and not isinstance(revision, Unavailable):
+            if document is not None and not isinstance(document, Unavailable):
+                from .score import GraphTrack
+                items["track"] = GraphTrack(
+                    track_values, nodes=items.get("nodes"), features=items.get("features"),
+                    host_call=host_call, artifact_store=store,
+                )
+            elif clips is not None and not isinstance(clips, Unavailable):
+                from .track import Track
+                items["track"] = Track(
+                    track_values, patterns=items.get("patterns"), features=items.get("features"),
+                    host_call=host_call, artifact_store=store,
+                )
 
     # The room is a binding record plus one capability: a camera over it. Every
     # thread with a venue in scope gets it, track and graph alike — looking at a

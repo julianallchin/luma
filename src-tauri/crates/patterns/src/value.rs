@@ -51,6 +51,7 @@ impl Envelope {
 
     pub fn validate(&self) -> Result<()> {
         if self.points.len() < 2
+            || self.points.len() > 256
             || self.points[0][0] != 0.0
             || self.points.last().unwrap()[0] != 1.0
             || self
@@ -60,7 +61,7 @@ impl Envelope {
             || self.points.windows(2).any(|w| w[0][0] >= w[1][0])
         {
             return Err(Error(
-                "envelope needs increasing normalized knots from 0 to 1".into(),
+                "envelope needs 2–256 increasing normalized knots from 0 to 1".into(),
             ));
         }
         Ok(())

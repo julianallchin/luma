@@ -51,8 +51,21 @@ impl Score {
             return Err(Error(format!("unsupported score version {}", self.version)));
         }
         let library = self.library(base)?;
-        for (id, definition) in &self.definitions {
-            library.validate(id)?;
+        for (id, clip) in &self.clips {
+            if !library.definitions.contains_key(&clip.graph) {
+                return Err(Error(format!(
+                    "clip {id}: unknown clip graph {}",
+                    clip.graph
+                )));
+            }
+        }
+        library.validate_many(
+            self.definitions
+                .keys()
+                .map(String::as_str)
+                .chain(self.clips.values().map(|clip| clip.graph.as_str())),
+        )?;
+        for definition in self.definitions.values() {
             if matches!(definition.body, Body::Primitive(_)) {
                 return Err(Error("score-local definitions must be graphs".into()));
             }
@@ -74,7 +87,8 @@ impl Score {
                 }
             }
         }
-        for clip in self.clips.values() {
+        for (id, clip) in &self.clips {
+            crate::graph::identity(id)?;
             clip.selection.validate()?;
             if !clip.start.is_finite()
                 || !clip.duration.is_finite()
@@ -107,6 +121,20 @@ impl Score {
                     return Err(Error(format!("clip input {key} has the wrong type")));
                 }
             }
+            // Check fixed timing/value relationships without binding venue geometry.
+            // Actual domain requirements (e.g. a solved circle) are host checks.
+            PreparedGraph::new_validated(
+                &library,
+                &clip.graph,
+                &clip.inputs,
+                Frame {
+                    cells: &[],
+                    beat: clip.start,
+                    clip_start: clip.start,
+                    seed: clip.seed,
+                },
+            )
+            .map_err(|error| Error(format!("clip {id}: {error}")))?;
         }
         Ok(())
     }
@@ -138,8 +166,8 @@ impl Score {
                 "clip needs finite start and positive duration".into(),
             ));
         }
-        if id.trim().is_empty()
-            || self.definitions.contains_key(id)
+        crate::graph::identity(id)?;
+        if self.definitions.contains_key(id)
             || self.clips.contains_key(id)
             || library.definitions.contains_key(id)
         {
@@ -231,6 +259,11 @@ impl Score {
     }
 
     pub fn library(&self, base: &Library) -> Result<Library> {
+        if self.definitions.len() > 512 || self.clips.len() > 2048 {
+            return Err(Error(
+                "a score supports at most 512 local definitions and 2,048 clips".into(),
+            ));
+        }
         let mut library = base.clone();
         for (id, definition) in &self.definitions {
             if library

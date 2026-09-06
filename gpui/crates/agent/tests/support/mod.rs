@@ -598,17 +598,31 @@ impl Fixture {
         .await;
 
         let score_id = if self.seed_track {
-            let score = call(
-                &services,
-                "create_score",
-                json!({
-                    "requestId": request_id(0),
-                    "trackId": TRACK,
-                    "venueId": VENUE,
-                    "name": "Fixture Score",
-                }),
-            )
-            .await;
+            let score = if self.graph_score.is_some() {
+                call(
+                    &services,
+                    "create_score",
+                    json!({
+                        "requestId": request_id(0), "trackId": TRACK,
+                        "venueId": VENUE, "name": "Fixture Score",
+                    }),
+                )
+                .await
+            } else {
+                // Exercise real pre-migration documents without making the
+                // production creation path emit legacy scores for tests.
+                let id = request_id(0);
+                sqlx::query("INSERT INTO scores(id,uid,track_id,venue_id,name) VALUES(?,?,?,?,?)")
+                    .bind(&id)
+                    .bind(session::PRINCIPAL)
+                    .bind(TRACK)
+                    .bind(VENUE)
+                    .bind("Fixture Score")
+                    .execute(&services.db().0)
+                    .await
+                    .expect("seed a pre-migration score");
+                json!({"id": id})
+            };
             Some(
                 score["id"]
                     .as_str()
