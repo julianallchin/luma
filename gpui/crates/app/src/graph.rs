@@ -74,7 +74,7 @@ use luma_ui::node::{agent_paint_node, agent_paint_node_focused, Instrument, Role
 use luma_ui::{fonts, ladder, paint};
 
 use luma_lib::dispatch::CommandError;
-use luma_lib::models::node_graph::edit::{apply, pattern_args_def, Edit};
+use luma_lib::models::node_graph::edit::{apply, Edit};
 use luma_lib::models::node_graph::{
     Graph, NodeTypeDef, ParamDef, ParamOption, ParamType, PortDef, Signal,
 };
@@ -122,6 +122,7 @@ pub struct Editor {
     /// against a guess.
     views: Rc<HashMap<String, Signal>>,
     document: Option<Document>,
+    inspection: Vec<(String, Rc<Graph>)>,
     /// Geometry derived from [`Document::graph`] and [`Self::types`], rebuilt
     /// on every change to either and measured once per rebuild. Behind a
     /// `RefCell` because the measure pass needs a text system and therefore
@@ -260,10 +261,9 @@ struct Viewport {
 }
 
 impl Viewport {
-    /// Zoom bounds. The web editor's React Flow range is 0.5–8; the lower end
-    /// is extended because a native canvas can afford to draw a whole graph at
-    /// once and there is no DOM to thrash at the far end of it.
-    const MIN_ZOOM: f32 = 0.2;
+    /// Deeply composed graphs still need to fit as an overview. Zooming in
+    /// reveals their labels and controls; the fit never clips distant nodes.
+    const MIN_ZOOM: f32 = 0.02;
     const MAX_ZOOM: f32 = 4.;
     /// Slack left around a fitted graph, as a fraction of the canvas — React
     /// Flow's `fitView` padding default.
@@ -344,20 +344,51 @@ impl Editor {
     /// when a save hands back a canonicalized graph — but *not* on a node
     /// move, which writes one card's origin in place, because a rebuild would
     /// throw away the measure pass along with it.
+    fn shown_graph(&self) -> Option<&Graph> {
+        self.inspection
+            .last()
+            .map(|(_, graph)| graph.as_ref())
+            .or_else(|| self.document.as_ref().map(|d| d.graph.as_ref()))
+    }
+
     fn rebuild(&mut self) {
-        let scene = match &self.document {
-            Some(document) => Scene::build(&document.graph, &self.types, &self.views),
-            None => Scene::default(),
-        };
+        let scene = self
+            .shown_graph()
+            .map(|graph| Scene::build(graph, &self.types, &self.views))
+            .unwrap_or_default();
+        self.selected
+            .retain(|id| scene.cards.iter().any(|card| card.node_id == *id));
         *self.scene.borrow_mut() = scene;
-        // A rebuild is where the document last changed hands (a delete, an
-        // undo, a canonicalized save coming back), so it is also where the
-        // selection sheds ids the document no longer has — a selection naming
-        // a dead node would aim the next delete at nothing.
-        if let Some(document) = &self.document {
-            self.selected
-                .retain(|id| document.graph.nodes.iter().any(|node| node.id == *id));
-        }
+    }
+
+    fn inspect_node(&mut self, node: &str) -> bool {
+        let Some(instance) = self
+            .shown_graph()
+            .and_then(|graph| graph.nodes.iter().find(|n| n.id == node))
+        else {
+            return false;
+        };
+        let Some(definition) = instance
+            .type_id
+            .strip_prefix(luma_lib::node_graph::lighting::PREFIX)
+        else {
+            return false;
+        };
+        let Some(graph) = luma_lib::node_graph::lighting::inspect_definition(definition) else {
+            return false;
+        };
+        self.inspection
+            .push((definition.to_owned(), Rc::new(graph)));
+        self.reframe();
+        true
+    }
+
+    fn reframe(&mut self) {
+        self.gesture = None;
+        self.selected.clear();
+        self.fit = true;
+        self.fitted_size.set(gpui::Size::default());
+        self.rebuild();
     }
 
     /// Move one node to `origin` in graph space, in both the document and the
@@ -367,6 +398,9 @@ impl Editor {
     /// Routed through [`apply`] like every other mutation — position is the
     /// one edit cheap enough to run per drag tick, but it is still an edit.
     fn move_node(&mut self, node: &SharedString, origin: Point<f32>) {
+        if !self.inspection.is_empty() {
+            return;
+        }
         let types = Rc::clone(&self.types);
         let Some(document) = &mut self.document else {
             return;
@@ -393,6 +427,9 @@ impl Editor {
     /// `None` before the document has landed — there is then nothing to step
     /// back to, and nothing worth recording.
     fn snapshot(&self) -> Option<GraphSnapshot> {
+        if !self.inspection.is_empty() {
+            return None;
+        }
         Some(GraphSnapshot {
             graph: Rc::clone(&self.document.as_ref()?.graph),
             selected: self.selected.clone(),
@@ -581,6 +618,7 @@ impl Luma {
             types: Rc::new(HashMap::new()),
             views: ViewData::snapshot(cx),
             document: None,
+            inspection: Vec::new(),
             scene: Rc::new(RefCell::new(Scene::default())),
             selected: Vec::new(),
             history: History::default(),
@@ -710,6 +748,7 @@ impl Luma {
         target: &Target,
         at: Point<Pixels>,
         shift: bool,
+        clicks: usize,
         cx: &mut Context<Self>,
     ) {
         self.edit_graph_tab(target, cx, |editor| {
@@ -726,6 +765,18 @@ impl Luma {
                 }
                 Hit::Header { card } | Hit::Body { card } | Hit::Widget { card, .. } => {
                     let node = scene.cards[card].node_id.clone();
+                    if clicks >= 2 {
+                        drop(scene);
+                        if editor.inspect_node(&node) {
+                            return;
+                        }
+                        editor.selected = vec![node];
+                        return;
+                    }
+                    if !editor.inspection.is_empty() {
+                        editor.selected = vec![node];
+                        return;
+                    }
                     if shift {
                         editor.toggle_selected(node);
                         return;
@@ -949,6 +1000,9 @@ impl Luma {
         let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
             return;
         };
+        if !editor.inspection.is_empty() {
+            return;
+        }
         if editor.saving {
             editor.dirty = true;
             return;
@@ -1514,25 +1568,50 @@ impl Scene {
             })
             .collect();
 
-        // `pattern_args` has no catalogue entry: its ports *are* the pattern's
-        // argument list, so the definition is synthesized here exactly as
-        // `pattern-args-node-def.ts` synthesizes it on the web side.
-        let synthetic = pattern_args_def(&graph.args);
-
+        let input_nodes: HashSet<_> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.type_id == "pattern_args")
+            .map(|n| n.id.as_str())
+            .collect();
         let cards: Vec<Card> = graph
             .nodes
             .iter()
+            .filter(|node| node.type_id != "pattern_args")
             .enumerate()
             .map(|(index, instance)| {
-                let definition = match instance.type_id.as_str() {
-                    "pattern_args" => synthetic.as_ref(),
-                    other => types.get(other),
-                };
+                let definition = types.get(&instance.type_id);
                 let ports = |defs: &[PortDef], output: bool| {
                     defs.iter()
                         .map(|port| Port {
                             id: port.id.clone().into(),
-                            label: port.name.clone().into(),
+                            label: if !output {
+                                graph
+                                    .edges
+                                    .iter()
+                                    .find(|edge| {
+                                        edge.to_node == instance.id
+                                            && edge.to_port == port.id
+                                            && input_nodes.contains(edge.from_node.as_str())
+                                    })
+                                    .map(|edge| {
+                                        let name = graph
+                                            .args
+                                            .iter()
+                                            .find(|arg| arg.id == edge.from_port)
+                                            .map(|arg| arg.name.as_str())
+                                            .unwrap_or(&edge.from_port);
+                                        if name == port.name || name == port.id {
+                                            format!("{} · exposed", port.name)
+                                        } else {
+                                            format!("{} · {name}", port.name)
+                                        }
+                                    })
+                                    .unwrap_or_else(|| port.name.clone())
+                                    .into()
+                            } else {
+                                port.name.clone().into()
+                            },
                             color: ladder::port(port.port_type.key()),
                             at: point(0., 0.),
                             connected: wired.contains(&(
@@ -2250,13 +2329,10 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .py(px(8.))
         .border_b_1()
         .border_color(ladder::trim())
-        .child(
-            div()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .child(state.pattern.name.clone())
-                .agent_node(Role::Text, state.pattern.name.clone()),
-        )
+        .children(graph_breadcrumbs(state, app))
+        .when(!state.inspection.is_empty(), |el| {
+            el.child(luma_ui::silkscreen("BUILT-IN · READ ONLY".to_owned()))
+        })
         .child(luma_ui::silkscreen(format!("{nodes} NODES")))
         .child(
             luma_ui::luma_button(
@@ -2286,6 +2362,38 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .when(state.saving || state.dirty, |el| {
             el.child(luma_ui::silkscreen("SAVING".to_string()))
         })
+}
+
+fn graph_breadcrumbs(state: &Editor, app: &Entity<Luma>) -> Vec<AnyElement> {
+    let labels = std::iter::once(state.pattern.name.clone()).chain(state.inspection.iter().map(
+        |(id, _)| {
+            state
+                .types
+                .get(&format!("{}{id}", luma_lib::node_graph::lighting::PREFIX))
+                .map(|def| def.name.clone())
+                .unwrap_or_else(|| id.clone())
+        },
+    ));
+    labels
+        .enumerate()
+        .map(|(depth, label)| {
+            let app = app.clone();
+            let target = Target::Graph {
+                pattern: state.pattern.id.clone(),
+            };
+            luma_ui::luma_button(&label, luma_ui::Enabled::Yes)
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        this.edit_graph_tab(&target, cx, |editor| {
+                            editor.inspection.truncate(depth);
+                            editor.reframe();
+                        })
+                    });
+                })
+                .agent_node(Role::Button, format!("Graph: {label}"))
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// One element for the whole graph.
@@ -2429,7 +2537,7 @@ fn listen(app: &Entity<Luma>, target: Target, hitbox: &Hitbox, window: &mut Wind
         let at = event.position;
         let shift = event.modifiers.shift;
         pressed.update(cx, |this, cx| {
-            this.graph_press(&press_target, at, shift, cx)
+            this.graph_press(&press_target, at, shift, event.click_count, cx)
         });
     });
 

@@ -15,6 +15,7 @@ pub enum ValueType {
     Coordinates,
     Boundary,
     Envelope,
+    Field,
     Mask,
     Lighting,
 }
@@ -91,8 +92,9 @@ pub enum Value {
     Coordinates(Mapping),
     Boundary(Boundary),
     Envelope(Envelope),
+    Field(BTreeMap<String, f64>),
     Mask(BTreeMap<String, f64>),
-    Lighting(BTreeMap<String, [f64; 3]>),
+    Lighting(BTreeMap<String, crate::FixtureOutput>),
 }
 impl Value {
     pub fn value_type(&self) -> ValueType {
@@ -107,6 +109,7 @@ impl Value {
             Self::Coordinates(_) => ValueType::Coordinates,
             Self::Boundary(_) => ValueType::Boundary,
             Self::Envelope(_) => ValueType::Envelope,
+            Self::Field(_) => ValueType::Field,
             Self::Mask(_) => ValueType::Mask,
             Self::Lighting(_) => ValueType::Lighting,
         }
@@ -120,8 +123,25 @@ impl Value {
             Self::Envelope(e) => return e.validate(),
             Self::Mapping(m) => return m.validate(),
             Self::Coordinates(m) => return m.validate(),
-            Self::Mask(m) => m.values().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
-            Self::Lighting(m) => m.values().flatten().all(|v| v.is_finite() && *v >= 0.0),
+            Self::Field(m) => m.iter().all(|(id, v)| !id.is_empty() && v.is_finite()),
+            Self::Mask(m) => m
+                .iter()
+                .all(|(id, v)| !id.is_empty() && v.is_finite() && (0.0..=1.0).contains(v)),
+            Self::Lighting(m) => {
+                for (id, value) in m {
+                    if id.is_empty() {
+                        return Err(Error("fixture output requires a head identity".into()));
+                    }
+                    value.validate()?;
+                }
+                let layout = m.values().next().map(|v| v.writes());
+                if m.values().any(|v| Some(v.writes()) != layout) {
+                    return Err(Error(
+                        "fixture output capabilities must cover one common head domain".into(),
+                    ));
+                }
+                true
+            }
             _ => true,
         };
         if valid {
@@ -145,4 +165,22 @@ pub struct Frame<'a> {
     pub beat: f64,
     pub clip_start: f64,
     pub seed: u64,
+}
+
+impl Frame<'_> {
+    pub fn validate(&self) -> Result<()> {
+        if !self.beat.is_finite() || !self.clip_start.is_finite() {
+            return Err(Error("musical time must be finite".into()));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for cell in self.cells {
+            if cell.id.is_empty() || !seen.insert(&cell.id) {
+                return Err(Error("head identities must be nonempty and unique".into()));
+            }
+            if cell.world.iter().chain(&cell.uvz).any(|v| !v.is_finite()) {
+                return Err(Error("head geometry must be finite".into()));
+            }
+        }
+        Ok(())
+    }
 }

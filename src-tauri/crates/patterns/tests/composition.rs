@@ -49,7 +49,7 @@ fn light(
     let Value::Lighting(l) = &result["lighting"] else {
         panic!()
     };
-    l.clone()
+    l.iter().map(|(id, v)| (id.clone(), v.rgb())).collect()
 }
 #[test]
 fn all_builtins_validate_and_only_lighting_graphs_are_score_candidates() {
@@ -62,6 +62,15 @@ fn all_builtins_validate_and_only_lighting_graphs_are_score_candidates() {
     assert!(!lib.definitions["chase_mask"].playable());
     assert!(matches!(lib.definitions["chase"].body, Body::Graph(_)));
     assert!(matches!(lib.definitions["chase_mask"].body, Body::Graph(_)));
+    assert!(matches!(lib.definitions["pill"].body, Body::Graph(_)));
+    assert!(matches!(
+        lib.definitions["dissolve_mask"].body,
+        Body::Graph(_)
+    ));
+    assert!(matches!(
+        lib.definitions["multiply_mask"].body,
+        Body::Graph(_)
+    ));
 }
 #[test]
 fn chase_rest_is_dark_and_seeking_is_deterministic() {
@@ -161,28 +170,50 @@ fn entry_and_exit_account_for_the_entire_stroke() {
 }
 #[test]
 fn dissolve_operates_per_head_and_is_monotone_not_flicker() {
-    let m = bar();
-    let mut previous = dissolve(&m, 0.0, 0.2, 42);
-    assert!(previous.values().all(|v| *v == 1.0));
-    for step in 1..=100 {
-        let next = dissolve(&m, f64::from(step) / 100.0, 0.2, 42);
-        for (id, v) in &next {
-            assert!(*v <= previous[id]);
+    let lib = standard_library();
+    let evaluate = |progress, softness, cells: &[Cell]| {
+        let values = BTreeMap::from([
+            ("coverage".into(), Value::Proportion(1.0 - progress)),
+            ("softness".into(), Value::Proportion(softness)),
+        ]);
+        let result = lib
+            .evaluate(
+                "dissolve_mask",
+                &values,
+                Frame {
+                    cells,
+                    ..frame(9.0)
+                },
+            )
+            .unwrap();
+        let Value::Mask(mask) = result["mask"].clone() else {
+            panic!()
+        };
+        mask
+    };
+    for softness in [0.0, 0.2, 1.0] {
+        let mut previous = evaluate(0.0, softness, cells());
+        assert!(previous.values().all(|v| *v == 1.0));
+        for step in 1..=100 {
+            let next = evaluate(f64::from(step) / 100.0, softness, cells());
+            for (id, value) in &next {
+                assert!(*value <= previous[id]);
+            }
+            previous = next;
         }
-        previous = next;
+        assert!(previous.values().all(|v| *v == 0.0));
     }
-    assert!(previous.values().all(|v| *v == 0.0));
-    let middle = dissolve(&m, 0.5, 0.0, 42);
+    let middle = evaluate(0.5, 0.0, cells());
     assert!(middle.values().any(|v| *v == 0.0));
     assert!(middle.values().any(|v| *v == 1.0));
-    let mut reordered = m.clone();
-    reordered.coordinates.reverse();
-    assert_eq!(middle, dissolve(&reordered, 0.5, 0.0, 42));
+    let mut reordered = cells().to_vec();
+    reordered.reverse();
+    assert_eq!(middle, evaluate(0.5, 0.0, &reordered));
 }
 #[test]
 fn dissolve_reseeding_changes_between_strokes_only_when_requested() {
     let lib = standard_library();
-    let mut i = inputs();
+    let mut i = BTreeMap::new();
     let first = light(&lib, "dissolve_flash", &i, 9.0);
     assert_ne!(first, light(&lib, "dissolve_flash", &i, 13.0));
     i.insert("reseed".into(), Value::Boolean(false));
@@ -354,18 +385,6 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
     let graph = Graph {
         nodes: BTreeMap::from([
             (
-                "mapping".into(),
-                Node {
-                    definition: "resolve_mapping".into(),
-                    inputs: BTreeMap::from([(
-                        "mapping".into(),
-                        Binding::Input {
-                            input: "mapping".into(),
-                        },
-                    )]),
-                },
-            ),
-            (
                 "chase".into(),
                 Node {
                     definition: "chase_mask".into(),
@@ -380,16 +399,7 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
                 "dissolve".into(),
                 Node {
                     definition: "dissolve_mask".into(),
-                    inputs: BTreeMap::from([
-                        (
-                            "mapping".into(),
-                            Binding::Connection {
-                                node: "mapping".into(),
-                                output: "coordinates".into(),
-                            },
-                        ),
-                        ("progress".into(), Value::Proportion(0.5).into()),
-                    ]),
+                    inputs: BTreeMap::from([("coverage".into(), Value::Proportion(0.5).into())]),
                 },
             ),
             (
@@ -447,7 +457,16 @@ fn dissolve_mask_can_modulate_chase_without_a_new_effect_kernel() {
     );
     let actual = light(&lib, "dissolving-chase", &inputs(), 9.0);
     let chase = light(&lib, "chase", &inputs(), 9.0);
-    let mask = dissolve(&bar(), 0.5, 0.0, 42);
+    let mask = lib
+        .evaluate(
+            "dissolve_mask",
+            &BTreeMap::from([("coverage".into(), Value::Proportion(0.5))]),
+            frame(9.0),
+        )
+        .unwrap();
+    let Value::Mask(mask) = &mask["mask"] else {
+        panic!()
+    };
     for (id, color) in actual {
         assert_eq!(color, chase[&id].map(|v| v * mask[&id]));
     }
@@ -479,8 +498,8 @@ fn score_insertion_creates_a_local_pattern_and_clip_edits_do_not_mutate_the_grap
     let Value::Lighting(l) = &out["lighting"] else {
         panic!()
     };
-    assert!(l.values().any(|c| c[2] > 0.0));
-    assert!(l.values().all(|c| c[0] == 0.0));
+    assert!(l.values().any(|c| c.rgb()[2] > 0.0));
+    assert!(l.values().all(|c| c.rgb()[0] == 0.0));
     assert!(restored
         .evaluate_clip(&lib, "local-1", &inputs(), 16.0, cells())
         .unwrap()
@@ -525,13 +544,16 @@ fn score_persists_mapping_choices_and_rejects_resolved_cell_snapshots() {
 fn prepared_graph_matches_interpreter_when_seeking_across_strokes() {
     let library = standard_library();
     for name in ["chase", "dissolve_flash"] {
-        let prepared = PreparedPattern::new(&library, name, &inputs(), frame(8.0)).unwrap();
-        // Resolve Mapping is baked, and nested graph wrappers aren't runtime steps.
-        assert_eq!(prepared.dynamic_step_count(), 4);
+        let overrides = if name == "chase" {
+            inputs()
+        } else {
+            BTreeMap::new()
+        };
+        let prepared = PreparedGraph::new(&library, name, &overrides, frame(8.0)).unwrap();
         for beat in [8.0, 9.3, 11.0, 8.2, 15.999, 12.1] {
             assert_eq!(
                 prepared.evaluate(beat).unwrap(),
-                library.evaluate(name, &inputs(), frame(beat)).unwrap()
+                library.evaluate(name, &overrides, frame(beat)).unwrap()
             );
         }
     }
@@ -661,4 +683,267 @@ fn a_perpendicular_major_axis_hint_still_maps_a_horizontal_rig() {
             .collect::<Vec<_>>(),
         vec![0., 0.25, 0.5, 0.75, 1.]
     );
+}
+
+#[test]
+fn clips_share_graphs_until_made_independent_including_local_dependencies() {
+    let lib = standard_library();
+    let mut score = Score::default();
+    score
+        .insert_effect(&lib, "chase", "original", 0.0, 8.0)
+        .unwrap();
+    // Replace the built-in dependency with a local, editable copy.
+    score
+        .definitions
+        .insert("local_chase".into(), lib.definitions["chase"].clone());
+    let Body::Graph(graph) = &mut score.definitions.get_mut("original").unwrap().body else {
+        panic!()
+    };
+    graph.nodes.get_mut("effect").unwrap().definition = "local_chase".into();
+    let mut repeat = score.clips["original"].clone();
+    repeat.start = 16.0;
+    score.clips.insert("repeat".into(), repeat);
+    score
+        .make_independent(&lib, "repeat", "independent")
+        .unwrap();
+    assert_eq!(score.clips["original"].graph, "original");
+    assert_eq!(score.clips["repeat"].graph, "independent");
+    let Body::Graph(graph) = &score.definitions["independent"].body else {
+        panic!()
+    };
+    let dependency = &graph.nodes["effect"].definition;
+    assert_ne!(dependency, "local_chase");
+    assert!(score.definitions.contains_key(dependency));
+    score.validate(&lib).unwrap();
+    let json = score.to_json(&lib).unwrap();
+    assert!(!json.contains("\"patterns\""));
+    let restored = Score::from_json(&lib, &json).unwrap();
+    assert_eq!(restored.clips["repeat"].graph, "independent");
+    // A collision fails without leaving partially cloned definitions.
+    let before = score.to_json(&lib).unwrap();
+    assert!(score.make_independent(&lib, "repeat", "original").is_err());
+    assert_eq!(before, score.to_json(&lib).unwrap());
+}
+
+#[test]
+fn fixture_output_writers_preserve_unset_capabilities() {
+    let lib = standard_library();
+    for (id, expected) in [
+        ("write_position", [false, false, true, false, false]),
+        ("write_dimmer", [false, true, false, false, false]),
+        ("write_strobe", [false, false, false, true, false]),
+        ("write_speed", [false, false, false, false, true]),
+        ("chase", [true, true, false, false, false]),
+    ] {
+        let output = lib.evaluate(id, &BTreeMap::new(), frame(9.0)).unwrap();
+        let Value::Lighting(values) = &output["lighting"] else {
+            panic!()
+        };
+        assert!(values.values().all(|v| v.writes() == expected), "{id}");
+    }
+}
+
+#[test]
+fn internal_layering_preserves_color_when_only_movement_is_written() {
+    let mut output = FixtureOutput::from_rgb([0.2, 0.4, 0.8]);
+    let original = output.rgb();
+    output.composite(
+        &FixtureOutput {
+            position: Some([0.0, 0.0]),
+            ..Default::default()
+        },
+        BlendMode::Replace,
+    );
+    assert_eq!(output.rgb(), original);
+    assert_eq!(output.position, Some([0.0, 0.0]));
+    assert!(output.strobe.is_none());
+    output.composite(
+        &FixtureOutput {
+            dimmer: Some(0.0),
+            ..Default::default()
+        },
+        BlendMode::Replace,
+    );
+    assert_eq!(output.rgb(), [0.0; 3]);
+    assert_eq!(output.position, Some([0.0, 0.0]));
+}
+
+#[test]
+fn refreshing_dissolve_holds_each_interval_and_replays_after_seeking() {
+    let lib = standard_library();
+    let overrides = BTreeMap::from([
+        ("coverage".into(), Value::Proportion(0.5)),
+        ("refresh".into(), Value::Boolean(true)),
+        ("refresh_every".into(), Value::Beats(0.125)),
+    ]);
+    let prepared = PreparedGraph::new(&lib, "dissolve_mask", &overrides, frame(8.0)).unwrap();
+    let first = prepared.evaluate(8.0).unwrap();
+    assert_eq!(first, prepared.evaluate(8.124).unwrap());
+    let next = prepared.evaluate(8.125).unwrap();
+    assert_ne!(first, next);
+    prepared.evaluate(123.0).unwrap();
+    assert_eq!(first, prepared.evaluate(8.0).unwrap());
+    assert_eq!(next, prepared.evaluate(8.2).unwrap());
+    for beat in [8.0, 8.125, 9.0, 12.01] {
+        assert_eq!(
+            prepared.evaluate(beat).unwrap(),
+            lib.evaluate("dissolve_mask", &overrides, frame(beat))
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn graph_pill_matches_the_previous_spatial_kernel() {
+    let lib = standard_library();
+    let mut mapping = bar();
+    for closed in [false, true] {
+        for c in &mut mapping.coordinates {
+            c.closed = closed;
+        }
+        for boundary in [Boundary::Clip, Boundary::Wrap, Boundary::Natural] {
+            for width in [0.0, 0.1, 0.25, 0.8, 1.0] {
+                for center in [
+                    -0.5,
+                    -width / 2.0,
+                    0.0,
+                    0.173,
+                    0.5,
+                    1.0,
+                    1.0 + width / 2.0,
+                    2.0,
+                ] {
+                    for shape in [
+                        Envelope::soft_edges(0.0),
+                        Envelope::soft_edges(0.1),
+                        Envelope {
+                            points: vec![[0.0, 0.0], [1.0, 1.0]],
+                        },
+                    ] {
+                        let inputs = BTreeMap::from([
+                            ("mapping".into(), Value::Coordinates(mapping.clone())),
+                            ("position".into(), Value::Position(center)),
+                            ("width".into(), Value::Proportion(width)),
+                            ("shape".into(), Value::Envelope(shape.clone())),
+                            ("boundary".into(), Value::Boundary(boundary)),
+                        ]);
+                        let result = lib.evaluate("pill", &inputs, frame(9.0)).unwrap();
+                        let Value::Mask(actual) = &result["mask"] else {
+                            panic!()
+                        };
+                        let expected = reference_pill(&mapping, center, width, &shape, boundary);
+                        for (id, value) in actual {
+                            assert!((value - expected[id]).abs() < 1e-10, "{id}: {value} != {} at center {center}, width {width}, boundary {boundary:?}", expected[id]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn reference_pill(
+    mapping: &Mapping,
+    position: f64,
+    width: f64,
+    shape: &Envelope,
+    boundary: Boundary,
+) -> BTreeMap<String, f64> {
+    mapping
+        .coordinates
+        .iter()
+        .map(|c| {
+            let wrap = boundary == Boundary::Wrap || (boundary == Boundary::Natural && c.closed);
+            let offset = if wrap {
+                (c.position - position + 0.5).rem_euclid(1.0) - 0.5
+            } else {
+                c.position - position
+            };
+            let half = width * 0.5;
+            let coverage = if width <= 0.0
+                || (!(wrap && width >= 1.0)
+                    && offset.abs() + 8.0 * f64::EPSILON * position.abs().max(1.0) >= half)
+            {
+                0.0
+            } else {
+                shape.sample(offset / width + 0.5)
+            };
+            (c.cell.clone(), coverage)
+        })
+        .collect()
+}
+
+fn pill(
+    mapping: &Mapping,
+    position: f64,
+    width: f64,
+    shape: &Envelope,
+    boundary: Boundary,
+) -> BTreeMap<String, f64> {
+    let cells: Vec<_> = mapping
+        .coordinates
+        .iter()
+        .map(|c| Cell {
+            id: c.cell.clone(),
+            group: "all".into(),
+            world: [0.0, 0.0, c.position],
+            uvz: [0.0, 0.0, c.position],
+        })
+        .collect();
+    let output = standard_library()
+        .evaluate(
+            "pill",
+            &BTreeMap::from([
+                ("mapping".into(), Value::Coordinates(mapping.clone())),
+                ("position".into(), Value::Position(position)),
+                ("width".into(), Value::Proportion(width)),
+                ("shape".into(), Value::Envelope(shape.clone())),
+                ("boundary".into(), Value::Boundary(boundary)),
+            ]),
+            Frame {
+                cells: &cells,
+                ..frame(9.0)
+            },
+        )
+        .unwrap();
+    let Value::Mask(mask) = output["mask"].clone() else {
+        panic!()
+    };
+    mask
+}
+
+#[test]
+fn dissolve_flash_uses_the_shared_envelope_and_keeps_the_rest_dark() {
+    let library = standard_library();
+    let inputs = BTreeMap::from([("shape".into(), Value::Envelope(Envelope::soft_edges(0.0)))]);
+    assert!(light(&library, "dissolve_flash", &inputs, 9.9)
+        .values()
+        .all(|rgb| *rgb == [1.0; 3]));
+    assert!(light(&library, "dissolve_flash", &inputs, 10.0)
+        .values()
+        .all(|rgb| *rgb == [0.0; 3]));
+    assert!(light(&library, "dissolve_flash", &inputs, 11.9)
+        .values()
+        .all(|rgb| *rgb == [0.0; 3]));
+}
+
+#[test]
+fn preparation_rejects_duplicate_head_identities_for_every_effect() {
+    let library = standard_library();
+    let duplicate = vec![cells()[0].clone(), cells()[0].clone()];
+    for id in ["chase", "dissolve_flash", "write_strobe"] {
+        let frame = Frame {
+            cells: &duplicate,
+            ..frame(8.0)
+        };
+        assert!(PreparedGraph::new(&library, id, &BTreeMap::new(), frame)
+            .unwrap_err()
+            .0
+            .contains("unique"));
+        assert!(library
+            .evaluate(id, &BTreeMap::new(), frame)
+            .unwrap_err()
+            .0
+            .contains("unique"));
+    }
 }

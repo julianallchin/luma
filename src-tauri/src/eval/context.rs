@@ -502,6 +502,7 @@ pub async fn build_resident_context(
     };
 
     let ctx = ResidentContext {
+        seed: seed_for(instance, "lighting"),
         span,
         positions,
         beat_grid,

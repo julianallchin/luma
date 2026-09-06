@@ -54,6 +54,8 @@ use crate::eval::Capability;
 
 #[derive(Clone, Debug)]
 pub enum SelectApplyOp {
+    /// Extract a capability from the packed output of a graph evaluation.
+    Channels { start: usize },
     /// Generic sink kept for callers that already adapt channels upstream: route
     /// input 0 into `capability`, copying it through verbatim to the out slot.
     /// Prefer the per-capability variants below, which clamp/adapt channels.
@@ -116,6 +118,17 @@ fn in_ch(ctx: &KernelCtx, i: usize, k: usize, ch: usize, t: usize) -> f32 {
 pub fn run_select_apply(op: &SelectApplyOp, ctx: &KernelCtx) -> Vec<f32> {
     let (t, n) = (ctx.t(), ctx.n());
     match op {
+        SelectApplyOp::Channels { start } => {
+            let mut out = ctx.out_buf();
+            for i in 0..n {
+                for k in 0..t {
+                    for ch in 0..ctx.c() {
+                        out[ctx.out_idx(i, k, ch)] = in_ch(ctx, i, k, start + ch, t);
+                    }
+                }
+            }
+            out
+        }
         // Compiler resolved the binding (Plan.outputs); pass through verbatim.
         SelectApplyOp::Apply(_) => ctx.input(0).data.to_vec(),
 

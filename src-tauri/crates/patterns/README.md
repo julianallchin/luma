@@ -7,12 +7,20 @@ device access. The existing evaluator shares its circle solver with this crate.
 
 Implemented examples:
 
-- `chase` is an ordinary graph using `chase_mask` and `appearance`.
-- `chase_mask` composes mapping, rhythm, motion, and a pill shape.
-- `dissolve_flash` composes mapping, rhythm, motion progress, per-cell dissolve,
-  and appearance. The tests compose its mask with Chase without a new kernel.
-- `Score::insert_effect` creates a local, one-node Pattern exposing the selected
-  graph's interface. Clip overrides never mutate the graph.
+- `chase` combines `chase_mask` and `appearance`.
+- `pill`, `multiply_mask`, `scale_mask`, and `dissolve_mask` are ordinary graphs
+  built from arithmetic, geometry, comparison, curve sampling, and randomness.
+- `dissolve_mask` takes coverage (1 = all on, 0 = all off). It can hold a random
+  order or refresh it every chosen beat interval. Randomness uses stable head
+  identities, the clip seed, and an integer epoch, so seeking is repeatable.
+- `dissolve_flash` uses the shared Envelope type for its fade curve, and keeps
+  its rest dark even when the curve ends above zero.
+- The version-2 `Score` directly references graph definitions from clips. Labels
+  are optional, and `make_independent` copies reachable score-local subgraphs.
+  Timing, selection, z-order, blend mode, seed and overrides belong to the clip.
+- `Lighting` carries the existing color, dimmer, movement, strobe, and speed
+  capabilities. An unwritten capability is distinct from an explicit zero.
+  Color already contains brightness; effects have no second brightness input.
 
 Mapping is an authored choice; Coordinates is a resolved runtime field. Saved
 scores reject runtime cell snapshots. The host supplies selected cells and their
@@ -23,8 +31,8 @@ principal direction, independently normalized per requested group.
 Run checks from the repository root:
 
 ```
-cargo test --manifest-path src-tauri/Cargo.toml -p luma-patterns
-cargo clippy --manifest-path src-tauri/Cargo.toml -p luma-patterns --all-targets -- -D warnings
+cargo +1.97.1 test --manifest-path src-tauri/Cargo.toml -p luma-patterns
+cargo +1.97.1 clippy --manifest-path src-tauri/Cargo.toml -p luma-patterns --all-targets -- -D warnings
 ```
 
 `pattern-eval` reads one JSON request on stdin and writes JSON on stdout. It
@@ -47,15 +55,19 @@ supports `catalog`, `evaluate`, and `preview_score`. For example:
 ```
 
 ```
-cargo run --manifest-path src-tauri/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
+cargo +1.97.1 run --manifest-path src-tauri/Cargo.toml -p luma-patterns --bin pattern-eval < request.json
 ```
 
 ## Remaining integration
 
-This is not yet the app's score editor or playback runtime. The score picker,
-rich input editors, authored revision storage, library promotion, and legacy
-migration must be connected before switching existing scores. The reference
-interpreter remains an oracle for tests. `PreparedPattern` validates and flattens
+Typed built-ins already run through the app's normal score evaluator and can be
+inserted from its native picker. The native graph canvas hides synthetic input
+wiring and supports read-only navigation into built-in graph definitions. The
+version-2 score document is not yet the production persistence model: authored
+revision storage, editing score-local definitions, Python authoring, and the
+manual legacy migration still need to move together before adopting the reset.
+The built-in library is fixed; account-level library promotion is being removed. The reference
+interpreter remains an oracle for tests. `PreparedGraph` validates and flattens
 the graph once, resolves fixed geometry once, and evaluates only dynamic kernels
 per frame. `Score::prepare_clip` also freezes clip overrides and enforces the
 clip span. Native previews use this prepared path and `BeatTimeline`, which
@@ -96,7 +108,7 @@ An optional `library` supplies custom graph definitions using the same contracts
 Save one returned frame as JSON to render it in the real venue:
 
 ```
-cargo run --manifest-path src-tauri/Cargo.toml --bin render_venue -- \
+cargo +1.97.1 run --manifest-path src-tauri/Cargo.toml --bin render_venue -- \
   --db /path/to/disposable/luma.db --venue-id UUID \
   --state /path/to/frame.json --output /path/to/preview.png
 ```
@@ -104,7 +116,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin render_venue -- \
 For repeatable execution measurements, save the response's `cells` array:
 
 ```
-cargo run --manifest-path src-tauri/Cargo.toml -p luma-patterns --release \
+cargo +1.97.1 run --manifest-path src-tauri/Cargo.toml -p luma-patterns --release \
   --example frame-budget < cells.json
 ```
 

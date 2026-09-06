@@ -112,3 +112,67 @@ fn edit_a_chase_envelope_per_clip() {
         pool.close().await;
     });
 }
+
+#[test]
+fn inspect_nested_builtin_graphs_without_an_inputs_box_or_mutating_them() {
+    #[cfg(feature = "pixel")]
+    let mode = Mode::Pixel;
+    #[cfg(not(feature = "pixel"))]
+    let mode = Mode::Headless;
+    let mut harness = Fixture::new(
+        "lighting-nested-graphs",
+        20,
+        vec![Clip::new("wash", "Wash", 0., 2.)],
+    )
+    .with_rig()
+    .open(mode);
+    let result = harness.exec(&support::script(r#"
+        nav.venue("Test Venue"); nav.track("Aurora"); nav.expand(); nav.stageOff();
+        until("waveform",s=>s.find({role:"card",label:"Waveform"}));
+        app.click(app.snapshot().find({role:"row",label:"Lane 0"}),{button:"right"});
+        until("search",s=>s.find({role:"input",label:"Search lighting nodes and Patterns…"}));
+        const field=app.snapshot().find({role:"input",label:"Search lighting nodes and Patterns…"});
+        app.type(field,"chase"); app.frames(2); app.key("enter");
+        until("Chase clip",s=>s.find({role:"card",label:"Chase"}));
+        const clip=app.snapshot().find({role:"card",label:"Chase"});
+        app.click(clip,{count:2});
+        until("graph preview",s=>s.find({role:"card",label:"Pattern output preview"}));
+        const root=app.snapshot().findAll({role:"card"}).map(n=>n.label);
+        const rootShot=CAPTURE ? app.screenshot() : null;
+        app.click(app.snapshot().find({role:"card",label:"Chase"}),{count:2});
+        until("chase recipe",s=>s.find({role:"card",label:"Chase Mask"}));
+        const chaseShot=CAPTURE ? app.screenshot() : null;
+        app.click(app.snapshot().find({role:"card",label:"Chase Mask"}),{count:2});
+        until("mask recipe",s=>s.find({role:"button",label:"Graph: Chase Mask"}));
+        app.click(app.snapshot().find({role:"card",label:"Pill"}),{count:2});
+        until("pill recipe",s=>s.find({role:"button",label:"Graph: Pill"}));
+        const pill=app.snapshot().findAll({role:"card"}).map(n=>n.label);
+        app.click(app.snapshot().find({role:"card",label:"Coordinate offset"}));
+        app.key("backspace"); app.frames(3);
+        const afterDelete=app.snapshot().findAll({role:"card"}).map(n=>n.label);
+        app.click(app.snapshot().find({role:"button",label:"Graph: Chase"}));
+        until("back at root",s=>s.find({role:"card",label:"Chase"}));
+        ({root,rootShot,chaseShot,pill,afterDelete,rootAfter:app.snapshot().findAll({role:"card"}).map(n=>n.label)})
+    "#.replace("CAPTURE", if cfg!(all(feature = "pixel", target_os = "macos")) { "true" } else { "false" }).as_str()), Duration::from_secs(60));
+    assert_eq!(result.error, None, "{}", result.stdout);
+    for (key, filename) in [
+        ("rootShot", "/tmp/luma-graph-reset-root.png"),
+        ("chaseShot", "/tmp/luma-graph-reset-chase.png"),
+    ] {
+        if let Some(path) = result.result[key]["path"].as_str() {
+            std::fs::copy(path, filename).unwrap();
+        }
+    }
+    assert!(!result.result["root"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "Inputs"));
+    assert!(result.result["pill"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "Coordinate offset"));
+    assert_eq!(result.result["pill"], result.result["afterDelete"]);
+    assert_eq!(result.result["root"], result.result["rootAfter"]);
+}

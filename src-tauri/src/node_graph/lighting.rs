@@ -3,7 +3,7 @@
 use crate::models::node_graph::*;
 use luma_patterns::{self as p, ValueType};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const PREFIX: &str = "lighting/";
 
@@ -31,7 +31,7 @@ pub fn choices(kind: ValueType) -> Vec<ParamOption> {
 
 pub fn port_type(kind: ValueType) -> PortType {
     match kind {
-        ValueType::Number => PortType::Signal,
+        ValueType::Number | ValueType::Field => PortType::Signal,
         ValueType::Color => PortType::Signal,
         ValueType::Beats => PortType::Beats,
         ValueType::Proportion => PortType::Proportion,
@@ -373,4 +373,75 @@ pub fn upgrade_shape_inputs(graph: &mut Graph) -> bool {
         changed = true;
     }
     changed
+}
+
+/// Read-only canvas projection of a built-in definition. This is never saved
+/// or compiled: the canonical graph remains the typed library definition.
+pub fn inspect_definition(id: &str) -> Option<Graph> {
+    let library = p::standard_library();
+    let definition = library.definitions.get(id)?;
+    let p::Body::Graph(body) = &definition.body else {
+        return None;
+    };
+    let mut graph = Graph {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        args: Vec::new(),
+    };
+    let mut depths = BTreeMap::new();
+    fn depth(id: &str, body: &p::Graph, depths: &mut BTreeMap<String, usize>) -> usize {
+        if let Some(value) = depths.get(id) {
+            return *value;
+        }
+        let value = body.nodes[id]
+            .inputs
+            .values()
+            .filter_map(|binding| match binding {
+                p::Binding::Connection { node, .. } => Some(depth(node, body, depths) + 1),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        depths.insert(id.into(), value);
+        value
+    }
+    let mut rows = BTreeMap::<usize, usize>::new();
+    for (id, node) in &body.nodes {
+        let column = depth(id, body, &mut depths);
+        let row = rows.entry(column).or_default();
+        let mut params = HashMap::new();
+        for (port, binding) in &node.inputs {
+            let (source, output) = match binding {
+                p::Binding::Value { value } => {
+                    params.insert(port.clone(), wire_value(value));
+                    continue;
+                }
+                p::Binding::Input { input } => ("__inputs".to_owned(), input.clone()),
+                p::Binding::Connection { node, output } => (node.clone(), output.clone()),
+            };
+            graph.edges.push(Edge {
+                id: format!("{id}/{port}"),
+                from_node: source,
+                from_port: output,
+                to_node: id.clone(),
+                to_port: port.clone(),
+            });
+        }
+        graph.nodes.push(NodeInstance {
+            id: id.clone(),
+            type_id: format!("{PREFIX}{}", node.definition),
+            params,
+            position_x: Some(column as f64 * 520.0),
+            position_y: Some(*row as f64 * 360.0),
+        });
+        *row += 1;
+    }
+    graph.nodes.push(NodeInstance {
+        id: "__inputs".into(),
+        type_id: "pattern_args".into(),
+        params: HashMap::new(),
+        position_x: None,
+        position_y: None,
+    });
+    Some(graph)
 }

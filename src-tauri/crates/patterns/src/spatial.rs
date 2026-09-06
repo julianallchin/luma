@@ -1,6 +1,6 @@
-use crate::{Boundary, Error, Result};
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,40 +88,9 @@ impl Mapping {
     }
 }
 
-pub fn pill(
-    mapping: &Mapping,
-    position: f64,
-    width: f64,
-    shape: &crate::Envelope,
-    boundary: Boundary,
-) -> BTreeMap<String, f64> {
-    mapping
-        .coordinates
-        .iter()
-        .map(|c| {
-            let wrap = boundary == Boundary::Wrap || (boundary == Boundary::Natural && c.closed);
-            let offset = if wrap {
-                (c.position - position + 0.5).rem_euclid(1.0) - 0.5
-            } else {
-                c.position - position
-            };
-            let half = width * 0.5;
-            let coverage = if width <= 0.0
-                || (!(wrap && width >= 1.0)
-                    && offset.abs() + 8.0 * f64::EPSILON * position.abs().max(1.0) >= half)
-            {
-                0.0
-            } else {
-                shape.sample(offset / width + 0.5)
-            };
-            (c.cell.clone(), coverage)
-        })
-        .collect()
-}
-
 /// Stable hash independent of Rust's Hash implementation, traversal order,
 /// process, or frame. Cell identity makes adjacent pixels independent.
-fn threshold(cell: &str, seed: u64) -> f64 {
+pub(crate) fn threshold(cell: &str, seed: u64) -> f64 {
     let mut h = 0xcbf29ce484222325_u64 ^ seed;
     for b in cell.bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3);
@@ -133,33 +102,9 @@ fn threshold(cell: &str, seed: u64) -> f64 {
     ((h >> 11) as f64 + 0.5) / 9007199254740992.0
 }
 
-pub fn dissolve(
-    mapping: &Mapping,
-    progress: f64,
-    softness: f64,
-    seed: u64,
-) -> BTreeMap<String, f64> {
-    mapping
-        .coordinates
-        .iter()
-        .map(|c| {
-            let t = threshold(&c.cell, seed);
-            // Each fade lies wholly inside 0..1; all lit at 0, all dark at 1.
-            let start = t * (1.0 - softness);
-            let v = if progress <= 0.0 {
-                1.0
-            } else if progress >= 1.0 {
-                0.0
-            } else if softness == 0.0 {
-                if progress < t {
-                    1.0
-                } else {
-                    0.0
-                }
-            } else {
-                (1.0 - (progress - start) / softness).clamp(0.0, 1.0)
-            };
-            (c.cell.clone(), v)
-        })
-        .collect()
+pub(crate) fn epoch_seed(seed: u64, epoch: i64) -> u64 {
+    let mut value = seed ^ (epoch as u64).wrapping_mul(0x9e3779b97f4a7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    value ^ (value >> 31)
 }

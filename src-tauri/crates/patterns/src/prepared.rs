@@ -18,7 +18,7 @@ struct Step {
     outputs: BTreeMap<String, usize>,
 }
 #[derive(Clone, Debug)]
-pub struct PreparedPattern {
+pub struct PreparedGraph {
     steps: Vec<Step>,
     outputs: BTreeMap<String, Source>,
     slots: usize,
@@ -26,7 +26,7 @@ pub struct PreparedPattern {
     clip_start: f64,
     seed: u64,
 }
-impl PreparedPattern {
+impl PreparedGraph {
     pub fn new(
         library: &Library,
         definition: &str,
@@ -34,9 +34,7 @@ impl PreparedPattern {
         frame: Frame,
     ) -> Result<Self> {
         library.validate(definition)?;
-        if !frame.beat.is_finite() || !frame.clip_start.is_finite() {
-            return Err(Error("musical time must be finite".into()));
-        }
+        frame.validate()?;
         let mut prepared = Self {
             steps: Vec::new(),
             outputs: BTreeMap::new(),
@@ -121,7 +119,12 @@ impl PreparedPattern {
         }
         match &definition.body {
             Body::Primitive(primitive) => {
-                if definition.outputs.values().all(|o| o.rate == Rate::Fixed) {
+                if definition.outputs.values().all(|o| o.rate == Rate::Fixed)
+                    || (!primitive.reads_time()
+                        && inputs
+                            .values()
+                            .all(|input| matches!(input, Source::Constant(_))))
+                {
                     let values = inputs
                         .iter()
                         .map(|(key, source)| Ok((key.clone(), source.read(&[])?)))

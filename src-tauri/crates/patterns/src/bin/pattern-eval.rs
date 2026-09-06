@@ -1,7 +1,7 @@
 //! JSON-in/JSON-out access to the same graph evaluator used by contract tests.
 //! Useful for inspecting a definition or rendering a saved score during the
 //! migration; never opens a user's library or sends device output.
-use luma_patterns::{standard_library, Cell, Frame, Library, PreparedPattern, Score, Value};
+use luma_patterns::{standard_library, Cell, Frame, Library, PreparedGraph, Score, Value};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -57,7 +57,7 @@ fn run() -> Result<serde_json::Value, String> {
                 return Err("preview is limited to 10,000 frames".into());
             }
             let library = library.unwrap_or_else(standard_library);
-            let prepared = PreparedPattern::new(
+            let prepared = PreparedGraph::new(
                 &library,
                 &definition,
                 &inputs,

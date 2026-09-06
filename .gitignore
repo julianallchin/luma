@@ -56,6 +56,7 @@ src/bindings/*.ts
 scripts/*
 !scripts/headless/
 !scripts/arena/
+!scripts/library/
 
 # Root docs (canonical docs live in www/)
 /docs/*

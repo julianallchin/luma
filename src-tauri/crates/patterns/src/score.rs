@@ -1,27 +1,32 @@
-use crate::{
-    Binding, Body, Definition, Error, Frame, Graph, Library, Node, PreparedPattern, Result, Value,
-};
+use crate::{Binding, Body, Definition, Error, Frame, Library, PreparedGraph, Result, Value};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// A playable composition. Definition IDs refer to graph revisions. A pattern
-/// lives either in its score document or in the reusable library, not a venue.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Pattern {
-    pub name: String,
-    pub definition: String,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Clip {
-    pub pattern: String,
+    /// A score-local graph or an immutable built-in node definition.
+    pub graph: String,
     pub start: f64,
     pub duration: f64,
     pub seed: u64,
+    /// Group expression resolved by the host; never physical fixture ids.
+    #[serde(default = "all_selection")]
+    pub selection: crate::Selection,
+    #[serde(default)]
+    pub z_index: i64,
+    #[serde(default = "replace_blend")]
+    pub blend_mode: crate::BlendMode,
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
 }
+fn all_selection() -> crate::Selection {
+    crate::Selection::all()
+}
+fn replace_blend() -> crate::BlendMode {
+    crate::BlendMode::Replace
+}
+
 /// New score document format. Local definitions travel with the score. This is
 /// deliberately not written into old SQL projections before migration exists.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,27 +34,28 @@ pub struct Clip {
 pub struct Score {
     version: u32,
     pub definitions: BTreeMap<String, Definition>,
-    pub patterns: BTreeMap<String, Pattern>,
     pub clips: BTreeMap<String, Clip>,
 }
 impl Default for Score {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             definitions: BTreeMap::new(),
-            patterns: BTreeMap::new(),
             clips: BTreeMap::new(),
         }
     }
 }
 impl Score {
     pub fn validate(&self, base: &Library) -> Result<()> {
-        if self.version != 1 {
+        if self.version != 2 {
             return Err(Error(format!("unsupported score version {}", self.version)));
         }
         let library = self.library(base)?;
         for (id, definition) in &self.definitions {
             library.validate(id)?;
+            if matches!(definition.body, Body::Primitive(_)) {
+                return Err(Error("score-local definitions must be graphs".into()));
+            }
             for input in definition.inputs.values() {
                 if let Some(value) = &input.default {
                     authored_value(value)?;
@@ -68,16 +74,8 @@ impl Score {
                 }
             }
         }
-        for pattern in self.patterns.values() {
-            let definition = library
-                .definitions
-                .get(&pattern.definition)
-                .ok_or_else(|| Error(format!("unknown pattern graph {}", pattern.definition)))?;
-            if !definition.playable() {
-                return Err(Error("a pattern must produce Lighting".into()));
-            }
-        }
         for clip in self.clips.values() {
+            clip.selection.validate()?;
             if !clip.start.is_finite()
                 || !clip.duration.is_finite()
                 || clip.duration <= 0.0
@@ -87,11 +85,18 @@ impl Score {
                     "clip needs finite start and positive duration".into(),
                 ));
             }
-            let pattern = self
-                .patterns
-                .get(&clip.pattern)
-                .ok_or_else(|| Error(format!("unknown pattern {}", clip.pattern)))?;
-            let definition = &library.definitions[&pattern.definition];
+            let definition = library
+                .definitions
+                .get(&clip.graph)
+                .ok_or_else(|| Error(format!("unknown clip graph {}", clip.graph)))?;
+            if !definition.playable() {
+                return Err(Error("a clip graph must produce fixture output".into()));
+            }
+            for (key, input) in &definition.inputs {
+                if input.default.is_none() && !clip.inputs.contains_key(key) {
+                    return Err(Error(format!("missing clip input {key}")));
+                }
+            }
             for (key, value) in &clip.inputs {
                 authored_value(value)?;
                 let input = definition
@@ -133,7 +138,7 @@ impl Score {
                 "clip needs finite start and positive duration".into(),
             ));
         }
-        if self.patterns.contains_key(id)
+        if id.trim().is_empty()
             || self.definitions.contains_key(id)
             || self.clips.contains_key(id)
             || library.definitions.contains_key(id)
@@ -147,55 +152,84 @@ impl Score {
                 "only Lighting outputs can be placed on the score".into(),
             ));
         }
-        let node = Node {
-            definition: effect.into(),
-            inputs: definition
-                .inputs
-                .keys()
-                .map(|key| (key.clone(), Binding::Input { input: key.clone() }))
-                .collect(),
-        };
-        let wrapper = Definition {
-            name: definition.name.clone(),
-            inputs: definition.inputs.clone(),
-            outputs: definition.outputs.clone(),
-            body: Body::Graph(Graph {
-                nodes: BTreeMap::from([("effect".into(), node)]),
-                outputs: definition
-                    .outputs
-                    .keys()
-                    .map(|name| {
-                        (
-                            name.clone(),
-                            Binding::Connection {
-                                node: "effect".into(),
-                                output: name.clone(),
-                            },
-                        )
-                    })
-                    .collect(),
-            }),
-        };
+        let wrapper = definition.instance(effect);
         self.definitions.insert(id.into(), wrapper);
-        self.patterns.insert(
-            id.into(),
-            Pattern {
-                name: definition.name.clone(),
-                definition: id.into(),
-            },
-        );
         self.clips.insert(
             id.into(),
             Clip {
-                pattern: id.into(),
+                graph: id.into(),
                 start,
                 duration,
                 seed: 0,
+                selection: all_selection(),
+                z_index: 0,
+                blend_mode: replace_blend(),
                 inputs: BTreeMap::new(),
             },
         );
         Ok(())
     }
+    /// Detach one clip, including every reachable score-local subgraph. Built-in
+    /// definitions remain shared and immutable. Validate before replacing self.
+    pub fn make_independent(&mut self, base: &Library, clip_id: &str, new_id: &str) -> Result<()> {
+        self.validate(base)?;
+        let clip = self
+            .clips
+            .get(clip_id)
+            .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
+        let library = self.library(base)?;
+        let mut reachable = BTreeSet::new();
+        let mut pending = vec![clip.graph.clone()];
+        while let Some(id) = pending.pop() {
+            if !reachable.insert(id.clone()) {
+                continue;
+            }
+            if let Body::Graph(graph) = &library.definitions[&id].body {
+                pending.extend(
+                    graph
+                        .nodes
+                        .values()
+                        .filter(|n| self.definitions.contains_key(&n.definition))
+                        .map(|n| n.definition.clone()),
+                );
+            }
+        }
+        let mut remap = BTreeMap::from([(clip.graph.clone(), new_id.to_owned())]);
+        for (index, id) in reachable.iter().filter(|id| **id != clip.graph).enumerate() {
+            remap.insert(id.clone(), format!("{new_id}/{index}"));
+        }
+        for id in remap.values() {
+            if id.is_empty() || library.definitions.contains_key(id) {
+                return Err(Error(format!(
+                    "graph identity {id} already exists or is empty"
+                )));
+            }
+        }
+        let mut candidate = self.clone();
+        for (old, new) in &remap {
+            let original = &library.definitions[old];
+            let mut definition = if matches!(original.body, Body::Primitive(_)) {
+                original.instance(old)
+            } else {
+                original.clone()
+            };
+            if let Body::Graph(graph) = &mut definition.body {
+                for node in graph.nodes.values_mut() {
+                    if self.definitions.contains_key(&node.definition) {
+                        if let Some(id) = remap.get(&node.definition) {
+                            node.definition = id.clone();
+                        }
+                    }
+                }
+            }
+            candidate.definitions.insert(new.clone(), definition);
+        }
+        candidate.clips.get_mut(clip_id).unwrap().graph = new_id.into();
+        candidate.validate(base)?;
+        *self = candidate;
+        Ok(())
+    }
+
     pub fn library(&self, base: &Library) -> Result<Library> {
         let mut library = base.clone();
         for (id, definition) in &self.definitions {
@@ -225,13 +259,12 @@ impl Score {
             .clips
             .get(clip_id)
             .ok_or_else(|| Error(format!("unknown clip {clip_id}")))?;
-        let pattern = &self.patterns[&clip.pattern];
         let library = self.library(base)?;
         let mut inputs = host_inputs.clone();
         inputs.extend(clip.inputs.clone());
-        let program = PreparedPattern::new(
+        let program = PreparedGraph::new(
             &library,
-            &pattern.definition,
+            &clip.graph,
             &inputs,
             Frame {
                 cells,
@@ -263,7 +296,7 @@ fn authored_value(value: &Value) -> Result<()> {
     value.validate()?;
     if matches!(
         value,
-        Value::Coordinates(_) | Value::Mask(_) | Value::Lighting(_)
+        Value::Coordinates(_) | Value::Field(_) | Value::Mask(_) | Value::Lighting(_)
     ) {
         return Err(Error(
             "resolved cell values belong to execution, not a saved score".into(),
@@ -274,7 +307,7 @@ fn authored_value(value: &Value) -> Result<()> {
 
 #[derive(Clone, Debug)]
 pub struct PreparedClip {
-    program: PreparedPattern,
+    program: PreparedGraph,
     start: f64,
     end: f64,
 }

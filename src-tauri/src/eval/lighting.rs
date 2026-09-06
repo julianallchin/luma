@@ -17,7 +17,7 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub struct Program {
-    prepared: p::PreparedPattern,
+    prepared: p::PreparedGraph,
     clock: p::BeatTimeline,
     ids: Vec<String>,
 }
@@ -177,10 +177,10 @@ fn build(
             id: id.clone(),
             group: "selection".into(),
             world: world.map(f64::from),
-            uvz: stage_coordinates(*world),
+            uvz: p::Cell::stage_coordinates(world.map(f64::from)),
         })
         .collect();
-    let prepared = p::PreparedPattern::new(
+    let prepared = p::PreparedGraph::new(
         &library,
         "__score_pattern",
         &BTreeMap::new(),
@@ -188,11 +188,20 @@ fn build(
             cells: &cells,
             beat: start,
             clip_start: start,
-            seed: crate::eval::context::seed_for(None, "lighting"),
+            seed: ctx.seed,
         },
     )
     .map_err(|e| e.to_string())?;
-    let rgb = low.emit(
+    let initial = prepared.evaluate(start).map_err(|e| e.to_string())?;
+    let writes = match initial.get("lighting") {
+        Some(p::Value::Lighting(values)) => values
+            .values()
+            .next()
+            .map(|v| v.writes())
+            .unwrap_or([false; 5]),
+        _ => return Err("graph did not produce fixture output".into()),
+    };
+    let packed = low.emit(
         OpKind::Lighting(Arc::new(Program {
             prepared,
             clock,
@@ -200,44 +209,44 @@ fn build(
         })),
         vec![],
         low.n,
-        3,
+        8,
         Phase::Kernel,
         "lighting",
-        "rgb",
+        "capabilities",
     );
-    let dimmer = low.emit(
-        OpKind::Color(super::ops::color::ColorOp::HsvValue),
-        vec![rgb],
-        low.n,
-        1,
-        Phase::Kernel,
-        "lighting",
-        "dimmer",
-    );
-    let color = low.emit(
-        OpKind::Color(super::ops::color::ColorOp::HsvNormalize),
-        vec![rgb],
-        low.n,
-        3,
-        Phase::Kernel,
-        "lighting",
-        "color",
-    );
-    low.outputs.dimmer = Some(dimmer);
-    low.outputs.color = Some(color);
+    for (index, (name, start, width)) in [
+        ("color", 0, 3),
+        ("dimmer", 3, 1),
+        ("position", 4, 2),
+        ("strobe", 6, 1),
+        ("speed", 7, 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !writes[index] {
+            continue;
+        }
+        let slot = low.emit(
+            OpKind::SelectApply(super::ops::select_apply::SelectApplyOp::Channels { start }),
+            vec![packed],
+            low.n,
+            width,
+            Phase::Kernel,
+            "lighting",
+            name,
+        );
+        match index {
+            0 => low.outputs.color = Some(slot),
+            1 => low.outputs.dimmer = Some(slot),
+            2 => low.outputs.position = Some(slot),
+            3 => low.outputs.strobe = Some(slot),
+            4 => low.outputs.speed = Some(slot),
+            _ => unreachable!(),
+        }
+    }
     Ok(())
 }
-// Stored venue positions are +X stage right, +Y upstage, +Z up.
-// MappingSpec normalizes these projections over the selection. Keep the stage
-// axes independent; an oblique fitted direction belongs to MajorAxis.
-fn stage_coordinates(world: [f32; 3]) -> [f64; 3] {
-    [
-        f64::from(world[0]),
-        -f64::from(world[1]),
-        f64::from(world[2]),
-    ]
-}
-
 impl Program {
     pub fn run(&self, ctx: &KernelCtx) -> Vec<f32> {
         let mut out = ctx.out_buf();
@@ -250,8 +259,20 @@ impl Program {
                 Ok(frame) => {
                     if let Some(p::Value::Lighting(values)) = frame.get("lighting") {
                         for (i, id) in self.ids.iter().enumerate() {
-                            if let Some(rgb) = values.get(id) {
-                                for (ch, v) in rgb.iter().enumerate() {
+                            if let Some(value) = values.get(id) {
+                                let color = value.color.unwrap_or([1.0; 3]);
+                                let position = value.position.unwrap_or([0.0; 2]);
+                                let packed = [
+                                    color[0],
+                                    color[1],
+                                    color[2],
+                                    value.dimmer.unwrap_or(0.0).clamp(0.0, 1.0),
+                                    position[0],
+                                    position[1],
+                                    value.strobe.unwrap_or(0.0),
+                                    value.speed.unwrap_or(1.0),
+                                ];
+                                for (ch, v) in packed.iter().enumerate() {
                                     out[ctx.out_idx(i, k, ch)] = *v as f32;
                                 }
                             }
@@ -278,7 +299,7 @@ mod tests {
                 id: i.to_string(),
                 group: "all".into(),
                 world: world.map(f64::from),
-                uvz: stage_coordinates(world),
+                uvz: p::Cell::stage_coordinates(world.map(f64::from)),
             })
             .collect();
         let resolve = |source| {
@@ -362,5 +383,100 @@ mod tests {
         assert!(lit(1) > 0 && lit(1) < 24);
         assert!(lit(2) < lit(1));
         assert_eq!(lit(3), 0);
+    }
+    #[test]
+    fn attribute_only_graphs_preserve_lower_color_in_the_normal_compositor() {
+        let ids: Vec<_> = (0..8).map(|n| format!("bar:{n}")).collect();
+        for (effect, expected) in [
+            ("write_position", [false, false, true, false, false]),
+            ("write_dimmer", [false, true, false, false, false]),
+            ("write_strobe", [false, false, false, true, false]),
+            ("write_speed", [false, false, false, false, true]),
+        ] {
+            let graph = crate::node_graph::lighting::pattern(effect).unwrap();
+            let mut args: HashMap<_, _> = graph
+                .args
+                .iter()
+                .map(|arg| (arg.id.clone(), arg.default_value.clone()))
+                .collect();
+            args.insert("value".into(), serde_json::json!(0.0));
+            let context = ResidentContext {
+                positions: vec![[0.0; 3]; ids.len()],
+                beat_grid: Some(BeatGrid {
+                    beats: vec![0., 0.5, 1., 1.5, 2.],
+                    downbeats: vec![0., 2.],
+                    bpm: 120.,
+                    downbeat_offset: 0.,
+                    beats_per_bar: 4,
+                }),
+                span: (0., 2.),
+                ..Default::default()
+            };
+            let plan = crate::eval::compile::compile_pattern(
+                &graph.nodes,
+                &graph.edges,
+                &args,
+                context,
+                ids.clone(),
+            )
+            .unwrap();
+            assert_eq!(
+                [
+                    plan.outputs.color.is_some(),
+                    plan.outputs.dimmer.is_some(),
+                    plan.outputs.position.is_some(),
+                    plan.outputs.strobe.is_some(),
+                    plan.outputs.speed.is_some()
+                ],
+                expected
+            );
+            let top =
+                crate::eval::eval(&plan, &[0.5], &mut crate::eval::Arena::default()).remove(0);
+            let mut base = crate::models::universe::UniverseState {
+                primitives: ids
+                    .iter()
+                    .map(|id| {
+                        (
+                            id.clone(),
+                            crate::models::universe::PrimitiveState {
+                                color: [0.2, 0.4, 1.0],
+                                dimmer: 0.7,
+                                position: [45., 30.],
+                                strobe: 0.5,
+                                speed: 1.,
+                            },
+                        )
+                    })
+                    .collect(),
+            };
+            crate::eval::composite::composite_frame(
+                &mut base,
+                &top,
+                &plan.outputs,
+                crate::eval::BlendMode::Replace,
+                1.0,
+                None,
+            );
+            for value in base.primitives.values() {
+                assert_eq!(value.color, [0.2, 0.4, 1.0]);
+                assert_eq!(
+                    value.dimmer,
+                    if effect == "write_dimmer" { 0.0 } else { 0.7 }
+                );
+                assert_eq!(
+                    value.position,
+                    if effect == "write_position" {
+                        [0.; 2]
+                    } else {
+                        [45., 30.]
+                    }
+                );
+                assert_eq!(
+                    value.strobe,
+                    if effect == "write_strobe" { 0.0 } else { 0.5 }
+                );
+                assert_eq!(value.speed, if effect == "write_speed" { 0.0 } else { 1.0 });
+            }
+        }
     }
 }

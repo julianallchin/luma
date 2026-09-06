@@ -35,6 +35,8 @@ pub struct ResidentAudio {
 /// kernel via [`ops::KernelCtx`].
 #[derive(Clone, Debug, Default)]
 pub struct ResidentContext {
+    /// Stable authored clip seed for composable graph randomness.
+    pub seed: u64,
     /// Per-primitive world position `[x, y, z]`, length `n` (spatial ops).
     pub positions: Vec<[f32; 3]>,
     /// Beat grid for beat-synced generators.

@@ -1,4 +1,4 @@
-use crate::{dissolve, pill, Error, Frame, Result, Value, ValueType};
+use crate::{Error, Frame, Result, Value, ValueType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,16 +52,56 @@ pub struct Graph {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Primitive {
+    FieldBinary(crate::FieldMath),
+    Broadcast(crate::ScalarKind),
+    FieldClamp,
+    MaskToField,
+    FieldGreater,
+    FieldSelect,
+    RandomField,
+    ChooseNumber,
     ResolveMapping,
     Rhythm,
     Motion,
-    Pill,
-    Dissolve,
+    CoordinateOffset,
+    FieldEnvelope,
     Appearance,
-    MultiplyMask,
+    WritePosition,
+    WriteDimmer,
+    WriteStrobe,
+    WriteSpeed,
     AddLighting,
     Envelope,
     SoftEdges,
+}
+impl Primitive {
+    /// All other primitives are pure functions of inputs and the prepared
+    /// head domain/seed, and may be folded when their inputs are constant.
+    pub(crate) fn reads_time(self) -> bool {
+        match self {
+            Self::Rhythm => true,
+            Self::FieldBinary(_)
+            | Self::Broadcast(_)
+            | Self::FieldClamp
+            | Self::MaskToField
+            | Self::FieldGreater
+            | Self::FieldSelect
+            | Self::RandomField
+            | Self::ChooseNumber
+            | Self::ResolveMapping
+            | Self::Motion
+            | Self::CoordinateOffset
+            | Self::FieldEnvelope
+            | Self::Appearance
+            | Self::WritePosition
+            | Self::WriteDimmer
+            | Self::WriteStrobe
+            | Self::WriteSpeed
+            | Self::AddLighting
+            | Self::Envelope
+            | Self::SoftEdges => false,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "body", rename_all = "snake_case")]
@@ -72,12 +112,50 @@ pub enum Body {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Definition {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     pub inputs: BTreeMap<String, Input>,
     pub outputs: BTreeMap<String, Output>,
     pub body: Body,
 }
 impl Definition {
+    /// A score-local, editable instance of any built-in node. Inputs are bindings,
+    /// not a synthetic node. The label is optional; editors can derive it from
+    /// the referenced node until the author chooses one.
+    pub fn instance(&self, definition: &str) -> Self {
+        Self {
+            name: String::new(),
+            inputs: self.inputs.clone(),
+            outputs: self.outputs.clone(),
+            body: Body::Graph(Graph {
+                nodes: BTreeMap::from([(
+                    "effect".into(),
+                    Node {
+                        definition: definition.into(),
+                        inputs: self
+                            .inputs
+                            .keys()
+                            .map(|key| (key.clone(), Binding::Input { input: key.clone() }))
+                            .collect(),
+                    },
+                )]),
+                outputs: self
+                    .outputs
+                    .keys()
+                    .map(|key| {
+                        (
+                            key.clone(),
+                            Binding::Connection {
+                                node: "effect".into(),
+                                output: key.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            }),
+        }
+    }
+
     pub fn lighting_output(&self) -> Option<&str> {
         let mut outputs = self
             .outputs
@@ -238,9 +316,7 @@ impl Library {
         overrides: &BTreeMap<String, Value>,
         frame: Frame,
     ) -> Result<BTreeMap<String, Value>> {
-        if !frame.beat.is_finite() || !frame.clip_start.is_finite() {
-            return Err(Error("musical time must be finite".into()));
-        }
+        frame.validate()?;
         self.validate(id)?;
         self.run(id, overrides, frame)
     }
@@ -348,6 +424,9 @@ pub(crate) fn run_primitive(
     i: &BTreeMap<String, Value>,
     frame: Frame,
 ) -> Result<BTreeMap<String, Value>> {
+    if let Some(result) = crate::field_ops::run(p, i, frame) {
+        return result;
+    }
     let n = |key: &str| i[key].scalar();
     let mapping = |key: &str| match &i[key] {
         Value::Coordinates(m) => m,
@@ -405,39 +484,47 @@ pub(crate) fn run_primitive(
                 ),
             ])
         }
-        Primitive::Pill => {
+        Primitive::CoordinateOffset => {
             let Value::Boundary(boundary) = i["boundary"] else {
                 unreachable!()
             };
+            let center = n("position");
+            let mut values = BTreeMap::new();
+            let mut wrapped = BTreeMap::new();
+            for c in &mapping("mapping").coordinates {
+                let wrap = boundary == crate::Boundary::Wrap
+                    || (boundary == crate::Boundary::Natural && c.closed);
+                let delta = c.position - center;
+                values.insert(
+                    c.cell.clone(),
+                    if wrap {
+                        (delta + 0.5).rem_euclid(1.0) - 0.5
+                    } else {
+                        delta
+                    },
+                );
+                wrapped.insert(c.cell.clone(), if wrap { 1.0 } else { 0.0 });
+            }
+            BTreeMap::from([
+                ("value".into(), Value::Field(values)),
+                ("wrapped".into(), Value::Mask(wrapped)),
+            ])
+        }
+        Primitive::FieldEnvelope => {
             let Value::Envelope(shape) = &i["shape"] else {
                 unreachable!()
             };
-            let mut m = pill(
-                mapping("mapping"),
-                n("position"),
-                n("width"),
-                shape,
-                boundary,
-            );
-            for v in m.values_mut() {
-                *v *= n("active");
-            }
-            out("mask", Value::Mask(m))
-        }
-        Primitive::Dissolve => {
-            let cycle = if i["reseed"] == Value::Boolean(true) {
-                n("cycle") as i64 as u64
-            } else {
-                0
+            let Value::Field(phase) = &i["phase"] else {
+                unreachable!()
             };
             out(
                 "mask",
-                Value::Mask(dissolve(
-                    mapping("mapping"),
-                    n("progress"),
-                    n("softness"),
-                    frame.seed ^ cycle.wrapping_mul(0x9e3779b97f4a7c15),
-                )),
+                Value::Mask(
+                    phase
+                        .iter()
+                        .map(|(id, phase)| (id.clone(), shape.sample(*phase)))
+                        .collect(),
+                ),
             )
         }
         Primitive::Appearance => {
@@ -450,23 +537,13 @@ pub(crate) fn run_primitive(
                     mask("mask")
                         .iter()
                         .map(|(cell, coverage)| {
-                            (cell.clone(), color.map(|v| v * coverage * n("brightness")))
+                            (
+                                cell.clone(),
+                                crate::FixtureOutput::from_rgb(color.map(|v| v * coverage)),
+                            )
                         })
                         .collect(),
                 ),
-            )
-        }
-        Primitive::MultiplyMask => {
-            let a = mask("a");
-            let b = mask("b");
-            if !a.keys().eq(b.keys()) {
-                return Err(Error(
-                    "mask cell domains differ; explicitly select a common domain".into(),
-                ));
-            }
-            out(
-                "mask",
-                Value::Mask(a.iter().map(|(k, v)| (k.clone(), v * b[k])).collect()),
             )
         }
         Primitive::AddLighting => {
@@ -476,14 +553,51 @@ pub(crate) fn run_primitive(
             let Value::Lighting(b) = &i["b"] else {
                 unreachable!()
             };
+            if !a.keys().eq(b.keys()) {
+                return Err(Error(
+                    "output head domains differ; explicitly select a common domain".into(),
+                ));
+            }
             let mut sum = a.clone();
-            for (cell, color) in b {
-                let dest = sum.entry(cell.clone()).or_insert([0.0; 3]);
-                for ch in 0..3 {
-                    dest[ch] += color[ch];
-                }
+            for (cell, top) in b {
+                let base = sum.get_mut(cell).unwrap();
+                base.composite(top, crate::BlendMode::Add);
             }
             out("lighting", Value::Lighting(sum))
+        }
+        Primitive::WritePosition
+        | Primitive::WriteDimmer
+        | Primitive::WriteStrobe
+        | Primitive::WriteSpeed => {
+            let value = match p {
+                Primitive::WritePosition => crate::FixtureOutput {
+                    position: Some([n("pan"), n("tilt")]),
+                    ..Default::default()
+                },
+                Primitive::WriteDimmer => crate::FixtureOutput {
+                    dimmer: Some(n("value")),
+                    ..Default::default()
+                },
+                Primitive::WriteStrobe => crate::FixtureOutput {
+                    strobe: Some(n("value")),
+                    ..Default::default()
+                },
+                Primitive::WriteSpeed => crate::FixtureOutput {
+                    speed: Some(n("value")),
+                    ..Default::default()
+                },
+                _ => unreachable!(),
+            };
+            out(
+                "lighting",
+                Value::Lighting(
+                    frame
+                        .cells
+                        .iter()
+                        .map(|c| (c.id.clone(), value.clone()))
+                        .collect(),
+                ),
+            )
         }
         Primitive::SoftEdges => out(
             "shape",
@@ -495,5 +609,6 @@ pub(crate) fn run_primitive(
             };
             out("value", Value::Proportion(e.sample(n("progress"))))
         }
+        _ => unreachable!("fundamental field op handled above"),
     })
 }
