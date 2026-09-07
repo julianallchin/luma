@@ -240,11 +240,9 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
     );
 }
 
-/// The centre follows the shell onto its subject rather than vanishing from
-/// under it: unattached over the pattern picker, the pattern agent once a
-/// pattern's tab is open beside it.
+/// A new conversation uses the editor context when the reader presses +.
 #[test]
-fn an_open_panel_re_points_at_the_screen_it_lands_on() {
+fn a_new_chat_uses_the_visible_editor_context() {
     let mut session = chat::session(Mode::Headless, WINDOW);
     let attached = run(
         &mut session,
@@ -253,15 +251,14 @@ fn an_open_panel_re_points_at_the_screen_it_lands_on() {
             {until}
             until("the unattached centre", (s) =>
                 s.findAll({{ role: "text" }}).some((n) => n.label === "Agent"));
-            // The pattern door needs a track context now, so the re-point
-            // walk goes through a track editor — one more screen for the
-            // centre to follow the shell across before it lands on the graph.
+            // Open the graph before explicitly starting its conversation.
             {venue}
             nav.track("Aurora");
             nav.pattern("chat-repoint");
+            nav.step("new conversation", "button", "New chat");
             until("the pattern agent", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
-                return send && send.bounds.width > 0;
+                return send && send.bounds.width > 0 && s.find({{ role: "text", label: "Pattern agent" }});
             }}).nodes
         "#,
             until = chat::UNTIL,
@@ -271,7 +268,7 @@ fn an_open_panel_re_points_at_the_screen_it_lands_on() {
     let text = labels(&attached, "text");
     assert!(
         text.iter().any(|l| l == "Pattern agent"),
-        "the panel did not re-point onto the graph's scope: {text:?}"
+        "the new conversation did not use the graph's scope: {text:?}"
     );
     assert!(
         !text.iter().any(|l| l == "Agent"),
@@ -537,12 +534,12 @@ fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
         until("the new chat's default", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
         app.click(app.snapshot().find({{ role: "button", label: "Chat history" }}));
         const rows = () => app.snapshot().findAll({{ role: "card", label: "New chat" }});
-        until("both conversations", () => rows().length === 2);
+        until("both conversations", () => rows().length >= 2);
         const engines = [];
-        for (let index = 0; index < 2; index++) {{
+        for (let index = 0, count = rows().length; index < count; index++) {{
             if (index > 0) {{
                 app.click(app.snapshot().find({{ role: "button", label: "Chat history" }}));
-                until("both conversations again", () => rows().length === 2);
+                until("both conversations again", () => rows().length >= 2);
             }}
             app.click(rows()[index]);
             until("the reopened picker", (s) =>
@@ -553,7 +550,7 @@ fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
             until("reopened effort", (s) => s.find({{ role: "select", label: expectedEffort }}) !== undefined);
 
         }}
-        if (JSON.stringify(engines.sort()) !== JSON.stringify(["OpenRouter · Kimi K3 Fast", "Vercel AI Gateway · Claude Opus 5"]))
+        if (!engines.includes("OpenRouter · Kimi K3 Fast") || !engines.includes("Vercel AI Gateway · Claude Opus 5"))
             throw new Error("thread choices were not preserved: " + JSON.stringify(engines));
     "#,
             open = chat::open_chat("chat-engine")

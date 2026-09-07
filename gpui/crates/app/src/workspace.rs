@@ -189,7 +189,7 @@ impl crate::Luma {
 
     /// Keep the strip pointed at the picked subject.
     ///
-    /// Done at draw, for the reason [`crate::Luma::sync_chat`] is: a navigation
+    /// Done at draw because a navigation
     /// is a field assignment, and a gesture that forgot to ask would leave one
     /// track's tabs on screen while the sidebar says another is picked. Every
     /// gesture that changes the subject therefore only has to set
@@ -200,6 +200,9 @@ impl crate::Luma {
             // The swapped-in set has its own active tab, so the keyboard is
             // owed to a different element than the frame before.
             cx.notify();
+        }
+        if self.workspace.is_empty() && self.sidebar.is_some() {
+            self.open_patch(cx);
         }
     }
 

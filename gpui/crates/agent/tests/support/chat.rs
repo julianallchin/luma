@@ -549,7 +549,7 @@ pub fn composer() -> String {
     )
 }
 
-/// Open one pattern's graph tab and put the thread beside it. Leaves the chat
+/// Open a pattern’s graph tab and explicitly create its chat. Leaves the chat
 /// idle, which is where every capture and every assertion starts.
 ///
 /// Every step polls rather than counting frames: the library is behind a Tokio
@@ -557,7 +557,7 @@ pub fn composer() -> String {
 /// guess that a busy machine falsifies.
 ///
 /// The chat is the shell's centre and is already there; what this walk does is
-/// give it a subject (the graph tab) and give it *room* — the workspace opens
+/// start its conversation and give it *room* — the workspace opens
 /// in takeover, so `ToggleExpand` splits the panel back beside the thread.
 /// Waiting on the *composer* is the honest wait: an unattached centre has
 /// none, so a Send that can be pressed is proof the scope resolved and not
@@ -571,6 +571,8 @@ pub fn open_chat(pattern: &str) -> String {
         // graph-editor design doc), so the walk goes venue → track → pattern.
         nav.track("Aurora");
         nav.pattern({pattern:?});
+        nav.step("new conversation", "button", "New chat");
+        until("the pattern conversation", (s) => s.find({{role: "text", label: "Pattern agent"}}));
         until("the chat centre", (s) => {{
             // Not merely present: a control inside a clipped region exists
             // without being pressable. Zero width is what "clipped away"

@@ -1,33 +1,4 @@
-//! A track's conversations, and a way to grep them.
-//!
-//! # What it lists, and why that is the subject
-//!
-//! The picker opens over whatever the chat is about — a track, or a pattern —
-//! and lists that subject's conversations only. Threads are almost never
-//! titled, so a row is named by its own words: what was first asked over what
-//! was last answered. Every row is about the same thing, so nothing on it says
-//! what that thing is; the empty state does.
-//!
-//! Typing turns the list into a grep. A query is matched against every line
-//! said in those conversations, not against the rows' summaries — "where did
-//! we talk about the drop" is a question about the transcripts, and a filter
-//! over two-line summaries would answer it wrongly most of the time. Hits are
-//! grouped under the conversation they came from; the grouping reads because
-//! the rows are lines, and a line without its conversation is a quote without
-//! a source.
-//!
-//! # Opening one changes only the conversation
-//!
-//! Picking a row does **not** move the workspace. Reading what was said about
-//! something is not the same act as going back to it, and a picker that
-//! rearranged the tabs would make browsing history expensive. The agent
-//! re-orients itself from the transcript it is handed.
-//!
-//! The thread is opened **by id**. `resolve_thread` answers "the newest thread
-//! for this subject", so routing a pick through it would land the reader in
-//! whichever conversation happens to be newest — a click that silently opens
-//! something else. [`luma_chat::AgentChat::open_thread`] pins the id it was
-//! given.
+//! Search and select this account’s conversations without moving editor tabs.
 
 use std::collections::HashMap;
 
@@ -36,14 +7,14 @@ use gpui::{
     KeyDownEvent, ScrollHandle, SharedString, Subscription,
 };
 use gpui_component::IconName;
-use luma_lib::agent::{History, HistoryHit, ThreadEntry, ThreadScope};
+use luma_lib::agent::{History, HistoryHit, ThreadEntry};
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::float::{self, Picker, RowState};
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 
-use crate::shell::{Body, Overlay};
+use crate::shell::Overlay;
 use crate::welcome::relative_age;
 use crate::Luma;
 
@@ -94,9 +65,6 @@ pub(crate) struct ChatHistory {
     /// has closed and reopened the dialog is a stale answer, and this is what
     /// lets it be dropped rather than painted over the new one.
     generation: u64,
-    /// What the conversations are about, as the empty state names it. `None`
-    /// when the chat is attached to nothing.
-    subject: Option<String>,
     history: Option<History>,
     /// The query → rows → cursor loop, shared with every other searchable
     /// list. The rows are rebuilt from `history` on every query change, so the
@@ -117,7 +85,7 @@ pub(crate) struct ChatHistory {
 }
 
 impl ChatHistory {
-    fn loading(generation: u64, subject: Option<String>, cx: &mut Context<Luma>) -> Self {
+    fn loading(generation: u64, cx: &mut Context<Luma>) -> Self {
         let search = cx.new(|cx| TextInput::search("Search chats…", cx));
         let search_focus = search.read(cx).focus_handle(cx);
         let subscription = cx.subscribe(&search, |luma, field, event, cx| {
@@ -130,7 +98,6 @@ impl ChatHistory {
         });
         Self {
             generation,
-            subject,
             history: None,
             picker: Picker::new(|_, _| true),
             error: None,
@@ -194,28 +161,14 @@ impl ChatHistory {
 }
 
 impl Luma {
-    /// Open the history picker over the chat's subject.
+    /// Open all of this account's conversations, independent of editor context.
     pub(crate) fn show_chat_history(&mut self, cx: &mut Context<Self>) {
-        let scope = self
-            .chat
-            .as_ref()
-            .and_then(|chat| chat.read(cx).scope().cloned());
-        let subject = scope.as_ref().and_then(|scope| self.subject_name(scope));
         self.chat_history_generation = self.chat_history_generation.wrapping_add(1);
         let generation = self.chat_history_generation;
-        let mut state = ChatHistory::loading(generation, subject, cx);
-        // No subject, nothing to list — but the dialog still opens and says
-        // so. Returning early here would be a button that does nothing when
-        // pressed, which is indistinguishable from a broken one.
-        let pending = scope.map(|scope| self.library.agent().history(scope));
-        if pending.is_none() {
-            state.finish(History::default(), cx);
-        }
+        let state = ChatHistory::loading(generation, cx);
+        let pending = self.library.agent().history();
         self.overlay.open(Overlay::ChatHistory(Box::new(state)));
         cx.notify();
-        let Some(pending) = pending else {
-            return;
-        };
         cx.spawn(async move |this, cx| {
             let listed = pending.await;
             this.update(cx, |this, cx| {
@@ -234,29 +187,6 @@ impl Luma {
             .ok();
         })
         .detach();
-    }
-
-    /// What the chat's subject is called, from the tab that shows it. The
-    /// subject's name is not the thread's data — it is the track's, or the
-    /// pattern's — and the workspace already holds it.
-    fn subject_name(&self, scope: &ThreadScope) -> Option<String> {
-        self.workspace.iter().find_map(|tab| match &tab.body {
-            Body::TrackEditor(editor)
-                if editor
-                    .subject()
-                    .is_some_and(|(track, _, _)| track == scope.subject_id) =>
-            {
-                Some(editor.track_name().to_string())
-            }
-            Body::Graph(editor)
-                if editor
-                    .subject()
-                    .is_some_and(|(pattern, _)| pattern == scope.subject_id) =>
-            {
-                Some(editor.pattern_name().to_string())
-            }
-            _ => None,
-        })
     }
 
     pub(crate) fn chat_history_query_changed(&mut self, query: String, cx: &mut Context<Self>) {
@@ -449,11 +379,12 @@ fn list(
             .into_any_element();
     };
     if state.picker.is_empty() {
-        let message = match &state.subject {
-            None => "No track or pattern open".to_string(),
-            Some(subject) if history.is_empty() => format!("No chats about {subject} yet"),
-            Some(_) => "No matches".to_string(),
-        };
+        let message = if history.is_empty() {
+            "No chats yet"
+        } else {
+            "No matches"
+        }
+        .to_string();
         return float::viewport()
             .child(
                 float::list()
@@ -461,10 +392,7 @@ fn list(
             )
             .into_any_element();
     }
-    // A plain tracked column, not a virtualized list: a subject holds tens of
-    // conversations, and a `uniform_list` renders only what is on screen —
-    // which would silently drop the off-screen rows out of the dialog's tab
-    // ring. Every conversation has to stay reachable by keyboard.
+    // Keep every result mounted so keyboard traversal can reach off-screen rows.
     float::viewport()
         .child(
             float::list()

@@ -16,7 +16,7 @@
 //! ```text
 //! AgentChat                  one thread, one composer
 //!  ├ agent      Agent        the loop, on the reactor its database needs
-//!  ├ scope      Option<..>   which conversation, derived from the screen
+//!  ├ scope      Option<..>   the open conversation’s subject
 //!  ├ transcript Transcript   luma_lib's type, held — never mirrored
 //!  ├ rows       Vec<Row>     render state beside it, one per message
 //!  ├ list       ListState    the virtualized transcript
@@ -25,12 +25,9 @@
 //!  └ turn       TurnState    Idle | Streaming { task, since, steer }
 //! ```
 //!
-//! The panel is **orthogonal to the screen**, not a variant of it: chat opens
-//! *over* whatever is showing, and its [`ThreadScope`] is derived from that
-//! screen by one function on the host's side. A screen that names no subject
-//! yields no scope, and the panel opens *unattached* — an opening that says
-//! what it could attach to, with no composer under it, because there is no
-//! thread for a send to land in.
+//! The open thread is independent of the editor tabs. The host supplies a
+//! separate context for new conversations; only an explicit new/open action
+//! replaces an attached thread.
 //!
 //! # Streaming
 //!
@@ -62,7 +59,7 @@ use luma_lib::agent::{
     AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt,
 };
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
-use luma_ui::node::{Instrument, Role as NodeRole};
+use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
 
 use crate::composer::Composer;
 use crate::theme::Theme;
@@ -139,16 +136,15 @@ impl Agent {
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
-    /// Every conversation about `scope`'s subject, newest first, with its
+    /// This account's conversations, newest first, with their
     /// transcripts read for the picker's summaries and grep.
     pub fn history(
         &self,
-        scope: ThreadScope,
     ) -> impl std::future::Future<Output = Result<luma_lib::agent::History, String>> + use<> {
         let service = self.service.clone();
         let task = self
             .runtime
-            .spawn(async move { service.history(&scope).await.map_err(|e| e.to_string()) });
+            .spawn(async move { service.history().await.map_err(|e| e.to_string()) });
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
@@ -206,7 +202,7 @@ impl Agent {
 /// the panel's own business, so it just does it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatEvent {
-    /// The reader pressed rewind: open the history picker over this subject.
+    /// Open this account’s conversation history.
     HistoryRequested,
     /// Show this thread's subagents. `Some` names the child to open straight
     /// into — a transcript chip knows which delegation was clicked, the
@@ -246,9 +242,8 @@ impl Turn {
 /// the opening over the first. Splitting them here is what stops the second
 /// being paintable at all: the opening is drawn from [`Self::Open`] only, so
 /// a conversation with history cannot flash "where do you want to start?" on
-/// its way in. The panel is rebuilt whole when the screen's subject changes,
-/// so there is no previous transcript to hold over: a load shows the plate
-/// and nothing in the column, which is the honest frame.
+/// its way in. An explicit conversation change shows a loading plate until
+/// the selected transcript arrives.
 enum Conversation {
     /// Nothing was ever asked for — the unattached panel, which resolves no
     /// thread at all.
@@ -281,11 +276,10 @@ enum TurnState {
 
 pub struct AgentChat {
     agent: Agent,
-    /// Which conversation, or `None` on a screen that names no subject. An
-    /// unattached panel is a real state and not a degenerate one: it opens, it
-    /// says what it could attach to, and it never resolves a thread — which is
-    /// what keeps "the chat did not open" out of the vocabulary entirely.
+    /// The open thread's subject, used for its header.
     scope: Option<ThreadScope>,
+    /// Current editor context, used only for the next explicit new chat.
+    new_thread_scope: Option<ThreadScope>,
     /// Which conversation, and whether its read has landed. Until it has, the
     /// composer is live but a send waits — the alternative is a send that
     /// silently starts a conversation in a thread nobody asked for.
@@ -350,12 +344,6 @@ pub struct AgentChat {
     trailer_row: Option<usize>,
     /// What went wrong, in the panel's own words. Cleared by the next send.
     error: Option<String>,
-    /// Whether the reader chose this conversation by hand, in which case the
-    /// panel stops following the screen — see [`Self::open_thread`].
-    ///
-    /// Distinct from the bottom pin above, which is about the *viewport*: this
-    /// one is about which conversation is on screen at all.
-    chosen: bool,
     /// Tool calls the reader has *closed*, by call id.
     ///
     /// The negative set, because a call's detail is open by default: the work
@@ -388,6 +376,7 @@ impl AgentChat {
         let chat = Self {
             agent,
             scope: scope.clone(),
+            new_thread_scope: scope.clone(),
             conversation: Conversation::Idle,
             reads: 0,
             transcript: Transcript::default(),
@@ -412,7 +401,6 @@ impl AgentChat {
             turn: TurnState::Idle,
             trailer_row: None,
             error: None,
-            chosen: false,
             collapsed: HashSet::new(),
             cells: RefCell::default(),
             fold: None,
@@ -754,14 +742,9 @@ impl AgentChat {
     /// open, which tab is focused, what the score says — is untouched, because
     /// reading an old conversation is not the same act as going back to what it
     /// was about. The agent re-orients itself from the transcript.
-    ///
-    /// [`Self::is_chosen`] is what keeps it open: without it the next scope change
-    /// would re-resolve the screen's subject and silently swap the reader onto
-    /// a different conversation about the same track.
     pub fn open_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
         // Whatever is running belongs to the conversation being left.
         self.cancel(cx);
-        self.chosen = true;
         let read = self.begin_read(cx);
         let pending = self.agent.open_thread(thread_id.to_string());
         cx.spawn(async move |this, cx| {
@@ -777,15 +760,12 @@ impl AgentChat {
     /// Start a fresh conversation about the screen's own subject.
     ///
     /// Always creates: "new chat" is a statement, and resolving would hand back
-    /// the existing conversation whenever there was one — the button appearing
-    /// to do nothing. Unpinned, because a new chat about *this* screen is
-    /// exactly what the screen implies.
+    /// the existing conversation whenever there was one.
     pub fn new_thread(&mut self, cx: &mut Context<Self>) {
-        let Some(scope) = self.scope.clone() else {
+        let Some(scope) = self.new_thread_scope.clone() else {
             return;
         };
         self.cancel(cx);
-        self.chosen = false;
         let read = self.begin_read(cx);
         let pending = self.agent.new_thread(scope);
         cx.spawn(async move |this, cx| {
@@ -815,8 +795,13 @@ impl AgentChat {
             return;
         }
         match detail {
-            Ok(detail) => match Transcript::from_rows(&detail.messages) {
-                Ok(transcript) => {
+            Ok(detail) => match ThreadScope::try_from(&detail.thread)
+                .map_err(|error| error.to_string())
+                .and_then(|scope| {
+                    Transcript::from_rows(&detail.messages).map(|transcript| (scope, transcript))
+                }) {
+                Ok((scope, transcript)) => {
+                    self.scope = Some(scope);
                     self.selection = Selection::from_thread(&detail.thread).ok();
                     self.conversation = Conversation::Open(detail.thread.id);
                     self.seat(transcript, cx);
@@ -846,20 +831,20 @@ impl AgentChat {
         matches!(self.conversation, Conversation::Open(_))
     }
 
-    /// Whether this panel is showing a conversation the reader chose by hand.
-    ///
-    /// Such a panel does not follow the screen: see [`Self::open_thread`].
-    #[must_use]
-    pub fn is_chosen(&self) -> bool {
-        self.chosen
-    }
-
-    /// Which conversation this panel is showing, or `None` while it is
-    /// unattached. The host compares it against what the current screen
-    /// implies, and re-points the panel when they part.
-    #[must_use]
-    pub fn scope(&self) -> Option<&ThreadScope> {
-        self.scope.as_ref()
+    /// Update the next new chat's context without replacing the open thread,
+    /// its draft, or a running turn. An unattached panel may resolve once.
+    pub fn set_new_thread_scope(&mut self, scope: Option<ThreadScope>, cx: &mut Context<Self>) {
+        if self.new_thread_scope == scope {
+            return;
+        }
+        self.new_thread_scope = scope.clone();
+        if matches!(self.conversation, Conversation::Idle) {
+            if let Some(scope) = scope {
+                self.scope = Some(scope.clone());
+                self.load(scope, cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Whether a turn is running. The composer, the send button and the status
@@ -1130,9 +1115,8 @@ impl AgentChat {
         // in — a live field over a conversation that cannot exist would be the
         // silent no-op moved one layer in.
         //
-        // A reader is the other scope-less panel and is not that: it names no
-        // subject *because* it was handed a thread outright, so it shows the
-        // conversation rather than an opening.
+        // A read-only child starts with an id and learns its scope from the
+        // thread read, so it must show the loading plate while that arrives.
         let kind = self.scope.as_ref().map(|scope| scope.agent_kind);
         if kind.is_none() && !self.read_only {
             let unattached = cx.entity();
@@ -1454,8 +1438,7 @@ impl AgentChat {
             .child(div().flex_1())
             // The two ways out of the conversation you are in: back to an
             // older one, or on to a new one. Only shown on an attached panel —
-            // an unattached one has no venue to search and no subject to start
-            // a chat about, so both would be buttons that cannot work.
+            // a thread supplies the header while editor context seeds new chats.
             .children(self.scope.is_some().then(|| {
                 let rewind = chat.clone();
                 let fresh = chat.clone();
@@ -1469,6 +1452,7 @@ impl AgentChat {
                         IconName::Undo2,
                         "Chat history",
                         theme,
+                        false,
                         move |cx| {
                             rewind.update(cx, |_, cx| cx.emit(ChatEvent::HistoryRequested));
                         },
@@ -1478,6 +1462,7 @@ impl AgentChat {
                         IconName::Plus,
                         "New chat",
                         theme,
+                        self.new_thread_scope.is_none(),
                         move |cx| {
                             fresh.update(cx, |this, cx| this.new_thread(cx));
                         },
@@ -1497,6 +1482,7 @@ fn header_button(
     icon: IconName,
     label: &'static str,
     theme: &Theme,
+    disabled: bool,
     pressed: impl Fn(&mut gpui::App) + 'static,
 ) -> impl IntoElement {
     div()
@@ -1506,11 +1492,16 @@ fn header_button(
         .items_center()
         .justify_center()
         .rounded(px(luma_ui::radius::CONTROL))
-        .cursor_pointer()
-        .hover(|style| style.bg(theme::wash(0.06)))
-        .on_click(move |_, _, cx| pressed(cx))
+        .when(!disabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(|style| style.bg(theme::wash(0.06)))
+                .on_click(move |_, _, cx| pressed(cx))
+        })
+        .when(disabled, |button| button.opacity(0.4))
         .child(Icon::new(icon).size(px(14.0)).text_color(theme.text_faint))
         .agent_node(NodeRole::Button, label)
+        .agent_disabled(disabled)
 }
 
 /// The bands at both ends of the transcript, dissolved into the panel's own
