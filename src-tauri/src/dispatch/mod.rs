@@ -221,6 +221,7 @@ commands! {
         input: AppendAgentThreadMessagesInput,
     ) -> Vec<AgentThreadMessage>;
     agent_threads::agent_thread_rename(thread_id: String, title: Option<String>) -> AgentThread;
+    agent_threads::agent_thread_set_model(thread_id: String, selection: crate::agent::engine::catalog::Selection) -> AgentThread;
     agent_threads::agent_thread_set_actor(thread_id: String, actor: String) -> ();
     agent_threads::agent_thread_record_usage(usage: AgentThreadUsage) -> ();
     agent_threads::agent_thread_delete(thread_id: String) -> ();

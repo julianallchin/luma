@@ -507,3 +507,47 @@ fn the_history_picker_reopens_the_conversation_that_was_picked() {
         "the reopened conversation lost its reply: {reopened:?}"
     );
 }
+
+#[test]
+fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
+    let mut session = chat::session(Mode::Headless, WINDOW);
+    run(
+        &mut session,
+        &format!("{}\n{}", chat::UNTIL, chat::PICK_VENUE),
+    );
+    run(
+        &mut session,
+        &format!(
+            r#"
+        {open}
+        until("the engine picker", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}));
+        until("the engine menu", (s) => s.find({{ role: "button", label: "OpenRouter" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "button", label: "OpenRouter" }}));
+        until("OpenRouter models", (s) => s.find({{ role: "button", label: "Kimi K3 Fast" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "button", label: "Kimi K3 Fast" }}));
+        until("the saved engine", (s) => s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "button", label: "New chat" }}));
+        until("the new chat's default", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "button", label: "Chat history" }}));
+        const rows = () => app.snapshot().findAll({{ role: "card", label: "New chat" }});
+        until("both conversations", () => rows().length === 2);
+        const engines = [];
+        for (let index = 0; index < 2; index++) {{
+            if (index > 0) {{
+                app.click(app.snapshot().find({{ role: "button", label: "Chat history" }}));
+                until("both conversations again", () => rows().length === 2);
+            }}
+            app.click(rows()[index]);
+            until("the reopened picker", (s) =>
+                s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined ||
+                s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
+            engines.push(app.snapshot().findAll({{ role: "select" }}).map((n) => n.label)[0]);
+        }}
+        if (JSON.stringify(engines.sort()) !== JSON.stringify(["OpenRouter · Kimi K3 Fast", "Vercel AI Gateway · Claude Opus 5"]))
+            throw new Error("thread choices were not preserved: " + JSON.stringify(engines));
+    "#,
+            open = chat::open_chat("chat-engine")
+        ),
+    );
+}

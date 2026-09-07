@@ -376,13 +376,8 @@ pub static MODELS: &[ModelSpec] = &[
 /// The model Luma picks when nothing has been chosen.
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
-/// The model the settings table selects.
-///
-/// The one place `agent_model` is read: a turn resolves its client through it
-/// and the composer's chip names it through it, so the panel cannot advertise
-/// a model the next turn would not use. A stored value naming a model this
-/// build dropped falls back to [`DEFAULT_MODEL`] rather than failing — the
-/// picker's list retires with the TypeScript loop and stale rows outlive it.
+/// Resolve the effective model settings. New threads snapshot this default;
+/// turns supply their saved model. Retired model IDs fall back to the default.
 ///
 /// # Errors
 ///

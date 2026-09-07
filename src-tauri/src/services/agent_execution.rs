@@ -536,6 +536,9 @@ mod tests {
             parent_call_id: None,
             title: None,
             actor: None,
+            engine: "api".into(),
+            model: Some(crate::agent::model::DEFAULT_MODEL.into()),
+            provider: Some("vercel-ai-gateway".into()),
             created_at: String::new(),
             updated_at: String::new(),
         }

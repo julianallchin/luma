@@ -149,3 +149,12 @@ pub async fn agent_thread_rename(
     )
     .await?)
 }
+
+pub async fn agent_thread_set_model(
+    services: &AppServices,
+    thread_id: String,
+    selection: crate::agent::engine::catalog::Selection,
+) -> Result<AgentThread, CommandError> {
+    let owner = services.admitted_principal().await?;
+    Ok(db::set_thread_selection(&services.db.0, &thread_id, &selection, owner.as_deref()).await?)
+}

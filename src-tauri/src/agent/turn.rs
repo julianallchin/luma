@@ -192,7 +192,7 @@ impl Turn {
                 .await
                 .map_err(|error| AgentError::Storage(error.to_string()))?,
         };
-        let execution = self.resolve_execution().await?;
+        let execution = self.resolve_execution(&detail.thread).await?;
         let context = engine::context_fingerprint(kind.system_prompt(), &registry.specs());
         let resume = match &execution {
             Execution::External { engine, model } => {
@@ -555,16 +555,19 @@ impl Turn {
         }
     }
 
-    async fn resolve_execution(&self) -> Result<Execution, AgentError> {
+    async fn resolve_execution(
+        &self,
+        thread: &crate::models::agent_threads::AgentThread,
+    ) -> Result<Execution, AgentError> {
         let mut settings =
             crate::database::local::settings::get_all_settings(&self.service.services().db().0)
                 .await
                 .map_err(AgentError::Storage)?;
-        let engine = self
-            .service
-            .engine
-            .unwrap_or(Engine::configured(&settings)?);
-        if let Some(model) = &self.service.model_name {
+        let engine = Engine::parse(&thread.engine)?;
+        if let Some(provider) = &thread.provider {
+            settings.insert("agent_provider".into(), provider.clone());
+        }
+        if let Some(model) = self.service.model_name.as_ref().or(thread.model.as_ref()) {
             if engine == Engine::Api && ModelId::parse(model).is_none() {
                 return Err(AgentError::Invalid(format!("unknown API model '{model}'")));
             }
@@ -575,9 +578,11 @@ impl Turn {
             settings.insert(key, model.clone());
         }
         if engine != Engine::Api {
-            let model = settings
-                .get(&format!("agent_{}_model", engine.key()))
-                .filter(|s| !s.trim().is_empty())
+            let model = self
+                .service
+                .model_name
+                .as_ref()
+                .or(thread.model.as_ref())
                 .cloned();
             return Ok(Execution::External { engine, model });
         }

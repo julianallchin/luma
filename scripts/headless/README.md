@@ -229,6 +229,11 @@ src-tauri/target/debug/luma-agent --track TRACK_ID --venue VENUE_ID --engine cla
 
 `--track` and `--venue` create a new score and conversation. `--thread` continues
 one; `--scope` accepts a serialized `ThreadScope` for other agent kinds.
+Each thread remembers its service and model, selectable beside the app's message
+box. New threads use the defaults in Settings → AI; forks and subagents inherit
+their parent's selection. `--engine` saves that engine's configured defaults to
+the thread.
+
 `--model` overrides the selected engine's model for this invocation. Host flags
 are shared with the other headless binaries. Output is JSON `TurnEvent` lines;
 score and thread ids go to stderr. Completed messages, tools, usage and authored
