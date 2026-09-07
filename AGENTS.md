@@ -57,6 +57,8 @@ Venues, scores, patterns and authored history all live in that one database — 
 
 Use native GPUI confirmation dialogs for destructive actions.
 
+Always use Nucleo icons for new or replaced icons. The local bundle lives at `~/github/nucleo` (MCP: `mcp/dist/index.js`; skills: `skills/nucleo-icons/SKILL.md`). Copy chosen SVGs into the app’s embedded assets; never require an absolute home-directory path at runtime.
+
 ## Releases
 
 The obsolete Tauri webview release workflow has been removed. Native GPUI packaging must be configured before publishing a new release.

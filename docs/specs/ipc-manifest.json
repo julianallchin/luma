@@ -4,7 +4,7 @@
   "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
     "commandCount": 230,
-    "domainCount": 34,
+    "domainCount": 35,
     "unportedCount": 0,
     "eventCount": 18
   },
@@ -85,8 +85,13 @@
       "handlers": "src-tauri/src/dispatch/handlers/fixtures.rs"
     },
     {
+      "domain": "group_references",
+      "commandCount": 2,
+      "handlers": "src-tauri/src/dispatch/handlers/group_references.rs"
+    },
+    {
       "domain": "groups",
-      "commandCount": 16,
+      "commandCount": 14,
       "handlers": "src-tauri/src/dispatch/handlers/groups.rs"
     },
     {
@@ -186,7 +191,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 93
+        "line": 90
       },
       "args": [
         {
@@ -1186,7 +1191,7 @@
       "domain": "composable_patterns",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
-        "line": 54
+        "line": 55
       },
       "args": [
         {
@@ -1208,7 +1213,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 27
+        "line": 24
       },
       "args": [
         {
@@ -1248,7 +1253,7 @@
       "domain": "composable_patterns",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
-        "line": 26
+        "line": 27
       },
       "args": [
         {
@@ -1404,7 +1409,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 80
+        "line": 77
       },
       "args": [
         {
@@ -2014,6 +2019,24 @@
       }
     },
     {
+      "name": "generate_venue_groups",
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 824
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
+      }
+    },
+    {
       "name": "get_classifier_thresholds",
       "domain": "tracks",
       "handler": {
@@ -2113,7 +2136,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 146
+        "line": 143
       },
       "args": [
         {
@@ -2520,7 +2543,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 207
+        "line": 204
       },
       "args": [
         {
@@ -2604,7 +2627,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 188
+        "line": 185
       },
       "args": [
         {
@@ -2942,7 +2965,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 280
+        "line": 277
       },
       "args": [
         {
@@ -2960,7 +2983,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 46
+        "line": 43
       },
       "args": [
         {
@@ -3135,32 +3158,6 @@
         "sideEffects": [
           "read-only"
         ]
-      }
-    },
-    {
-      "name": "merge_group_nodes",
-      "domain": "groups",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 346
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "groupId",
-          "rust": "String"
-        },
-        {
-          "name": "intoGroupId",
-          "rust": "Option<String>"
-        }
-      ],
-      "returns": "Vec<GroupTreeNode>",
-      "prose": {
-        "returns": "Vec<GroupTreeNode>"
       }
     },
     {
@@ -3509,6 +3506,24 @@
       }
     },
     {
+      "name": "missing_venue_groups",
+      "domain": "group_references",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/group_references.rs",
+        "line": 66
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        }
+      ],
+      "returns": "Vec<crate::models::groups::MissingGroup>",
+      "prose": {
+        "returns": "Vec<crate::models::groups::MissingGroup>"
+      }
+    },
+    {
       "name": "mixer_cancel_learn",
       "domain": "mixer",
       "handler": {
@@ -3692,32 +3707,6 @@
         "sideEffects": [
           "arms learn: the next CC message emits `mixer_learned` { channel: u8, cc: u8 } (raw serde_json, not a ts-rs type) and is swallowed instead of being mapped to a fader; auto-disarms after one capture"
         ]
-      }
-    },
-    {
-      "name": "move_group_node",
-      "domain": "groups",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 321
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "groupId",
-          "rust": "String"
-        },
-        {
-          "name": "parentId",
-          "rust": "Option<String>"
-        }
-      ],
-      "returns": "Vec<GroupTreeNode>",
-      "prose": {
-        "returns": "Vec<GroupTreeNode>"
       }
     },
     {
@@ -4142,7 +4131,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 158
+        "line": 155
       },
       "args": [
         {
@@ -4418,7 +4407,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 111
+        "line": 108
       },
       "args": [
         {
@@ -4494,32 +4483,6 @@
           "non-session key: plain delete",
           "session key: sync_lock + reserved StateDb connection, recover_committed_signout, capture auth + write-admission backups, authored identity barrier, suspend write admission, consume_signout_transition_and_clear_session, re-arm write admission for the anonymous principal (None), bootstrap authored live projections for None; staged rollback on any failure"
         ]
-      }
-    },
-    {
-      "name": "rename_group_node",
-      "domain": "groups",
-      "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 297
-      },
-      "args": [
-        {
-          "name": "venueId",
-          "rust": "String"
-        },
-        {
-          "name": "groupId",
-          "rust": "String"
-        },
-        {
-          "name": "label",
-          "rust": "Option<String>"
-        }
-      ],
-      "returns": "Vec<GroupTreeNode>",
-      "prose": {
-        "returns": "Vec<GroupTreeNode>"
       }
     },
     {
@@ -4804,11 +4767,11 @@
       }
     },
     {
-      "name": "reset_group_node",
-      "domain": "groups",
+      "name": "resolve_venue_group",
+      "domain": "group_references",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 365
+        "file": "src-tauri/src/dispatch/handlers/group_references.rs",
+        "line": 100
       },
       "args": [
         {
@@ -4816,13 +4779,21 @@
           "rust": "String"
         },
         {
-          "name": "groupId",
+          "name": "missing",
           "rust": "String"
+        },
+        {
+          "name": "replacement",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "fixtures",
+          "rust": "Vec<String>"
         }
       ],
-      "returns": "Vec<GroupTreeNode>",
+      "returns": "()",
       "prose": {
-        "returns": "Vec<GroupTreeNode>"
+        "returns": "()"
       }
     },
     {
@@ -4967,6 +4938,40 @@
           "commits a revision to the pattern's authored Git document + refreshes the SQLite projection",
           "engine.push_notify.notify_one() only when result.changed"
         ]
+      }
+    },
+    {
+      "name": "save_venue_group",
+      "domain": "groups",
+      "handler": {
+        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "line": 781
+      },
+      "args": [
+        {
+          "name": "venueId",
+          "rust": "String"
+        },
+        {
+          "name": "groupId",
+          "rust": "Option<String>"
+        },
+        {
+          "name": "label",
+          "rust": "String"
+        },
+        {
+          "name": "added",
+          "rust": "Vec<String>"
+        },
+        {
+          "name": "removed",
+          "rust": "Vec<String>"
+        }
+      ],
+      "returns": "()",
+      "prose": {
+        "returns": "()"
       }
     },
     {
@@ -5593,7 +5598,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 55
+        "line": 52
       },
       "args": [
         {
@@ -5633,7 +5638,7 @@
       "domain": "groups",
       "handler": {
         "file": "src-tauri/src/dispatch/handlers/groups.rs",
-        "line": 222
+        "line": 219
       },
       "args": [
         {

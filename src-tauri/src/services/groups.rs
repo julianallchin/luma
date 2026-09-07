@@ -338,18 +338,16 @@ enum LexToken {
     End,
 }
 
-struct Lexer<'a> {
+struct Lexer {
     chars: Vec<char>,
     pos: usize,
-    input: &'a str,
 }
 
-impl<'a> Lexer<'a> {
-    fn new(input: &'a str) -> Self {
+impl Lexer {
+    fn new(input: &str) -> Self {
         Self {
             chars: input.chars().collect(),
             pos: 0,
-            input,
         }
     }
 
@@ -400,7 +398,7 @@ impl<'a> Lexer<'a> {
                     {
                         self.pos += 1;
                     }
-                    let ident = &self.input[start..self.pos];
+                    let ident: String = self.chars[start..self.pos].iter().collect();
                     Ok(LexToken::Ident(ident.to_lowercase()))
                 } else {
                     Err(format!("Unexpected character '{}' in selection query", c))
@@ -847,9 +845,8 @@ pub async fn remove_head_from_group(
 ///
 /// **The** read: every surface that asks a venue what its groups are asks
 /// this, and gets one answer — the derivation, the overrides on top of it, and
-/// the authored `fixture_groups` rows beside it. There is no second place to
-/// ask, and nothing writes derived sets into `fixture_groups` to make them
-/// visible; a set exists because the rig describes it, not because a row does.
+/// saved `fixture_groups` rows. Derivation is used only while converting an
+/// older library or explicitly generating a starting set.
 ///
 /// One derivation per command. The tree, a node in it, the derivation path an
 /// override row records and the tree the command hands back afterwards are all
@@ -880,7 +877,18 @@ impl GroupSources {
         access: &mut impl AuthorizedVenue,
     ) -> Result<Self, String> {
         let solved = solve(resource_path, access).await?;
-        let derived = group_derivation::derive_groups(&solved.facts);
+        let venue = access.venue_id().to_owned();
+        let initialized: bool =
+            sqlx::query_scalar("SELECT groups_initialized FROM venues WHERE id = ?")
+                .bind(&venue)
+                .fetch_one(&mut *access.connection())
+                .await
+                .map_err(|e| e.to_string())?;
+        let derived = if initialized {
+            DerivedTree::default()
+        } else {
+            group_derivation::derive_groups(&solved.facts)
+        };
         let overrides = overrides_db::list(access).await?;
         let members = groups_db::venue_memberships(access).await?;
         let authored = groups_db::list_groups(access).await?;
@@ -1060,48 +1068,6 @@ impl GroupSources {
         let named = self.named();
         let asked = &named.iter().find(|node| node.id == group_id)?.name;
         node_answering_to(&named, asked, group_id).cloned()
-    }
-
-    /// Whether `group_id` names a node of this venue's tree at all.
-    #[must_use]
-    pub fn contains(&self, group_id: &str) -> bool {
-        self.derived.groups.iter().any(|g| g.id == group_id)
-            || self.manual.iter().any(|g| g.id == group_id)
-    }
-
-    /// The derivation path of a derived node, `/`-joined — the override row's
-    /// record of *which set* was touched. Empty for an authored group, which
-    /// has no derivation to record.
-    #[must_use]
-    pub fn derived_path(&self, group_id: &str) -> String {
-        self.derived
-            .groups
-            .iter()
-            .find(|group| group.id == group_id)
-            .map_or_else(String::new, |group| group.path.join("/"))
-    }
-
-    /// The override row already standing for `group_id`, if any.
-    #[must_use]
-    pub fn override_of(&self, group_id: &str) -> Option<&GroupOverride> {
-        self.overrides.iter().find(|row| row.group_id == group_id)
-    }
-
-    /// Every override in the venue — what [`group_derivation::merged_terminal`]
-    /// reads to follow a merge chain.
-    #[must_use]
-    pub fn overrides(&self) -> &[GroupOverride] {
-        &self.overrides
-    }
-
-    /// Apply a row locally, so the caller that just wrote it can hand back the
-    /// resulting tree without re-deriving the venue it derived a moment ago.
-    pub fn apply(&mut self, row: Option<GroupOverride>, group_id: &str) {
-        self.overrides
-            .retain(|existing| existing.group_id != group_id);
-        if let Some(row) = row {
-            self.overrides.push(row);
-        }
     }
 }
 
@@ -1399,4 +1365,173 @@ mod tests {
         assert_eq!(or_expression(&["a".to_string(), "b".to_string()]), "a | b");
         assert_eq!(or_terms(&or_expression(&[])), Some(vec![]));
     }
+}
+
+/// Materialize generated sets once. Explicit generation only adds missing names;
+/// it never replaces the memberships of a user's existing collections.
+pub async fn snapshot_generated_groups(
+    resource_path: &Path,
+    access: &mut VenueAccess<'_, Write>,
+    explicit: bool,
+) -> Result<(), String> {
+    let venue = access.venue_id().to_owned();
+    let initialized: bool =
+        sqlx::query_scalar("SELECT groups_initialized FROM venues WHERE id = ?")
+            .bind(&venue)
+            .fetch_one(&mut *access.connection())
+            .await
+            .map_err(|e| e.to_string())?;
+    if initialized && !explicit {
+        return Ok(());
+    }
+    let mut sources = GroupSources::read(resource_path, access).await?;
+    sources.derived = group_derivation::derive_groups(&sources.solved.facts);
+    if initialized {
+        sources.manual.clear();
+        sources.overrides.clear();
+    }
+    let nodes = sources.tree();
+    let uid = access.principal().map(str::to_owned);
+    if !initialized {
+        // Make room for names which were swapped by old overrides. The
+        // transaction hides temporary names from readers and sync.
+        for group in &sources.authored {
+            sqlx::query("UPDATE fixture_groups SET name = ? WHERE id = ? AND venue_id = ?")
+                .bind(format!("migration_{}", uuid::Uuid::new_v4().simple()))
+                .bind(&group.id)
+                .bind(&venue)
+                .execute(&mut *access.connection())
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let mut saved_ids = std::collections::HashSet::new();
+    for (order, node) in nodes.iter().enumerate() {
+        if node.name.is_empty() {
+            if !initialized {
+                sqlx::query("UPDATE fixture_groups SET name = NULL WHERE id = ? AND venue_id = ?")
+                    .bind(&node.id)
+                    .bind(&venue)
+                    .execute(&mut *access.connection())
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            continue;
+        }
+        let existing = sources.authored.iter().find(|g| g.id == node.id);
+        if existing.is_some() && initialized {
+            continue;
+        }
+        // Preserve the canonical selector, not the old tree's leaf label.
+        if existing.is_some() {
+            sqlx::query("UPDATE fixture_groups SET name = ? WHERE id = ? AND venue_id = ?")
+                .bind(&node.name)
+                .bind(&node.id)
+                .bind(&venue)
+                .execute(&mut *access.connection())
+                .await
+                .map_err(|e| e.to_string())?;
+            for fixture in &node.fixtures {
+                if !sources
+                    .members
+                    .iter()
+                    .any(|m| m.group_id == node.id && m.fixture_id == *fixture)
+                {
+                    groups_db::add_member_to_group(
+                        access,
+                        fixture,
+                        &node.id,
+                        groups_db::WHOLE_FIXTURE,
+                    )
+                    .await?;
+                }
+            }
+        } else {
+            // Old derivation could mint the same id for identically labelled
+            // structures. Preserve both selector names with distinct saved ids.
+            let id = if initialized || !saved_ids.insert(node.id.clone()) {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                node.id.clone()
+            };
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM fixture_groups WHERE venue_id = ? AND name = ?)",
+            )
+            .bind(&venue)
+            .bind(&node.name)
+            .fetch_one(&mut *access.connection())
+            .await
+            .map_err(|e| e.to_string())?;
+            if exists {
+                continue;
+            }
+            sqlx::query("INSERT INTO fixture_groups (id, uid, venue_id, name, display_order) VALUES (?, ?, ?, ?, ?)")
+                .bind(&id).bind(&uid).bind(&venue).bind(&node.name).bind(order as i64).execute(&mut *access.connection()).await.map_err(|e| e.to_string())?;
+            for fixture in &node.fixtures {
+                groups_db::add_member_to_group(access, fixture, &id, groups_db::WHOLE_FIXTURE)
+                    .await?;
+            }
+        }
+    }
+    if !initialized {
+        for group in &sources.authored {
+            if !nodes.iter().any(|node| node.id == group.id) {
+                groups_db::delete_group(access, &group.id).await?;
+            }
+        }
+    }
+    sqlx::query("DELETE FROM fixture_group_overrides WHERE venue_id = ?")
+        .bind(&venue)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE venues SET groups_initialized = 1 WHERE id = ?")
+        .bind(&venue)
+        .execute(&mut *access.connection())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Inspect selectors using the same grammar as evaluation, never substring search.
+pub fn selection_names(expression: &str) -> Result<Vec<String>, String> {
+    if expression.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    parse_selection_expression(expression)?;
+    let mut lexer = Lexer::new(expression);
+    let mut names = Vec::new();
+    loop {
+        match lexer.next_token()? {
+            LexToken::End => break,
+            LexToken::Ident(name) if name != "all" && !names.contains(&name) => names.push(name),
+            _ => {}
+        }
+    }
+    Ok(names)
+}
+
+pub fn replace_selection_name(expression: &str, from: &str, to: &str) -> Result<String, String> {
+    parse_selection_expression(expression)?;
+    crate::models::groups::validate_group_name(to)?;
+    let mut result = String::new();
+    let mut token = String::new();
+    let flush = |token: &mut String, result: &mut String| {
+        if token.eq_ignore_ascii_case(from) {
+            result.push_str(to);
+        } else {
+            result.push_str(token);
+        }
+        token.clear();
+    };
+    for c in expression.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            token.push(c);
+        } else {
+            flush(&mut token, &mut result);
+            result.push(c);
+        }
+    }
+    flush(&mut token, &mut result);
+    Ok(result)
 }

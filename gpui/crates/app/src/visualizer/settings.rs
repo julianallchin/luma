@@ -12,7 +12,7 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .gap(px(12.0))
         .child(float::label("Render settings"))
         .child(environment_card(state.venue_environment(), app))
-        .child(super::renderer_lab_trigger(state, app));
+        .child(super::view_controls(state, app));
     if let Some(error) = &state.environment_error {
         content = content.child(luma_ui::plate(error.clone(), ladder::danger()));
     }
@@ -20,7 +20,12 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
         .relative()
         .flex_none()
         .child(
-            float::btn("View", "visualizer-settings")
+            float::btn("", "visualizer-settings")
+                .child(
+                    luma_ui::icons::eye()
+                        .size(px(18.0))
+                        .text_color(ladder::foreground_alpha(0.7)),
+                )
                 .id("visualizer-settings")
                 .on_click(move |_, _, cx| {
                     toggle.update(cx, |this, cx| {
@@ -34,7 +39,7 @@ pub(super) fn trigger(state: &Visualizer, app: &Entity<Luma>) -> AnyElement {
                 .agent_focused(state.settings_open),
         )
         .when(state.settings_open, |d| {
-            d.child(float::anchored_below(
+            d.child(float::anchored_above(
                 "visualizer-settings-popover",
                 luma_ui::CONTROL_HEIGHT,
                 float::Dismiss::on_press_out(move |_, cx| {

@@ -1623,19 +1623,46 @@ impl Library {
         )
     }
 
+    pub fn missing_venue_groups(
+        &self,
+        venue: &str,
+    ) -> impl Future<Output = Result<Vec<luma_lib::models::groups::MissingGroup>, LibraryError>> + use<>
+    {
+        self.call("missing_venue_groups", json!({"venueId":venue}))
+    }
+    pub fn resolve_venue_group(
+        &self,
+        venue: &str,
+        missing: &str,
+        replacement: Option<&str>,
+        fixtures: &[String],
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("resolve_venue_group", json!({"venueId":venue,"missing":missing,"replacement":replacement,"fixtures":fixtures}))
+    }
+    pub fn delete_venue_group(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("delete_group", json!({"id":id}))
+    }
+    pub fn generate_venue_groups(
+        &self,
+        venue: &str,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call("generate_venue_groups", json!({"venueId":venue}))
+    }
     /// Commit a venue group name and membership changes atomically.
     pub fn save_venue_group(
         &self,
         venue: &str,
         id: Option<&str>,
         label: &str,
-        parent_id: Option<&str>,
         added: &[String],
         removed: &[String],
     ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
         self.call(
             "save_venue_group",
-            json!({"venueId":venue,"groupId":id,"label":label,"parentId":parent_id,"added":added,"removed":removed}),
+            json!({"venueId":venue,"groupId":id,"label":label,"added":added,"removed":removed}),
         )
     }
 
@@ -2739,6 +2766,11 @@ impl Library {
                 command(&services, "get_patched_fixtures", &venue).await?;
             let solved: ResolvedVenue = command(&services, "get_resolved_venue", &venue).await?;
             let groups: Vec<GroupTreeNode> = command(&services, "list_group_tree", &venue).await?;
+            let (missing, missing_error) =
+                match command(&services, "missing_venue_groups", &venue).await {
+                    Ok(missing) => (missing, None),
+                    Err(error) => (Vec::new(), Some(error.to_string())),
+                };
             let universes: Vec<u16> = command(&services, "universes_in_use", &venue).await?;
             let outputs: Vec<UniverseOutput> =
                 command(&services, "list_outputs", &json!({})).await?;
@@ -2775,6 +2807,8 @@ impl Library {
                 placed,
                 definitions,
                 groups,
+                missing,
+                missing_error,
                 universes,
                 outputs,
             })
@@ -3074,8 +3108,10 @@ pub struct Patch {
     /// Keyed by `fixture_path`; a path whose bundle no longer resolves is
     /// absent rather than an error.
     pub definitions: HashMap<String, FixtureDefinition>,
-    /// The derived group tree, flat and parents-first.
+    /// Saved fixture collections.
     pub groups: Vec<GroupTreeNode>,
+    pub missing: Vec<luma_lib::models::groups::MissingGroup>,
+    pub missing_error: Option<String>,
     /// Every universe the venue patches into, ascending.
     pub universes: Vec<u16>,
     /// The universe→node table. Not per-venue: an output is a fact about this

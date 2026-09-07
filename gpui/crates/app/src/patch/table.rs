@@ -33,98 +33,6 @@ const W_RANGE: f32 = 90.0;
 const W_PLACED: f32 = 76.0;
 const ROW_HEIGHT: f32 = 38.0;
 
-/// Contextual controls below the table. Editable patch fields live in its rows.
-pub(super) fn inspector(
-    state: &Patch,
-    row: &PatchedFixture,
-    selection: Option<AnyElement>,
-    app: &Entity<Luma>,
-) -> AnyElement {
-    let name: SharedString = row
-        .label
-        .clone()
-        .unwrap_or_else(|| row.model.clone())
-        .into();
-    let duplicate = app.clone();
-    let remove = app.clone();
-    let placed = state.is_placed(&row.id);
-    let fixture_id = row.id.clone();
-    let fixture_name = name.to_string();
-    let mut card = div()
-        .flex()
-        .flex_col()
-        .p(px(12.0))
-        .gap(px(8.0))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(12.0))
-                        .truncate()
-                        .child(name.clone()),
-                )
-                .child(
-                    float::btn(
-                        if placed { "Duplicate" } else { "Place" },
-                        "fixture-duplicate",
-                    )
-                    .id("fixture-duplicate")
-                    .on_click(move |_, _, cx| {
-                        duplicate.update(cx, |this, cx| {
-                            if placed {
-                                this.stage_duplicate(cx);
-                            } else {
-                                this.stage_take(
-                                    crate::stage::hand::Holding::Unplaced {
-                                        node: fixture_id.clone(),
-                                        label: fixture_name.clone(),
-                                    },
-                                    cx,
-                                );
-                            }
-                        })
-                    })
-                    .agent_node(
-                        Role::Button,
-                        if placed {
-                            "Duplicate element"
-                        } else {
-                            "Place fixture"
-                        },
-                    ),
-                )
-                .child(
-                    float::btn("Remove", "fixture-remove")
-                        .id("fixture-remove")
-                        .on_click(move |_, _, cx| {
-                            remove.update(cx, |this, cx| this.stage_delete(cx))
-                        })
-                        .agent_node(Role::Button, "Remove element"),
-                ),
-        )
-        .child(super::groups::memberships(state, &row.id, app))
-        .children(selection);
-    if let Some(error) = &state.group_error {
-        card = card.child(luma_ui::plate(error.clone(), ladder::danger()));
-    }
-    div()
-        .id("venue-fixture-inspector")
-        .flex_none()
-        .max_h(px(190.0))
-        .overflow_y_scroll()
-        .border_t_1()
-        .border_color(glass::hairline(HAIRLINE))
-        .child(card)
-        .agent_node(Role::Card, format!("Fixture {name}"))
-        .into_any_element()
-}
-
 /// The narrowest the nine columns fit in: the fixed widths, both name columns
 /// at their minimum, the gaps between them and the page's own inset. Below
 /// this the table scrolls sideways rather than squeezing — a column of
@@ -228,7 +136,7 @@ fn compact_row(
         .unwrap_or_else(|| row.model.clone())
         .into();
     let selected = state.selected.contains(&row.id);
-    let editing_members = state.group_editor.as_ref().is_some_and(|e| e.manual);
+    let editing_members = state.group_editor.is_some();
     let editing = state.editing.as_ref().filter(|edit| edit.fixture == row.id);
     let picked = app.clone();
     let venue = state.venue_id.clone();
@@ -268,17 +176,24 @@ fn compact_row(
         line = line
             .child(
                 cell_flex()
-                    .text_size(px(12.0))
+                    .text_size(px(13.0))
                     .truncate()
                     .child(name.clone()),
             )
             .child(
                 cell(COMPACT_MODEL)
                     .text_size(px(12.0))
+                    .text_color(ladder::foreground_alpha(0.62))
                     .truncate()
                     .child(row.model.clone()),
             )
-            .child(reading(COMPACT_MODE, row.mode_name.clone()))
+            .child(
+                cell(COMPACT_MODE)
+                    .text_size(px(12.0))
+                    .text_color(ladder::foreground_alpha(0.85))
+                    .truncate()
+                    .child(row.mode_name.clone()),
+            )
             .child(reading(COMPACT_NUMBER, row.universe.to_string()))
             .child(reading(COMPACT_NUMBER, row.address.to_string()));
     } else {

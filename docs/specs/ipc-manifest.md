@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**230 commands** across **34 domains** · **18 events** · **0 commands not on the seam**
+**230 commands** across **35 domains** · **18 events** · **0 commands not on the seam**
 
 ## Domains
 
@@ -29,7 +29,8 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `distribute` | 2 | `src-tauri/src/dispatch/handlers/distribute.rs` |
 | `engine_dj` | 7 | `src-tauri/src/dispatch/handlers/engine_dj.rs` |
 | `fixtures` | 16 | `src-tauri/src/dispatch/handlers/fixtures.rs` |
-| `groups` | 16 | `src-tauri/src/dispatch/handlers/groups.rs` |
+| `group_references` | 2 | `src-tauri/src/dispatch/handlers/group_references.rs` |
+| `groups` | 14 | `src-tauri/src/dispatch/handlers/groups.rs` |
 | `host_audio` | 9 | `src-tauri/src/dispatch/handlers/host_audio.rs` |
 | `midi` | 15 | `src-tauri/src/dispatch/handlers/midi.rs` |
 | `mixer` | 8 | `src-tauri/src/dispatch/handlers/mixer.rs` |
@@ -213,10 +214,19 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `remove_patched_fixture` | `venueId: String`<br>`id: String` | `()` |
 | `rename_patched_fixture` | `venueId: String`<br>`id: String`<br>`label: String` | `()` |
 
+### `group_references`
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `missing_venue_groups` | `venueId: String` | `Vec<crate::models::groups::MissingGroup>` |
+| `resolve_venue_group` | `venueId: String`<br>`missing: String`<br>`replacement: Option<String>`<br>`fixtures: Vec<String>` | `()` |
+
 ### `groups`
 
 | Command | Arguments | Returns |
 | --- | --- | --- |
+| `generate_venue_groups` | `venueId: String` | `()` |
+| `save_venue_group` | `venueId: String`<br>`groupId: Option<String>`<br>`label: String`<br>`added: Vec<String>`<br>`removed: Vec<String>` | `()` |
 | `list_groups` | `venueId: String` | `Vec<FixtureGroup>` |
 | `create_group` | `venueId: String`<br>`name: Option<String>`<br>`axisLr: Option<f64>`<br>`axisFb: Option<f64>`<br>`axisAb: Option<f64>` | `FixtureGroup` |
 | `update_group` | `id: String`<br>`name: Option<String>`<br>`axisLr: Option<f64>`<br>`axisFb: Option<f64>`<br>`axisAb: Option<f64>` | `FixtureGroup` |
@@ -225,10 +235,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `remove_fixture_from_group` | `fixtureId: String`<br>`groupId: String`<br>`headIndex: Option<i64>` | `()` |
 | `get_grouped_hierarchy` | `venueId: String` | `Vec<FixtureGroupNode>` |
 | `list_group_tree` | `venueId: String` | `Vec<GroupTreeNode>` |
-| `rename_group_node` | `venueId: String`<br>`groupId: String`<br>`label: Option<String>` | `Vec<GroupTreeNode>` |
-| `move_group_node` | `venueId: String`<br>`groupId: String`<br>`parentId: Option<String>` | `Vec<GroupTreeNode>` |
-| `merge_group_nodes` | `venueId: String`<br>`groupId: String`<br>`intoGroupId: Option<String>` | `Vec<GroupTreeNode>` |
-| `reset_group_node` | `venueId: String`<br>`groupId: String` | `Vec<GroupTreeNode>` |
 | `get_ungrouped_fixtures` | `venueId: String` | `Vec<PatchedFixture>` |
 | `update_movement_config` | `groupId: String`<br>`config: Option<MovementConfig>` | `FixtureGroup` |
 | `preview_selection_query` | `venueId: String`<br>`query: String`<br>`seed: Option<u64>` | `Vec<PatchedFixture>` |

@@ -318,7 +318,10 @@ commands! {
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
-    groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, parent_id: Option<String>, added: Vec<String>, removed: Vec<String>) -> ();
+    group_references::missing_venue_groups(venue_id: String) -> Vec<crate::models::groups::MissingGroup>;
+    group_references::resolve_venue_group(venue_id: String, missing: String, replacement: Option<String>, fixtures: Vec<String>) -> ();
+    groups::generate_venue_groups(venue_id: String) -> ();
+    groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, added: Vec<String>, removed: Vec<String>) -> ();
     groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
     groups::create_group(
         venue_id: String,
@@ -347,22 +350,6 @@ commands! {
     ) -> ();
     groups::get_grouped_hierarchy(venue_id: String) -> Vec<FixtureGroupNode>;
     groups::list_group_tree(venue_id: String) -> Vec<GroupTreeNode>;
-    groups::rename_group_node(
-        venue_id: String,
-        group_id: String,
-        label: Option<String>,
-    ) -> Vec<GroupTreeNode>;
-    groups::move_group_node(
-        venue_id: String,
-        group_id: String,
-        parent_id: Option<String>,
-    ) -> Vec<GroupTreeNode>;
-    groups::merge_group_nodes(
-        venue_id: String,
-        group_id: String,
-        into_group_id: Option<String>,
-    ) -> Vec<GroupTreeNode>;
-    groups::reset_group_node(venue_id: String, group_id: String) -> Vec<GroupTreeNode>;
     groups::get_ungrouped_fixtures(venue_id: String) -> Vec<PatchedFixture>;
     groups::update_movement_config(
         group_id: String,

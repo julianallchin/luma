@@ -37,7 +37,7 @@ use crate::{LibraryError, Luma};
 
 mod add;
 mod footprint;
-mod groups;
+pub(crate) mod groups;
 mod outputs;
 mod table;
 mod venue;
@@ -131,6 +131,7 @@ pub(crate) struct Patch {
     pub(crate) group_editor: Option<groups::Editor>,
     pub(crate) group_error: Option<String>,
     pub(crate) group_busy: bool,
+    pub(crate) repair_after_save: bool,
     pub(crate) data: Option<PatchData>,
     pub(crate) error: Option<String>,
 
@@ -176,6 +177,7 @@ impl Patch {
             group_editor: None,
             group_error: None,
             group_busy: false,
+            repair_after_save: false,
             venue_name,
             data: None,
             error: None,
@@ -348,6 +350,10 @@ impl Luma {
                     return;
                 }
                 state.landed(data, cells, nodes);
+                let repair = std::mem::take(&mut state.repair_after_save);
+                if repair {
+                    this.open_group_repair(cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -1230,13 +1236,8 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // ---------------------------------------------------------------------------
 
 /// Render the active task in the narrow venue panel.
-pub(crate) fn patch(
-    state: &Patch,
-    app: &Entity<Luma>,
-    selection: Option<AnyElement>,
-    window: &Window,
-) -> AnyElement {
-    venue::render(state, app, selection, window)
+pub(crate) fn patch(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
+    venue::render(state, app, window)
 }
 
 pub(super) fn details(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {

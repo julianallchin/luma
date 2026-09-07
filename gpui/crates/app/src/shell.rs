@@ -93,6 +93,7 @@ pub(crate) enum Overlay {
     /// see [`crate::confirm`]. Unboxed because it is a few strings and an
     /// enum, and it is the *smallest* variant here rather than the largest.
     Confirm(confirm::Confirm),
+    GroupRepair(patch::groups::Repair),
 }
 
 impl Overlay {
@@ -109,6 +110,7 @@ impl Overlay {
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
             Self::AddFixtures(_) => keymap::context::ADD_FIXTURES,
             Self::Confirm(_) => keymap::context::CONFIRM,
+            Self::GroupRepair(_) => keymap::context::ROOT,
         }
     }
 }
@@ -324,15 +326,6 @@ impl Luma {
         // bundle before the card itself closes.
         if self.add_fixtures_back(cx) {
             return;
-        }
-        if let Some(Body::Patch(page)) = self.workspace.active_body_mut() {
-            if let Some(editor) = &mut page.group_editor {
-                if editor.parent_open {
-                    editor.parent_open = false;
-                    cx.notify();
-                    return;
-                }
-            }
         }
         if self.overlay.as_open().is_none() {
             if let Some(visualizer) = self.visualizer_mut() {
@@ -1065,9 +1058,6 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     let focus = app.focus.clone();
     // Read before the workspace is borrowed mutably: the builder lives beside
     // the picture, not in the tab, and its state is a projection either way.
-    let selection = app
-        .build_state()
-        .and_then(|build| stage::selection_controls(build, &entity));
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
@@ -1087,7 +1077,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Graph(state) => graph::graph(state, &entity, window, cx).into_any_element(),
-        Body::Patch(state) => patch::patch(state, &entity, selection, window).into_any_element(),
+        Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
     };
     div()
         .flex_1()
@@ -1165,6 +1155,10 @@ fn overlay_layer(
         Overlay::AddFixtures(state) => (
             patch::add_fixtures_dialog(state, entity, window, cx),
             "Add fixtures dialog",
+        ),
+        Overlay::GroupRepair(state) => (
+            patch::groups::repair_dialog(state, entity),
+            "Group repair dialog",
         ),
         Overlay::Confirm(state) => (
             confirm::render(

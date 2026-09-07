@@ -45,3 +45,5 @@ pub mod telemetry;
 pub mod tracks;
 pub mod venues;
 pub mod waveforms;
+
+pub mod group_references;

@@ -92,7 +92,7 @@ pub async fn create_venue(
     .map_err(|error| format!("Failed to authorize venue creation: {error}"))?
     .ok_or_else(|| "Venue creation is not currently admitted".to_string())?;
 
-    sqlx::query("INSERT INTO venues (id, name, description, uid) VALUES (?, ?, ?, ?)")
+    sqlx::query("INSERT INTO venues (id, name, description, uid, groups_initialized) VALUES (?, ?, ?, ?, 1)")
         .bind(&id)
         .bind(&name)
         .bind(&description)
