@@ -133,17 +133,14 @@ impl Session {
                     }
                 }
                 "assistant" => {
-                    if let Some(error) = frame.get("error") {
-                        return Err(protocol(format!("Claude: {error}")));
+                    if frame.get("error").is_some() {
+                        return Err(claude_error(&frame));
                     }
                 }
 
                 "result" => {
                     if frame["is_error"] == true {
-                        return Err(protocol(format!(
-                            "Claude: {}",
-                            frame.get("errors").unwrap_or(&frame)
-                        )));
+                        return Err(claude_error(&frame));
                     }
                     self.completed = true;
                     let usage = &frame["usage"];
@@ -260,6 +257,28 @@ fn claude_command(cwd: &std::path::Path) -> tokio::process::Command {
     cmd
 }
 
+fn claude_error(frame: &Value) -> AgentError {
+    let messages: Vec<_> = frame["errors"]
+        .as_array()
+        .or_else(|| frame.pointer("/message/content").and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().or_else(|| value["text"].as_str()))
+        .filter(|text| !text.trim().is_empty())
+        .collect();
+    let message = if messages.is_empty() {
+        ["result", "error", "subtype"]
+            .into_iter()
+            .filter_map(|key| frame[key].as_str())
+            .find(|text| !text.trim().is_empty())
+            .unwrap_or("unknown provider error")
+            .to_owned()
+    } else {
+        messages.join("\n")
+    };
+    protocol(format!("Claude: {message}"))
+}
+
 fn count(value: &Value, key: &str) -> u64 {
     value[key].as_u64().unwrap_or(0)
 }
@@ -267,6 +286,22 @@ fn count(value: &Value, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_errors_preserve_the_explanation() {
+        for frame in [
+            json!({"error":"invalid_request","message":{"content":[{"type":"text","text":"Request rejected: try a new session."}]}}),
+            json!({"is_error":true,"errors":[],"result":"Request rejected: try a new session."}),
+            json!({"is_error":true,"errors":["Request rejected: try a new session."]}),
+        ] {
+            assert!(claude_error(&frame)
+                .to_string()
+                .contains("Request rejected: try a new session."));
+        }
+        assert!(claude_error(&json!({"error":"invalid_request"}))
+            .to_string()
+            .contains("invalid_request"));
+    }
+
     #[tokio::test]
     async fn scoped_mcp_round_trip_and_denied_native_tool() {
         let temp = tempfile::tempdir().unwrap();

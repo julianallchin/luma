@@ -183,7 +183,7 @@ mod tests {
         request.tools[0].schema = serde_json::json!({"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false});
         let work = async {
             let mut resume = None;
-            for _ in 0..2 {
+            for turn_index in 0..2 {
                 request.resume = resume.take();
                 let mut session = Session::start(request.clone()).await.unwrap();
                 let mut called = false;
@@ -215,7 +215,10 @@ mod tests {
                         _ => {}
                     }
                 }
-                assert!(called, "CLI did not call the scoped tool");
+                assert!(
+                    called,
+                    "turn {turn_index}: CLI did not call the scoped tool; response: {text}"
+                );
                 assert!(text.contains("DONE"), "{text}");
             }
         };
