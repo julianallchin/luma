@@ -365,7 +365,7 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     use luma_lib::agent::engine::Engine;
     let mut fields = vec![field(
-        Some("Agent engine"),
+        Some("Default agent engine"),
         select(
             state,
             app,
@@ -373,7 +373,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
             Engine::CHOICES,
             values.agent_engine.key(),
         ),
-        Some("Applies to the next message in app and headless conversations."),
+        Some("Used for new conversations. Choose a service and model for an existing conversation beside its message box."),
     )];
     if values.agent_engine != Engine::Api {
         fields.push(note("Uses the locally installed agent and its signed-in account. Sign in with the agent's CLI on each machine."));
@@ -381,7 +381,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
     }
     fields.extend([
         field(
-            Some("Model Provider"),
+            Some("Default API service"),
             select(
                 state,
                 app,
@@ -389,13 +389,10 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
                 AGENT_PROVIDERS,
                 &values.agent_provider,
             ),
-            Some(
-                "The service Luma's agents call. Keys are stored per provider — \
-                 switching keeps both.",
-            ),
+            Some("Used for new API conversations. Each service keeps its own API key."),
         ),
         field(
-            Some("Model"),
+            Some("Default API model"),
             select(
                 state,
                 app,
@@ -403,10 +400,7 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
                 &agent_models(),
                 &values.agent_model,
             ),
-            Some(
-                "The model behind the track agent. Applies from the next message, \
-                 including in open threads.",
-            ),
+            Some("Used for new API conversations."),
         ),
         note("API keys are not editable from the native host yet."),
     ]);

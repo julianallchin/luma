@@ -19,7 +19,7 @@ use crate::models::agent_threads::{
 };
 
 const THREAD_COLUMNS: &str =
-    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, created_at, updated_at";
+    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, created_at, updated_at";
 
 /// The FROM/WHERE every thread *read* shares: active threads, admitted by the
 /// write-admission singleton, owned by the bound principal (one `?`).
@@ -73,14 +73,21 @@ pub(crate) async fn create_thread_with_id(
     owner_user_id: Option<&str>,
 ) -> Result<AgentThread, String> {
     input.route()?;
+    let settings = super::settings::get_all_settings(pool).await?;
+    let defaults = crate::agent::engine::catalog::Selection::configured(&settings)
+        .map_err(|e| e.to_string())?;
     let mut transaction = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| format!("Failed to begin agent thread creation: {e}"))?;
     sqlx::query(
-        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id)
-         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider)
+         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             COALESCE(parent.engine, ?),
+             CASE WHEN parent.id IS NOT NULL THEN parent.model ELSE ? END,
+             CASE WHEN parent.id IS NOT NULL THEN parent.provider ELSE ? END
          FROM auth_write_admission admission
+         LEFT JOIN agent_threads parent ON parent.id = ? AND parent.owner_user_id IS admission.active_uid
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
            AND admission.remote_writes = 0 AND admission.active_uid IS ?",
@@ -95,6 +102,10 @@ pub(crate) async fn create_thread_with_id(
     .bind(&input.title)
     .bind(&input.parent_thread_id)
     .bind(&input.parent_call_id)
+    .bind(defaults.service.engine().key())
+    .bind(&defaults.model)
+    .bind(defaults.service.provider().map(|p| p.as_str()))
+    .bind(&input.parent_thread_id)
     .bind(owner_user_id)
     .execute(&mut *transaction)
     .await
@@ -187,8 +198,8 @@ pub(crate) async fn fork_thread_for_connection(
         "INSERT INTO agent_threads
          (id, owner_user_id, agent_kind, subject_kind, subject_id,
           implementation_id, venue_id, score_id, forked_from_thread_id,
-          forked_at_message_id, title)
-         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          forked_at_message_id, title, engine, model, provider)
+         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          FROM auth_write_admission AS admission
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
@@ -204,6 +215,9 @@ pub(crate) async fn fork_thread_for_connection(
     .bind(source_thread_id)
     .bind(at_message_id)
     .bind(title.or(source.title.as_deref()))
+    .bind(&source.engine)
+    .bind(&source.model)
+    .bind(&source.provider)
     .bind(owner_user_id)
     .execute(&mut *connection)
     .await
@@ -1435,6 +1449,31 @@ pub async fn rename_thread(
     Ok(thread)
 }
 
+/// Change only this principal's active conversation. Runtime selection is
+/// captured when a turn starts, so this preference applies to the next turn.
+pub async fn set_thread_selection(
+    pool: &SqlitePool,
+    thread_id: &str,
+    selection: &crate::agent::engine::catalog::Selection,
+    owner_user_id: Option<&str>,
+) -> Result<AgentThread, String> {
+    selection.validate().map_err(|e| e.to_string())?;
+    sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
+        "UPDATE agent_threads SET engine = ?, model = ?, provider = ?, synced_at = NULL
+         WHERE id = ? AND id IN (SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL})
+         RETURNING {THREAD_COLUMNS}"
+    )))
+    .bind(selection.service.engine().key())
+    .bind(&selection.model)
+    .bind(selection.service.provider().map(|p| p.as_str()))
+    .bind(thread_id)
+    .bind(owner_user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("Failed to change agent engine: {error}"))?
+    .ok_or_else(|| thread_not_found(thread_id))
+}
+
 /// Name the writer this thread's revisions are attributed to.
 ///
 /// Restamped rather than set once: the model is chosen per turn, so the turn
@@ -1583,6 +1622,78 @@ mod tests {
         crate::database::local::auth::arm_write_admission(pool, principal)
             .await
             .expect("arm test admission");
+    }
+
+    #[tokio::test]
+    async fn engine_selection_is_owned_and_inherited_without_changing_other_threads() {
+        let (_dir, pool) = test_pool().await;
+        admit(&pool, Some("alice")).await;
+        crate::database::local::settings::update_setting(&pool, "agent_engine", "claude")
+            .await
+            .unwrap();
+        let first = create_thread(&pool, track_thread("track"), Some("alice"))
+            .await
+            .unwrap();
+        let second = create_thread(&pool, track_thread("track"), Some("alice"))
+            .await
+            .unwrap();
+        assert_eq!(first.engine, "claude");
+        use crate::agent::engine::catalog::{Selection, Service};
+        let selected = Selection {
+            service: Service::Codex,
+            model: Some("test-model".into()),
+        };
+        let invalid = Selection {
+            service: Service::OpenRouter,
+            model: Some("unknown".into()),
+        };
+        set_thread_selection(&pool, &first.id, &selected, Some("alice"))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_thread_row(&pool, &second.id, Some("alice"))
+                .await
+                .unwrap()
+                .engine,
+            "claude"
+        );
+        let fork = fork_thread_with_id(
+            &pool,
+            &Uuid::new_v4().to_string(),
+            &first.id,
+            None,
+            None,
+            Some("alice"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fork.engine, "codex");
+        assert_eq!(fork.model, selected.model);
+        let mut child = track_thread("track");
+        child.parent_thread_id = Some(first.id.clone());
+        child.parent_call_id = Some("call".into());
+        let child = create_thread(&pool, child, Some("alice")).await.unwrap();
+        assert_eq!(child.engine, "codex");
+        assert_eq!(child.model, selected.model);
+        assert!(
+            set_thread_selection(&pool, &first.id, &invalid, Some("alice"))
+                .await
+                .is_err()
+        );
+        admit(&pool, Some("bob")).await;
+        assert!(
+            set_thread_selection(&pool, &first.id, &selected, Some("bob"))
+                .await
+                .is_err()
+        );
+        admit(&pool, Some("alice")).await;
+        assert_eq!(
+            get_thread_row(&pool, &first.id, Some("alice"))
+                .await
+                .unwrap()
+                .engine,
+            "codex"
+        );
     }
 
     async fn legacy_graph_migration_pool() -> SqlitePool {

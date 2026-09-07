@@ -25,27 +25,9 @@ impl Session {
         let status: Value = serde_json::from_slice(&status.stdout)
             .map_err(|e| protocol(format!("invalid Claude authentication status: {e}")))?;
         if status["loggedIn"] != true || status["authMethod"] != "claude.ai" {
-            return Err(protocol("Claude subscription execution requires `claude auth login` with Claude.ai on this machine"));
+            return Err(protocol("A new Claude CLI process reports no Claude.ai login. An already-open terminal session may still be signed in. Run `claude auth login` in a fresh terminal, then retry."));
         }
-        let mut cmd = claude_command(&request.cwd);
-        cmd.args([
-            "--print",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--tools",
-            "",
-            "--strict-mcp-config",
-            "--permission-prompt-tool",
-            "stdio",
-            "--setting-sources",
-            "",
-            "--max-turns",
-            "64",
-        ]);
+        let mut cmd = stream_command(&request.cwd);
         cmd.arg("--system-prompt").arg(&request.system);
         cmd.arg("--mcp-config")
             .arg(json!({"mcpServers":{"luma":{"type":"sdk","name":"luma"}}}).to_string());
@@ -59,7 +41,7 @@ impl Session {
     }
 
     async fn connect(request: Request, mut process: Process) -> Result<Self, AgentError> {
-        process.send(json!({"type":"control_request","request_id":"initialize","request":{"subtype":"initialize","hooks":null}})).await?;
+        initialize(&mut process).await?;
         Ok(Self {
             process,
             request,
@@ -205,6 +187,64 @@ impl Session {
             .await
     }
 }
+fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
+    let mut cmd = claude_command(cwd);
+    cmd.args([
+        "--print",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--permission-prompt-tool",
+        "stdio",
+        "--setting-sources",
+        "",
+        "--max-turns",
+        "64",
+    ]);
+    cmd
+}
+
+pub(super) async fn models(
+    cwd: &std::path::Path,
+) -> Result<Vec<super::catalog::ModelChoice>, AgentError> {
+    let mut process = Process::start(stream_command(cwd))?;
+    initialize(&mut process).await?;
+    loop {
+        let frame = process.read().await?;
+        if frame["type"] == "control_response" && frame["response"]["request_id"] == "initialize" {
+            let models = frame
+                .pointer("/response/response/models")
+                .and_then(Value::as_array)
+                .ok_or_else(|| protocol("Claude did not return its model catalog"))?;
+            return models
+                .iter()
+                .map(|model| {
+                    Ok(super::catalog::ModelChoice {
+                        id: model["value"]
+                            .as_str()
+                            .filter(|id| *id != "default")
+                            .map(str::to_string),
+                        label: model["displayName"]
+                            .as_str()
+                            .ok_or_else(|| protocol("Claude model has no name"))?
+                            .into(),
+                    })
+                })
+                .collect();
+        }
+    }
+}
+
+async fn initialize(process: &mut Process) -> Result<(), AgentError> {
+    process.send(json!({"type":"control_request","request_id":"initialize","request":{"subtype":"initialize","hooks":null}})).await
+}
+
 fn claude_command(cwd: &std::path::Path) -> tokio::process::Command {
     let mut cmd = command("claude", cwd);
     for variable in [

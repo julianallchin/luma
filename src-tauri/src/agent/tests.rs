@@ -1041,6 +1041,9 @@ fn history_thread(id: &str, title: Option<&str>) -> crate::models::agent_threads
         parent_call_id: None,
         title: title.map(ToString::to_string),
         actor: None,
+        engine: "api".into(),
+        model: Some(crate::agent::model::DEFAULT_MODEL.into()),
+        provider: Some("vercel-ai-gateway".into()),
         created_at: String::new(),
         updated_at: String::new(),
     }
@@ -1129,4 +1132,39 @@ fn a_history_search_finds_lines_and_windows_long_ones() {
         History::HITS_PER_ENTRY
     );
     assert!(history.search("   ").is_empty());
+}
+
+#[tokio::test]
+async fn a_threads_model_is_independent_of_later_default_changes() {
+    use crate::agent::engine::catalog::{Selection, Service};
+    let fixture = fixture().await;
+    let scripted = Arc::new(ScriptedModel::new(vec![vec![ModelEvent::TextDelta(
+        "shared runtime".into(),
+    )]]));
+    let agent = AgentService::new(fixture.services.clone()).with_model(scripted.clone());
+    agent
+        .set_thread_selection(
+            &fixture.thread_id,
+            Selection {
+                service: Service::OpenRouter,
+                model: Some("kimi-k3-fast".into()),
+            },
+        )
+        .await
+        .unwrap();
+    for (key, value) in [("agent_engine", "claude"), ("agent_model", "grok-4.5")] {
+        crate::database::local::settings::update_setting(fixture.pool(), key, value)
+            .await
+            .unwrap();
+    }
+    let mut turn = agent.turn(&fixture.thread_id, "Answer".to_string().into());
+    let mut completed = false;
+    while let Some(event) = turn.next().await {
+        if let TurnEvent::TurnEnded { outcome } = event {
+            assert!(matches!(outcome, TurnOutcome::Completed), "{outcome:?}");
+            completed = true;
+        }
+    }
+    assert!(completed);
+    assert_eq!(scripted.requests()[0].model.spec().key, "kimi-k3-fast");
 }

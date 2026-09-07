@@ -42,6 +42,10 @@ pub struct AgentThread {
     /// resolved, or an external MCP client's label. `None` until a turn names
     /// one, and then the host's own session actor answers instead.
     pub actor: Option<String>,
+    /// Execution engine selected for this conversation.
+    pub engine: String,
+    pub model: Option<String>,
+    pub provider: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -1,6 +1,7 @@
 //! Session engines. API inference remains in `model`; CLI engines own their
 //! tool loop and return calls to the same Luma tool registry.
 
+pub mod catalog;
 pub(crate) mod claim;
 mod claude;
 mod codex;

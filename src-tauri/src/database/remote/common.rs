@@ -179,8 +179,12 @@ impl SupabaseClient {
             .await
             .map_err(|e| SyncError::ParseError(e.to_string()))?;
 
-        serde_json::from_str(&body)
-            .map_err(|e| SyncError::ParseError(format!("Failed to parse RPC response: {}", e)))
+        serde_json::from_str(if body.trim().is_empty() {
+            "null"
+        } else {
+            &body
+        })
+        .map_err(|e| SyncError::ParseError(format!("Failed to parse RPC response: {}", e)))
     }
 
     /// Upload a file to Supabase Storage
@@ -339,5 +343,40 @@ impl SupabaseClient {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn rpc_accepts_postgres_void_responses_without_hiding_invalid_json() {
+        for (body, expected) in [
+            ("", Some(serde_json::Value::Null)),
+            ("true", Some(serde_json::json!(true))),
+            ("invalid", None),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                stream.read(&mut request).await.unwrap();
+                let status = if body.is_empty() {
+                    "204 No Content"
+                } else {
+                    "200 OK"
+                };
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let client = SupabaseClient::new(format!("http://{address}"), "test".into());
+            let result = client
+                .rpc::<serde_json::Value>("release", &serde_json::json!({}), "test")
+                .await;
+            assert_eq!(result.ok(), expected);
+            server.await.unwrap();
+        }
     }
 }

@@ -13,21 +13,12 @@ pub(super) struct Session {
 
 impl Session {
     pub async fn start(request: Request) -> Result<Self, AgentError> {
-        let mut cmd = command("codex", &request.cwd);
-        cmd.args(["app-server", "--stdio"]);
-        for (key, value) in isolated_config().as_object().expect("config object") {
-            cmd.arg("-c").arg(format!("{key}={value}"));
-        }
-        Self::connect(request, Process::start(cmd)?).await
+        let process = start_process(&request.cwd)?;
+        Self::connect(request, process).await
     }
 
     async fn connect(request: Request, mut process: Process) -> Result<Self, AgentError> {
-        process
-            .send(json!({"id":1,"method":"initialize","params":{
-                "clientInfo":{"name":"luma","version":env!("CARGO_PKG_VERSION")},
-                "capabilities":{"experimentalApi":true}
-            }}))
-            .await?;
+        initialize(&mut process).await?;
         let usage = request
             .resume
             .as_ref()
@@ -284,5 +275,68 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
         );
         assert!(matches!(session.next().await.unwrap(),Event::Text(text) if text == "done"));
         assert!(matches!(session.next().await.unwrap(), Event::Done));
+    }
+}
+
+fn start_process(cwd: &std::path::Path) -> Result<Process, AgentError> {
+    let mut cmd = command("codex", cwd);
+    cmd.args(["app-server", "--stdio"]);
+    for (key, value) in isolated_config().as_object().expect("config object") {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    Process::start(cmd)
+}
+
+async fn initialize(process: &mut Process) -> Result<(), AgentError> {
+    process
+        .send(json!({"id":1,"method":"initialize","params":{
+            "clientInfo":{"name":"luma","version":env!("CARGO_PKG_VERSION")},
+            "capabilities":{"experimentalApi":true}
+        }}))
+        .await
+}
+
+pub(super) async fn models(
+    cwd: &std::path::Path,
+) -> Result<Vec<super::catalog::ModelChoice>, AgentError> {
+    let mut process = start_process(cwd)?;
+    initialize(&mut process).await?;
+    let mut models = vec![super::catalog::ModelChoice {
+        id: None,
+        label: "Default".into(),
+    }];
+    loop {
+        let frame = process.read().await?;
+        if let Some(error) = frame.get("error") {
+            return Err(protocol(format!("Codex: {error}")));
+        }
+        match frame.get("id").and_then(Value::as_u64) {
+            Some(1) => {
+                process.send(json!({"method":"initialized"})).await?;
+                process
+                    .send(json!({"id":2,"method":"model/list","params":{}}))
+                    .await?;
+            }
+            Some(2) => {
+                let page = frame
+                    .pointer("/result/data")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| protocol("Codex did not return its model catalog"))?;
+                for model in page {
+                    models.push(super::catalog::ModelChoice {
+                        id: Some(text(model, "model")?),
+                        label: text(model, "displayName")?,
+                    });
+                }
+                if let Some(cursor) = frame.pointer("/result/nextCursor").and_then(Value::as_str) {
+                    process
+                        .send(json!({"id":2,"method":"model/list","params":{"cursor":cursor}}))
+                        .await?;
+                } else {
+                    return Ok(models);
+                }
+            }
+            _ => {}
+        }
     }
 }

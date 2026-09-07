@@ -580,11 +580,10 @@ impl From<AgentError> for crate::dispatch::CommandError {
 #[derive(Clone)]
 pub struct AgentService {
     services: SharedServices,
-    engine: Option<engine::Engine>,
     model_name: Option<String>,
     /// Overrides provider selection. Set by tests and by a host that wants a
-    /// scripted model; `None` resolves the model from settings and the key from
-    /// the environment or the settings table.
+    /// scripted model; `None` uses the thread's selection and resolves the key
+    /// from the environment or the settings table.
     client: Option<Arc<dyn ModelClient>>,
     /// Overrides the tool set. `None` builds it from the thread's agent kind,
     /// which is also how a subagent gets a surface identical to its parent's.
@@ -596,7 +595,6 @@ impl AgentService {
     pub fn new(services: SharedServices) -> Self {
         Self {
             services,
-            engine: None,
             model_name: None,
             client: None,
             tools: None,
@@ -619,13 +617,6 @@ impl AgentService {
         self
     }
 
-    /// Select an execution engine without changing the user's saved settings.
-    #[must_use]
-    pub fn with_engine(mut self, engine: engine::Engine) -> Self {
-        self.engine = Some(engine);
-        self
-    }
-
     /// Override the model for this host without changing saved preferences.
     #[must_use]
     pub fn with_model_name(mut self, model: String) -> Self {
@@ -637,26 +628,43 @@ impl AgentService {
         &self.services
     }
 
-    /// What the next turn's model is called, for a surface that names it.
-    ///
-    /// Settings-only: no key is read and no client is built, so a panel can ask
-    /// on open without touching a provider.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::Storage`] if settings cannot be read.
-    pub async fn model_label(&self) -> Result<&'static str, AgentError> {
-        let settings = crate::database::local::settings::get_all_settings(&self.services.db().0)
-            .await
-            .map_err(AgentError::Storage)?;
-        match self
-            .engine
-            .unwrap_or(engine::Engine::configured(&settings)?)
-        {
-            engine::Engine::Api => Ok(model::configured(&settings)?.spec().display),
-            engine::Engine::Codex => Ok("Codex"),
-            engine::Engine::Claude => Ok("Claude Code"),
-        }
+    pub async fn set_thread_engine(
+        &self,
+        thread_id: &str,
+        engine: engine::Engine,
+    ) -> Result<AgentThread, AgentError> {
+        let mut settings =
+            crate::database::local::settings::get_all_settings(&self.services.db().0)
+                .await
+                .map_err(AgentError::Storage)?;
+        settings.insert("agent_engine".into(), engine.key().into());
+        self.set_thread_selection(
+            thread_id,
+            engine::catalog::Selection::configured(&settings)?,
+        )
+        .await
+    }
+
+    pub async fn models(
+        &self,
+        service: engine::catalog::Service,
+    ) -> Result<Vec<engine::catalog::ModelChoice>, AgentError> {
+        engine::catalog::models(service, self.services.storage().path()).await
+    }
+
+    pub async fn set_thread_selection(
+        &self,
+        thread_id: &str,
+        selection: engine::catalog::Selection,
+    ) -> Result<AgentThread, AgentError> {
+        let value = crate::dispatch::dispatch(
+            &self.services,
+            "agent_thread_set_model",
+            &serde_json::json!({"threadId":thread_id,"selection":selection}),
+        )
+        .await
+        .map_err(|error| AgentError::Storage(error.to_string()))?;
+        serde_json::from_value(value).map_err(|error| AgentError::Storage(error.to_string()))
     }
 
     /// Everything the history picker shows about `scope`'s subject: its

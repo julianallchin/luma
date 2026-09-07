@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 /// pattern — so two tests sharing a pattern would share a thread, and the
 /// second would open onto the first's transcript. One pattern each is what
 /// makes each test's panel empty when it opens.
-pub const PATTERNS: [&str; 9] = [
+pub const PATTERNS: [&str; 10] = [
     "chat-turn",
     "chat-context",
     "chat-growth",
@@ -45,6 +45,7 @@ pub const PATTERNS: [&str; 9] = [
     "chat-repoint",
     "chat-new",
     "chat-history",
+    "chat-engine",
     "chat-subagent",
     CAPTURED,
 ];

@@ -80,9 +80,6 @@ async fn run() -> Result<(), String> {
     if let Some(model) = model {
         agent = agent.with_model_name(model);
     }
-    if let Some(engine) = engine {
-        agent = agent.with_engine(engine);
-    }
     let thread = match thread {
         Some(id) => id,
         None => {
@@ -94,6 +91,12 @@ async fn run() -> Result<(), String> {
                 .id
         }
     };
+    if let Some(engine) = engine {
+        agent
+            .set_thread_engine(&thread, engine)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     eprintln!("thread {thread}");
     let mut turn = agent.turn(&thread, prompt.into());
     let mut outcome = Err("agent stream ended without an outcome".to_string());

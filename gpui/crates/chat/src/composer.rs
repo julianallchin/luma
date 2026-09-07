@@ -515,7 +515,7 @@ pub fn composer(
     composer: &mut Composer,
     chat: &Entity<AgentChat>,
     streaming: bool,
-    model: Option<&str>,
+    picker: Option<gpui::AnyElement>,
     theme: &Theme,
     window: &mut Window,
     cx: &mut Context<AgentChat>,
@@ -566,7 +566,7 @@ pub fn composer(
         .flex_row()
         .items_center()
         .gap(px(theme::SPACE_SM))
-        .children(model.map(|model| model_chip(model, theme)))
+        .children(picker)
         .child(send(chat, action, theme));
 
     let body = if layout.expanded {
@@ -653,36 +653,6 @@ pub fn composer(
             theme::PILL_BLUR,
             motion::fade_quick("composer-pill", body),
         ))
-}
-
-/// Which model answers. A readout, not a control — the model is chosen in
-/// settings, and a second place to change it would be a second rule about it.
-fn model_chip(model: &str, theme: &Theme) -> impl IntoElement {
-    let label = SharedString::from(model.to_string());
-    div()
-        .h(px(theme::CHIP_SMALL_HEIGHT))
-        .flex_none()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(theme::SPACE_XS + 2.0))
-        .px(px(theme::SPACE_SM))
-        .rounded(px(luma_ui::radius::CONTROL))
-        .bg(theme::card_bg())
-        .border_1()
-        .border_color(theme.border)
-        .child(
-            Icon::new(IconName::Bot)
-                .size(px(12.0))
-                .text_color(theme.text_faint),
-        )
-        .child(
-            div()
-                .text_size(px(11.0))
-                .text_color(theme.text_muted)
-                .child(label.clone()),
-        )
-        .agent_node(NodeRole::Text, label)
 }
 
 /// Send, steer, or stop.

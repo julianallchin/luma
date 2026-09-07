@@ -1407,9 +1407,19 @@ async fn apply_thread_projection(
             table.name
         )));
     }
-    let mutable = &["title", "lifecycle_state", "updated_at"];
+    let mutable = &[
+        "title",
+        "engine",
+        "model",
+        "provider",
+        "lifecycle_state",
+        "updated_at",
+    ];
     verify_row_except(transaction, table, values, mutable).await?;
     let remote_title = value_for_column(table, values, "title");
+    let remote_engine = value_for_column(table, values, "engine");
+    let remote_model = value_for_column(table, values, "model");
+    let remote_provider = value_for_column(table, values, "provider");
     let remote_lifecycle = value_for_column(table, values, "lifecycle_state");
     let remote_updated_at = value_for_column(table, values, "updated_at");
     let id = value_for_column(table, values, "id");
@@ -1417,7 +1427,7 @@ async fn apply_thread_projection(
     // a projection this device just received is not a local edit.
     let mut query = sqlx::query(
         "UPDATE agent_threads
-         SET title = ?,
+         SET title = ?, engine = ?, model = ?, provider = ?,
              lifecycle_state = CASE
                  WHEN lifecycle_state = 'deleting' OR ? = 'deleting' THEN 'deleting'
                  ELSE 'active'
@@ -1428,6 +1438,9 @@ async fn apply_thread_projection(
     );
     for value in [
         remote_title,
+        remote_engine,
+        remote_model,
+        remote_provider,
         remote_lifecycle,
         remote_updated_at,
         remote_updated_at,
@@ -1749,6 +1762,9 @@ mod remote_deletion_tests {
                     "id": thread.id,
                     "owner_user_id": "alice",
                     "agent_kind": "track_copilot",
+                    "engine": "api",
+                    "model": "claude-opus-5",
+                    "provider": "vercel-ai-gateway",
                     "subject_kind": "track",
                     "subject_id": "track",
                     "implementation_id": null,
@@ -1885,6 +1901,9 @@ mod remote_deletion_tests {
                         "id": thread.id,
                         "owner_user_id": "alice",
                         "agent_kind": "track_copilot",
+                        "engine": "api",
+                        "model": "claude-opus-5",
+                        "provider": "vercel-ai-gateway",
                         "subject_kind": "track",
                         "subject_id": "track",
                         "implementation_id": null,

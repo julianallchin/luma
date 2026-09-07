@@ -41,6 +41,7 @@
 
 pub mod chip;
 pub mod composer;
+mod model_picker;
 pub mod python_cell;
 pub mod subagents;
 pub mod theme;
@@ -56,8 +57,11 @@ use gpui::{
     SharedString, Task, Window,
 };
 use gpui_component::{Icon, IconName};
-use luma_lib::agent::{AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt};
-use luma_lib::models::agent_threads::AgentThreadDetail;
+use luma_lib::agent::{
+    engine::catalog::{ModelChoice, Selection, Service},
+    AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt,
+};
+use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
 use luma_ui::node::{Instrument, Role as NodeRole};
 
 use crate::composer::Composer;
@@ -148,15 +152,30 @@ impl Agent {
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
-    /// What the next turn's model is called. `None` once the settings read
-    /// fails — the composer's chip is a readout, and a panel that refused to
-    /// open because it could not name a model would be the wrong trade.
-    pub fn model_label(&self) -> impl std::future::Future<Output = Option<String>> + use<> {
+    pub fn set_selection(
+        &self,
+        thread_id: String,
+        selection: Selection,
+    ) -> impl std::future::Future<Output = Result<AgentThread, String>> + use<> {
         let service = self.service.clone();
+        let task = self.runtime.spawn(async move {
+            service
+                .set_thread_selection(&thread_id, selection)
+                .await
+                .map_err(|error| error.to_string())
+        });
+        async move { task.await.map_err(|error| error.to_string())? }
+    }
+
+    pub fn models(
+        &self,
+        service: Service,
+    ) -> impl std::future::Future<Output = Result<Vec<ModelChoice>, String>> + use<> {
+        let agent = self.service.clone();
         let task = self
             .runtime
-            .spawn(async move { service.model_label().await.ok() });
-        async move { task.await.ok().flatten().map(ToString::to_string) }
+            .spawn(async move { agent.models(service).await.map_err(|e| e.to_string()) });
+        async move { task.await.map_err(|e| e.to_string())? }
     }
 
     /// Start a turn. The stream is built here rather than inside the spawned
@@ -304,8 +323,9 @@ pub struct AgentChat {
     /// belongs to the composer, and passing it back through the entity would
     /// re-enter a borrow that is already live.
     pub(crate) composer: Composer,
-    /// What the composer's chip names, once settings have been read.
-    model: Option<SharedString>,
+    selection: Option<Selection>,
+    model_picker: model_picker::Picker,
+    selection_saving: bool,
     /// Whether the context gauge's card is showing. Held here rather than
     /// derived from a hover fade — see [`usage::gauge`].
     usage_open: bool,
@@ -383,7 +403,9 @@ impl AgentChat {
             spring_settled: None,
             distance: 0.0,
             composer: Composer::new(cx),
-            model: None,
+            selection: None,
+            model_picker: model_picker::Picker::default(),
+            selection_saving: false,
             usage_open: false,
             subagents: Vec::new(),
             read_only: false,
@@ -402,7 +424,6 @@ impl AgentChat {
         if let Some(scope) = scope {
             chat.load(scope, cx);
         }
-        chat.name_model(cx);
         chat
     }
 
@@ -452,13 +473,65 @@ impl AgentChat {
         }
     }
 
-    /// Read the model's name for the composer's chip.
-    fn name_model(&self, cx: &mut Context<Self>) {
-        let pending = self.agent.model_label();
+    fn toggle_model_picker(&mut self, cx: &mut Context<Self>) {
+        if self.is_streaming() || self.selection_saving {
+            return;
+        }
+        self.model_picker.open = !self.model_picker.open;
+        if self.model_picker.open {
+            if let Some(selection) = &self.selection {
+                self.browse_models(selection.service, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn browse_models(&mut self, service: Service, cx: &mut Context<Self>) {
+        self.model_picker.service = service;
+        if matches!(self.model_picker.catalogs.get(&service), Some(Ok(_)))
+            || !self.model_picker.loading.insert(service)
+        {
+            cx.notify();
+            return;
+        }
+        self.model_picker.catalogs.remove(&service);
+        let pending = self.agent.models(service);
+        cx.notify();
         cx.spawn(async move |this, cx| {
-            let label = pending.await;
+            let result = pending.await;
             this.update(cx, |this, cx| {
-                this.model = label.map(SharedString::from);
+                this.model_picker.loading.remove(&service);
+                this.model_picker.catalogs.insert(service, result);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn select_model(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        self.model_picker.open = false;
+        if self.is_streaming() || self.selection_saving {
+            return;
+        }
+        let Some(thread) = self.thread().map(str::to_owned) else {
+            return;
+        };
+        self.selection_saving = true;
+        let read = self.reads;
+        let pending = self.agent.set_selection(thread, selection);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if this.reads != read {
+                    return;
+                }
+                this.selection_saving = false;
+                match result {
+                    Ok(thread) => this.selection = Selection::from_thread(&thread).ok(),
+                    Err(error) => this.error = Some(error),
+                }
                 cx.notify();
             })
             .ok();
@@ -487,6 +560,9 @@ impl AgentChat {
     fn begin_read(&mut self, cx: &mut Context<Self>) -> u64 {
         self.reads += 1;
         self.conversation = Conversation::Loading(self.reads);
+        self.selection = None;
+        self.model_picker.open = false;
+        self.selection_saving = false;
         self.error = None;
         self.seat(Transcript::default(), cx);
         self.reads
@@ -729,8 +805,12 @@ impl AgentChat {
         match detail {
             Ok(detail) => match Transcript::from_rows(&detail.messages) {
                 Ok(transcript) => {
+                    self.selection = Selection::from_thread(&detail.thread).ok();
                     self.conversation = Conversation::Open(detail.thread.id);
                     self.seat(transcript, cx);
+                    if let Some(selection) = &self.selection {
+                        self.browse_models(selection.service, cx);
+                    }
                 }
                 Err(error) => self.error = Some(error),
             },
@@ -853,6 +933,10 @@ impl AgentChat {
     /// keeps its durability invariant anyway. Queueing here would be a second
     /// place that decides when a prompt takes effect.
     pub fn send(&mut self, cx: &mut Context<Self>) {
+        if self.selection_saving {
+            return;
+        }
+        self.model_picker.open = false;
         let prompt = self.composer.prompt(cx);
         if prompt.is_empty() {
             return;
@@ -1054,7 +1138,13 @@ impl AgentChat {
         // Read out before the composer takes `&mut self.composer` below —
         // the plate is painted in one expression, and a live `&self` inside it
         // would collide with that borrow.
-        let model = self.model.clone();
+        let picker = self.selection.as_ref().map(|selection| {
+            self.model_picker.render(
+                selection,
+                self.is_streaming() || self.selection_saving,
+                &cx.entity(),
+            )
+        });
         let error = self.error.clone();
         let this = cx.entity();
         // Asked with a clock: a fade that finished while its block was off
@@ -1214,7 +1304,7 @@ impl AgentChat {
                                     &mut self.composer,
                                     &this,
                                     streaming,
-                                    model.as_deref(),
+                                    picker,
                                     &theme,
                                     window,
                                     cx,
