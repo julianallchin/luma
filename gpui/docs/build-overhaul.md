@@ -22,7 +22,7 @@ vendored gpui tree and the rest of the dependency graph. Symbol names survive
 it just loses line numbers.
 
 Why it is worth doing: the two target trees are 564 GB together (382 GB for
-`gpui`, 182 GB for `src-tauri`) on a volume with 87 GB free, and `sys` time is
+`gpui`, 182 GB for `backend`) on a volume with 87 GB free, and `sys` time is
 5x `user` on every measured invocation. The tree is the bottleneck, and full
 DWARF on every dependency is what makes it that size.
 
@@ -139,7 +139,7 @@ handing `Library` its paths explicitly is the finish line.
 ### What was planned
 
 48 files in `crates/agent/tests/`, 111 `#[test]` functions, one binary each.
-Each binary links `luma-app` + `luma` (all of src-tauri, via dev-dependencies)
+Each binary links `luma-app` + `luma` (all of backend, via dev-dependencies)
 + vendored gpui, and weighs ~120 MB.
 
 ### The prerequisites are bug fixes

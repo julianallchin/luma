@@ -23,10 +23,10 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::IconName;
 use luma_lib::models::venues::Venue;
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
+use luma_ui::icons::IconName;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};

@@ -1,4 +1,4 @@
-[submodule "src-tauri/python/consonance-ACE"]
-	path = src-tauri/python/consonance-ACE
+[submodule "backend/python/consonance-ACE"]
+	path = backend/python/consonance-ACE
 	url = git@github.com:andreamust/consonance-ACE.git
 

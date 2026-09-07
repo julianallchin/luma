@@ -2,7 +2,7 @@
 
 **Status:** design, phase 1 (report). No code has been written against this yet.
 
-Today Luma writes **zero** `cache_control` breakpoints. `grep -rn 'cache_control' src-tauri/src src gpui/crates` returns nothing. Every turn re-reads the whole conversation at full input price on Anthropic and the Vercel gateway. The *reading* half is already built — `Usage` carries `cache_read_input_tokens` / `cache_creation_input_tokens` and the usage card renders both — so the instrument that proves a fix works is in place before the fix is.
+Today Luma writes **zero** `cache_control` breakpoints. `grep -rn 'cache_control' backend/src src gpui/crates` returns nothing. Every turn re-reads the whole conversation at full input price on Anthropic and the Vercel gateway. The *reading* half is already built — `Usage` carries `cache_read_input_tokens` / `cache_creation_input_tokens` and the usage card renders both — so the instrument that proves a fix works is in place before the fix is.
 
 The good news from the audit: our prefix is already byte-stable. Nothing dynamic sits in the system prompt or the tool definitions. This is a "place three markers" job, not a "restructure the prompt" job.
 
@@ -110,7 +110,7 @@ This is Pi's answer to the fact that its markers can leave a rewound turn's pref
 
 ## 2. Audit: our request assembly
 
-There is exactly **one** production site that builds a `ModelRequest`: `src-tauri/src/agent/turn.rs:165-172`.
+There is exactly **one** production site that builds a `ModelRequest`: `backend/src/agent/turn.rs:165-172`.
 
 ```rust
 let request = ModelRequest {
@@ -127,10 +127,10 @@ Every field, traced:
 
 | Prefix element | Source | Byte-stable across turns? | Across app restarts? | Notes |
 |---|---|---|---|---|
-| `system` | `AgentKind::system_prompt()` — `src-tauri/src/agent/mod.rs:90-95`, `include_str!("prompts/track.md")` / `graph.md` | **Yes** | **Yes** (compiled into the binary) | No format string, no interpolation, no date, no venue name, no cwd. This is the single biggest thing we got right by accident. |
+| `system` | `AgentKind::system_prompt()` — `backend/src/agent/mod.rs:90-95`, `include_str!("prompts/track.md")` / `graph.md` | **Yes** | **Yes** (compiled into the binary) | No format string, no interpolation, no date, no venue name, no cwd. This is the single biggest thing we got right by accident. |
 | `tools[].name` | `PythonTool::name()` — `tools/python.rs:54-56`, `&'static str` | Yes | Yes | |
 | `tools[].description` | `PYTHON_TOOL_DESCRIPTION` — `tools/python.rs:29`, `include_str!("../prompts/python-tool.md")` | **Yes** | **Yes** | The doc comment at `tools/python.rs:23-25` already states the invariant: *"The description is a cached prompt prefix: it must stay byte-stable for a thread's lifetime, so it lives in a file rather than in a format string."* It contains **no catalog** — `luma.catalog()` is named as a callable, not inlined. |
-| `tools[].schema` | `schemars::schema_for!(PythonArgs)` — `tools/python.rs:62-66` | Yes | Yes | `serde_json` is built **without** `preserve_order` (`src-tauri/Cargo.toml:67` is a bare `serde_json = "1"`, and `preserve_order` appears nowhere in `Cargo.lock`), so every `Map` is a `BTreeMap` and serializes in sorted key order. Deterministic. |
+| `tools[].schema` | `schemars::schema_for!(PythonArgs)` — `tools/python.rs:62-66` | Yes | Yes | `serde_json` is built **without** `preserve_order` (`backend/Cargo.toml:67` is a bare `serde_json = "1"`, and `preserve_order` appears nowhere in `Cargo.lock`), so every `Map` is a `BTreeMap` and serializes in sorted key order. Deterministic. |
 | tool **order** | `ToolRegistry.tools: Vec` — `tools/mod.rs:88-90`, built by `tools::registry(kind)` at `tools/mod.rs:129-137` | Yes | Yes | Currently one tool, so order is trivially stable. The doc comment at `tools/mod.rs:85-86` already flags ordering as a caching correctness concern. |
 | `messages` | `transcript::to_model_messages` — `transcript.rs:620-637` | **Yes, append-only** | **Yes** | Pure function of the persisted rows. A reloaded thread reproduces the same bytes: `Transcript::from_rows` → same parts → same blocks. |
 | `messages` tool results | `transcript::tool_result` — `transcript.rs:683-702` → `PythonTool::stored_output` → `model_output` (`tools/python.rs:177-237`) | **Yes** | **Yes** | `clamp_for_model` and the figure budget (`MAX_MODEL_FIGURE_BYTES`) are deterministic functions of the *stored* value, not of wall time or of live kernel state. This is the property that makes reload-after-restart cache-safe. |
@@ -264,7 +264,7 @@ Do **not** emit `cache_control` for these models. It is at best ignored, at wors
 
 ### MCP-driven turns are unaffected
 
-`src-tauri/src/bin/luma-mcp.rs` exposes the kernel to an out-of-process coding agent. There is no in-app loop there — Luma never assembles a `ModelRequest`, so there is nothing to cache and nothing to break. The one shared surface is `PYTHON_TOOL_DESCRIPTION` (`tools/python.rs:29`), which is `pub` precisely so both hosts hand the model the same text. Keeping it a `const &'static str` from a file is the caching invariant *and* the single-source-of-truth invariant; they point the same way.
+`backend/src/bin/luma-mcp.rs` exposes the kernel to an out-of-process coding agent. There is no in-app loop there — Luma never assembles a `ModelRequest`, so there is nothing to cache and nothing to break. The one shared surface is `PYTHON_TOOL_DESCRIPTION` (`tools/python.rs:29`), which is `pub` precisely so both hosts hand the model the same text. Keeping it a `const &'static str` from a file is the caching invariant *and* the single-source-of-truth invariant; they point the same way.
 
 Subagents likewise: there is no subagent turn loop in the Rust agent yet (`TurnEvent::Subagent` at `agent/mod.rs:484` is live UI state only). When one lands, the rule from §1 applies — a fork must reuse the parent's `system`, `tools`, and `model` **verbatim** and append only at the tail, or it misses the parent's cache entirely.
 

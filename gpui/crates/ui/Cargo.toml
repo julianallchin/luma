@@ -7,8 +7,9 @@ publish = false
 [dependencies]
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+gpui-component-assets = { workspace = true }
 unicode-segmentation = "1"
-luma-patterns = { path = "../../../src-tauri/crates/patterns" }
+luma-patterns = { path = "../../../backend/crates/patterns" }
 
 [features]
 # Publishes the automation node tree (`luma_ui::node`) that `gpui-agent` reads.

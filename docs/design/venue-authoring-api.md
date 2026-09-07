@@ -176,10 +176,10 @@ Suggested seams (implementer may refine, not thin out):
   vector→socket resolution and chain compilation belong (compile a chain op to
   the existing attach/extend/params graph edits; the graph schema does not
   change).
-- `src-tauri/src/agent_execution/venue_host.rs` — new host verbs
+- `backend/src/agent_execution/venue_host.rs` — new host verbs
   (`venue.chain`, `venue.query`, `venue.extent`, `venue.draft.*`,
   `venue.stamp`), same request/response style as the existing ones.
-- `src-tauri/python/luma_exec/venue.py` — cursor class, `draft`, `toward`,
+- `backend/python/luma_exec/venue.py` — cursor class, `draft`, `toward`,
   reworked docstrings; the binding header gains the frame-contract lines.
 
 ## Out of scope

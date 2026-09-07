@@ -7,7 +7,7 @@ Luma uses the QLC+ community fixture library, which provides thousands of fixtur
 
 ## QLC+ Format
 
-File: `src-tauri/src/fixtures/parser.rs`
+File: `backend/src/fixtures/parser.rs`
 
 Fixture definitions are stored as `.qxf` XML files in the `resources/fixtures/` directory, organized by manufacturer subdirectories.
 
@@ -41,7 +41,7 @@ The parser identifies channel types through a combination of the channel's `Grou
 
 ## Head Layout Computation
 
-File: `src-tauri/src/fixtures/layout.rs`
+File: `backend/src/fixtures/layout.rs`
 
 For multi-head fixtures (LED bars, pixel strips), the layout system computes 3D positions for each head:
 
@@ -51,7 +51,7 @@ For multi-head fixtures (LED bars, pixel strips), the layout system computes 3D 
 4. If fewer heads than grid cells and they divide evenly, assume grouped layout (e.g., 12 cells / 4 heads = 3 cells per head, positioned at group center)
 5. Head positions are returned in millimeters
 
-The selection system (`src-tauri/src/node_graph/nodes/selection.rs`) converts head positions to meters and applies the fixture's 3D rotation (Euler angles: X roll, Y pitch, Z yaw) to produce global coordinates.
+The selection system (`backend/src/node_graph/nodes/selection.rs`) converts head positions to meters and applies the fixture's 3D rotation (Euler angles: X roll, Y pitch, Z yaw) to produce global coordinates.
 
 ### Example: 4-Head LED Bar
 
@@ -64,7 +64,7 @@ A fixture with physical dimensions 1000mm x 100mm and a layout grid of 12 x 1:
 
 ## Fixture Library Organization
 
-The fixture library path is resolved at startup from the Tauri resource directory (`resources/fixtures/2511260420`). The directory structure follows the QLC+ convention:
+The fixture library path is resolved at startup from the source tree or the host resource directory (`resources/fixtures/2511260420`). The directory structure follows the QLC+ convention:
 
 ```
 resources/fixtures/2511260420/

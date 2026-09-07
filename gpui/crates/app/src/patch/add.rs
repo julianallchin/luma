@@ -440,7 +440,10 @@ fn header(
                             this.add_fixtures_back(cx);
                         });
                     })
-                    .child("←")
+                    .child(
+                        gpui_component::Icon::new(luma_ui::icons::IconName::ArrowLeft)
+                            .size(px(12.)),
+                    )
                     .agent_node(Role::Button, "Back"),
             )
         })

@@ -5,17 +5,16 @@ edition = "2021"
 publish = false
 
 [dependencies]
-luma-patterns = { path = "../../../src-tauri/crates/patterns" }
+luma-patterns = { path = "../../../backend/crates/patterns" }
 luma-ui = { workspace = true }
 luma-chat = { path = "../chat" }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true }
-gpui-component-assets = { workspace = true }
 
 # The Luma core, consumed strictly through `luma_lib::dispatch`. Nothing in
 # this crate may reach past that seam into a service or a query.
-luma_lib = { package = "luma", path = "../../../src-tauri" }
+luma_lib = { package = "luma", path = "../../../backend" }
 
 # The 3D viewport. `luma-render` owns the device and the passes and knows
 # nothing of Luma's models or of gpui; `visualizer.rs` is the only place the

@@ -65,7 +65,7 @@ on the pattern id alone. §6 changes this.
 **Seam coverage.** `Library` has `node_types`, `pattern_graph`,
 `save_pattern_graph` (`library.rs:1206`, `:1219`, `:1236`). It does **not** have
 `run_graph`. The dispatch command exists
-(`src-tauri/src/dispatch/mod.rs:204` → `handlers/node_graph.rs:39`) and returns
+(`backend/src/dispatch/mod.rs:204` → `handlers/node_graph.rs:39`) and returns
 `RunResult { views, mel_specs, color_views, universe_state }`, so this is a
 missing facade method, not a missing command.
 

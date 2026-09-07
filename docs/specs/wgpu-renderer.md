@@ -12,7 +12,7 @@ Status: design. Nothing here is implemented.
 
 Read this section before arguing with any decision below.
 
-**The eval engine is already the right shape.** `src-tauri/src/eval/scene.rs`:
+**The eval engine is already the right shape.** `backend/src/eval/scene.rs`:
 
 ```rust
 pub struct Scene { pub annotations: Vec<CompiledAnnotation> }  // z-ascending
@@ -40,7 +40,7 @@ There is **no beam angle, zoom, gobo, or focus** in the state, and the frozen
 scene state and never will be — it is a property of the luminaire.
 
 **Rust has no graphics code at all.** No `wgpu`, `glam`, `nalgebra`, `gltf`, or `image`
-in any of the four `Cargo.toml`s. All 3D lives in TS. `src-tauri/src/fixtures/layout.rs`
+in any of the four `Cargo.toml`s. All 3D lives in TS. `backend/src/fixtures/layout.rs`
 is the only spatial Rust: `compute_head_offsets` and `head_world_position`, the latter
 documented as "the single source of truth for how a primitive maps to a 3D point" —
 and it reproduces three.js's `Rx(rot_x)·Ry(rot_z)·Rz(rot_y)` Euler composition with a
@@ -48,9 +48,9 @@ Y↔Z swap in and back out, because storage is Z-up and three.js is Y-up.
 
 **There is no video export.** The task brief describes a "render-target → ffmpeg pipe"
 path to unify with. It does not exist, in Rust or TS. ffmpeg is bundled
-(`src-tauri/src/ffmpeg_env.rs::ffmpeg_path()`) but every caller is audio-only decode
+(`backend/src/ffmpeg_env.rs::ffmpeg_path()`) but every caller is audio-only decode
 or transcode. The nearest precedent for "dense time grid → pixel buffer" is
-`src-tauri/src/annotation_preview.rs`, which steps an explicit time grid and emits raw
+`backend/src/annotation_preview.rs`, which steps an explicit time grid and emits raw
 RGBA. Export is greenfield, which is good news: there is no legacy path to unify with,
 only a shape to match.
 
@@ -91,7 +91,7 @@ are the kind CLAUDE.md says to flag rather than extend):
 
 ## 1. Crate layout
 
-Four new workspace crates under `src-tauri/crates/`. The dependency edges are a
+Four new workspace crates under `backend/crates/`. The dependency edges are a
 strict DAG and each edge is load-bearing: the split exists so the math and the editor
 logic are testable with no GPU and no window.
 
@@ -337,10 +337,10 @@ phase, and normalise pixel-bar intensity by `sqrt(headCount)`.
 The brief says the renderer consumes fixture states and never computes them. That is
 right about *state* and wrong about *geometry*: none of the above is scene state, it
 is luminaire physics, and it belongs next to `head_world_position` in
-`src-tauri/src/fixtures/layout.rs`, which is already declared the single source of
+`backend/src/fixtures/layout.rs`, which is already declared the single source of
 truth for primitive→3D-point mapping. Split it:
 
-**Moves into `luma` (`src-tauri/src/fixtures/`), beside `head_world_position`:**
+**Moves into `luma` (`backend/src/fixtures/`), beside `head_world_position`:**
 
 ```rust
 pub struct Luminaire { pub field_angle_deg: f32, pub lumens: f32 }
@@ -713,7 +713,7 @@ three stateful things in the renderer are the temporal haze accumulator, the
   it is a quality/time dial with no other consequence.
 
 Frames pipe as raw `rgba` to the already-bundled ffmpeg via
-`src-tauri/src/ffmpeg_env.rs::ffmpeg_path()`:
+`backend/src/ffmpeg_env.rs::ffmpeg_path()`:
 `ffmpeg -f rawvideo -pix_fmt rgba -s WxH -r FPS -i - -c:v ... out.mp4`, plus the
 track audio as a second input. Reuse the existing stdin-pipe pattern from
 `src/sync/files.rs`.
@@ -785,7 +785,7 @@ on a 3° beam-axis error that does. Use all three, per scene, with per-scene thr
    grain, keeps structure. Threshold ≥ 0.98 for haze scenes, ≥ 0.995 for scene 7.
 2. **Colour.** Oklab ΔE on 16×16 block means. Catches tonemap and attenuation drift,
    which is the failure mode most likely to be systematic and least likely to be
-   visible in SSIM. `src-tauri/src/node_graph/oklab.rs` already exists — use it.
+   visible in SSIM. `backend/src/node_graph/oklab.rs` already exists — use it.
    Threshold: mean ΔE ≤ 0.01, p99 ≤ 0.03.
 3. **Analytic probes**, per scene, asserted numerically:
    - beam centroid direction and 50%-intensity half-angle, from a threshold+moment fit

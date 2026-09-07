@@ -191,7 +191,7 @@ from.
 ## 2. Runtime design (`luma_lib::agent`)
 
 ```
-src-tauri/src/agent/
+backend/src/agent/
   mod.rs          AgentService, TurnStream, the turn protocol
   transcript.rs   AgentChatPart, the fold, the durable-JSON contract
   model/
@@ -327,7 +327,7 @@ pub enum AgentChatPart {
 `data-pi-message` keeps its wire name even though Pi is gone: renaming a
 discriminant in a durable column to match an implementation detail is how you
 get a migration for nothing. (The field's *doc comment* at
-`src-tauri/src/models/agent_threads.rs:38` still claims these are "the AI SDK
+`backend/src/models/agent_threads.rs:38` still claims these are "the AI SDK
 `UIMessage.parts` array verbatim" — stale twice over. Fix it while here.)
 
 **One fold.** `transcript::apply(&mut Transcript, &TurnEvent)` is the single
@@ -741,7 +741,7 @@ Flagged per `CLAUDE.md`; each is fixed by a row above, not deferred.
 - `shared/lib/agent/openrouter.ts` and `ask-venue-tool.ts` importing *upward*
   from `shared/` into `features/track-editor/` for key + model config —
   inverted layering, deleted by the port.
-- `src-tauri/src/models/agent_threads.rs:38` documenting `parts` as "the AI
+- `backend/src/models/agent_threads.rs:38` documenting `parts` as "the AI
   SDK `UIMessage.parts` array verbatim" — a stale contract comment on a
   durable schema, and stale twice (the SDK was replaced by Pi, and Pi by
   this) (R1).
@@ -755,7 +755,7 @@ Flagged per `CLAUDE.md`; each is fixed by a row above, not deferred.
 
 ## 8. Runtime as built (R1–R8, R11, R12-partial)
 
-The runtime half is implemented in `src-tauri/src/agent/**`. Where the code
+The runtime half is implemented in `backend/src/agent/**`. Where the code
 differs from §1–§4 above, the reason is recorded here; the sections above are
 otherwise unchanged and still the contract.
 

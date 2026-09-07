@@ -626,7 +626,7 @@ struct SessionWrite {
 
 impl Library {
     /// Open the library in the app's real config directory — the same
-    /// `$APPCONFIG` the Tauri app and the headless harness use, honouring the
+    /// platform config directory that backend tools use, honouring the
     /// `LUMA_CONFIG_DIR` / `LUMA_FIXTURES_ROOT` overrides so a disposable
     /// fixture directory can be pointed at without touching the real one.
     ///
@@ -635,6 +635,15 @@ impl Library {
     /// If the config directory cannot be located or either database fails to
     /// open or migrate.
     pub fn open() -> Result<Self, String> {
+        Self::open_host(false)
+    }
+
+    /// Open the native desktop library with physical output and Python setup.
+    pub fn open_desktop() -> Result<Self, String> {
+        Self::open_host(true)
+    }
+
+    fn open_host(desktop: bool) -> Result<Self, String> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -710,15 +719,20 @@ impl Library {
                 }
             };
             // This host runs the agent, and the agent's only tool is Python —
-            // so it resolves the same managed environment the Tauri app
-            // created, through the one resolver every non-Tauri host shares.
+            // so it resolves the managed environment through the same
+            // path-based resolver as backend tools.
             // Resolution is lazy: a machine with no venv yet still opens.
             let workspaces = Arc::new(headless_env::workspace_service(
                 &storage,
                 headless_env::cache_dir()?,
             ));
             let services = AppServices::headless(db, state_db, storage, fixtures_root, workspaces)
-                .with_events(events);
+                .with_events(events.clone());
+            let services = if desktop {
+                services.with_artnet().await?
+            } else {
+                services
+            };
             #[cfg(feature = "agent")]
             let services = services.with_track_sources(import_sources);
             // The audio host keeps its own copy of the settings it reads, and
@@ -749,10 +763,39 @@ impl Library {
 
         let services = services.into_shared();
         // The loop that keeps the library current after the sync that opened
-        // it: the same one the Tauri app runs, on this library's reactor, for
+        // it, on this library's reactor, for
         // as long as the library lives. It handles its own sign-in state —
         // a 401 backs it off, and the next sign-in's push wakes it.
+        if desktop {
+            let ready = luma_lib::python_env::setup_python_env_background(
+                headless_env::cache_dir()?,
+                std::env::var_os("LUMA_RESOURCE_DIR").map(std::path::PathBuf::from),
+                events.clone(),
+            );
+            let analysis_services = services.clone();
+            runtime.spawn(async move {
+                match ready.await {
+                    Ok(Ok(())) => {
+                        if let Err(error) = analysis_services.reconcile_analysis().await {
+                            eprintln!("startup analysis reconciliation failed: {error}");
+                        }
+                    }
+                    Ok(Err(error)) => eprintln!("Python environment is unavailable: {error}"),
+                    Err(error) => {
+                        eprintln!("Python setup ended before reporting readiness: {error}")
+                    }
+                }
+            });
+        }
         let (sync_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        if desktop {
+            let output_services = services.clone();
+            let output_shutdown = shutdown_rx.clone();
+            runtime.spawn(async move {
+                output_services.run_artnet(output_shutdown).await;
+            });
+        }
+
         if cloud {
             runtime.spawn(services.sync_loop(shutdown_rx));
         }
@@ -2158,7 +2201,7 @@ impl Library {
     /// The transport, `after` a wait.
     ///
     /// The desktop app learns the playhead from a `host-audio://state` event
-    /// that a Tauri broadcaster emits; nothing emits it here, so this host
+    /// used by native playback; this host
     /// polls instead — and the pacing belongs on the Tokio runtime because
     /// that is the one this process has real timers on. GPUI's own timers are
     /// driven by a test clock under the harness, so a poll paced there would
@@ -2398,7 +2441,7 @@ impl Library {
     // answer.
     //
     // Thin on purpose. Each is one dispatch command with the argument names
-    // `src-tauri/src/dispatch/mod.rs` declares, and every mutating one hands
+    // `backend/src/dispatch/mod.rs` declares, and every mutating one hands
     // back the whole solved venue inside its `PlacementReport`: a graph edit
     // moves everything bolted to what it touched, so a caller that re-fetched
     // would be asking for a second solve of a graph it was just given.
@@ -3182,7 +3225,7 @@ impl Rig {
     }
 }
 
-/// The app config directory: `$APPCONFIG` as the Tauri app resolves it, with
+/// The app config directory: the stable platform location, with
 /// the same escape hatch the headless harness has.
 fn config_dir() -> Result<StorageRoot, String> {
     match luma_ui::runtime::Runtime::with(|runtime| runtime.config_dir.clone()) {

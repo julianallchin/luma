@@ -808,7 +808,7 @@ impl Luma {
             let scene = scene.borrow();
             match scene.hit(cursor, view.zoom) {
                 // Phase 1 of the design doc: a port press names its node. The
-                // wire drag starts here in phase 2.
+                // the graph currently selects the card behind a port.
                 Hit::Port { card, .. } => {
                     editor.selected = vec![scene.cards[card].node_id.clone()];
                 }
@@ -857,9 +857,9 @@ impl Luma {
                         initial,
                     });
                 }
-                // A wire is not draggable until phase 2, so a press on one is
+                // A wire is not draggable, so a press on one is
                 // a press on the ground under it.
-                Hit::Wire { .. } | Hit::Empty => {
+                Hit::Wire | Hit::Empty => {
                     if shift {
                         editor.gesture = Some(Gesture::Marquee {
                             from: cursor,
@@ -1409,23 +1409,18 @@ impl Card {
         // `paint_body` draws them.
         let slab_left = CARD_BORDER + PAD_H;
         let slab_width = self.width - (CARD_BORDER + PAD_H) * 2.;
-        let widget = |index: usize,
-                      slot_y: f32,
-                      width: f32,
-                      height: f32,
-                      kind: WidgetKind,
-                      id: &SharedString| Region {
-            origin: point(slab_left, self.body_top + slot_y),
-            size: size(width, height),
-            kind: RegionKind::Widget { param: index, kind },
-            label: format!("{} param {id}", self.node_id).into(),
-        };
+        let widget =
+            |slot_y: f32, width: f32, height: f32, kind: WidgetKind, id: &SharedString| Region {
+                origin: point(slab_left, self.body_top + slot_y),
+                size: size(width, height),
+                kind: RegionKind::Widget { kind },
+                label: format!("{} param {id}", self.node_id).into(),
+            };
         match &self.body {
             Body::Params(params) => {
-                for (index, param) in params.iter().enumerate() {
+                for param in params {
                     regions.push(match &param.control {
                         Control::Field(_) => widget(
-                            index,
                             param.slot_y,
                             slab_width,
                             FIELD_HEIGHT,
@@ -1433,7 +1428,6 @@ impl Card {
                             &param.id,
                         ),
                         Control::Select { width, .. } => widget(
-                            index,
                             param.slot_y,
                             *width,
                             SELECT_HEIGHT,
@@ -1444,9 +1438,8 @@ impl Card {
                 }
             }
             Body::Falloff { rows, .. } => {
-                for (index, row) in rows.iter().enumerate() {
+                for row in rows {
                     regions.push(widget(
-                        index,
                         row.slot_y,
                         slab_width,
                         SLIDER_HEIGHT,
@@ -1492,12 +1485,12 @@ impl Region {
 
 enum RegionKind {
     Port { port: usize, output: bool },
-    Widget { param: usize, kind: WidgetKind },
+    Widget { kind: WidgetKind },
     Header,
 }
 
 /// What kind of control a widget slot is a picture of — which decides both
-/// the harness role it registers under and, in phase 3, which tier edits it.
+/// the harness role it registers under.
 #[derive(Clone, Copy)]
 enum WidgetKind {
     Field,
@@ -1510,17 +1503,11 @@ enum WidgetKind {
 enum Hit {
     Port {
         card: usize,
-        #[allow(dead_code)] // the wire drag (phase 2) starts from these two
         port: usize,
-        #[allow(dead_code)]
         output: bool,
     },
     Widget {
         card: usize,
-        #[allow(dead_code)] // param editing (phase 3) routes on these two
-        param: usize,
-        #[allow(dead_code)]
-        kind: WidgetKind,
     },
     Header {
         card: usize,
@@ -1528,10 +1515,7 @@ enum Hit {
     Body {
         card: usize,
     },
-    Wire {
-        #[allow(dead_code)] // disconnect (phase 2) names the edge with this
-        link: usize,
-    },
+    Wire,
     Empty,
 }
 
@@ -1884,18 +1868,14 @@ impl Scene {
                         port,
                         output,
                     },
-                    RegionKind::Widget { param, kind } => Hit::Widget {
-                        card: index,
-                        param,
-                        kind,
-                    },
+                    RegionKind::Widget { .. } => Hit::Widget { card: index },
                     RegionKind::Header => Hit::Header { card: index },
                 };
             }
             return Hit::Body { card: index };
         }
         let slack = WIRE_GRAB / zoom;
-        for (index, link) in self.links.iter().enumerate() {
+        for link in &self.links {
             let (from, to) = self.ends(link);
             // The same four corner points `paint_wire` strokes through; the
             // fillets round the corners by less than the slack, so the
@@ -1910,7 +1890,7 @@ impl Scene {
                 .windows(2)
                 .any(|pair| segment_distance(at, pair[0], pair[1]) <= slack)
             {
-                return Hit::Wire { link: index };
+                return Hit::Wire;
             }
         }
         Hit::Empty

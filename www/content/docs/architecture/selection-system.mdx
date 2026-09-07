@@ -7,7 +7,7 @@ The selection system translates abstract fixture queries into concrete fixture l
 
 ## Selection Expression Parser
 
-File: `src-tauri/src/services/groups.rs`
+File: `backend/src/services/groups.rs`
 
 Selection expressions support boolean algebra over **fixture group names**. Each token in the expression is matched against the snake_case names of groups in the current venue. A fixture matches a token if it belongs to a group with that name.
 
@@ -39,7 +39,7 @@ Fixture selection is not a node in the pattern graph. Instead, every pattern has
 
 ## Spatial Attributes
 
-The `get_attribute` node (in `src-tauri/src/node_graph/nodes/selection.rs`) extracts per-fixture scalar values from a Selection and outputs them as a Signal with `N = fixture count`, `T = 1`, `C = 1`.
+The `get_attribute` node (in `backend/src/node_graph/nodes/selection.rs`) extracts per-fixture scalar values from a Selection and outputs them as a Signal with `N = fixture count`, `T = 1`, `C = 1`.
 
 | Attribute | Description |
 |-----------|-------------|
@@ -71,7 +71,7 @@ Degenerate rigs: a selection with no horizontal spread (a single vertical stack)
 
 Both are computed over the current **selection**, like every other spatial attribute -- two different selections in the same venue can therefore have different `u` axes. A venue-wide basis with per-group overrides is future work.
 
-Implementation: `rig_uv` in `src-tauri/src/eval/ops/spatial.rs`.
+Implementation: `rig_uv` in `backend/src/eval/ops/spatial.rs`.
 
 ### `rel_major_span` vs `rel_major_count`
 
@@ -79,7 +79,7 @@ The "span" variant picks the axis with the largest physical extent (useful for l
 
 ## Circle Fitting Algorithm
 
-File: `src-tauri/src/node_graph/circle_fit.rs`
+File: `backend/src/node_graph/circle_fit.rs`
 
 For detecting circular fixture arrangements in arbitrary 3D space (used by `angular_position` and `angular_index` attributes):
 

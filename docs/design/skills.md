@@ -73,11 +73,11 @@ it lives* and *who can reach it*.
 
 ### 2.2 The Rust loop
 
-`src-tauri/src/agent/` has no notion of skills at all (`grep -rni skill
+`backend/src/agent/` has no notion of skills at all (`grep -rni skill
 --include='*.rs'` → zero hits), and `tools::registry` returns exactly one tool:
 
 ```rust
-// src-tauri/src/agent/tools/mod.rs:129-140
+// backend/src/agent/tools/mod.rs:129-140
 pub fn registry(kind: super::AgentKind) -> ToolRegistry {
     match kind {
         AgentKind::TrackCopilot | AgentKind::PatternGraph => {
@@ -88,7 +88,7 @@ pub fn registry(kind: super::AgentKind) -> ToolRegistry {
 ```
 
 Yet its system prompt tells the model to use a tool that does not exist —
-`src-tauri/src/agent/prompts/track.md:25`:
+`backend/src/agent/prompts/track.md:25`:
 
 > Then read the skill(s) that fit — the `skill` tool carries genre technique,
 > craft, and analysis playbooks.
@@ -98,7 +98,7 @@ given. Whatever else this design settles, that line and that registry must agree
 
 ### 2.3 The prompt duplication under it
 
-`src-tauri/src/agent/prompts/track.md` and
+`backend/src/agent/prompts/track.md` and
 `src/features/track-editor/agent/build-context.ts` are the **same prose, twice** —
 byte-identical from "## One working surface" through the end of "## Voice", with
 the TS copy adding only a `## Current track` header block and template
@@ -112,11 +112,11 @@ fixing it is right there — `python-tool.md` is read by *both* sides from one f
 // src/shared/lib/agent/python-tool.ts:9-11
 // The one copy of the tool description, shared with the Rust agent loop,
 // which reads the same file through `include_str!`.
-import DESCRIPTION from "../../../../src-tauri/src/agent/prompts/python-tool.md?raw";
+import DESCRIPTION from "../../../../backend/src/agent/prompts/python-tool.md?raw";
 ```
 
 ```rust
-// src-tauri/src/agent/tools/python.rs:24-29
+// backend/src/agent/tools/python.rs:24-29
 /// Public because it is the contract for *any* host that exposes this kernel —
 /// `luma-mcp` hands the same text to an out-of-process coding agent, and a
 /// second wording would be a second tool.
@@ -128,8 +128,8 @@ would be a second tool*. Skills are the same class of artifact.
 
 ### 2.4 The MCP surface
 
-`src-tauri/src/bin/luma-mcp.rs` exposes four tools — `open`, `python`, `reset`,
-`cancel` — over the hand-rolled `src-tauri/crates/mcp-stdio` crate (207 lines, one
+`backend/src/bin/luma-mcp.rs` exposes four tools — `open`, `python`, `reset`,
+`cancel` — over the hand-rolled `backend/crates/mcp-stdio` crate (207 lines, one
 dependency: `serde_json`). Its `initialize` declares `"capabilities": {"tools":{}}`
 and `route()` answers exactly `initialize` / `ping` / `tools/list` / `tools/call`;
 everything else is `-32601 unknown method`, pinned by a test that specifically
@@ -639,7 +639,7 @@ projection of that registry.
 resources/skills/<name>/SKILL.md          # + optional references/, scripts/, assets/
         │
         ▼
-src-tauri/src/agent/skills.rs             # Skill { name, description, body, path }
+backend/src/agent/skills.rs             # Skill { name, description, body, path }
    discover · validate · diagnostics       # the one registry
         │
         ├── agent/mod.rs      system_prompt() += <available_skills> listing   (Rust loop)
@@ -668,9 +668,9 @@ parsing (there is no YAML dep on that side today — see §8.3).
 ### 8.1 One on-disk skill source
 
 `resources/skills/<name>/SKILL.md`, sibling to `resources/fixtures/` and
-`resources/meshes/`, added to `tauri.conf.json` `resources` (`src-tauri/tauri.conf.json:54-61`).
+`resources/meshes/`, added to `tauri.conf.json` `resources` (`backend/tauri.conf.json:54-61`).
 
-Why `resources/` and not `src-tauri/src/agent/skills/`:
+Why `resources/` and not `backend/src/agent/skills/`:
 
 - fixtures already established that **bundled content authored as data** lives in
   the repo-root `resources/`, resolved through `app.path().resource_dir()` with
@@ -694,7 +694,7 @@ rejecting it. `disable-model-invocation` we *do* honour: it costs one filter in
 
 ### 8.2 One Rust registry
 
-`src-tauri/src/agent/skills.rs`:
+`backend/src/agent/skills.rs`:
 
 ```rust
 /// A lighting-craft playbook, discovered from disk at startup.
@@ -741,7 +741,7 @@ Loaded once at boot, held in `AppServices` next to the other bundled catalogs.
 
 ### 8.3 Frontmatter in Rust
 
-There is no YAML crate anywhere in `src-tauri/` today. Two options:
+There is no YAML crate anywhere in `backend/` today. Two options:
 
 - **`serde_yaml`-family dependency** — full YAML, matches Pi exactly, ~1 new crate
   tree.
@@ -860,7 +860,7 @@ Not this document's job to fix, but §8.4 forces the issue: `system_prompt()` ga
 a parameter and a suffix, and the TS copy in `build-context.ts` must gain the same
 suffix. Doing that twice, in two languages, on prose that is *already* byte-duplicated,
 is how smell #2 becomes permanent. **Fix it in the same pass:** `build-context.ts`
-imports `../../../../src-tauri/src/agent/prompts/track.md?raw` exactly as
+imports `../../../../backend/src/agent/prompts/track.md?raw` exactly as
 `python-tool.ts` imports `python-tool.md?raw`, and keeps only the `## Current track`
 interpolation. That is a ~60-line deletion and it removes an entire class of drift.
 
@@ -871,22 +871,22 @@ interpolation. That is a ~60-line deletion and it removes an entire class of dri
 | File | Action | Rough size |
 |---|---|---|
 | `resources/skills/<name>/SKILL.md` × 10 | **move** from `src/shared/lib/agent/skills/*/` unchanged (already spec-conformant) | 10 files, ~33 KB, no edits |
-| `src-tauri/tauri.conf.json` | add `"../resources/skills/**/*"` to `resources` | 1 line |
-| `src-tauri/src/agent/skills.rs` | **new** — `Skill`, `SkillRegistry`, `SkillDiagnostic`, discovery, validation, frontmatter, `listing()` | ~260 lines + ~120 test |
-| `src-tauri/src/agent/tools/skill.rs` | **new** — `SkillTool` (`Tool` impl, `<skill …>` envelope) | ~70 lines |
-| `src-tauri/src/agent/tools/mod.rs` | register `SkillTool` for `TrackCopilot` (before `PythonTool`? no — after, ordering is cache-keyed, pick once and freeze) | ~5 lines |
-| `src-tauri/src/agent/mod.rs` | `system_prompt(&SkillRegistry) -> String`; hold the registry | ~20 lines |
-| `src-tauri/src/agent/turn.rs:167` | pass the registry through | ~3 lines |
-| `src-tauri/src/commands/skills.rs` | **new** — `skills_listing()`, `list_skills()`, `get_skill(name)` | ~50 lines |
-| `src-tauri/src/dispatch.rs` + `lib.rs` | register the three commands | ~6 lines |
-| `src-tauri/crates/mcp-stdio/src/lib.rs` | `Surface { tools, prompts }`, `prompts/list`, `prompts/get`, `prompt()` builder, capability advertisement | ~70 lines + tests |
-| `src-tauri/src/bin/luma-mcp.rs` | `skill` tool + dispatch arm; listing appended to `open`; build the prompts array from the registry | ~60 lines |
+| `backend/tauri.conf.json` | add `"../resources/skills/**/*"` to `resources` | 1 line |
+| `backend/src/agent/skills.rs` | **new** — `Skill`, `SkillRegistry`, `SkillDiagnostic`, discovery, validation, frontmatter, `listing()` | ~260 lines + ~120 test |
+| `backend/src/agent/tools/skill.rs` | **new** — `SkillTool` (`Tool` impl, `<skill …>` envelope) | ~70 lines |
+| `backend/src/agent/tools/mod.rs` | register `SkillTool` for `TrackCopilot` (before `PythonTool`? no — after, ordering is cache-keyed, pick once and freeze) | ~5 lines |
+| `backend/src/agent/mod.rs` | `system_prompt(&SkillRegistry) -> String`; hold the registry | ~20 lines |
+| `backend/src/agent/turn.rs:167` | pass the registry through | ~3 lines |
+| `backend/src/commands/skills.rs` | **new** — `skills_listing()`, `list_skills()`, `get_skill(name)` | ~50 lines |
+| `backend/src/dispatch.rs` + `lib.rs` | register the three commands | ~6 lines |
+| `backend/crates/mcp-stdio/src/lib.rs` | `Surface { tools, prompts }`, `prompts/list`, `prompts/get`, `prompt()` builder, capability advertisement | ~70 lines + tests |
+| `backend/src/bin/luma-mcp.rs` | `skill` tool + dispatch arm; listing appended to `open`; build the prompts array from the registry | ~60 lines |
 | `gpui/crates/agent/src/mcp.rs` | pass an empty prompt set to `route` | ~2 lines |
 | `src/shared/lib/agent/skills/skill-loader.ts` | **rewrite** as a thin client of `get_skill` / `skills_listing`; keep `buildSkillTool`, drop `SkillLoader`/`normalize`/`fromRaw` | 130 → ~45 lines |
 | `src/shared/lib/agent/skills/bundled-skills.ts` | **delete** | −18 lines |
 | `src/shared/lib/agent/skills/skill-loader.test.ts` | **rewrite** — parse/validation cases move to Rust; keep the tool-shape cases against a stubbed invoke | 140 → ~60 lines |
 | `src/features/track-editor/agent/build-context.ts` | append the listing; **and** collapse the duplicated prose to `track.md?raw` (§8.6) | −60 lines |
-| `src-tauri/src/agent/prompts/track.md:25` | reword to match the new mechanism | 1 line |
+| `backend/src/agent/prompts/track.md:25` | reword to match the new mechanism | 1 line |
 | `scripts/headless/mcp_smoke.ts` | cover `skill` and `prompts/list` | ~20 lines |
 
 **Rough total: ~600 new/changed lines, ~220 deleted, 10 files moved.** The bulk is

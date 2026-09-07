@@ -53,12 +53,13 @@ use gpui::{
     div, list, prelude::*, px, AnyElement, Context, Entity, FocusHandle, ListAlignment, ListState,
     SharedString, Task, Window,
 };
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 use luma_lib::agent::{
     engine::catalog::{ModelChoice, Selection, Service},
     AgentService, ThreadScope, Transcript, TurnEvent, TurnOutcome, UserPrompt,
 };
 use luma_lib::models::agent_threads::{AgentThread, AgentThreadDetail};
+use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role as NodeRole};
 
 use crate::composer::Composer;
@@ -1449,7 +1450,7 @@ impl AgentChat {
                     .gap(px(theme::SPACE_XS))
                     .child(header_button(
                         "chat-history",
-                        IconName::Undo2,
+                        IconName::Undo,
                         "Chat history",
                         theme,
                         false,

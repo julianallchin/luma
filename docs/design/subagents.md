@@ -303,7 +303,7 @@ this shape.
 
 **There is no child `agent_threads` row and no `parent_thread_id`.**
 
-- `src-tauri/migrations/20260728000000_agent_threads.sql:25-35` — columns are
+- `backend/migrations/20260728000000_agent_threads.sql:25-35` — columns are
   `id, agent_kind, subject_kind, subject_id, venue_id, score_id, title,
   created_at, updated_at`.
 - Later ALTERs add only `owner_user_id`
@@ -542,7 +542,7 @@ The model sees the merge outcome appended to the child's text —
 `${childResult}\n\n<authored_merge status="${finalization.status}" revision_id="${finalization.revisionId}"/>`
 ```
 
-Rust side, `src-tauri/src/services/authored_documents/workspaces.rs:940-1078`:
+Rust side, `backend/src/services/authored_documents/workspaces.rs:940-1078`:
 `merge_workspace` locks the thread, verifies `head_revision_id ==
 expected_head_revision_id`, replays a prior outcome by operation id, refuses a
 dirty directory (`"workspace has uncommitted changes; commit it before merging"`,
@@ -620,7 +620,7 @@ row with `parent_thread_id` and `parent_call_id`; its messages are ordinary
    `project_authored_turn_invariant` records, still live today. Design 2 has no
    milestone rows: a child's assistant rows live in the child thread and the Rust
    loop already prepares exactly one authored turn per assistant row
-   (`src-tauri/src/agent/turn.rs:6-11, 311-330`), which is precisely the
+   (`backend/src/agent/turn.rs:6-11, 311-330`), which is precisely the
    discipline the trigger asks for. See §C.6 for the one thing this needs.
 2. **It removes a parser.** Design 1 needs `subagentStatesFromMessages`' walk,
    its recursion into grandchildren and its cycle guard
@@ -629,7 +629,7 @@ row with `parent_thread_id` and `parent_call_id`; its messages are ordinary
    here it is the same abstraction twice.
 3. **The dialog's read-only thread is free.** `Transcript` and
    `luma_lib::agent::apply` are the canonical reducer both hosts already use
-   (`src-tauri/src/agent/transcript.rs:509`), `open_thread` already exists
+   (`backend/src/agent/transcript.rs:509`), `open_thread` already exists
    (`gpui/crates/chat/src/lib.rs:107-120`), and `transcript::row` already renders
    a virtualized list. Design 1 forces a parallel renderer over snapshot JSON.
 4. **Row size.** Design 1 rewrites the parent's `parts_json` with the child's
@@ -647,7 +647,7 @@ stores.
 
 Mirror Pi's extension *shape* — one tool, registered in the same registry, with
 no host handle — not its subprocess mechanics. The Rust side is already built for
-this and says so: `src-tauri/src/agent/tools/mod.rs:1-7` opens with
+this and says so: `backend/src/agent/tools/mod.rs:1-7` opens with
 
 > "A tool is bound to a *context*, never to a host. That is what makes a
 > subagent's tool set identical to its parent's by construction rather than by
@@ -661,12 +661,12 @@ exists as "the one seam a subagent needs" (`agent/mod.rs:575-581`), `TurnEvent`
 already has a `Subagent { snapshot: Value }` variant documented as never
 persisted (`agent/mod.rs:494-497`), the reducer already drops it
 (`transcript.rs:592-594`), and `resolve_execution_id`
-(`src-tauri/src/services/agent_execution.rs:87-104`) already enforces the
+(`backend/src/services/agent_execution.rs:87-104`) already enforces the
 invariant **a child's Python execution id equals its authored workspace id**.
 Almost none of the plumbing is new; what is missing is the tool and the
 supervisor.
 
-Add `src-tauri/src/agent/tools/subagent.rs`, one tool, three arguments:
+Add `backend/src/agent/tools/subagent.rs`, one tool, three arguments:
 
 - `agent: String` — the named agent from the loader.
 - `task: String` — the delegated instruction.
@@ -737,7 +737,7 @@ side for free.
 ### C.6 The authored-state problem (the real work)
 
 `prepare_turn` resolves the document **from the thread's scope** and locks the
-live head — `src-tauri/src/services/authored_documents/turns.rs:26-33`:
+live head — `backend/src/services/authored_documents/turns.rs:26-33`:
 
 ```rust
 let (_thread, scope, _guard) = self.lock_active_thread(pool, principal, &input.thread_id).await?;
@@ -778,7 +778,7 @@ deadlocking on its own child.
 |---|---|---|---|
 | 1 | `parent_thread_id`, `parent_call_id`, `authored_workspace_id`, `started_at` on `agent_threads`; index on `parent_thread_id` | new migration | ~30 lines |
 | 2 | `workspace_id` on `authored_turn_preparations`; `prepare_turn`/`finalize_turn` branch on it | `services/authored_documents/turns.rs` | ~150 lines + migration |
-| 3 | Supervisor: allocate/fork workspace, post-order merge scheduler, finalize, discard | new `src-tauri/src/agent/subagent.rs` | ~450 lines — the bulk |
+| 3 | Supervisor: allocate/fork workspace, post-order merge scheduler, finalize, discard | new `backend/src/agent/subagent.rs` | ~450 lines — the bulk |
 | 4 | `subagent` tool (start), finish-call emission, depth-gated registry arm | `agent/tools/subagent.rs`, `tools/mod.rs:127` | ~180 lines |
 | 5 | Agent loader port (frontmatter + bundled agents), sharing the existing frontmatter parser | `agent/skills.rs` neighbours | ~120 lines — check `docs/design/skills.md:44`, the parser is already shared |
 | 6 | `SubagentSnapshot` type + emit `TurnEvent::Subagent` from the supervisor | `agent/mod.rs`, `models/` | ~80 lines |
@@ -796,7 +796,7 @@ Two places the build deviates from the plan above, both deliberate:
   the first row's output (§C.1 item 1).
 - **Depth is checked, not arranged.** Item 4 said "depth-gated registry arm".
   The landed check walks the child's own ancestry against `MAX_DEPTH`
-  (`src-tauri/src/agent/subagent.rs:42-46, 265, 411-434`), because
+  (`backend/src/agent/subagent.rs:42-46, 265, 411-434`), because
   `AgentService::with_tools` can hand any surface to any turn — a registry that
   omits the subagent tool is a convention, while the thread's parent chain is a
   fact.

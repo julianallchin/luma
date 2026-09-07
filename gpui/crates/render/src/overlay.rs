@@ -77,10 +77,6 @@ const REFUSED: u32 = 0xff_3b_30;
 /// to grab.
 const SOCKET_RADIUS: f32 = 0.025;
 
-/// How solid the selected-piece tint is — under the ghost's alpha, because a
-/// selection is a fact about what is already there, not a preview.
-const SELECTED_PIECE_ALPHA: f32 = 0.3;
-
 /// How much of a bead survives being occluded: the x-ray copy's share of the
 /// visible copy's alpha.
 const BEAD_XRAY: f32 = 0.35;

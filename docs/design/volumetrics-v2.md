@@ -1083,7 +1083,7 @@ is the trap this problem invites.
 
 **A moving head pans and tilts. Its light-emitting point does not move.**
 
-Verified in this codebase. `src-tauri/src/fixtures/layout.rs`:
+Verified in this codebase. `backend/src/fixtures/layout.rs`:
 
 ```rust
 pub fn head_world_position(base: [f32; 3], rot: [f64; 3], offset: HeadLayout) -> [f32; 3]
@@ -1734,7 +1734,7 @@ rather than where it appears to come from. And it lands directly on §16.
 I checked. The finding is not the one the correction anticipated.
 
 **`head_world_position` is not a pan/tilt model and was never meant to be.** Reading
-`compute_head_offsets` (`src-tauri/src/fixtures/layout.rs`), it lays heads out on a **grid across
+`compute_head_offsets` (`backend/src/fixtures/layout.rs`), it lays heads out on a **grid across
 the fixture's physical face** — `width × height` divided into `layout_w × layout_h` cells, mapping
 QLC+ `<Head>` elements to cell centres. That is a **multi-cell face layout** for pixel bars,
 blinders and matrix panels. It answers "where is cell *i* on this fixture's face, given the
@@ -1938,7 +1938,7 @@ is the reason the policy change is specified here rather than guessed at.
 Both are `#[ignore]`d and take a library *copy* — opening a library runs
 migrations, so neither may be pointed at a live one.
 
-- `compositor::tests::profile_a_real_score_across_a_window` (src-tauri) — eval
+- `compositor::tests::profile_a_real_score_across_a_window` (backend) — eval
   cost, lit count, strobing count and `dimmer_sum` per frame across a window.
 - `visualizer_real_score_window` (gpui-agent, `--features pixel`) — the same
   window played through the real renderer, reporting the UI/GPU/present split

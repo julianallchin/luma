@@ -1,7 +1,7 @@
 # Dispatcher port guide
 
 How to move a command off `#[tauri::command]` and onto the dispatch seam. The
-seam and 177 of the 181 live commands are landed in `src-tauri/src/dispatch/`;
+seam and 177 of the 181 live commands are landed in `backend/src/dispatch/`;
 the four still outstanding are the spawned-progress imports below, and this is
 the recipe for them and for anything added later.
 
@@ -35,7 +35,7 @@ implements some commands itself. That is the public surface.
 ## Inside
 
 ```
-src-tauri/src/dispatch/
+backend/src/dispatch/
   mod.rs                 the commands! table -> `adapter` (Tauri) + `dispatch` (JSON),
                          and the wire decoding, which knows the same schema
   handlers/<domain>.rs   behavior:  async fn(&AppServices, args…) -> Result<T, CommandError>
@@ -94,10 +94,10 @@ invocation and this step disappears.
 ### 4. Keep it green
 
 ```
-cargo check --manifest-path src-tauri/Cargo.toml --all-targets
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
-cargo test --manifest-path src-tauri/Cargo.toml --lib
-cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path backend/Cargo.toml --all-targets
+cargo clippy --manifest-path backend/Cargo.toml --all-targets
+cargo test --manifest-path backend/Cargo.toml --lib
+cargo fmt --manifest-path backend/Cargo.toml
 bunx vitest run
 ```
 

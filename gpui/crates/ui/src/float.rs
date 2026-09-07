@@ -27,9 +27,10 @@
 //! and prose reads the same whatever plane it lands on. Nothing in this module
 //! writes a colour or a corner down.
 
+use crate::icons::IconName;
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, Div, FontWeight, SharedString, Window};
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 
 use crate::node::Instrument as _;
 use crate::{glass, ladder, motion, radius, select};

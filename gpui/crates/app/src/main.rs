@@ -18,7 +18,7 @@ fn main() {
     // instead — see `luma_ui::runtime`.
     luma_ui::runtime::Runtime::default().install();
 
-    let library = match Library::open() {
+    let library = match Library::open_desktop() {
         Ok(library) => library,
         Err(error) => {
             eprintln!("[luma] could not open the library: {error}");
@@ -26,15 +26,14 @@ fn main() {
         }
     };
 
-    // Icons are SVGs embedded by gpui-component's assets crate; without an
+    // Nucleo icons are embedded by luma-ui; without an
     // asset source every `Icon` silently renders nothing.
-    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let app = gpui_platform::application().with_assets(luma_ui::icons::Assets);
     app.run(move |cx| {
         luma_app::init(cx);
 
         let options = WindowOptions {
-            // No *visible* native chrome: `chrome`'s head bands draw it, the same
-            // choice `decorations: false` makes for the Tauri window. The
+            // No visible native chrome: `chrome` draws the head bands. The
             // titlebar is still requested, transparent and title-less, because
             // that is the only branch of gpui's macOS window that honours
             // `is_resizable` — `titlebar: None` pins the style mask to

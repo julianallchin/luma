@@ -170,7 +170,11 @@ fn compact_row(
             cell(COMPACT_PICK)
                 .text_size(px(12.0))
                 .text_color(ladder::accent())
-                .child(if selected { "✓" } else { "" }),
+                .when(selected, |cell| {
+                    cell.child(
+                        gpui_component::Icon::new(luma_ui::icons::IconName::Check).size(px(12.)),
+                    )
+                }),
         );
     if editing_members {
         line = line

@@ -54,11 +54,11 @@ export type McpServerOptions = {
 /** Path to the built binary, honouring `LUMA_MCP_BIN`. Throws with the build
  * command when it is missing, because "ENOENT" is not an actionable error. */
 export function mcpBinary(): string {
-	const binary = process.env.LUMA_MCP_BIN ?? join(REPO_ROOT, "src-tauri/target/debug/luma-mcp");
+	const binary = process.env.LUMA_MCP_BIN ?? join(REPO_ROOT, "backend/target/debug/luma-mcp");
 	if (!existsSync(binary)) {
 		throw new Error(
 			`luma-mcp not found at ${binary}. Build it first:\n` +
-				"  cargo build --bin luma-mcp --manifest-path src-tauri/Cargo.toml",
+				"  cargo build --bin luma-mcp --manifest-path backend/Cargo.toml",
 		);
 	}
 	return binary;

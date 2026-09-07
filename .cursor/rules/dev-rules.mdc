@@ -2,4 +2,4 @@
 alwaysApply: true
 ---
 
-Follow the repository's AGENTS.md. Luma's desktop UI is GPUI in `gpui/`; the React frontend has been removed. Shared backend types remain in `src-tauri/`. Do not regenerate desktop TypeScript bindings.
+Follow the repository's AGENTS.md. Luma's desktop UI is GPUI in `gpui/`; the React frontend has been removed. Shared backend types remain in `backend/`. Do not regenerate desktop TypeScript bindings.

@@ -32,7 +32,7 @@ Think of it like sheet music vs. a recording. Sheet music says "play a C major c
 ## Project Structure
 
 - **`gpui/`** — Native Rust desktop UI and wgpu stage renderer
-- **`src-tauri/`** — Shared Rust backend (SQLite, node engine, audio DSP, ArtNet)
+- **`backend/`** — Shared Rust backend (SQLite, node engine, audio DSP, ArtNet)
 - **`www/`** — Documentation site ([luma.show](https://luma.show))
 - **`resources/fixtures/`** — QLC+ fixture definition library (thousands of fixtures)
 - **`experiments/`** — Research code and test data

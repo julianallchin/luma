@@ -569,7 +569,7 @@ fn head(scores: &Scores, app: &Entity<Luma>, window: &Window, flying: bool) -> D
                     back.update(cx, |this, cx| this.leave_scores(cx));
                 })
                 .child(
-                    gpui_component::Icon::new(gpui_component::IconName::ChevronLeft).size(px(11.)),
+                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronLeft).size(px(11.)),
                 )
                 .child("Tracks")
                 .agent_node(Role::Button, "Back to tracks")
@@ -764,7 +764,7 @@ fn new_score(app: &Entity<Luma>) -> AnyElement {
         .id("new-score")
         .on_click(move |_, _, cx| app.update(cx, |this, cx| this.create_sidebar_score(cx)))
         .child(
-            gpui_component::Icon::new(gpui_component::IconName::Plus)
+            gpui_component::Icon::new(luma_ui::icons::IconName::Plus)
                 .size(px(11.))
                 .text_color(glass::ink(0.55)),
         )

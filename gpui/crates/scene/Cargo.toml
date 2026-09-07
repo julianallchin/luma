@@ -12,7 +12,7 @@ glam = "0.30"
 # fixture's rest aim into its mount frame, and that frame must be the one the
 # beam math would have produced — so the two factors are read from there rather
 # than restated here.
-fixture-kinematics = { path = "../../../src-tauri/crates/fixture-kinematics" }
+fixture-kinematics = { path = "../../../backend/crates/fixture-kinematics" }
 
 [dev-dependencies]
 serde_json = "1"

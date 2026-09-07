@@ -115,7 +115,7 @@ The full mode is 17.0× slower. Isolation controls retain geometry/depth and env
 Reproduction (from the repository root; app remains closed):
 
 ```sh
-cargo +1.97.1 run --manifest-path src-tauri/Cargo.toml --bin render_venue -- --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
+cargo +1.97.1 run --manifest-path backend/Cargo.toml --bin render_venue -- --venue-id 346ce3ae-84e9-4c4f-916b-03bf4d115365 --output /tmp/gasworks.json --format catalogue --width 1146 --height 1051
 LUMA_GEOMETRY_SHADOWS=0 cargo +1.97.1 run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
 LUMA_GEOMETRY_SHADOWS=1 cargo +1.97.1 run --release --manifest-path gpui/Cargo.toml -p luma-render --bin profile-volumetrics -- --catalogue=/tmp/gasworks.json --warmup-frames=30 --measured-frames=120
 ```

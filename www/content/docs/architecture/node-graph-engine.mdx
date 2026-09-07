@@ -3,11 +3,11 @@ title: Node Graph Engine
 description: Execution model, topological sort, node dispatch, ADSR envelopes, and selection resolution
 ---
 
-The node graph engine evaluates pattern graphs to produce time-varying light output for fixtures. It lives in `src-tauri/src/node_graph/`.
+The node graph engine evaluates pattern graphs to produce time-varying light output for fixtures. It lives in `backend/src/node_graph/`.
 
 ## Execution Model
 
-File: `src-tauri/src/node_graph/executor.rs`
+File: `backend/src/node_graph/executor.rs`
 
 Graph execution follows five steps:
 
@@ -39,7 +39,7 @@ After merging, a preview frame is rendered at `start_time` via `engine::render_f
 
 ## ExecutionState
 
-Defined in `src-tauri/src/node_graph/state.rs`:
+Defined in `backend/src/node_graph/state.rs`:
 
 ```rust
 pub struct ExecutionState {
@@ -61,7 +61,7 @@ All outputs are keyed by `(node_id, port_id)` tuples. Different output types (si
 
 ## Node Dispatch
 
-File: `src-tauri/src/node_graph/nodes/mod.rs`
+File: `backend/src/node_graph/nodes/mod.rs`
 
 The top-level `run_node()` function dispatches to submodule handlers in order:
 
@@ -76,7 +76,7 @@ Each submodule's `run_node()` returns `Ok(true)` if it handled the node type, or
 
 ### NodeExecutionContext
 
-Each node receives a `NodeExecutionContext` (defined in `src-tauri/src/node_graph/node_execution_context.rs`) with:
+Each node receives a `NodeExecutionContext` (defined in `backend/src/node_graph/node_execution_context.rs`) with:
 
 - Access to incoming edges and source node outputs
 - Database pools (main + project)
@@ -120,11 +120,11 @@ This absolute-time convention ensures correct alignment when the compositor merg
 
 ## Selection Resolution
 
-File: `src-tauri/src/node_graph/nodes/selection.rs`
+File: `backend/src/node_graph/nodes/selection.rs`
 
 Selection resolution translates selection expressions (over group names) into concrete fixture lists. Selection is not a graph node -- it is a pattern argument resolved before graph execution:
 
-1. Selection expressions are parsed into an AST by the expression parser in `src-tauri/src/services/groups.rs`
+1. Selection expressions are parsed into an AST by the expression parser in `backend/src/services/groups.rs`
 2. Supported operators: `&` (AND), `|` (OR), `^` (XOR), `~` (NOT), `>` (fallback)
 3. Expressions are resolved against the venue's fixture group names (e.g., `front_wash & left_truss`)
 4. Each matched fixture's heads are enumerated with global 3D positions computed from fixture position, rotation, and head layout offsets

@@ -6,10 +6,10 @@ use gpui::{
     div, prelude::*, px, Context, ElementId, Entity, FocusHandle, Focusable as _, FontWeight,
     KeyDownEvent, ScrollHandle, SharedString, Subscription,
 };
-use gpui_component::IconName;
 use luma_lib::agent::{History, HistoryHit, ThreadEntry};
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::float::{self, Picker, RowState};
+use luma_ui::icons::IconName;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};

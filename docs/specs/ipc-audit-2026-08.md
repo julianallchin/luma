@@ -4,13 +4,13 @@ The one-time audit of the Tauri command surface that motivated the dispatch seam
 conventions, the state/`AppHandle` inventory, the dead-command list and the known issues.
 
 **A snapshot, not a live artifact.** Most of the surface has since moved onto
-`src-tauri/src/dispatch`, so the file and line references below point at the pre-port layout and
+`backend/src/dispatch`, so the file and line references below point at the pre-port layout and
 several of the commands named here are gone. The current surface is generated in
 [`ipc-manifest.md`](./ipc-manifest.md); this file is kept for the analysis, which still holds.
 
 ## Events
 
-`close-requested` comes from Tauri's own window lifecycle, not from our emit sites. `universe-buffer` (`universe-state-store.ts:161`) and `dmx://update` (`dmx-store.ts:18`) are **dead listeners** — nothing in `src-tauri/` has ever emitted them; the visualizer gets its data from `universe-state-update` instead. `controller_port_change` (`controller_manager.rs:295`) is the mirror image: emitted, nobody listens.
+`close-requested` comes from Tauri's own window lifecycle, not from our emit sites. `universe-buffer` (`universe-state-store.ts:161`) and `dmx://update` (`dmx-store.ts:18`) are **dead listeners** — nothing in `backend/` has ever emitted them; the visualizer gets its data from `universe-state-update` instead. `controller_port_change` (`controller_manager.rs:295`) is the mirror image: emitted, nobody listens.
 
 Progress is *only* observable through events. `import_tracks`, `reprocess_track`, `sync_full` and the DJ-import commands all return `Ok` as soon as the work is spawned; there is no completion value and no cancellation handle in the command surface.
 
@@ -64,7 +64,7 @@ Idempotency is by `operationId` + request fingerprint, on 3 flattened commands (
 
 ## Dispatcher refactor notes
 
-> **Status:** the seam described below is built — `src-tauri/src/dispatch/`, with
+> **Status:** the seam described below is built — `backend/src/dispatch/`, with
 > `AppServices`, `Events`/`EventSink`, `HostControl`, `CommandError`, and a
 > `commands!` table that generates both the Tauri adapter and a
 > `dispatch(name, json)` entry point. 12 commands are ported and the agent
@@ -76,7 +76,7 @@ What it would take to lift these bodies out of `#[tauri::command]` into a plain 
 
 ### There is already a second dispatcher, and it duplicates command bodies
 
-`src-tauri/src/bin/agent_harness.rs` hand-writes a `match name { … }` dispatcher covering **51 of the 196 commands**, with its own `arg()` / `opt_arg()` JSON extraction and its own re-implementation of each body (`get_pattern_args`, `save_pattern_graph_document`, `run_graph`, `replace_track_scores`, …). That is the duplication the refactor deletes, and the harness is its first consumer — not a hypothetical one. Any port should land the dispatch layer *and* delete those 51 arms in the same change, or the drift doubles.
+`backend/src/bin/agent_harness.rs` hand-writes a `match name { … }` dispatcher covering **51 of the 196 commands**, with its own `arg()` / `opt_arg()` JSON extraction and its own re-implementation of each body (`get_pattern_args`, `save_pattern_graph_document`, `run_graph`, `replace_track_scores`, …). That is the duplication the refactor deletes, and the harness is its first consumer — not a hypothetical one. Any port should land the dispatch layer *and* delete those 51 arms in the same change, or the drift doubles.
 
 ### State: one services struct replaces 18 `State<T>` injections
 
@@ -175,5 +175,5 @@ Carried over from the fragment audits; each is a thing a port must either fix or
 | `undocumented-idempotency-retry` | contract | `score_dsl_import` | The TS wrapper (src/lib/dsl/index.ts:51) blind-retries the identical request exactly once on ANY failure. That is only safe because operationId makes the write idempotent — an invariant undocumented at the call site that any port must preserve. |
 | `score-dsl-toctou` | correctness | `score_dsl_import` | Takes VenueAccess::<Write> for the scope check then drops it before the authored apply — a TOCTOU window between authorization and write. |
 | `opaque-invoke-payload` | contract | `save_pattern_graph_document` | The caller (pattern-editor.tsx:1755) passes an opaque `input` object straight into invoke, so the TS object keys ARE the Rust arg names with no typecheck between them. Renaming a Rust arg breaks the call silently at runtime. |
-| `duplicate-domain-naming` | cleanup | `universe/groups` | Fragment authors split src-tauri/src/commands/groups.rs across two domain labels (`stage/groups` and `universe/groups`). Canonicalized here to universe/groups; the underlying file is one module and should stay one domain. |
-| `orphan-events` | cleanup | `controller_port_change`, `universe-buffer`, `dmx://update` | `controller_port_change` (controller_manager.rs:295) is emitted and never listened to. `universe-buffer` and `dmx://update` are the mirror image — the visualizer stores subscribe to them but nothing in src-tauri/ has ever emitted them; delete the listeners. (`close-requested` is not in this set: Tauri's own window lifecycle emits it.) |
+| `duplicate-domain-naming` | cleanup | `universe/groups` | Fragment authors split backend/src/commands/groups.rs across two domain labels (`stage/groups` and `universe/groups`). Canonicalized here to universe/groups; the underlying file is one module and should stay one domain. |
+| `orphan-events` | cleanup | `controller_port_change`, `universe-buffer`, `dmx://update` | `controller_port_change` (controller_manager.rs:295) is emitted and never listened to. `universe-buffer` and `dmx://update` are the mirror image — the visualizer stores subscribe to them but nothing in backend/ has ever emitted them; delete the listeners. (`close-requested` is not in this set: Tauri's own window lifecycle emits it.) |

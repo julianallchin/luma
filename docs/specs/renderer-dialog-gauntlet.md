@@ -280,7 +280,7 @@ cargo test -p luma-render
 cargo test -p luma-scene
 
 cd /tmp/luma-gauntlet.7qvhKU
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path backend/Cargo.toml
 ```
 
 Visual rounds produce before/after/current-reference captures at the same pixel

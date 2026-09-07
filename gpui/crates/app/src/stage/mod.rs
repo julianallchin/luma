@@ -36,13 +36,13 @@ use std::collections::{BTreeMap, HashMap};
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Entity, Pixels, Point, Window};
-use gpui_component::IconName;
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
 use luma_scene::catalog::{pieces, PaletteGroup};
 use luma_scene::coords;
 use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
 use luma_ui::float::{self, Dismiss, RowState};
+use luma_ui::icons::IconName;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
@@ -3309,13 +3309,15 @@ pub(crate) fn build_layer(
                         .flex_row()
                         .gap(px(6.0))
                         .occlude();
-                    for (glyph, direction) in [("⟲", 1.0), ("⟳", -1.0)] {
+                    for (icon, direction) in
+                        [(IconName::RotateLeft, 1.0), (IconName::RotateRight, -1.0)]
+                    {
                         let app = app.clone();
                         let node = selected.node.clone();
                         let turned = selected.param + direction * selected.roll_step;
                         pair = pair.child(
                             float::key_cap_pressable(float::key_cap())
-                                .child(glyph)
+                                .child(gpui_component::Icon::new(icon).size(px(14.)))
                                 .id(gpui::ElementId::Name(
                                     format!("stage-rotate-{direction}").into(),
                                 ))

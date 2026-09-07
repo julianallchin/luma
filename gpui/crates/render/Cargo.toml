@@ -9,11 +9,11 @@ publish = false
 # comes back as bytes. `luma-viewport` will own presentation.
 [dependencies]
 luma-scene = { path = "../scene" }
-# Reaches across into the src-tauri workspace, the same direction `luma-app`
+# Reaches across into the backend workspace, the same direction `luma-app`
 # already goes. It is glam-only by policy precisely so that crossing is cheap:
 # beam origins have to be one implementation or they drift, and the app cannot
 # depend on anything in `gpui/`.
-fixture-kinematics = { path = "../../../src-tauri/crates/fixture-kinematics" }
+fixture-kinematics = { path = "../../../backend/crates/fixture-kinematics" }
 glam = "0.30"
 wgpu = "30"
 bytemuck = { version = "1", features = ["derive"] }

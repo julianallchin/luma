@@ -115,7 +115,7 @@ pub fn luma_palette_row(
         .gap(px(4.))
         .children(swatches)
         .child(
-            action_slab("+")
+            action_slab(crate::icons::IconName::Plus)
                 .id(add_id)
                 .on_click(move |_, window, cx| add(PaletteEvent::Add, window, cx))
                 .agent_node(Role::Button, "add color"),
@@ -124,7 +124,7 @@ pub fn luma_palette_row(
         Some(index) if count > 1 => {
             let remove = on_event;
             row.child(
-                action_slab("×")
+                action_slab(crate::icons::IconName::Close)
                     .id(remove_id)
                     .on_click(move |_, window, cx| {
                         remove(PaletteEvent::Remove(index), window, cx);
@@ -137,7 +137,7 @@ pub fn luma_palette_row(
 }
 
 /// The `+` / `×` slab: a square button in the control voice.
-fn action_slab(glyph: &str) -> Div {
+fn action_slab(icon: crate::icons::IconName) -> Div {
     div()
         .flex()
         .items_center()
@@ -150,5 +150,5 @@ fn action_slab(glyph: &str) -> Div {
         .text_size(px(12.))
         .text_color(ladder::foreground_90())
         .hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground()))
-        .child(glyph.to_string())
+        .child(gpui_component::Icon::new(icon).size(px(12.)))
 }

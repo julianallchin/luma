@@ -56,7 +56,8 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
+use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::{float, glass, ladder, motion, radius};
 

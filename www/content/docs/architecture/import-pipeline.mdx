@@ -7,7 +7,7 @@ The import pipeline handles track ingestion, audio analysis, and DJ equipment in
 
 ## Track Import Flow
 
-File: `src-tauri/src/services/tracks.rs`
+File: `backend/src/services/tracks.rs`
 
 ```
 Import request
@@ -31,7 +31,7 @@ Import request
 
 Audio is decoded using symphonia and resampled to a target sample rate of 48kHz (`TARGET_SAMPLE_RATE`). Stereo audio is converted to mono for analysis workers.
 
-Progress is communicated to the frontend via Tauri events (`track-status-changed`). In-progress sets (`STEMS_IN_PROGRESS`, `ROOTS_IN_PROGRESS`) prevent duplicate worker spawns for the same track.
+Progress reaches the native UI through the dispatch event sink (`track-import-state`). The preprocessing scheduler owns in-flight claims and identity-scoped task leases to prevent duplicate work and cancel analysis across identity changes.
 
 ### Pipeline Timing
 
@@ -48,7 +48,7 @@ Beat detection, stem separation, and waveform generation run in parallel. Harmon
 
 ## Python Worker Management
 
-File: `src-tauri/src/python_env.rs`
+File: `backend/src/python_env.rs`
 
 Luma manages a Python virtual environment for ML-based audio analysis:
 
@@ -71,7 +71,7 @@ Dependency installation is fingerprinted by SHA-256 hashing the requirements fil
 
 ## StageLinQ Integration
 
-Files: `src-tauri/crates/stagelinq/src/`
+Files: `backend/crates/stagelinq/src/`
 
 Luma includes a custom Rust implementation of Denon's StageLinQ protocol for real-time DJ equipment integration.
 

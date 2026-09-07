@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`. GPUI consumes the shared Rust backend in `src-tauri/` through its dispatch seam. The former React frontend has been deleted. `www/` is a separate documentation website.
+Luma is a native GPUI desktop app. The UI lives in `gpui/crates/app` and `gpui/crates/ui`; the wgpu renderer is in `gpui/crates/render`. GPUI consumes the shared Rust backend in `backend/` through its dispatch seam. The backend has no Tauri dependency. `www/` is a separate documentation website.
 
 ## Shared checkout
 
@@ -9,7 +9,7 @@ Several agents work in this tree at once. Never run `git stash`, `git checkout -
 ## Project Structure and Commands
 
 - `gpui/`: native UI, renderer, scene model, and test harness. Read `gpui/BUILD.md` for prerequisites and build-cache conventions.
-- `src-tauri/`: shared backend, models, append-only SQLite migrations, and Python analysis workers.
+- `backend/`: shared backend, models, append-only SQLite migrations, and Python analysis workers.
 - `resources/`: shared fixture definitions and meshes.
 - `harness/`: native renderer goldens, reference captures, fonts, and image comparison tools.
 - `www/`: independent documentation site; use Bun for its JavaScript tooling.
@@ -29,7 +29,7 @@ When you spot a smell adjacent to your work — a leaky abstraction, a guard tha
 
 ## Coding Style
 
-Use standard Rust formatting and clippy. Keep backend modules cohesive around domains. Native frontend calls go through `luma_lib::dispatch`; do not add React or Tauri webview UI.
+Use standard Rust formatting and clippy. Keep backend modules cohesive around domains. Native frontend calls go through `luma_lib::dispatch`; do not add a webview UI.
 
 The backend retains `ts-rs` type metadata for shared schemas, but there is no desktop TypeScript consumer. Do not recreate `src/` for frontend work.
 
@@ -37,7 +37,7 @@ The backend retains `ts-rs` type metadata for shared schemas, but there is no de
 
 - Migrations are **append-only** once run on any machine: sqlx checksums each version (SHA-384), so editing an applied file breaks every launch with a checksum mismatch.
 - To amend a migration, add a new timestamped file — never edit or renumber an existing one.
-- Keep `src-tauri/migrations` (local SQLite) and `supabase/migrations` (remote Postgres) symmetric: a schema change that syncs needs a file in both.
+- Keep `backend/migrations` (local SQLite) and `supabase/migrations` (remote Postgres) symmetric: a schema change that syncs needs a file in both.
 
 ## Testing Guidelines
 
@@ -45,7 +45,7 @@ Use the GPUI harness for UI verification and `luma-render` tests/captures for re
 
 ## Data & File Locations
 
-The global library database `luma.db` is stored in the Tauri app config directory:
+The global library database `luma.db` stays in the platform app config directory:
 
 - macOS: `~/Library/Application Support/com.luma.luma/luma.db`
 - Windows: `%APPDATA%\\com.luma.luma\\luma.db`
@@ -88,10 +88,10 @@ Group names are automatically normalized to snake_case: lowercase, spaces/hyphen
 
 ### Key files
 
-- `src-tauri/src/models/groups.rs` — `FixtureGroup`, name normalization/validation helpers
-- `src-tauri/src/services/groups.rs` — hierarchy building, selection expression parser/evaluator, spatial filtering
-- `src-tauri/src/database/local/groups.rs` — group CRUD, membership
-- `src-tauri/src/commands/groups.rs` — Tauri commands for groups
+- `backend/src/models/groups.rs` — `FixtureGroup`, name normalization/validation helpers
+- `backend/src/services/groups.rs` — hierarchy building, selection expression parser/evaluator, spatial filtering
+- `backend/src/database/local/groups.rs` — group CRUD, membership
+- `backend/src/dispatch/handlers/groups.rs` — group command handlers
 - `gpui/crates/app/` — native group management UI
 - `gpui/crates/ui/src/arg/expression.rs` — group selection expression editor
 

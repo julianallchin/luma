@@ -7,7 +7,7 @@ The DMX output pipeline converts abstract fixture states into concrete DMX byte 
 
 ## PrimitiveState
 
-The `PrimitiveState` struct (defined in `src-tauri/src/models/universe.rs`) represents a single fixture or head at a single moment in time:
+The `PrimitiveState` struct (defined in `backend/src/models/universe.rs`) represents a single fixture or head at a single moment in time:
 
 ```rust
 pub struct PrimitiveState {
@@ -21,7 +21,7 @@ pub struct PrimitiveState {
 
 ## PrimitiveState to DMX Mapping
 
-File: `src-tauri/src/fixtures/engine.rs`
+File: `backend/src/fixtures/engine.rs`
 
 | Property | DMX Mapping |
 |----------|-------------|
@@ -53,7 +53,7 @@ This means fixtures mounted upside-down on a truss do not require manual pan/til
 
 ## ArtNet Broadcasting
 
-File: `src-tauri/src/artnet.rs`
+File: `backend/src/artnet.rs`
 
 Luma uses the standard Art-Net protocol over UDP to broadcast DMX data.
 
@@ -78,7 +78,7 @@ Luma uses the standard Art-Net protocol over UDP to broadcast DMX data.
 
 ## Render Engine
 
-File: `src-tauri/src/render_engine.rs`
+File: `backend/src/render_engine.rs`
 
 The render engine runs a continuous async loop at approximately 60fps (16ms sleep between iterations).
 
@@ -94,12 +94,12 @@ For each deck with a non-zero volume, render its `LayerTimeSeries` at the deck's
 
 The resulting `UniverseState` is emitted to:
 
-1. **Frontend** via Tauri event (`universe-state-update`) for the 3D visualizer
+1. **Native visualizer** samples the shared render engine for its current frame
 2. **ArtNetManager** for DMX broadcast to physical hardware
 
 ### `render_frame()`
 
-The `render_frame()` function (in `src-tauri/src/engine/mod.rs`) samples each primitive's Series by finding the nearest sample via linear scan (closest time distance).
+The `render_frame()` function (in `backend/src/engine/mod.rs`) samples each primitive's Series by finding the nearest sample via linear scan (closest time distance).
 
 Default values when no data is present:
 

@@ -164,8 +164,8 @@ if (options.usageOnly) {
     console.log(summarizeUsage(await runner.usage()));
     process.exit(0);
 }
-const binary = process.env.LUMA_AGENT_BIN ?? join(REPO_ROOT, "src-tauri/target/debug/luma-agent");
-if (!existsSync(binary)) throw new Error(`Build luma-agent first: cargo +1.97.1 build --manifest-path src-tauri/Cargo.toml --bin luma-agent`);
+const binary = process.env.LUMA_AGENT_BIN ?? join(REPO_ROOT, "backend/target/debug/luma-agent");
+if (!existsSync(binary)) throw new Error(`Build luma-agent first: cargo +1.97.1 build --manifest-path backend/Cargo.toml --bin luma-agent`);
 if (!options.skipUsageCheck) await gate(runner);
 const binding = await resolveBinding(options);
 const prompt = [
