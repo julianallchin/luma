@@ -195,7 +195,7 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
             app.snapshot().nodes
         "#,
             until = chat::UNTIL,
-            blurb = chat::UNATTACHED_BLURB,
+            blurb = luma_chat::UNATTACHED_BLURB,
         ),
     );
     let text = labels(&welcome, "text");
@@ -204,7 +204,7 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
         "the panel did not open on the venue grid: {text:?}"
     );
     assert!(
-        text.iter().any(|l| l == chat::UNATTACHED_BLURB),
+        text.iter().any(|l| l == luma_chat::UNATTACHED_BLURB),
         "the panel opened without saying what it attaches to: {text:?}"
     );
     // No composer and no suggestions: there is no thread for either to reach,

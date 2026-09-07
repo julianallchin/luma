@@ -62,7 +62,7 @@ AF1, AF3, AF5, AF10.
 
 **Scope.** Groups are **derived sets shown as a tree**; a fixture may be in
 several. One derivation: role (wash / spot / beam / strobe / blinder / pixel /
-fx, from the QLC+ `Type` and channels, `src-tauri/src/models/fixtures.rs`) →
+fx, from the QLC+ `Type` and channels, `backend/src/models/fixtures.rs`) →
 class (`horizontal`/`vertical` for a run standing alone, `left wing`/`right
 wing` for one bolted to a stage, by the run's *attachment* side against the
 stage's resolved surface centre) → row (one per distribution, never merged,
@@ -227,7 +227,7 @@ cargo clippy --workspace --all-targets
 cargo test -p luma-scene -p luma-render
 cargo test -p gpui-agent --test headless       # append a name to filter a file
 cargo run -p luma-render --release --bin render-goldens -- --check
-cargo test --manifest-path ../src-tauri/Cargo.toml
+cargo test --manifest-path ../backend/Cargo.toml
 # Pixel rounds get the second tree — never flip features in the headless one.
 export PIXEL_TARGET="$(git rev-parse --show-toplevel)/gpui/target-pixel"
 CARGO_TARGET_DIR="$PIXEL_TARGET" cargo test -p gpui-agent --features pixel \

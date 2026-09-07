@@ -7,11 +7,11 @@ The pieces:
 
 | | |
 |---|---|
-| `src-tauri/src/bin/agent_harness.rs` | stdio JSON-RPC server over the command surface |
+| `backend/src/bin/agent_harness.rs` | stdio JSON-RPC server over the command surface |
 | `scripts/headless/shim.ts` | spawns it and installs `window.__TAURI_INTERNALS__` so unmodified frontend `invoke()` calls land on the pipe |
 | `scripts/headless/smoke.ts` | end-to-end check of both halves against a copy of the real `luma.db` |
 | `scripts/headless/e2e.ts` | drives the *real frontend agents* and audits the design's §22 acceptance criteria |
-| `src-tauri/src/bin/luma-mcp.rs` | MCP over stdio: the same sandboxed Python workspace, for an out-of-process coding agent |
+| `backend/src/bin/luma-mcp.rs` | MCP over stdio: the same sandboxed Python workspace, for an out-of-process coding agent |
 | `scripts/headless/mcp_smoke.ts` | speaks MCP at that binary over a pipe — handshake, `open`, `python`, figures, `reset` |
 | `scripts/headless/author_score.ts` | resolves a show job and launches the shared Rust agent runtime |
 | `scripts/headless/import_engine_playlists.ts` | imports whole Engine DJ playlists into a real library and stays up until the analysis DAG finishes |
@@ -22,11 +22,11 @@ The pieces:
 ## Build + run
 
 ```sh
-cargo build --manifest-path src-tauri/Cargo.toml --bin agent_harness
+cargo build --manifest-path backend/Cargo.toml --bin agent_harness
 bun run scripts/headless/smoke.ts
 bun run scripts/headless/e2e.ts
 
-cargo build --manifest-path src-tauri/Cargo.toml --bin luma-mcp
+cargo build --manifest-path backend/Cargo.toml --bin luma-mcp
 bun run scripts/headless/mcp_smoke.ts
 ```
 
@@ -79,7 +79,7 @@ without copying a live Supabase token.
 ```sh
 mkdir -p /tmp/luma-scratch
 cp "$HOME/Library/Application Support/com.luma.luma/luma.db" /tmp/luma-scratch/
-./src-tauri/target/debug/agent_harness --config-dir /tmp/luma-scratch
+./backend/target/debug/agent_harness --config-dir /tmp/luma-scratch
 ```
 
 …then type request lines on stdin. From Bun:
@@ -222,9 +222,9 @@ logic into the harness.
 Build `luma-agent` to run the same Rust service as native chat:
 
 ```sh
-cargo +1.97.1 build --manifest-path src-tauri/Cargo.toml --bin luma-agent
-src-tauri/target/debug/luma-agent --thread THREAD_ID --engine codex --prompt 'Continue the score' --sync
-src-tauri/target/debug/luma-agent --track TRACK_ID --venue VENUE_ID --engine claude --prompt 'Author the whole track' --sync
+cargo +1.97.1 build --manifest-path backend/Cargo.toml --bin luma-agent
+backend/target/debug/luma-agent --thread THREAD_ID --engine codex --prompt 'Continue the score' --sync
+backend/target/debug/luma-agent --track TRACK_ID --venue VENUE_ID --engine claude --prompt 'Author the whole track' --sync
 ```
 
 `--track` and `--venue` create a new score and conversation. `--thread` continues
@@ -336,7 +336,7 @@ and a `.mcp.json` to register it with.
 
 ## Render a saved venue
 
-From `src-tauri/`, run:
+From `backend/`, run:
 
 ```sh
 cargo run --bin render_venue -- --venue-id UUID --output /tmp/venue.png --view front

@@ -15,15 +15,14 @@ app = ["dep:luma-app", "dep:gpui-component"]
 pixel = [
     "dep:gpui_platform",
     "dep:gpui-component",
-    "dep:gpui-component-assets",
     "dep:image",
 ]
 
 [dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 luma-ui = { workspace = true, features = ["agent"] }
-# MCP's stdio JSON-RPC vocabulary, shared with `luma-mcp` in `src-tauri`.
-mcp-stdio = { path = "../../../src-tauri/crates/mcp-stdio" }
+# MCP's stdio JSON-RPC vocabulary, shared with `luma-mcp` in `backend`.
+mcp-stdio = { path = "../../../backend/crates/mcp-stdio" }
 rquickjs = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -34,7 +33,6 @@ luma-app = { path = "../app", features = ["agent"], optional = true }
 # of pixel mode.
 gpui_platform = { workspace = true, optional = true, features = ["test-support"] }
 gpui-component = { workspace = true, optional = true }
-gpui-component-assets = { workspace = true, optional = true }
 # Must track the version gpui itself uses: `render_to_image` hands back that
 # crate's `RgbaImage`, and two copies of `image` would not unify.
 image = { version = "0.25", optional = true }
@@ -49,7 +47,7 @@ required-features = ["app"]
 # test are arithmetic over rows, not over files.
 [dev-dependencies]
 # `scripted-model` is what lets a test drive a turn without a network.
-luma = { path = "../../../src-tauri", features = ["scripted-model"] }
+luma = { path = "../../../backend", features = ["scripted-model"] }
 luma-chat = { path = "../chat" }
 # The pixel suite projects world points through the camera the app reports, so
 # it needs the same camera and the same gizmo scale the renderer uses.

@@ -5011,30 +5011,6 @@ mod tests {
             Channels::Bgra => [pixels[offset + 2], pixels[offset + 1], pixels[offset]],
         }
     }
-
-    /// Independent conservative oracle: numerical samples can prove a ray is
-    /// inside a finite cone, but never claim a miss. Every proven hit must be
-    /// present in the CPU-generated tile list.
-    fn sampled_ray_hits_cone(eye: Vec3, ray: Vec3, light: &FixtureCone) -> bool {
-        let oc = eye - light.position;
-        let b = oc.dot(ray);
-        let disc = b * b - (oc.length_squared() - light.range * light.range);
-        if disc <= 0.0 {
-            return false;
-        }
-        let root = disc.sqrt();
-        let start = (-b - root).max(0.0);
-        let end = -b + root;
-        if end <= start {
-            return false;
-        }
-        (0..=32).any(|sample| {
-            let t = start + (end - start) * sample as f32 / 32.0;
-            let q = oc + ray * t;
-            let axial = q.dot(light.direction);
-            axial > 0.0 && axial * axial >= light.cos_field * light.cos_field * q.length_squared()
-        })
-    }
 }
 
 impl Completion {

@@ -29,10 +29,11 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 use luma_lib::models::tracks::{TrackBrowserRow, TrackImportPhase, TrackImportProgress};
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
+use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::{glass, ladder};

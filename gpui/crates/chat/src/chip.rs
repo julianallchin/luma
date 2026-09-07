@@ -27,8 +27,9 @@
 //! rendering per line.
 
 use gpui::{div, prelude::*, px, AnyElement, Hsla, SharedString, Window};
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 use luma_lib::agent::{ToolPart, ToolState};
+use luma_ui::icons::IconName;
 use luma_ui::node::{Instrument as _, Role as NodeRole};
 
 use crate::python_cell::Cell;

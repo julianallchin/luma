@@ -5,7 +5,7 @@ and what the measurements changed, and §9 for the second sampling mode. §1–�
 are the original design; where a later section disagrees with an earlier one,
 the later one is what the code does.
 
-Original scope note: Scope: one new module in `src-tauri/src`, one small change to
+Original scope note: Scope: one new module in `backend/src`, one small change to
 `stage_render`, one change to `ffmpeg_env`, three thin callers.
 
 `docs/specs/wgpu-renderer.md` §6 already specified this. **Half of it landed**: the
@@ -47,7 +47,7 @@ recording nearly free to build on top:
   `ffmpeg-runtime/*`, `ffmpeg_env::ffmpeg_path()` finds it. The local binary has
   `libx264`, `h264_videotoolbox`, `aac` and `aac_at`.
 
-**The old export path is not in this tree.** `src-tauri/src/commands/export.rs` lives
+**The old export path is not in this tree.** `backend/src/commands/export.rs` lives
 only on `feat/video-export` (`4d39a707`), which is not an ancestor of `main` and never
 merged. Nothing on main references it. §5 says what to take from it.
 
@@ -118,11 +118,11 @@ latency. A recording is throughput-bound by definition. Render serially.
 
 ## 3. The seam
 
-**One module: `src-tauri/src/recording.rs`**, sibling to `stage_render.rs`.
+**One module: `backend/src/recording.rs`**, sibling to `stage_render.rs`.
 
 `stage_render` is "one venue, one moment, one PNG". Recording is a different
 abstraction — a *time axis* and a *container format* — so it is a different module,
-not a longer `Shot`. It sits in `src-tauri/src` and not in a crate because everything
+not a longer `Shot`. It sits in `backend/src` and not in a crate because everything
 it composes (`compositor`, `eval`, `database::local`, `ffmpeg_env`, `stage_render`)
 already lives there; a crate would have to drag the database upward.
 
@@ -187,7 +187,7 @@ required for the CLI to work at all.
 ### Rust
 
 ```rust
-// src-tauri/src/recording.rs
+// backend/src/recording.rs
 
 /// What to record. Everything else is derived from the library.
 pub struct Recording {
@@ -265,7 +265,7 @@ tool would be a second way to do one thing.
 
 ### CLI
 
-`src-tauri/src/bin/luma-record.rs`, bootstrapping exactly like `agent_harness.rs`:
+`backend/src/bin/luma-record.rs`, bootstrapping exactly like `agent_harness.rs`:
 
 ```rust
 let config = HostConfig::parse_args(shared_flags)?;
@@ -404,9 +404,9 @@ of a bake actually exists.
 
 ## 8. What landed, and what the measurements said
 
-Built on `agent-code-execution`: `src-tauri/src/recording.rs`, the `Sequence`
+Built on `agent-code-execution`: `backend/src/recording.rs`, the `Sequence`
 handle in `stage_render.rs`, an `ffmpeg_env` split, and
-`src-tauri/src/bin/luma-record.rs`. Scope is one score in, one file out — no
+`backend/src/bin/luma-record.rs`. Scope is one score in, one file out — no
 `--all`, no Python binding, no MCP tool, no app dialog. The `Recording` /
 `Progress` / `Recorded` shapes are §4's, minus `quality` (see the shutter, below)
 and `audio` (a recording without the track is not a thing anyone asked for).

@@ -1,188 +1,187 @@
 {
   "$schema": "https://luma.dev/schemas/ipc-manifest.v2.json",
   "version": 2,
-  "source": "generated from the `commands!` table in src-tauri/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
+  "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 230,
+    "commandCount": 231,
     "domainCount": 35,
-    "unportedCount": 0,
     "eventCount": 18
   },
   "domains": [
     {
       "domain": "agent",
       "commandCount": 3,
-      "handlers": "src-tauri/src/dispatch/handlers/agent.rs"
+      "handlers": "backend/src/dispatch/handlers/agent.rs"
     },
     {
       "domain": "agent_execution",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/agent_execution.rs"
+      "handlers": "backend/src/dispatch/handlers/agent_execution.rs"
     },
     {
       "domain": "agent_threads",
-      "commandCount": 8,
-      "handlers": "src-tauri/src/dispatch/handlers/agent_threads.rs"
+      "commandCount": 9,
+      "handlers": "backend/src/dispatch/handlers/agent_threads.rs"
     },
     {
       "domain": "annotation_preview",
       "commandCount": 5,
-      "handlers": "src-tauri/src/dispatch/handlers/annotation_preview.rs"
+      "handlers": "backend/src/dispatch/handlers/annotation_preview.rs"
     },
     {
       "domain": "artnet",
       "commandCount": 6,
-      "handlers": "src-tauri/src/dispatch/handlers/artnet.rs"
+      "handlers": "backend/src/dispatch/handlers/artnet.rs"
     },
     {
       "domain": "auth",
       "commandCount": 7,
-      "handlers": "src-tauri/src/dispatch/handlers/auth.rs"
+      "handlers": "backend/src/dispatch/handlers/auth.rs"
     },
     {
       "domain": "authored_state",
       "commandCount": 11,
-      "handlers": "src-tauri/src/dispatch/handlers/authored_state.rs"
+      "handlers": "backend/src/dispatch/handlers/authored_state.rs"
     },
     {
       "domain": "categories",
       "commandCount": 1,
-      "handlers": "src-tauri/src/dispatch/handlers/categories.rs"
+      "handlers": "backend/src/dispatch/handlers/categories.rs"
     },
     {
       "domain": "cloud_sync",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/cloud_sync.rs"
+      "handlers": "backend/src/dispatch/handlers/cloud_sync.rs"
     },
     {
       "domain": "composable_patterns",
       "commandCount": 4,
-      "handlers": "src-tauri/src/dispatch/handlers/composable_patterns.rs"
+      "handlers": "backend/src/dispatch/handlers/composable_patterns.rs"
     },
     {
       "domain": "compositor",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/compositor.rs"
+      "handlers": "backend/src/dispatch/handlers/compositor.rs"
     },
     {
       "domain": "controller",
       "commandCount": 8,
-      "handlers": "src-tauri/src/dispatch/handlers/controller.rs"
+      "handlers": "backend/src/dispatch/handlers/controller.rs"
     },
     {
       "domain": "distribute",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/distribute.rs"
+      "handlers": "backend/src/dispatch/handlers/distribute.rs"
     },
     {
       "domain": "engine_dj",
       "commandCount": 7,
-      "handlers": "src-tauri/src/dispatch/handlers/engine_dj.rs"
+      "handlers": "backend/src/dispatch/handlers/engine_dj.rs"
     },
     {
       "domain": "fixtures",
       "commandCount": 16,
-      "handlers": "src-tauri/src/dispatch/handlers/fixtures.rs"
+      "handlers": "backend/src/dispatch/handlers/fixtures.rs"
     },
     {
       "domain": "group_references",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/group_references.rs"
+      "handlers": "backend/src/dispatch/handlers/group_references.rs"
     },
     {
       "domain": "groups",
       "commandCount": 14,
-      "handlers": "src-tauri/src/dispatch/handlers/groups.rs"
+      "handlers": "backend/src/dispatch/handlers/groups.rs"
     },
     {
       "domain": "host_audio",
       "commandCount": 9,
-      "handlers": "src-tauri/src/dispatch/handlers/host_audio.rs"
+      "handlers": "backend/src/dispatch/handlers/host_audio.rs"
     },
     {
       "domain": "midi",
       "commandCount": 15,
-      "handlers": "src-tauri/src/dispatch/handlers/midi.rs"
+      "handlers": "backend/src/dispatch/handlers/midi.rs"
     },
     {
       "domain": "mixer",
       "commandCount": 8,
-      "handlers": "src-tauri/src/dispatch/handlers/mixer.rs"
+      "handlers": "backend/src/dispatch/handlers/mixer.rs"
     },
     {
       "domain": "node_graph",
       "commandCount": 3,
-      "handlers": "src-tauri/src/dispatch/handlers/node_graph.rs"
+      "handlers": "backend/src/dispatch/handlers/node_graph.rs"
     },
     {
       "domain": "patterns",
       "commandCount": 11,
-      "handlers": "src-tauri/src/dispatch/handlers/patterns.rs"
+      "handlers": "backend/src/dispatch/handlers/patterns.rs"
     },
     {
       "domain": "perform",
       "commandCount": 9,
-      "handlers": "src-tauri/src/dispatch/handlers/perform.rs"
+      "handlers": "backend/src/dispatch/handlers/perform.rs"
     },
     {
       "domain": "rekordbox",
       "commandCount": 6,
-      "handlers": "src-tauri/src/dispatch/handlers/rekordbox.rs"
+      "handlers": "backend/src/dispatch/handlers/rekordbox.rs"
     },
     {
       "domain": "render_engine",
       "commandCount": 4,
-      "handlers": "src-tauri/src/dispatch/handlers/render_engine.rs"
+      "handlers": "backend/src/dispatch/handlers/render_engine.rs"
     },
     {
       "domain": "score_dsl",
       "commandCount": 3,
-      "handlers": "src-tauri/src/dispatch/handlers/score_dsl.rs"
+      "handlers": "backend/src/dispatch/handlers/score_dsl.rs"
     },
     {
       "domain": "scores",
       "commandCount": 13,
-      "handlers": "src-tauri/src/dispatch/handlers/scores.rs"
+      "handlers": "backend/src/dispatch/handlers/scores.rs"
     },
     {
       "domain": "settings",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/settings.rs"
+      "handlers": "backend/src/dispatch/handlers/settings.rs"
     },
     {
       "domain": "skills",
       "commandCount": 2,
-      "handlers": "src-tauri/src/dispatch/handlers/skills.rs"
+      "handlers": "backend/src/dispatch/handlers/skills.rs"
     },
     {
       "domain": "stage",
       "commandCount": 16,
-      "handlers": "src-tauri/src/dispatch/handlers/stage.rs"
+      "handlers": "backend/src/dispatch/handlers/stage.rs"
     },
     {
       "domain": "sync",
       "commandCount": 4,
-      "handlers": "src-tauri/src/dispatch/handlers/sync.rs"
+      "handlers": "backend/src/dispatch/handlers/sync.rs"
     },
     {
       "domain": "telemetry",
       "commandCount": 1,
-      "handlers": "src-tauri/src/dispatch/handlers/telemetry.rs"
+      "handlers": "backend/src/dispatch/handlers/telemetry.rs"
     },
     {
       "domain": "tracks",
       "commandCount": 12,
-      "handlers": "src-tauri/src/dispatch/handlers/tracks.rs"
+      "handlers": "backend/src/dispatch/handlers/tracks.rs"
     },
     {
       "domain": "venues",
       "commandCount": 9,
-      "handlers": "src-tauri/src/dispatch/handlers/venues.rs"
+      "handlers": "backend/src/dispatch/handlers/venues.rs"
     },
     {
       "domain": "waveforms",
       "commandCount": 3,
-      "handlers": "src-tauri/src/dispatch/handlers/waveforms.rs"
+      "handlers": "backend/src/dispatch/handlers/waveforms.rs"
     }
   ],
   "commands": [
@@ -190,7 +189,7 @@
       "name": "add_fixture_to_group",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 90
       },
       "args": [
@@ -221,7 +220,7 @@
       "name": "agent_steer",
       "domain": "agent",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent.rs",
+        "file": "backend/src/dispatch/handlers/agent.rs",
         "line": 35
       },
       "args": [
@@ -243,7 +242,7 @@
       "name": "agent_thread_append_messages",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 53
       },
       "args": [
@@ -271,7 +270,7 @@
       "name": "agent_thread_create",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 9
       },
       "args": [
@@ -296,7 +295,7 @@
       "name": "agent_thread_delete",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 80
       },
       "args": [
@@ -321,7 +320,7 @@
       "name": "agent_thread_get",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 22
       },
       "args": [
@@ -344,7 +343,7 @@
       "name": "agent_thread_list",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 33
       },
       "args": [
@@ -375,7 +374,7 @@
       "name": "agent_thread_record_usage",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 113
       },
       "args": [
@@ -393,7 +392,7 @@
       "name": "agent_thread_rename",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 138
       },
       "args": [
@@ -420,7 +419,7 @@
       "name": "agent_thread_set_actor",
       "domain": "agent_threads",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_threads.rs",
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
         "line": 127
       },
       "args": [
@@ -439,10 +438,29 @@
       }
     },
     {
+      "name": "agent_thread_set_model",
+      "domain": "agent_threads",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/agent_threads.rs",
+        "line": 153
+      },
+      "args": [
+        {
+          "name": "threadId",
+          "rust": "String"
+        },
+        {
+          "name": "selection",
+          "rust": "crate::agent::engine::catalog::Selection"
+        }
+      ],
+      "returns": "AgentThread"
+    },
+    {
       "name": "agent_turn_cancel",
       "domain": "agent",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent.rs",
+        "file": "backend/src/dispatch/handlers/agent.rs",
         "line": 27
       },
       "args": [
@@ -460,7 +478,7 @@
       "name": "agent_turn_start",
       "domain": "agent",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent.rs",
+        "file": "backend/src/dispatch/handlers/agent.rs",
         "line": 15
       },
       "args": [
@@ -482,7 +500,7 @@
       "name": "append_render_telemetry",
       "domain": "telemetry",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/telemetry.rs",
+        "file": "backend/src/dispatch/handlers/telemetry.rs",
         "line": 17
       },
       "args": [
@@ -506,7 +524,7 @@
       "name": "apply_score_document",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 33
       },
       "args": [
@@ -536,7 +554,7 @@
       "name": "attach",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 137
       },
       "args": [
@@ -586,7 +604,7 @@
       "name": "authored_state_check_workspace",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 118
       },
       "args": [
@@ -610,7 +628,7 @@
       "name": "authored_state_commit_workspace",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 134
       },
       "args": [
@@ -634,7 +652,7 @@
       "name": "authored_state_create_workspace",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 105
       },
       "args": [
@@ -658,7 +676,7 @@
       "name": "authored_state_finalize_turn",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 45
       },
       "args": [
@@ -682,7 +700,7 @@
       "name": "authored_state_list_history",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 68
       },
       "args": [
@@ -713,7 +731,7 @@
       "name": "authored_state_merge_workspace",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 145
       },
       "args": [
@@ -737,7 +755,7 @@
       "name": "authored_state_prepare_turn",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 34
       },
       "args": [
@@ -762,7 +780,7 @@
       "name": "authored_state_recover_turns",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 57
       },
       "args": [
@@ -785,7 +803,7 @@
       "name": "authored_state_remove_workspace",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 156
       },
       "args": [
@@ -811,7 +829,7 @@
       "name": "authored_state_restore",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 87
       },
       "args": [
@@ -836,7 +854,7 @@
       "name": "authored_state_set_session_actor",
       "domain": "authored_state",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/authored_state.rs",
+        "file": "backend/src/dispatch/handlers/authored_state.rs",
         "line": 25
       },
       "args": [
@@ -854,8 +872,8 @@
       "name": "auto_patch",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 176
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 174
       },
       "args": [
         {
@@ -872,8 +890,8 @@
       "name": "bind_output",
       "domain": "artnet",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 49
+        "file": "backend/src/dispatch/handlers/artnet.rs",
+        "line": 45
       },
       "args": [
         {
@@ -906,7 +924,7 @@
       "name": "cancel_python_cell",
       "domain": "agent_execution",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_execution.rs",
+        "file": "backend/src/dispatch/handlers/agent_execution.rs",
         "line": 49
       },
       "args": [
@@ -930,7 +948,7 @@
       "name": "composite_track",
       "domain": "compositor",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/compositor.rs",
+        "file": "backend/src/dispatch/handlers/compositor.rs",
         "line": 22
       },
       "args": [
@@ -968,7 +986,7 @@
       "name": "constrain",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 253
       },
       "args": [
@@ -1002,7 +1020,7 @@
       "name": "controller_cancel_learn",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 72
       },
       "args": [
@@ -1024,7 +1042,7 @@
       "name": "controller_connect",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 10
       },
       "args": [
@@ -1053,7 +1071,7 @@
       "name": "controller_disconnect",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 24
       },
       "args": [
@@ -1076,7 +1094,7 @@
       "name": "controller_get_state",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 99
       },
       "args": [
@@ -1098,7 +1116,7 @@
       "name": "controller_get_status",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 35
       },
       "args": [
@@ -1120,7 +1138,7 @@
       "name": "controller_init_for_venue",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 46
       },
       "args": [
@@ -1142,7 +1160,7 @@
       "name": "controller_set_active",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 88
       },
       "args": [
@@ -1168,7 +1186,7 @@
       "name": "controller_start_learn",
       "domain": "controller",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/controller.rs",
+        "file": "backend/src/dispatch/handlers/controller.rs",
         "line": 63
       },
       "args": [
@@ -1190,7 +1208,7 @@
       "name": "copy_pattern_to_library",
       "domain": "composable_patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
         "line": 55
       },
       "args": [
@@ -1212,7 +1230,7 @@
       "name": "create_group",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 24
       },
       "args": [
@@ -1252,7 +1270,7 @@
       "name": "create_lighting_pattern",
       "domain": "composable_patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
         "line": 27
       },
       "args": [
@@ -1278,7 +1296,7 @@
       "name": "create_pattern",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 29
       },
       "args": [
@@ -1309,7 +1327,7 @@
       "name": "create_score",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 131
       },
       "args": [
@@ -1345,7 +1363,7 @@
       "name": "create_track_score",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 192
       },
       "args": [
@@ -1369,7 +1387,7 @@
       "name": "create_venue",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 30
       },
       "args": [
@@ -1395,7 +1413,7 @@
       "name": "current_account",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 101
       },
       "args": [],
@@ -1408,7 +1426,7 @@
       "name": "delete_group",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 77
       },
       "args": [
@@ -1431,7 +1449,7 @@
       "name": "delete_pattern",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 79
       },
       "args": [
@@ -1454,7 +1472,7 @@
       "name": "delete_score",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 173
       },
       "args": [
@@ -1478,7 +1496,7 @@
       "name": "delete_subtree",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 337
       },
       "args": [
@@ -1500,7 +1518,7 @@
       "name": "delete_track",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 71
       },
       "args": [
@@ -1524,7 +1542,7 @@
       "name": "delete_track_score",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 206
       },
       "args": [
@@ -1548,7 +1566,7 @@
       "name": "delete_venue",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 52
       },
       "args": [
@@ -1571,7 +1589,7 @@
       "name": "describe_venue",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 90
       },
       "args": [
@@ -1589,7 +1607,7 @@
       "name": "detach",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 234
       },
       "args": [
@@ -1611,7 +1629,7 @@
       "name": "distribute",
       "domain": "distribute",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/distribute.rs",
+        "file": "backend/src/dispatch/handlers/distribute.rs",
         "line": 25
       },
       "args": [
@@ -1657,7 +1675,7 @@
       "name": "duplicate",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 314
       },
       "args": [
@@ -1691,7 +1709,7 @@
       "name": "engine_dj_default_library_path",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 103
       },
       "args": [],
@@ -1706,7 +1724,7 @@
       "name": "engine_dj_get_playlist_tracks",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 76
       },
       "args": [
@@ -1732,7 +1750,7 @@
       "name": "engine_dj_import_tracks",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 111
       },
       "args": [
@@ -1754,7 +1772,7 @@
       "name": "engine_dj_list_playlists",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 53
       },
       "args": [
@@ -1776,7 +1794,7 @@
       "name": "engine_dj_list_tracks",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 64
       },
       "args": [
@@ -1798,7 +1816,7 @@
       "name": "engine_dj_open_library",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 38
       },
       "args": [
@@ -1820,7 +1838,7 @@
       "name": "engine_dj_search_tracks",
       "domain": "engine_dj",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/engine_dj.rs",
+        "file": "backend/src/dispatch/handlers/engine_dj.rs",
         "line": 89
       },
       "args": [
@@ -1846,7 +1864,7 @@
       "name": "ensure_venue_score",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 152
       },
       "args": [
@@ -1876,7 +1894,7 @@
       "name": "extend",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 293
       },
       "args": [
@@ -1906,7 +1924,7 @@
       "name": "extend_reach",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 119
       },
       "args": [
@@ -1932,8 +1950,8 @@
       "name": "fixture_role",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 281
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 279
       },
       "args": [
         {
@@ -1954,7 +1972,7 @@
       "name": "force_quit",
       "domain": "sync",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/sync.rs",
+        "file": "backend/src/dispatch/handlers/sync.rs",
         "line": 5
       },
       "args": [],
@@ -1971,7 +1989,7 @@
       "name": "fork_pattern",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 64
       },
       "args": [
@@ -1995,7 +2013,7 @@
       "name": "generate_annotation_previews",
       "domain": "annotation_preview",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/annotation_preview.rs",
+        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
         "line": 34
       },
       "args": [
@@ -2022,7 +2040,7 @@
       "name": "generate_venue_groups",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 824
       },
       "args": [
@@ -2040,7 +2058,7 @@
       "name": "get_classifier_thresholds",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 63
       },
       "args": [],
@@ -2055,8 +2073,8 @@
       "name": "get_discovered_nodes",
       "domain": "artnet",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 30
+        "file": "backend/src/dispatch/handlers/artnet.rs",
+        "line": 26
       },
       "args": [],
       "returns": "Vec<ArtNetNode>",
@@ -2072,7 +2090,7 @@
       "name": "get_display_names",
       "domain": "cloud_sync",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/cloud_sync.rs",
+        "file": "backend/src/dispatch/handlers/cloud_sync.rs",
         "line": 33
       },
       "args": [
@@ -2095,8 +2113,8 @@
       "name": "get_fixture_definition",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 95
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 93
       },
       "args": [
         {
@@ -2117,8 +2135,8 @@
       "name": "get_fixture_facings",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 41
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 39
       },
       "args": [
         {
@@ -2135,7 +2153,7 @@
       "name": "get_grouped_hierarchy",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 143
       },
       "args": [
@@ -2157,7 +2175,7 @@
       "name": "get_node_types",
       "domain": "node_graph",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/node_graph.rs",
+        "file": "backend/src/dispatch/handlers/node_graph.rs",
         "line": 15
       },
       "args": [],
@@ -2172,7 +2190,7 @@
       "name": "get_or_create_share_code",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 63
       },
       "args": [
@@ -2197,8 +2215,8 @@
       "name": "get_patched_fixtures",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 19
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 17
       },
       "args": [
         {
@@ -2220,7 +2238,7 @@
       "name": "get_pattern",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 20
       },
       "args": [
@@ -2240,7 +2258,7 @@
       "name": "get_pattern_args",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 160
       },
       "args": [
@@ -2268,7 +2286,7 @@
       "name": "get_pattern_graph_document",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 104
       },
       "args": [
@@ -2292,7 +2310,7 @@
       "name": "get_pattern_node_library",
       "domain": "composable_patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
         "line": 5
       },
       "args": [],
@@ -2305,7 +2323,7 @@
       "name": "get_resolved_venue",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 47
       },
       "args": [
@@ -2323,7 +2341,7 @@
       "name": "get_score_document",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 15
       },
       "args": [
@@ -2341,7 +2359,7 @@
       "name": "get_session_item",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 163
       },
       "args": [
@@ -2364,7 +2382,7 @@
       "name": "get_settings",
       "domain": "settings",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/settings.rs",
+        "file": "backend/src/dispatch/handlers/settings.rs",
         "line": 9
       },
       "args": [],
@@ -2381,7 +2399,7 @@
       "name": "get_skill",
       "domain": "skills",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/skills.rs",
+        "file": "backend/src/dispatch/handlers/skills.rs",
         "line": 22
       },
       "args": [
@@ -2399,7 +2417,7 @@
       "name": "get_track_audio_base64",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 97
       },
       "args": [
@@ -2421,7 +2439,7 @@
       "name": "get_track_bar_classifications",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 42
       },
       "args": [
@@ -2441,7 +2459,7 @@
       "name": "get_track_beats",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 33
       },
       "args": [
@@ -2461,7 +2479,7 @@
       "name": "get_track_drum_onsets",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 52
       },
       "args": [
@@ -2481,7 +2499,7 @@
       "name": "get_track_waveform",
       "domain": "waveforms",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
+        "file": "backend/src/dispatch/handlers/waveforms.rs",
         "line": 5
       },
       "args": [
@@ -2506,8 +2524,8 @@
       "name": "get_track_waveform_window",
       "domain": "waveforms",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
-        "line": 24
+        "file": "backend/src/dispatch/handlers/waveforms.rs",
+        "line": 29
       },
       "args": [
         {
@@ -2542,7 +2560,7 @@
       "name": "get_ungrouped_fixtures",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 204
       },
       "args": [
@@ -2564,7 +2582,7 @@
       "name": "get_venue",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 23
       },
       "args": [
@@ -2586,7 +2604,7 @@
       "name": "get_venue_annotation_counts",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 23
       },
       "args": [
@@ -2608,7 +2626,7 @@
       "name": "get_venue_graph",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 36
       },
       "args": [
@@ -2626,7 +2644,7 @@
       "name": "highlight_selection",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 185
       },
       "args": [
@@ -2648,8 +2666,8 @@
       "name": "host_load_segment",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 22
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
+        "line": 21
       },
       "args": [
         {
@@ -2663,10 +2681,6 @@
         {
           "name": "endTime",
           "rust": "f32"
-        },
-        {
-          "name": "beatGrid",
-          "rust": "Option<BeatGrid>"
         }
       ],
       "returns": "()",
@@ -2684,8 +2698,8 @@
       "name": "host_load_track",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
-        "line": 82
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
+        "line": 84
       },
       "args": [
         {
@@ -2709,7 +2723,7 @@
       "name": "host_pause",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 163
       },
       "args": [],
@@ -2726,7 +2740,7 @@
       "name": "host_play",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 158
       },
       "args": [],
@@ -2743,7 +2757,7 @@
       "name": "host_seek",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 169
       },
       "args": [
@@ -2765,7 +2779,7 @@
       "name": "host_set_loop",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 174
       },
       "args": [
@@ -2787,7 +2801,7 @@
       "name": "host_set_loop_region",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 183
       },
       "args": [
@@ -2814,7 +2828,7 @@
       "name": "host_set_playback_rate",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 197
       },
       "args": [
@@ -2836,7 +2850,7 @@
       "name": "host_snapshot",
       "domain": "host_audio",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/host_audio.rs",
+        "file": "backend/src/dispatch/handlers/host_audio.rs",
         "line": 204
       },
       "args": [],
@@ -2853,8 +2867,8 @@
       "name": "import_tracks",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 120
+        "file": "backend/src/dispatch/handlers/tracks.rs",
+        "line": 125
       },
       "args": [
         {
@@ -2871,8 +2885,8 @@
       "name": "initialize_fixtures",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 67
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 65
       },
       "args": [],
       "returns": "usize",
@@ -2889,7 +2903,7 @@
       "name": "join_venue",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 112
       },
       "args": [
@@ -2913,7 +2927,7 @@
       "name": "leave_track",
       "domain": "compositor",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/compositor.rs",
+        "file": "backend/src/dispatch/handlers/compositor.rs",
         "line": 47
       },
       "args": [
@@ -2939,7 +2953,7 @@
       "name": "leave_venue",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 150
       },
       "args": [
@@ -2964,7 +2978,7 @@
       "name": "list_group_tree",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 277
       },
       "args": [
@@ -2982,7 +2996,7 @@
       "name": "list_groups",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 43
       },
       "args": [
@@ -3004,8 +3018,8 @@
       "name": "list_outputs",
       "domain": "artnet",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 40
+        "file": "backend/src/dispatch/handlers/artnet.rs",
+        "line": 36
       },
       "args": [],
       "returns": "Vec<UniverseOutput>",
@@ -3017,7 +3031,7 @@
       "name": "list_pattern_categories",
       "domain": "categories",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/categories.rs",
+        "file": "backend/src/dispatch/handlers/categories.rs",
         "line": 8
       },
       "args": [],
@@ -3032,7 +3046,7 @@
       "name": "list_patterns",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 14
       },
       "args": [],
@@ -3047,7 +3061,7 @@
       "name": "list_scores_across_venues",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 122
       },
       "args": [
@@ -3066,7 +3080,7 @@
       "name": "list_scores_for_track",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 108
       },
       "args": [
@@ -3090,7 +3104,7 @@
       "name": "list_track_scores",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 183
       },
       "args": [
@@ -3110,7 +3124,7 @@
       "name": "list_tracks",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
+        "file": "backend/src/dispatch/handlers/tracks.rs",
         "line": 17
       },
       "args": [],
@@ -3125,8 +3139,8 @@
       "name": "list_tracks_enriched",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 111
+        "file": "backend/src/dispatch/handlers/tracks.rs",
+        "line": 116
       },
       "args": [
         {
@@ -3147,7 +3161,7 @@
       "name": "list_venues",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 17
       },
       "args": [],
@@ -3164,7 +3178,7 @@
       "name": "midi_compile_cues_for_deck",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 180
       },
       "args": [
@@ -3195,7 +3209,7 @@
       "name": "midi_create_binding",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 101
       },
       "args": [
@@ -3217,7 +3231,7 @@
       "name": "midi_create_cue",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 27
       },
       "args": [
@@ -3239,7 +3253,7 @@
       "name": "midi_create_modifier",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 70
       },
       "args": [
@@ -3261,7 +3275,7 @@
       "name": "midi_delete_binding",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 123
       },
       "args": [
@@ -3283,7 +3297,7 @@
       "name": "midi_delete_cue",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 49
       },
       "args": [
@@ -3306,7 +3320,7 @@
       "name": "midi_delete_modifier",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 81
       },
       "args": [
@@ -3328,7 +3342,7 @@
       "name": "midi_fire_cue",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 211
       },
       "args": [
@@ -3356,7 +3370,7 @@
       "name": "midi_list_bindings",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 92
       },
       "args": [
@@ -3376,7 +3390,7 @@
       "name": "midi_list_cues",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 18
       },
       "args": [
@@ -3396,7 +3410,7 @@
       "name": "midi_list_modifiers",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 61
       },
       "args": [
@@ -3416,7 +3430,7 @@
       "name": "midi_release_cue",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 234
       },
       "args": [
@@ -3440,7 +3454,7 @@
       "name": "midi_reload_mapping",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 137
       },
       "args": [
@@ -3465,7 +3479,7 @@
       "name": "midi_update_binding",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 112
       },
       "args": [
@@ -3487,7 +3501,7 @@
       "name": "midi_update_cue",
       "domain": "midi",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/midi.rs",
+        "file": "backend/src/dispatch/handlers/midi.rs",
         "line": 38
       },
       "args": [
@@ -3509,7 +3523,7 @@
       "name": "missing_venue_groups",
       "domain": "group_references",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/group_references.rs",
+        "file": "backend/src/dispatch/handlers/group_references.rs",
         "line": 66
       },
       "args": [
@@ -3527,7 +3541,7 @@
       "name": "mixer_cancel_learn",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 117
       },
       "args": [
@@ -3549,7 +3563,7 @@
       "name": "mixer_connect",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 18
       },
       "args": [
@@ -3581,7 +3595,7 @@
       "name": "mixer_disconnect",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 40
       },
       "args": [
@@ -3604,7 +3618,7 @@
       "name": "mixer_get_status",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 55
       },
       "args": [
@@ -3626,7 +3640,7 @@
       "name": "mixer_init_for_venue",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 69
       },
       "args": [
@@ -3648,7 +3662,7 @@
       "name": "mixer_list_ports",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 10
       },
       "args": [],
@@ -3665,7 +3679,7 @@
       "name": "mixer_open_port",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 92
       },
       "args": [
@@ -3691,7 +3705,7 @@
       "name": "mixer_start_learn",
       "domain": "mixer",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/mixer.rs",
+        "file": "backend/src/dispatch/handlers/mixer.rs",
         "line": 108
       },
       "args": [
@@ -3713,8 +3727,8 @@
       "name": "next_addresses",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 214
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 212
       },
       "args": [
         {
@@ -3743,8 +3757,8 @@
       "name": "patch_fixture",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 107
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 105
       },
       "args": [
         {
@@ -3799,7 +3813,7 @@
       "name": "perform_match_track",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 59
       },
       "args": [
@@ -3825,7 +3839,7 @@
       "name": "perform_match_track_by_metadata",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 100
       },
       "args": [
@@ -3863,7 +3877,7 @@
       "name": "place_free",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 197
       },
       "args": [
@@ -3925,7 +3939,7 @@
       "name": "preview_annotation",
       "domain": "annotation_preview",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/annotation_preview.rs",
+        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
         "line": 15
       },
       "args": [
@@ -3955,7 +3969,7 @@
       "name": "preview_composable_pattern",
       "domain": "composable_patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/composable_patterns.rs",
+        "file": "backend/src/dispatch/handlers/composable_patterns.rs",
         "line": 9
       },
       "args": [
@@ -3973,7 +3987,7 @@
       "name": "preview_graph_image",
       "domain": "annotation_preview",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/annotation_preview.rs",
+        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
         "line": 75
       },
       "args": [
@@ -4015,7 +4029,7 @@
       "name": "preview_pattern",
       "domain": "node_graph",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/node_graph.rs",
+        "file": "backend/src/dispatch/handlers/node_graph.rs",
         "line": 127
       },
       "args": [
@@ -4062,7 +4076,7 @@
       "name": "preview_pattern_image",
       "domain": "annotation_preview",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/annotation_preview.rs",
+        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
         "line": 50
       },
       "args": [
@@ -4104,7 +4118,7 @@
       "name": "preview_score_clip",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 68
       },
       "args": [
@@ -4130,7 +4144,7 @@
       "name": "preview_selection_query",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 155
       },
       "args": [
@@ -4160,7 +4174,7 @@
       "name": "prodjlink_connect",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 40
       },
       "args": [
@@ -4183,7 +4197,7 @@
       "name": "prodjlink_disconnect",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 48
       },
       "args": [],
@@ -4201,7 +4215,7 @@
       "name": "prodjlink_discover",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 32
       },
       "args": [],
@@ -4219,7 +4233,7 @@
       "name": "reattach",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 168
       },
       "args": [
@@ -4257,7 +4271,7 @@
       "name": "redistribute",
       "domain": "distribute",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/distribute.rs",
+        "file": "backend/src/dispatch/handlers/distribute.rs",
         "line": 64
       },
       "args": [
@@ -4287,7 +4301,7 @@
       "name": "rekordbox_get_playlist_tracks",
       "domain": "rekordbox",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "file": "backend/src/dispatch/handlers/rekordbox.rs",
         "line": 57
       },
       "args": [
@@ -4310,7 +4324,7 @@
       "name": "rekordbox_import_tracks",
       "domain": "rekordbox",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "file": "backend/src/dispatch/handlers/rekordbox.rs",
         "line": 72
       },
       "args": [
@@ -4328,7 +4342,7 @@
       "name": "rekordbox_list_playlists",
       "domain": "rekordbox",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "file": "backend/src/dispatch/handlers/rekordbox.rs",
         "line": 51
       },
       "args": [],
@@ -4346,7 +4360,7 @@
       "name": "rekordbox_list_tracks",
       "domain": "rekordbox",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "file": "backend/src/dispatch/handlers/rekordbox.rs",
         "line": 43
       },
       "args": [],
@@ -4364,7 +4378,7 @@
       "name": "rekordbox_open_library",
       "domain": "rekordbox",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "file": "backend/src/dispatch/handlers/rekordbox.rs",
         "line": 36
       },
       "args": [],
@@ -4383,7 +4397,7 @@
       "name": "rekordbox_search_tracks",
       "domain": "rekordbox",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/rekordbox.rs",
+        "file": "backend/src/dispatch/handlers/rekordbox.rs",
         "line": 65
       },
       "args": [
@@ -4406,7 +4420,7 @@
       "name": "remove_fixture_from_group",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 108
       },
       "args": [
@@ -4439,8 +4453,8 @@
       "name": "remove_patched_fixture",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 301
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 299
       },
       "args": [
         {
@@ -4466,7 +4480,7 @@
       "name": "remove_session_item",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 443
       },
       "args": [
@@ -4489,8 +4503,8 @@
       "name": "rename_patched_fixture",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 311
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 309
       },
       "args": [
         {
@@ -4520,7 +4534,7 @@
       "name": "render_clear_active_layer",
       "domain": "render_engine",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/render_engine.rs",
+        "file": "backend/src/dispatch/handlers/render_engine.rs",
         "line": 35
       },
       "args": [
@@ -4542,7 +4556,7 @@
       "name": "render_clear_perform",
       "domain": "render_engine",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/render_engine.rs",
+        "file": "backend/src/dispatch/handlers/render_engine.rs",
         "line": 23
       },
       "args": [
@@ -4564,7 +4578,7 @@
       "name": "render_composite_deck",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 227
       },
       "args": [
@@ -4596,7 +4610,7 @@
       "name": "render_composite_deck_unmatched",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 268
       },
       "args": [
@@ -4640,7 +4654,7 @@
       "name": "render_identify",
       "domain": "render_engine",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/render_engine.rs",
+        "file": "backend/src/dispatch/handlers/render_engine.rs",
         "line": 47
       },
       "args": [
@@ -4662,7 +4676,7 @@
       "name": "render_set_deck_states",
       "domain": "render_engine",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/render_engine.rs",
+        "file": "backend/src/dispatch/handlers/render_engine.rs",
         "line": 11
       },
       "args": [
@@ -4688,7 +4702,7 @@
       "name": "replace_track_scores",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 216
       },
       "args": [
@@ -4729,8 +4743,8 @@
       "name": "reprocess_track",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 235
+        "file": "backend/src/dispatch/handlers/tracks.rs",
+        "line": 240
       },
       "args": [
         {
@@ -4747,8 +4761,8 @@
       "name": "reprocess_waveform",
       "domain": "waveforms",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/waveforms.rs",
-        "line": 45
+        "file": "backend/src/dispatch/handlers/waveforms.rs",
+        "line": 55
       },
       "args": [
         {
@@ -4770,7 +4784,7 @@
       "name": "resolve_venue_group",
       "domain": "group_references",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/group_references.rs",
+        "file": "backend/src/dispatch/handlers/group_references.rs",
         "line": 100
       },
       "args": [
@@ -4800,7 +4814,7 @@
       "name": "restore_graph",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 60
       },
       "args": [
@@ -4822,7 +4836,7 @@
       "name": "run_graph",
       "domain": "node_graph",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/node_graph.rs",
+        "file": "backend/src/dispatch/handlers/node_graph.rs",
         "line": 39
       },
       "args": [
@@ -4866,7 +4880,7 @@
       "name": "run_python_cell",
       "domain": "agent_execution",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/agent_execution.rs",
+        "file": "backend/src/dispatch/handlers/agent_execution.rs",
         "line": 21
       },
       "args": [
@@ -4905,7 +4919,7 @@
       "name": "save_pattern_graph_document",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 176
       },
       "args": [
@@ -4944,7 +4958,7 @@
       "name": "save_venue_group",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 781
       },
       "args": [
@@ -4978,7 +4992,7 @@
       "name": "score_dsl_export",
       "domain": "score_dsl",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/score_dsl.rs",
+        "file": "backend/src/dispatch/handlers/score_dsl.rs",
         "line": 79
       },
       "args": [
@@ -5012,7 +5026,7 @@
       "name": "score_dsl_import",
       "domain": "score_dsl",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/score_dsl.rs",
+        "file": "backend/src/dispatch/handlers/score_dsl.rs",
         "line": 250
       },
       "args": [
@@ -5055,7 +5069,7 @@
       "name": "score_dsl_validate",
       "domain": "score_dsl",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/score_dsl.rs",
+        "file": "backend/src/dispatch/handlers/score_dsl.rs",
         "line": 116
       },
       "args": [
@@ -5089,8 +5103,8 @@
       "name": "search_fixtures",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 78
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 76
       },
       "args": [
         {
@@ -5119,7 +5133,7 @@
       "name": "search_patterns_remote",
       "domain": "cloud_sync",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/cloud_sync.rs",
+        "file": "backend/src/dispatch/handlers/cloud_sync.rs",
         "line": 11
       },
       "args": [
@@ -5154,7 +5168,7 @@
       "name": "send_login_code",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 36
       },
       "args": [
@@ -5172,8 +5186,8 @@
       "name": "set_address_pinned",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 265
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 263
       },
       "args": [
         {
@@ -5198,8 +5212,8 @@
       "name": "set_fixture_address",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 163
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 161
       },
       "args": [
         {
@@ -5228,8 +5242,8 @@
       "name": "set_fixture_mode",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 243
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 241
       },
       "args": [
         {
@@ -5258,7 +5272,7 @@
       "name": "set_params",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 273
       },
       "args": [
@@ -5288,7 +5302,7 @@
       "name": "set_pattern_category",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 91
       },
       "args": [
@@ -5314,7 +5328,7 @@
       "name": "set_session_item",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 236
       },
       "args": [
@@ -5343,7 +5357,7 @@
       "name": "set_setting",
       "domain": "settings",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/settings.rs",
+        "file": "backend/src/dispatch/handlers/settings.rs",
         "line": 20
       },
       "args": [
@@ -5369,7 +5383,7 @@
       "name": "set_venue_environment",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 188
       },
       "args": [
@@ -5391,7 +5405,7 @@
       "name": "skills_listing",
       "domain": "skills",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/skills.rs",
+        "file": "backend/src/dispatch/handlers/skills.rs",
         "line": 17
       },
       "args": [],
@@ -5404,7 +5418,7 @@
       "name": "stage_catalog",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 105
       },
       "args": [],
@@ -5417,7 +5431,7 @@
       "name": "stagelinq_connect",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 16
       },
       "args": [],
@@ -5436,7 +5450,7 @@
       "name": "stagelinq_disconnect",
       "domain": "perform",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/perform.rs",
+        "file": "backend/src/dispatch/handlers/perform.rs",
         "line": 21
       },
       "args": [],
@@ -5454,8 +5468,8 @@
       "name": "start_discovery",
       "domain": "artnet",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 20
+        "file": "backend/src/dispatch/handlers/artnet.rs",
+        "line": 16
       },
       "args": [],
       "returns": "()",
@@ -5475,8 +5489,8 @@
       "name": "stop_discovery",
       "domain": "artnet",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 25
+        "file": "backend/src/dispatch/handlers/artnet.rs",
+        "line": 21
       },
       "args": [],
       "returns": "()",
@@ -5494,7 +5508,7 @@
       "name": "sync_full",
       "domain": "sync",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/sync.rs",
+        "file": "backend/src/dispatch/handlers/sync.rs",
         "line": 16
       },
       "args": [],
@@ -5513,7 +5527,7 @@
       "name": "sync_retry",
       "domain": "sync",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/sync.rs",
+        "file": "backend/src/dispatch/handlers/sync.rs",
         "line": 34
       },
       "args": [],
@@ -5526,7 +5540,7 @@
       "name": "sync_status",
       "domain": "sync",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/sync.rs",
+        "file": "backend/src/dispatch/handlers/sync.rs",
         "line": 24
       },
       "args": [],
@@ -5539,8 +5553,8 @@
       "name": "unbind_output",
       "domain": "artnet",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/artnet.rs",
-        "line": 69
+        "file": "backend/src/dispatch/handlers/artnet.rs",
+        "line": 65
       },
       "args": [
         {
@@ -5557,8 +5571,8 @@
       "name": "universe_occupancy",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 189
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 187
       },
       "args": [
         {
@@ -5579,8 +5593,8 @@
       "name": "universes_in_use",
       "domain": "fixtures",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/fixtures.rs",
-        "line": 200
+        "file": "backend/src/dispatch/handlers/fixtures.rs",
+        "line": 198
       },
       "args": [
         {
@@ -5597,7 +5611,7 @@
       "name": "update_group",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 52
       },
       "args": [
@@ -5637,7 +5651,7 @@
       "name": "update_movement_config",
       "domain": "groups",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/groups.rs",
+        "file": "backend/src/dispatch/handlers/groups.rs",
         "line": 219
       },
       "args": [
@@ -5664,7 +5678,7 @@
       "name": "update_pattern",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 53
       },
       "args": [
@@ -5694,8 +5708,8 @@
       "name": "update_track_metadata",
       "domain": "tracks",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/tracks.rs",
-        "line": 412
+        "file": "backend/src/dispatch/handlers/tracks.rs",
+        "line": 422
       },
       "args": [
         {
@@ -5729,7 +5743,7 @@
       "name": "update_track_score",
       "domain": "scores",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/scores.rs",
+        "file": "backend/src/dispatch/handlers/scores.rs",
         "line": 199
       },
       "args": [
@@ -5753,7 +5767,7 @@
       "name": "update_venue",
       "domain": "venues",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/venues.rs",
+        "file": "backend/src/dispatch/handlers/venues.rs",
         "line": 39
       },
       "args": [
@@ -5784,7 +5798,7 @@
       "name": "venue_tiles",
       "domain": "stage",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/stage.rs",
+        "file": "backend/src/dispatch/handlers/stage.rs",
         "line": 74
       },
       "args": [
@@ -5806,7 +5820,7 @@
       "name": "verify_login_code",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 64
       },
       "args": [
@@ -5828,7 +5842,7 @@
       "name": "verify_pattern",
       "domain": "patterns",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/patterns.rs",
+        "file": "backend/src/dispatch/handlers/patterns.rs",
         "line": 121
       },
       "args": [
@@ -5857,7 +5871,7 @@
       "name": "view_composite_image",
       "domain": "annotation_preview",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/annotation_preview.rs",
+        "file": "backend/src/dispatch/handlers/annotation_preview.rs",
         "line": 100
       },
       "args": [
@@ -5887,7 +5901,7 @@
       "name": "wipe_database",
       "domain": "auth",
       "handler": {
-        "file": "src-tauri/src/dispatch/handlers/auth.rs",
+        "file": "backend/src/dispatch/handlers/auth.rs",
         "line": 598
       },
       "args": [],
@@ -5906,7 +5920,6 @@
       }
     }
   ],
-  "unported": [],
   "events": [
     {
       "name": "close-requested",
@@ -5918,7 +5931,7 @@
     {
       "name": "controller_port_change",
       "emitters": [
-        "src-tauri/src/controller_manager.rs:311"
+        "backend/src/controller_manager.rs:311"
       ],
       "listeners": [],
       "orphan": true,
@@ -5927,9 +5940,9 @@
     {
       "name": "controller_state",
       "emitters": [
-        "src-tauri/src/controller_manager.rs:645",
-        "src-tauri/src/dispatch/handlers/midi.rs:230",
-        "src-tauri/src/dispatch/handlers/midi.rs:239"
+        "backend/src/controller_manager.rs:645",
+        "backend/src/dispatch/handlers/midi.rs:230",
+        "backend/src/dispatch/handlers/midi.rs:239"
       ],
       "listeners": [],
       "orphan": true
@@ -5943,20 +5956,18 @@
     },
     {
       "name": "host-audio://state",
-      "emitters": [
-        "src-tauri/src/host_audio.rs:25"
-      ],
+      "emitters": [],
       "listeners": [],
       "orphan": true
     },
     {
       "name": "library-changed",
       "emitters": [
-        "src-tauri/src/dispatch/handlers/tracks.rs:324",
-        "src-tauri/src/dispatch/handlers/tracks.rs:362",
-        "src-tauri/src/dispatch/handlers/tracks.rs:427",
-        "src-tauri/src/sync/orchestrator.rs:181",
-        "src-tauri/src/sync/orchestrator.rs:232"
+        "backend/src/dispatch/handlers/tracks.rs:334",
+        "backend/src/dispatch/handlers/tracks.rs:372",
+        "backend/src/dispatch/handlers/tracks.rs:437",
+        "backend/src/sync/orchestrator.rs:240",
+        "backend/src/sync/orchestrator.rs:286"
       ],
       "listeners": [],
       "orphan": true
@@ -5964,8 +5975,8 @@
     {
       "name": "midi_learn_captured",
       "emitters": [
-        "src-tauri/src/controller_manager.rs:279",
-        "src-tauri/src/controller_manager.rs:384"
+        "backend/src/controller_manager.rs:279",
+        "backend/src/controller_manager.rs:384"
       ],
       "listeners": [],
       "orphan": true
@@ -5973,7 +5984,7 @@
     {
       "name": "mixer_learned",
       "emitters": [
-        "src-tauri/src/mixer_manager.rs:169"
+        "backend/src/mixer_manager.rs:169"
       ],
       "listeners": [],
       "orphan": true
@@ -5981,8 +5992,8 @@
     {
       "name": "mixer_state",
       "emitters": [
-        "src-tauri/src/mixer_manager.rs:201",
-        "src-tauri/src/mixer_manager.rs:214"
+        "backend/src/mixer_manager.rs:201",
+        "backend/src/mixer_manager.rs:214"
       ],
       "listeners": [],
       "orphan": true
@@ -5996,8 +6007,8 @@
     {
       "name": "perform_event",
       "emitters": [
-        "src-tauri/src/prodjlink_manager.rs:42",
-        "src-tauri/src/stagelinq_manager.rs:42"
+        "backend/src/prodjlink_manager.rs:42",
+        "backend/src/stagelinq_manager.rs:42"
       ],
       "listeners": [],
       "orphan": true
@@ -6005,11 +6016,11 @@
     {
       "name": "python-env-progress",
       "emitters": [
-        "src-tauri/src/python_env.rs:308",
-        "src-tauri/src/python_env.rs:404",
-        "src-tauri/src/python_env.rs:423",
-        "src-tauri/src/python_env.rs:447",
-        "src-tauri/src/python_env.rs:501"
+        "backend/src/python_env.rs:286",
+        "backend/src/python_env.rs:354",
+        "backend/src/python_env.rs:373",
+        "backend/src/python_env.rs:397",
+        "backend/src/python_env.rs:451"
       ],
       "listeners": [],
       "orphan": true
@@ -6017,14 +6028,14 @@
     {
       "name": "track-import-state",
       "emitters": [
-        "src-tauri/src/dispatch/handlers/tracks.rs:278",
-        "src-tauri/src/dispatch/handlers/tracks.rs:449",
-        "src-tauri/src/dispatch/handlers/tracks.rs:519",
-        "src-tauri/src/preprocessing/scheduler.rs:351",
-        "src-tauri/src/preprocessing/scheduler.rs:399",
-        "src-tauri/src/preprocessing/scheduler.rs:463",
-        "src-tauri/src/preprocessing/scheduler.rs:499",
-        "src-tauri/src/preprocessing/scheduler.rs:531"
+        "backend/src/dispatch/handlers/tracks.rs:288",
+        "backend/src/dispatch/handlers/tracks.rs:459",
+        "backend/src/dispatch/handlers/tracks.rs:529",
+        "backend/src/preprocessing/scheduler.rs:351",
+        "backend/src/preprocessing/scheduler.rs:399",
+        "backend/src/preprocessing/scheduler.rs:463",
+        "backend/src/preprocessing/scheduler.rs:499",
+        "backend/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
         "gpui/crates/app/src/library.rs:160"
@@ -6035,7 +6046,7 @@
     {
       "name": "track-status-changed",
       "emitters": [
-        "src-tauri/src/preprocessing/scheduler.rs:386"
+        "backend/src/preprocessing/scheduler.rs:386"
       ],
       "listeners": [],
       "orphan": true
@@ -6050,9 +6061,8 @@
     {
       "name": "universe-state-update",
       "emitters": [
-        "src-tauri/src/controller_manager.rs:657",
-        "src-tauri/src/dispatch/handlers/midi.rs:248",
-        "src-tauri/src/render_engine.rs:46"
+        "backend/src/controller_manager.rs:657",
+        "backend/src/dispatch/handlers/midi.rs:248"
       ],
       "listeners": [],
       "orphan": true
@@ -6060,7 +6070,7 @@
     {
       "name": "upload-progress-start",
       "emitters": [
-        "src-tauri/src/sync/files.rs:26"
+        "backend/src/sync/files.rs:26"
       ],
       "listeners": [],
       "orphan": true
@@ -6068,7 +6078,7 @@
     {
       "name": "upload-progress-tick",
       "emitters": [
-        "src-tauri/src/sync/files.rs:31"
+        "backend/src/sync/files.rs:31"
       ],
       "listeners": [],
       "orphan": true

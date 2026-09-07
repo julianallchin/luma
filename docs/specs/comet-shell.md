@@ -119,7 +119,7 @@ threads per subject. So:
 - **Within a subject**, the titlebar's thread title is a popover trigger:
   recent threads for this subject, `New thread`, `Rename`, `Delete`. Backed by
   `agent_thread_list` / `agent_thread_rename` / `agent_thread_delete`, which
-  already exist in the dispatcher (`src-tauri/src/dispatch/mod.rs:252-264`) and
+  already exist in the dispatcher (`backend/src/dispatch/mod.rs:252-264`) and
   need only `Library` methods.
 - **Pattern threads** (`AgentKind::PatternGraph`) are reached the same way from
   the pattern graph tab's own title, not from the sidebar — a pattern is not a

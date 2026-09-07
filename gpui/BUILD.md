@@ -22,7 +22,7 @@ Current, measured on a quiet machine after the 2026-08-23 rebuild:
 | `cargo check --workspace --all-targets`, **warm** | **4.3 s** |
 | the same, from an empty target dir | 3 m 46 s |
 | `cargo test -p gpui-agent --test headless --no-run`, cold | 3 m 31 s |
-| `cargo check --workspace --all-targets` in `src-tauri`, cold | 2 m 9 s |
+| `cargo check --workspace --all-targets` in `backend`, cold | 2 m 9 s |
 
 The warm number used to be ~6.5 minutes. Almost none of that was compilation.
 

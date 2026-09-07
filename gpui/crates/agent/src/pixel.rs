@@ -48,7 +48,7 @@ pub(crate) fn open<V: Render>(
 ) -> Host {
     let mut cx = HeadlessAppContext::with_platform(
         text_system(),
-        Arc::new(gpui_component_assets::Assets),
+        Arc::new(luma_ui::icons::Assets),
         gpui_platform::current_headless_renderer,
     );
     cx.update(|cx| {

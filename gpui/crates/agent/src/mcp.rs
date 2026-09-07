@@ -1,7 +1,7 @@
 //! MCP over stdio.
 //!
 //! The framing, `initialize`, `ping` and `tools/list` live in `mcp-stdio`,
-//! shared with `src-tauri`'s `luma-mcp`. What is here is this harness's own
+//! shared with `backend`'s `luma-mcp`. What is here is this harness's own
 //! half: two tools, and a strictly serial loop — one blocking thread per stage
 //! is the whole architecture of this crate, and a driver that could interleave
 //! two scripts against one interpreter would be lying about what it drives.

@@ -22,7 +22,7 @@
 // is compiled into the Rust core. Regenerate it with the `dump_node_types`
 // binary, which is the same function the app serves over `get_node_types`:
 //
-//   cargo run --manifest-path src-tauri/Cargo.toml --bin dump_node_types \
+//   cargo run --manifest-path backend/Cargo.toml --bin dump_node_types \
 //     > harness/gauntlet/node-types.json
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";

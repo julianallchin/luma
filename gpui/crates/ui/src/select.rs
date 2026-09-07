@@ -7,8 +7,9 @@
 //! already owns the screen's state instead of introducing a second, hidden
 //! store inside the design system.
 
+use crate::icons::IconName;
 use gpui::*;
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 
 use crate::float::RowState;
 use crate::{ladder, CONTROL_HEIGHT};

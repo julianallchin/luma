@@ -7,7 +7,7 @@ The Signal system is the foundation of Luma's data flow. Every value that passes
 
 ## Signal: A 3D Tensor
 
-The `Signal` struct is the fundamental data type in Luma's graph engine. Defined in `src-tauri/src/models/node_graph.rs`:
+The `Signal` struct is the fundamental data type in Luma's graph engine. Defined in `backend/src/models/node_graph.rs`:
 
 ```rust
 pub struct Signal {
@@ -76,7 +76,7 @@ Each step in this pipeline narrows the data from abstract tensors to concrete by
 
 ## Series and SeriesSample
 
-A `Series` is the time-series representation for a single fixture's channel after a Signal is converted by an apply node. Defined in `src-tauri/src/models/node_graph.rs`:
+A `Series` is the time-series representation for a single fixture's channel after a Signal is converted by an apply node. Defined in `backend/src/models/node_graph.rs`:
 
 ```rust
 pub struct Series {
@@ -94,6 +94,6 @@ pub struct SeriesSample {
 
 ### Sampling at Render Time
 
-At render time, the compositor uses binary search (`partition_point`) for O(log n) lookup of the nearest sample, with optional linear interpolation between adjacent samples. The `sample_series()` function in `src-tauri/src/compositor.rs` handles this lookup.
+At render time, the compositor uses binary search (`partition_point`) for O(log n) lookup of the nearest sample, with optional linear interpolation between adjacent samples. The `sample_series()` function in `backend/src/compositor.rs` handles this lookup.
 
 All times in `SeriesSample` are absolute (seconds from track start), not relative to the pattern's start time. This convention ensures correct alignment when the compositor merges layers from different annotations that span different time ranges.

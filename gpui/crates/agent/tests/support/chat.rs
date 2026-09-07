@@ -51,7 +51,6 @@ pub const PATTERNS: [&str; 10] = [
 ];
 
 /// What the unattached panel promises, as the panel itself spells it.
-pub use luma_chat::UNATTACHED_BLURB;
 
 /// The pattern the reference captures are taken over.
 pub const CAPTURED: &str = "gauntlet-chat";

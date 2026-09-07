@@ -318,7 +318,7 @@ The core schema is deliberately small:
 | `authored_operation_outcomes` | immutable, permanent | Idempotent committed or typed-conflicted result for a host operation. |
 
 The executable SQLite DDL lives in the additive
-`src-tauri/migrations/20260802945000_relational_authored_history.sql` migration.
+`backend/migrations/20260802945000_relational_authored_history.sql` migration.
 Earlier migrations are frozen byte-for-byte so databases created by the
 checkpoint pass SQLx checksum verification; the additive migration removes
 their retired Git-shaped tables after establishing the relational replacement.
@@ -2497,7 +2497,7 @@ required to validate the core executor.
 Suggested module shape:
 
 ```text
-src-tauri/src/agent_execution/
+backend/src/agent_execution/
   mod.rs
   workspace.rs             thread -> workspace registry
   worker_process.rs        protocol, process, interrupt
@@ -2523,13 +2523,13 @@ src-tauri/src/agent_execution/
     macos.rs
     linux.rs
 
-src-tauri/python/
+backend/python/
   luma_exec/
     worker.py               persistent cell loop and generic host-call bridge
     bindings.py             manifest -> Python namespace
     track.py                Track/Edit/Window/Output facade
 
-src-tauri/src/services/
+backend/src/services/
   track_edits.rs            typed score validation and SQLite projection
   score_dsl/                one lossless score parser/serializer/compiler
   authored_state/           relational revision DAG/hash/CAS primitives
@@ -2543,7 +2543,7 @@ src-tauri/src/services/
   graph_documents.rs        graph revision, validation, atomic projection
   score_mutations.rs        shared command-shaped score adapters
 
-src-tauri/src/sync/
+backend/src/sync/
   authored_remote.rs        typed boundary for exactly three head/archive RPCs
   registry.rs               immutable authored + transcript row mappings
 
@@ -2608,8 +2608,8 @@ Events go to stderr, because both put their protocol on stdout.
 
 | | |
 |---|---|
-| `src-tauri/src/bin/agent_harness.rs` | one JSON request per line; the shim in `scripts/headless/shim.ts` puts `window.__TAURI_INTERNALS__.invoke` on top of it so unmodified frontend agent code runs under Bun |
-| `src-tauri/src/bin/luma-mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
+| `backend/src/bin/agent_harness.rs` | one JSON request per line; the shim in `scripts/headless/shim.ts` puts `window.__TAURI_INTERNALS__.invoke` on top of it so unmodified frontend agent code runs under Bun |
+| `backend/src/bin/luma-mcp.rs` | MCP over stdio, so an out-of-process coding agent gets the `python` tool itself |
 
 `luma-mcp` exposes four tools:
 
@@ -2639,7 +2639,7 @@ included. A second wording or a second projection would be a second tool.
 The loop is concurrent, one task per request, for the reason the JSON-RPC
 harness's is: `cancel` exists precisely to interrupt a `python` that is still
 in flight. The framing, `initialize`, `ping` and `tools/list` live in
-`src-tauri/crates/mcp-stdio`, shared with the GPUI harness's server; the loop
+`backend/crates/mcp-stdio`, shared with the GPUI harness's server; the loop
 does not, because that harness is deliberately serial.
 
 The sandbox is not a flag on these hosts. They resolve the worker environment
@@ -2653,7 +2653,7 @@ Register the server with a `.mcp.json` at the repository root (not committed):
 {
   "mcpServers": {
     "luma": {
-      "command": "./src-tauri/target/debug/luma-mcp",
+      "command": "./backend/target/debug/luma-mcp",
       "args": []
     }
   }

@@ -98,7 +98,7 @@ fn main() {
 
     // Icons (chevrons, checks, …) are SVGs embedded by gpui-component's assets
     // crate; without an asset source every `Icon` silently renders nothing.
-    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let app = gpui_platform::application().with_assets(luma_ui::icons::Assets);
     app.run(move |cx| {
         gpui_component::init(cx);
         // The entity fixtures hold real text fields; without the keymap their

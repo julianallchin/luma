@@ -25,13 +25,13 @@ Luma uses a single SQLite database (`luma.db`) for all application data. Portabl
 
 ## Migrations
 
-Location: `src-tauri/migrations/`
+Location: `backend/migrations/`
 
 11 migrations total, applied in order by timestamp. Each migration is a SQL file that creates or alters tables. sqlx manages migration state and applies pending migrations on app startup.
 
 ## Cloud Sync
 
-Files: `src-tauri/src/sync/`
+Files: `backend/src/sync/`
 
 Luma syncs to **Supabase** (PostgreSQL + PostgREST API). The architecture is **local-first** -- SQLite is the source of truth, and the cloud is a secondary copy for backup and sharing. Sync is **automatic and bidirectional** -- changes are pushed in the background and pulled on launch, with no manual sync button needed.
 

@@ -1,0 +1,81 @@
+//! Bridge to the MERT-95M feature-extraction python worker.
+//!
+//! Shells out to `mert_worker.py` against a full-mix audio file *and* the
+//! demucs drum stem, producing two cached .npy files in a single Python
+//! process. The model is loaded once per track — consumer-laptop friendly
+//! — and the resulting caches feed the bar classifier (full mix) and the
+//! n2n drum-onset preprocessor (drum stem).
+
+use crate::preprocessing::WorkerEnvironment;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+const WORKER_SOURCE: &str = include_str!("../python/mert_worker.py");
+const WORKER_SCRIPT_NAME: &str = "mert_worker.py";
+
+/// Result of a successful MERT extraction. Both caches written by one
+/// Python invocation against the same loaded MERT-95M model.
+#[derive(Debug, Clone)]
+pub struct MertCache {
+    pub fullmix_path: PathBuf,
+    pub drum_path: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct WorkerResponse {
+    fullmix_path: String,
+    drum_path: String,
+}
+
+pub fn compute_mert_cache(
+    env: &WorkerEnvironment,
+    fullmix_path: &Path,
+    drum_path: &Path,
+    out_fullmix: &Path,
+    out_drum: &Path,
+) -> Result<MertCache, String> {
+    // The worker imports `n2n.infer.compute_mert_features` so it shares the
+    // exact chunking parameters the training pipeline uses; ensure the n2n
+    // resource dir is unpacked alongside the script.
+    let _ = env.deploy_resource("n2n")?;
+
+    for out in [out_fullmix, out_drum] {
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!("Failed to create MERT cache dir {}: {e}", parent.display())
+            })?;
+        }
+    }
+
+    let mut cmd = env.worker_command(WORKER_SCRIPT_NAME, WORKER_SOURCE)?;
+    let output = cmd
+        .arg("--fullmix")
+        .arg(fullmix_path)
+        .arg("--drum")
+        .arg(drum_path)
+        .arg("--out-fullmix")
+        .arg(out_fullmix)
+        .arg("--out-drum")
+        .arg(out_drum)
+        .output()
+        .map_err(|e| format!("Failed to launch MERT worker: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "MERT worker exited unsuccessfully".to_string()
+        } else {
+            format!("MERT worker failed: {stderr}")
+        });
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|e| format!("MERT worker output was not valid UTF-8: {e}"))?;
+    let payload: WorkerResponse = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("Failed to parse MERT response '{}': {e}", stdout.trim()))?;
+
+    Ok(MertCache {
+        fullmix_path: PathBuf::from(payload.fullmix_path),
+        drum_path: PathBuf::from(payload.drum_path),
+    })
+}

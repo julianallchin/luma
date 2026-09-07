@@ -1,9 +1,10 @@
 use gpui::{div, prelude::*, px, AnyElement, Entity, SharedString, Svg};
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
 use luma_lib::agent::{
     engine::catalog::{ModelChoice, Selection, Service},
     model::MODELS,
 };
+use luma_ui::icons::IconName;
 use luma_ui::{
     float, ladder,
     node::{AgentNode, Instrument, Role},

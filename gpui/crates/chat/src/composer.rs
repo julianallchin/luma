@@ -40,7 +40,8 @@
 use std::time::{Duration, Instant};
 
 use gpui::{div, prelude::*, px, Context, Entity, Focusable as _, SharedString, Window};
-use gpui_component::{Icon, IconName};
+use gpui_component::Icon;
+use luma_ui::icons::IconName;
 use luma_ui::node::{AgentNode as _, Instrument, Role as NodeRole};
 use luma_ui::text_input::{self, TextInput};
 use luma_ui::{dialog, motion};

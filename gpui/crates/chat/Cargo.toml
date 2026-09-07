@@ -11,7 +11,7 @@ luma-md = { path = "../md" }
 luma-ui = { workspace = true }
 
 # The agent loop. Consumed as a typed Rust stream — see `luma_lib::agent`.
-luma_lib = { package = "luma", path = "../../../src-tauri" }
+luma_lib = { package = "luma", path = "../../../backend" }
 
 base64 = "0.21"
 chrono = "0.4"

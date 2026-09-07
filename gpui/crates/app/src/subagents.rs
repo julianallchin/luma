@@ -33,11 +33,11 @@ use gpui::{
     div, prelude::*, px, AnyElement, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
     SharedString, Window,
 };
-use gpui_component::IconName;
 use luma_chat::AgentChat;
 use luma_lib::agent::subagent::{SubagentPhase, SubagentSnapshot};
 use luma_ui::dialog::morph::{self, ContentMode, MorphDialog, MorphSize, RouteDescriptor};
 use luma_ui::float::{self, RowState};
+use luma_ui::icons::IconName;
 use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 
@@ -407,7 +407,10 @@ fn header(
                             this.subagents_to_list(cx);
                         });
                     })
-                    .child("←")
+                    .child(
+                        gpui_component::Icon::new(luma_ui::icons::IconName::ArrowLeft)
+                            .size(px(12.)),
+                    )
                     .agent_node(Role::Button, "Back")
                     .agent_focused(state.back_focus.is_focused(window)),
             )

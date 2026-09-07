@@ -17,9 +17,8 @@
 //! its first annotation is authored.
 //!
 //! Album art comes from `album_art_path` — a path on disk, never inlined bytes
-//! (see CLAUDE.md on why bulk responses carry paths). The web side has to route
-//! that path through Tauri's asset protocol to get it past the webview; a
-//! native host just reads the file, so `img(path)` is the whole story and
+//! (see CLAUDE.md on why bulk responses carry paths). The native host reads
+//! the file with `img(path)` and
 //! GPUI's image cache handles the decode and the lazy load.
 
 use std::cell::Cell;
@@ -788,7 +787,7 @@ fn account_foot(shell: &Luma, app: &Entity<Luma>, window: &Window) -> Div {
                         .agent_node(Role::Text, label),
                 )
                 .child(
-                    gpui_component::Icon::new(gpui_component::IconName::ChevronUp)
+                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronUp)
                         .size(px(11.))
                         .text_color(luma_ui::glass::ink(0.45)),
                 )
@@ -929,7 +928,7 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 })
                 .child(state.venue_name.clone())
                 .child(
-                    gpui_component::Icon::new(gpui_component::IconName::ChevronDown)
+                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronDown)
                         .size(px(11.))
                         .text_color(luma_ui::glass::ink(0.45)),
                 )
@@ -948,7 +947,7 @@ fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
                 .justify_center()
                 .hover(|button| button.bg(luma_ui::glass::wash(0.06)))
                 .on_click(move |_, _, cx| add.update(cx, |this, cx| this.show_add_tracks(cx)))
-                .child(gpui_component::Icon::new(gpui_component::IconName::Plus).size(px(12.0)))
+                .child(gpui_component::Icon::new(luma_ui::icons::IconName::Plus).size(px(12.0)))
                 .agent_node(Role::Button, "Add track")
         })
         // How many rows the filters admit — the web browser's footer, kept in
@@ -1248,7 +1247,7 @@ fn track_row(
                 .justify_center()
                 .text_color(luma_ui::glass::ink(if picked { 0.6 } else { 0.35 }))
                 .child(
-                    gpui_component::Icon::new(gpui_component::IconName::ChevronRight).size(px(11.)),
+                    gpui_component::Icon::new(luma_ui::icons::IconName::ChevronRight).size(px(11.)),
                 ),
         )
         .agent_node(Role::Row, name)

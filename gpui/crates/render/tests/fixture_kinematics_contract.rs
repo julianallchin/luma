@@ -13,7 +13,7 @@
 //!    expectations are updated in the same commit that recaptures the goldens.
 //!
 //! 2. **Agreement.** The shared contract vectors, evaluated here rather than in
-//!    `src-tauri/`. The app and the renderer are separate cargo workspaces and
+//!    `backend/`. The app and the renderer are separate cargo workspaces and
 //!    cannot share a test crate, so the file is included by path from both.
 
 use std::collections::BTreeMap;
@@ -28,7 +28,7 @@ use luma_render::scene_desc::{
 };
 use luma_render::{build_frame, Frame};
 
-#[path = "../../../../src-tauri/crates/fixture-kinematics/contract_vectors.rs"]
+#[path = "../../../../backend/crates/fixture-kinematics/contract_vectors.rs"]
 mod contract_vectors;
 
 /// The pose the characterization frame uses: nothing symmetric, so a dropped
