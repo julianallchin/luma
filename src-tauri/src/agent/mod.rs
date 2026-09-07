@@ -373,6 +373,33 @@ pub struct ThreadScope {
     pub score_id: Option<String>,
 }
 
+impl TryFrom<&AgentThread> for ThreadScope {
+    type Error = AgentError;
+
+    fn try_from(thread: &AgentThread) -> Result<Self, Self::Error> {
+        use crate::models::agent_threads::{AuthoredThreadRoute, ThreadRoute};
+        match thread.route().map_err(AgentError::Invalid)? {
+            ThreadRoute::Venue { venue_id } => Ok(Self::venue(venue_id)),
+            ThreadRoute::Authored(AuthoredThreadRoute::Track {
+                track_id,
+                venue_id,
+                score_id,
+            }) => Ok(Self::track(track_id, venue_id, score_id)),
+            ThreadRoute::Authored(AuthoredThreadRoute::Pattern {
+                pattern_id,
+                implementation_id,
+            }) => Ok(Self {
+                agent_kind: AgentKind::PatternGraph,
+                subject_kind: SubjectKind::Pattern,
+                subject_id: pattern_id.into(),
+                implementation_id: Some(implementation_id.into()),
+                venue_id: thread.venue_id.clone(),
+                score_id: thread.score_id.clone(),
+            }),
+        }
+    }
+}
+
 impl ThreadScope {
     /// The track agent's scope for one track in one venue's score.
     #[must_use]
@@ -667,35 +694,21 @@ impl AgentService {
         serde_json::from_value(value).map_err(|error| AgentError::Storage(error.to_string()))
     }
 
-    /// Everything the history picker shows about `scope`'s subject: its
-    /// conversations, newest first, each named by its own words, and a grep.
-    ///
-    /// Scoped to the *subject* — agent, subject kind, subject id — and not to
-    /// the whole [`ThreadScope`]: "what have I said about this track" does not
-    /// change with the score it was hung on, and a listing that hid last
-    /// week's conversation because it was had over another score would look
-    /// like it lost it.
-    ///
-    /// # Errors
-    ///
-    /// [`AgentError::Storage`] if the threads or their messages cannot be read.
-    pub async fn history(&self, scope: &ThreadScope) -> Result<History, AgentError> {
+    /// This principal's live conversations and searchable transcripts.
+    pub async fn history(&self) -> Result<History, AgentError> {
         let pool = &self.services.db().0;
         let principal = self.principal().await?;
         let threads = crate::database::local::agent_threads::list_threads(
             pool,
-            Some(scope.agent_kind.as_str()),
-            Some(scope.subject_kind.as_str()),
-            Some(&scope.subject_id),
+            None,
+            None,
+            None,
             principal.as_deref(),
         )
         .await
         .map_err(AgentError::Storage)?;
-        let messages = crate::database::local::agent_threads::list_subject_messages(
+        let messages = crate::database::local::agent_threads::list_history_messages(
             pool,
-            scope.agent_kind.as_str(),
-            scope.subject_kind.as_str(),
-            &scope.subject_id,
             principal.as_deref(),
         )
         .await

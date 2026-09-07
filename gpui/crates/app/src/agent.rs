@@ -1,18 +1,5 @@
-//! Which conversation the shell implies, and the centre that shows it.
-//!
-//! The chat is a **region**, not a panel: it is the shell's centre, it cannot
-//! be closed, and only its subject varies. What the conversation is *about* is
-//! [`scope_for`] and nowhere else, so the rule that `pattern_graph` requires
-//! an implementation and `track_copilot` forbids one is stated once — the
-//! durable model enforces the same rule, and two statements of it would be two
-//! chances to disagree.
-//!
-//! A shell that has *never* shown a subject has no scope, and the centre sits
-//! *unattached*: an opening that says what it could attach to, with no
-//! composer under it, because there is no thread for a send to land in. Once
-//! a thread exists it is sticky: a tab that names no subject (the visualizer)
-//! or an emptied workspace does not take the conversation away — only a
-//! *different* subject re-points the centre.
+//! The shell keeps one conversation open. Editor context seeds the first
+//! conversation and the next explicit new chat; navigation never replaces it.
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::AgentChat;
@@ -22,31 +9,8 @@ use crate::shell::Body;
 use crate::tabs::Target;
 use crate::Luma;
 
-/// The conversation the shell is about right now, or `None` when nothing an
-/// agent can work on is up.
-///
-/// The visible tab decides: a track editor names a `(track, venue, score)`, a
-/// graph names a `(pattern, implementation)`. The sidebar's selection alone
-/// does not — a track thread's scope names the score it edits, and only the
-/// editor knows one. When thread history lands (spec §7 P5) the sidebar row
-/// will resolve its own score; until then the row opens the editor, which
-/// amounts to the same conversation.
+/// Context for a new conversation, chosen from the visible editor.
 pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
-    // Each editor gets its companion agent, keyed on the tab in *front*: the
-    // web app pairs the track sidebar with the track agent and the pattern
-    // editor's Agent tab with the graph agent, and front-tab scoping is that
-    // same contract in a single-chat-column shell. An active graph tab is the
-    // pattern-graph conversation; the two venue tabs are the venue
-    // conversation; tabs that name no agent of their own fall back to the
-    // track being worked on, so glancing elsewhere does not end a track
-    // conversation. Deliberately the dumbest switch that makes the agents
-    // reachable: the eventual design injects the open view's context into the
-    // user message instead of deriving agent identity from a tab, and
-    // supersedes this.
-    //
-    // The two venue tabs read their subject off the *target* rather than the
-    // body: a target names the venue exactly, and asking the page would be a
-    // second spelling of the same id.
     match app.workspace.active() {
         Some(Target::Patch { venue }) => return Some(ThreadScope::venue(venue.clone())),
         _ => {}
@@ -65,7 +29,11 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
             score_id: None,
         });
     }
-    current_track(app)
+    current_track(app).or_else(|| {
+        app.sidebar
+            .as_ref()
+            .map(|browser| ThreadScope::venue(browser.venue_id()))
+    })
 }
 
 /// The track the workspace is about: the focused editor if one is focused,
@@ -95,38 +63,15 @@ fn current_track(app: &Luma) -> Option<ThreadScope> {
 }
 
 impl Luma {
-    /// Keep the centre pointed at the shell's subject: build the chat on the
-    /// first frame (its composer needs a `Window`), and re-point it when a
-    /// different subject appears. A subject-less view does not erase an
-    /// already attached conversation.
-    ///
-    /// Done at draw rather than at every navigation for the reason
-    /// [`Luma::take_focus`] is: a navigation is a field assignment, and a
-    /// gesture that forgot to ask would leave the centre showing somebody
-    /// else's conversation. Comparing the whole scope, not just its presence,
-    /// is what stops a chat about one pattern following the eye to the next.
+    /// Initialize the chat once and update only the context for its + button.
     pub(crate) fn sync_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = scope_for(self);
         if let Some(chat) = &self.chat {
-            let current = chat.read(cx).scope();
-            if current == wanted.as_ref() {
-                return;
-            }
-            // The conversation is stickier than the eye: a tab that names no
-            // subject (the visualizer), or no tab at all, implies no *new*
-            // conversation — it does not end the one in progress. Rebuilding
-            // here would also drop a turn in flight, since a `TurnStream`
-            // cancels on drop.
-            if wanted.is_none() && current.is_some() {
-                return;
-            }
+            chat.update(cx, |chat, cx| chat.set_new_thread_scope(wanted, cx));
+            return;
         }
         let agent = self.library.agent();
         let chat = cx.new(|cx| AgentChat::new(agent, wanted, window, cx));
-        // The panel cannot open a modal — overlays are the shell's to mount —
-        // so rewind arrives here as a request. Held with the chat: a re-pointed
-        // centre builds a new entity, and a subscription to the old one would
-        // be a button that stopped working after the first navigation.
         self.chat_subscription =
             Some(
                 cx.subscribe_in(&chat, window, |this, _, event, window, cx| match event {
