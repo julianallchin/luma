@@ -809,6 +809,5 @@ fn kind_icon(target: &Target) -> IconName {
         Target::TrackEditor { .. } => IconName::Play,
         Target::Graph { .. } | Target::ScoreGraph { .. } => IconName::Network,
         Target::Patch { .. } => IconName::Cpu,
-        Target::Stage { .. } => IconName::LayoutDashboard,
     }
 }

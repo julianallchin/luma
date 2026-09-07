@@ -122,6 +122,8 @@ const HELPERS: &str = r#"
     }
     function openPatch() {
         nav.patch("Test Venue");
+        nav.step("fixtures", "toggle", "Fixtures");
+        nav.step("patch details", "button", "Patch details");
         // Takeover, and the stage off: the table is nine columns beside a rail,
         // and a cell scrolled out of a shared column is a cell no gesture can
         // reach.
@@ -634,4 +636,58 @@ fn seed_two_modes(dir: &Path) {
 "#;
     std::fs::write(dir.join("fixtures").join(support::MOVER_PATH), definition)
         .expect("failed to write the two-mode definition");
+}
+
+#[test]
+fn venue_groups_are_editable_in_the_narrow_panel() {
+    let mut harness = Fixture::new("venue-groups-edit", 20, Vec::new())
+        .with_rig()
+        .window(1100., 900.)
+        .open(Mode::Headless);
+    let out = run(
+        &mut harness,
+        r#"
+        nav.patch("Test Venue");
+        nav.step("fixtures", "toggle", "Fixtures");
+        until("lights", s => s.find({role:"row", label:"Mover 0"}));
+        nav.step("pick a light", "row", "Mover 0");
+        nav.step("make group", "button", "Group selected lights");
+        app.key("f r o n t space w a s h");
+        nav.step("save group", "button", "Save group");
+        until("saved group", s => s.find({role:"row", label:"Group front wash"}));
+        nav.step("edit group", "button", "Edit group front wash");
+        const included = app.snapshot().findAll({role:"checkbox"}).filter(n=>n.focused).map(n=>n.label);
+        nav.step("include another", "checkbox", "Include Mover 1");
+        nav.step("save membership", "button", "Save group");
+        until("saved", s => s.find({role:"button", label:"Edit group front wash"}));
+        nav.step("rename group", "button", "Edit group front wash");
+        app.key("cmd-a b a c k space w a s h");
+        nav.step("save rename", "button", "Save group");
+        until("renamed", s => s.find({role:"row", label:"Group back wash"}));
+        nav.step("verify", "button", "Edit group back wash");
+        const after = app.snapshot().findAll({role:"checkbox"}).filter(n=>n.focused).map(n=>n.label);
+        nav.step("cancel", "button", "Cancel group edit");
+        nav.step("new parent", "button", "Create group");
+        app.key("r i g");
+        nav.step("save parent", "button", "Save group");
+        nav.step("move group", "button", "Edit group back wash");
+        nav.step("parent picker", "select", "Top level");
+        nav.step("parent", "button", "rig");
+        nav.step("save move", "button", "Save group");
+        nav.step("verify parent", "button", "Edit group rig / back wash");
+        const parentSaved = !!until("saved parent", s => s.find({role:"select", label:"rig"}));
+        nav.step("cancel", "button", "Cancel group edit");
+        nav.step("layout", "toggle", "Stage");
+        until("builder", s=>s.find({role:"button",label:"Add element"}));
+        nav.step("lights again", "toggle", "Fixtures");
+        ({included, after, parentSaved, ready:!!app.snapshot().find({role:"button",label:"Add fixtures"})})
+    "#,
+    );
+    assert_eq!(out["included"], serde_json::json!(["Include Mover 0"]));
+    assert_eq!(
+        out["after"],
+        serde_json::json!(["Include Mover 0", "Include Mover 1"])
+    );
+    assert_eq!(out["ready"], true);
+    assert_eq!(out["parentSaved"], true);
 }

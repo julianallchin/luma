@@ -318,6 +318,7 @@ commands! {
     fixtures::remove_patched_fixture(venue_id: String, id: String) -> ();
     fixtures::rename_patched_fixture(venue_id: String, id: String, label: String) -> ();
 
+    groups::save_venue_group(venue_id: String, group_id: Option<String>, label: String, parent_id: Option<String>, added: Vec<String>, removed: Vec<String>) -> ();
     groups::list_groups(venue_id: String) -> Vec<FixtureGroup>;
     groups::create_group(
         venue_id: String,

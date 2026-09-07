@@ -1623,6 +1623,22 @@ impl Library {
         )
     }
 
+    /// Commit a venue group name and membership changes atomically.
+    pub fn save_venue_group(
+        &self,
+        venue: &str,
+        id: Option<&str>,
+        label: &str,
+        parent_id: Option<&str>,
+        added: &[String],
+        removed: &[String],
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "save_venue_group",
+            json!({"venueId":venue,"groupId":id,"label":label,"parentId":parent_id,"added":added,"removed":removed}),
+        )
+    }
+
     /// A venue's fixture groups — the vocabulary a selection expression is
     /// written over, which is what seeds the strip's autocomplete.
     pub fn venue_groups(

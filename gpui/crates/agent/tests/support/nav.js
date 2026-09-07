@@ -149,22 +149,19 @@ globalThis.nav = {
 		// screen until something is open there. `luma::NewTab` is the path
 		// chrome.rs documents as surviving a closed panel.
 		app.action("luma::NewTab");
-		nav.step("the patch choice", "button", "Patch");
+		nav.step("the venue choice", "button", "Venue");
 		until("the patch tab", (s) =>
-			s.find({ role: "card", label: `${venue} Patch` }) !== undefined,
+			s.find({ role: "card", label: `${venue} Venue` }) !== undefined,
 		);
 	},
 
 	// The venue's builder tab, reached the same way. The one tab that can
 	// write a position, so every placement test starts here.
 	stage(venue) {
-		nav.venue(venue);
-		app.action("luma::NewTab");
-		nav.step("the stage choice", "button", "Stage builder");
-		until("the stage tab", (s) =>
-			s.find({ role: "card", label: `${venue} Stage builder` }) !== undefined,
-		);
-	},
+        nav.patch(venue);
+        nav.step("layout", "toggle", "Stage");
+        until("the stage controls", s => s.find({role:"button",label:"Add element"}) !== undefined);
+    },
 
 	// Close the visible tab, dropping its state. What "leave and come back"
 	// means now: a reopened tab reloads, which is what the persistence tests
