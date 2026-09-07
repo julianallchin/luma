@@ -69,6 +69,12 @@ pub async fn update_group(
     crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&id)).await?;
     require_unique_name(services, &mut access, name.as_deref(), Some(&id)).await?;
+    let old = groups_db::get_group(&mut access, &id).await?;
+    if let Some(old_name) = old.name.as_deref().filter(|old| !old.is_empty()) {
+        if name.as_deref().map(normalize_group_name).as_deref() != Some(old_name) {
+            require_unused_selection_name(&mut access, old_name).await?;
+        }
+    }
     let result =
         groups_db::update_group(&mut access, &id, name.as_deref(), axis_lr, axis_fb, axis_ab)
             .await?;
@@ -459,11 +465,7 @@ async fn override_node(
 
     let before = sources.tree();
     if let Some(Some(parent)) = edit.parent_id.as_ref() {
-        if !parent.is_empty() && is_inside(&before, parent, group_id) {
-            return Err(CommandError::Invalid(
-                "a group cannot be moved under itself or under one of its own children".into(),
-            ));
-        }
+        require_group_parent(&before, group_id, parent)?;
     }
     if let Some(Some(target)) = edit.merged_into.as_ref() {
         if is_inside(&before, target, group_id) {
@@ -509,6 +511,15 @@ async fn override_node(
         return Err(name_taken(&clash.name, &clash));
     }
     let after = sources.tree();
+    for old in &before {
+        if after
+            .iter()
+            .any(|node| node.id == old.id && node.name != old.name)
+            && !old.name.is_empty()
+        {
+            require_unused_selection_name(&mut access, &old.name).await?;
+        }
+    }
 
     match &row {
         Some(row) => overrides_db::put(&mut access, row).await?,
@@ -543,6 +554,27 @@ fn is_inside(tree: &[GroupTreeNode], node: &str, ancestor: &str) -> bool {
         at = parent;
     }
     false
+}
+
+fn require_group_parent(
+    tree: &[GroupTreeNode],
+    group_id: &str,
+    parent: &str,
+) -> Result<(), CommandError> {
+    if parent.is_empty() {
+        return Ok(());
+    }
+    if !tree.iter().any(|node| node.id == parent) {
+        return Err(CommandError::NotFound(
+            "That parent group no longer exists".into(),
+        ));
+    }
+    if is_inside(tree, parent, group_id) {
+        return Err(CommandError::Invalid(
+            "a group cannot be moved under itself or under one of its own children".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -934,6 +966,148 @@ mod tests {
             1,
             "the cache still answers from before the commit"
         );
+    }
+
+    #[tokio::test]
+    async fn venue_group_save_rolls_back_all_members_on_failure() {
+        let (_dir, services, venue) = rig().await;
+        let tree = tree(&services, &venue).await;
+        let fixture = tree[0]["fixtures"][0].as_str().unwrap();
+        let error = dispatch(
+            &services,
+            "save_venue_group",
+            &json!({
+                "venueId":venue, "groupId":null, "label":"front wash",
+                "added":[fixture, "missing-fixture"], "removed":[]
+            }),
+        )
+        .await;
+        assert!(error.is_err());
+        let groups = dispatch(&services, "list_groups", &json!({"venueId":venue}))
+            .await
+            .unwrap();
+        assert!(!groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["name"] == "front_wash"));
+    }
+
+    #[tokio::test]
+    async fn venue_group_save_renames_and_changes_members_together() {
+        let (_dir, services, venue) = rig().await;
+        let nodes = tree(&services, &venue).await;
+        let fixture = nodes[0]["fixtures"][0].as_str().unwrap();
+        dispatch(
+            &services,
+            "save_venue_group",
+            &json!({
+                "venueId":venue,"groupId":null,"label":"front wash","added":[fixture],"removed":[]
+            }),
+        )
+        .await
+        .unwrap();
+        let groups = dispatch(&services, "list_groups", &json!({"venueId":venue}))
+            .await
+            .unwrap();
+        let id = groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "front_wash")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        assert_eq!(selection(&services, &venue, "front_wash").await, 1);
+        dispatch(
+            &services,
+            "save_venue_group",
+            &json!({
+                "venueId":venue,"groupId":id,"label":"back wash","added":[],"removed":[fixture]
+            }),
+        )
+        .await
+        .unwrap();
+        let nodes = tree(&services, &venue).await;
+        assert_eq!(at(&nodes, id)["name"], "back_wash");
+        assert_eq!(at(&nodes, id)["fixtures"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn venue_group_save_preserves_names_mentioned_in_saved_scores() {
+        let (_dir, services, venue) = rig().await;
+        let group = create(&services, &venue, "front wash").await.unwrap();
+        let uid: Option<String> = sqlx::query_scalar("SELECT uid FROM venues WHERE id = ?")
+            .bind(&venue)
+            .fetch_one(&services.db.0)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO tracks (id,uid,track_hash,file_path) VALUES ('group-track',?,'group-track','/tmp/group.wav')")
+            .bind(&uid).execute(&services.db.0).await.unwrap();
+        let document =
+            json!({"version":2,"definitions":{},"clips":{},"label":"front_wash"}).to_string();
+        sqlx::query("INSERT INTO scores (id,uid,track_id,venue_id,graph_document_json) VALUES ('group-score',?,'group-track',?,?)")
+            .bind(&uid).bind(&venue).bind(&document).execute(&services.db.0).await.unwrap();
+        let id = group["id"].as_str().unwrap();
+        let error = dispatch(
+            &services,
+            "save_venue_group",
+            &json!({"venueId":venue,"groupId":id,"label":"back wash","added":[],"removed":[]}),
+        )
+        .await
+        .unwrap_err();
+        assert_invalid(&error, "Saved effects use");
+        assert_invalid(
+            &rename(&services, &venue, id, Some("back wash"))
+                .await
+                .unwrap_err(),
+            "Saved effects use",
+        );
+        assert_eq!(at(&tree(&services, &venue).await, id)["name"], "front_wash");
+    }
+
+    #[tokio::test]
+    async fn venue_group_save_reorganizes_generated_groups_without_changing_members() {
+        let (_dir, services, venue) = rig().await;
+        let before = tree(&services, &venue).await;
+        let id = find(&before, "left wing");
+        let members = at(&before, &id)["fixtures"].clone();
+        let child = before
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["parentId"] == id)
+            .unwrap()["id"]
+            .clone();
+        let refused = dispatch(
+            &services,
+            "save_venue_group",
+            &json!({
+                "venueId":venue, "groupId":id, "label":"house left", "parentId":child,
+                "added":[], "removed":[]
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_invalid(&refused, "own children");
+        assert_eq!(
+            at(&tree(&services, &venue).await, &id)["label"],
+            "left wing"
+        );
+        dispatch(
+            &services,
+            "save_venue_group",
+            &json!({
+                "venueId":venue, "groupId":id, "label":"house left", "parentId":"",
+                "added":[], "removed":[]
+            }),
+        )
+        .await
+        .unwrap();
+        let after = tree(&services, &venue).await;
+        assert_eq!(at(&after, &id)["label"], "house left");
+        assert_eq!(at(&after, &id)["parentId"], Value::Null);
+        assert_eq!(at(&after, &id)["fixtures"], members);
     }
 
     // -----------------------------------------------------------------------
@@ -1385,4 +1559,116 @@ mod tests {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
         AppServices::headless(db, state_db, storage, repo, workspaces)
     }
+}
+
+/// One venue edit, including the name and all membership changes, commits
+/// together. A bad fixture or a name conflict cannot leave half a group saved.
+pub async fn save_venue_group(
+    services: &AppServices,
+    venue_id: String,
+    group_id: Option<String>,
+    label: String,
+    parent_id: Option<String>,
+    added: Vec<String>,
+    removed: Vec<String>,
+) -> Result<(), CommandError> {
+    crate::models::groups::validate_group_name(&normalize_group_name(&label))
+        .map_err(CommandError::Invalid)?;
+    crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
+    let mut access =
+        VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
+    let mut sources = GroupSources::read(&services.fixtures_root, &mut access).await?;
+    if let Some(parent) = &parent_id {
+        require_group_parent(
+            &sources.tree(),
+            group_id.as_deref().unwrap_or_default(),
+            parent,
+        )?;
+    }
+    let id = if let Some(id) = group_id {
+        let before = sources
+            .tree()
+            .into_iter()
+            .find(|node| node.id == id)
+            .ok_or_else(|| CommandError::NotFound("That group no longer exists".into()))?;
+        if before.role.is_some() && (!added.is_empty() || !removed.is_empty()) {
+            return Err(CommandError::Invalid(
+                "This group's lights follow the stage layout".into(),
+            ));
+        }
+        let row = Edit {
+            label: Some(Some(label)),
+            parent_id: parent_id.map(Some),
+            ..Edit::default()
+        }
+        .onto(&id, sources.derived_path(&id), sources.override_of(&id));
+        sources.apply(row.clone(), &id);
+        if let Some(clash) = sources.clash_for(&id) {
+            return Err(name_taken(&clash.name, &clash));
+        }
+        let after = sources
+            .tree()
+            .into_iter()
+            .find(|node| node.id == id)
+            .ok_or_else(|| CommandError::NotFound("That group no longer exists".into()))?;
+        if before.name != after.name && !before.name.is_empty() {
+            require_unused_selection_name(&mut access, &before.name).await?;
+        }
+        if let Some(row) = row {
+            overrides_db::put(&mut access, &row).await?;
+        }
+        id
+    } else {
+        require_unique_name(services, &mut access, Some(&label), None).await?;
+        let id = groups_db::create_group(&mut access, Some(&label), None, None, None)
+            .await?
+            .id;
+        if let Some(parent) = parent_id.filter(|parent| !parent.is_empty()) {
+            overrides_db::put(
+                &mut access,
+                &GroupOverride {
+                    group_id: id.clone(),
+                    path: String::new(),
+                    label: None,
+                    parent_id: Some(parent),
+                    merged_into: None,
+                },
+            )
+            .await?;
+        }
+        id
+    };
+    for fixture in removed {
+        groups_db::remove_member_from_group(&mut access, &fixture, &id, None).await?;
+    }
+    for fixture in added {
+        groups_db::add_member_to_group(&mut access, &fixture, &id, groups_db::WHOLE_FIXTURE)
+            .await?;
+    }
+    access.commit().await?;
+    invalidate_venue_fixture_cache();
+    Ok(())
+}
+
+/// Group names are score selectors. Until rename can revise the affected
+/// authored histories atomically, preserve any name mentioned in saved work.
+/// This deliberately errs toward retaining a name when a document mentions it
+/// in another context, such as a graph label.
+async fn require_unused_selection_name(
+    access: &mut VenueAccess<'_, Write>,
+    name: &str,
+) -> Result<(), CommandError> {
+    use crate::database::local::venue_access::AuthorizedVenue;
+    let venue = access.venue_id().to_string();
+    let used: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM scores WHERE venue_id = ? AND instr(COALESCE(graph_document_json, ''), ?) > 0)
+         OR EXISTS(SELECT 1 FROM track_scores c JOIN scores s ON c.score_id = s.id WHERE s.venue_id = ? AND instr(c.args_json, ?) > 0)
+         OR EXISTS(SELECT 1 FROM cues WHERE venue_id = ? AND instr(args_json, ?) > 0)
+         OR EXISTS(SELECT 1 FROM implementations WHERE instr(graph_json, ?) > 0)",
+    ).bind(&venue).bind(name).bind(&venue).bind(name).bind(&venue).bind(name).bind(name)
+        .fetch_one(&mut *access.connection()).await.map_err(|error| CommandError::Invalid(error.to_string()))?;
+    if used {
+        return Err(CommandError::Invalid(format!("Saved effects use “{name}”. You can edit its lights, but keep this name until score-aware renaming is available.")));
+    }
+    Ok(())
 }

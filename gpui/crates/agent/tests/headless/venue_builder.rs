@@ -579,7 +579,7 @@ fn duplicate_and_flip_place_a_copy_on_the_opposite_corner() {
         app.frames(8);
         const first = one("Edge: ");
 
-        app.key("cmd-d");
+        app.key("secondary-d");
         app.frames(6);
         // A held piece owns the pointer, which is the picture saying the copy
         // is in the hand — there is no state label to read.
@@ -1109,4 +1109,45 @@ fn undo_takes_a_placement_back_and_redo_replays_it() {
         out["back"].as_u64().unwrap() > 0,
         "redo did not bring the piece back\n{out:#}"
     );
+}
+
+#[test]
+fn the_element_list_selects_and_confirms_removal() {
+    let mut harness = harness("venue-element-list");
+    let out = exec(
+        &mut harness,
+        r#"
+        nav.stage("Test Venue");
+        nav.step("fixtures", "toggle", "Fixtures");
+        const fixtures = () => app.snapshot().findAll({role:"row"}).filter(n => n.label.startsWith("Mover "));
+        until("fixture inventory", () => fixtures().length > 0);
+        const fixtureCount = fixtures().length;
+        nav.step("stage", "toggle", "Stage");
+        const elements = () => app.snapshot().findAll({role:"row"}).filter(n => n.label.startsWith("Element "));
+        until("stage elements", () => elements().length > 0);
+        const before = elements().length;
+        const label = elements()[0].label;
+        nav.step("element", "row", label);
+        nav.step("remove", "button", "Remove element");
+        until("confirmation", s => s.find({role:"card",label:"Confirm dialog"}));
+        app.key("escape");
+        until("cancelled", s => !s.find({role:"card",label:"Confirm dialog"}));
+        const cancelled = elements().length;
+        nav.step("remove again", "button", "Remove element");
+        nav.step("confirm", "button", "Remove");
+        until("removed", () => elements().length < before);
+        const after = elements().length;
+        nav.step("remaining fixtures", "toggle", "Fixtures");
+        until("fixture inventory after removal", () => fixtures().length === fixtureCount);
+        const remainingFixtures = fixtures().length;
+        nav.step("stage again", "toggle", "Stage");
+        app.action("luma::UndoStage");
+        until("restored elements", () => elements().length === before);
+        ({before, cancelled, after, restored:elements().length, fixtureCount, remainingFixtures})
+    "#,
+    );
+    assert_eq!(out["before"], out["cancelled"]);
+    assert!(out["after"].as_u64().unwrap() < out["before"].as_u64().unwrap());
+    assert_eq!(out["before"], out["restored"]);
+    assert_eq!(out["fixtureCount"], out["remainingFixtures"]);
 }

@@ -1,12 +1,4 @@
-//! The patch page: what a rig *is*, as paperwork.
-//!
-//! The venue graph's two pages split on one question each — the stage page
-//! answers *where*, this one answers *what* — and the split is enforced rather
-//! than merely intended: nothing here writes a `venue_edges` row or a
-//! placement param, and there is no column, field or gesture that could
-//! (gauntlet AF8). A fixture's placement reaches this page as one bit,
-//! [`crate::library::Patch::placed`], because "is it placed" is the only thing
-//! a rental sheet needs to know about the room.
+//! Venue workspace: lights, placement and groups share one tab.
 //!
 //! # One allocator, and it is not here
 //!
@@ -48,6 +40,15 @@ mod footprint;
 mod groups;
 mod outputs;
 mod table;
+mod venue;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Section {
+    Fixtures,
+    Stage,
+    Groups,
+    Details,
+}
 
 pub(crate) use add::render as add_fixtures_dialog;
 pub(crate) use add::tick as tick_add_fixtures;
@@ -55,24 +56,20 @@ pub(crate) use add::AddFixtures;
 
 /// What the header's chips hang.
 ///
-/// Three things a *universe* answers for, rather than three things a fixture
-/// does — which is why none of them is a column, and why they are floats over
-/// the table instead of panels beside it.
+/// Optional address-map and output-routing details.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Panel {
     Footprint,
     Outputs,
-    Groups,
 }
 
 impl Panel {
-    pub(crate) const ALL: [Panel; 3] = [Panel::Footprint, Panel::Outputs, Panel::Groups];
+    pub(crate) const ALL: [Panel; 2] = [Panel::Footprint, Panel::Outputs];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Panel::Footprint => "Footprint",
             Panel::Outputs => "Outputs",
-            Panel::Groups => "Groups",
         }
     }
 }
@@ -137,6 +134,11 @@ pub(crate) struct StripDrag {
 pub(crate) struct Patch {
     pub(crate) venue_id: String,
     pub(crate) venue_name: String,
+    pub(crate) stage: crate::stage::StagePage,
+    pub(crate) section: Section,
+    pub(crate) group_editor: Option<groups::Editor>,
+    pub(crate) group_error: Option<String>,
+    pub(crate) group_busy: bool,
     pub(crate) data: Option<PatchData>,
     pub(crate) error: Option<String>,
 
@@ -174,9 +176,14 @@ pub(crate) struct Patch {
 }
 
 impl Patch {
-    pub(crate) fn loading(venue_id: String, venue_name: String) -> Self {
+    pub(crate) fn loading(venue_id: String, venue_name: String, cx: &mut Context<Luma>) -> Self {
         Self {
             venue_id,
+            stage: crate::stage::StagePage::new(venue_name.clone(), cx),
+            section: Section::Stage,
+            group_editor: None,
+            group_error: None,
+            group_busy: false,
             venue_name,
             data: None,
             error: None,
@@ -224,6 +231,15 @@ impl Patch {
     /// grouping rule the gauntlet forbids.
     pub(crate) fn group_path(&self, id: &str) -> Option<String> {
         let data = self.data.as_ref()?;
+        let authored: Vec<_> = data
+            .groups
+            .iter()
+            .filter(|node| node.role.is_none() && node.fixtures.iter().any(|fixture| fixture == id))
+            .map(|node| node.label.as_str())
+            .collect();
+        if !authored.is_empty() {
+            return Some(authored.join(" · "));
+        }
         let by_id: BTreeMap<&str, &luma_lib::models::groups::GroupTreeNode> =
             data.groups.iter().map(|n| (n.id.as_str(), n)).collect();
         // The deepest node holding it — the tree is parents-first, so the last
@@ -304,7 +320,7 @@ impl Luma {
             cx.notify();
             return;
         }
-        let state = Patch::loading(venue_id.clone(), venue_name);
+        let state = Patch::loading(venue_id.clone(), venue_name, cx);
         self.open_tab(target, move || Body::Patch(Box::new(state)), cx);
         self.reload_patch(venue_id, cx);
     }
@@ -964,6 +980,11 @@ impl Luma {
                 state.selected.insert(fixture);
             }
         }
+        let selected = self
+            .patch_mut(&venue_id)
+            .map(|state| state.selected.clone())
+            .unwrap_or_default();
+        self.highlight_venue_lights(selected, cx);
         cx.notify();
     }
 
@@ -1213,19 +1234,22 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 // The page
 // ---------------------------------------------------------------------------
 
-/// The table, under one band of chrome.
-///
-/// The table *is* the page: everything that is about a universe rather than a
-/// fixture — the footprint, the outputs, the derived groups — hangs off a chip
-/// in the band as a float, one at a time. Three panels standing permanently
-/// beside the rows would be three walls of legends competing with the thing
-/// the page is for.
-pub(crate) fn patch(state: &Patch, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
+/// Render the active task in the narrow venue panel.
+pub(crate) fn patch(
+    state: &Patch,
+    app: &Entity<Luma>,
+    view: Option<&crate::stage::StageView>,
+    selection: Option<AnyElement>,
+    window: &Window,
+) -> AnyElement {
+    venue::render(state, app, view, selection, window)
+}
+
+pub(super) fn details(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
     div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(ladder::background())
         .child(band(state, app))
         .child(table::table(state, app, window))
         .children(
@@ -1240,7 +1264,7 @@ pub(crate) fn patch(state: &Patch, app: &Entity<Luma>, window: &Window) -> impl 
                 .as_ref()
                 .map(|(fixture, at)| table::mode_menu(state, fixture, *at, app)),
         )
-        .agent_node(Role::Card, format!("{} Patch", state.venue_name))
+        .into_any_element()
 }
 
 /// Title, what the patch holds, and the four things a person came here to do.
@@ -1334,7 +1358,6 @@ fn panel_float(state: &Patch, panel: Panel, app: &Entity<Luma>) -> AnyElement {
     let body = match panel {
         Panel::Footprint => footprint::footprint(state, app),
         Panel::Outputs => outputs::outputs(state, app),
-        Panel::Groups => groups::groups(state),
     };
     luma_ui::float::anchored_below(
         SharedString::from(format!("patch-panel-float-{}", panel.label())),

@@ -1,0 +1,80 @@
+Use case: ui-mockup.
+Create ONE polished, realistic screenshot of a proposed native desktop lighting-design application called Luma. This is a carefully designed functional software interface, not a website, not a marketing page. Landscape high resolution 2400x1500, 8:5 ratio, entirely filled by the app window with no desktop surround. Small "CONCEPT" label in title bar. Extremely crisp, readable typography, accurate spelling, coherent table values. Native Inter typeface, compact 12–14px logical sizing. Square corners, neutral charcoal surfaces (#181818 main, #232323 bands, #262626 sidebar), thin grey dividers, light grey text. Restrained pale cyan #88c0d0 exclusively for selected items and active controls. Muted amber for unplaced fixtures. No gradients, glossy cards, excessive rounded pills, neon glow, huge headings, web navigation, photo background, device frame, branding flourish, or explanatory callout arrows.
+
+PRODUCT IDEA: One Venue workspace contains a structure tree and editable groups on the left, a substantial 3D stage viewport above a docked fixture patch table in the middle, and a persistent inspector on the right. Same four selected pixel bars are visibly cyan in all three areas. It should feel like excellent mature CAD/music-production software, clear and inviting despite functional density. Stage is the focus, not decorative filler.
+
+LAYOUT at 1600x1000 logical pixels (render high resolution):
+Thin 36px native titlebar with small "LUMA", a tab "EBF · Venue", inactive tab "Saving Up · Score", and small "CONCEPT" at far right.
+Next 52px toolbar: "EBF April 4" at left; segmented layout control "Stage  Split  Patch" with Split selected; compact undo/redo icons; right-aligned buttons "+ Add fixtures", "+ Add structure", and "Outputs".
+Below that left navigator width 225px, center workspace width 1060px, right inspector width 315px. Bottom 26px status bar across entire window.
+
+LEFT NAVIGATOR:
+Small search field "Search venue…".
+Heading "STRUCTURE" with plus icon.
+Readable tree:
+Stage
+  DJ booth
+  Left wing truss       4
+  Right wing truss      4
+  Rear truss           8
+  Floor wash           6
+Separate amber row "Unplaced               2".
+Below divider, heading "GROUPS" with plus and small menu icon.
+Rows:
+All pixel bars          8  [Auto]
+Left wing bars          4  [pencil icon]   <- cyan highlighted
+Right wing bars         4
+Back movers             8
+Front wash              8
+Accent                  2
+Visible small native tooltip by pencil: "Rename group · F2". This is the crucial edit affordance. A quiet action "+ New group from selection" under the list. The two sections are distinct: physical mounting is structure, creative selection sets are groups.
+
+CENTER TOP STAGE VIEWPORT occupies about 540px height:
+Top viewport control strip with "3D  Top  Front  Side" (3D selected), small select/move/rotate/measure icons, "Snap 0.5 m" and "Overlay: Groups".
+A convincing neutral-grey real-time 3D technical stage model in three-quarter front perspective, with a dark grey floor grid, simple raised stage deck, DJ booth at center, two slanted 45-degree wing trusses, a rear horizontal truss, pixel bars mounted on the wings, compact moving-head fixtures on rear truss and wash cans on floor. Simple realistic geometry with subtle ambient occlusion, not a cinematic concert render. FOUR narrow linear pixel bars on LEFT wing are selected in pale cyan with thin outlines and visible eight-pixel segmentation. Right wing bars and the rest are neutral grey. Small legible tags 101, 102, 103, 104 on the selected four. A subtle cyan multi-selection bounding box and one transform gizmo. Ground label "AUDIENCE / DOWNSTAGE" along the front edge. Small axis guide lower-left reads "U →  V ↓  Z ↑". Bottom-right tiny "4 fixtures · 32 heads". Room remains spacious and unobscured; no floating property cards.
+
+CENTER BOTTOM PATCH DOCK:
+Tab strip "Fixtures 24" (selected), "Address map", "Outputs", "Checks 2".
+Second compact toolbar "All fixtures ▾", "4 selected" in cyan, and actions "Assign groups…", "Auto patch…", "Export…".
+Editable spreadsheet-like fixture table, aligned numeric columns, thin row dividers, no oversized boxes.
+Columns: checkbox, "#", "Fixture", "Mode", "Address", "Mounted on", "Groups".
+First four rows selected pale cyan background and checked boxes:
+101 | LX-01 | RGB · 24 ch | 1.001 | Left wing truss | Left wing bars  +1
+102 | LX-02 | RGB · 24 ch | 1.025 | Left wing truss | Left wing bars  +1
+103 | LX-03 | RGB · 24 ch | 1.049 | Left wing truss | Left wing bars  +1
+104 | LX-04 | RGB · 24 ch | 1.073 | Left wing truss | Left wing bars  +1
+Then two unselected rows:
+105 | RX-01 | RGB · 24 ch | 1.097 | Right wing truss | Right wing bars  +1
+106 | RX-02 | RGB · 24 ch | 1.121 | Right wing truss | Right wing bars  +1
+A calm compact footer "24 fixtures · 2 universes" with a small horizontal universe utilization strip. Table and viewport share width and connect naturally via a thin draggable divider.
+
+RIGHT INSPECTOR:
+Title "4 fixtures selected", subtitle "RGB Pixel Bar · 32 heads".
+Segmented selector "Fixtures  Heads" with Fixtures selected.
+Section "GROUP MEMBERSHIP": short list of interactive checkbox rows with counts/indeterminate semantics:
+checked "Left wing bars"
+unchecked "Right wing bars"
+indeterminate "Accent"
+checked "All pixel bars" with a small grey "Auto" badge.
+Action "+ Add to another group…" below.
+Divider.
+Section "PLACEMENT":
+"Mounted on" field "Left wing truss ▾"
+"Surface" field "Top rail ▾"
+"Arrange" field "Even spacing ▾"
+"Spacing" numeric field "0.75 m"
+Compact adjacent buttons "Distribute" and "Mirror".
+Collapsed row "Mapping & aim    ›".
+Divider.
+Section "PATCH":
+"Mode" field "RGB · 24 channels ▾"
+"Universe" field "1"
+Button "Readdress selection…".
+Divider.
+Section "IDENTIFY":
+Button "Highlight selection" with small "Preview only" badge. A tidy level slider at 60%. This is local visualization, no armed live DMX indication.
+Small quiet footer "Changes save automatically".
+
+BOTTOM STATUS BAR: left "24 fixtures · 80 heads", amber middle "2 unplaced · Review", right "Preview only" and green dot "Saved".
+
+Prioritize clear hierarchy, readable real controls and beautiful spacing over cramming decorative information. Ensure the important group editing, membership checkboxes, linked selection, patch addresses, staging tools, mapping/aim entry point, outputs/address map and unplaced workflow are present. This screenshot must look like a plausible redesigned native Luma app ready to implement. Use illustrative fixture data exactly as specified; do not invent extra marketing or advice text.

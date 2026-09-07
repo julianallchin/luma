@@ -32,6 +32,10 @@ use crate::Luma;
 /// module docs for why this is a closed list.
 #[derive(Clone)]
 pub(crate) enum Action {
+    DeleteStageElement {
+        venue_id: String,
+        node_id: String,
+    },
     /// Unpatch fixtures that are standing in the room. Both rows go — the
     /// paperwork and the node — so the question is worth asking.
     UnpatchFixtures {
@@ -39,7 +43,9 @@ pub(crate) enum Action {
         fixture_ids: Vec<String>,
     },
     /// Re-derive every address in a venue, discarding the hand-set ones.
-    AutoPatch { venue_id: SharedString },
+    AutoPatch {
+        venue_id: SharedString,
+    },
     /// Let the allocator move a fixture so a wider mode fits.
     RepatchMode {
         venue_id: SharedString,
@@ -92,6 +98,9 @@ impl Luma {
         let action = confirm.action.clone();
         self.close_overlay(cx);
         match action {
+            Action::DeleteStageElement { venue_id, node_id } => {
+                self.run_stage_delete(venue_id, node_id, cx)
+            }
             Action::UnpatchFixtures {
                 venue_id,
                 fixture_ids,

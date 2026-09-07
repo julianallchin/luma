@@ -48,9 +48,7 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
     // body: a target names the venue exactly, and asking the page would be a
     // second spelling of the same id.
     match app.workspace.active() {
-        Some(Target::Stage { venue } | Target::Patch { venue }) => {
-            return Some(ThreadScope::venue(venue.clone()))
-        }
+        Some(Target::Patch { venue }) => return Some(ThreadScope::venue(venue.clone())),
         _ => {}
     }
     if let Some(Body::Graph(editor)) = app.workspace.active_body() {

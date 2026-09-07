@@ -2470,8 +2470,7 @@ impl Luma {
         // that answer rather than looking one up and disagreeing.
         let lit = match self.workspace.active_body() {
             Some(Body::TrackEditor(state)) if state.venue_id() == venue_id => state.lit(),
-            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Patch(_) | Body::Stage(_))
-            | None => None,
+            Some(Body::TrackEditor(_) | Body::Graph(_) | Body::Patch(_)) | None => None,
         };
         let name = self
             .sidebar
@@ -4044,13 +4043,33 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
         }
         released.update(cx, |this, cx| {
             let mut place = None;
+            let mut selected = None;
             if let Some(state) = this.visualizer_mut() {
                 if event.button == MouseButton::Left {
+                    let selecting = state.editor_drag.is_some();
                     place = state.editor_release(event.position);
+                    if selecting {
+                        selected = Some(
+                            state
+                                .selection
+                                .selected()
+                                .iter()
+                                .filter_map(|object| match object {
+                                    EditorObject::Fixture(id) => Some(id.clone()),
+                                    EditorObject::StagePiece(_) => None,
+                                })
+                                .collect(),
+                        );
+                    }
                 } else {
                     state.drag = None;
                 }
                 cx.notify();
+            }
+            if let (Some(selected), Some(Body::Patch(page))) =
+                (selected, this.workspace.active_body_mut())
+            {
+                page.selected = selected;
             }
             match place {
                 Some(ReleaseAct::Place(at)) => this.stage_click_room(at, cx),

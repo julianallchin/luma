@@ -121,7 +121,6 @@ pub(crate) enum Body {
     TrackEditor(Box<track_editor::Editor>),
     Graph(Box<graph::Editor>),
     Patch(Box<patch::Patch>),
-    Stage(Box<stage::StagePage>),
 }
 
 impl Body {
@@ -131,7 +130,6 @@ impl Body {
             Self::TrackEditor(state) => state.track_name().to_string().into(),
             Self::Graph(state) => state.pattern_name().to_string().into(),
             Self::Patch(state) => state.venue_name().to_string().into(),
-            Self::Stage(state) => state.venue_name.clone().into(),
         }
     }
 }
@@ -279,7 +277,7 @@ impl Luma {
                     .detach();
                 }
             }
-            Body::Graph(_) | Body::Patch(_) | Body::Stage(_) => {}
+            Body::Graph(_) | Body::Patch(_) => {}
         }
     }
 
@@ -327,22 +325,32 @@ impl Luma {
         if self.add_fixtures_back(cx) {
             return;
         }
+        if let Some(Body::Patch(page)) = self.workspace.active_body_mut() {
+            if let Some(editor) = &mut page.group_editor {
+                if editor.parent_open {
+                    editor.parent_open = false;
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         // The stage builder's hand — and its node menu — are floats over the
         // room on the same rung as the shell's own menus, handled here so
         // Escape reaches them wherever focus happens to be.
         let stage_menu = matches!(
             self.workspace.active_body(),
-            Some(Body::Stage(page)) if page.menu.is_some()
+            Some(Body::Patch(page)) if page.stage.menu.is_some()
         );
-        let stage_up = matches!(self.workspace.active_body(), Some(Body::Stage(_)));
-        if stage_menu
-            || self
-                .build_state()
-                .is_some_and(|build| !matches!(build.hand, crate::stage::hand::Hand::Idle))
-            || (stage_up
-                && self
+        let stage_up = matches!(self.workspace.active_body(), Some(Body::Patch(page)) if page.section == patch::Section::Stage);
+        if self.overlay.as_open().is_none()
+            && (stage_menu
+                || self
                     .build_state()
-                    .is_some_and(|build| build.selected.is_some()))
+                    .is_some_and(|build| !matches!(build.hand, crate::stage::hand::Hand::Idle))
+                || (stage_up
+                    && self
+                        .build_state()
+                        .is_some_and(|build| build.selected.is_some())))
         {
             self.stage_escape(cx);
             return;
@@ -713,16 +721,11 @@ fn seam(color: gpui::Rgba) -> Div {
 /// How the thread and the workspace panel divide the room they share, and the
 /// floors neither may be dragged below.
 ///
-/// Even by default. Comet states its panel as 520px, which at the reference
-/// window is a hair over half of what the pair shares — so the proportion says
-/// the same thing the pixel count did, minus its one flaw: a width holds only
-/// at the width it was measured at, and this holds at every window size and on
-/// both sides of a ⌘B.
-///
-/// Stated here rather than in `Luma::new` so the split and the floors it
-/// enforces sit together.
+/// The workspace gets 65% of the shared room by default. Chat keeps its
+/// minimum readable width, and dragging or resetting the seam uses this same
+/// proportion at every window size.
 pub(crate) fn workspace_split() -> luma_ui::split::SplitFraction {
-    luma_ui::split::SplitFraction::new(0.5, CENTER_MIN, WORKSPACE_MIN)
+    luma_ui::split::SplitFraction::new(0.35, CENTER_MIN, WORKSPACE_MIN)
 }
 
 /// The room the thread and the panel share this frame: the window, less the
@@ -832,44 +835,6 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     }
     if app.visualizer.is_none() {
         return active_tab(app, window, cx);
-    }
-    // The stage tab *is* the picture: its chrome floats over the room rather
-    // than sitting under it, so there is nothing to split and no seam to drag.
-    // Every other tab is an editor beside a rig view, and keeps the split.
-    //
-    // This is the one place the difference is stated. A stage page that had to
-    // be told how tall the room was would be a page that could disagree with
-    // it.
-    let full_bleed = matches!(app.workspace.active_body(), Some(Body::Stage(_)));
-    if full_bleed {
-        let Luma {
-            visualizer,
-            library,
-            ..
-        } = app;
-        let room = visualizer
-            .as_mut()
-            .map(|state| visualizer::visualizer(state, &cx.entity(), library, window));
-        return div()
-            .flex_1()
-            .min_h_0()
-            .relative()
-            .key_context(keymap::context::VISUALIZER)
-            .children(room)
-            // The tab renders as an overlay inside the room's own box, so the
-            // builder's floats are positioned against the picture they aim at.
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    // A flex box, because `active_tab` sizes itself with
-                    // `flex_1` — inside a bare absolute parent that resolves to
-                    // nothing and the whole page collapses to zero height.
-                    .flex()
-                    .flex_col()
-                    .child(active_tab(app, window, cx)),
-            )
-            .into_any_element();
     }
     let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
     let (stage_height, _) = app.visualizer_split.resolve(available);
@@ -1056,17 +1021,29 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     // Read before the workspace is borrowed mutably: the builder lives beside
     // the picture, not in the tab, and its state is a projection either way.
     let stage_view = app.stage_view();
+    let selection = app
+        .build_state()
+        .and_then(|build| stage::selection_controls(build, &entity));
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
+    let layout = matches!(&*body, Body::Patch(page) if page.section == patch::Section::Stage);
+    let mut keys = gpui::KeyContext::default();
+    keys.add(if layout {
+        keymap::context::STAGE
+    } else {
+        target.key_context()
+    });
+    if layout {
+        keys.add(keymap::context::VISUALIZER);
+    }
     let inner = match body {
         Body::TrackEditor(state) => {
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Graph(state) => graph::graph(state, &entity, window, cx).into_any_element(),
-        Body::Patch(state) => patch::patch(state, &entity, window).into_any_element(),
-        Body::Stage(state) => {
-            stage::stage_page(state, &entity, stage_view.as_ref(), window).into_any_element()
+        Body::Patch(state) => {
+            patch::patch(state, &entity, stage_view.as_ref(), selection, window).into_any_element()
         }
     };
     div()
@@ -1074,7 +1051,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         .min_h_0()
         .overflow_hidden()
         .when(holds_focus, |tab| tab.track_focus(&focus))
-        .key_context(target.key_context())
+        .key_context(keys)
         .child(inner)
         .into_any_element()
 }
@@ -1194,10 +1171,10 @@ mod tests {
     #[test]
     fn opening_the_sidebar_narrows_both_neighbours_in_the_ratio_they_were_at() {
         let split = workspace_split();
-        let closed = shared_room(1200.0, 0.0);
-        let open = shared_room(1200.0, SIDEBAR_WIDTH);
-        assert_eq!(closed, 1199.0);
-        assert_eq!(open, 942.0);
+        let closed = shared_room(1600.0, 0.0);
+        let open = shared_room(1600.0, SIDEBAR_WIDTH);
+        assert_eq!(closed, 1599.0);
+        assert_eq!(open, 1342.0);
 
         let (thread_closed, panel_closed) = split.resolve(closed);
         let (thread_open, panel_open) = split.resolve(open);
@@ -1218,8 +1195,8 @@ mod tests {
         let split = workspace_split();
         let (thread, panel) = split.resolve(CENTER_MIN + WORKSPACE_MIN + 40.0);
         assert!(thread >= CENTER_MIN && panel >= WORKSPACE_MIN);
-        // Half of 720 is 360 — exactly the thread's floor, so the extra 40 all
-        // goes to the panel rather than half of it going under the floor.
+        // At this size the requested chat share is below its minimum. The
+        // minimum wins and the remaining space belongs to the workspace.
         assert!((thread - 360.0).abs() < 0.001);
         assert!((panel - 360.0).abs() < 0.001);
     }

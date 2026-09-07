@@ -32,13 +32,14 @@ fn harness() -> Harness {
 
 /// `name` is per-test: the fixture keys its seeded library directory by it,
 /// and two harnesses on one name race for the same SQLite file. The window is
-/// the suite default here — `SCRIPT`'s drag distances are authored against it.
+/// wide enough to exercise a 150 px drag before chat reaches its minimum.
 fn fixture(name: &'static str) -> Fixture {
     Fixture::new(
         name,
         TRACK_SECONDS,
         vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0).lane(0)],
     )
+    .window(1600.0, 950.0)
 }
 
 const SCRIPT: &str = r#"
@@ -341,7 +342,7 @@ const RATIO: &str = r#"
     // The window this test opens, stated once. Its own size rather than the
     // suite default: `SCRIPT` above authors drag distances against that one,
     // and a shared window would tie the two tests' geometry together.
-    const WINDOW = 1280;
+    const WINDOW = 1600;
 
     // Where the pair begins: past the sidebar's live edge and its seam, or at
     // the window's own edge while the sidebar is away. Read off the sidebar
@@ -390,7 +391,7 @@ const RATIO: &str = r#"
 #[test]
 fn toggling_the_sidebar_keeps_the_thread_and_panel_at_the_same_ratio() {
     let mut harness = fixture("shell-panels-ratio")
-        .window(1280.0, 800.0)
+        .window(1600.0, 800.0)
         .with_motion()
         .open(Mode::Headless);
     let result = harness.exec(&support::script(RATIO), Duration::from_secs(60));
@@ -398,10 +399,10 @@ fn toggling_the_sidebar_keeps_the_thread_and_panel_at_the_same_ratio() {
     let out: Value = result.result;
 
     let open = out["open"].as_f64().expect("a split with the sidebar open");
-    // An even split is the authored default; asserted so a change to it is a
+    // The workspace gets 65% by default; asserted so a change to it is a
     // decision someone makes rather than a number this test absorbs.
     assert!(
-        (open - 0.5).abs() < 0.01,
+        (open - 0.65).abs() < 0.01,
         "the panel did not rest at its authored share: {open}"
     );
 

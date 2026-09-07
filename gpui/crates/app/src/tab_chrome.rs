@@ -438,18 +438,16 @@ fn progress(started: Instant, now: Instant) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewTabChoice {
     Patch,
-    Stage,
     Pattern,
     Track,
 }
 
 impl NewTabChoice {
-    pub(crate) const ALL: [Self; 4] = [Self::Patch, Self::Stage, Self::Pattern, Self::Track];
+    pub(crate) const ALL: [Self; 3] = [Self::Patch, Self::Pattern, Self::Track];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Patch => "Patch",
-            Self::Stage => "Stage builder",
+            Self::Patch => "Venue",
             Self::Pattern => "Pattern editor",
             Self::Track => "Track editor",
         }
@@ -479,12 +477,10 @@ impl ChoiceAvailability {
     }
 }
 
-pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 4] {
+pub(crate) fn menu_choices(prerequisites: &NewTabPrerequisites) -> [ChoiceAvailability; 3] {
     NewTabChoice::ALL.map(|choice| {
         let reason = match choice {
-            NewTabChoice::Patch | NewTabChoice::Stage if prerequisites.venue.is_none() => {
-                Some("Select a venue first")
-            }
+            NewTabChoice::Patch if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.venue.is_none() => Some("Select a venue first"),
             NewTabChoice::Track if prerequisites.track.is_none() => Some("Select a track first"),
             // The track gate outranks the pattern gate: a pattern can be
@@ -578,7 +574,6 @@ impl Luma {
         self.tab_chrome.menu_open = false;
         match choice {
             NewTabChoice::Patch => self.open_patch(cx),
-            NewTabChoice::Stage => self.open_stage(cx),
             NewTabChoice::Pattern => {
                 if let Some(pattern) = self.selected_pattern.clone() {
                     self.open_pattern(pattern, cx);
@@ -768,10 +763,6 @@ mod tests {
             Some("Select a venue first")
         );
         assert_eq!(
-            reason(&none, NewTabChoice::Stage),
-            Some("Select a venue first")
-        );
-        assert_eq!(
             reason(&none, NewTabChoice::Pattern),
             Some("Open a track to edit patterns")
         );
@@ -785,7 +776,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(reason(&venue, NewTabChoice::Patch), None);
-        assert_eq!(reason(&venue, NewTabChoice::Stage), None);
         assert_eq!(
             reason(&venue, NewTabChoice::Track),
             Some("Select a track first")
