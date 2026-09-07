@@ -4,12 +4,14 @@ The venue lives in the right workspace column, next to chat. It starts at 65% of
 
 ## Implemented
 
-- One venue tab owns Stage, Fixtures and Groups. It opens on Stage. Stage no longer creates a separate tab or takes the whole workspace height.
-- Fixtures shows a compact selectable list. Add fixtures uses the existing fixture picker and allocator. Selecting lights highlights them in the stage; selecting fixtures in the stage updates the list.
-- Stage keeps the existing placement, snapping, distribution, duplicate, flip and undo tools. Environment and selection controls sit below the preview. A flat element list selects the same objects as the viewport; the inspector exposes Duplicate and Remove. Removal uses the native confirmation dialog. Removing structure preserves attached fixtures as unplaced inventory, and undo restores the structure; deleting a fixture directly still removes its patch row. Native palettes can use more window width when opened.
-- Groups supports creation, staged membership edits, renaming and changing the parent group. The same fixture can be in multiple authored groups. Automatic groups are visible alongside authored groups, marked Auto. Parent paths distinguish same-named leaves without requiring an expanded tree. Clicking a group highlights its fixtures in the stage. Parent changes organize the group list; moving physical structures remains a stage operation.
+- One Venue tab: live stage above, groups and fixture inventory below. There are no Stage / Fixtures / Groups navigation tabs.
+- Add element and Objects live on the preview toolbar. Objects is a flat popover for selecting structures and placing unplaced inventory; it uses the same selection as the viewport. Placement, snapping, distribution, duplicate, flip and undo retain their existing behavior.
+- The lower panel shows groups and fixtures together. Selecting a fixture opens its label, mode, universe, address, authored group membership, and geometry controls above the list. Unplaced fixtures offer Place. Add fixtures uses the existing fixture picker and allocator. Viewport selection and inventory selection stay in sync; Shift or the platform modifier extends selection.
+- Selected elements expose Duplicate and Remove. Removal uses the native confirmation dialog. Removing structure preserves attached fixtures as unplaced inventory, and undo restores the structure; deleting a fixture directly still removes its patch row. Native palettes can use more window width when opened.
+- View opens render settings in every visualizer, including score previews. It contains Indoor/Outdoor, House/Sun, and the advanced Renderer Lab. Environment values remain saved with the venue and do not change when a score starts. Scrubs update immediately and serialize their writes; the final value is still saved if navigation closes the preview.
+- Group chips show authored groups first, then automatic groups marked auto. Clicking opens a draft editor for its name, parent and members. Membership edits also update the stage highlight. Parent paths distinguish same-named leaves without an expanded tree. The same fixture can belong to multiple authored groups. Parent changes organize groups; moving physical structures remains a stage operation.
 - A group save is one backend transaction. A missing fixture, name conflict or permission failure rolls back the whole edit. Cancelling discards the draft.
-- Patch details retains addresses, modes, footprint, auto patch and local output routing. The technical table remains horizontally scrollable; it is no longer the first thing a venue opens into.
+- Patch details replaces only the lower region with the technical table, footprint, auto patch and local output routing. Closing it returns to the inventory. The table remains horizontally scrollable.
 - No schema migration or rendering changes. Ambient occlusion remains future renderer work.
 
 ## Important limits / next pass
@@ -18,16 +20,19 @@ Group selector names are currently the strings saved effects reference. The nati
 
 The first membership editor operates on whole fixtures. Existing per-head memberships are retained unless their fixture is explicitly removed, but individual heads still need their own editor and partial-membership indicator. Derived/merged groups need clearer membership provenance before exposing arbitrary membership changes.
 
-Advanced patch editing is still the old wide table behind Patch details. A focused fixture detail sheet is the next step, along with moving the existing Renderer Lab control out of the default preview header.
+Bulk patch editing is still the wide table behind Patch details. Per-fixture edits are available directly in the compact inspector. Geometry controls can be dense for fixtures in distributed rows; they retain the existing builder vocabulary.
 
 The original concept image in this directory was generated. The native captures are actual GPUI windows using the user's EBF library on a dedicated X11 display; they are not web mockups. No in-app agent/model turns were used.
 
 ## Validation
 
-- Native group workflow at 1100 × 900: create, assign, edit, rename, reparent, cancel, and switch sections.
+- Native group workflow at 1100 × 900: create, assign, edit, rename, reparent and cancel without changing pages.
+- Inline fixture edits and group membership match the values in Patch details. Render settings follow a score and survive closing/reopening the venue preview.
 - Existing patch tests cover address refusal, occupancy, outputs, auto patch, destructive confirmation, adding fixtures and mode changes.
 - Existing builder tests cover placement, attachments, distribution, fit refusal, duplicate/flip, detach, palette focus and undo/redo. The duplicate test now uses the platform's secondary modifier instead of hard-coding macOS Command.
 - Backend tests cover atomic rollback, rename with membership changes, generated-group reparenting, cycle refusal and protecting names used by saved scores. Native tests cover element selection, confirmed removal, retained fixture inventory and undo, plus the wider workspace split and its resizing limits.
 - Workspace/all-targets check and native application build.
 
-The widened-shell checks pass, as do all 15 builder tests, 8 patch/group UI tests and 19 backend group tests. The all-targets check and native build pass. An additional venue-picker stale-response test fails while reopening its catalogue (`venue_launch_picker_create_and_stale_reads_are_correlated`); its injected catalogue failure arrives earlier than the test expects. That separate picker/request-order issue was not changed in this revision. The track-list ordering test passed on an isolated rerun after failing in the concurrent batch.
+Current validation: all 15 builder tests, all 10 patch/group/render-settings tests, and the venue-filter browser test pass (26 total). The workspace/all-targets check and native build pass. Native X11 captures were inspected using the actual EBF library with chat visible, including fixture selection, Objects and View. No venue contents were changed for captures.
+
+The previous revision's additional venue-picker stale-response test failed while reopening its catalogue (`venue_launch_picker_create_and_stale_reads_are_correlated`); its injected catalogue failure arrives earlier than the test expects. That separate picker/request-order issue is outside this layout change. The track-list ordering test passed on an isolated rerun after failing in the concurrent batch.

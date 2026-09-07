@@ -33,6 +33,125 @@ const W_RANGE: f32 = 90.0;
 const W_PLACED: f32 = 76.0;
 const ROW_HEIGHT: f32 = 38.0;
 
+/// The same editable cells as the full patch, scoped to the selected fixture.
+pub(super) fn inspector(
+    state: &Patch,
+    row: &PatchedFixture,
+    selection: Option<AnyElement>,
+    app: &Entity<Luma>,
+    window: &gpui::Window,
+) -> AnyElement {
+    let name: SharedString = row
+        .label
+        .clone()
+        .unwrap_or_else(|| row.model.clone())
+        .into();
+    let editing = state.editing.as_ref().filter(|edit| edit.fixture == row.id);
+    let duplicate = app.clone();
+    let remove = app.clone();
+    let placed = state.is_placed(&row.id);
+    let fixture_id = row.id.clone();
+    let fixture_name = name.to_string();
+    let mut card = float::popover_card()
+        .p(px(10.0))
+        .gap(px(8.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(label_cell(state, row, &name, editing, app, window))
+                .child(
+                    float::btn(
+                        if placed { "Duplicate" } else { "Place" },
+                        "fixture-duplicate",
+                    )
+                    .id("fixture-duplicate")
+                    .on_click(move |_, _, cx| {
+                        duplicate.update(cx, |this, cx| {
+                            if placed {
+                                this.stage_duplicate(cx);
+                            } else {
+                                this.stage_take(
+                                    crate::stage::hand::Holding::Unplaced {
+                                        node: fixture_id.clone(),
+                                        label: fixture_name.clone(),
+                                    },
+                                    cx,
+                                );
+                            }
+                        })
+                    })
+                    .agent_node(
+                        Role::Button,
+                        if placed {
+                            "Duplicate element"
+                        } else {
+                            "Place fixture"
+                        },
+                    ),
+                )
+                .child(
+                    float::btn("Remove", "fixture-remove")
+                        .id("fixture-remove")
+                        .on_click(move |_, _, cx| {
+                            remove.update(cx, |this, cx| this.stage_delete(cx))
+                        })
+                        .agent_node(Role::Button, "Remove element"),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(10.0))
+                .child(float::field_row("Mode", mode_cell(state, row, &name, app)))
+                .child(float::field_row(
+                    "Universe",
+                    number_cell(
+                        state,
+                        row,
+                        &name,
+                        Column::Universe,
+                        row.universe,
+                        W_UNIVERSE,
+                        editing,
+                        app,
+                        window,
+                    ),
+                ))
+                .child(float::field_row(
+                    "Address",
+                    number_cell(
+                        state,
+                        row,
+                        &name,
+                        Column::Address,
+                        row.address,
+                        W_ADDRESS,
+                        editing,
+                        app,
+                        window,
+                    ),
+                )),
+        )
+        .child(super::groups::memberships(state, &row.id, app))
+        .children(selection);
+    if let Some(refusal) = state.refusal.as_ref().filter(|r| r.fixture == row.id) {
+        card = card.child(luma_ui::plate(refusal.message.clone(), ladder::danger()));
+    }
+    if let Some(error) = &state.group_error {
+        card = card.child(luma_ui::plate(error.clone(), ladder::danger()));
+    }
+    div()
+        .flex_none()
+        .px(px(16.0))
+        .pb(px(8.0))
+        .child(card)
+        .agent_node(Role::Card, format!("Fixture {name}"))
+        .into_any_element()
+}
+
 /// The narrowest the nine columns fit in: the fixed widths, both name columns
 /// at their minimum, the gaps between them and the page's own inset. Below
 /// this the table scrolls sideways rather than squeezing — a column of

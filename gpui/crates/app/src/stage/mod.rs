@@ -39,7 +39,6 @@ use gpui::{div, px, AnyElement, Context, Div, Entity, Pixels, Point, Window};
 use gpui_component::{Icon, IconName};
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
-use luma_render::scene_desc::VenueEnvironment;
 use luma_scene::catalog::{pieces, PaletteGroup};
 use luma_scene::coords;
 use luma_scene::venue::{NodeKind, NodeSockets as _, VenueGraph};
@@ -49,7 +48,6 @@ use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
 use crate::fixture_library::{self, FixtureLibrary};
 use crate::library::{LibraryError, Rig};
-use crate::visualizer::Visualizer;
 use crate::Luma;
 
 use hand::{Extending, Hand, Held, Holding, Landed, Landing, Room};
@@ -703,7 +701,6 @@ fn poses(solved: &ResolvedVenue) -> HashMap<String, glam::DMat4> {
 /// The stage tab. Almost stateless: what a builder is doing lives on the
 /// [`Build`] beside the picture, and this is the venue the tab dies with.
 pub(crate) struct StagePage {
-    pub(crate) venue_name: String,
     /// The one search the add-element dialog has, and the fixture rows it
     /// fetched. The shared picker rather than a private query: the bundle is
     /// fifteen thousand definitions, so "what fixtures match this" is paged,
@@ -721,6 +718,7 @@ pub(crate) struct StagePage {
     /// hand: a menu is chrome about the selection, not a thing the hand is
     /// doing.
     pub(crate) menu: Option<NodeMenuAt>,
+    pub(crate) objects_open: bool,
     /// The add-element dialog's exit. The hand decides *whether* the dialog is
     /// up ([`Hand::Choosing`]); this only buys the card its leaving frames —
     /// see [`luma_ui::dialog::Popup`].
@@ -728,14 +726,14 @@ pub(crate) struct StagePage {
 }
 
 impl StagePage {
-    pub(crate) fn new(venue_name: String, cx: &mut Context<Luma>) -> Self {
+    pub(crate) fn new(cx: &mut Context<Luma>) -> Self {
         Self {
-            venue_name,
             library: FixtureLibrary::new("Search elements", cx, |luma, query, cx| {
                 luma.stage_fixture_query(query, cx);
             }),
             focus: cx.focus_handle(),
             menu: None,
+            objects_open: false,
             closing: luma_ui::dialog::Popup::default(),
         }
     }
@@ -954,6 +952,7 @@ impl Luma {
     /// is commit, which is what [`ConfigureView::ready`] gates.
     pub(crate) fn stage_take(&mut self, what: Holding, cx: &mut Context<Self>) {
         if let Some(page) = self.stage_page_mut() {
+            page.objects_open = false;
             page.closing.begin_close(cx);
         }
         let path = match &what {
@@ -1051,6 +1050,8 @@ impl Luma {
         self.stage_escape(cx);
         if let Some(crate::shell::Body::Patch(page)) = self.workspace.active_body_mut() {
             page.selected.clear();
+            page.group_editor = None;
+            page.stage.objects_open = false;
         }
         if let Some(state) = self.visualizer_mut() {
             state.replace_selection([luma_render::frame::EditorObject::StagePiece(id.clone())]);
@@ -1063,6 +1064,9 @@ impl Luma {
 
     pub(crate) fn stage_escape(&mut self, cx: &mut Context<Self>) {
         self.stage_close_menu(cx);
+        if let Some(crate::shell::Body::Patch(page)) = self.workspace.active_body_mut() {
+            page.selected.clear();
+        }
         let mut was_choosing = false;
         if let Some(build) = self.build_mut() {
             was_choosing = matches!(build.hand, Hand::Choosing(_));
@@ -1565,43 +1569,6 @@ impl Luma {
             None,
         );
         self.stage_verb(pending, cx);
-    }
-
-    /// Write the venue's lighting environment: what kind of room this is, and
-    /// how far up its one dial.
-    ///
-    /// Not a graph verb — nothing in the room moves — so it does not go
-    /// through [`Self::stage_verb`] and there is no re-solve to wait for. The
-    /// viewport adopts the value first and the write follows: a scrub hands
-    /// over a value per pointer step, and a house dial that only moved once
-    /// the database had answered would lag the picture it is dimming. A
-    /// refusal lands on the build's report line, where every other stage
-    /// write's does.
-    pub(crate) fn stage_set_environment(
-        &mut self,
-        environment: VenueEnvironment,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(state) = self.visualizer.as_mut() else {
-            return;
-        };
-        let venue = state.venue_id.clone();
-        state.set_venue_environment(environment);
-        let pending = self.library.set_venue_environment(&venue, environment);
-        cx.spawn(async move |this, cx| {
-            let Err(error) = pending.await else {
-                return;
-            };
-            this.update(cx, |this, cx| {
-                if let Some(build) = this.build_mut() {
-                    build.report = vec![error.to_string()];
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
     }
 
     /// Detach the selected node. Its rows stay: it lands in the tray, which is
@@ -2132,10 +2099,6 @@ impl Build {
 pub(crate) struct StageView {
     pub(crate) elements: Vec<(String, String, String)>,
     pub(crate) selected: Option<String>,
-    /// The venue's own environment — what kind of room this is and how far up
-    /// its one dial. Venue truth, so the control edits *this* and never the
-    /// darkened room a playing score is drawn under.
-    pub(crate) environment: VenueEnvironment,
     /// The add-element dialog's keyboard cursor, when it is up.
     pub(crate) choosing: Option<usize>,
     /// Unplaced fixtures, as dialog rows.
@@ -2200,10 +2163,6 @@ impl Luma {
     /// The builder as the page draws it, or `None` when no room is up.
     pub(crate) fn stage_view(&self) -> Option<StageView> {
         let build = self.build_state()?;
-        let environment = self
-            .visualizer
-            .as_ref()
-            .map_or_else(VenueEnvironment::default, Visualizer::venue_environment);
         Some(StageView {
             elements: build
                 .graph
@@ -2221,7 +2180,6 @@ impl Luma {
                 })
                 .collect(),
             selected: build.selected.clone(),
-            environment,
             choosing: build.hand.choosing().map(|c| c.cursor),
             unplaced: build
                 .solved
@@ -2265,45 +2223,73 @@ impl Luma {
     }
 }
 
-/// Layout controls beneath the live stage. The palette and context menus
-/// still use window-anchored native popovers.
-pub(crate) fn stage_page(
+/// The venue's tools live on the picture, alongside its render settings.
+pub(crate) fn controls(
     state: &StagePage,
     app: &Entity<Luma>,
     view: Option<&StageView>,
     window: &Window,
 ) -> AnyElement {
     let Some(view) = view else {
-        return div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(float::empty_row("Loading stage…"))
-            .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
-            .into_any_element();
+        return div().into_any_element();
     };
+    let toggle = app.clone();
+    let close = app.clone();
+    let objects = div()
+        .relative()
+        .child(
+            float::btn("Objects", "stage-objects")
+                .id("stage-objects")
+                .on_click(move |_, _, cx| {
+                    toggle.update(cx, |this, cx| {
+                        if let Some(page) = this.stage_page_mut() {
+                            page.objects_open = !page.objects_open;
+                        }
+                        cx.notify();
+                    })
+                })
+                .agent_node(Role::Toggle, "Stage objects")
+                .agent_focused(state.objects_open),
+        )
+        .when(state.objects_open, |d| {
+            d.child(float::anchored_below(
+                "stage-objects-popover",
+                luma_ui::CONTROL_HEIGHT,
+                Dismiss::on_press_out(move |_, cx| {
+                    close.update(cx, |this, cx| {
+                        if let Some(page) = this.stage_page_mut() {
+                            page.objects_open = false;
+                        }
+                        cx.notify();
+                    })
+                }),
+                float::popover_card()
+                    .w(px(300.0))
+                    .p(px(12.0))
+                    .child(
+                        div()
+                            .id("stage-object-list")
+                            .max_h(px(320.0))
+                            .overflow_y_scroll()
+                            .child(elements(view, app))
+                            .child(unplaced(view, app)),
+                    )
+                    .agent_node(Role::Card, "Stage objects")
+                    .into_any_element(),
+            ))
+        });
     div()
         .flex()
-        .flex_col()
-        .gap(px(12.0))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .justify_between()
-                .gap(px(8.0))
-                .child(add_button(app))
-                .child(environment_card(view.environment, app)),
-        )
+        .items_center()
+        .gap(px(6.0))
+        .child(add_button(app))
+        .child(objects)
         .children(
             (view.choosing.is_some() || state.closing.is_closing())
                 .then(|| chooser(state, view, view.choosing.unwrap_or(0), app, window)),
         )
         .children(view.configuring.as_ref().map(|row| configure(row, app)))
         .children(state.menu.as_ref().map(|menu| node_menu(menu, app)))
-        .agent_node(Role::Card, format!("{} Stage builder", state.venue_name))
         .into_any_element()
 }
 
@@ -2340,101 +2326,6 @@ fn add_button(app: &Entity<Luma>) -> AnyElement {
     );
     bar.into_any_element()
 }
-
-/// Venue environment, independent of score playback.
-fn environment_card(environment: VenueEnvironment, app: &Entity<Luma>) -> AnyElement {
-    let mut track = float::segmented().w(px(ENVIRONMENT_MODE_W));
-    for (name, indoor) in [("Indoor", true), ("Outdoor", false)] {
-        let app = app.clone();
-        track = track.child(
-            float::segment(
-                name,
-                matches!(environment, VenueEnvironment::Indoor { .. }) == indoor,
-                name,
-            )
-            .id(gpui::ElementId::Name(format!("environment-{name}").into()))
-            .on_click(move |_, _, cx| {
-                // Switching modes keeps neither scalar: the other mode's
-                // dial is a different quantity, and a house level read as
-                // an elevation is a sunset at one degree. Each mode opens
-                // at its own default — house at full, sun at mid-morning.
-                let chosen = if indoor {
-                    VenueEnvironment::default()
-                } else {
-                    VenueEnvironment::outdoor(ENVIRONMENT_DEFAULT_SUN_DEG)
-                };
-                app.update(cx, |this, cx| this.stage_set_environment(chosen, cx));
-            })
-            .agent_node(Role::Toggle, name),
-        );
-    }
-    let dial = match environment {
-        VenueEnvironment::Indoor { .. } => {
-            let app = app.clone();
-            float::field_row(
-                "House",
-                float::scrub(
-                    "stage-house-level",
-                    f64::from(environment.house_level()),
-                    0.0,
-                    1.0,
-                    0.05,
-                    ENVIRONMENT_DIAL_W,
-                    move |value, _, cx| {
-                        app.update(cx, |this, cx| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            this.stage_set_environment(VenueEnvironment::indoor(value as f32), cx);
-                        });
-                    },
-                ),
-            )
-        }
-        VenueEnvironment::Outdoor { .. } => {
-            let app = app.clone();
-            float::field_row(
-                "Sun",
-                float::scrub(
-                    "stage-sun-elevation",
-                    f64::from(environment.sun_elevation_deg()),
-                    -90.0,
-                    90.0,
-                    1.0,
-                    ENVIRONMENT_DIAL_W,
-                    move |value, _, cx| {
-                        app.update(cx, |this, cx| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            this.stage_set_environment(VenueEnvironment::outdoor(value as f32), cx);
-                        });
-                    },
-                ),
-            )
-        }
-    };
-    div()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_end()
-                .gap(px(8.0))
-                .child(float::field_row("Room", track))
-                .child(dial)
-                .agent_node(Role::Card, "Environment"),
-        )
-        .into_any_element()
-}
-
-/// Wide enough for "Outdoor" twice over, and narrow enough that the card is
-/// chrome in a corner rather than a panel.
-const ENVIRONMENT_MODE_W: f32 = 148.0;
-
-/// The dial's box. The number is the whole control, so it is sized to the
-/// widest number either mode prints — a signed two-digit elevation.
-const ENVIRONMENT_DIAL_W: f32 = 56.0;
-
-/// Where an open-air venue's sun starts: high enough that the room is lit and
-/// low enough that everything in it still casts a shadow with a direction.
-const ENVIRONMENT_DEFAULT_SUN_DEG: f32 = 40.0;
 
 // ---------------------------------------------------------------------------
 // The add-element dialog
@@ -3984,39 +3875,47 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         return None;
     }
     let selected = build.selected_view()?;
-    let mut card = float::popover_card().w_full().gap(px(6.0)).p(px(8.0));
+    let mut card = div().flex().flex_col().w_full().gap(px(6.0));
     let duplicate = app.clone();
     let remove = app.clone();
-    card = card.child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(12.0))
-                    .text_color(ladder::foreground())
-                    .child(selected.label.clone())
-                    .agent_node(Role::Text, selected.label.clone()),
-            )
-            .child(
-                float::btn("Duplicate", "selection-duplicate")
-                    .id("selection-duplicate")
-                    .on_click(move |_, _, cx| {
-                        duplicate.update(cx, |this, cx| this.stage_duplicate(cx))
-                    })
-                    .agent_node(Role::Button, "Duplicate element"),
-            )
-            .child(
-                float::btn("Remove", "selection-remove")
-                    .id("selection-remove")
-                    .on_click(move |_, _, cx| remove.update(cx, |this, cx| this.stage_delete(cx)))
-                    .agent_node(Role::Button, "Remove element"),
-            ),
-    );
+    let fixture = build
+        .graph
+        .node(&selected.node)
+        .is_some_and(|node| node.kind == NodeKind::Fixture);
+    if !fixture {
+        card = card.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.0))
+                        .text_color(ladder::foreground())
+                        .child(selected.label.clone())
+                        .agent_node(Role::Text, selected.label.clone()),
+                )
+                .child(
+                    float::btn("Duplicate", "selection-duplicate")
+                        .id("selection-duplicate")
+                        .on_click(move |_, _, cx| {
+                            duplicate.update(cx, |this, cx| this.stage_duplicate(cx))
+                        })
+                        .agent_node(Role::Button, "Duplicate element"),
+                )
+                .child(
+                    float::btn("Remove", "selection-remove")
+                        .id("selection-remove")
+                        .on_click(move |_, _, cx| {
+                            remove.update(cx, |this, cx| this.stage_delete(cx))
+                        })
+                        .agent_node(Role::Button, "Remove element"),
+                ),
+        );
+    }
     // A fixture clicked out of a row selected the row, and the row
     // is what this card edits: count and layout re-run the same
     // `distribute` the configure popover committed, live.
@@ -4174,8 +4073,94 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         .children(selected.relation.clone().map(note))
         .children(selected.constraint.clone().map(note));
 
+    if !fixture {
+        card = float::popover_card().p(px(8.0)).child(card);
+    }
     Some(
         card.agent_node(Role::Card, "Selection card")
             .into_any_element(),
     )
+}
+
+fn elements(view: &StageView, app: &Entity<Luma>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .child(float::label("Elements"))
+        .when(view.elements.is_empty(), |d| {
+            d.child(float::empty_row("No stage elements"))
+        })
+        .children(view.elements.iter().map(|(id, label, parent)| {
+            let click = app.clone();
+            let id = id.clone();
+            let selected = view.selected.as_ref() == Some(&id);
+            div()
+                .id(gpui::SharedString::from(format!("venue-element-{id}")))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(8.0))
+                .py(px(7.0))
+                .rounded(px(4.0))
+                .bg(if selected {
+                    luma_ui::glass::card_selected_bg()
+                } else {
+                    luma_ui::glass::wash(0.0)
+                })
+                .hover(|d| d.bg(luma_ui::glass::glass_hover()))
+                .cursor_pointer()
+                .on_click(move |_, _, cx| {
+                    click.update(cx, |this, cx| this.stage_select_element(id.clone(), cx))
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.0))
+                        .child(label.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(ladder::muted_foreground())
+                        .child(parent.clone()),
+                )
+                .agent_node(Role::Row, format!("Element {label}"))
+                .agent_focused(selected)
+        }))
+        .into_any_element()
+}
+
+fn unplaced(view: &StageView, app: &Entity<Luma>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .when(!view.unplaced.is_empty(), |d| {
+            d.child(float::label("Unplaced fixtures"))
+        })
+        .children(view.unplaced.iter().map(|(node, label)| {
+            let app = app.clone();
+            let node = node.clone();
+            let label = label.clone();
+            let shown = label.clone();
+            float::btn(format!("Place {shown}"), format!("place-{node}"))
+                .id(gpui::SharedString::from(format!("place-{node}")))
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        this.stage_take(
+                            hand::Holding::Unplaced {
+                                node: node.clone(),
+                                label: label.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .agent_node(Role::Button, format!("Place {shown}"))
+        }))
+        .into_any_element()
 }

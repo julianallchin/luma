@@ -159,7 +159,6 @@ globalThis.nav = {
 	// write a position, so every placement test starts here.
 	stage(venue) {
         nav.patch(venue);
-        nav.step("layout", "toggle", "Stage");
         until("the stage controls", s => s.find({role:"button",label:"Add element"}) !== undefined);
     },
 
