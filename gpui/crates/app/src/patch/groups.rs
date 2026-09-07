@@ -213,8 +213,10 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let new = app.clone();
     let from_selection = app.clone();
     let mut section = div()
-        .flex_1()
-        .min_w_0()
+        .flex_none()
+        .w(gpui::relative(0.30))
+        .min_w(px(200.0))
+        .max_w(px(320.0))
         .h_full()
         .overflow_hidden()
         .border_l_1()
@@ -236,6 +238,7 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                     |d| {
                         d.child(
                             float::btn("From selection", "group-selected")
+                                .px(px(6.0))
                                 .id("group-selected")
                                 .on_click(move |_, window, cx| {
                                     from_selection.update(cx, |this, cx| {
@@ -249,6 +252,7 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                 )
                 .child(
                     float::btn("New", "group-create")
+                        .px(px(6.0))
                         .id("group-create")
                         .on_click(move |_, window, cx| {
                             new.update(cx, |this, cx| {

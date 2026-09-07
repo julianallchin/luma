@@ -2,9 +2,9 @@
 use super::Patch;
 use crate::{shell::Body, Luma};
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, Entity, SharedString, Window};
-use luma_ui::node::{AgentNode as _, Instrument as _, Role};
-use luma_ui::{float, glass, ladder};
+use gpui::{div, px, AnyElement, Entity, Window};
+use luma_ui::node::{Instrument as _, Role};
+use luma_ui::{float, ladder};
 
 impl Luma {
     pub(crate) fn highlight_venue_lights(
@@ -117,34 +117,26 @@ pub(super) fn render(
                         .agent_node(Role::Button, "Patch details"),
                 ),
         );
-    let mut inventory = div()
-        .id("venue-fixtures-scroll")
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .flex()
-        .flex_col();
+    lights = lights.child(super::table::compact(state, app, window));
     if state.group_editor.is_none() {
         let fixture = (state.selected.len() == 1)
             .then(|| state.selected.iter().next())
             .flatten()
             .and_then(|id| state.row(id));
         if let Some(fixture) = fixture {
-            inventory = inventory.child(super::table::inspector(
-                state, fixture, selection, app, window,
-            ));
+            lights = lights.child(super::table::inspector(state, fixture, selection, app));
         } else if let Some(selection) = selection {
-            inventory =
-                inventory.child(div().flex_none().px(px(12.0)).pb(px(8.0)).child(selection));
+            lights = lights.child(
+                div()
+                    .id("venue-element-inspector")
+                    .flex_none()
+                    .max_h(px(190.0))
+                    .overflow_y_scroll()
+                    .p(px(12.0))
+                    .child(selection),
+            );
         }
     }
-    if let Some(error) = &state.error {
-        inventory = inventory.child(luma_ui::plate(error.clone(), ladder::danger()));
-    }
-    if state.data.is_none() && state.error.is_none() {
-        inventory = inventory.child(float::empty_row("Loading fixtures…"));
-    }
-    lights = lights.child(inventory.child(fixtures(state, app)));
     body.child(
         div()
             .size_full()
@@ -160,99 +152,4 @@ pub(super) fn render(
     )
     .agent_node(Role::Card, format!("{} Venue", state.venue_name))
     .into_any_element()
-}
-
-fn fixtures(state: &Patch, app: &Entity<Luma>) -> AnyElement {
-    let editing_members = state.group_editor.as_ref().is_some_and(|e| e.manual);
-    let rows = state.rows().iter().map(|row| {
-        let selected = state.selected.contains(&row.id);
-        let click = app.clone();
-        let venue = state.venue_id.clone();
-        let id = row.id.clone();
-        let name = row.label.clone().unwrap_or_else(|| row.model.clone());
-        let item = div()
-            .id(SharedString::from(format!("venue-light-{}", row.id)))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .px(px(10.0))
-            .py(px(7.0))
-            .rounded(px(6.0))
-            .cursor_pointer()
-            .bg(if selected {
-                glass::card_selected_bg()
-            } else {
-                glass::wash(0.0)
-            })
-            .hover(|d| d.bg(glass::glass_hover()))
-            .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
-                click.update(cx, |this, cx| {
-                    if editing_members {
-                        this.toggle_venue_group_member(&id, cx);
-                    } else {
-                        this.pick_patch_row(
-                            venue.clone(),
-                            id.clone(),
-                            event.modifiers.shift || event.modifiers.platform,
-                            cx,
-                        );
-                    }
-                })
-            })
-            .child(
-                div()
-                    .text_size(px(14.0))
-                    .text_color(if selected {
-                        ladder::accent().into()
-                    } else {
-                        ladder::foreground_alpha(0.35)
-                    })
-                    .child(if selected { "●" } else { "○" }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.0))
-                    .child(div().text_size(px(12.5)).truncate().child(name.clone()))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .truncate()
-                            .text_color(ladder::foreground_alpha(0.45))
-                            .child(format!("{} · {}", row.manufacturer, row.model)),
-                    ),
-            )
-            .children((!state.is_placed(&row.id)).then(|| {
-                div()
-                    .text_size(px(10.5))
-                    .text_color(ladder::foreground_alpha(0.55))
-                    .child("Unplaced")
-            }));
-        let item = if editing_members {
-            item.agent_node(Role::Checkbox, format!("Include {name}"))
-                .agent_focused(selected)
-                .agent_disabled(state.group_busy)
-                .into_any_element()
-        } else {
-            item.into_any_element()
-        };
-        div()
-            .flex_none()
-            .child(item)
-            .agent_node(Role::Row, name)
-            .agent_focused(selected)
-    });
-    div()
-        .id("venue-lights-list")
-        .flex_none()
-        .flex()
-        .flex_col()
-        .px(px(4.0))
-        .gap(px(2.0))
-        .children(rows)
-        .into_any_element()
 }
