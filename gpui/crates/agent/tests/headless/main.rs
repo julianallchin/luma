@@ -53,3 +53,5 @@ mod visualizer_score;
 mod workspace_scope;
 
 mod lighting_patterns;
+
+mod sync_status;

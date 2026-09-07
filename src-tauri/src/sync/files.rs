@@ -3,9 +3,9 @@
 //! **Writer path**: Upload binary to Supabase Storage first, then update
 //! local `storage_path` (which marks the metadata dirty for push).
 //!
-//! **Reader path**: After pull, download files for tracks with a
-//! `storage_path` but no local file (stub tracks). Downloads go to a
-//! temp file first and are atomically renamed on success.
+//! **Reader path**: Audio is downloaded on demand and retained locally.
+//! Sync downloads album art; stems follow tracks with local audio.
+//! Downloads go to a temp file first and are atomically renamed on success.
 
 use sqlx::SqlitePool;
 use std::process::Command;
@@ -37,7 +37,6 @@ pub struct FileSyncStats {
     pub audio_uploaded: usize,
     pub stems_uploaded: usize,
     pub art_uploaded: usize,
-    pub audio_downloaded: usize,
     pub stems_downloaded: usize,
     pub art_downloaded: usize,
     pub errors: Vec<String>,
@@ -127,6 +126,7 @@ pub async fn upload_pending_audio(
     token: &str,
     stats: &mut FileSyncStats,
     host: &SyncHost,
+    progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingAudioUpload>(
         "SELECT id, track_hash, file_path FROM tracks
@@ -138,7 +138,9 @@ pub async fn upload_pending_audio(
 
     emit_upload_start(host, rows.len());
 
+    progress.phase("Uploading audio", Some(rows.len()), "files");
     for row in &rows {
+        let _item = progress.item();
         let file_path = std::path::Path::new(&row.file_path);
         if !file_path.exists() {
             continue;
@@ -220,6 +222,7 @@ pub async fn upload_pending_stems(
     token: &str,
     stats: &mut FileSyncStats,
     host: &SyncHost,
+    progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingStemUpload>(
         "SELECT ts.track_id, t.track_hash, ts.stem_name, ts.file_path AS stem_file_path
@@ -233,7 +236,9 @@ pub async fn upload_pending_stems(
 
     emit_upload_start(host, rows.len());
 
+    progress.phase("Uploading stems", Some(rows.len()), "files");
     for row in &rows {
+        let _item = progress.item();
         let file_path = std::path::Path::new(&row.stem_file_path);
         if !file_path.exists() {
             continue;
@@ -310,6 +315,7 @@ pub async fn upload_pending_album_art(
     token: &str,
     stats: &mut FileSyncStats,
     host: &SyncHost,
+    progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingArtUpload>(
         "SELECT id, track_hash, album_art_path, album_art_mime FROM tracks
@@ -322,7 +328,9 @@ pub async fn upload_pending_album_art(
 
     emit_upload_start(host, rows.len());
 
+    progress.phase("Uploading cover art", Some(rows.len()), "files");
     for row in &rows {
+        let _item = progress.item();
         let file_path = std::path::Path::new(&row.album_art_path);
         if !file_path.exists() {
             continue;
@@ -382,183 +390,192 @@ pub async fn upload_pending_album_art(
 // Download
 // ============================================================================
 
+/// Downloaded metadata can belong to another principal, just like pulled rows.
+/// Keep admission inside the database transaction and outside the network/file
+/// work so failures roll it back without exposing it to ordinary local edits.
+async fn apply_download_metadata(
+    pool: &SqlitePool,
+    query: sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
+) -> Result<u64, SyncError> {
+    use crate::database::local::write_admission::{enter_remote_writes, leave_remote_writes};
+
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+    enter_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    let changed = query.execute(&mut *transaction).await?.rows_affected();
+    leave_remote_writes(&mut transaction)
+        .await
+        .map_err(SyncError::Local)?;
+    transaction.commit().await?;
+    Ok(changed)
+}
+
+/// Make one visible track available locally. Cached audio works offline; a
+/// missing source is fetched only when a caller actually needs the audio.
+/// The engine serializes requests so simultaneous waveform/playback loads share
+/// one download. No database transaction is held during network I/O.
+pub(super) async fn ensure_track_audio(
+    pool: &SqlitePool,
+    state_pool: &SqlitePool,
+    remote: &dyn RemoteClient,
+    storage: &crate::storage::StorageRoot,
+    track_id: &str,
+) -> Result<(), SyncError> {
+    use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
+    use crate::database::local::write_admission::{enter_remote_writes, leave_remote_writes};
+
+    let mut access = VisibleTrackAccess::<Read>::read(pool, track_id)
+        .await
+        .map_err(SyncError::Local)?;
+    let principal = access.principal().map(str::to_owned);
+    let (file_path, track_hash, storage_path): (String, String, Option<String>) =
+        sqlx::query_as("SELECT file_path, track_hash, storage_path FROM tracks WHERE id = ?")
+            .bind(track_id)
+            .fetch_one(access.connection())
+            .await?;
+    access.finish().await.map_err(SyncError::Local)?;
+    if !file_path.ends_with(".stub") && std::path::Path::new(&file_path).is_file() {
+        return Ok(());
+    }
+    let storage_path = storage_path
+        .ok_or_else(|| SyncError::Local("Track audio is missing and has no cloud copy".into()))?;
+    let auth = crate::database::local::auth::get_current_auth(state_pool)
+        .await?
+        .ok_or(SyncError::AuthRequired)?;
+    if principal.as_deref() != Some(auth.principal.user_id.as_str()) {
+        return Err(SyncError::AuthRequired);
+    }
+    let (bucket, path) = storage_path
+        .split_once('/')
+        .ok_or_else(|| SyncError::Parse("Invalid audio storage path".into()))?;
+    let ext = path.rsplit('.').next().unwrap_or("bin");
+    storage.ensure_track_storage().map_err(SyncError::Local)?;
+    let dest = storage.tracks_dir().join(format!("{track_hash}.{ext}"));
+    if !dest.is_file() {
+        let bytes = remote
+            .download_file(bucket, path, &auth.access_token)
+            .await?;
+        atomic_write(&dest, &bytes)
+            .map_err(|error| SyncError::Local(format!("Failed to cache track audio: {error}")))?;
+    }
+
+    let mut publication = VisibleTrackAccess::<Operate>::operate(pool, track_id)
+        .await
+        .map_err(SyncError::Local)?;
+    if publication.principal() != principal.as_deref() {
+        return Err(SyncError::AuthRequired);
+    }
+    enter_remote_writes(publication.connection())
+        .await
+        .map_err(SyncError::Local)?;
+    let changed = sqlx::query(
+        "UPDATE tracks SET file_path = ?, version = version + 1
+         WHERE id = ? AND track_hash = ? AND storage_path = ? AND file_path = ?",
+    )
+    .bind(dest.to_string_lossy().as_ref())
+    .bind(track_id)
+    .bind(&track_hash)
+    .bind(&storage_path)
+    .bind(&file_path)
+    .execute(publication.connection())
+    .await?
+    .rows_affected();
+    if changed != 1 {
+        return Err(SyncError::Local(
+            "Track audio changed while downloading".into(),
+        ));
+    }
+    leave_remote_writes(publication.connection())
+        .await
+        .map_err(SyncError::Local)?;
+    publication.commit().await.map_err(SyncError::Local)
+}
+
 #[derive(sqlx::FromRow)]
-struct PendingAudioDownload {
-    id: String,
+struct PendingStemDownload {
+    track_id: String,
     track_hash: String,
+    stem_name: String,
+    file_path: String,
     storage_path: String,
 }
 
-/// Download audio for tracks that have a storage_path but a .stub local file.
-pub async fn download_pending_audio(
-    pool: &SqlitePool,
-    remote: &dyn RemoteClient,
-    host: &SyncHost,
-    token: &str,
-    stats: &mut FileSyncStats,
-) -> Result<(), SyncError> {
-    let rows = sqlx::query_as::<_, PendingAudioDownload>(
-        "SELECT id, track_hash, storage_path FROM tracks
-         WHERE storage_path IS NOT NULL AND file_path LIKE '%.stub'",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let tracks_dir = host.storage.tracks_dir();
-
-    for row in &rows {
-        let (bucket, path) = match row.storage_path.split_once('/') {
-            Some(bp) => bp,
-            None => continue,
-        };
-
-        let bytes = match remote.download_file(bucket, path, token).await {
-            Ok(b) => b,
-            Err(e) => {
-                stats.errors.push(format!("download audio {}: {e}", row.id));
-                continue;
-            }
-        };
-
-        let ext = path.rsplit('.').next().unwrap_or("bin");
-        let dest = tracks_dir.join(format!("{}.{ext}", row.track_hash));
-
-        if let Err(e) = atomic_write(&dest, &bytes) {
-            stats.errors.push(format!("write audio {}: {e}", row.id));
-            continue;
-        }
-
-        if let Err(e) =
-            sqlx::query("UPDATE tracks SET file_path = ?, version = version + 1 WHERE id = ?")
-                .bind(dest.to_string_lossy().as_ref())
-                .bind(&row.id)
-                .execute(pool)
-                .await
-        {
-            stats
-                .errors
-                .push(format!("db update audio {}: {e}", row.id));
-            continue;
-        }
-
-        stats.audio_downloaded += 1;
-    }
-
-    Ok(())
-}
-
-#[derive(sqlx::FromRow)]
-struct TrackNeedingStems {
-    id: String,
-    track_hash: String,
-}
-
-#[derive(serde::Deserialize)]
-struct RemoteStemRow {
-    stem_name: String,
-    storage_path: Option<String>,
-}
-
-/// Download stems for tracks that have cloud stems but no local files.
+/// Pull already installed the remote stem catalog. Only download missing files
+/// for tracks whose main audio is local; never rediscover each track remotely.
 pub async fn download_pending_stems(
     pool: &SqlitePool,
     remote: &dyn RemoteClient,
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
+    progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
-    let tracks = sqlx::query_as::<_, TrackNeedingStems>(
-        "SELECT DISTINCT t.id, t.track_hash FROM tracks t
-         WHERE t.storage_path IS NOT NULL
-         AND NOT EXISTS (
-             SELECT 1 FROM track_stems ts
-             WHERE ts.track_id = t.id AND ts.file_path IS NOT NULL AND ts.file_path != ''
-         )",
+    let rows = sqlx::query_as::<_, PendingStemDownload>(
+        "SELECT ts.track_id, t.track_hash, ts.stem_name, ts.file_path, ts.storage_path
+         FROM track_stems ts JOIN tracks t ON t.id = ts.track_id
+         WHERE ts.storage_path IS NOT NULL AND t.file_path NOT LIKE '%.stub'
+         ORDER BY ts.track_id, ts.stem_name",
     )
     .fetch_all(pool)
     .await?;
-
-    let stems_root = host.storage.stems_root();
-
-    for track in &tracks {
-        let remote_stems: Vec<RemoteStemRow> = remote
-            .select_json(
-                "track_stems",
-                &format!(
-                    "track_id=eq.{}&select=track_id,stem_name,storage_path",
-                    track.id
-                ),
-                token,
-            )
-            .await
-            .and_then(|rows| {
-                serde_json::from_value(serde_json::Value::Array(rows))
-                    .map_err(|e| SyncError::Parse(e.to_string()))
-            })?;
-
-        let stems_dir = stems_root.join(&track.track_hash);
-        if let Err(e) = std::fs::create_dir_all(&stems_dir) {
-            stats.errors.push(format!("mkdir stems {}: {e}", track.id));
+    let pending: Vec<_> = rows
+        .into_iter()
+        .filter(|row| !std::path::Path::new(&row.file_path).is_file())
+        .collect();
+    progress.phase("Downloading stems", Some(pending.len()), "files");
+    for row in pending {
+        let _item = progress.item();
+        let Some((bucket, path)) = row.storage_path.split_once('/') else {
             continue;
-        }
-
-        for stem in &remote_stems {
-            let Some(ref spath) = stem.storage_path else {
-                continue;
-            };
-
-            let (bucket, path) = match spath.split_once('/') {
-                Some(bp) => bp,
-                None => continue,
-            };
-
-            let bytes = match remote.download_file(bucket, path, token).await {
-                Ok(b) => b,
-                Err(e) => {
-                    stats.errors.push(format!(
-                        "download stem {}/{}: {e}",
-                        track.id, stem.stem_name
-                    ));
-                    continue;
-                }
-            };
-
-            let ext = path.rsplit('.').next().unwrap_or("wav");
-            let dest = stems_dir.join(format!("{}.{ext}", stem.stem_name));
-
-            if let Err(e) = atomic_write(&dest, &bytes) {
-                stats
-                    .errors
-                    .push(format!("write stem {}/{}: {e}", track.id, stem.stem_name));
-                continue;
-            }
-
-            if let Err(e) = sqlx::query(
-                "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
-                 VALUES (?, (SELECT uid FROM tracks WHERE id = ?), ?, ?, ?)
-                 ON CONFLICT(track_id, stem_name) DO UPDATE SET
-                   file_path = excluded.file_path, version = version + 1,
-                   storage_path = excluded.storage_path",
-            )
-            .bind(&track.id)
-            .bind(&track.id)
-            .bind(&stem.stem_name)
-            .bind(dest.to_string_lossy().as_ref())
-            .bind(spath)
-            .execute(pool)
-            .await
-            {
+        };
+        let bytes = match remote.download_file(bucket, path, token).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
                 stats.errors.push(format!(
-                    "db update stem {}/{}: {e}",
-                    track.id, stem.stem_name
+                    "download stem {}/{}: {error}",
+                    row.track_id, row.stem_name
                 ));
                 continue;
             }
-
-            stats.stems_downloaded += 1;
+        };
+        let stems_dir = host.storage.stems_root().join(&row.track_hash);
+        if let Err(error) = std::fs::create_dir_all(&stems_dir) {
+            stats
+                .errors
+                .push(format!("mkdir stems {}: {error}", row.track_id));
+            continue;
+        }
+        let ext = path.rsplit('.').next().unwrap_or("wav");
+        let dest = stems_dir.join(format!("{}.{ext}", row.stem_name));
+        if let Err(error) = atomic_write(&dest, &bytes) {
+            stats.errors.push(format!(
+                "write stem {}/{}: {error}",
+                row.track_id, row.stem_name
+            ));
+            continue;
+        }
+        match apply_download_metadata(
+            pool,
+            sqlx::query(
+                "UPDATE track_stems SET file_path = ?, version = version + 1
+             WHERE track_id = ? AND stem_name = ? AND storage_path = ?",
+            )
+            .bind(dest.to_string_lossy().as_ref())
+            .bind(&row.track_id)
+            .bind(&row.stem_name)
+            .bind(&row.storage_path),
+        )
+        .await
+        {
+            Ok(0) => continue,
+            Ok(_) => stats.stems_downloaded += 1,
+            Err(error) => stats.errors.push(format!(
+                "db update stem {}/{}: {error}",
+                row.track_id, row.stem_name
+            )),
         }
     }
-
     Ok(())
 }
 
@@ -581,6 +598,7 @@ pub async fn download_pending_album_art(
     host: &SyncHost,
     token: &str,
     stats: &mut FileSyncStats,
+    progress: &super::progress::Progress,
 ) -> Result<(), SyncError> {
     let rows = sqlx::query_as::<_, PendingArtDownload>(
         "SELECT id, track_hash, album_art_storage_path, album_art_mime FROM tracks
@@ -592,7 +610,9 @@ pub async fn download_pending_album_art(
 
     let art_dir = host.storage.art_dir();
 
+    progress.phase("Downloading cover art", Some(rows.len()), "files");
     for row in &rows {
+        let _item = progress.item();
         let (bucket, path) = match row.album_art_storage_path.split_once('/') {
             Some(bp) => bp,
             None => continue,
@@ -618,12 +638,13 @@ pub async fn download_pending_album_art(
             continue;
         }
 
-        if let Err(e) =
+        if let Err(e) = apply_download_metadata(
+            pool,
             sqlx::query("UPDATE tracks SET album_art_path = ?, version = version + 1 WHERE id = ?")
                 .bind(dest.to_string_lossy().as_ref())
-                .bind(&row.id)
-                .execute(pool)
-                .await
+                .bind(&row.id),
+        )
+        .await
         {
             stats.errors.push(format!("db update art {}: {e}", row.id));
             continue;

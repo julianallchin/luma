@@ -583,6 +583,8 @@ pub struct Library {
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
     /// Whether this library talks to the cloud — see `Runtime::cloud`.
     cloud: bool,
+    #[cfg(feature = "agent")]
+    sync_status_fixture: Option<Arc<Mutex<luma_lib::models::sync::SyncStatus>>>,
     /// Fires when a sync's pull phase is over; see [`Library::sync_pull`].
     sync_pulled: tokio::sync::broadcast::Sender<()>,
     /// Fires when the backend learns the session is revoked; see
@@ -788,6 +790,8 @@ impl Library {
             runtime,
             import_progress: progress_tx,
             cloud,
+            #[cfg(feature = "agent")]
+            sync_status_fixture: None,
             sync_pulled,
             session_revoked,
             sync_shutdown,
@@ -936,14 +940,36 @@ impl Library {
     /// pull has landed.
     ///
     pub(crate) fn cloud_sync_enabled(&self) -> bool {
+        #[cfg(feature = "agent")]
+        if self.sync_status_fixture.is_some() {
+            return true;
+        }
         self.cloud
+    }
+
+    /// Supply live sync snapshots to the harness without enabling networking.
+    #[cfg(feature = "agent")]
+    pub fn set_sync_status_fixture(
+        &mut self,
+        status: Arc<Mutex<luma_lib::models::sync::SyncStatus>>,
+    ) {
+        self.sync_status_fixture = Some(status);
     }
 
     pub(crate) fn sync_status(
         &self,
     ) -> impl Future<Output = Result<luma_lib::models::sync::SyncStatus, LibraryError>> + use<>
     {
-        self.call("sync_status", json!({}))
+        #[cfg(feature = "agent")]
+        let fixture = self.sync_status_fixture.clone();
+        let pending = self.call("sync_status", json!({}));
+        async move {
+            #[cfg(feature = "agent")]
+            if let Some(fixture) = fixture {
+                return Ok(fixture.lock().unwrap().clone());
+            }
+            pending.await
+        }
     }
 
     pub(crate) fn retry_sync(&self) -> impl Future<Output = Result<(), LibraryError>> + use<> {

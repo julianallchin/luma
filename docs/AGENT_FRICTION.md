@@ -2,6 +2,7 @@
 
 Where agents grumble about tooling that fights back. One line each, newest first,
 `- [YYYY-MM-DD] <gripe>`. Product bugs go in the task report, not here.
+- [2026-08-30] The gpui app fails to link on a fresh Linux box with `unable to find library -lxkbcommon-x11`, and nothing in BUILD.md, AGENTS.md or CLAUDE.md listed a system dependency — the whole build doc is mac-shaped. You pay the full cold compile before the linker tells you a `-dev` package is missing, and the error names the linker flag rather than the package. Now documented at the top of `gpui/BUILD.md`.
 - [2026-09-01] supabase has a project-wide 50 MB upload cap that overrides the `renders` bucket's 500 MB `file_size_limit`; both the object and TUS endpoints 413. the bucket limit is a lie until the project limit is raised.
 - [2026-09-01] `luma-record` prints its progress bar to stderr; pipe it through `tail` and you lose the ETA for the whole 20-minute render. run it unpiped or tee to a file.
 - [2026-09-01] the headless authoring agent on a 194-fixture rig got `venue.groups` = "unknown host method" from a stale `luma-mcp` and had no way to address left/right or per-portal subsets. rebuild the MCP binary before an authoring run.

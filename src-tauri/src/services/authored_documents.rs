@@ -86,6 +86,31 @@ pub enum AuthoredDocumentsError {
     Graph(GraphDocumentError),
 }
 
+impl AuthoredDocumentsError {
+    /// Whether the local database *decided* against this content rather than
+    /// failed to store it.
+    ///
+    /// The distinction is what a caller replaying remote history needs: a
+    /// decision is reached again on every retry, so a replayer must advance
+    /// past it or it re-reads the same row forever; a failure is the opposite,
+    /// and retrying is the entire recovery. A revision conflict is a failure
+    /// by this measure — the head it lost to can move.
+    pub(crate) fn is_refusal(&self) -> bool {
+        match self {
+            Self::Invalid(_) | Self::Scope(_) => true,
+            Self::Track(error) => matches!(
+                error,
+                TrackEditError::Invalid { .. } | TrackEditError::Scope { .. }
+            ),
+            Self::Graph(error) => matches!(
+                error,
+                GraphDocumentError::Invalid { .. } | GraphDocumentError::Scope { .. }
+            ),
+            Self::Storage(_) | Self::State(_) => false,
+        }
+    }
+}
+
 impl fmt::Display for AuthoredDocumentsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

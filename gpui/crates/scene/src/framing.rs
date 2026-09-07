@@ -70,9 +70,6 @@ impl Framing {
     /// both axes, so a 16:9 frame gets more absolute margin horizontally than vertically —
     /// which is what "a margin" looks like to an eye.
     pub const MARGIN: f32 = 0.08;
-    /// How far outside the extent a dolly may come. Inside it is inside the
-    /// beams, where every pixel is one saturated colour.
-    const NEAR_MARGIN: f32 = 1.25;
     /// Furthest out a dolly may go, as a multiple of the distance it opened at.
     const FAR_MULTIPLE: f32 = 6.0;
     /// Smallest half-diagonal a rig is treated as having. A one-fixture venue
@@ -274,12 +271,12 @@ impl Framing {
         distance >= self.required_distance(target, offset / distance.max(1e-6), view)
     }
 
-    /// Radii a dolly may reach, given the distance the view opened at: never
-    /// inside the rig, never so far out that the scene is a speck with no way
-    /// back.
+    /// Radii a dolly may reach, given the distance the view opened at.
+    /// Close inspection can enter the rig, down to the camera's minimum
+    /// distance from its target. The far limit scales with the opening view.
     #[must_use]
     pub fn radius_bounds(&self, fitted: f32) -> (f32, f32) {
-        let near = (self.radius() * Self::NEAR_MARGIN).max(0.5);
+        let near = Camera::MIN_RADIUS;
         (near, (fitted * Self::FAR_MULTIPLE).max(near * 2.0))
     }
 
@@ -666,6 +663,23 @@ mod tests {
         assert!(f
             .required_distance(Vec3::ZERO, Vec3::NEG_Y, &Viewfinder::new(50.0, 1.0))
             .is_finite());
+    }
+
+    #[test]
+    fn dolly_can_inspect_inside_rigs_of_any_size() {
+        for extent in [1.0, 10.0, 100.0] {
+            let framing = Framing::of([], [Aabb::new(Vec3::splat(-extent), Vec3::splat(extent))]);
+            let fitted = framing.required_distance(
+                framing.target(),
+                Vec3::NEG_Y,
+                &Viewfinder::new(50.0, 1.0),
+            );
+            let (near, far) = framing.radius_bounds(fitted);
+            assert_eq!(near, Camera::MIN_RADIUS);
+            assert!(near < framing.radius());
+            assert!(near > Camera::default().znear);
+            assert_eq!(far, fitted * Framing::FAR_MULTIPLE);
+        }
     }
 
     /// Why the fit runs on points and not on the box. An L-shaped rig leaves

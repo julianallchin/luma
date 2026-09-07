@@ -158,6 +158,7 @@ pub struct Fixture {
     seed_track: bool,
     track_created_at: Option<String>,
     window: Option<gpui::Size<gpui::Pixels>>,
+    sync_status: Option<Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>>,
     source_fixture: Option<luma_app::SourceAdapterFixture>,
     source_fixture_delay: Option<Duration>,
     source_search_responses: Vec<luma_app::SourceSearchFixtureResponse>,
@@ -183,6 +184,7 @@ impl Fixture {
             seed_track: true,
             track_created_at: None,
             window: None,
+            sync_status: None,
             source_fixture: None,
             source_fixture_delay: None,
             source_search_responses: Vec::new(),
@@ -281,6 +283,14 @@ impl Fixture {
     /// Install raw DJ-adapter answers before constructing the app. The UI
     /// still crosses the production Library normalization and import seams;
     /// only the external Engine/Rekordbox database read is substituted.
+    pub fn with_sync_status(
+        mut self,
+        status: Arc<std::sync::Mutex<luma_lib::models::sync::SyncStatus>>,
+    ) -> Self {
+        self.sync_status = Some(status);
+        self
+    }
+
     pub fn with_source_fixture(mut self, fixture: luma_app::SourceAdapterFixture) -> Self {
         self.source_fixture = Some(fixture);
         self
@@ -380,6 +390,7 @@ impl Fixture {
         // `seed_rig`, so the app resolves the definition this fixture just
         // wrote rather than the developer's.
         let fixtures_root = (self.rig > 0).then(|| config_dir.join("fixtures"));
+        let sync_status = self.sync_status.clone();
         let source_fixture = self.source_fixture.clone();
         let source_fixture_delay = self.source_fixture_delay;
         let source_search_responses = self.source_search_responses.clone();
@@ -389,6 +400,9 @@ impl Fixture {
                 luma_app::init(cx);
                 let mut library =
                     luma_app::Library::open().expect("failed to open the fixture library");
+                if let Some(status) = sync_status.clone() {
+                    library.set_sync_status_fixture(status);
+                }
                 if let Some(fixture) = source_fixture.clone() {
                     library.set_source_adapter_fixture(fixture);
                 }

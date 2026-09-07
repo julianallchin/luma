@@ -40,8 +40,17 @@ mod tests {
         upserted: Mutex<Vec<(String, Value)>>,
         /// Optional one-shot API failure for the next upsert.
         next_upsert_error: Mutex<Option<(u16, String)>>,
+        upsert_gate: Mutex<
+            Option<(
+                std::sync::Arc<tokio::sync::Notify>,
+                std::sync::Arc<tokio::sync::Notify>,
+            )>,
+        >,
         /// Tombstone PATCHes, which are a different statement from an upsert.
         patched: Mutex<Vec<String>>,
+        downloaded: Mutex<Vec<String>>,
+        next_download_error: Mutex<Option<SyncError>>,
+        download_effect: Mutex<Option<(SqlitePool, String)>>,
     }
 
     impl MockRemoteClient {
@@ -52,7 +61,11 @@ mod tests {
                 selected_tables: Mutex::new(Vec::new()),
                 upserted: Mutex::new(Vec::new()),
                 next_upsert_error: Mutex::new(None),
+                upsert_gate: Mutex::default(),
                 patched: Mutex::new(Vec::new()),
+                downloaded: Mutex::default(),
+                next_download_error: Mutex::default(),
+                download_effect: Mutex::default(),
             }
         }
 
@@ -123,6 +136,11 @@ mod tests {
             _conflict_key: &str,
             _token: &str,
         ) -> Result<(), SyncError> {
+            let gate = self.upsert_gate.lock().unwrap().take();
+            if let Some((started, resume)) = gate {
+                started.notify_one();
+                resume.notified().await;
+            }
             if let Some((status, message)) = self.next_upsert_error.lock().unwrap().take() {
                 return Err(SyncError::Api { status, message });
             }
@@ -157,10 +175,23 @@ mod tests {
 
         async fn download_file(
             &self,
-            _bucket: &str,
-            _path: &str,
+            bucket: &str,
+            path: &str,
             _token: &str,
         ) -> Result<Vec<u8>, SyncError> {
+            self.downloaded
+                .lock()
+                .unwrap()
+                .push(format!("{bucket}/{path}"));
+            if let Some(error) = self.next_download_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            let effect = self.download_effect.lock().unwrap().take();
+            if let Some((pool, statement)) = effect {
+                sqlx::query(sqlx::AssertSqlSafe(statement))
+                    .execute(&pool)
+                    .await?;
+            }
             Ok(vec![0u8; 100])
         }
     }
@@ -247,6 +278,276 @@ mod tests {
         crate::database::local::auth::arm_write_admission(pool, Some(uid))
             .await
             .unwrap();
+    }
+
+    fn file_sync_host(directory: &std::path::Path) -> super::super::host::SyncHost {
+        super::super::host::SyncHost {
+            storage: crate::storage::StorageRoot::from_path(directory.join("library")),
+            events: crate::dispatch::Events::discard(),
+            workspaces: std::sync::Arc::new(crate::agent_execution::PythonWorkspaceService::new(
+                directory.join("workspaces"),
+                std::sync::Arc::new(|| Err("Python is unused by file sync tests".into())),
+            )),
+            graph_runs: std::sync::Arc::default(),
+            subagents: std::sync::Arc::default(),
+        }
+    }
+
+    async fn audio_download_fixture() -> (
+        tempfile::TempDir,
+        SqlitePool,
+        std::sync::Arc<MockRemoteClient>,
+        super::super::orchestrator::SyncEngine,
+        super::super::host::SyncHost,
+    ) {
+        let (directory, pool) = test_pool().await;
+        authenticate(&pool, "alice").await;
+        seed_as_remote(
+            &pool,
+            "INSERT INTO venues (id, uid, name) VALUES ('audio-venue', 'alice', 'Room')",
+        )
+        .await;
+        seed_as_remote(&pool, "INSERT INTO tracks (id, uid, track_hash, file_path, storage_path) VALUES
+            ('shared-audio', 'bob', 'shared-hash', 'shared-hash.stub', 'track-audio/bob/shared/audio.ogg'),
+            ('untouched-audio', 'alice', 'untouched-hash', 'untouched-hash.stub', 'track-audio/alice/untouched/audio.ogg')").await;
+        seed_as_remote(
+            &pool,
+            "INSERT INTO scores (id, uid, track_id, venue_id, name)
+            VALUES ('audio-score', 'alice', 'shared-audio', 'audio-venue', 'Shared')",
+        )
+        .await;
+        let remote = std::sync::Arc::new(MockRemoteClient::new());
+        let host = file_sync_host(directory.path());
+        let engine = super::super::orchestrator::SyncEngine::new(
+            pool.clone(),
+            pool.clone(),
+            remote.clone(),
+            crate::services::authored_documents::AuthoredDocuments::new(host.storage.clone()),
+        );
+        (directory, pool, remote, engine, host)
+    }
+
+    #[tokio::test]
+    async fn audio_download_is_on_demand_shared_and_cached_offline() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        engine.sync_files_unlocked(&host).await.unwrap();
+        assert!(remote.downloaded.lock().unwrap().is_empty());
+        assert!(
+            remote.selected_tables.lock().unwrap().is_empty(),
+            "stub tracks must not fetch stems"
+        );
+
+        let (first, second) = tokio::join!(
+            engine.ensure_track_audio(&host.storage, "shared-audio"),
+            engine.ensure_track_audio(&host.storage, "shared-audio"),
+        );
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(remote.downloaded.lock().unwrap().len(), 1);
+        let path: String =
+            sqlx::query_scalar("SELECT file_path FROM tracks WHERE id = 'shared-audio'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), vec![0u8; 100]);
+        let untouched: String =
+            sqlx::query_scalar("SELECT file_path FROM tracks WHERE id = 'untouched-audio'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(untouched, "untouched-hash.stub");
+        // Reconstruct the engine to prove the cache survives a restart, and
+        // remove credentials to prove local hits do not require a cloud session.
+        let restarted = super::super::orchestrator::SyncEngine::new(
+            pool.clone(),
+            pool.clone(),
+            remote.clone(),
+            crate::services::authored_documents::AuthoredDocuments::new(host.storage.clone()),
+        );
+        sqlx::query("DELETE FROM auth_session")
+            .execute(&pool)
+            .await
+            .unwrap();
+        *remote.next_download_error.lock().unwrap() = Some(SyncError::Network("offline".into()));
+        restarted
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .unwrap();
+        assert_eq!(remote.downloaded.lock().unwrap().len(), 1);
+        assert!(sqlx::query(
+            "UPDATE tracks SET title = 'Unauthorized edit' WHERE id = 'shared-audio'"
+        )
+        .execute(&pool)
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn audio_download_failure_is_retryable_and_does_not_publish_a_path() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        *remote.next_download_error.lock().unwrap() = Some(SyncError::Network("offline".into()));
+        assert!(engine
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .is_err());
+        let path: String =
+            sqlx::query_scalar("SELECT file_path FROM tracks WHERE id = 'shared-audio'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(path, "shared-hash.stub");
+        assert!(!host.storage.tracks_dir().join("shared-hash.ogg").exists());
+        engine
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .unwrap();
+        assert_eq!(remote.downloaded.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn audio_download_database_failure_rolls_back_admission_and_reuses_cached_bytes() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        sqlx::query(
+            "CREATE TRIGGER fail_audio_path BEFORE UPDATE OF file_path ON tracks
+            BEGIN SELECT RAISE(ABORT, 'test disk database failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let error = engine
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("test disk database failure"));
+        let (path, remote_writes): (String, i64) = sqlx::query_as(
+            "SELECT file_path, remote_writes FROM tracks CROSS JOIN auth_write_admission WHERE tracks.id = 'shared-audio'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(path, "shared-hash.stub");
+        assert_eq!(remote_writes, 0);
+        sqlx::query("DROP TRIGGER fail_audio_path")
+            .execute(&pool)
+            .await
+            .unwrap();
+        engine
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .unwrap();
+        assert_eq!(remote.downloaded.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn audio_download_rejects_invisible_tracks_before_network_io() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        seed_as_remote(&pool, "INSERT INTO tracks (id, uid, track_hash, file_path, storage_path)
+            VALUES ('hidden-audio', 'carol', 'hidden-hash', 'hidden-hash.stub', 'track-audio/carol/hidden/audio.ogg')").await;
+        assert!(engine
+            .ensure_track_audio(&host.storage, "hidden-audio")
+            .await
+            .is_err());
+        assert!(remote.downloaded.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn audio_download_shared_track_art_and_stems_use_remote_admission() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        engine
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .unwrap();
+        seed_as_remote(&pool, "UPDATE tracks SET album_art_storage_path = 'track-audio/bob/shared/cover.jpg' WHERE id = 'shared-audio'").await;
+        seed_as_remote(
+            &pool,
+            "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
+            VALUES ('shared-audio', 'bob', 'drums', '', 'track-stems/bob/shared/drums.wav')",
+        )
+        .await;
+        let stats = engine.sync_files_unlocked(&host).await.unwrap();
+        assert!(stats.errors.is_empty(), "{:?}", stats.errors);
+        assert_eq!(stats.stems_downloaded, 1);
+        assert_eq!(stats.art_downloaded, 1);
+        assert!(sqlx::query(
+            "UPDATE tracks SET title = 'Unauthorized edit' WHERE id = 'shared-audio'"
+        )
+        .execute(&pool)
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn stem_download_retries_only_missing_files_after_partial_failure() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        engine
+            .ensure_track_audio(&host.storage, "shared-audio")
+            .await
+            .unwrap();
+        remote.downloaded.lock().unwrap().clear();
+        for name in ["drums", "bass", "vocals", "other"] {
+            seed_as_remote(
+                &pool,
+                &format!(
+                    "INSERT INTO track_stems (track_id, uid, stem_name, file_path, storage_path)
+                VALUES ('shared-audio', 'bob', '{name}', '', 'track-stems/bob/shared/{name}.wav')"
+                ),
+            )
+            .await;
+        }
+        *remote.next_download_error.lock().unwrap() =
+            Some(SyncError::Network("interrupted".into()));
+
+        let first = engine.sync_files_unlocked(&host).await.unwrap();
+        assert_eq!(first.errors.len(), 1);
+        assert_eq!(first.stems_downloaded, 3);
+        remote.downloaded.lock().unwrap().clear();
+
+        let retry = engine.sync_files_unlocked(&host).await.unwrap();
+        assert!(retry.errors.is_empty(), "{:?}", retry.errors);
+        assert_eq!(retry.stems_downloaded, 1);
+        assert_eq!(
+            *remote.downloaded.lock().unwrap(),
+            ["track-stems/bob/shared/bass.wav"]
+        );
+        remote.downloaded.lock().unwrap().clear();
+
+        let cached = engine.sync_files_unlocked(&host).await.unwrap();
+        assert!(cached.errors.is_empty(), "{:?}", cached.errors);
+        assert_eq!(cached.stems_downloaded, 0);
+        assert!(remote.downloaded.lock().unwrap().is_empty());
+
+        // A database path alone is not proof the stem still exists on disk.
+        let bass_path: String = sqlx::query_scalar(
+            "SELECT file_path FROM track_stems WHERE track_id = 'shared-audio' AND stem_name = 'bass'")
+            .fetch_one(&pool).await.unwrap();
+        std::fs::remove_file(&bass_path).unwrap();
+        let repair = engine.sync_files_unlocked(&host).await.unwrap();
+        assert!(repair.errors.is_empty(), "{:?}", repair.errors);
+        assert_eq!(repair.stems_downloaded, 1);
+        assert_eq!(
+            *remote.downloaded.lock().unwrap(),
+            ["track-stems/bob/shared/bass.wav"]
+        );
+        assert_eq!(std::fs::read(&bass_path).unwrap(), vec![0u8; 100]);
+        assert!(
+            remote.selected_tables.lock().unwrap().is_empty(),
+            "stem downloads must use the already-pulled catalog, without rediscovery requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_download_refuses_an_account_switch_during_network_io() {
+        let (_directory, pool, remote, engine, host) = audio_download_fixture().await;
+        *remote.download_effect.lock().unwrap() = Some((pool.clone(),
+            "UPDATE auth_write_admission SET active_uid = 'bob', generation = generation + 1 WHERE singleton = 1".into()));
+        assert!(matches!(
+            engine
+                .ensure_track_audio(&host.storage, "shared-audio")
+                .await,
+            Err(SyncError::AuthRequired)
+        ));
+        let (path, remote_writes): (String, i64) = sqlx::query_as(
+            "SELECT file_path, remote_writes FROM tracks CROSS JOIN auth_write_admission WHERE tracks.id = 'shared-audio'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(path, "shared-hash.stub");
+        assert_eq!(remote_writes, 0);
     }
 
     #[tokio::test]
@@ -754,6 +1055,7 @@ mod tests {
             &remote,
             "token",
             Some("u-1"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -891,6 +1193,7 @@ mod tests {
             &remote,
             "token",
             Some("u-1"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -958,6 +1261,7 @@ mod tests {
             &remote,
             "token",
             Some("u-1"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -1113,6 +1417,92 @@ mod tests {
             .find(|(table, _)| table == "venues")
             .unwrap();
         assert_eq!(payload["environment"], environment);
+    }
+
+    #[tokio::test]
+    async fn sync_progress_reports_live_work_and_clears_after_success_or_cancellation() {
+        for cancel in [false, true] {
+            let (directory, pool) = test_pool().await;
+            authenticate(&pool, "alice").await;
+            seed_venue(&pool, VENUE, "alice", "Room").await;
+            let remote = std::sync::Arc::new(MockRemoteClient::new());
+            let started = std::sync::Arc::new(tokio::sync::Notify::new());
+            let resume = std::sync::Arc::new(tokio::sync::Notify::new());
+            *remote.upsert_gate.lock().unwrap() = Some((started.clone(), resume.clone()));
+            let engine = super::super::orchestrator::SyncEngine::new(
+                pool.clone(),
+                pool.clone(),
+                remote,
+                crate::services::authored_documents::AuthoredDocuments::new(
+                    crate::storage::StorageRoot::from_path(directory.path().join("authored")),
+                ),
+            );
+            assert_eq!(engine.status().await.unwrap().pending_changes, 1);
+            let running = engine.clone();
+            let task = tokio::spawn(async move { running.run_push("alice").await });
+            tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+                .await
+                .unwrap();
+            let snapshot = engine.status().await.unwrap();
+            assert!(snapshot.syncing);
+            let progress = snapshot.progress.unwrap();
+            assert_eq!(progress.phase, "Sending changes");
+            assert_eq!(progress.total, Some(1));
+            assert_eq!(progress.completed, 0);
+            assert_eq!(snapshot.pending_changes, 1);
+            if cancel {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                resume.notify_one();
+                assert_eq!(task.await.unwrap().unwrap(), 1);
+            }
+            let snapshot = engine.status().await.unwrap();
+            assert!(!snapshot.syncing);
+            assert!(snapshot.progress.is_none());
+            assert_eq!(snapshot.pending_changes, usize::from(cancel));
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_pending_count_includes_backoff_and_separates_blocked_work() {
+        let (directory, pool) = test_pool().await;
+        authenticate(&pool, "alice").await;
+        seed_venue(&pool, VENUE, "alice", "Room").await;
+        seed_as_remote(
+            &pool,
+            "INSERT INTO venues (id, uid, name) VALUES ('foreign', 'bob', 'Other')",
+        )
+        .await;
+        let engine = super::super::orchestrator::SyncEngine::new(
+            pool.clone(),
+            pool.clone(),
+            std::sync::Arc::new(MockRemoteClient::new()),
+            crate::services::authored_documents::AuthoredDocuments::new(
+                crate::storage::StorageRoot::from_path(directory.path().join("authored")),
+            ),
+        );
+        assert_eq!(engine.status().await.unwrap().pending_changes, 1);
+        for (verdict, expected) in [
+            (super::super::push_state::Verdict::Transient, 1),
+            (super::super::push_state::Verdict::Permanent, 0),
+        ] {
+            super::super::push_state::record_failure(
+                &pool,
+                "signed-in:alice",
+                "venues",
+                VENUE,
+                super::super::push_state::Subject::Row,
+                Some(1),
+                verdict,
+                "test failure",
+            )
+            .await
+            .unwrap();
+            let status = engine.status().await.unwrap();
+            assert_eq!(status.pending_changes, expected);
+            assert_eq!(status.failures.len(), 1);
+        }
     }
 
     #[tokio::test]
@@ -2064,6 +2454,7 @@ mod tests {
             &remote,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();

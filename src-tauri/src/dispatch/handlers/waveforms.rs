@@ -6,6 +6,11 @@ pub async fn get_track_waveform(
     services: &AppServices,
     track_id: String,
 ) -> Result<TrackWaveform, CommandError> {
+    services
+        .sync
+        .ensure_track_audio(&services.storage, &track_id)
+        .await
+        .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(
         waveform_service::get_track_waveform(&services.db.0, &services.analysis_tasks, &track_id)
             .await?
@@ -28,6 +33,11 @@ pub async fn get_track_waveform_window(
     end_seconds: f64,
     buckets: u32,
 ) -> Result<WaveformWindow, CommandError> {
+    services
+        .sync
+        .ensure_track_audio(&services.storage, &track_id)
+        .await
+        .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(waveform_service::get_track_waveform_window(
         &services.db.0,
         &services.analysis_tasks,
@@ -46,6 +56,11 @@ pub async fn reprocess_waveform(
     services: &AppServices,
     track_id: String,
 ) -> Result<TrackWaveform, CommandError> {
+    services
+        .sync
+        .ensure_track_audio(&services.storage, &track_id)
+        .await
+        .map_err(|error| CommandError::Internal(error.to_string()))?;
     Ok(waveform_service::reprocess_track_waveform(
         &services.db.0,
         &services.analysis_tasks,
