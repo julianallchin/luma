@@ -193,9 +193,13 @@ impl Turn {
                 .map_err(|error| AgentError::Storage(error.to_string()))?,
         };
         let execution = self.resolve_execution(&detail.thread).await?;
-        let context = engine::context_fingerprint(kind.system_prompt(), &registry.specs());
+        let context = engine::context_fingerprint(
+            kind.system_prompt(),
+            &registry.specs(),
+            detail.thread.effort.as_deref(),
+        );
         let resume = match &execution {
-            Execution::External { engine, model } => {
+            Execution::External { engine, model, .. } => {
                 lease.resume(*engine, model, self.head.as_deref(), &context)?
             }
             Execution::Api { .. } => None,
@@ -234,7 +238,7 @@ impl Turn {
                 self.assistant_row(&setup, &turn_message_id).await?;
             self.close_row(&setup, &assistant_id, stop_reason, usage)
                 .await?;
-            if let (Execution::External { engine, model }, Some(session), Some(head)) =
+            if let (Execution::External { engine, model, .. }, Some(session), Some(head)) =
                 (&execution, self.native_session.take(), self.head.clone())
             {
                 setup.resume = Some(session.clone());
@@ -285,9 +289,20 @@ impl Turn {
             role: Role::Assistant,
         });
 
-        if let Execution::External { engine, model } = setup.execution {
+        if let Execution::External {
+            engine,
+            model,
+            effort,
+        } = setup.execution
+        {
             let result = self
-                .external_row(setup, turn_message_id, *engine, model.clone())
+                .external_row(
+                    setup,
+                    turn_message_id,
+                    *engine,
+                    model.clone(),
+                    effort.clone(),
+                )
                 .await?;
             return Ok((StopReason::EndTurn, result, assistant_id));
         }
@@ -584,7 +599,11 @@ impl Turn {
                 .as_ref()
                 .or(thread.model.as_ref())
                 .cloned();
-            return Ok(Execution::External { engine, model });
+            return Ok(Execution::External {
+                engine,
+                model,
+                effort: thread.effort.clone(),
+            });
         }
         let (client, model, reasoning) = if let Some(client) = &self.service.client {
             let model = model::configured(&settings)?;
@@ -595,7 +614,9 @@ impl Turn {
         Ok(Execution::Api {
             client,
             model,
-            reasoning,
+            reasoning: engine::catalog::Selection::from_thread(thread)?
+                .api_reasoning()?
+                .unwrap_or(reasoning),
         })
     }
 
@@ -605,6 +626,7 @@ impl Turn {
         turn_message_id: &str,
         engine: Engine,
         model: Option<String>,
+        effort: Option<String>,
     ) -> Result<Usage, AgentError> {
         let directory = setup.lease.directory().to_path_buf();
         let prompt = if setup.resume.is_some() {
@@ -620,6 +642,7 @@ impl Turn {
         let mut session = engine::Session::start(engine::Request {
             engine,
             model,
+            effort,
             system: setup.kind.system_prompt().into(),
             prompt,
             tools: setup.registry.specs(),
@@ -756,13 +779,14 @@ enum Execution {
     External {
         engine: Engine,
         model: Option<String>,
+        effort: Option<String>,
     },
 }
 impl Execution {
     fn model(&self) -> &str {
         match self {
             Self::Api { model, .. } => model.key(),
-            Self::External { engine, model } => model.as_deref().unwrap_or(engine.key()),
+            Self::External { engine, model, .. } => model.as_deref().unwrap_or(engine.key()),
         }
     }
 }

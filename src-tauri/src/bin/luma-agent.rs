@@ -21,9 +21,10 @@ async fn run() -> Result<(), String> {
     let (mut track, mut venue, mut model) = (None, None, None);
     let mut host = Vec::new();
     let mut sync = false;
+    let mut effort = None;
     while let Some(flag) = args.next() {
         if flag == "--help" {
-            println!("luma-agent (--thread ID | --scope JSON | --track ID --venue ID) --prompt TEXT [--engine api|codex|claude] [--model NAME] [--sync] [host options]\n\n--scope creates a conversation from a serialized ThreadScope. --thread continues an existing one.\nHost options: --config-dir, --fixtures-root, --cache-dir, --fixture-principal.");
+            println!("luma-agent (--thread ID | --scope JSON | --track ID --venue ID) --prompt TEXT [--engine api|codex|claude] [--model NAME] [--effort LEVEL|auto] [--sync] [host options]\n\n--scope creates a conversation from a serialized ThreadScope. --thread continues an existing one.\nHost options: --config-dir, --fixtures-root, --cache-dir, --fixture-principal.");
             return Ok(());
         }
         if flag == "--sync" {
@@ -38,6 +39,7 @@ async fn run() -> Result<(), String> {
             "--track" => track = Some(value),
             "--venue" => venue = Some(value),
             "--model" => model = Some(value),
+            "--effort" => effort = Some(value),
             "--scope" => {
                 scope =
                     Some(serde_json::from_str::<ThreadScope>(&value).map_err(|e| e.to_string())?)
@@ -94,6 +96,20 @@ async fn run() -> Result<(), String> {
     if let Some(engine) = engine {
         agent
             .set_thread_engine(&thread, engine)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(effort) = effort {
+        let detail = agent
+            .open_thread(&thread)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut selection =
+            luma_lib::agent::engine::catalog::Selection::from_thread(&detail.thread)
+                .map_err(|error| error.to_string())?;
+        selection.effort = (effort != "auto").then_some(effort);
+        agent
+            .set_thread_selection(&thread, selection)
             .await
             .map_err(|error| error.to_string())?;
     }

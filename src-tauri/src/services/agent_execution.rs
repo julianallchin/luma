@@ -539,6 +539,7 @@ mod tests {
             engine: "api".into(),
             model: Some(crate::agent::model::DEFAULT_MODEL.into()),
             provider: Some("vercel-ai-gateway".into()),
+            effort: None,
             created_at: String::new(),
             updated_at: String::new(),
         }

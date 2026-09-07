@@ -1412,6 +1412,7 @@ async fn apply_thread_projection(
         "engine",
         "model",
         "provider",
+        "effort",
         "lifecycle_state",
         "updated_at",
     ];
@@ -1420,6 +1421,7 @@ async fn apply_thread_projection(
     let remote_engine = value_for_column(table, values, "engine");
     let remote_model = value_for_column(table, values, "model");
     let remote_provider = value_for_column(table, values, "provider");
+    let remote_effort = value_for_column(table, values, "effort");
     let remote_lifecycle = value_for_column(table, values, "lifecycle_state");
     let remote_updated_at = value_for_column(table, values, "updated_at");
     let id = value_for_column(table, values, "id");
@@ -1427,7 +1429,7 @@ async fn apply_thread_projection(
     // a projection this device just received is not a local edit.
     let mut query = sqlx::query(
         "UPDATE agent_threads
-         SET title = ?, engine = ?, model = ?, provider = ?,
+         SET title = ?, engine = ?, model = ?, provider = ?, effort = ?,
              lifecycle_state = CASE
                  WHEN lifecycle_state = 'deleting' OR ? = 'deleting' THEN 'deleting'
                  ELSE 'active'
@@ -1441,6 +1443,7 @@ async fn apply_thread_projection(
         remote_engine,
         remote_model,
         remote_provider,
+        remote_effort,
         remote_lifecycle,
         remote_updated_at,
         remote_updated_at,

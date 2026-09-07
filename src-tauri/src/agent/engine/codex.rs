@@ -94,7 +94,7 @@ impl Session {
                         .to_string();
                     self.process
                         .send(json!({"id":3,"method":"turn/start","params":{
-                            "threadId":thread,"input":[{"type":"text","text":self.request.prompt}]
+                            "threadId":thread,"effort":self.request.effort,"input":[{"type":"text","text":self.request.prompt}]
                         }}))
                         .await?;
                     return Ok(Event::Session {
@@ -223,7 +223,9 @@ assert start['params']['config']['mcp_servers']['external']['enabled'] == False
 assert start['params']['dynamicTools'][0]['name']=='echo'
 assert start['params']['sandbox']=='read-only'
 send({'id':2,'result':{'thread':{'id':'native'}}})
-assert read()['method']=='turn/start'
+turn=read()
+assert turn['method']=='turn/start'
+assert turn['params']['effort']=='high'
 send({'id':3,'result':{}})
 send({'id':'call','method':'item/tool/call','params':{'callId':'tool-1','tool':'echo','arguments':{'value':'hi'}}})
 reply=read()
@@ -236,7 +238,8 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
 "#;
         let mut command = tokio::process::Command::new("python3");
         command.args(["-c", script]);
-        let request = super::super::tests::request(super::super::Engine::Codex, temp.path());
+        let mut request = super::super::tests::request(super::super::Engine::Codex, temp.path());
+        request.effort = Some("high".into());
         let mut session = Session::connect(request, Process::start(command).unwrap())
             .await
             .unwrap();
@@ -304,6 +307,8 @@ pub(super) async fn models(
     let mut models = vec![super::catalog::ModelChoice {
         id: None,
         label: "Default".into(),
+        resolved_model: None,
+        effort_levels: Vec::new(),
     }];
     loop {
         let frame = process.read().await?;
@@ -326,7 +331,28 @@ pub(super) async fn models(
                     models.push(super::catalog::ModelChoice {
                         id: Some(text(model, "model")?),
                         label: text(model, "displayName")?,
+                        resolved_model: Some(text(model, "model")?),
+                        effort_levels: model["supportedReasoningEfforts"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|value| value["reasoningEffort"].as_str())
+                            .map(str::to_string)
+                            .collect(),
                     });
+                }
+                if let Some(default) = page.iter().find(|model| model["isDefault"] == true) {
+                    if let Some(choice) = models
+                        .iter()
+                        .find(|choice| choice.id.as_deref() == default["model"].as_str())
+                        .cloned()
+                    {
+                        models[0] = super::catalog::ModelChoice {
+                            id: None,
+                            label: format!("Default · {}", choice.label),
+                            ..choice
+                        };
+                    }
                 }
                 if let Some(cursor) = frame.pointer("/result/nextCursor").and_then(Value::as_str) {
                     process
