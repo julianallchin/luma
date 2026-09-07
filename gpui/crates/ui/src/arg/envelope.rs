@@ -1,4 +1,4 @@
-//! A reusable normalized curve editor. Hosts persist only committed point sets.
+//! The shared envelope value, edited with anchors and real Bézier handles.
 use crate::{
     ladder,
     node::{Instrument, Role},
@@ -8,26 +8,49 @@ use gpui::{
     canvas, div, point, px, Bounds, Context, EventEmitter, MouseButton, PathBuilder, Pixels, Point,
     Window,
 };
+use luma_patterns::{Envelope, EnvelopeCurve};
 
 #[derive(Clone, Debug)]
-pub struct EnvelopeChanged(pub Vec<[f64; 2]>);
+pub struct EnvelopeChanged(pub Envelope);
+#[derive(Clone, Copy, PartialEq)]
+enum Drag {
+    Anchor(usize),
+    Handle(usize, usize),
+}
 pub struct EnvelopeEditor {
-    points: Vec<[f64; 2]>,
+    value: Envelope,
     bounds: Option<Bounds<Pixels>>,
-    dragging: Option<usize>,
+    selected: usize,
+    dragging: Option<Drag>,
+    before_drag: Option<Envelope>,
+    error: Option<String>,
 }
 impl EventEmitter<EnvelopeChanged> for EnvelopeEditor {}
 impl EnvelopeEditor {
-    pub fn new(points: Vec<[f64; 2]>) -> Self {
+    pub fn new(value: Envelope) -> Self {
+        assert!(
+            value.validate().is_ok(),
+            "EnvelopeEditor requires a validated envelope"
+        );
         Self {
-            points: valid_points(points),
+            value,
             bounds: None,
+            selected: 0,
             dragging: None,
+            before_drag: None,
+            error: None,
         }
     }
-    pub fn set_value(&mut self, points: Vec<[f64; 2]>, cx: &mut Context<Self>) {
-        self.points = valid_points(points);
+    pub fn set_value(&mut self, value: Envelope, cx: &mut Context<Self>) {
+        assert!(
+            value.validate().is_ok(),
+            "EnvelopeEditor requires a validated envelope"
+        );
+        self.value = value;
+        self.selected = self.selected.min(self.value.points.len() - 2);
         self.dragging = None;
+        self.before_drag = None;
+        self.error = None;
         cx.notify();
     }
     fn position(&self, p: Point<Pixels>) -> Option<[f64; 2]> {
@@ -37,37 +60,118 @@ impl EnvelopeEditor {
             (1. - f32::from(p.y - b.origin.y) / f32::from(b.size.height)).clamp(0., 1.) as f64,
         ])
     }
-    fn move_point(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
-        let (Some(i), Some(mut p)) = (self.dragging, self.position(p)) else {
+    fn distance(&self, a: [f64; 2], b: [f64; 2]) -> f64 {
+        let bounds = self.bounds.unwrap();
+        ((a[0] - b[0]) * f32::from(bounds.size.width) as f64)
+            .hypot((a[1] - b[1]) * f32::from(bounds.size.height) as f64)
+    }
+    fn hit(&self, p: [f64; 2]) -> Option<Drag> {
+        if matches!(
+            self.value.curve(self.selected),
+            EnvelopeCurve::Bezier { .. }
+        ) {
+            let c = self.value.controls(self.selected);
+            for h in [1, 2] {
+                if self.distance(c[h], p) <= 9. {
+                    return Some(Drag::Handle(self.selected, h));
+                }
+            }
+        }
+        self.value
+            .points
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                let d = self.distance(*a, p);
+                (d <= 9.).then_some((i, d))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| Drag::Anchor(i))
+    }
+    fn move_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let (Some(drag), Some(mut p)) = (self.dragging, self.position(position)) else {
             return;
         };
-        p[0] = if i == 0 {
-            0.
-        } else if i + 1 == self.points.len() {
-            1.
-        } else {
-            let (prev, next) = (self.points[i - 1][0], self.points[i + 1][0]);
-            let margin = (next - prev) * 1e-6;
-            if prev + margin > prev && next - margin < next {
-                p[0].clamp(prev + margin, next - margin)
-            } else {
-                self.points[i][0]
+        let result = match drag {
+            Drag::Anchor(i) => {
+                p[0] = if i == 0 {
+                    0.
+                } else if i == self.value.points.len() - 1 {
+                    1.
+                } else {
+                    let (a, b) = (self.value.points[i - 1][0], self.value.points[i + 1][0]);
+                    let margin = (b - a) * 1e-6;
+                    p[0].clamp(a + margin, b - margin)
+                };
+                self.value.move_point(i, p)
+            }
+            Drag::Handle(i, h) => {
+                let mut c = self.value.controls(i);
+                p[0] = if h == 1 {
+                    p[0].clamp(c[0][0], c[2][0])
+                } else {
+                    p[0].clamp(c[1][0], c[3][0])
+                };
+                c[h] = p;
+                self.value.set_curve(
+                    i,
+                    EnvelopeCurve::Bezier {
+                        control1: c[1],
+                        control2: c[2],
+                    },
+                )
             }
         };
-        self.points[i] = p;
+        self.error = result.err().map(|e| e.to_string());
         cx.notify();
     }
     fn commit(&mut self, cx: &mut Context<Self>) {
-        if self.dragging.take().is_some() {
-            cx.emit(EnvelopeChanged(self.points.clone()));
+        self.dragging = None;
+        if self.before_drag.take().is_some_and(|old| old != self.value) {
+            cx.emit(EnvelopeChanged(self.value.clone()));
+        }
+        cx.notify();
+    }
+    fn choose_curve(&mut self, curved: bool, cx: &mut Context<Self>) {
+        let c = self.value.controls(self.selected);
+        let curve = if curved {
+            EnvelopeCurve::Bezier {
+                control1: c[1],
+                control2: c[2],
+            }
+        } else {
+            EnvelopeCurve::Linear
+        };
+        match self.value.set_curve(self.selected, curve) {
+            Ok(()) => {
+                self.error = None;
+                cx.emit(EnvelopeChanged(self.value.clone()));
+            }
+            Err(e) => self.error = Some(e.to_string()),
         }
         cx.notify();
     }
 }
 impl Render for EnvelopeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let points = self.points.clone();
+        let value = self.value.clone();
+        let selected = self.selected;
         let this = cx.entity();
+        let curved = matches!(self.value.curve(selected), EnvelopeCurve::Bezier { .. });
+        let mut handles = self
+            .value
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (Drag::Anchor(i), *p))
+            .collect::<Vec<_>>();
+        if curved {
+            let c = self.value.controls(selected);
+            handles.extend([
+                (Drag::Handle(selected, 1), c[1]),
+                (Drag::Handle(selected, 2), c[2]),
+            ]);
+        }
         div()
             .w_full()
             .flex()
@@ -76,136 +180,206 @@ impl Render for EnvelopeEditor {
             .child(
                 div()
                     .w_full()
-                    .h(px(110.))
-                    .flex_none()
+                    .p(px(9.))
                     .border_1()
                     .border_color(ladder::foreground().opacity(0.3))
                     .child(
-                        canvas(
-                            move |bounds, _, cx| {
-                                this.update(cx, |this, _| this.bounds = Some(bounds));
-                            },
-                            move |bounds, _, window, _| {
-                                let at = |p: [f64; 2]| {
-                                    point(
-                                        bounds.origin.x + bounds.size.width * p[0] as f32,
-                                        bounds.origin.y + bounds.size.height * (1. - p[1]) as f32,
-                                    )
-                                };
-                                let mut path = PathBuilder::stroke(px(2.));
-                                if let Some(p) = points.first() {
-                                    path.move_to(at(*p));
-                                }
-                                for p in points.iter().skip(1) {
-                                    path.line_to(at(*p));
-                                }
-                                if let Ok(path) = path.build() {
-                                    window.paint_path(path, ladder::foreground());
-                                }
-                                for p in &points {
-                                    let p = at(*p);
-                                    let mut dot = PathBuilder::fill();
-                                    dot.move_to(point(p.x - px(3.), p.y - px(3.)));
-                                    dot.line_to(point(p.x + px(3.), p.y - px(3.)));
-                                    dot.line_to(point(p.x + px(3.), p.y + px(3.)));
-                                    dot.line_to(point(p.x - px(3.), p.y + px(3.)));
-                                    dot.close();
-                                    if let Ok(path) = dot.build() {
-                                        window.paint_path(path, ladder::foreground());
+                        div()
+                            .relative()
+                            .w_full()
+                            .h(px(120.))
+                            .flex_none()
+                            .child(
+                                canvas(
+                                    move |bounds, _, cx| {
+                                        this.update(cx, |this, _| this.bounds = Some(bounds));
+                                    },
+                                    move |bounds, _, window, _| {
+                                        let at = |p: [f64; 2]| {
+                                            point(
+                                                bounds.origin.x + bounds.size.width * p[0] as f32,
+                                                bounds.origin.y
+                                                    + bounds.size.height * (1. - p[1]) as f32,
+                                            )
+                                        };
+                                        let mut path = PathBuilder::stroke(px(1.5));
+                                        path.move_to(at(value.points[0]));
+                                        for i in 0..value.points.len() - 1 {
+                                            let c = value.controls(i);
+                                            match value.curve(i) {
+                                                EnvelopeCurve::Linear => path.line_to(at(c[3])),
+                                                EnvelopeCurve::Bezier { .. } => path
+                                                    .cubic_bezier_to(at(c[3]), at(c[1]), at(c[2])),
+                                            }
+                                        }
+                                        if let Ok(path) = path.build() {
+                                            window.paint_path(path, ladder::foreground());
+                                        }
+                                        if curved {
+                                            let c = value.controls(selected);
+                                            let mut lines = PathBuilder::stroke(px(1.));
+                                            lines.move_to(at(c[0]));
+                                            lines.line_to(at(c[1]));
+                                            lines.move_to(at(c[3]));
+                                            lines.line_to(at(c[2]));
+                                            if let Ok(path) = lines.build() {
+                                                window.paint_path(
+                                                    path,
+                                                    ladder::primary().opacity(0.6),
+                                                );
+                                            }
+                                        }
+                                    },
+                                )
+                                .size_full(),
+                            )
+                            .children(handles.into_iter().map(|(handle, p)| {
+                                let (role, label) = match handle {
+                                    Drag::Anchor(i) => {
+                                        (Role::Slider, format!("Envelope anchor {}", i + 1))
                                     }
-                                }
-                            },
-                        )
-                        .size_full(),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
-                            let Some(p) = this.position(e.position) else {
-                                return;
-                            };
-                            let nearest = this
-                                .points
-                                .iter()
-                                .enumerate()
-                                .min_by(|(_, a), (_, b)| {
-                                    ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2))
-                                        .total_cmp(&((b[0] - p[0]).powi(2) + (b[1] - p[1]).powi(2)))
-                                })
-                                .map(|(i, _)| i)
-                                .unwrap();
-                            let near = this.points[nearest];
-                            if (near[0] - p[0]).hypot(near[1] - p[1]) < 0.08 {
-                                this.dragging = Some(nearest);
-                            } else if p[0] > 1e-6
-                                && p[0] < 1. - 1e-6
-                                && this.points.iter().all(|v| (v[0] - p[0]).abs() > 2e-6)
-                            {
-                                let i = this.points.partition_point(|v| v[0] < p[0]);
-                                this.points.insert(i, p);
-                                this.dragging = Some(i);
-                            }
-                            this.move_point(e.position, cx);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _, cx| {
-                        this.move_point(e.position, cx)
-                    }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.commit(cx)),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.commit(cx)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
-                            let Some(p) = this.position(e.position) else {
-                                return;
-                            };
-                            if let Some(i) = (1..this.points.len() - 1).min_by(|a, b| {
-                                (this.points[*a][0] - p[0])
-                                    .abs()
-                                    .total_cmp(&(this.points[*b][0] - p[0]).abs())
-                            }) {
-                                if (this.points[i][0] - p[0]).abs() < 0.05 {
-                                    this.points.remove(i);
-                                    cx.emit(EnvelopeChanged(this.points.clone()));
+                                    Drag::Handle(i, h) => (
+                                        Role::Slider,
+                                        format!("Envelope segment {} handle {h}", i + 1),
+                                    ),
+                                };
+                                div()
+                                    .absolute()
+                                    .left(gpui::relative(p[0] as f32))
+                                    .top(gpui::relative((1. - p[1]) as f32))
+                                    .ml(px(-4.))
+                                    .mt(px(-4.))
+                                    .size(px(8.))
+                                    .border_1()
+                                    .border_color(ladder::control_border())
+                                    .bg(if matches!(handle, Drag::Handle(..)) {
+                                        ladder::primary()
+                                    } else {
+                                        ladder::foreground()
+                                    })
+                                    .when(matches!(handle, Drag::Handle(..)), |d| d.rounded_full())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.before_drag = Some(this.value.clone());
+                                            this.dragging = Some(handle);
+                                            if let Drag::Anchor(i) = handle {
+                                                this.selected = i.min(this.value.points.len() - 2);
+                                            }
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .agent_node(role, label)
+                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
+                                    let Some(p) = this.position(e.position) else {
+                                        return;
+                                    };
+                                    this.before_drag = Some(this.value.clone());
+                                    if let Some(hit) = this.hit(p) {
+                                        this.dragging = Some(hit);
+                                        if let Drag::Anchor(i) = hit {
+                                            this.selected = i.min(this.value.points.len() - 2);
+                                        }
+                                    } else if e.click_count == 2 {
+                                        match this.value.insert_point(p[0]) {
+                                            Ok(i) => {
+                                                this.dragging = Some(Drag::Anchor(i));
+                                                this.selected = i;
+                                                this.error = None;
+                                            }
+                                            Err(e) => this.error = Some(e.to_string()),
+                                        }
+                                    } else {
+                                        this.selected = this
+                                            .value
+                                            .points
+                                            .partition_point(|a| a[0] < p[0])
+                                            .saturating_sub(1)
+                                            .min(this.value.points.len() - 2);
+                                    }
+                                    cx.stop_propagation();
                                     cx.notify();
-                                }
-                            }
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .agent_node(Role::Card, "Envelope curve"),
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(|this, e: &gpui::MouseMoveEvent, _, cx| {
+                                this.move_drag(e.position, cx)
+                            }))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| this.commit(cx)),
+                            )
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| this.commit(cx)),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
+                                    let Some(p) = this.position(e.position) else {
+                                        return;
+                                    };
+                                    if let Some(Drag::Anchor(i)) = this.hit(p) {
+                                        match this.value.remove_point(i) {
+                                            Ok(()) => {
+                                                this.selected =
+                                                    this.selected.min(this.value.points.len() - 2);
+                                                this.error = None;
+                                                cx.emit(EnvelopeChanged(this.value.clone()));
+                                            }
+                                            Err(e) => this.error = Some(e.to_string()),
+                                        }
+                                    }
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            )
+                            .agent_node(Role::Card, "Envelope curve"),
+                    ),
             )
             .child(
-                div()
-                    .text_size(px(11.))
-                    .child("Drag points · Click to add · Right-click to remove"),
+                div().flex().gap(px(4.)).children(
+                    [("Straight", false), ("Curve", true)]
+                        .into_iter()
+                        .map(|(label, mode)| {
+                            crate::luma_button(label, crate::Enabled::Yes)
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| this.choose_curve(mode, cx)),
+                                )
+                                .agent_node(Role::Button, format!("Envelope {label}"))
+                        }),
+                ),
+            )
+            .child(div().text_size(px(11.)).child(
+                "Drag points or handles · Double-click to add · Right-click a point to remove",
+            ))
+            .children(
+                self.error
+                    .as_ref()
+                    .map(|error| div().text_size(px(11.)).child(error.clone())),
             )
             .child(
                 div().flex().flex_wrap().gap(px(4.)).children(
                     [
-                        ("Hard", vec![[0., 1.], [1., 1.]]),
-                        ("Soft", vec![[0., 0.], [0.15, 1.], [0.85, 1.], [1., 0.]]),
-                        ("Triangle", vec![[0., 0.], [0.5, 1.], [1., 0.]]),
-                        ("Ramp up", vec![[0., 0.], [1., 1.]]),
-                        ("Ramp down", vec![[0., 1.], [1., 0.]]),
+                        ("Hard", Envelope::soft_edges(0.)),
+                        ("Soft", soft_preset()),
+                        ("Triangle", Envelope::soft_edges(1.)),
+                        ("Ramp up", Envelope::linear(vec![[0., 0.], [1., 1.]])),
+                        ("Ramp down", Envelope::linear(vec![[0., 1.], [1., 0.]])),
                     ]
                     .into_iter()
-                    .map(|(label, points)| {
+                    .map(|(label, value)| {
                         crate::luma_button(label, crate::Enabled::Yes)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.points = points.clone();
-                                    this.dragging = None;
-                                    cx.emit(EnvelopeChanged(this.points.clone()));
-                                    cx.notify();
+                                    this.set_value(value.clone(), cx);
+                                    this.selected = 0;
+                                    cx.emit(EnvelopeChanged(this.value.clone()));
                                 }),
                             )
                             .agent_node(Role::Button, label)
@@ -214,19 +388,19 @@ impl Render for EnvelopeEditor {
             )
     }
 }
-
-fn valid_points(points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
-    if points.len() >= 2
-        && points[0][0] == 0.
-        && points.last().unwrap()[0] == 1.
-        && points
-            .iter()
-            .flatten()
-            .all(|v| v.is_finite() && (0. ..=1.).contains(v))
-        && points.windows(2).all(|p| p[0][0] < p[1][0])
-    {
-        points
-    } else {
-        vec![[0., 1.], [1., 1.]]
+fn soft_preset() -> Envelope {
+    Envelope {
+        points: vec![[0., 0.], [0.2, 1.], [0.8, 1.], [1., 0.]],
+        curves: vec![
+            EnvelopeCurve::Bezier {
+                control1: [0.07, 0.],
+                control2: [0.13, 1.],
+            },
+            EnvelopeCurve::Linear,
+            EnvelopeCurve::Bezier {
+                control1: [0.87, 1.],
+                control2: [0.93, 0.],
+            },
+        ],
     }
 }

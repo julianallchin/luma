@@ -264,9 +264,7 @@ pub(crate) fn foundation(library: &mut Library) {
         "motion",
         "path",
         "Travel curve",
-        Value::Envelope(Envelope {
-            points: vec![[0., 0.], [1., 1.]],
-        }),
+        Value::Envelope(Envelope::linear(vec![[0., 0.], [1., 1.]])),
     );
     for key in ["progress", "active"] {
         let spec = library.definitions["core/travel_time"].outputs[key].clone();
@@ -626,9 +624,7 @@ pub(crate) fn extend(library: &mut Library) {
         "noise_mask",
         "shape",
         "Response",
-        Value::Envelope(Envelope {
-            points: vec![[0.0, 0.0], [1.0, 1.0]],
-        }),
+        Value::Envelope(Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]])),
     );
     graph(
         library,
@@ -821,9 +817,7 @@ pub(crate) fn extend(library: &mut Library) {
         "band_mask",
         "shape",
         "Response",
-        Value::Envelope(Envelope {
-            points: vec![[0.0, 0.0], [1.0, 1.0]],
-        }),
+        Value::Envelope(Envelope::linear(vec![[0.0, 0.0], [1.0, 1.0]])),
     );
     graph(
         library,

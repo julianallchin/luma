@@ -257,9 +257,7 @@ pub(crate) fn primitive(p: Primitive) -> Definition {
                     field(
                         "Envelope",
                         "Normalized editable curve",
-                        Value::Envelope(Envelope {
-                            points: vec![[0.0, 1.0], [1.0, 0.0]],
-                        }),
+                        Value::Envelope(Envelope::linear(vec![[0.0, 1.0], [1.0, 0.0]])),
                         Frame,
                     ),
                 ),
@@ -789,9 +787,12 @@ fn pill_graph() -> Definition {
             field(
                 "Shape",
                 "Brightness across the stroke, from its negative to positive edge",
-                Value::Envelope(Envelope {
-                    points: vec![[0., 0.], [0.05, 1.], [0.95, 1.], [1., 0.]],
-                }),
+                Value::Envelope(Envelope::linear(vec![
+                    [0., 0.],
+                    [0.05, 1.],
+                    [0.95, 1.],
+                    [1., 0.],
+                ])),
                 Frame,
             ),
         ),

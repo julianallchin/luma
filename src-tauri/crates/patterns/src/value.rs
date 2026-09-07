@@ -1,4 +1,4 @@
-use crate::{Cell, Error, Mapping, MappingSpec, Result};
+use crate::{Cell, Envelope, Error, Mapping, MappingSpec, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -30,56 +30,6 @@ pub enum Boundary {
     Natural,
     Clip,
     Wrap,
-}
-
-/// Normalized domain/value knots. The consumer supplies time or spatial meaning.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Envelope {
-    pub points: Vec<[f64; 2]>,
-}
-
-impl Envelope {
-    /// A symmetric edge profile; useful as an editable preset or graph input.
-    pub fn soft_edges(softness: f64) -> Self {
-        let edge = softness.clamp(0., 1.) * 0.5;
-        let points = if edge <= 0. {
-            vec![[0., 1.], [1., 1.]]
-        } else if edge >= 0.5 {
-            vec![[0., 0.], [0.5, 1.], [1., 0.]]
-        } else {
-            vec![[0., 0.], [edge, 1.], [1. - edge, 1.], [1., 0.]]
-        };
-        Self { points }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        if self.points.len() < 2
-            || self.points.len() > 256
-            || self.points[0][0] != 0.0
-            || self.points.last().unwrap()[0] != 1.0
-            || self
-                .points
-                .iter()
-                .any(|p| p.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)))
-            || self.points.windows(2).any(|w| w[0][0] >= w[1][0])
-        {
-            return Err(Error(
-                "envelope needs 2–256 increasing normalized knots from 0 to 1".into(),
-            ));
-        }
-        Ok(())
-    }
-    pub fn sample(&self, progress: f64) -> f64 {
-        let p = progress.clamp(0.0, 1.0);
-        for pair in self.points.windows(2) {
-            if p <= pair[1][0] {
-                let t = (p - pair[0][0]) / (pair[1][0] - pair[0][0]);
-                return pair[0][1] + t * (pair[1][1] - pair[0][1]);
-            }
-        }
-        self.points.last().map_or(0.0, |p| p[1])
-    }
 }
 
 /// Values retain their units across graph boundaries. Masks and Lighting are

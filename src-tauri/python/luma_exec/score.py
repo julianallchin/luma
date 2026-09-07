@@ -11,6 +11,13 @@
 Compose with graph.node(), node.output(), graph.expose() and graph.output().
 definition(id) follows both shipped and local references. source() is the exact
 score.luma document, suitable for an agent workspace or a one-shot model.
+
+Envelope values store anchors and optional Bézier segments, for example:
+    {"points": [[0, 1], [1, 0]], "curves": [
+        {"kind": "bezier", "control1": [.3, 1], "control2": [.7, 0]}]}
+Handles use the same normalized coordinates as anchors. Their x positions must
+stay ordered between their segment endpoints; y stays in 0..1. An omitted
+curves list means straight segments. Every editor and evaluator uses this value.
 """
 from __future__ import annotations
 

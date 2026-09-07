@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import copy
+import functools
 from dataclasses import dataclass
 import hashlib
 import json
@@ -109,34 +110,53 @@ def color(value):
     return [value[key] / 255 for key in ("r", "g", "b")]
 
 
-def curve(x, amount):
-    x = max(0., min(1., x))
-    if abs(amount) < .001:
-        return x
-    power = 1 + abs(amount) * 5
-    return x ** power if amount > 0 else 1 - (1 - x) ** power
+def bezier_segment(a, b, amount=0.):
+    """One editable cubic per authored phase, with absolute normalized handles."""
+    if abs(amount) < .001 or a[1] == b[1]:
+        return {"kind": "linear"}
+    controls = power_handles(round(1 + abs(amount) * 5, 12))
+    if amount < 0:
+        controls = tuple((1-x, 1-y) for x, y in reversed(controls))
+    return {"kind": "bezier", **{
+        key: [a[0] + (b[0]-a[0])*x, a[1] + (b[1]-a[1])*y]
+        for key, (x, y) in zip(("control1", "control2"), controls)}}
 
 
-def sampled_envelope(function, anchors=()):
-    """Keep actual stage boundaries, then refine only where curvature needs it."""
-    points = sorted(set([0., 1., *(float(x) for x in anchors if 0 < x < 1)]))
-    values = {x: max(0., min(1., function(x))) for x in points}
-    while len(points) < 256:
-        worst = (0., None)
-        for a, b in zip(points, points[1:]):
-            for weight in (.25, .5, .75):
-                x = a + (b-a) * weight
-                error = abs(function(x) - (values[a] + (values[b]-values[a]) * weight))
-                if error > worst[0]:
-                    worst = error, x
-        if worst[0] <= .0002:
-            break
-        x = worst[1]
-        values[x] = max(0., min(1., function(x)))
-        bisect.insort(points, x)
-    else:
-        raise ValueError("envelope approximation exceeds the canonical knot budget")
-    return {"points": [[x, values[x]] for x in points]}
+@functools.lru_cache(maxsize=128)
+def power_handles(power):
+    """Fit the old power response to one cubic, never to authored sample knots.
+
+    Only migration uses this fit. Playback and the editor evaluate the stored
+    Bézier directly. Ordered handles keep time monotonic and the result bounded.
+    """
+    samples = [i/64 for i in range(1, 64)]
+    def loss(p):
+        x1, x2, y1, y2 = p
+        if not 0 <= x1 <= x2 <= 1 or not 0 <= y1 <= 1 or not 0 <= y2 <= 1:
+            return math.inf
+        return sum((3*(1-t)**2*t*y1 + 3*(1-t)*t*t*y2 + t**3 -
+                    (3*(1-t)**2*t*x1 + 3*(1-t)*t*t*x2 + t**3)**power)**2 for t in samples)
+    best = None
+    for initial in ([1/3, 2/3, 0., max(0., 1-power/3)], [.5, .8, 0., .1], [.1, .5, 0., .3]):
+        p, step = list(initial), .2
+        error = loss(p)
+        for _ in range(300):
+            improved = False
+            for axis in range(4):
+                for direction in (-1, 1):
+                    candidate = p.copy()
+                    candidate[axis] += direction*step
+                    candidate_error = loss(candidate)
+                    if candidate_error < error:
+                        p, error, improved = candidate, candidate_error, True
+            if not improved:
+                step *= .5
+                if step < 1e-6:
+                    break
+        if best is None or error < best[0]:
+            best = error, p
+    x1, x2, y1, y2 = best[1]
+    return ((x1, y1), (x2, y2))
 
 
 def envelope(params):
@@ -146,25 +166,29 @@ def envelope(params):
         return {"points": [[0., 0.], [1., 0.]]}
     attack, decay, sustain, release = [x / total for x in weights]
     level = params.get("sustain_level", 0.)
-    def sample(t):
-        if t < attack:
-            return curve(t / attack, params.get("attack_curve", 0.))
-        if t < attack + decay:
-            return level + (1-level) * curve(1-(t-attack)/decay, params.get("decay_curve", 0.))
-        if t < attack + decay + sustain:
-            return level
-        if release:
-            return level * max(0., 1-(t-attack-decay-sustain)/release)
-        # The clock gates the stroke's end. Preserve an attack's limiting peak.
-        return level if sustain or decay else 1.
-    return sampled_envelope(sample, [attack, attack+decay, attack+decay+sustain])
+    points, curves = [[0., 0. if attack else 1.]], []
+    for length, target, amount in [(attack, 1., params.get("attack_curve", 0.)),
+                                    (decay, level, -params.get("decay_curve", 0.)),
+                                    (sustain, level, 0.), (release, 0., 0.)]:
+        if length:
+            end = [min(1., points[-1][0]+length), target]
+            curves.append(bezier_segment(points[-1], end, amount))
+            points.append(end)
+    points[-1][0] = 1.
+    # Adjacent constant stages do not need redundant anchor points.
+    for i in range(len(points)-2, 0, -1):
+        if points[i-1][1] == points[i][1] == points[i+1][1]:
+            points.pop(i)
+            curves.pop(i)
+    return {"points": points, **({"curves": curves} if any(c["kind"] != "linear" for c in curves) else {})}
 
 
 def spatial_profile(record):
     params = next(n["params"] for n in record["graph"]["nodes"] if n["typeId"] == "falloff")
-    # Width and shape remain independently editable. Discard the old sampled
-    # Invert extrema: the intended stroke has a lit center and dark edges.
-    shape = sampled_envelope(lambda x: 1 - curve(abs(2*x-1), params["curve"]), [.5])
+    points = [[0., 0.], [.5, 1.], [1., 0.]]
+    curves = [bezier_segment(points[0], points[1], -params["curve"]),
+              bezier_segment(points[1], points[2], params["curve"])]
+    shape = {"points": points, **({"curves": curves} if any(c["kind"] != "linear" for c in curves) else {})}
     width = (1 if record["name"].startswith("circle_pill") else 2) / max(params["width"], 1e-6)
     return width, shape
 
@@ -578,6 +602,100 @@ def apply_reviewed(options):
         host.close()
 
 
+def envelope_sample(value, x):
+    points = value["points"]
+    i = min(max(0, bisect.bisect_left([p[0] for p in points], x)-1), len(points)-2)
+    a, b = points[i:i+2]
+    segment = value.get("curves", [])[i] if value.get("curves") else {"kind": "linear"}
+    if segment["kind"] == "linear":
+        return a[1] + (b[1]-a[1]) * (x-a[0])/(b[0]-a[0])
+    c, d = segment["control1"], segment["control2"]
+    def at(t, axis):
+        return (1-t)**3*a[axis] + 3*(1-t)**2*t*c[axis] + 3*(1-t)*t*t*d[axis] + t**3*b[axis]
+    low, high = 0., 1.
+    for _ in range(40):
+        middle = (low+high)/2
+        if at(middle, 0) < x:
+            low = middle
+        else:
+            high = middle
+    return at((low+high)/2, 1)
+
+
+def repair_curves(options):
+    """Repair only untouched envelope values from this migration, through history.
+
+    Scores, clips, graphs, and unrelated edits retain their current identities
+    and values. The original reviewed sources are the comparison base, not a
+    replacement document. Validation precedes all writes; imports use CAS.
+    """
+    manifest = json.loads((options.references / "manifest.json").read_text())
+    records = {item["clip"]: json.loads((options.references / item["file"]).read_text()) for item in manifest}
+    host = Host(options.host, options.config, options.output / "host.log", fixture=not options.live)
+    report = {"changed": [], "skipped_edits": [], "applied": []}
+    (options.output / "before").mkdir()
+    (options.output / "sources").mkdir()
+    pending = []
+    try:
+        for path in sorted((options.repair_curves / "sources").glob("*.luma")):
+            original = json.loads(path.read_text())
+            record = records[next(iter(original["clips"]))]
+            scope = {"score_id": path.stem, "track_id": record["track_id"], "venue_id": VENUE}
+            exported = host.call("score_dsl_export", **scope, include_clip_ids=True)
+            current = json.loads(exported["source"])
+            if current.get("version") != 2:
+                raise ValueError(f"expected migrated score {path.stem}")
+            (options.output / "before" / f"{path.stem}.json").write_text(json.dumps(exported, indent=2))
+            changed = []
+            for clip_id, old_clip in original["clips"].items():
+                current_clip = current["clips"].get(clip_id)
+                if current_clip is None:
+                    continue
+                replacements = clip_inputs(records[clip_id])
+                for key, old in old_clip["inputs"].items():
+                    if old["type"] != "envelope" or len(old["value"]["points"]) <= 8:
+                        continue
+                    new = {"type": "envelope", "value": replacements[key]}
+                    held = current_clip["inputs"].get(key)
+                    if same_document(held, new):
+                        continue
+                    if not same_document(held, old):
+                        report["skipped_edits"].append({"score": path.stem, "clip": clip_id, "input": key})
+                        continue
+                    maximum = max(abs(envelope_sample(old["value"], x/1000) - envelope_sample(new["value"], x/1000)) for x in range(1001))
+                    if maximum > .02:
+                        raise ValueError(f"curve fit changed {clip_id}.{key} by {maximum:.4f}")
+                    if len(new["value"]["points"]) > 5:
+                        raise ValueError("a rebuilt phase curve should never contain sampled anchors")
+                    current_clip["inputs"][key] = new
+                    changed.append({"score": path.stem, "clip": clip_id, "input": key,
+                                    "old_anchors": len(old["value"]["points"]),
+                                    "new_anchors": len(new["value"]["points"]), "maximum_difference": maximum})
+            if not changed:
+                continue
+            source = json.dumps(current, indent=2, allow_nan=False) + "\n"
+            checked = host.call("score_dsl_validate", **scope, source=source)
+            if not checked["valid"]:
+                raise ValueError(f"{path.stem}: {checked['diagnostics']}")
+            (options.output / "sources" / path.name).write_text(source)
+            pending.append((scope, source, exported["revision"]))
+            report["changed"].extend(changed)
+            print(f"Validated {path.stem}: {len(changed)} compact envelopes", flush=True)
+        (options.output / "report.json").write_text(json.dumps(report, indent=2))
+        for scope, source, revision in pending:
+            digest = hashlib.sha256(source.encode()).hexdigest()
+            result = host.call("score_dsl_import", **scope, source=source, base_revision=revision,
+                               operation_id=f"ebf-bezier-{scope['score_id']}-{digest}")
+            saved = host.call("score_dsl_export", **scope, include_clip_ids=True)
+            if not same_document(json.loads(source), json.loads(saved["source"])):
+                raise ValueError(f"curve repair did not round-trip: {scope['score_id']}")
+            report["applied"].append({**scope, "revision": result["revisionId"]})
+            (options.output / "report.json").write_text(json.dumps(report, indent=2))
+            print(f"Saved {scope['score_id']}", flush=True)
+    finally:
+        host.close()
+
+
 def same_document(a, b):
     """Rust/Python decimal parsers can differ by an f64 ULP; IDs and seeds cannot."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -603,10 +721,14 @@ def main():
     parser.add_argument("--references", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compare", action="store_true")
+    parser.add_argument("--repair-curves", type=Path, help="replace untouched sampled envelopes from a prior reviewed import")
     parser.add_argument("--apply-reviewed", type=Path, help="import a completed comparison directory")
     parser.add_argument("--live", action="store_true", help="use the regular library's stored identity, never fixture admission")
     options = parser.parse_args()
     options.output.mkdir(parents=True, exist_ok=False)
+    if options.repair_curves:
+        repair_curves(options)
+        return
     if options.apply_reviewed:
         apply_reviewed(options)
         return

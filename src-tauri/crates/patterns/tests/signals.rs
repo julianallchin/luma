@@ -91,9 +91,7 @@ fn pulse_is_dark_in_the_rest_even_when_the_curve_ends_lit() {
     for effect in ["pulse", "pulse_dimmer"] {
         let inputs = BTreeMap::from([(
             "shape".into(),
-            Value::Envelope(Envelope {
-                points: vec![[0., 1.], [1., 1.]],
-            }),
+            Value::Envelope(Envelope::linear(vec![[0., 1.], [1., 1.]])),
         )]);
         let graph = PreparedGraph::new(&library, effect, &inputs, frame(&cells)).unwrap();
         for (beat, dimmer) in [(3., 1.), (4.999, 1.), (5., 0.), (6.999, 0.), (7., 1.)] {
