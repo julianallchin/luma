@@ -1,5 +1,5 @@
 //! Authored groups are editable sets; automatic groups follow the stage.
-use super::{Patch, Section};
+use super::Patch;
 use crate::{shell::Body, Luma};
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Entity, Focusable, SharedString, Subscription, Window};
@@ -31,6 +31,9 @@ impl Luma {
         let Some(Body::Patch(state)) = self.workspace.active_body_mut() else {
             return;
         };
+        if state.group_busy {
+            return;
+        }
         let group = id
             .as_ref()
             .and_then(|id| state.data.as_ref()?.groups.iter().find(|g| &g.id == id));
@@ -52,7 +55,7 @@ impl Luma {
         });
         let subscription = cx.subscribe(&name, |_: &mut Luma, _, _, cx| cx.notify());
         window.focus(&name.read(cx).focus_handle(cx), cx);
-        state.section = Section::Groups;
+
         state.group_error = None;
         state.group_editor = Some(Editor {
             id,
@@ -65,6 +68,9 @@ impl Luma {
             parent_open: false,
             _subscription: subscription,
         });
+        let selected = state.group_editor.as_ref().unwrap().members.clone();
+        state.selected = selected.clone();
+        self.highlight_venue_lights(selected, cx);
         cx.notify();
     }
 
@@ -114,7 +120,7 @@ impl Luma {
     }
 }
 
-pub(super) fn groups(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+pub(super) fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let mut body = div()
         .id("venue-groups")
         .flex_1()
@@ -197,8 +203,12 @@ pub(super) fn groups(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                                             if !e.members.remove(&id) {
                                                 e.members.insert(id.clone());
                                             }
+                                            s.selected = e.members.clone();
                                         }
                                     }
+                                }
+                                if let Some(Body::Patch(s)) = this.workspace.active_body() {
+                                    this.highlight_venue_lights(s.selected.clone(), cx);
                                 }
                                 cx.notify();
                             })
@@ -222,106 +232,179 @@ pub(super) fn groups(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         }
         return body.into_any_element();
     }
-    let new = app.clone();
-    body = body.child(
-        div().flex().child(
-            float::btn("Create group", "group-create")
-                .id("group-create")
-                .on_click(move |_, window, cx| {
-                    new.update(cx, |this, cx| {
-                        this.edit_venue_group(None, false, window, cx)
-                    })
-                })
-                .agent_node(Role::Button, "Create group"),
-        ),
-    );
-    if let Some(data) = &state.data {
-        for group in &data.groups {
-            body = body.child(group_row(group, &data.groups, app));
-        }
-        if data.groups.is_empty() {
-            body = body.child(float::empty_row("No groups"));
-        }
-    } else if let Some(error) = &state.error {
-        body = body.child(luma_ui::plate(error.clone(), ladder::danger()));
-    } else {
-        body = body.child(float::empty_row("Loading groups…"));
-    }
     body.into_any_element()
 }
 
-fn group_row(
-    group: &luma_lib::models::groups::GroupTreeNode,
-    tree: &[luma_lib::models::groups::GroupTreeNode],
-    app: &Entity<Luma>,
-) -> AnyElement {
-    let edit = app.clone();
-    let id = group.id.clone();
-    let label = group.label.replace('_', " ");
-    let path = group_path(tree, &id);
-    let select = app.clone();
-    let members: HashSet<String> = group.fixtures.iter().cloned().collect();
-    let parent = group
-        .parent_id
-        .as_deref()
-        .map(|id| group_path(tree, id))
-        .unwrap_or_default();
-    div()
-        .id(SharedString::from(format!("venue-group-{id}")))
+pub(super) fn strip(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+    let new = app.clone();
+    let from_selection = app.clone();
+    let mut section = div()
         .flex_none()
-        .py(px(5.0))
+        .px(px(16.0))
+        .pb(px(8.0))
         .flex()
-        .items_center()
-        .gap(px(10.0))
+        .flex_col()
+        .gap(px(6.0))
         .child(
             div()
-                .id(SharedString::from(format!("select-group-{id}")))
-                .flex_1()
-                .min_w_0()
                 .flex()
-                .flex_col()
-                .gap(px(3.0))
-                .cursor_pointer()
-                .on_click(move |_, _, cx| {
-                    select.update(cx, |this, cx| {
-                        if let Some(Body::Patch(s)) = this.workspace.active_body_mut() {
-                            s.selected = members.clone();
-                        }
-                        this.highlight_venue_lights(members.clone(), cx);
-                    })
+                .items_center()
+                .gap(px(8.0))
+                .child(div().flex_1().child(float::label("Groups")))
+                .when(!state.selected.is_empty(), |d| {
+                    d.child(
+                        float::btn("Group selected", "group-selected")
+                            .id("group-selected")
+                            .on_click(move |_, window, cx| {
+                                from_selection.update(cx, |this, cx| {
+                                    this.edit_venue_group(None, true, window, cx)
+                                })
+                            })
+                            .agent_node(Role::Button, "Group selected lights")
+                            .agent_disabled(state.group_busy),
+                    )
                 })
-                .child(div().text_size(px(12.5)).truncate().child(label.clone()))
                 .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(ladder::foreground_alpha(0.45))
-                        .truncate()
-                        .child(format!(
-                            "{}{}{}",
-                            super::plural(group.fixtures.len(), "fixture"),
-                            if parent.is_empty() { "" } else { " · " },
-                            parent
-                        )),
+                    float::btn("Create group", "group-create")
+                        .id("group-create")
+                        .on_click(move |_, window, cx| {
+                            new.update(cx, |this, cx| {
+                                this.edit_venue_group(None, false, window, cx)
+                            })
+                        })
+                        .agent_node(Role::Button, "Create group")
+                        .agent_disabled(state.group_busy),
                 ),
-        )
-        .children(group.role.map(|_| {
-            div()
-                .text_size(px(10.0))
-                .text_color(ladder::muted_foreground())
-                .child("Auto")
-        }))
-        .child(
-            float::btn("Edit", format!("edit-{id}"))
-                .id(SharedString::from(format!("edit-{id}")))
-                .on_click(move |_, window, cx| {
-                    edit.update(cx, |this, cx| {
-                        this.edit_venue_group(Some(id.clone()), false, window, cx)
+        );
+    if let Some(data) = &state.data {
+        let mut chips = div()
+            .id("venue-group-chips")
+            .max_h(px(108.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_wrap()
+            .gap(px(4.0));
+        // Authored sets first, followed by the automatic vocabulary.
+        for group in data
+            .groups
+            .iter()
+            .filter(|g| g.role.is_none())
+            .chain(data.groups.iter().filter(|g| g.role.is_some()))
+        {
+            let id = group.id.clone();
+            let path = group_path(&data.groups, &id);
+            let click = app.clone();
+            let active = state.group_editor.as_ref().and_then(|e| e.id.as_ref()) == Some(&id);
+            chips = chips.child(
+                div()
+                    .child(
+                        float::btn(
+                            format!(
+                                "{path} · {}{}",
+                                group.fixtures.len(),
+                                if group.role.is_some() { " · auto" } else { "" }
+                            ),
+                            format!("group-{id}"),
+                        )
+                        .id(SharedString::from(format!("group-{id}")))
+                        .max_w_full()
+                        .when(active, |d| d.bg(luma_ui::glass::card_selected_bg()))
+                        .on_click(move |_, window, cx| {
+                            click.update(cx, |this, cx| {
+                                this.edit_venue_group(Some(id.clone()), false, window, cx)
+                            })
+                        })
+                        .agent_node(Role::Button, format!("Edit group {path}"))
+                        .agent_disabled(state.group_busy),
+                    )
+                    .agent_node(Role::Row, format!("Group {path}")),
+            );
+        }
+        section = section.child(chips);
+    }
+    section.into_any_element()
+}
+
+pub(super) fn memberships(state: &Patch, fixture: &str, app: &Entity<Luma>) -> AnyElement {
+    let mut chips = div().flex().flex_wrap().gap(px(4.0));
+    if let Some(data) = &state.data {
+        for group in data.groups.iter().filter(|g| g.role.is_none()) {
+            let member = group.fixtures.iter().any(|id| id == fixture);
+            let id = group.id.clone();
+            let fixture = fixture.to_string();
+            let click = app.clone();
+            chips = chips.child(
+                float::btn(group.label.replace('_', " "), format!("fixture-group-{id}"))
+                    .id(SharedString::from(format!("fixture-group-{id}")))
+                    .when(member, |d| d.bg(luma_ui::glass::card_selected_bg()))
+                    .on_click(move |_, _, cx| {
+                        click.update(cx, |this, cx| {
+                            this.set_fixture_group(fixture.clone(), id.clone(), !member, cx)
+                        })
                     })
-                })
-                .agent_node(Role::Button, format!("Edit group {path}")),
-        )
-        .agent_node(Role::Row, format!("Group {path}"))
-        .into_any_element()
+                    .agent_node(
+                        Role::Checkbox,
+                        format!("Member of {}", group.label.replace('_', " ")),
+                    )
+                    .agent_focused(member)
+                    .agent_disabled(state.group_busy),
+            );
+        }
+    }
+    chips.into_any_element()
+}
+
+impl Luma {
+    fn set_fixture_group(
+        &mut self,
+        fixture: String,
+        group: String,
+        member: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Body::Patch(state)) = self.workspace.active_body_mut() else {
+            return;
+        };
+        if state.group_busy {
+            return;
+        }
+        let Some(node) = state
+            .data
+            .as_ref()
+            .and_then(|data| data.groups.iter().find(|g| g.id == group))
+        else {
+            return;
+        };
+        let venue = state.venue_id.clone();
+        let (added, removed) = if member {
+            (vec![fixture], vec![])
+        } else {
+            (vec![], vec![fixture])
+        };
+        let pending = self.library.save_venue_group(
+            &venue,
+            Some(&group),
+            &node.label,
+            None,
+            &added,
+            &removed,
+        );
+        state.group_busy = true;
+        state.group_error = None;
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.patch_mut(&venue) {
+                    state.group_busy = false;
+                    state.group_error = result.err().map(|e| super::refusal_message(&e));
+                }
+                this.reload_patch(venue, cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
 }
 
 fn group_path(tree: &[luma_lib::models::groups::GroupTreeNode], id: &str) -> String {

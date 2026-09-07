@@ -106,6 +106,7 @@ fn orbiting_changes_what_is_drawn() {
     run(
         &mut harness,
         r#"
+            nav.step("render settings", "toggle", "Render settings");
             const lab = app.snapshot().find({ role: "toggle", label: "Open Renderer Lab" });
             if (!lab) { throw new Error("the renderer lab trigger is not on screen"); }
             app.click(lab, { restale: "match" });
@@ -148,6 +149,7 @@ fn orbiting_changes_what_is_drawn() {
             if (!sun) { throw new Error("the sun control is not in the renderer lab"); }
             app.click(sun, { restale: "match" });
             app.frames(2);
+            nav.step("render settings", "toggle", "Render settings");
             const close = app.snapshot().find({ role: "toggle", label: "Close Renderer Lab" });
             app.click(close, { restale: "match" });
             app.frames(4, { waitMs: 30 });
@@ -169,12 +171,14 @@ fn orbiting_changes_what_is_drawn() {
     run(
         &mut harness,
         r#"
+            nav.step("render settings", "toggle", "Render settings");
             app.click(app.snapshot().find({ role: "toggle", label: "Open Renderer Lab" }), { restale: "match" });
             app.frames(2);
             const restoredSun = app.snapshot().find({ role: "checkbox", label: "Sun" });
             if (!restoredSun) { throw new Error("the renderer lab did not preserve the sun-off state"); }
             app.click(restoredSun, { restale: "match" });
             app.frames(2);
+            nav.step("render settings", "toggle", "Render settings");
             app.click(app.snapshot().find({ role: "toggle", label: "Close Renderer Lab" }), { restale: "match" });
             app.frames(4, { waitMs: 30 });
         "#,

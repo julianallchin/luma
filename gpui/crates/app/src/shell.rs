@@ -334,6 +334,41 @@ impl Luma {
                 }
             }
         }
+        if self.overlay.as_open().is_none() {
+            if let Some(visualizer) = self.visualizer_mut() {
+                if visualizer.settings_open {
+                    visualizer.settings_open = false;
+                    cx.notify();
+                    return;
+                }
+            }
+            if let Some(Body::Patch(page)) = self.workspace.active_body_mut() {
+                if page.stage.objects_open {
+                    page.stage.objects_open = false;
+                    cx.notify();
+                    return;
+                }
+                if page.details_open {
+                    if page.mode_menu.take().is_some() || page.menu.take().is_some() {
+                        cx.notify();
+                        return;
+                    }
+                    if page.panel.take().is_some() {
+                        cx.notify();
+                        return;
+                    }
+                    page.details_open = false;
+                    cx.notify();
+                    return;
+                }
+                if page.group_editor.is_some() && !page.group_busy {
+                    page.group_editor = None;
+                    page.group_error = None;
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         // The stage builder's hand — and its node menu — are floats over the
         // room on the same rung as the shell's own menus, handled here so
         // Escape reaches them wherever focus happens to be.
@@ -341,7 +376,7 @@ impl Luma {
             self.workspace.active_body(),
             Some(Body::Patch(page)) if page.stage.menu.is_some()
         );
-        let stage_up = matches!(self.workspace.active_body(), Some(Body::Patch(page)) if page.section == patch::Section::Stage);
+        let stage_up = matches!(self.workspace.active_body(), Some(Body::Patch(_)));
         if self.overlay.as_open().is_none()
             && (stage_menu
                 || self
@@ -842,6 +877,16 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     // Split the borrow the way `active_tab` does: the stage's element mutates
     // its own state and reads the library synchronously, and the two fields
     // are disjoint.
+    let stage_view = app.stage_view();
+    let venue_tools = match app.workspace.active_body() {
+        Some(Body::Patch(page)) => Some(stage::controls(
+            &page.stage,
+            &cx.entity(),
+            stage_view.as_ref(),
+            window,
+        )),
+        _ => None,
+    };
     let Luma {
         visualizer,
         library,
@@ -849,7 +894,7 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     } = app;
     let stage = visualizer
         .as_mut()
-        .map(|state| visualizer::visualizer(state, &cx.entity(), library, window));
+        .map(|state| visualizer::visualizer(state, &cx.entity(), library, window, venue_tools));
     div()
         .flex_1()
         .min_h_0()
@@ -1020,14 +1065,13 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
     let focus = app.focus.clone();
     // Read before the workspace is borrowed mutably: the builder lives beside
     // the picture, not in the tab, and its state is a projection either way.
-    let stage_view = app.stage_view();
     let selection = app
         .build_state()
         .and_then(|build| stage::selection_controls(build, &entity));
     let Some(body) = app.workspace.body_mut(&target) else {
         return div().into_any_element();
     };
-    let layout = matches!(&*body, Body::Patch(page) if page.section == patch::Section::Stage);
+    let layout = matches!(&*body, Body::Patch(_));
     let mut keys = gpui::KeyContext::default();
     keys.add(if layout {
         keymap::context::STAGE
@@ -1035,6 +1079,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
         target.key_context()
     });
     if layout {
+        keys.add(keymap::context::PATCH);
         keys.add(keymap::context::VISUALIZER);
     }
     let inner = match body {
@@ -1042,9 +1087,7 @@ fn active_tab(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> An
             track_editor::track_editor(state, &entity, window, cx).into_any_element()
         }
         Body::Graph(state) => graph::graph(state, &entity, window, cx).into_any_element(),
-        Body::Patch(state) => {
-            patch::patch(state, &entity, stage_view.as_ref(), selection, window).into_any_element()
-        }
+        Body::Patch(state) => patch::patch(state, &entity, selection, window).into_any_element(),
     };
     div()
         .flex_1()

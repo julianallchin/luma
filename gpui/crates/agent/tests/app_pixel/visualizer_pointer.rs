@@ -66,6 +66,7 @@ const SEAM_SCRIPT: &str = r#"
 
 /// Turn the wheel over the renderer lab. Its column scrolls; the camera stays.
 const LAB_SCRIPT: &str = r#"
+    nav.step("render settings", "toggle", "Render settings");
     app.click(app.snapshot().find({ role: "toggle", label: "Open Renderer Lab" }),
               { restale: "match" });
     app.frames(4, { waitMs: 60 });

@@ -45,6 +45,8 @@
 //! space by [`luma_scene::Camera`] and converted at exactly one boundary,
 //! [`coords::three_from_world`].
 
+mod settings;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -401,11 +403,14 @@ pub(crate) struct Visualizer {
     /// earlier than prepaint can supply it.
     size: gpui::Size<Pixels>,
     viewport_origin: Point<Pixels>,
-    /// The venue's own environment, as the rig last landed with it — venue
-    /// truth, not a render dial. What the room is actually drawn under is
-    /// [`Self::environment`].
+    /// The preview environment, shared by venue editing and score playback.
     venue_environment: VenueEnvironment,
     render_lab: RenderLab,
+    pub(crate) settings_open: bool,
+    environment_error: Option<String>,
+    environment_saving: bool,
+    environment_edited: bool,
+    environment_pending: Rc<RefCell<Option<VenueEnvironment>>>,
     /// Whether the FPS readout is unfolded into the full frame-stats panel.
     fps_expanded: bool,
     /// The builder. `None` until the rig lands, and the one place a position
@@ -626,8 +631,7 @@ enum EditorDrag {
 #[derive(Clone, PartialEq)]
 struct RenderLab {
     open: bool,
-    /// The room's environment — the venue's own, or the house turned all the
-    /// way down while a score plays over it (see [`Visualizer::environment`]).
+    /// The room's environment, unchanged by score playback.
     ///
     /// Every field below it is this value's *fill*, resolved once through
     /// [`house::fill`] and then free to be overridden by hand. This one is not
@@ -955,14 +959,18 @@ impl Visualizer {
             viewport_origin: Point::default(),
             venue_environment: VenueEnvironment::default(),
             render_lab: RenderLab::new(environment),
+            settings_open: false,
+            environment_error: None,
+            environment_saving: false,
+            environment_edited: false,
+            environment_pending: Rc::default(),
             fps_expanded: false,
             build: None,
             stage: Rc::default(),
         }
     }
 
-    /// The venue's own environment — what the stage page's control edits, and
-    /// what a room with no score over it is drawn under.
+    /// The environment edited by View and used by every preview in this venue.
     pub(crate) fn venue_environment(&self) -> VenueEnvironment {
         self.venue_environment
     }
@@ -1084,7 +1092,9 @@ impl Visualizer {
             .iter()
             .map(|(path, def)| (path.clone(), stage_render::definition(def)))
             .collect();
-        self.venue_environment = rig.environment;
+        if !self.environment_edited {
+            self.venue_environment = rig.environment;
+        }
         self.render_lab.set_environment(self.environment());
         let scene = scene(&rig, &definitions, self.environment());
         self.framing = scene.framing(&definitions);
@@ -2574,6 +2584,7 @@ pub(crate) fn visualizer(
     app: &Entity<Luma>,
     library: &Library,
     window: &mut Window,
+    venue_tools: Option<AnyElement>,
 ) -> Div {
     // Continuous redraw: asking at the top of a render is what makes the next
     // one happen, and CVDisplayLink paces it (spec §4.3).
@@ -2586,7 +2597,7 @@ pub(crate) fn visualizer(
         stage.requested_at = Some(Instant::now());
         stage.renders_since_prepaint = stage.renders_since_prepaint.saturating_add(1);
     }
-    let chrome = toolbar(state, app, library);
+    let chrome = toolbar(state, app, library, venue_tools);
     let floating = overlay_toolbar(state, app);
     let fps = fps_overlay(state, app);
     let pane = state.stage.borrow().pane;
@@ -2637,7 +2648,12 @@ pub(crate) fn visualizer(
         )
 }
 
-fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
+fn toolbar(
+    state: &Visualizer,
+    app: &Entity<Luma>,
+    library: &Library,
+    venue_tools: Option<AnyElement>,
+) -> Div {
     let readout = match &state.status {
         Status::Loading => "LOADING".to_string(),
         Status::Live { lit } => format!(
@@ -2649,6 +2665,7 @@ fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
     };
     div()
         .flex()
+        .flex_wrap()
         .flex_shrink_0()
         .items_center()
         .gap(px(12.))
@@ -2663,7 +2680,8 @@ fn toolbar(state: &Visualizer, app: &Entity<Luma>, library: &Library) -> Div {
                 .agent_node(Role::Text, state.venue_name.clone()),
         )
         .child(clock_readout(library))
-        .child(renderer_lab_trigger(state, app))
+        .children(venue_tools)
+        .child(settings::trigger(state, app))
         // Which document is on the rig — by the handle the sidebar and the
         // timeline both name it by, so "the editor is showing #2" and "the rig
         // is lit by #2" are comparable at a glance. Reads what the install
@@ -2681,12 +2699,13 @@ fn renderer_lab_trigger(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElem
         "Open Renderer Lab"
     };
     let app = app.clone();
-    luma_ui::luma_button(label, Enabled::Yes)
+    luma_ui::float::btn(label, "renderer-lab")
         .id("renderer-lab")
         .on_click(move |_, _, cx| {
             app.update(cx, |this, cx| {
                 if let Some(state) = this.visualizer_mut() {
                     state.render_lab.open = !state.render_lab.open;
+                    state.settings_open = false;
                 }
                 cx.notify();
             });
@@ -4069,6 +4088,9 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window, _cx: &mut gp
             if let (Some(selected), Some(Body::Patch(page))) =
                 (selected, this.workspace.active_body_mut())
             {
+                if page.selected != selected && !page.group_busy {
+                    page.group_editor = None;
+                }
                 page.selected = selected;
             }
             match place {

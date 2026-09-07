@@ -1118,11 +1118,10 @@ fn the_element_list_selects_and_confirms_removal() {
         &mut harness,
         r#"
         nav.stage("Test Venue");
-        nav.step("fixtures", "toggle", "Fixtures");
         const fixtures = () => app.snapshot().findAll({role:"row"}).filter(n => n.label.startsWith("Mover "));
         until("fixture inventory", () => fixtures().length > 0);
         const fixtureCount = fixtures().length;
-        nav.step("stage", "toggle", "Stage");
+        nav.step("objects", "toggle", "Stage objects");
         const elements = () => app.snapshot().findAll({role:"row"}).filter(n => n.label.startsWith("Element "));
         until("stage elements", () => elements().length > 0);
         const before = elements().length;
@@ -1132,16 +1131,20 @@ fn the_element_list_selects_and_confirms_removal() {
         until("confirmation", s => s.find({role:"card",label:"Confirm dialog"}));
         app.key("escape");
         until("cancelled", s => !s.find({role:"card",label:"Confirm dialog"}));
+        nav.step("objects after cancel", "toggle", "Stage objects");
         const cancelled = elements().length;
+        app.key("escape");
         nav.step("remove again", "button", "Remove element");
         nav.step("confirm", "button", "Remove");
+        until("closed confirmation", s => !s.find({role:"card",label:"Confirm dialog"}));
+        nav.step("remaining objects", "toggle", "Stage objects");
         until("removed", () => elements().length < before);
         const after = elements().length;
-        nav.step("remaining fixtures", "toggle", "Fixtures");
+        app.key("escape");
         until("fixture inventory after removal", () => fixtures().length === fixtureCount);
         const remainingFixtures = fixtures().length;
-        nav.step("stage again", "toggle", "Stage");
         app.action("luma::UndoStage");
+        nav.step("restored objects", "toggle", "Stage objects");
         until("restored elements", () => elements().length === before);
         ({before, cancelled, after, restored:elements().length, fixtureCount, remainingFixtures})
     "#,

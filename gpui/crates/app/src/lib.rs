@@ -464,7 +464,7 @@ impl Render for Luma {
                 cx.listener(|this, _: &keymap::DuplicateSubtree, _, cx| this.stage_duplicate(cx)),
             )
             .on_action(cx.listener(|this, _: &keymap::CancelBuild, window, cx| {
-                this.stage_escape(cx);
+                this.dismiss_overlay(cx);
                 // Escape can land while the chooser's field holds focus — the
                 // binding outruns the field's own key handler — and the field
                 // unmounts with the dialog. Focus left on an unmounted element

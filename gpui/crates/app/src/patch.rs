@@ -42,14 +42,6 @@ mod outputs;
 mod table;
 mod venue;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Section {
-    Fixtures,
-    Stage,
-    Groups,
-    Details,
-}
-
 pub(crate) use add::render as add_fixtures_dialog;
 pub(crate) use add::tick as tick_add_fixtures;
 pub(crate) use add::AddFixtures;
@@ -135,7 +127,7 @@ pub(crate) struct Patch {
     pub(crate) venue_id: String,
     pub(crate) venue_name: String,
     pub(crate) stage: crate::stage::StagePage,
-    pub(crate) section: Section,
+    pub(crate) details_open: bool,
     pub(crate) group_editor: Option<groups::Editor>,
     pub(crate) group_error: Option<String>,
     pub(crate) group_busy: bool,
@@ -179,8 +171,8 @@ impl Patch {
     pub(crate) fn loading(venue_id: String, venue_name: String, cx: &mut Context<Luma>) -> Self {
         Self {
             venue_id,
-            stage: crate::stage::StagePage::new(venue_name.clone(), cx),
-            section: Section::Stage,
+            stage: crate::stage::StagePage::new(cx),
+            details_open: false,
             group_editor: None,
             group_error: None,
             group_busy: false,
@@ -971,6 +963,9 @@ impl Luma {
     ) {
         if let Some(state) = self.patch_mut(&venue_id) {
             state.clear_edit();
+            if !state.group_busy {
+                state.group_editor = None;
+            }
             if extend {
                 if !state.selected.remove(&fixture) {
                     state.selected.insert(fixture);
@@ -1238,11 +1233,10 @@ pub(crate) const NUMBER_FIELD_WIDTH: f32 = 56.0;
 pub(crate) fn patch(
     state: &Patch,
     app: &Entity<Luma>,
-    view: Option<&crate::stage::StageView>,
     selection: Option<AnyElement>,
     window: &Window,
 ) -> AnyElement {
-    venue::render(state, app, view, selection, window)
+    venue::render(state, app, selection, window)
 }
 
 pub(super) fn details(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
