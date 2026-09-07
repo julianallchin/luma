@@ -26,7 +26,7 @@
 //! ```
 //!
 //! The open thread is independent of the editor tabs. The host supplies a
-//! separate context for new conversations; only an explicit new/open action
+//! context for each turn; only an explicit new/open action
 //! replaces an attached thread.
 //!
 //! # Streaming
@@ -179,9 +179,15 @@ impl Agent {
     /// task so its steering handle can be handed back with it — a turn a host
     /// could not redirect would force the composer to lock while one ran.
     #[must_use]
-    pub fn turn(&self, thread_id: &str, prompt: String) -> Turn {
+    pub fn turn(&self, thread_id: &str, prompt: String, context: Option<ThreadScope>) -> Turn {
         let (events, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut stream = self.service.turn(thread_id, UserPrompt::from(prompt));
+        let mut stream = self.service.turn(
+            thread_id,
+            UserPrompt {
+                text: prompt,
+                context: Some(luma_lib::agent::TurnContext { scope: context }),
+            },
+        );
         let steer = stream.steering();
         self.runtime.spawn(async move {
             use futures::StreamExt as _;
@@ -277,10 +283,10 @@ enum TurnState {
 
 pub struct AgentChat {
     agent: Agent,
-    /// The open thread's subject, used for its header.
+    /// Initial resource metadata, retained when creating a chat with no editor open.
     scope: Option<ThreadScope>,
-    /// Current editor context, used only for the next explicit new chat.
-    new_thread_scope: Option<ThreadScope>,
+    /// Editor context captured by the next turn; never changes conversation identity.
+    editor_context: Option<ThreadScope>,
     /// Which conversation, and whether its read has landed. Until it has, the
     /// composer is live but a send waits — the alternative is a send that
     /// silently starts a conversation in a thread nobody asked for.
@@ -377,7 +383,7 @@ impl AgentChat {
         let chat = Self {
             agent,
             scope: scope.clone(),
-            new_thread_scope: scope.clone(),
+            editor_context: scope.clone(),
             conversation: Conversation::Idle,
             reads: 0,
             transcript: Transcript::default(),
@@ -758,12 +764,12 @@ impl AgentChat {
         .detach();
     }
 
-    /// Start a fresh conversation about the screen's own subject.
+    /// Start a fresh conversation with the current editor as its initial metadata.
     ///
     /// Always creates: "new chat" is a statement, and resolving would hand back
     /// the existing conversation whenever there was one.
     pub fn new_thread(&mut self, cx: &mut Context<Self>) {
-        let Some(scope) = self.new_thread_scope.clone() else {
+        let Some(scope) = self.editor_context.clone().or_else(|| self.scope.clone()) else {
             return;
         };
         self.cancel(cx);
@@ -832,13 +838,13 @@ impl AgentChat {
         matches!(self.conversation, Conversation::Open(_))
     }
 
-    /// Update the next new chat's context without replacing the open thread,
+    /// Update the next turn's context without replacing the open thread,
     /// its draft, or a running turn. An unattached panel may resolve once.
-    pub fn set_new_thread_scope(&mut self, scope: Option<ThreadScope>, cx: &mut Context<Self>) {
-        if self.new_thread_scope == scope {
+    pub fn set_editor_context(&mut self, scope: Option<ThreadScope>, cx: &mut Context<Self>) {
+        if self.editor_context == scope {
             return;
         }
-        self.new_thread_scope = scope.clone();
+        self.editor_context = scope.clone();
         if matches!(self.conversation, Conversation::Idle) {
             if let Some(scope) = scope {
                 self.scope = Some(scope.clone());
@@ -957,7 +963,9 @@ impl AgentChat {
         // arriving off-screen is the one case where following is not a guess.
         self.jump_to_bottom(cx);
 
-        let turn = self.agent.turn(&thread, prompt);
+        let turn = self
+            .agent
+            .turn(&thread, prompt, self.editor_context.clone());
         let steer = turn.steering();
         let mut turn = turn;
         let task = cx.spawn(async move |this, cx| {
@@ -1118,8 +1126,8 @@ impl AgentChat {
         //
         // A read-only child starts with an id and learns its scope from the
         // thread read, so it must show the loading plate while that arrives.
-        let kind = self.scope.as_ref().map(|scope| scope.agent_kind);
-        if kind.is_none() && !self.read_only {
+        let attached = self.scope.is_some();
+        if !attached && !self.read_only {
             let unattached = cx.entity();
             return self
                 .plate(&unattached, &theme)
@@ -1249,9 +1257,9 @@ impl AgentChat {
                     // in flight has an empty transcript too, and the opening
                     // painted over that is a conversation with history being
                     // told it has none — see [`Conversation`].
-                    .when_some(
-                        kind.filter(|_| self.transcript.messages.is_empty() && self.is_open()),
-                        |el, kind| {
+                    .when(
+                        attached && self.transcript.messages.is_empty() && self.is_open(),
+                        |el| {
                             // A turn sent from the empty state has no row to
                             // trail yet — the user's own row arrives with the
                             // turn's first event, one hop later. Without this
@@ -1265,7 +1273,7 @@ impl AgentChat {
                                     .left_0()
                                     .child(working::trailer(&state, &theme, view, cx))
                             });
-                            el.child(opening(&Opening::of(kind), Some(&this), &theme))
+                            el.child(opening(&Opening::CHAT, Some(&this), &theme))
                                 .children(opening_trailer)
                         },
                     )
@@ -1283,7 +1291,7 @@ impl AgentChat {
             // it lifts it clear of the field instead of over it, and lands it
             // on the column's edge rather than the pane's
             // (see [`usage::open_card`]).
-            .when_some(kind.filter(|_| !self.read_only), |el, kind| {
+            .when(attached && !self.read_only, |el| {
                 el.child(
                     div()
                         .flex()
@@ -1310,7 +1318,6 @@ impl AgentChat {
                                 .child(status_strip(
                                     streaming,
                                     error.as_deref(),
-                                    kind,
                                     self.transcript.last_request().as_ref(),
                                     &this,
                                     &theme,
@@ -1402,18 +1409,6 @@ impl AgentChat {
     }
 
     fn header(&self, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
-        let title: SharedString = match self.scope.as_ref().map(|scope| scope.agent_kind) {
-            Some(luma_lib::agent::AgentKind::TrackCopilot) => "Track agent".into(),
-            Some(luma_lib::agent::AgentKind::PatternGraph) => "Pattern agent".into(),
-            Some(luma_lib::agent::AgentKind::VenueRig) => "Venue agent".into(),
-            None => "Agent".into(),
-        };
-        let badge: Option<SharedString> = match self.scope.as_ref().map(|scope| scope.agent_kind) {
-            Some(luma_lib::agent::AgentKind::TrackCopilot) => Some("Track".into()),
-            Some(luma_lib::agent::AgentKind::PatternGraph) => Some("Pattern".into()),
-            Some(luma_lib::agent::AgentKind::VenueRig) => Some("Venue".into()),
-            None => None,
-        };
         div()
             .h(px(theme::HEADER_HEIGHT))
             .flex_none()
@@ -1423,19 +1418,7 @@ impl AgentChat {
             .px(px(theme::SPACE_LG))
             .text_size(px(12.0))
             .text_color(theme.text_muted)
-            .child(div().child(title.clone()).agent_node(NodeRole::Text, title))
-            .children(badge.map(|badge| {
-                div()
-                    .h(px(18.0))
-                    .px(px(theme::SPACE_SM))
-                    .flex()
-                    .items_center()
-                    .rounded(px(luma_ui::radius::CONTROL))
-                    .bg(theme::wash(0.06))
-                    .text_size(px(10.0))
-                    .text_color(theme.text_faint)
-                    .child(badge)
-            }))
+            .child(div().child("Luma").agent_node(NodeRole::Text, "Luma"))
             .child(div().flex_1())
             // The two ways out of the conversation you are in: back to an
             // older one, or on to a new one. Only shown on an attached panel —
@@ -1463,7 +1446,7 @@ impl AgentChat {
                         IconName::Plus,
                         "New chat",
                         theme,
-                        self.new_thread_scope.is_none(),
+                        !self.is_open(),
                         move |cx| {
                             fresh.update(cx, |this, cx| this.new_thread(cx));
                         },
@@ -1600,41 +1583,16 @@ impl Opening {
         prompts: &[],
     };
 
-    fn of(kind: luma_lib::agent::AgentKind) -> Self {
-        match kind {
-            luma_lib::agent::AgentKind::PatternGraph => Self {
-                headline: OPENING_HEADLINE,
-                blurb: "It reads the graph, runs Python against it, and says what it finds.",
-                hint: None,
-                prompts: &[
-                    "Explain what this graph does",
-                    "Why is the output flat?",
-                    "Suggest a change to the ramp",
-                ],
-            },
-            luma_lib::agent::AgentKind::TrackCopilot => Self {
-                headline: OPENING_HEADLINE,
-                blurb:
-                    "It reads the track's analysis, runs Python against it, and says what it finds.",
-                hint: None,
-                prompts: &[
-                    "Summarise this track",
-                    "Where are the drops?",
-                    "Check the beat grid",
-                ],
-            },
-            luma_lib::agent::AgentKind::VenueRig => Self {
-                headline: OPENING_HEADLINE,
-                blurb: "It reads the room, builds with it, and says what is hung where.",
-                hint: None,
-                prompts: &[
-                    "Describe this room",
-                    "What is still unplaced?",
-                    "Hang four washes on the downstage truss",
-                ],
-            },
-        }
-    }
+    const CHAT: Self = Self {
+        headline: OPENING_HEADLINE,
+        blurb: "Build the room, shape the show, or explore the music.",
+        hint: None,
+        prompts: &[
+            "What is open right now?",
+            "Describe this room",
+            "Help me shape the lighting",
+        ],
+    };
 }
 
 /// What a conversation that has not started asks the reader. Public for the
@@ -1765,7 +1723,6 @@ fn suggestion(
 fn status_strip(
     streaming: bool,
     error: Option<&str>,
-    kind: luma_lib::agent::AgentKind,
     request: Option<&luma_lib::agent::RequestUsage>,
     chat: &Entity<AgentChat>,
     theme: &Theme,
@@ -1798,14 +1755,9 @@ fn status_strip(
     //
     // What the strip does drop while a turn runs is the send hint — a key
     // legend for a field that is busy is an instruction that will not work.
-    let subject = match kind {
-        luma_lib::agent::AgentKind::TrackCopilot => "Track thread",
-        luma_lib::agent::AgentKind::PatternGraph => "Pattern thread",
-        luma_lib::agent::AgentKind::VenueRig => "Venue thread",
-    };
     strip
         .text_color(theme.text_faint)
-        .child(SharedString::from(subject))
+        .child(SharedString::from("Python"))
         .child(div().flex_1())
         .when(!streaming, |el| el.child(SharedString::from("⏎ to send")))
         // Trailing, past the send hint: the gauge answers a question nobody is

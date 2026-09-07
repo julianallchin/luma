@@ -50,7 +50,7 @@ impl AuthoredDocuments {
         principal: Option<&str>,
         thread_id: &str,
     ) -> Result<ActiveThreadLockRequest> {
-        let thread = agent_threads::get_thread_row(pool, thread_id, principal)
+        let thread = crate::agent::context::execution_thread(pool, thread_id, principal)
             .await
             .map_err(AuthoredDocumentsError::Scope)?;
         let scope = ResolvedScope::from_thread(&thread, principal)?;
@@ -67,7 +67,7 @@ impl AuthoredDocuments {
         request: ActiveThreadLockRequest,
     ) -> Result<(AgentThread, ResolvedScope, AuthoredDocumentGuard)> {
         let guard = self.document_guard(&request.document_id).await;
-        let thread = agent_threads::get_thread_row(pool, &request.thread_id, principal)
+        let thread = crate::agent::context::execution_thread(pool, &request.thread_id, principal)
             .await
             .map_err(AuthoredDocumentsError::Scope)?;
         let scope = ResolvedScope::from_thread(&thread, principal)?;
@@ -374,7 +374,8 @@ fn provisional_scope(
     principal: Option<&str>,
 ) -> Result<Option<ResolvedScope>> {
     match input.route().map_err(AuthoredDocumentsError::Invalid)? {
-        crate::models::agent_threads::ThreadRoute::Venue { .. } => return Ok(None),
+        crate::models::agent_threads::ThreadRoute::Venue { .. }
+        | crate::models::agent_threads::ThreadRoute::Unbound => return Ok(None),
         crate::models::agent_threads::ThreadRoute::Authored(
             crate::models::agent_threads::AuthoredThreadRoute::Track {
                 track_id,

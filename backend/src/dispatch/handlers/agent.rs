@@ -19,7 +19,7 @@ pub async fn agent_turn_start(
 ) -> Result<String, CommandError> {
     Ok(services
         .agent_turns()
-        .start(&thread_id, UserPrompt { text: prompt })?)
+        .start(&thread_id, UserPrompt::from(prompt))?)
 }
 
 /// Cancel the thread's running turn, including any Python cell in flight.

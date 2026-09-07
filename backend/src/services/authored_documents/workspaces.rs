@@ -1314,7 +1314,7 @@ impl AuthoredDocuments {
             AuthoredDocumentsError::Invalid("only a subagent thread has work to merge".into())
         })?;
         let scope = ResolvedScope::from_thread(&child, principal)?;
-        let parent = agent_threads::get_thread_row(pool, &parent_thread_id, principal)
+        let parent = crate::agent::context::execution_thread(pool, &parent_thread_id, principal)
             .await
             .map_err(AuthoredDocumentsError::Scope)?;
         let mut connection = pool

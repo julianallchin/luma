@@ -237,6 +237,7 @@ pub enum AgentThreadAppendOutcome {
 /// caller's guess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThreadRoute<'a> {
+    Unbound,
     Authored(AuthoredThreadRoute<'a>),
     /// The room itself: fixtures, stage pieces and their poses. No track, no
     /// score, no authored document — so no assistant row of such a thread
@@ -337,6 +338,7 @@ fn route<'a>(
         {
             Ok(ThreadRoute::Venue { venue_id })
         }
+        ("unbound", None, None, None, None, None) => Ok(ThreadRoute::Unbound),
         ("track_copilot", ..) => Err(
             "track agent thread requires non-empty track, venue, and score IDs and no graph implementation"
                 .into(),

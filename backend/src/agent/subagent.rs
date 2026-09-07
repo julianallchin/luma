@@ -258,10 +258,9 @@ pub(super) async fn delegate(
         .await
         .map_err(|error| error.to_string())?;
 
-    let parent = db::get_thread(&pool, ctx.thread_id, principal.as_deref())
+    let parent = super::context::execution_thread(&pool, ctx.thread_id, principal.as_deref())
         .await
-        .map_err(|error| format!("this thread is not available: {error}"))?
-        .thread;
+        .map_err(|error| format!("this thread is not available: {error}"))?;
     if depth_of(&pool, principal.as_deref(), &parent).await? + 1 > MAX_DEPTH {
         return Err(format!(
             "subagents may be nested {MAX_DEPTH} deep; do this work yourself"

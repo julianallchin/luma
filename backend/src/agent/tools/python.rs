@@ -1,8 +1,8 @@
 //! The `python` tool: one persistent kernel per agent thread.
 //!
 //! The model supplies a purpose and the code. Workspace, thread, binding
-//! revision, scope ids and the graph snapshot are resolved from the thread —
-//! never from the model (design §7.1).
+//! revision, scope ids and the graph snapshot come from the host-selected turn
+//! context, never from model tool arguments.
 
 use std::borrow::Cow;
 use std::sync::Arc;

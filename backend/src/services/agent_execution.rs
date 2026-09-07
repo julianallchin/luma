@@ -122,6 +122,22 @@ async fn resolve_scope(
     current_user_id: Option<&str>,
 ) -> Result<ResolvedScope, String> {
     match thread.route()? {
+        ThreadRoute::Unbound => Ok(ResolvedScope {
+            bindings: BindingScope {
+                agent_kind: "venue_rig".into(),
+                track_id: None,
+                venue_id: None,
+                score_id: None,
+                track_editable: false,
+                track_document: None,
+                pattern_id: None,
+                implementation_id: None,
+                window: None,
+                graph_definition: None,
+            },
+            track: None,
+            track_edit: None,
+        }),
         ThreadRoute::Venue { venue_id } => {
             assert_pinned("venue", requested.venue_id.as_deref(), Some(venue_id))?;
             assert_pinned("track", requested.track_id.as_deref(), None)?;
@@ -329,7 +345,9 @@ pub async fn run_python_cell_inner(
         }
         None => None,
     };
-    let thread = thread.thread;
+    let thread =
+        crate::agent::context::execution_thread(pool, &thread_id, current_user_id.as_deref())
+            .await?;
 
     let mut resolved =
         resolve_scope(pool, &thread, requested_scope, current_user_id.as_deref()).await?;

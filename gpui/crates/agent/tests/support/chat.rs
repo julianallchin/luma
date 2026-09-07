@@ -571,7 +571,7 @@ pub fn open_chat(pattern: &str) -> String {
         nav.track("Aurora");
         nav.pattern({pattern:?});
         nav.step("new conversation", "button", "New chat");
-        until("the pattern conversation", (s) => s.find({{role: "text", label: "Pattern agent"}}));
+        until("the conversation", (s) => s.find({{role: "button", label: "New chat"}})?.enabled);
         until("the chat centre", (s) => {{
             // Not merely present: a control inside a clipped region exists
             // without being pressable. Zero width is what "clipped away"

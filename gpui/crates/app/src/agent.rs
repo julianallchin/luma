@@ -1,19 +1,17 @@
 //! The shell keeps one conversation open. Editor context seeds the first
-//! conversation and the next explicit new chat; navigation never replaces it.
+//! conversation; navigation updates the working context without replacing it.
 
 use gpui::{AppContext as _, Context, Window};
 use luma_chat::AgentChat;
 use luma_lib::agent::{AgentKind, SubjectKind, ThreadScope};
 
 use crate::shell::Body;
-use crate::tabs::Target;
 use crate::Luma;
 
-/// Context for a new conversation, chosen from the visible editor.
+/// Working context for the next turn, independent of the conversation.
 pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
-    match app.workspace.active() {
-        Some(Target::Patch { venue }) => return Some(ThreadScope::venue(venue.clone())),
-        _ => {}
+    if let Some(scope) = current_track(app) {
+        return Some(scope);
     }
     if let Some(Body::Graph(editor)) = app.workspace.active_body() {
         if let Some((track, venue, score)) = editor.score_subject() {
@@ -25,23 +23,19 @@ pub(crate) fn scope_for(app: &Luma) -> Option<ThreadScope> {
             subject_kind: SubjectKind::Pattern,
             subject_id: pattern,
             implementation_id: Some(implementation),
-            venue_id: None,
+            venue_id: app
+                .sidebar
+                .as_ref()
+                .map(|browser| browser.venue_id().to_owned()),
             score_id: None,
         });
     }
-    current_track(app).or_else(|| {
-        app.sidebar
-            .as_ref()
-            .map(|browser| ThreadScope::venue(browser.venue_id()))
-    })
+    app.sidebar
+        .as_ref()
+        .map(|browser| ThreadScope::venue(browser.venue_id()))
 }
 
-/// The track the workspace is about: the focused editor if one is focused,
-/// otherwise the last track editor opened.
-///
-/// The fallback is what makes the rule hold while a graph tab is in front —
-/// without it, switching away from a track would read as "no track", and the
-/// thread would drift to whatever the new tab named.
+/// An open track remains available while another editor tab is in front.
 fn track_scope(body: &Body) -> Option<ThreadScope> {
     let Body::TrackEditor(state) = body else {
         return None;
@@ -63,11 +57,11 @@ fn current_track(app: &Luma) -> Option<ThreadScope> {
 }
 
 impl Luma {
-    /// Initialize the chat once and update only the context for its + button.
+    /// Keep one chat entity and refresh its working context for the next turn.
     pub(crate) fn sync_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = scope_for(self);
         if let Some(chat) = &self.chat {
-            chat.update(cx, |chat, cx| chat.set_new_thread_scope(wanted, cx));
+            chat.update(cx, |chat, cx| chat.set_editor_context(wanted, cx));
             return;
         }
         let agent = self.library.agent();

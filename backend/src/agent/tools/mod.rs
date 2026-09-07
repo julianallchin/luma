@@ -172,23 +172,13 @@ impl ToolRegistry {
 /// The tool set for an agent kind. Both a parent turn and a subagent turn call
 /// this; they differ only in the [`ToolContext`] they pass to the result.
 #[must_use]
-pub fn registry(kind: super::AgentKind) -> ToolRegistry {
-    match kind {
-        // The graph agent's own tools (graph edits, `ask_venue`, `preview`)
-        // are not ported yet; it shares the notebook until they are.
-        super::AgentKind::TrackCopilot | super::AgentKind::PatternGraph => ToolRegistry::new(vec![
-            Arc::new(python::PythonTool),
-            Arc::new(skill::SkillTool),
-            Arc::new(subagent::SubagentTool),
-        ]),
-        // No subagent: a child thread is given a detached head of its parent's
-        // authored document, and a venue thread has no document to detach.
-        // Offering the tool would be a refusal the model has to discover.
-        super::AgentKind::VenueRig => ToolRegistry::new(vec![
-            Arc::new(python::PythonTool),
-            Arc::new(skill::SkillTool),
-        ]),
+pub fn registry_for_context(authored: bool) -> ToolRegistry {
+    let mut tools: Vec<Arc<dyn Tool>> =
+        vec![Arc::new(python::PythonTool), Arc::new(skill::SkillTool)];
+    if authored {
+        tools.push(Arc::new(subagent::SubagentTool));
     }
+    ToolRegistry::new(tools)
 }
 
 /// Head+tail clamp for model-facing tool text.

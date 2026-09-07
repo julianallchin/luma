@@ -277,7 +277,7 @@ impl ResolvedScope {
     fn of_thread(thread: &AgentThread, principal: Option<&str>) -> Result<Option<Self>> {
         ensure_thread_owned(thread, principal)?;
         let route = match thread.route().map_err(AuthoredDocumentsError::Scope)? {
-            ThreadRoute::Venue { .. } => return Ok(None),
+            ThreadRoute::Venue { .. } | ThreadRoute::Unbound => return Ok(None),
             ThreadRoute::Authored(route) => route,
         };
         let mut scope = match route {

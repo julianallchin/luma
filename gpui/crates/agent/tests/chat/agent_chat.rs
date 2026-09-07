@@ -64,7 +64,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
         &format!("{}\napp.snapshot().nodes", chat::open_chat("chat-turn")),
     );
     assert!(
-        labels(&idle, "text").iter().any(|l| l == "Pattern agent"),
+        labels(&idle, "text").iter().any(|l| l == "Luma"),
         "the panel did not open: {:?}",
         labels(&idle, "text")
     );
@@ -188,7 +188,7 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
             r#"
             {until}
             until("the unattached centre", (s) => {{
-                const header = s.findAll({{ role: "text" }}).some((n) => n.label === "Agent");
+                const header = s.findAll({{ role: "text" }}).some((n) => n.label === "Luma");
                 return header && s.find({{ role: "text", label: {blurb:?} }});
             }});
             app.frames(8, {{ waitMs: 40 }});
@@ -200,7 +200,7 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
     );
     let text = labels(&welcome, "text");
     assert!(
-        text.iter().any(|l| l == "Agent"),
+        text.iter().any(|l| l == "Luma"),
         "the panel did not open on the venue grid: {text:?}"
     );
     assert!(
@@ -234,15 +234,15 @@ fn the_chat_opens_unattached_on_a_screen_with_no_subject() {
         "#,
     );
     assert!(
-        labels(&patterns, "text").iter().any(|l| l == "Agent"),
+        labels(&patterns, "text").iter().any(|l| l == "Luma"),
         "the panel was dropped moving between two scopeless screens: {:?}",
         labels(&patterns, "text")
     );
 }
 
-/// A new conversation uses the editor context when the reader presses +.
+/// All conversations present one identity, regardless of the open editor.
 #[test]
-fn a_new_chat_uses_the_visible_editor_context() {
+fn a_new_chat_has_one_identity_across_editors() {
     let mut session = chat::session(Mode::Headless, WINDOW);
     let attached = run(
         &mut session,
@@ -250,15 +250,15 @@ fn a_new_chat_uses_the_visible_editor_context() {
             r#"
             {until}
             until("the unattached centre", (s) =>
-                s.findAll({{ role: "text" }}).some((n) => n.label === "Agent"));
+                s.findAll({{ role: "text" }}).some((n) => n.label === "Luma"));
             // Open the graph before explicitly starting its conversation.
             {venue}
             nav.track("Aurora");
             nav.pattern("chat-repoint");
             nav.step("new conversation", "button", "New chat");
-            until("the pattern agent", (s) => {{
+            until("the conversation", (s) => {{
                 const send = s.find({{ role: "button", label: "Send" }});
-                return send && send.bounds.width > 0 && s.find({{ role: "text", label: "Pattern agent" }});
+                return send && send.bounds.width > 0 && s.find({{ role: "button", label: "New chat" }})?.enabled;
             }}).nodes
         "#,
             until = chat::UNTIL,
@@ -267,12 +267,12 @@ fn a_new_chat_uses_the_visible_editor_context() {
     );
     let text = labels(&attached, "text");
     assert!(
-        text.iter().any(|l| l == "Pattern agent"),
-        "the new conversation did not use the graph's scope: {text:?}"
+        text.iter().any(|l| l == "Luma"),
+        "the unified chat header is missing: {text:?}"
     );
     assert!(
-        !text.iter().any(|l| l == "Agent"),
-        "the unattached header is still up beside the attached one: {text:?}"
+        !text.iter().any(|label| label.ends_with(" agent")),
+        "agent types must not appear: {text:?}"
     );
 }
 
