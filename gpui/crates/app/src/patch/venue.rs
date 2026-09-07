@@ -41,12 +41,7 @@ impl Luma {
     }
 }
 
-pub(super) fn render(
-    state: &Patch,
-    app: &Entity<Luma>,
-    selection: Option<AnyElement>,
-    window: &Window,
-) -> AnyElement {
+pub(super) fn render(state: &Patch, app: &Entity<Luma>, window: &Window) -> AnyElement {
     let add = app.clone();
     let venue = state.venue_id.clone();
     let details = app.clone();
@@ -76,7 +71,7 @@ pub(super) fn render(
             .agent_node(Role::Card, "Patch details sheet")
             .into_any_element();
     }
-    let mut lights = div()
+    let lights = div()
         .flex_1()
         .min_w_0()
         .h_full()
@@ -117,26 +112,7 @@ pub(super) fn render(
                         .agent_node(Role::Button, "Patch details"),
                 ),
         );
-    lights = lights.child(super::table::compact(state, app, window));
-    if state.group_editor.is_none() {
-        let fixture = (state.selected.len() == 1)
-            .then(|| state.selected.iter().next())
-            .flatten()
-            .and_then(|id| state.row(id));
-        if let Some(fixture) = fixture {
-            lights = lights.child(super::table::inspector(state, fixture, selection, app));
-        } else if let Some(selection) = selection {
-            lights = lights.child(
-                div()
-                    .id("venue-element-inspector")
-                    .flex_none()
-                    .max_h(px(190.0))
-                    .overflow_y_scroll()
-                    .p(px(12.0))
-                    .child(selection),
-            );
-        }
-    }
+    let lights = lights.child(super::table::compact(state, app, window));
     body.child(
         div()
             .size_full()

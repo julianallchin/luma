@@ -665,18 +665,8 @@ fn venue_groups_are_editable_in_the_narrow_panel() {
         nav.step("verify", "button", "Edit group back wash");
         const after = app.snapshot().findAll({role:"checkbox"}).filter(n=>n.focused).map(n=>n.label);
         nav.step("cancel", "button", "Cancel group edit");
-        nav.step("new parent", "button", "Create group");
-        app.key("r i g");
-        nav.step("save parent", "button", "Save group");
-        nav.step("move group", "button", "Edit group back wash");
-        nav.step("parent picker", "select", "Top level");
-        nav.step("parent", "button", "rig");
-        nav.step("save move", "button", "Save group");
-        nav.step("verify parent", "button", "Edit group rig / back wash");
-        const parentSaved = !!until("saved parent", s => s.find({role:"select", label:"rig"}));
-        nav.step("cancel", "button", "Cancel group edit");
         until("builder", s=>s.find({role:"button",label:"Add element"}));
-        ({included, after, parentSaved, ready:!!app.snapshot().find({role:"button",label:"Add fixtures"})})
+        ({included, after, ready:!!app.snapshot().find({role:"button",label:"Add fixtures"})})
     "#,
     );
     assert_eq!(out["included"], serde_json::json!(["Include Mover 0"]));
@@ -685,11 +675,10 @@ fn venue_groups_are_editable_in_the_narrow_panel() {
         serde_json::json!(["Include Mover 0", "Include Mover 1"])
     );
     assert_eq!(out["ready"], true);
-    assert_eq!(out["parentSaved"], true);
 }
 
 #[test]
-fn fixture_controls_and_membership_live_beside_the_inventory() {
+fn fixture_table_edits_and_scene_controls_share_selection() {
     let mut harness = harness("venue-inline-fixture", false);
     let out = run(
         &mut harness,
@@ -700,16 +689,16 @@ fn fixture_controls_and_membership_live_beside_the_inventory() {
         nav.step("pick fixture", "row", "Mover 0");
         nav.step("rename fixture", "text", "Mover 0 label = Mover 0");
         app.key("cmd-a w a s h space 1 enter");
-        until("renamed", s => s.find({role:"card",label:"Fixture wash 1"}));
+        until("renamed", s => s.find({role:"row",label:"wash 1"}));
         nav.step("edit universe", "text", "wash 1 universe = 1");
         app.key("cmd-a 2 enter");
         until("universe saved", s => s.find({role:"text",label:"wash 1 universe = 2"}));
         nav.step("edit address", "text", "wash 1 address = 1");
         app.key("cmd-a 6 5 enter");
         until("address saved", s => s.find({role:"text",label:"wash 1 address = 65"}));
-        nav.step("join group", "checkbox", "Member of right movers");
-        until("membership saved", s => s.findAll({role:"checkbox"})
-            .some(n => n.label === "Member of right movers" && n.focused));
+        nav.step("edit group", "button", "Edit group right movers");
+        nav.step("include fixture", "checkbox", "Include wash 1");
+        nav.step("save membership", "button", "Save group");
         nav.step("patch details", "button", "Patch details");
         nav.expand();
         nav.stageOff();
@@ -717,7 +706,9 @@ fn fixture_controls_and_membership_live_beside_the_inventory() {
         nav.step("close patch", "button", "Close patch details");
         nav.step("select another fixture", "row", "Mover 1");
         nav.step("return to fixture", "row", "wash 1");
-        const member = app.snapshot().find({role:"checkbox",label:"Member of right movers"}).focused;
+        nav.step("verify group", "button", "Edit group right movers");
+        const member = app.snapshot().find({role:"checkbox",label:"Include wash 1"}).focused;
+        nav.step("cancel group", "button", "Cancel group edit");
         ({oldTabs:oldTabs.length,member,address:reading("wash 1 address = ")})
     "#,
     );
@@ -762,7 +753,7 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
         nav.closeTab();
         app.action("luma::NewTab");
         nav.step("venue again", "button", "Venue");
-        until("loaded room", s => s.find({role:"text",label:"4 FIXTURES · UNLIT"}));
+        until("loaded room", s => s.find({role:"toggle",label:"Frame stats"}));
         nav.step("reopened settings", "toggle", "Render settings");
         until("saved sun", s => sun() !== undefined);
         ({before,changed,score,reopened:sun().label})
@@ -771,4 +762,24 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
     assert_ne!(out["changed"], out["before"], "{out:#}");
     assert_eq!(out["score"], out["changed"], "{out:#}");
     assert_eq!(out["reopened"], out["changed"], "{out:#}");
+}
+
+#[test]
+fn missing_group_dialog_repairs_saved_score_selectors() {
+    let mut harness = Fixture::new("venue-missing-group",20,Vec::new()).with_rig()
+        .with_graph_score(serde_json::json!({"version":2,"definitions":{},"clips":{"a":{"graph":"chase","start":0.,"duration":4.,"seed":0,"selection":{"expression":"lost_wash"}}}}))
+        .window(1500.,950.).open(Mode::Headless);
+    let out = run(
+        &mut harness,
+        r#"
+        nav.patch("Test Venue");
+        nav.step("repair", "button", "Resolve missing groups");
+        until("dialog", s => s.find({role:"card",label:"Group repair dialog"}));
+        nav.step("choose replacement", "toggle", "Use group left_movers");
+        nav.step("apply repair", "button", "Fix affected scores");
+        until("resolved", s => !s.find({role:"button",label:"Resolve missing groups"}) && !s.find({role:"button",label:"Fix affected scores"}));
+        ({resolved:true})
+    "#,
+    );
+    assert_eq!(out["resolved"], true);
 }

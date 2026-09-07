@@ -629,8 +629,7 @@ fn a_fixture_on_a_face_previews_a_row_and_places_all_of_it() {
         app.key("escape");
         app.frames(4);
         const patched = () => {{
-            const line = said().find((l) => l.includes("FIXTURES"));
-            return Number(line.slice(0, line.indexOf(" ")));
+            return app.snapshot().findAll({{role:"row"}}).filter(n => n.label.startsWith("Mover ")).length;
         }};
         const before = patched();
 
@@ -680,8 +679,7 @@ fn a_row_that_will_not_fit_is_refused_and_the_offer_makes_it_fit() {
         app.key("escape");
         app.frames(4);
         const patched = () => {{
-            const line = said().find((l) => l.includes("FIXTURES"));
-            return Number(line.slice(0, line.indexOf(" ")));
+            return app.snapshot().findAll({{role:"row"}}).filter(n => n.label.startsWith("Mover ")).length;
         }};
         const before = patched();
 

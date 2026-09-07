@@ -59,7 +59,6 @@ use gpui::{
     Hitbox, HitboxBehavior, ImageId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     Pixels, Point, RenderImage, ScrollWheelEvent, Window,
 };
-use gpui_component::scroll::ScrollableElement;
 use luma_lib::models::universe::UniverseState;
 use luma_lib::stage_render;
 use luma_render::{
@@ -72,8 +71,8 @@ use luma_scene::{
     Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph,
     Selection, Transform, TransformTarget, TriMesh, View, Viewfinder,
 };
+use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
-use luma_ui::{ladder, Enabled};
 
 use crate::library::Rig;
 use crate::shell::Body;
@@ -95,14 +94,6 @@ const STATS_OVERLAY_TOP: Pixels = px(12.);
 /// drift: a rig framed to the whole pane is framed partly under this chrome.
 const TOOLBAR_OVERLAY_BOTTOM: Pixels = px(16.);
 
-/// How tall [`toolbar`] comes out: two 8px pads, one line of 12px text, and
-/// the seam under it.
-///
-/// Named because the stage page floats its chrome over this same box and must
-/// not cover the row that names the venue — see `shell::workspace_body`'s
-/// full-bleed branch. A number written down twice is a number that drifts the
-/// first time the padding is retuned.
-pub(crate) const HEADER_HEIGHT: f32 = 8. + 19.5 + 8. + 1.;
 /// Height of one control slab plus the hairline trim around it — the vertical
 /// span the toolbar occupies, and so the band the fit keeps clear.
 const OVERLAY_BAND: Pixels = px(30.);
@@ -630,7 +621,6 @@ enum EditorDrag {
 /// field list there would silently miss every dial added later.
 #[derive(Clone, PartialEq)]
 struct RenderLab {
-    open: bool,
     /// The room's environment, unchanged by score playback.
     ///
     /// Every field below it is this value's *fill*, resolved once through
@@ -680,7 +670,6 @@ impl RenderLab {
     fn new(environment: VenueEnvironment) -> Self {
         let (azimuth_deg, elevation_deg) = editor_sun_angles();
         let mut lab = Self {
-            open: false,
             house: environment,
             sun_enabled: true,
             // The editor key light, in the lab's own polar spelling. Read off
@@ -757,135 +746,30 @@ impl RenderLab {
             elevation.sin(),
         ]
     }
-
-    fn cycle_debug_view(&mut self) {
-        self.debug_view = match self.debug_view {
-            scene_desc::DebugView::Pbr => scene_desc::DebugView::BaseColor,
-            scene_desc::DebugView::BaseColor => scene_desc::DebugView::Normals,
-            scene_desc::DebugView::Normals => scene_desc::DebugView::Metallic,
-            scene_desc::DebugView::Metallic => scene_desc::DebugView::Roughness,
-            scene_desc::DebugView::Roughness => scene_desc::DebugView::Shadow,
-            scene_desc::DebugView::Shadow => scene_desc::DebugView::Depth,
-            scene_desc::DebugView::Depth => scene_desc::DebugView::VolumetricAccumulation,
-            scene_desc::DebugView::VolumetricAccumulation => scene_desc::DebugView::Pbr,
-        };
-    }
-
-    fn debug_label(&self) -> &'static str {
-        match self.debug_view {
-            scene_desc::DebugView::Pbr => "PBR",
-            scene_desc::DebugView::BaseColor => "Base color",
-            scene_desc::DebugView::Normals => "Normals",
-            scene_desc::DebugView::Metallic => "Metallic",
-            scene_desc::DebugView::Roughness => "Roughness",
-            scene_desc::DebugView::Shadow => "Shadow",
-            scene_desc::DebugView::Depth => "Depth",
-            scene_desc::DebugView::VolumetricAccumulation => "Volume accumulation",
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
 enum LabToggle {
-    Sun,
-    Shadows,
-    Environment,
-    Probe,
-    ProbeVisible,
-    FixtureSurfaceLighting,
     FixtureShadows,
-    GeometryShadows,
-    ClusterDebug,
     Haze,
     Grid,
 }
-
 #[derive(Clone, Copy)]
 enum LabValue {
-    Azimuth,
-    Elevation,
-    SunIntensity,
-    SunColor(usize),
-    SunShadowSoftness,
-    BackgroundColor(usize),
-    AmbientColor(usize),
-    Ambient,
-    ProbeIntensity,
-    ProbeRotation,
     HazeDensity,
-    HazeSteps,
-    HazeResolution,
 }
-
 impl RenderLab {
     fn toggle(&mut self, control: LabToggle) {
         let value = match control {
-            LabToggle::Sun => &mut self.sun_enabled,
-            LabToggle::Shadows => &mut self.sun_shadows,
-            LabToggle::Environment => &mut self.environment_enabled,
-            LabToggle::Probe => &mut self.probe_enabled,
-            LabToggle::ProbeVisible => &mut self.probe_visible,
-            LabToggle::FixtureSurfaceLighting => &mut self.fixture_surface_lighting,
             LabToggle::FixtureShadows => &mut self.fixture_shadows,
-            LabToggle::GeometryShadows => &mut self.geometry_shadows,
-            LabToggle::ClusterDebug => &mut self.cluster_debug,
             LabToggle::Haze => &mut self.haze_enabled,
             LabToggle::Grid => &mut self.grid_enabled,
         };
         *value = !*value;
     }
-
-    /// Put a control at `value`, bounded — the one statement of every lab
-    /// control's range.
-    ///
-    /// Absolute rather than a delta because the slider that drives it is a
-    /// position (see [`luma_ui::luma_slider`]): a control asked for a value it
-    /// cannot hold lands on its nearest legal one and stops there, where a
-    /// stream of deltas would bank the overshoot and pay it back on the way
-    /// out. The two angles wrap instead of clamping, and the one control that
-    /// counts in whole steps rounds; those are properties of the parameter, so
-    /// they live with the bound rather than beside the caller.
     fn set(&mut self, control: LabValue, value: f32) {
         match control {
-            LabValue::Azimuth => {
-                self.sun_azimuth_deg = (value + 180.0).rem_euclid(360.0) - 180.0;
-            }
-            LabValue::Elevation => {
-                self.sun_elevation_deg = value.clamp(-85.0, 85.0);
-            }
-            LabValue::SunIntensity => {
-                self.sun_intensity = value.clamp(0.0, 10.0);
-            }
-            LabValue::SunColor(channel) => {
-                self.sun_color[channel] = value.clamp(0.0, 1.0);
-            }
-            LabValue::SunShadowSoftness => {
-                self.sun_shadow_softness = value.clamp(0.0, 3.0);
-            }
-            LabValue::BackgroundColor(channel) => {
-                self.background_color[channel] = value.clamp(0.0, 1.0);
-            }
-            LabValue::AmbientColor(channel) => {
-                self.ambient_color[channel] = value.clamp(0.0, 1.0);
-            }
-            LabValue::Ambient => {
-                self.ambient_intensity = value.clamp(0.0, 2.0);
-            }
-            LabValue::ProbeIntensity => {
-                self.probe_intensity = value.clamp(0.0, 4.0);
-            }
-            LabValue::ProbeRotation => {
-                self.probe_rotation_deg = (value + 180.0).rem_euclid(360.0) - 180.0;
-            }
-            LabValue::HazeDensity => {
-                self.haze_density = value.clamp(0.0, 2.0);
-            }
-            LabValue::HazeSteps => {
-                self.haze_steps = (value.round() as u32).clamp(1, 64);
-            }
-            LabValue::HazeResolution => {
-                self.haze_resolution = value.clamp(0.25, 1.0);
-            }
+            LabValue::HazeDensity => self.haze_density = value.clamp(0.0, 2.0),
         }
     }
 }
@@ -2597,8 +2481,9 @@ pub(crate) fn visualizer(
         stage.requested_at = Some(Instant::now());
         stage.renders_since_prepaint = stage.renders_since_prepaint.saturating_add(1);
     }
-    let chrome = toolbar(state, app, library, venue_tools);
-    let floating = overlay_toolbar(state, app);
+    let venue = venue_tools.is_some();
+    let chrome = (!venue).then(|| toolbar(state, library));
+    let floating = overlay_toolbar(state, app, venue_tools);
     let fps = fps_overlay(state, app);
     let pane = state.stage.borrow().pane;
     let builder = state.build.as_ref().map(|build| {
@@ -2624,16 +2509,20 @@ pub(crate) fn visualizer(
         .absolute()
         .inset_0()
     };
-    let lab = state
-        .render_lab
-        .open
-        .then(|| renderer_lab(state, app).into_any_element());
+    let selection = if venue {
+        state
+            .build
+            .as_ref()
+            .and_then(|build| crate::stage::selection_controls(build, app))
+    } else {
+        None
+    };
     div()
         .size_full()
         .flex()
         .flex_col()
         .bg(ladder::background())
-        .child(chrome)
+        .children(chrome)
         .child(
             div()
                 .flex_1()
@@ -2644,16 +2533,26 @@ pub(crate) fn visualizer(
                 .children(builder)
                 .child(fps)
                 .child(floating)
-                .children(lab),
+                .children(selection.map(|controls| {
+                    luma_ui::float::popover_card()
+                        .occlude()
+                        .absolute()
+                        .left(px(12.))
+                        .top(px(12.))
+                        .w(px(280.))
+                        .p(px(10.))
+                        .child(
+                            div()
+                                .id("scene-object-controls")
+                                .max_h(px(210.))
+                                .overflow_y_scroll()
+                                .child(controls),
+                        )
+                })),
         )
 }
 
-fn toolbar(
-    state: &Visualizer,
-    app: &Entity<Luma>,
-    library: &Library,
-    venue_tools: Option<AnyElement>,
-) -> Div {
+fn toolbar(state: &Visualizer, library: &Library) -> Div {
     let readout = match &state.status {
         Status::Loading => "LOADING".to_string(),
         Status::Live { lit } => format!(
@@ -2680,8 +2579,6 @@ fn toolbar(
                 .agent_node(Role::Text, state.venue_name.clone()),
         )
         .child(clock_readout(library))
-        .children(venue_tools)
-        .child(settings::trigger(state, app))
         // Which document is on the rig — by the handle the sidebar and the
         // timeline both name it by, so "the editor is showing #2" and "the rig
         // is lit by #2" are comparable at a glance. Reads what the install
@@ -2692,184 +2589,20 @@ fn toolbar(
         .child(luma_ui::silkscreen(readout))
 }
 
-fn renderer_lab_trigger(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
-    let label = if state.render_lab.open {
-        "Close Renderer Lab"
-    } else {
-        "Open Renderer Lab"
-    };
-    let app = app.clone();
-    luma_ui::float::btn(label, "renderer-lab")
-        .id("renderer-lab")
-        .on_click(move |_, _, cx| {
-            app.update(cx, |this, cx| {
-                if let Some(state) = this.visualizer_mut() {
-                    state.render_lab.open = !state.render_lab.open;
-                    state.settings_open = false;
-                }
-                cx.notify();
-            });
-        })
-        .agent_node(Role::Toggle, label)
-}
-
-/// The lab panel: a fixed head over a body that scrolls.
-///
-/// Bounded top *and* bottom against the stage rather than sized by its
-/// contents. The panel is longer than most windows are tall, and an absolutely
-/// positioned column with no floor simply ran off the bottom of the pane —
-/// every control below the fold was unreachable, with nothing on screen to say
-/// so. Spanning the pane and scrolling the body is what makes the list's length
-/// the body's problem instead of the window's.
-///
-/// The title stays out of the scroller: a panel whose own name scrolls away
-/// reads as page content, not as a panel.
-fn renderer_lab(state: &Visualizer, app: &Entity<Luma>) -> Div {
-    div()
-        .absolute()
-        .top(px(12.))
-        .right(px(12.))
-        .bottom(px(12.))
-        .w(px(360.))
-        .p(px(12.))
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .border_1()
-        .border_color(ladder::border())
-        .bg(ladder::apex())
-        // An opaque panel over the viewport takes the whole pointer plane it
-        // covers, wheel included: the lab's controls scroll in a column of
-        // their own, and a wheel that also reached the stage dollied the
-        // camera while the list moved. See [`listen`].
-        .occlude()
-        .child(luma_ui::silkscreen("RENDERER LAB"))
-        .child(lab_controls(state, app))
-}
-
-/// Every control in the lab, in one scrolling column.
-fn lab_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
+fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
     let lab = &state.render_lab;
     div()
-        // `min_h_0` is what lets this actually shrink: without it a flex child
-        // sized by its content refuses to be smaller than the content, and the
-        // column overflows its parent exactly as it did before.
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scrollbar()
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(lab_toggle(app, "Sun", lab.sun_enabled, LabToggle::Sun))
+        .child(lab_toggle(app, "Haze", lab.haze_enabled, LabToggle::Haze))
         .child(lab_value(
             app,
-            "Sun azimuth",
-            lab.sun_azimuth_deg,
-            -180.0,
-            180.0,
-            LabValue::Azimuth,
-        ))
-        .child(lab_value(
-            app,
-            "Sun elevation",
-            lab.sun_elevation_deg,
-            -85.0,
-            85.0,
-            LabValue::Elevation,
-        ))
-        .child(lab_value(
-            app,
-            "Sun intensity",
-            lab.sun_intensity,
-            0.0,
-            10.0,
-            LabValue::SunIntensity,
-        ))
-        .children(color_controls(
-            app,
-            "Sun color",
-            lab.sun_color,
-            LabValue::SunColor,
-        ))
-        .child(lab_toggle(
-            app,
-            "Sun shadows",
-            lab.sun_shadows,
-            LabToggle::Shadows,
-        ))
-        .child(lab_value(
-            app,
-            "Shadow softness",
-            lab.sun_shadow_softness,
-            0.0,
-            3.0,
-            LabValue::SunShadowSoftness,
-        ))
-        .child(lab_toggle(
-            app,
-            "Environment",
-            lab.environment_enabled,
-            LabToggle::Environment,
-        ))
-        .children(color_controls(
-            app,
-            "Background",
-            lab.background_color,
-            LabValue::BackgroundColor,
-        ))
-        .children(color_controls(
-            app,
-            "Ambient color",
-            lab.ambient_color,
-            LabValue::AmbientColor,
-        ))
-        .child(lab_value(
-            app,
-            "Ambient intensity",
-            lab.ambient_intensity,
-            0.0,
-            2.0,
-            LabValue::Ambient,
-        ))
-        .child(lab_toggle(
-            app,
-            "HDR probe",
-            lab.probe_enabled,
-            LabToggle::Probe,
-        ))
-        .child(lab_value(
-            app,
-            "Probe intensity",
-            lab.probe_intensity,
-            0.0,
-            4.0,
-            LabValue::ProbeIntensity,
-        ))
-        .child(lab_value(
-            app,
-            "Probe rotation",
-            lab.probe_rotation_deg,
-            -180.0,
-            180.0,
-            LabValue::ProbeRotation,
-        ))
-        .child(lab_toggle(
-            app,
-            "Show probe background",
-            lab.probe_visible,
-            LabToggle::ProbeVisible,
-        ))
-        .child(lab_toggle(
-            app,
-            "Fixture haze",
-            lab.haze_enabled,
-            LabToggle::Haze,
-        ))
-        .child(lab_toggle(
-            app,
-            "Fixture surface light",
-            lab.fixture_surface_lighting,
-            LabToggle::FixtureSurfaceLighting,
+            "Haze density",
+            lab.haze_density,
+            0.,
+            2.,
+            LabValue::HazeDensity,
         ))
         .child(lab_toggle(
             app,
@@ -2877,88 +2610,7 @@ fn lab_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             lab.fixture_shadows,
             LabToggle::FixtureShadows,
         ))
-        .child(lab_toggle(
-            app,
-            "All fixture shadows",
-            lab.geometry_shadows,
-            LabToggle::GeometryShadows,
-        ))
-        .child(lab_toggle(
-            app,
-            "Cluster occupancy",
-            lab.cluster_debug,
-            LabToggle::ClusterDebug,
-        ))
-        .child(lab_value(
-            app,
-            "Haze density",
-            lab.haze_density,
-            0.0,
-            2.0,
-            LabValue::HazeDensity,
-        ))
-        .child(lab_value(
-            app,
-            "Haze steps",
-            lab.haze_steps as f32,
-            1.0,
-            64.0,
-            LabValue::HazeSteps,
-        ))
-        .child(lab_value(
-            app,
-            "Haze resolution",
-            lab.haze_resolution,
-            0.25,
-            1.0,
-            LabValue::HazeResolution,
-        ))
-        .child(lab_toggle(
-            app,
-            "Editor grid",
-            lab.grid_enabled,
-            LabToggle::Grid,
-        ))
-        .child(debug_view_button(app, lab.debug_label()))
-}
-
-fn color_controls(
-    app: &Entity<Luma>,
-    label: &'static str,
-    color: [f32; 3],
-    control: fn(usize) -> LabValue,
-) -> [Div; 3] {
-    [0, 1, 2].map(|index| {
-        let channel_label = match (label, index) {
-            ("Sun color", 0) => "Sun color red",
-            ("Sun color", 1) => "Sun color green",
-            ("Sun color", _) => "Sun color blue",
-            ("Background", 0) => "Background red",
-            ("Background", 1) => "Background green",
-            ("Background", _) => "Background blue",
-            ("Ambient color", 0) => "Ambient color red",
-            ("Ambient color", 1) => "Ambient color green",
-            ("Ambient color", _) => "Ambient color blue",
-            _ => unreachable!("color controls have a fixed label set"),
-        };
-        lab_value(app, channel_label, color[index], 0.0, 1.0, control(index))
-    })
-}
-
-fn debug_view_button(app: &Entity<Luma>, view: &'static str) -> impl IntoElement {
-    let app = app.clone();
-    let label = format!("Debug view: {view}");
-    luma_ui::luma_button(&label, Enabled::Yes)
-        .id("renderer-debug-view")
-        .on_click(move |_, _, cx| {
-            app.update(cx, |this, cx| {
-                if let Some(state) = this.visualizer_mut() {
-                    state.render_lab.cycle_debug_view();
-                }
-                cx.notify();
-            });
-        })
-        .agent_node(Role::Button, label)
+        .child(lab_toggle(app, "Grid", lab.grid_enabled, LabToggle::Grid))
 }
 
 fn lab_toggle(
@@ -3060,7 +2712,7 @@ fn clock_readout(library: &Library) -> Div {
 /// and since the builder's chrome floats over this same viewport, a row of
 /// opaque square uppercase slabs beside a translucent rounded popover would be
 /// two design languages in one tab.
-fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
+fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<AnyElement>) -> Div {
     let current = state.gizmo_mode;
     let mode = |label: &'static str, mode: GizmoMode| {
         let app = app.clone();
@@ -3094,6 +2746,8 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     // surface over the viewport owns the pointer it covers
                     // (see [`listen`]), and the row is air either side of it.
                     .occlude()
+                    .children(venue_tools)
+                    .child(settings::trigger(state, app))
                     // The two gizmo modes are one choice, so they share one
                     // track. Zoom is the wheel's (and `=`/`-`), not a button's
                     // — a camera verb with a pointer gesture needs no chrome.
@@ -3182,13 +2836,6 @@ fn fps_reading(stage: &Stage) -> FpsReading {
 /// numbers the hitch ring already records, under the same labels the harness
 /// has always read (`DRAW`, `UI`, `PRES`, `CPU`).
 fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
-    // The renderer lab's instrument, shown with the lab. It is pointed at the
-    // renderer rather than at the room, and on its own it sat in the top-left
-    // corner of every screenshot anybody ever took of this page. One control
-    // for "I am looking at the renderer" rather than two.
-    if !state.render_lab.open {
-        return div();
-    }
     let live = matches!(state.status, Status::Live { .. });
     let expanded = state.fps_expanded;
     let (resting, reading, draw, ui, pres, gpu, shadows) = {
@@ -3240,27 +2887,28 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
         .gap(px(6.))
         .child(
             div()
-                .text_size(px(18.))
-                .line_height(px(18.))
+                .text_size(px(10.))
+                .line_height(px(12.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(ladder::foreground())
                 .child(fps_text.clone())
                 .agent_node(Role::Text, format!("FPS {fps_text}")),
         )
         .child(luma_ui::silkscreen("FPS"))
-        .child(div().flex_1())
-        .child(
-            div()
-                .text_size(px(9.))
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(if dipped {
-                    ladder::status_bad()
-                } else {
-                    ladder::muted_foreground()
-                })
-                .child(low_text.clone())
-                .agent_node(Role::Text, low_text),
-        );
+        .when(expanded, |el| {
+            el.child(
+                div()
+                    .text_size(px(9.))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(if dipped {
+                        ladder::status_bad()
+                    } else {
+                        ladder::muted_foreground()
+                    })
+                    .child(low_text.clone())
+                    .agent_node(Role::Text, low_text),
+            )
+        });
     let toggle = {
         let app = app.clone();
         move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
@@ -3275,7 +2923,7 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
     div()
         .absolute()
         .top(STATS_OVERLAY_TOP)
-        .left(px(12.))
+        .right(px(10.))
         .when(live, |el| {
             el.child(
                 div()
@@ -3283,7 +2931,7 @@ fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .p(px(8.))
+                    .p(px(4.))
                     .border_1()
                     .border_color(ladder::border())
                     .bg(ladder::apex())
@@ -3573,11 +3221,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             .build
             .as_ref()
             .is_some_and(|build| build.hand.owns_pointer());
-    let key_lab = {
-        let mut lab = state.render_lab.clone();
-        lab.open = false;
-        lab
-    };
+    let key_lab = state.render_lab.clone();
     let sized = app.clone();
 
     canvas(
@@ -4167,44 +3811,14 @@ mod render_lab_tests {
     }
 
     #[test]
-    fn render_lab_controls_are_independent_and_bounded() {
+    fn view_controls_are_independent_and_bounded() {
         let mut lab = RenderLab::new(VenueEnvironment::default());
-        let original_background = lab.background_color;
-
-        // Out-of-range targets on purpose: a slider hands over whatever the
-        // pointer asks for, and `set` is the only thing between that and the
-        // renderer.
-        lab.set(LabValue::SunColor(0), 0.65);
-        lab.set(LabValue::SunShadowSoftness, 10.0);
-        lab.set(LabValue::BackgroundColor(2), original_background[2] + 0.2);
-        lab.set(LabValue::AmbientColor(1), 0.6);
-        lab.set(LabValue::ProbeIntensity, 10.0);
-        lab.set(LabValue::ProbeRotation, 225.0);
-        lab.toggle(LabToggle::Probe);
-        lab.toggle(LabToggle::ProbeVisible);
-        lab.toggle(LabToggle::FixtureSurfaceLighting);
-        lab.toggle(LabToggle::ClusterDebug);
-        lab.set(LabValue::HazeSteps, 100.0);
-        lab.set(LabValue::HazeResolution, -10.0);
-
-        assert!((lab.sun_color[0] - 0.65).abs() < f32::EPSILON);
-        assert_eq!(lab.sun_shadow_softness, 3.0);
-        assert!((lab.background_color[2] - (original_background[2] + 0.2)).abs() < f32::EPSILON);
-        assert!((lab.ambient_color[1] - 0.6).abs() < f32::EPSILON);
-        assert_eq!(lab.background_color[..2], original_background[..2]);
-        assert_eq!(lab.probe_intensity, 4.0);
-        assert_eq!(lab.probe_rotation_deg, -135.0);
-        assert!(lab.probe_enabled);
-        assert!(lab.probe_visible);
-        assert!(!lab.fixture_surface_lighting);
-        assert!(lab.cluster_debug);
-        assert_eq!(lab.haze_steps, 64);
-        assert_eq!(lab.haze_resolution, 0.25);
-
-        lab.set(LabValue::HazeSteps, -100.0);
-        lab.set(LabValue::HazeResolution, 10.0);
-        assert_eq!(lab.haze_steps, 1);
-        assert_eq!(lab.haze_resolution, 1.0);
+        let house = lab.house;
+        lab.set(LabValue::HazeDensity, 9.0);
+        assert_eq!(lab.haze_density, 2.0);
+        lab.toggle(LabToggle::FixtureShadows);
+        assert!(!lab.fixture_shadows);
+        assert_eq!(lab.house, house);
     }
 }
 

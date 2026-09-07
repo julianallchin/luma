@@ -172,23 +172,8 @@ pub async fn update_group(
     get_group(access, id).await
 }
 
-/// Delete a group (only if empty)
+/// Delete a collection and its memberships; physical fixtures remain.
 pub async fn delete_group(access: &mut VenueAccess<'_, Write>, id: &str) -> Result<u64, String> {
-    // Check if group has fixtures
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM fixture_group_members WHERE group_id = ?")
-            .bind(id)
-            .fetch_one(&mut *access.connection())
-            .await
-            .map_err(|e| format!("Failed to check group membership: {}", e))?;
-
-    if count > 0 {
-        return Err(format!(
-            "Cannot delete group: it still contains {} members",
-            count
-        ));
-    }
-
     let venue_id = access.venue_id().to_owned();
     let deleted = sync_delete::delete_synced_where(
         access.connection(),

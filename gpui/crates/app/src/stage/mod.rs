@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use gpui::prelude::*;
 use gpui::{div, px, AnyElement, Context, Div, Entity, Pixels, Point, Window};
-use gpui_component::{Icon, IconName};
+use gpui_component::IconName;
 use luma_lib::models::venue_graph::{PlacementReport, ResolvedVenue};
 use luma_render::catalog::VenueSockets;
 use luma_scene::catalog::{pieces, PaletteGroup};
@@ -2252,7 +2252,7 @@ pub(crate) fn controls(
                 .agent_focused(state.objects_open),
         )
         .when(state.objects_open, |d| {
-            d.child(float::anchored_below(
+            d.child(float::anchored_above(
                 "stage-objects-popover",
                 luma_ui::CONTROL_HEIGHT,
                 Dismiss::on_press_out(move |_, cx| {
@@ -2310,11 +2310,11 @@ fn add_button(app: &Entity<Luma>) -> AnyElement {
             .items_center()
             .gap(px(6.0))
             .child(
-                float::btn("Add element", "stage-add")
+                float::btn("Add", "stage-add")
                     .id("stage-add")
                     .child(
-                        Icon::new(IconName::Plus)
-                            .size(px(13.0))
+                        luma_ui::icons::plus()
+                            .size(px(18.0))
                             .text_color(ladder::foreground_alpha(0.7)),
                     )
                     .on_click(move |_, window, cx| {
@@ -3284,8 +3284,7 @@ pub(crate) fn build_layer(
         }
         layer = layer.child(mark.agent_node(Role::Button, label));
     }
-    // Keep the rotation gesture at its physical pivot. Numeric controls live
-    // below the preview in `selection_controls`.
+    // Keep the rotation gesture at its physical pivot.
     if matches!(build.hand, Hand::Idle) {
         if let Some(selected) = build.selected_view() {
             // The joint's turn, at the joint. A rolled piece rotates about
@@ -3303,10 +3302,9 @@ pub(crate) fn build_layer(
                         .left(px(
                             (f32::from(at.x) - ROTATE_PAIR_HALF).clamp(INSET, size.0 - INSET)
                         ))
-                        .top(px((f32::from(at.y) + ROTATE_PAIR_GAP).clamp(
-                            crate::visualizer::HEADER_HEIGHT + INSET,
-                            size.1 - INSET,
-                        )))
+                        .top(px(
+                            (f32::from(at.y) + ROTATE_PAIR_GAP).clamp(INSET, size.1 - INSET)
+                        ))
                         .flex()
                         .flex_row()
                         .gap(px(6.0))
@@ -3471,7 +3469,7 @@ pub(crate) fn build_layer(
             layer = layer.child(
                 div()
                     .absolute()
-                    .top(px(crate::visualizer::HEADER_HEIGHT + INSET))
+                    .top(px(INSET))
                     .left_0()
                     .right_0()
                     .flex()
@@ -3869,7 +3867,7 @@ mod tests {
     }
 }
 
-/// Controls stay under the picture, so adjusting a light never covers it.
+/// Object controls belong to the scene, beside the selected object.
 pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<AnyElement> {
     if !matches!(build.hand, Hand::Idle) {
         return None;
@@ -3878,11 +3876,10 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
     let mut card = div().flex().flex_col().w_full().gap(px(6.0));
     let duplicate = app.clone();
     let remove = app.clone();
-    let fixture = build
-        .graph
-        .node(&selected.node)
-        .is_some_and(|node| node.kind == NodeKind::Fixture);
-    if !fixture {
+    let unplaced = build.graph.edge(&selected.node).is_none();
+    let place_node = selected.node.clone();
+    let place_label = selected.label.clone();
+    {
         card = card.child(
             div()
                 .flex()
@@ -3899,12 +3896,34 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
                         .agent_node(Role::Text, selected.label.clone()),
                 )
                 .child(
-                    float::btn("Duplicate", "selection-duplicate")
-                        .id("selection-duplicate")
-                        .on_click(move |_, _, cx| {
-                            duplicate.update(cx, |this, cx| this.stage_duplicate(cx))
+                    float::btn(
+                        if unplaced { "Place" } else { "Duplicate" },
+                        "selection-duplicate",
+                    )
+                    .id("selection-duplicate")
+                    .on_click(move |_, _, cx| {
+                        duplicate.update(cx, |this, cx| {
+                            if unplaced {
+                                this.stage_take(
+                                    Holding::Unplaced {
+                                        node: place_node.clone(),
+                                        label: place_label.clone(),
+                                    },
+                                    cx,
+                                );
+                            } else {
+                                this.stage_duplicate(cx);
+                            }
                         })
-                        .agent_node(Role::Button, "Duplicate element"),
+                    })
+                    .agent_node(
+                        Role::Button,
+                        if unplaced {
+                            "Place element"
+                        } else {
+                            "Duplicate element"
+                        },
+                    ),
                 )
                 .child(
                     float::btn("Remove", "selection-remove")
@@ -4073,9 +4092,6 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         .children(selected.relation.clone().map(note))
         .children(selected.constraint.clone().map(note));
 
-    if !fixture {
-        card = float::popover_card().p(px(8.0)).child(card);
-    }
     Some(
         card.agent_node(Role::Card, "Selection card")
             .into_any_element(),

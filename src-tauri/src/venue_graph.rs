@@ -139,14 +139,21 @@ pub async fn ensure_migrated(
 ) -> Result<(), String> {
     let mut read = VenueAccess::<Read>::read(pool, VenueResource::Venue(venue_id)).await?;
     let converted = local::venue_graph::root_id(&mut read).await?.is_some();
+    let initialized: bool =
+        sqlx::query_scalar("SELECT groups_initialized FROM venues WHERE id = ?")
+            .bind(venue_id)
+            .fetch_one(&mut *read.connection())
+            .await
+            .map_err(|e| e.to_string())?;
+    let member = local::venues::get_venue(&mut read).await?.role == "member";
     drop(read);
-    if converted {
+    if converted && (initialized || member) {
         return Ok(());
     }
     let mut access = VenueAccess::<Write>::write(pool, VenueResource::Venue(venue_id)).await?;
-    if migrate(&mut access, fixtures_root).await? {
-        commit_graph(access).await?;
-    }
+    migrate(&mut access, fixtures_root).await?;
+    crate::services::groups::snapshot_generated_groups(fixtures_root, &mut access, false).await?;
+    commit_graph(access).await?;
     Ok(())
 }
 

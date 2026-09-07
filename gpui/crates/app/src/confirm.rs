@@ -32,6 +32,10 @@ use crate::Luma;
 /// module docs for why this is a closed list.
 #[derive(Clone)]
 pub(crate) enum Action {
+    DeleteGroup {
+        venue: String,
+        id: String,
+    },
     DeleteStageElement {
         venue_id: String,
         node_id: String,
@@ -98,6 +102,7 @@ impl Luma {
         let action = confirm.action.clone();
         self.close_overlay(cx);
         match action {
+            Action::DeleteGroup { venue, id } => self.delete_venue_group(venue, id, cx),
             Action::DeleteStageElement { venue_id, node_id } => {
                 self.run_stage_delete(venue_id, node_id, cx)
             }

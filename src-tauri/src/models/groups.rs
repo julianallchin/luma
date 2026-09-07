@@ -231,3 +231,11 @@ pub struct GroupTreeNode {
     /// Fixture ids, in creation order.
     pub fixtures: Vec<String>,
 }
+
+/// A selector name used by saved scores but absent from their venue.
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingGroup {
+    pub name: String,
+    pub scores: Vec<String>,
+}

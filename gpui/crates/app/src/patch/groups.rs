@@ -1,4 +1,4 @@
-//! Authored groups are editable sets; automatic groups follow the stage.
+//! Groups are saved fixture collections. Generation only provides a starting set.
 use super::Patch;
 use crate::{shell::Body, Luma};
 use gpui::prelude::*;
@@ -13,10 +13,6 @@ pub(crate) struct Editor {
     name: Entity<TextInput>,
     before: HashSet<String>,
     members: HashSet<String>,
-    pub(super) manual: bool,
-    parent: String,
-    original_parent: String,
-    pub(crate) parent_open: bool,
     _subscription: Subscription,
 }
 
@@ -28,7 +24,7 @@ impl Luma {
         if state.group_busy {
             return;
         }
-        let Some(editor) = state.group_editor.as_mut().filter(|e| e.manual) else {
+        let Some(editor) = state.group_editor.as_mut() else {
             return;
         };
         if !editor.members.remove(id) {
@@ -55,9 +51,7 @@ impl Luma {
         let group = id
             .as_ref()
             .and_then(|id| state.data.as_ref()?.groups.iter().find(|g| &g.id == id));
-        let label = group.map_or(String::new(), |g| g.label.replace('_', " "));
-        let manual = group.is_none_or(|g| g.role.is_none());
-        let parent = group.and_then(|g| g.parent_id.clone()).unwrap_or_default();
+        let label = group.map_or(String::new(), |g| g.name.replace('_', " "));
         let before: HashSet<String> = group
             .map(|g| g.fixtures.iter().cloned().collect())
             .unwrap_or_default();
@@ -80,10 +74,6 @@ impl Luma {
             name,
             before,
             members,
-            manual,
-            original_parent: parent.clone(),
-            parent,
-            parent_open: false,
             _subscription: subscription,
         });
         let selected = state.group_editor.as_ref().unwrap().members.clone();
@@ -106,14 +96,9 @@ impl Luma {
         let venue = state.venue_id.clone();
         let added: Vec<String> = editor.members.difference(&editor.before).cloned().collect();
         let removed: Vec<String> = editor.before.difference(&editor.members).cloned().collect();
-        let pending = self.library.save_venue_group(
-            &venue,
-            editor.id.as_deref(),
-            &label,
-            (editor.parent != editor.original_parent).then_some(editor.parent.as_str()),
-            &added,
-            &removed,
-        );
+        let pending =
+            self.library
+                .save_venue_group(&venue, editor.id.as_deref(), &label, &added, &removed);
         state.group_busy = true;
         state.group_error = None;
         cx.notify();
@@ -126,6 +111,7 @@ impl Luma {
                         Ok(()) => {
                             state.group_editor = None;
                             state.say("Group saved");
+                            state.repair_after_save = true;
                         }
                         Err(error) => state.group_error = Some(super::refusal_message(&error)),
                     }
@@ -161,7 +147,6 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                 "New group"
             }))
             .child(editor.name.clone())
-            .child(parent_picker(state, editor, app))
             .child(
                 div()
                     .flex()
@@ -196,13 +181,17 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                             .agent_node(Role::Button, "Cancel group edit"),
                     ),
             );
-        if editor.manual {
-            body = body.child(float::label(format!(
-                "{} fixtures selected",
-                editor.members.len()
-            )));
-        } else {
-            body = body.child(float::empty_row("Membership follows stage geometry."));
+        body = body.child(float::label(format!(
+            "{} fixtures selected",
+            editor.members.len()
+        )));
+        if let Some(id) = &editor.id {
+            let id = id.clone();
+            let venue = state.venue_id.clone();
+            let remove = app.clone();
+            body=body.child(float::btn("Delete group","delete-venue-group").id("delete-venue-group").on_click(move |_,_,cx| remove.update(cx,|this,cx| {
+                this.ask(crate::confirm::Confirm { title:"Delete group?".into(), body:"The fixtures stay in the venue. Any affected scores will be shown for repair.".into(), verb:"Delete group".into(), action:crate::confirm::Action::DeleteGroup {venue:venue.clone(),id:id.clone()} },cx);
+            })).agent_node(Role::Button,"Delete group"));
         }
         return body.into_any_element();
     }
@@ -211,6 +200,7 @@ fn editor(state: &Patch, app: &Entity<Luma>) -> AnyElement {
 
 pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
     let new = app.clone();
+    let generate = app.clone();
     let from_selection = app.clone();
     let mut section = div()
         .flex_none()
@@ -263,6 +253,37 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                         .agent_disabled(state.group_busy),
                 ),
         );
+    if let Some(data) = &state.data {
+        if let Some(error) = &data.missing_error {
+            section = section.child(luma_ui::plate(
+                format!("Could not check score groups: {error}"),
+                ladder::danger(),
+            ));
+        }
+        if !data.missing.is_empty() {
+            let repair = app.clone();
+            section = section.child(
+                float::btn(
+                    format!("{} missing groups · Resolve", data.missing.len()),
+                    "missing-groups",
+                )
+                .id("missing-groups")
+                .text_color(ladder::danger())
+                .on_click(move |_, _, cx| repair.update(cx, |this, cx| this.open_group_repair(cx)))
+                .agent_node(Role::Button, "Resolve missing groups"),
+            );
+        }
+        if data.groups.is_empty() {
+            section = section.child(
+                float::btn("Generate from stage", "generate-groups")
+                    .id("generate-groups")
+                    .on_click(move |_, _, cx| {
+                        generate.update(cx, |this, cx| this.generate_groups(cx))
+                    })
+                    .agent_node(Role::Button, "Generate groups from stage"),
+            );
+        }
+    }
     if state.group_editor.is_some() {
         return section
             .child(editor(state, app))
@@ -279,26 +300,10 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
             .flex_col()
             .px(px(4.0))
             .gap(px(2.0));
-        // Authored sets first, followed by the automatic vocabulary.
-        for group in data
-            .groups
-            .iter()
-            .filter(|g| g.role.is_none())
-            .chain(data.groups.iter().filter(|g| g.role.is_some()))
-        {
+        for group in &data.groups {
             let id = group.id.clone();
-            let path = group_path(&data.groups, &id);
+            let path = group.name.replace('_', " ");
             let click = app.clone();
-            let parent = group
-                .parent_id
-                .as_ref()
-                .map(|id| group_path(&data.groups, id));
-            let detail = match (parent, group.role.is_some()) {
-                (Some(parent), true) => format!("{parent} · Automatic"),
-                (Some(parent), false) => parent,
-                (None, true) => "Automatic".to_string(),
-                (None, false) => "Custom".to_string(),
-            };
             rows = rows.child(
                 div()
                     .flex_none()
@@ -326,14 +331,7 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                                         div()
                                             .text_size(px(12.5))
                                             .truncate()
-                                            .child(group.label.replace('_', " ")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.0))
-                                            .truncate()
-                                            .text_color(ladder::foreground_alpha(0.45))
-                                            .child(detail),
+                                            .child(group.name.replace('_', " ")),
                                     ),
                             )
                             .child(
@@ -361,72 +359,67 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
         .into_any_element()
 }
 
-pub(super) fn memberships(state: &Patch, fixture: &str, app: &Entity<Luma>) -> AnyElement {
-    let mut chips = div().flex().flex_wrap().gap(px(4.0));
-    if let Some(data) = &state.data {
-        for group in data.groups.iter().filter(|g| g.role.is_none()) {
-            let member = group.fixtures.iter().any(|id| id == fixture);
-            let id = group.id.clone();
-            let fixture = fixture.to_string();
-            let click = app.clone();
-            chips = chips.child(
-                float::btn(group.label.replace('_', " "), format!("fixture-group-{id}"))
-                    .id(SharedString::from(format!("fixture-group-{id}")))
-                    .when(member, |d| d.bg(luma_ui::glass::card_selected_bg()))
-                    .on_click(move |_, _, cx| {
-                        click.update(cx, |this, cx| {
-                            this.set_fixture_group(fixture.clone(), id.clone(), !member, cx)
-                        })
-                    })
-                    .agent_node(
-                        Role::Checkbox,
-                        format!("Member of {}", group.label.replace('_', " ")),
-                    )
-                    .agent_focused(member)
-                    .agent_disabled(state.group_busy),
-            );
-        }
-    }
-    chips.into_any_element()
+/// Repair owns a snapshot for display; the backend rechecks every write.
+pub(crate) struct Repair {
+    venue: String,
+    missing: Vec<luma_lib::models::groups::MissingGroup>,
+    groups: Vec<String>,
+    fixtures: Vec<String>,
+    selected: Option<String>,
+    busy: bool,
+    error: Option<String>,
 }
-
 impl Luma {
-    fn set_fixture_group(
-        &mut self,
-        fixture: String,
-        group: String,
-        member: bool,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn open_group_repair(&mut self, cx: &mut Context<Self>) {
+        let Some(Body::Patch(state)) = self.workspace.active_body() else {
+            return;
+        };
+        let Some(data) = &state.data else {
+            return;
+        };
+        if data.missing.is_empty() {
+            return;
+        }
+        self.overlay
+            .open(crate::shell::Overlay::GroupRepair(Repair {
+                venue: state.venue_id.clone(),
+                missing: data.missing.clone(),
+                groups: data.groups.iter().map(|g| g.name.clone()).collect(),
+                fixtures: state.selected.iter().cloned().collect(),
+                selected: None,
+                busy: false,
+                error: None,
+            }));
+        cx.notify();
+    }
+    pub(crate) fn delete_venue_group(&mut self, venue: String, id: String, cx: &mut Context<Self>) {
+        let pending = self.library.delete_venue_group(&id);
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(state) = this.patch_mut(&venue) {
+                    state.group_error = result.err().map(|e| super::refusal_message(&e));
+                    if state.group_error.is_none() {
+                        state.group_editor = None;
+                        state.repair_after_save = true;
+                    }
+                }
+                this.reload_patch(venue, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+    fn generate_groups(&mut self, cx: &mut Context<Self>) {
         let Some(Body::Patch(state)) = self.workspace.active_body_mut() else {
             return;
         };
         if state.group_busy {
             return;
         }
-        let Some(node) = state
-            .data
-            .as_ref()
-            .and_then(|data| data.groups.iter().find(|g| g.id == group))
-        else {
-            return;
-        };
-        let venue = state.venue_id.clone();
-        let (added, removed) = if member {
-            (vec![fixture], vec![])
-        } else {
-            (vec![], vec![fixture])
-        };
-        let pending = self.library.save_venue_group(
-            &venue,
-            Some(&group),
-            &node.label,
-            None,
-            &added,
-            &removed,
-        );
         state.group_busy = true;
-        state.group_error = None;
+        let venue = state.venue_id.clone();
+        let pending = self.library.generate_venue_groups(&venue);
         cx.spawn(async move |this, cx| {
             let result = pending.await;
             this.update(cx, |this, cx| {
@@ -441,82 +434,141 @@ impl Luma {
         .detach();
         cx.notify();
     }
-}
-
-fn group_path(tree: &[luma_lib::models::groups::GroupTreeNode], id: &str) -> String {
-    let mut labels = Vec::new();
-    let mut at = Some(id);
-    for _ in 0..tree.len() {
-        let Some(group) = at.and_then(|id| tree.iter().find(|g| g.id == id)) else {
-            break;
+    fn resolve_group(&mut self, recreate: bool, cx: &mut Context<Self>) {
+        let Some(crate::shell::Overlay::GroupRepair(state)) = self.overlay.open_mut() else {
+            return;
         };
-        labels.push(group.label.replace('_', " "));
-        at = group.parent_id.as_deref();
+        if state.busy {
+            return;
+        }
+        let Some(missing) = state.missing.first() else {
+            return;
+        };
+        let replacement = if recreate {
+            None
+        } else {
+            let Some(name) = &state.selected else {
+                return;
+            };
+            Some(name.clone())
+        };
+        state.busy = true;
+        state.error = None;
+        let venue = state.venue.clone();
+        let name = missing.name.clone();
+        let pending = self.library.resolve_venue_group(
+            &venue,
+            &name,
+            replacement.as_deref(),
+            &state.fixtures,
+        );
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                if let Some(crate::shell::Overlay::GroupRepair(state)) = this.overlay.open_mut() {
+                    if state.venue != venue {
+                        return;
+                    }
+                    state.busy = false;
+                    match result {
+                        Ok(()) => {
+                            state.missing.retain(|m| m.name != name);
+                            if recreate {
+                                state.groups.push(name);
+                            }
+                            state.selected = None;
+                        }
+                        Err(error) => state.error = Some(super::refusal_message(&error)),
+                    }
+                    if state.missing.is_empty() {
+                        this.dismiss_overlay(cx);
+                    }
+                }
+                this.reload_patch(venue, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
-    labels.reverse();
-    labels.join(" / ")
 }
-
-fn parent_picker(state: &Patch, editor: &Editor, app: &Entity<Luma>) -> AnyElement {
-    let tree = state.data.as_ref().map_or(&[][..], |d| d.groups.as_slice());
-    let mut options = vec![(String::new(), "Top level".to_string())];
-    for group in tree {
-        let mut at = Some(group.id.as_str());
-        let mut descendant = false;
-        for _ in 0..tree.len() {
-            if at.is_some() && at == editor.id.as_deref() {
-                descendant = true;
-                break;
-            }
-            at = at
-                .and_then(|id| tree.iter().find(|g| g.id == id))
-                .and_then(|g| g.parent_id.as_deref());
-        }
-        if !descendant {
-            options.push((group.id.clone(), group_path(tree, &group.id)));
-        }
+pub(crate) fn repair_dialog(state: &Repair, app: &Entity<Luma>) -> AnyElement {
+    let Some(missing) = state.missing.first() else {
+        return div().into_any_element();
+    };
+    let recreate = app.clone();
+    let replace = app.clone();
+    let close = app.clone();
+    let mut body = div().p(px(20.)).flex().flex_col().gap(px(12.))
+        .child(div().text_size(px(16.)).child(format!("Missing group: {}", missing.name)))
+        .child(div().text_size(px(12.)).child(format!("{} saved scores use this name. Recreate it, or change their selectors to an existing group.", missing.scores.len())))
+        .child(float::btn(format!("Recreate with {} selected fixtures",state.fixtures.len()), "recreate-group").id("recreate-group")
+            .on_click(move |_,_,cx| recreate.update(cx, |this,cx| this.resolve_group(true,cx))).agent_node(Role::Button,"Recreate missing group").agent_disabled(state.busy))
+        .child(float::label("Replace references with"));
+    let mut choices = div()
+        .id("replacement-groups")
+        .max_h(px(150.))
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .gap(px(3.));
+    for name in &state.groups {
+        let label = format!("Use group {name}");
+        let name = name.clone();
+        let picked = app.clone();
+        let selected = state.selected.as_ref() == Some(&name);
+        choices = choices.child(
+            float::btn(name.replace('_', " "), format!("replace-{name}"))
+                .id(SharedString::from(format!("replace-{name}")))
+                .when(selected, |d| d.bg(luma_ui::glass::card_selected_bg()))
+                .on_click(move |_, _, cx| {
+                    picked.update(cx, |this, cx| {
+                        if let Some(crate::shell::Overlay::GroupRepair(state)) =
+                            this.overlay.open_mut()
+                        {
+                            if !state.busy {
+                                state.selected = Some(name.clone());
+                            }
+                        }
+                        cx.notify();
+                    })
+                })
+                .agent_node(Role::Toggle, label)
+                .agent_focused(selected),
+        );
     }
-    let current = options
-        .iter()
-        .find(|(id, _)| id == &editor.parent)
-        .map_or("Top level", |(_, name)| name.as_str());
-    let labels: Vec<&str> = options.iter().map(|(_, name)| name.as_str()).collect();
-    let ids: Vec<String> = options.iter().map(|(id, _)| id.clone()).collect();
-    let toggle = app.clone();
-    let pick = app.clone();
-    float::field_row(
-        "Parent",
-        luma_ui::arg::select::luma_arg_select(
-            "group-parent",
-            current,
-            &labels,
-            editor.parent_open,
-            move |_, cx| {
-                toggle.update(cx, |this, cx| {
-                    if let Some(Body::Patch(s)) = this.workspace.active_body_mut() {
-                        if !s.group_busy {
-                            if let Some(e) = &mut s.group_editor {
-                                e.parent_open = !e.parent_open;
-                            }
-                        }
-                    }
-                    cx.notify();
+    body = body.child(choices);
+    if let Some(error) = &state.error {
+        body = body.child(luma_ui::plate(error.clone(), ladder::danger()));
+    }
+    body = body.child(
+        div()
+            .flex()
+            .gap(px(8.))
+            .child(
+                float::btn_primary(if state.busy {
+                    "Saving…"
+                } else {
+                    "Fix affected scores"
                 })
-            },
-            move |index, _, cx| {
-                pick.update(cx, |this, cx| {
-                    if let Some(Body::Patch(s)) = this.workspace.active_body_mut() {
-                        if !s.group_busy {
-                            if let Some(e) = &mut s.group_editor {
-                                e.parent = ids[index].clone();
-                                e.parent_open = false;
-                            }
-                        }
-                    }
-                    cx.notify();
+                .id("repair-group-references")
+                .on_click(move |_, _, cx| {
+                    replace.update(cx, |this, cx| this.resolve_group(false, cx))
                 })
-            },
-        ),
+                .agent_node(Role::Button, "Fix affected scores")
+                .agent_disabled(state.busy || state.selected.is_none()),
+            )
+            .child(
+                float::btn("Later", "repair-later")
+                    .id("repair-later")
+                    .on_click(move |_, _, cx| close.update(cx, |this, cx| this.dismiss_overlay(cx)))
+                    .agent_node(Role::Button, "Resolve later"),
+            ),
+    );
+    luma_ui::dialog::morph::fixed_card(
+        "Group repair dialog",
+        luma_ui::dialog::morph::MorphSize::new(480., 440.),
+        body.into_any_element(),
     )
-    .into_any_element()
 }

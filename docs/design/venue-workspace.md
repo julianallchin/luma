@@ -1,40 +1,42 @@
-# Venue workspace — native revision
+# Venue workspace
 
-The venue lives in the right workspace column, next to chat. It starts at 65% of the shared width, with a 360 px minimum for chat and a draggable divider. A live stage preview sits above compact editing controls. The tone is professional: short labels, direct manipulation and contextual controls, without tutorial copy. It must remain useful at the shell's 320 px workspace minimum.
+One Venue tab beside chat: live scene above, fixture table and groups below. The fixture column gets most of the width; both columns scroll independently.
 
-## Implemented
+## Scene
 
-- One Venue tab: live stage above, with the lower panel divided vertically into a fixture table on the left and groups on the right. Fixtures take the larger share of the width. The two columns scroll independently and keep their headers visible. There are no Stage / Fixtures / Groups navigation tabs.
-- Add element and Objects live on the preview toolbar. Objects is a flat popover for selecting structures and placing unplaced inventory; it uses the same selection as the viewport. Placement, snapping, distribution, duplicate, flip and undo retain their existing behavior.
-- The fixture table has 34 px rows and five labelled columns: Fixture, Model, Mode, Universe, Address. Names, modes and addresses use the same inline editors and allocator as Patch details. Clicking a name first selects its row; clicking the selected name edits it. Selecting a fixture reveals only its extra group/geometry controls and actions below the table, without repeating the patch fields. Unplaced fixtures offer Place. Add uses the existing fixture picker and allocator. Viewport selection and table selection stay in sync; Shift or the platform modifier extends selection. At narrow widths the table scrolls horizontally with its header aligned to its rows.
-- Selected elements expose Duplicate and Remove. Removal uses the native confirmation dialog. Removing structure preserves attached fixtures as unplaced inventory, and undo restores the structure; deleting a fixture directly still removes its patch row. Native palettes can use more window width when opened.
-- View opens render settings in every visualizer, including score previews. It contains Indoor/Outdoor, House/Sun, and the advanced Renderer Lab. Environment values remain saved with the venue and do not change when a score starts. Scrubs update immediately and serialize their writes; the final value is still saved if navigation closes the preview.
-- Groups are vertical rows with names, parent paths and fixture counts, authored groups first. Automatic groups are marked in the subtitle. Clicking opens the draft editor inside the right column. While editing an authored group, clicking fixtures on the left toggles draft membership and updates the stage highlight; there is no duplicate fixture list in the group editor. Parent paths distinguish same-named leaves without an expanded tree. The same fixture can belong to multiple authored groups. Parent changes organize groups; moving physical structures remains a stage operation.
-- A group save is one backend transaction. A missing fixture, name conflict or permission failure rolls back the whole edit. Cancelling discards the draft.
-- Patch details replaces only the lower region with the technical table, footprint, auto patch and local output routing. Closing it returns to the inventory. The table remains horizontally scrollable.
-- No schema migration or rendering changes. Ambient occlusion remains future renderer work.
+The centered floating bar contains Add, Objects, the Nucleo eye icon for View, and available transform modes. There is no track clock or separate toolbar on the Venue tab. Selecting an object opens its placement controls over the scene. Patch fields stay in the table.
 
-## Important limits / next pass
+View contains room mode, House/Sun, haze and fixture-shadow/grid controls. Renderer Lab and its obsolete diagnostic controls are removed. FPS is always visible as a small top-right readout; clicking expands performance details.
 
-Group selector names are currently the strings saved effects reference. The native save command and existing rename commands refuse to change a name mentioned in saved work. Membership remains editable. The reference check is deliberately conservative and also protects names found in graph labels or legacy implementations. The complete solution is stable group selector identity or an authored-history transaction updating every affected score, rather than silently making an existing effect select nothing.
+New icons come from Nucleo. The permanent local bundle is `~/github/nucleo`; selected SVGs are embedded in `gpui/crates/ui/assets/nucleo` so builds do not depend on that directory.
 
-The first membership editor operates on whole fixtures. Existing per-head memberships are retained unless their fixture is explicitly removed, but individual heads still need their own editor and partial-membership indicator. Derived/merged groups need clearer membership provenance before exposing arbitrary membership changes.
+## Fixtures and groups
 
-Advanced patch tools remain behind Patch: occupancy, auto patch, channel ranges and output routing. Everyday patch fields are editable directly in the compact table. Geometry controls can be dense for fixtures in distributed rows; they retain the existing builder vocabulary.
+The table columns are Fixture, Model, Mode, Universe, Address. Editing group membership keeps the same fonts and column sizes. Numeric addresses are monospace; fixture names and modes are sans.
 
-The original concept image in this directory was generated. The native captures are actual GPUI windows using the user's EBF library on a dedicated X11 display; they are not web mockups. No in-app agent/model turns were used.
+Groups are saved collections of fixtures, without parents or a distinction between automatic and authored membership. A new venue can Generate from stage once its fixtures are placed. This produces a useful starting vocabulary; subsequent geometry changes never rewrite those memberships. Generation adds missing names and preserves existing collections.
+
+Existing venues convert lazily and transactionally: derive the old effective groups including overrides, preserve canonical selector names and members, save them into `fixture_groups`, and mark `venues.groups_initialized`. Local SQLite and remote Postgres migrations add the same marker. Duplicate IDs produced by identically labelled legacy structures receive distinct saved IDs; selector names and memberships remain unchanged. The old override table remains only for converting older libraries. Tree mutation commands are retired.
+
+The group editor supports naming, fixture membership and confirmed deletion. Deleting a group leaves physical fixtures in place. Whole-fixture membership is editable; existing per-head rows remain until that fixture is removed from the collection. A head-level membership editor remains future work.
+
+## Missing targets
+
+A visible warning identifies selector names used by saved scores but missing from the venue. Group edits open the repair dialog when needed. Audit failures remain visible without preventing the fixture table from loading. The dialog offers:
+
+- Recreate the missing name with the currently selected fixtures (including an explicitly empty collection).
+- Replace that name in affected scores with an existing group.
+
+Repair parses selection expressions and replaces exact identifiers, preserving boolean operators and unrelated graph labels. Score edits go through authored history with revision checks. A batch commits one score at a time; a conflict stops the batch and remains visible. Retrying skips already repaired scores. Earlier revisions are retained, not rewritten.
+
+Advanced patch tools remain behind Patch: occupancy, auto patch, channel ranges and output routing.
 
 ## Validation
 
-- Native group workflow at 1100 × 900: create, assign, edit, rename, reparent and cancel without changing pages.
-- Inline fixture edits and group membership match the values in Patch details. Render settings follow a score and survive closing/reopening the venue preview.
-- Existing patch tests cover address refusal, occupancy, outputs, auto patch, destructive confirmation, adding fixtures and mode changes.
-- Existing builder tests cover placement, attachments, distribution, fit refusal, duplicate/flip, detach, palette focus and undo/redo. The duplicate test now uses the platform's secondary modifier instead of hard-coding macOS Command.
-- Backend tests cover atomic rollback, rename with membership changes, generated-group reparenting, cycle refusal and protecting names used by saved scores. Native tests cover element selection, confirmed removal, retained fixture inventory and undo, plus the wider workspace split and its resizing limits.
-- Workspace/all-targets check and native application build.
+Verification covers flat group generation, retained membership after geometry edits, conversion of legacy overrides, atomic membership edits, missing-selector recreation and replacement through score history, and native table/group/repair/render-settings workflows. Native screenshots use the GPUI app, without in-app model calls.
 
-Table layout validation: all 10 patch/group/render-settings tests pass, including inline field edits and group creation, assignment, rename, reparenting and cancellation at 1100 × 900. The workspace/all-targets check and native build pass. Native X11 captures were inspected using the actual EBF library with chat visible. No venue contents were changed for captures. The preceding revision also passed all 15 builder tests and the venue-filter browser test.
+Verified against the actual EBF library: all 10 group names and their exact fixture memberships survive conversion. A SQLite backup was taken before migration. Both the saved-group marker and the previously pending score-local-pattern migration have been applied to Supabase.
 
-The first table test run exposed an intermittent render-settings mismatch: the score preview read sun 40° after a scrub to 45°, while reopening the venue read the saved 45°. The complete rerun passed. This layout change does not alter environment saving or navigation; that preview/request-order issue needs separate investigation.
+Checks: workspace/all-targets passes; 20 backend group tests, the exact-selector repair test, 11 native patch tests and 15 native scene-builder tests pass. The broader venue test filter also exposes a failure in `venue_launch_picker_create_and_stale_reads_are_correlated`: its delayed catalogue error appears while it expects the picker. That navigation issue remains outside this change.
 
-The previous revision's additional venue-picker stale-response test failed while reopening its catalogue (`venue_launch_picker_create_and_stale_reads_are_correlated`); its injected catalogue failure arrives earlier than the test expects. That separate picker/request-order issue is outside this layout change. The track-list ordering test passed on an isolated rerun after failing in the concurrent batch.
+The real app still reports audio-record write-admission errors in its sync diagnostics (`signed-in write admission is closed or principal-mismatched`). The group data itself is verified remotely, and fresh pull/push passes complete without the schema errors. The audio admission issue has not been changed here.
