@@ -1,5 +1,18 @@
 # Building the gpui workspace
 
+## Linux system libraries
+
+The link line is the only place a missing one shows up, and it shows up as
+`rust-lld: error: unable to find library -l<name>` after a full compile. On
+Debian/Ubuntu the runtime packages are usually already there; it is the `-dev`
+package that carries the bare `.so` symlink the linker resolves against. The
+one that is not pulled in by anything else — `zed_xim` links it for X11 keymap
+handling — is:
+
+```sh
+sudo apt install libxkbcommon-x11-dev
+```
+
 ## Where the time goes
 
 Current, measured on a quiet machine after the 2026-08-23 rebuild:

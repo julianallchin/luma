@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub syncing: bool,
+    pub progress: Option<SyncProgress>,
+    pub pending_changes: usize,
     pub errors: Vec<String>,
     pub failures: Vec<SyncFailure>,
 }
@@ -19,4 +21,14 @@ pub struct SyncFailure {
     pub attempts: i64,
     pub permanent: bool,
     pub last_error: Option<String>,
+}
+
+/// Counts are scoped to the named phase. `None` means its total is not yet known.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgress {
+    pub phase: String,
+    pub completed: usize,
+    pub total: Option<usize>,
+    pub unit: String,
 }

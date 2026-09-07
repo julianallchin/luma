@@ -29,6 +29,8 @@ pub struct SyncReport {
 #[derive(Clone)]
 pub struct SyncEngine {
     pool: SqlitePool,
+    progress: Arc<super::progress::Progress>,
+    audio_download_lock: Arc<Mutex<()>>,
     state_pool: SqlitePool,
     remote: Arc<dyn RemoteClient>,
     authored: AuthoredDocuments,
@@ -49,6 +51,8 @@ impl SyncEngine {
     ) -> Self {
         Self {
             pool,
+            progress: Arc::default(),
+            audio_download_lock: Arc::default(),
             state_pool,
             remote,
             authored,
@@ -74,8 +78,34 @@ impl SyncEngine {
         .bind(principal)
         .fetch_all(&self.pool)
         .await?;
+        // Use the same durability predicates as sign-out: include backoff,
+        // exclude permanently blocked rows (which are listed as failures).
+        let mut counts: Vec<String> = registry::TABLES
+            .iter()
+            .filter_map(|table| table.undelivered_count_sql())
+            .map(|sql| format!("SELECT ({sql}) AS pending"))
+            .collect();
+        counts.push(
+            "SELECT COUNT(*) AS pending FROM sync_tombstones AS tombstone
+            LEFT JOIN sync_push_failures AS failure
+              ON failure.principal_key = tombstone.principal_key
+             AND failure.table_name = tombstone.table_name
+             AND failure.record_id = tombstone.record_id AND failure.subject = 'tombstone'
+            WHERE tombstone.principal_key = 'signed-in:' || ?1
+              AND COALESCE(failure.permanent, 0) = 0"
+                .into(),
+        );
+        let pending_changes: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COALESCE(SUM(pending), 0) FROM ({})",
+            counts.join(" UNION ALL ")
+        )))
+        .bind(&uid)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(crate::models::sync::SyncStatus {
             syncing: self.sync_lock.try_lock().is_err(),
+            progress: self.progress.snapshot(&uid),
+            pending_changes: pending_changes as usize,
             errors: self
                 .last_errors
                 .lock()
@@ -102,6 +132,24 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Playback and waveform requests share a download; sync never fetches the
+    /// whole audio library. Local hits do not require a signed-in session.
+    pub(crate) async fn ensure_track_audio(
+        &self,
+        storage: &crate::storage::StorageRoot,
+        track_id: &str,
+    ) -> Result<(), SyncError> {
+        let _guard = self.audio_download_lock.lock().await;
+        files::ensure_track_audio(
+            &self.pool,
+            &self.state_pool,
+            self.remote.as_ref(),
+            storage,
+            track_id,
+        )
+        .await
+    }
+
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -122,12 +170,22 @@ impl SyncEngine {
         Ok((auth.access_token, auth.principal.user_id))
     }
 
-    /// Full sync: discovery → pull → files → push.
+    /// Full sync: send local changes, then discovery → pull → files → push.
     pub async fn sync_full(&self, host: &SyncHost) -> Result<SyncReport, SyncError> {
         let _guard = self.sync_lock.lock().await;
         println!("[sync] Starting full sync...");
         let (token, uid) = self.require_auth().await?;
+        let _activity = self.progress.start(&uid);
+        self.progress
+            .phase("Finding shared libraries", None, "libraries");
         let mut report = SyncReport::default();
+        // Existing edits must not sit behind the cloud refresh or media work.
+        report.pushed += self.run_push_unlocked(&uid).await.unwrap_or_else(|error| {
+            report.errors.push(format!("push: {error}"));
+            0
+        });
+        self.progress
+            .phase("Finding shared libraries", None, "libraries");
 
         // 1. Discovery
         match pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await {
@@ -152,6 +210,7 @@ impl SyncEngine {
             self.remote.as_ref(),
             &token,
             Some(&uid),
+            &self.progress,
         )
         .await
         {
@@ -192,15 +251,13 @@ impl SyncEngine {
                 if stats.audio_uploaded
                     + stats.stems_uploaded
                     + stats.art_uploaded
-                    + stats.audio_downloaded
                     + stats.stems_downloaded
                     + stats.art_downloaded
                     > 0 =>
             {
                 println!(
-                    "[sync] Files: {}↑ {}↓ audio, {}↑ {}↓ stems, {}↑ {}↓ art",
+                    "[sync] Files: {}↑ audio, {}↑ {}↓ stems, {}↑ {}↓ art",
                     stats.audio_uploaded,
-                    stats.audio_downloaded,
                     stats.stems_uploaded,
                     stats.stems_downloaded,
                     stats.art_uploaded,
@@ -224,10 +281,7 @@ impl SyncEngine {
         // Notify the UI if incoming data changed (pull or downloads).
         // Push-only cycles are not emitted — the UI already has that state.
         let incoming_changed = report.pull.rows_pulled > 0
-            || report.files.audio_downloaded
-                + report.files.stems_downloaded
-                + report.files.art_downloaded
-                > 0;
+            || report.files.stems_downloaded + report.files.art_downloaded > 0;
         if incoming_changed {
             host.events.emit("library-changed", ());
         }
@@ -246,6 +300,7 @@ impl SyncEngine {
     /// Enqueue dirty records and flush pending ops. Returns count pushed.
     pub async fn run_push(&self, uid: &str) -> Result<usize, SyncError> {
         let _guard = self.sync_lock.lock().await;
+        let _activity = self.progress.start(uid);
         let result = self.run_push_unlocked(uid).await;
         self.last_errors.lock().unwrap().insert(
             (uid.to_string(), "push"),
@@ -259,6 +314,8 @@ impl SyncEngine {
     }
 
     async fn run_push_unlocked(&self, uid: &str) -> Result<usize, SyncError> {
+        self.progress
+            .phase("Preparing local changes", None, "changes");
         self.authored
             .bootstrap_live_projections(&self.pool, Some(uid))
             .await
@@ -272,6 +329,7 @@ impl SyncEngine {
             &self.state_pool,
             self.remote.as_ref(),
             Some(&self.authored),
+            &self.progress,
         )
         .await?;
         if n > 0 {
@@ -293,6 +351,7 @@ impl SyncEngine {
             &token,
             &mut stats,
             host,
+            &self.progress,
         )
         .await?;
         files::upload_pending_stems(
@@ -302,6 +361,7 @@ impl SyncEngine {
             &token,
             &mut stats,
             host,
+            &self.progress,
         )
         .await?;
         files::upload_pending_album_art(
@@ -311,18 +371,25 @@ impl SyncEngine {
             &token,
             &mut stats,
             host,
+            &self.progress,
         )
         .await?;
-        files::download_pending_audio(&self.pool, self.remote.as_ref(), host, &token, &mut stats)
-            .await?;
-        files::download_pending_stems(&self.pool, self.remote.as_ref(), host, &token, &mut stats)
-            .await?;
+        files::download_pending_stems(
+            &self.pool,
+            self.remote.as_ref(),
+            host,
+            &token,
+            &mut stats,
+            &self.progress,
+        )
+        .await?;
         files::download_pending_album_art(
             &self.pool,
             self.remote.as_ref(),
             host,
             &token,
             &mut stats,
+            &self.progress,
         )
         .await?;
         Ok(stats)

@@ -18,6 +18,7 @@
 
 pub mod authored_remote;
 pub mod error;
+pub mod progress;
 pub mod pull;
 pub mod push;
 pub mod push_state;

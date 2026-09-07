@@ -225,6 +225,19 @@ enum NewIdentityPolicy<'a> {
     StableIds(TrackProjectionIdentity<'a>),
 }
 
+impl NewIdentityPolicy<'_> {
+    /// Whether this candidate is authoring something new, as opposed to
+    /// replaying a revision that already exists in history.
+    ///
+    /// Only the first admits placement rules — see [`validate_candidate`].
+    fn admits_new_authoring(self) -> bool {
+        !matches!(
+            self,
+            Self::StableIds(TrackProjectionIdentity::TrustedRevision)
+        )
+    }
+}
+
 /// Why an unknown stable UUID is allowed to enter a score projection. Human
 /// imports may add only IDs allocated by the host during that compile. Trees
 /// already accepted into this document's revision lineage may restore deleted
@@ -367,6 +380,7 @@ async fn check_track_candidate_on_connection(
         &plan.candidate,
         min_duration,
         track_duration,
+        NewIdentityPolicy::DraftIds,
     )
     .await?;
 
@@ -469,6 +483,7 @@ pub(crate) async fn check_track_projection_candidate(
         candidate,
         min_duration,
         duration,
+        NewIdentityPolicy::StableIds(identity),
     )
     .await?;
     transaction.commit().await.map_err(|error| {
@@ -519,6 +534,7 @@ pub(crate) async fn check_track_workspace_candidate(
         candidate,
         min_duration,
         duration,
+        NewIdentityPolicy::WorkspaceLineage(lineage_ids),
     )
     .await?;
     transaction
@@ -567,6 +583,7 @@ pub(crate) async fn check_track_detached_candidate(
         candidate,
         min_duration,
         duration,
+        NewIdentityPolicy::StableIds(identity),
     )
     .await?;
     transaction
@@ -626,6 +643,7 @@ async fn apply_track_candidate_in_transaction(
         &plan.candidate,
         min_duration,
         track_duration,
+        identity_policy,
     )
     .await?;
     let (candidate, id_map) = materialize_candidate(&current, plan.candidate, identity_policy);
@@ -927,19 +945,44 @@ async fn minimum_duration(
     Ok(((beats_per_bar as f64 / bpm) * 60.0) / 32.0)
 }
 
+/// The latest time a clip is allowed to end: the longest this track can be,
+/// according to the best source that has an opinion.
+///
+/// Two sources do, and they disagree. `track_waveforms.decoded_duration` is
+/// measured off the decoded samples and is the true length. `tracks.duration_
+/// seconds` comes from the container tag, which for MP3 is reported truncated
+/// to whole seconds — 125 of one 133-track library are exact integers — so it
+/// does not measure the track, it only proves the track is shorter than one
+/// second past it.
+///
+/// Bounding authored content against the tag as if it were exact is what
+/// rejects a final clip that runs to the end of its last bar: a bar grid built
+/// from the bpm routinely overshoots a truncated second by a few hundred
+/// milliseconds, and the clip is right while the number is wrong. So each
+/// source is taken for what it can prove, and the tag is widened by its own
+/// quantum rather than trusted to a microsecond.
 async fn track_duration(
     connection: &mut SqliteConnection,
     track_id: &str,
 ) -> Result<Option<f64>, TrackEditError> {
-    let duration: Option<f64> =
-        sqlx::query_scalar("SELECT duration_seconds FROM tracks WHERE id = ?")
-            .bind(track_id)
-            .fetch_optional(connection)
-            .await
-            .map_err(|e| TrackEditError::storage(format!("failed to load track duration: {e}")))?
-            .flatten();
-    Ok(duration.filter(|duration| duration.is_finite() && *duration > 0.0))
+    let row: Option<(Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT tracks.duration_seconds, track_waveforms.decoded_duration
+         FROM tracks
+         LEFT JOIN track_waveforms ON track_waveforms.track_id = tracks.id
+         WHERE tracks.id = ?",
+    )
+    .bind(track_id)
+    .fetch_optional(connection)
+    .await
+    .map_err(|e| TrackEditError::storage(format!("failed to load track duration: {e}")))?;
+    let (tagged, decoded) = row.unwrap_or((None, None));
+    let usable = |duration: Option<f64>| duration.filter(|d| d.is_finite() && *d > 0.0);
+    Ok(usable(decoded).or_else(|| usable(tagged).map(|tagged| tagged + TAG_DURATION_QUANTUM)))
 }
+
+/// How much a container tag's duration can understate the audio. MP3 reports
+/// whole seconds, so the true length lies in `[tagged, tagged + 1)`.
+const TAG_DURATION_QUANTUM: f64 = 1.0;
 
 fn assert_current_revision(
     expected_revision: &str,
@@ -1087,17 +1130,36 @@ fn materialize_candidate(
 /// editor that lets a clip be dragged across its neighbour is expressing what
 /// the model already allows. Rejecting it here refused an edit the canvas had
 /// already painted and the user had already seen land.
+///
+/// # Two contracts, not one
+///
+/// The rules divide into structure — finite times, an object for args, a
+/// pattern that exists — and *placement*, which is where in the timeline a
+/// clip is allowed to sit. Structure is an invariant of a stored row and holds
+/// on every path. Placement is authoring policy: it answers whether a clip may
+/// be **put** somewhere, which is a question only a new edit asks. Replaying a
+/// revision that already exists in history asks nothing — it happened.
+///
+/// Adjudicating placement on a replay is what makes a document unreplicable:
+/// the machine that authored it keeps it (see `preserves_existing_times`
+/// below, which grandfathers rows already stored), while a machine seeing it
+/// for the first time refuses it, and the refusal is permanent because the
+/// revision is immutable. That asymmetry is precisely the sync case, so
+/// placement is skipped whenever the identity policy already says the content
+/// comes from a trusted revision.
 async fn validate_candidate(
     connection: &mut SqliteConnection,
     current: &[TrackScore],
     candidate: &[TrackClip],
     min_duration: f64,
     track_duration: Option<f64>,
+    identity_policy: NewIdentityPolicy<'_>,
 ) -> Result<(), TrackEditError> {
     let current_by_id: HashMap<&str, &TrackScore> = current
         .iter()
         .map(|score| (score.id.as_str(), score))
         .collect();
+    let adjudicates_placement = identity_policy.admits_new_authoring();
 
     let mut pattern_ids = BTreeSet::new();
     for clip in candidate {
@@ -1107,31 +1169,34 @@ async fn validate_candidate(
                 clip.id
             )));
         }
-        let duration = clip.end_time - clip.start_time;
-        if duration < min_duration {
-            return Err(TrackEditError::invalid(format!(
-                "clip {} is too short ({duration:.4}s); minimum is {min_duration:.4}s",
-                clip.id
-            )));
-        }
-        let preserves_existing_times =
-            current_by_id.get(clip.id.as_str()).is_some_and(|existing| {
-                existing.start_time.to_bits() == clip.start_time.to_bits()
-                    && existing.end_time.to_bits() == clip.end_time.to_bits()
-            });
-        if !preserves_existing_times && clip.start_time < 0.0 {
-            return Err(TrackEditError::invalid(format!(
-                "clip {} starts before the track",
-                clip.id
-            )));
-        }
-        if !preserves_existing_times
-            && track_duration.is_some_and(|track_duration| clip.end_time > track_duration + 1e-6)
-        {
-            return Err(TrackEditError::invalid(format!(
-                "clip {} ends after the track",
-                clip.id
-            )));
+        if adjudicates_placement {
+            let duration = clip.end_time - clip.start_time;
+            if duration < min_duration {
+                return Err(TrackEditError::invalid(format!(
+                    "clip {} is too short ({duration:.4}s); minimum is {min_duration:.4}s",
+                    clip.id
+                )));
+            }
+            let preserves_existing_times =
+                current_by_id.get(clip.id.as_str()).is_some_and(|existing| {
+                    existing.start_time.to_bits() == clip.start_time.to_bits()
+                        && existing.end_time.to_bits() == clip.end_time.to_bits()
+                });
+            if !preserves_existing_times && clip.start_time < 0.0 {
+                return Err(TrackEditError::invalid(format!(
+                    "clip {} starts before the track",
+                    clip.id
+                )));
+            }
+            if !preserves_existing_times
+                && track_duration
+                    .is_some_and(|track_duration| clip.end_time > track_duration + 1e-6)
+            {
+                return Err(TrackEditError::invalid(format!(
+                    "clip {} ends after the track",
+                    clip.id
+                )));
+            }
         }
         if !clip.args.is_object() {
             let preserves_legacy = current_by_id.get(clip.id.as_str()).is_some_and(|existing| {
@@ -1252,6 +1317,7 @@ fn hash_string(hasher: &mut Sha256, value: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::time::Duration;
 
     use serde_json::json;
@@ -1261,9 +1327,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        apply_track_edit, check_track_edit, load_track_document,
+        apply_track_edit, check_track_edit, check_track_projection_candidate, load_track_document,
         replace_track_scores_from_snapshot, track_revision, validate_candidate_envelope, TrackClip,
-        TrackEditError, TrackEditPlan, TrackEditScope,
+        TrackEditError, TrackEditPlan, TrackEditScope, TrackProjectionIdentity, TrackScope,
     };
     use crate::models::node_graph::BlendMode;
     use crate::models::scores::TrackScore;
@@ -1337,6 +1403,10 @@ mod tests {
                 track_id TEXT PRIMARY KEY,
                 bpm REAL NOT NULL,
                 beats_per_bar INTEGER NOT NULL
+            );
+            CREATE TABLE track_waveforms (
+                track_id TEXT PRIMARY KEY,
+                decoded_duration REAL
             );
             CREATE TABLE track_scores (
                 id TEXT PRIMARY KEY,
@@ -1791,7 +1861,7 @@ mod tests {
 
         for invalid in [
             clip("new:before", -1.0, 1.0, 2),
-            clip("new:after", 119.5, 120.5, 2),
+            clip("new:after", 120.5, 122.0, 2),
         ] {
             let error = check_track_edit(
                 &pool,
@@ -1805,6 +1875,85 @@ mod tests {
             .unwrap_err();
             assert!(matches!(error, TrackEditError::Invalid { .. }));
         }
+    }
+
+    /// Placement is authoring policy, so a revision that already exists in
+    /// history is replayed rather than re-adjudicated. Refusing one here means
+    /// the machine that authored a document can hold it while every other
+    /// machine rejects it permanently — the revision is immutable, so the
+    /// refusal is reached again on every sync — which is a wedged pull, not a
+    /// caught error.
+    #[tokio::test]
+    async fn a_trusted_revision_is_replayed_even_where_a_new_edit_would_be_refused() {
+        let (_directory, pool) = test_pool().await;
+        let past_the_end = [clip(
+            "11111111-2222-3333-4444-555555555555",
+            119.5,
+            199.0,
+            0,
+        )];
+        let lineage = BTreeSet::from([past_the_end[0].id.clone()]);
+
+        check_track_projection_candidate(
+            &pool,
+            &TrackScope::from(&scope()),
+            Some(USER),
+            &past_the_end,
+            TrackProjectionIdentity::TrustedRevision,
+        )
+        .await
+        .unwrap();
+
+        let error = check_track_projection_candidate(
+            &pool,
+            &TrackScope::from(&scope()),
+            Some(USER),
+            &past_the_end,
+            TrackProjectionIdentity::Allowed {
+                lineage_ids: &lineage,
+                host_allocated_ids: &lineage,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, TrackEditError::Invalid { .. }));
+    }
+
+    /// A container tag reports whole seconds, so a 120 s tag proves only that
+    /// the track ends before 121 s; a decoded waveform measures it. Bounding
+    /// against the tag as if it were exact rejects a final clip that runs to
+    /// the end of its last bar, which a bar grid routinely places a few
+    /// hundred milliseconds past a truncated second.
+    #[tokio::test]
+    async fn a_measured_waveform_bounds_a_clip_the_container_tag_cannot() {
+        let (_directory, pool) = test_pool().await;
+        let last_bar = clip("new:last-bar", 119.5, 120.5, 0);
+        let plan = || TrackEditPlan {
+            base_revision: track_revision(&[]),
+            candidate: vec![last_bar.clone()],
+        };
+
+        check_track_edit(&pool, &scope(), plan()).await.unwrap();
+
+        sqlx::query("INSERT INTO track_waveforms (track_id, decoded_duration) VALUES ('track', ?)")
+            .bind(120.25_f64)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let error = check_track_edit(&pool, &scope(), plan()).await.unwrap_err();
+        assert!(matches!(error, TrackEditError::Invalid { .. }));
+
+        check_track_edit(
+            &pool,
+            &scope(),
+            TrackEditPlan {
+                base_revision: track_revision(&[]),
+                candidate: vec![clip("new:inside", 119.5, 120.2, 0)],
+            },
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

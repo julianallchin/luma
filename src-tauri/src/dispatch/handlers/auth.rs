@@ -646,6 +646,7 @@ pub async fn wipe_database(services: &AppServices) -> Result<(), CommandError> {
             &state.0,
             engine.remote().as_ref(),
             Some(engine.authored()),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .map_err(|error| format!("Cannot sign out before catalog sync: {error}"))?;

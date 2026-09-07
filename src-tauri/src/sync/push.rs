@@ -58,7 +58,14 @@ pub async fn flush_pending(
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
 ) -> Result<usize, SyncError> {
-    flush_pending_with_integrator(pool, state_pool, remote, None).await
+    flush_pending_with_integrator(
+        pool,
+        state_pool,
+        remote,
+        None,
+        &crate::sync::progress::Progress::default(),
+    )
+    .await
 }
 
 /// Flush with the domain-aware authored-head integration bridge installed.
@@ -69,6 +76,7 @@ pub async fn flush_pending_with_integrator(
     state_pool: &SqlitePool,
     remote: &dyn RemoteClient,
     integrator: Option<&dyn HeadProposalIntegrator>,
+    progress: &super::progress::Progress,
 ) -> Result<usize, SyncError> {
     let admitted_user_id = crate::database::local::auth::admitted_principal(pool)
         .await
@@ -91,10 +99,15 @@ pub async fn flush_pending_with_integrator(
         if delivered >= FLUSH_BUDGET {
             return Ok(delivered);
         }
-        for subject in scan_dirty(pool, table, &principal_key, &admitted_user_id).await? {
+        let subjects = scan_dirty(pool, table, &principal_key, &admitted_user_id).await?;
+        if !subjects.is_empty() {
+            progress.phase("Sending changes", Some(subjects.len()), "changes");
+        }
+        for subject in subjects {
             if delivered >= FLUSH_BUDGET {
                 return Ok(delivered);
             }
+            let _item = progress.item();
             let outcome = deliver_row(pool, remote, &subject, &token, &admitted_user_id).await;
             match settle(pool, &principal_key, &subject, Subject::Row, outcome).await? {
                 Settlement::Delivered => delivered += 1,
@@ -108,10 +121,15 @@ pub async fn flush_pending_with_integrator(
     // server has ordered, with no terminal integration yet, is work regardless
     // of which device created it.
     if let Some(integrator) = integrator {
-        for proposal_id in pending_integrations(pool, &principal_key).await? {
+        let proposals = pending_integrations(pool, &principal_key).await?;
+        if !proposals.is_empty() {
+            progress.phase("Merging shared changes", Some(proposals.len()), "changes");
+        }
+        for proposal_id in proposals {
             if delivered >= FLUSH_BUDGET {
                 return Ok(delivered);
             }
+            let _item = progress.item();
             match integrate_one(
                 pool,
                 remote,
@@ -156,10 +174,15 @@ pub async fn flush_pending_with_integrator(
     // Children before parents, and after every upsert: the remote's soft delete
     // does not cascade, so the order it hears about a subtree is the order this
     // device deleted it.
-    for tombstone in tombstone::pending(pool, &principal_key).await? {
+    let tombstones = tombstone::pending(pool, &principal_key).await?;
+    if !tombstones.is_empty() {
+        progress.phase("Sending deletions", Some(tombstones.len()), "deletions");
+    }
+    for tombstone in tombstones {
         if delivered >= FLUSH_BUDGET {
             return Ok(delivered);
         }
+        let _item = progress.item();
         let Some(table) = registry::get_table(&tombstone.table_name) else {
             // A registry entry disappeared under a tombstone. Nothing can
             // deliver it; say so once and stop asking.

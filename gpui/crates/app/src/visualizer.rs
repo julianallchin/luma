@@ -1036,11 +1036,6 @@ impl Visualizer {
         true
     }
 
-    /// Dolly by a factor: the web toolbar's one zoom verb, and what both the
-    /// wheel and the middle-button drag reduce to.
-    ///
-    /// The near bound is the rig's own extent: a camera closer than that is
-    /// inside the beams, where every pixel is one saturated colour.
     /// Dolly all the way in, for the launch-time reproduction driver.
     ///
     /// Steps rather than a target radius: the near bound is
@@ -1162,6 +1157,7 @@ impl Visualizer {
         true
     }
 
+    /// Dolly by a factor, shared by the toolbar, wheel and middle-button drag.
     pub(crate) fn dolly(&mut self, factor: f32) {
         let (near, far) = self
             .framing

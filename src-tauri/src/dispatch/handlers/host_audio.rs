@@ -26,6 +26,11 @@ pub async fn host_load_segment(
     end_time: f32,
     beat_grid: Option<BeatGrid>,
 ) -> Result<(), CommandError> {
+    services
+        .sync
+        .ensure_track_audio(&services.storage, &track_id)
+        .await
+        .map_err(|error| CommandError::Internal(error.to_string()))?;
     let pool = &services.db.0;
     let mut access = VisibleTrackAccess::<Read>::read(pool, &track_id).await?;
     let admitted_principal = access.principal().map(str::to_owned);
@@ -80,6 +85,11 @@ pub async fn host_load_segment(
 /// Load a whole track for playback, with its beat grid if one is stored.
 /// Segment start is 0.0, so snapshot times equal absolute track times.
 pub async fn host_load_track(services: &AppServices, track_id: String) -> Result<(), CommandError> {
+    services
+        .sync
+        .ensure_track_audio(&services.storage, &track_id)
+        .await
+        .map_err(|error| CommandError::Internal(error.to_string()))?;
     let pool = &services.db.0;
     let mut access = VisibleTrackAccess::<Read>::read(pool, &track_id).await?;
     let admitted_principal = access.principal().map(str::to_owned);

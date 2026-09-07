@@ -227,11 +227,15 @@ pub async fn pull_all(
     remote: &dyn RemoteClient,
     token: &str,
     current_uid: Option<&str>,
+    progress: &super::progress::Progress,
 ) -> Result<PullStats, SyncError> {
     let mut stats = PullStats::default();
     let mut unavailable = HashSet::new();
 
-    for table in registry::tables_in_topo_order() {
+    let tables = registry::tables_in_topo_order();
+    progress.phase("Checking cloud changes", Some(tables.len()), "collections");
+    for table in tables {
+        let _item = progress.item();
         let blocked_by = table
             .parents
             .iter()
@@ -259,6 +263,7 @@ pub async fn pull_all(
         }
     }
 
+    progress.phase("Updating local library", None, "changes");
     if let Some(uid) = current_uid {
         if let Err(error) = authored.bootstrap_live_projections(pool, Some(uid)).await {
             stats
@@ -437,20 +442,30 @@ async fn pull_table(
                     .apply_server_head(pool, uid, document_id, revision_id, generation, updated_at)
                     .await
                 {
-                    Ok(()) => {
-                        total_count += 1;
-                        page_cursor = sequence;
-                        last_successful_cursor = sequence;
-                        continue;
+                    Ok(()) => total_count += 1,
+                    // Same rule as the declined delete above, for the same
+                    // reason: a refusal is a decision the local database owns.
+                    // The revision it refuses is immutable, so every retry
+                    // reaches the same decision, and stopping here would pin
+                    // this table's cursor to that row forever and defer every
+                    // table downstream of it. The document keeps its current
+                    // head and a later one for it still applies.
+                    Err(error) if error.is_refusal() => {
+                        eprintln!(
+                            "[sync] Cannot project server head {document_id}.{revision_id}: {error}"
+                        );
                     }
                     Err(error) => {
                         eprintln!(
-                            "[sync] Cannot project server head {document_id}.{revision_id}: {error}"
+                            "[sync] Failed to project server head {document_id}.{revision_id}: {error}"
                         );
                         stopped_at_failure = Some(SyncError::Local(error.to_string()));
                         break 'pages;
                     }
                 }
+                page_cursor = sequence;
+                last_successful_cursor = sequence;
+                continue;
             }
 
             // A remote row the local schema would refuse is repaired on the
@@ -477,7 +492,11 @@ async fn pull_table(
                                 .get("document_id")
                                 .and_then(Value::as_str)
                                 .ok_or_else(|| SyncError::MissingField("document_id".into()))?;
-                            authored
+                            // A refusal here is the same decision the head
+                            // branch above tolerates, and `?` would be worse
+                            // than a `break`: it abandons the pull before the
+                            // cursor this page already earned is made durable.
+                            if let Err(error) = authored
                                 .apply_integrated_server_head(
                                     pool,
                                     uid,
@@ -485,7 +504,15 @@ async fn pull_table(
                                     result_revision_id,
                                 )
                                 .await
-                                .map_err(|error| SyncError::Local(error.to_string()))?;
+                            {
+                                if !error.is_refusal() {
+                                    stopped_at_failure = Some(SyncError::Local(error.to_string()));
+                                    break 'pages;
+                                }
+                                eprintln!(
+                                    "[sync] Cannot project integrated head {document_id}.{result_revision_id}: {error}"
+                                );
+                            }
                         }
                     }
                     total_count += 1;
@@ -1793,6 +1820,7 @@ mod remote_deletion_tests {
             &projection_only,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -1830,6 +1858,7 @@ mod remote_deletion_tests {
             &canonical_receipt,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -1962,6 +1991,7 @@ mod remote_deletion_tests {
             &remote,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -2020,6 +2050,7 @@ mod remote_deletion_tests {
             &remote,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -2386,6 +2417,7 @@ mod remote_deletion_tests {
             &remote,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
@@ -2451,6 +2483,7 @@ mod remote_deletion_tests {
             &remote,
             "token",
             Some("alice"),
+            &crate::sync::progress::Progress::default(),
         )
         .await
         .unwrap();
