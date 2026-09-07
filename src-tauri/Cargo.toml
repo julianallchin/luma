@@ -80,7 +80,7 @@ realfft = "3.5"
 rayon = "1.10"
 symphonia = { version = "0.5", features = ["mp3", "flac", "wav", "aac", "ogg", "vorbis"] }
 cpal = "0.15"
-tokio = { version = "1", features = ["macros", "sync", "time", "rt", "signal"] }
+tokio = { version = "1", features = ["macros", "sync", "time", "rt", "signal", "process", "io-util"] }
 async-trait = "0.1"
 futures-util = "0.3"
 schemars = "1.2"

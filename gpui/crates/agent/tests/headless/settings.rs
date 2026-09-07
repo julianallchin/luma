@@ -37,16 +37,16 @@ const SCRIPT: &str = r#"
 			s.find({ role: "select", label: model }) !== undefined ? s : undefined);
     }
 
-    const opened = openSettings("Kimi K3 Fast");
-    const before = opened.find({ role: "select", label: "Kimi K3 Fast" });
+    const opened = openSettings("Claude Opus 5");
+    const before = opened.find({ role: "select", label: "Claude Opus 5" });
 
     // Open the picker, then choose the option that is not selected. The pick
     // is a write plus a re-read on a runtime gpui does not own — waited for
     // by its result, not by a frame count.
     app.click(before);
-    app.click(app.snapshot().find({ role: "button", label: "Claude Opus 5" }));
+    app.click(app.snapshot().find({ role: "button", label: "Kimi K3 Fast" }));
     until("the picked model", (s) =>
-        s.find({ role: "select", label: "Claude Opus 5" }) !== undefined);
+        s.find({ role: "select", label: "Kimi K3 Fast" }) !== undefined);
 
     const chosen = app.snapshot().findAll({ role: "select" }).map((n) => n.label);
 
@@ -55,9 +55,15 @@ const SCRIPT: &str = r#"
     const home = app.snapshot().nodes.map((n) => n.label);
 
     // …and in again, which re-reads the seam.
-    const reopened = openSettings("Claude Opus 5").findAll({ role: "select" }).map((n) => n.label);
+    const reopened = openSettings("Kimi K3 Fast").findAll({ role: "select" }).map((n) => n.label);
 
-    ({ before: before.label, chosen, home, reopened })
+    app.click(app.snapshot().find({ role: "select", label: "API" }));
+    app.click(app.snapshot().find({ role: "button", label: "Codex subscription" }));
+    until("the subscription engine", (s) => s.find({ role: "select", label: "Codex subscription" }));
+    nav.dismiss();
+    const engine = openSettings("Codex subscription").findAll({ role: "select" }).map((n) => n.label);
+
+    ({ before: before.label, chosen, home, reopened, engine })
 "#;
 
 #[test]
@@ -68,11 +74,11 @@ fn the_model_picker_writes_through_the_seam_and_reads_back() {
     let out: Value = result.result;
 
     // The default the settings schema declares.
-    assert_eq!(out["before"], "Kimi K3 Fast");
+    assert_eq!(out["before"], "Claude Opus 5");
     // Provider is untouched — the gateway default — and the model is the pick.
     assert_eq!(
         out["chosen"],
-        serde_json::json!(["Vercel AI Gateway", "Claude Opus 5"])
+        serde_json::json!(["API", "Vercel AI Gateway", "Kimi K3 Fast"])
     );
     // Back landed on the venue shell settings covered, with its venue intact.
     assert!(
@@ -92,6 +98,7 @@ fn the_model_picker_writes_through_the_seam_and_reads_back() {
     // The choice survived a fresh `get_settings`.
     assert_eq!(
         out["reopened"],
-        serde_json::json!(["Vercel AI Gateway", "Claude Opus 5"])
+        serde_json::json!(["API", "Vercel AI Gateway", "Kimi K3 Fast"])
     );
+    assert_eq!(out["engine"], serde_json::json!(["Codex subscription"]));
 }

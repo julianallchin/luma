@@ -27,6 +27,7 @@
 //! a database trigger, and it has to run headless — batch lighting runs and CI
 //! have no window.
 
+pub mod engine;
 pub mod host;
 pub mod model;
 pub mod skills;
@@ -579,6 +580,8 @@ impl From<AgentError> for crate::dispatch::CommandError {
 #[derive(Clone)]
 pub struct AgentService {
     services: SharedServices,
+    engine: Option<engine::Engine>,
+    model_name: Option<String>,
     /// Overrides provider selection. Set by tests and by a host that wants a
     /// scripted model; `None` resolves the model from settings and the key from
     /// the environment or the settings table.
@@ -593,6 +596,8 @@ impl AgentService {
     pub fn new(services: SharedServices) -> Self {
         Self {
             services,
+            engine: None,
+            model_name: None,
             client: None,
             tools: None,
         }
@@ -614,6 +619,20 @@ impl AgentService {
         self
     }
 
+    /// Select an execution engine without changing the user's saved settings.
+    #[must_use]
+    pub fn with_engine(mut self, engine: engine::Engine) -> Self {
+        self.engine = Some(engine);
+        self
+    }
+
+    /// Override the model for this host without changing saved preferences.
+    #[must_use]
+    pub fn with_model_name(mut self, model: String) -> Self {
+        self.model_name = Some(model);
+        self
+    }
+
     pub(crate) fn services(&self) -> &AppServices {
         &self.services
     }
@@ -630,7 +649,14 @@ impl AgentService {
         let settings = crate::database::local::settings::get_all_settings(&self.services.db().0)
             .await
             .map_err(AgentError::Storage)?;
-        Ok(model::configured(&settings)?.spec().display)
+        match self
+            .engine
+            .unwrap_or(engine::Engine::configured(&settings)?)
+        {
+            engine::Engine::Api => Ok(model::configured(&settings)?.spec().display),
+            engine::Engine::Codex => Ok("Codex"),
+            engine::Engine::Claude => Ok("Claude Code"),
+        }
     }
 
     /// Everything the history picker shows about `scope`'s subject: its
