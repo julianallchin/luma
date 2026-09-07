@@ -19,7 +19,7 @@ use crate::models::agent_threads::{
 };
 
 const THREAD_COLUMNS: &str =
-    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, created_at, updated_at";
+    "id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, forked_from_thread_id, forked_at_message_id, parent_thread_id, parent_call_id, title, actor, engine, model, provider, effort, created_at, updated_at";
 
 /// The FROM/WHERE every thread *read* shares: active threads, admitted by the
 /// write-admission singleton, owned by the bound principal (one `?`).
@@ -81,11 +81,12 @@ pub(crate) async fn create_thread_with_id(
         .await
         .map_err(|e| format!("Failed to begin agent thread creation: {e}"))?;
     sqlx::query(
-        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider)
+        "INSERT INTO agent_threads (id, owner_user_id, agent_kind, subject_kind, subject_id, implementation_id, venue_id, score_id, title, parent_thread_id, parent_call_id, engine, model, provider, effort)
          SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              COALESCE(parent.engine, ?),
              CASE WHEN parent.id IS NOT NULL THEN parent.model ELSE ? END,
-             CASE WHEN parent.id IS NOT NULL THEN parent.provider ELSE ? END
+             CASE WHEN parent.id IS NOT NULL THEN parent.provider ELSE ? END,
+             CASE WHEN parent.id IS NOT NULL THEN parent.effort ELSE ? END
          FROM auth_write_admission admission
          LEFT JOIN agent_threads parent ON parent.id = ? AND parent.owner_user_id IS admission.active_uid
          WHERE admission.singleton = 1 AND admission.armed = 1
@@ -105,6 +106,7 @@ pub(crate) async fn create_thread_with_id(
     .bind(defaults.service.engine().key())
     .bind(&defaults.model)
     .bind(defaults.service.provider().map(|p| p.as_str()))
+    .bind(&defaults.effort)
     .bind(&input.parent_thread_id)
     .bind(owner_user_id)
     .execute(&mut *transaction)
@@ -198,8 +200,8 @@ pub(crate) async fn fork_thread_for_connection(
         "INSERT INTO agent_threads
          (id, owner_user_id, agent_kind, subject_kind, subject_id,
           implementation_id, venue_id, score_id, forked_from_thread_id,
-          forked_at_message_id, title, engine, model, provider)
-         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          forked_at_message_id, title, engine, model, provider, effort)
+         SELECT ?, admission.active_uid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          FROM auth_write_admission AS admission
          WHERE admission.singleton = 1 AND admission.armed = 1
            AND admission.accepting = 1 AND admission.maintenance = 0
@@ -218,6 +220,7 @@ pub(crate) async fn fork_thread_for_connection(
     .bind(&source.engine)
     .bind(&source.model)
     .bind(&source.provider)
+    .bind(&source.effort)
     .bind(owner_user_id)
     .execute(&mut *connection)
     .await
@@ -1459,13 +1462,14 @@ pub async fn set_thread_selection(
 ) -> Result<AgentThread, String> {
     selection.validate().map_err(|e| e.to_string())?;
     sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
-        "UPDATE agent_threads SET engine = ?, model = ?, provider = ?, synced_at = NULL
+        "UPDATE agent_threads SET engine = ?, model = ?, provider = ?, effort = ?, synced_at = NULL
          WHERE id = ? AND id IN (SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL})
          RETURNING {THREAD_COLUMNS}"
     )))
     .bind(selection.service.engine().key())
     .bind(&selection.model)
     .bind(selection.service.provider().map(|p| p.as_str()))
+    .bind(&selection.effort)
     .bind(thread_id)
     .bind(owner_user_id)
     .fetch_optional(pool)
@@ -1642,10 +1646,12 @@ mod tests {
         let selected = Selection {
             service: Service::Codex,
             model: Some("test-model".into()),
+            effort: Some("high".into()),
         };
         let invalid = Selection {
             service: Service::OpenRouter,
             model: Some("unknown".into()),
+            effort: None,
         };
         set_thread_selection(&pool, &first.id, &selected, Some("alice"))
             .await
@@ -1669,12 +1675,14 @@ mod tests {
         .unwrap();
         assert_eq!(fork.engine, "codex");
         assert_eq!(fork.model, selected.model);
+        assert_eq!(fork.effort, selected.effort);
         let mut child = track_thread("track");
         child.parent_thread_id = Some(first.id.clone());
         child.parent_call_id = Some("call".into());
         let child = create_thread(&pool, child, Some("alice")).await.unwrap();
         assert_eq!(child.engine, "codex");
         assert_eq!(child.model, selected.model);
+        assert_eq!(child.effort, selected.effort);
         assert!(
             set_thread_selection(&pool, &first.id, &invalid, Some("alice"))
                 .await

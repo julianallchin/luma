@@ -1046,6 +1046,7 @@ pub static TABLES: &[TableMeta] = &[
             "engine",
             "model",
             "provider",
+            "effort",
             "subject_kind",
             "subject_id",
             "implementation_id",

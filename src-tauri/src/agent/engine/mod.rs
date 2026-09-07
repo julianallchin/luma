@@ -61,6 +61,7 @@ impl Engine {
 pub(super) struct Request {
     pub engine: Engine,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub system: String,
     pub prompt: String,
     pub tools: Vec<ToolSpec>,
@@ -92,6 +93,22 @@ pub(super) enum Session {
 
 impl Session {
     pub async fn start(request: Request) -> Result<Self, AgentError> {
+        if let Some(effort) = &request.effort {
+            let service = match request.engine {
+                Engine::Claude => catalog::Service::Claude,
+                Engine::Codex => catalog::Service::Codex,
+                Engine::Api => return Err(protocol("API engine has no subprocess")),
+            };
+            let models = catalog::models(service, &request.cwd).await?;
+            if !models
+                .iter()
+                .any(|model| model.matches(&request.model) && model.effort_levels.contains(effort))
+            {
+                return Err(protocol(format!(
+                    "Effort {effort} is not supported by the selected model"
+                )));
+            }
+        }
         match request.engine {
             Engine::Codex => codex::Session::start(request).await.map(Self::Codex),
             Engine::Claude => claude::Session::start(request).await.map(Self::Claude),
@@ -134,9 +151,13 @@ fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
         .collect()
 }
 
-pub(super) fn context_fingerprint(system: &str, tools: &[ToolSpec]) -> String {
+pub(super) fn context_fingerprint(
+    system: &str,
+    tools: &[ToolSpec],
+    effort: Option<&str>,
+) -> String {
     use sha2::{Digest, Sha256};
-    let context = serde_json::to_vec(&(system, tool_definitions(tools)))
+    let context = serde_json::to_vec(&(system, tool_definitions(tools), effort))
         .expect("serializable tool configuration");
     format!("{:x}", Sha256::digest(context))
 }
@@ -160,6 +181,7 @@ mod tests {
         Request {
             engine,
             model: None,
+            effort: None,
             system: "Use the echo tool.".into(),
             prompt: "Echo hi.".into(),
             tools: vec![ToolSpec {

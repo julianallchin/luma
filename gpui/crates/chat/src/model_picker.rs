@@ -14,6 +14,7 @@ use crate::AgentChat;
 
 pub(crate) struct Picker {
     pub open: bool,
+    pub effort_open: bool,
     pub service: Service,
     pub catalogs: HashMap<Service, Result<Vec<ModelChoice>, String>>,
     pub loading: HashSet<Service>,
@@ -23,6 +24,7 @@ impl Default for Picker {
     fn default() -> Self {
         Self {
             open: false,
+            effort_open: false,
             service: Service::Claude,
             catalogs: HashMap::new(),
             loading: HashSet::new(),
@@ -70,7 +72,7 @@ impl Picker {
             .catalogs
             .get(&selection.service)
             .and_then(|result| result.as_ref().ok())
-            .and_then(|models| models.iter().find(|model| model.id == selection.model))
+            .and_then(|models| models.iter().find(|model| model.matches(&selection.model)))
             .map(|model| model.label.clone())
             .or_else(|| {
                 MODELS
@@ -100,9 +102,9 @@ impl Picker {
             .agent_disabled(disabled);
         let dismiss = chat.clone();
         div()
-            .relative()
-            .child(trigger)
-            .when(self.open, |el| {
+            .flex()
+            .gap(px(4.))
+            .child(div().relative().child(trigger).when(self.open, |el| {
                 el.child(float::anchored_below(
                     "thread-model-menu",
                     luma_ui::CONTROL_HEIGHT,
@@ -110,6 +112,75 @@ impl Picker {
                         dismiss.update(cx, |chat, cx| chat.toggle_model_picker(cx))
                     }),
                     self.menu(selection, chat),
+                ))
+            }))
+            .child(self.effort_picker(selection, disabled, chat))
+            .into_any_element()
+    }
+
+    fn effort_picker(
+        &self,
+        selection: &Selection,
+        disabled: bool,
+        chat: &Entity<AgentChat>,
+    ) -> AnyElement {
+        let model = self
+            .catalogs
+            .get(&selection.service)
+            .and_then(|catalog| catalog.as_ref().ok())
+            .and_then(|models| models.iter().find(|model| model.matches(&selection.model)));
+        let Some(model) = model.filter(|model| !model.effort_levels.is_empty()) else {
+            return div().into_any_element();
+        };
+        let label = effort_label(selection.effort.as_deref());
+        let toggle = chat.clone();
+        let dismiss = chat.clone();
+        let trigger = float::chip()
+            .id("thread-effort")
+            .child(label.clone())
+            .child(Icon::new(IconName::ChevronDown).size(px(12.)))
+            .when(disabled, |el| el.opacity(0.5))
+            .on_click(move |_, _, cx| toggle.update(cx, |chat, cx| chat.toggle_effort_picker(cx)))
+            .agent_node(Role::Select, format!("Effort · {label}"))
+            .agent_disabled(disabled);
+        div()
+            .relative()
+            .child(trigger)
+            .when(self.effort_open, |el| {
+                let mut menu = float::popover_card()
+                    .w(px(160.))
+                    .child(div().px(px(10.)).py(px(6.)).child("Effort"));
+                for effort in std::iter::once(None)
+                    .chain(model.effort_levels.iter().map(|level| Some(level.as_str())))
+                {
+                    let mut chosen = selection.clone();
+                    chosen.effort = effort.map(str::to_string);
+                    let active = chosen.effort == selection.effort;
+                    let label = effort_label(effort);
+                    let chat = chat.clone();
+                    let id = format!("effort-{}", effort.unwrap_or("default"));
+                    menu = menu.child(
+                        float::menu_row(float::RowState::of(active, false), id.clone())
+                            .id(SharedString::from(id))
+                            .px(px(10.))
+                            .py(px(8.))
+                            .child(div().flex_1().child(label.clone()))
+                            .when(active, |row| {
+                                row.child(Icon::new(IconName::Check).size(px(14.)))
+                            })
+                            .on_click(move |_, _, cx| {
+                                chat.update(cx, |chat, cx| chat.select_model(chosen.clone(), cx))
+                            })
+                            .agent_node(Role::Button, format!("Effort {label}")),
+                    );
+                }
+                el.child(float::anchored_below(
+                    "thread-effort-menu",
+                    luma_ui::CONTROL_HEIGHT,
+                    float::Dismiss::on_press_out(move |_, cx| {
+                        dismiss.update(cx, |chat, cx| chat.toggle_effort_picker(cx))
+                    }),
+                    menu.into_any_element(),
                 ))
             })
             .into_any_element()
@@ -182,11 +253,9 @@ impl Picker {
                         .max_h(px(280.))
                         .overflow_y_scroll(),
                     |rows, (index, model)| {
-                        let chosen = Selection {
-                            service: self.service,
-                            model: model.id.clone(),
-                        };
-                        let active = &chosen == selection;
+                        let chosen = model.selection(self.service, selection);
+                        let active =
+                            self.service == selection.service && model.matches(&selection.model);
                         let chat = chat.clone();
                         rows.child(
                             float::menu_row(
@@ -202,8 +271,19 @@ impl Picker {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
-                                    .child(model.label.clone()),
+                                    .child(div().child(model.label.clone()))
+                                    .when_some(
+                                        model.resolved_model.clone().or(model.id.clone()),
+                                        |el, version| {
+                                            el.child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(ladder::muted_foreground())
+                                                    .child(version.clone())
+                                                    .agent_node(Role::Text, version),
+                                            )
+                                        },
+                                    ),
                             )
                             .when(active, |row| {
                                 row.child(Icon::new(IconName::Check).size(px(14.)))
@@ -219,5 +299,19 @@ impl Picker {
             }
         }
         menu.into_any_element()
+    }
+}
+
+fn effort_label(effort: Option<&str>) -> String {
+    match effort {
+        None => "Auto".into(),
+        Some("xhigh") => "Extra high".into(),
+        Some(effort) => {
+            let mut chars = effort.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        }
     }
 }

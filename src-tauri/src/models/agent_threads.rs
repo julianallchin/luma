@@ -46,6 +46,8 @@ pub struct AgentThread {
     pub engine: String,
     pub model: Option<String>,
     pub provider: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -477,12 +477,22 @@ impl AgentChat {
         if self.is_streaming() || self.selection_saving {
             return;
         }
+        self.model_picker.effort_open = false;
         self.model_picker.open = !self.model_picker.open;
         if self.model_picker.open {
             if let Some(selection) = &self.selection {
                 self.browse_models(selection.service, cx);
             }
         }
+        cx.notify();
+    }
+
+    fn toggle_effort_picker(&mut self, cx: &mut Context<Self>) {
+        if self.is_streaming() || self.selection_saving {
+            return;
+        }
+        self.model_picker.open = false;
+        self.model_picker.effort_open = !self.model_picker.effort_open;
         cx.notify();
     }
 
@@ -511,6 +521,7 @@ impl AgentChat {
 
     fn select_model(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.model_picker.open = false;
+        self.model_picker.effort_open = false;
         if self.is_streaming() || self.selection_saving {
             return;
         }
@@ -562,6 +573,7 @@ impl AgentChat {
         self.conversation = Conversation::Loading(self.reads);
         self.selection = None;
         self.model_picker.open = false;
+        self.model_picker.effort_open = false;
         self.selection_saving = false;
         self.error = None;
         self.seat(Transcript::default(), cx);
@@ -937,6 +949,7 @@ impl AgentChat {
             return;
         }
         self.model_picker.open = false;
+        self.model_picker.effort_open = false;
         let prompt = self.composer.prompt(cx);
         if prompt.is_empty() {
             return;

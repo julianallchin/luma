@@ -31,6 +31,9 @@ impl Session {
         cmd.arg("--system-prompt").arg(&request.system);
         cmd.arg("--mcp-config")
             .arg(json!({"mcpServers":{"luma":{"type":"sdk","name":"luma"}}}).to_string());
+        if let Some(effort) = &request.effort {
+            cmd.arg("--effort").arg(effort);
+        }
         if let Some(model) = &request.model {
             cmd.arg("--model").arg(model);
         }
@@ -227,10 +230,28 @@ pub(super) async fn models(
                             .as_str()
                             .filter(|id| *id != "default")
                             .map(str::to_string),
-                        label: model["displayName"]
-                            .as_str()
-                            .ok_or_else(|| protocol("Claude model has no name"))?
-                            .into(),
+                        label: {
+                            let label = model["description"]
+                                .as_str()
+                                .and_then(|text| text.split('·').next())
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                                .or_else(|| model["displayName"].as_str())
+                                .ok_or_else(|| protocol("Claude model has no name"))?;
+                            if model["value"] == "default" {
+                                format!("Default · {label}")
+                            } else {
+                                label.into()
+                            }
+                        },
+                        resolved_model: model["resolvedModel"].as_str().map(str::to_string),
+                        effort_levels: model["supportedEffortLevels"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect(),
                     })
                 })
                 .collect();

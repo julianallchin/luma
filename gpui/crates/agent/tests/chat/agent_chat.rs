@@ -525,8 +525,14 @@ fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
         until("the engine menu", (s) => s.find({{ role: "button", label: "OpenRouter" }}) !== undefined);
         app.click(app.snapshot().find({{ role: "button", label: "OpenRouter" }}));
         until("OpenRouter models", (s) => s.find({{ role: "button", label: "Kimi K3 Fast" }}) !== undefined);
+        if (!app.snapshot().find({{ role: "text", label: "kimi-k3-fast" }})) throw new Error("model version missing");
         app.click(app.snapshot().find({{ role: "button", label: "Kimi K3 Fast" }}));
         until("the saved engine", (s) => s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "select", label: "Effort · Auto" }}));
+        until("effort choices", (s) => s.find({{ role: "button", label: "Effort Low" }}) !== undefined);
+        app.click(app.snapshot().find({{ role: "button", label: "Effort Low" }}));
+        until("saved effort", (s) => s.find({{ role: "select", label: "Effort · Low" }}) !== undefined);
+
         app.click(app.snapshot().find({{ role: "button", label: "New chat" }}));
         until("the new chat's default", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
         app.click(app.snapshot().find({{ role: "button", label: "Chat history" }}));
@@ -543,6 +549,9 @@ fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
                 s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined ||
                 s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
             engines.push(app.snapshot().findAll({{ role: "select" }}).map((n) => n.label)[0]);
+            const expectedEffort = engines.at(-1).startsWith("OpenRouter") ? "Effort · Low" : "Effort · Auto";
+            until("reopened effort", (s) => s.find({{ role: "select", label: expectedEffort }}) !== undefined);
+
         }}
         if (JSON.stringify(engines.sort()) !== JSON.stringify(["OpenRouter · Kimi K3 Fast", "Vercel AI Gateway · Claude Opus 5"]))
             throw new Error("thread choices were not preserved: " + JSON.stringify(engines));

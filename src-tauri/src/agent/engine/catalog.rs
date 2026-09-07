@@ -70,6 +70,8 @@ impl Service {
 pub struct Selection {
     pub service: Service,
     pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 impl Selection {
@@ -77,6 +79,7 @@ impl Selection {
         Ok(Self {
             service: Service::of(Engine::parse(&thread.engine)?, thread.provider.as_deref()),
             model: thread.model.clone(),
+            effort: thread.effort.clone(),
         })
     }
 
@@ -94,10 +97,22 @@ impl Selection {
                 .filter(|s| !s.trim().is_empty())
                 .cloned()
         };
-        Ok(Self { service, model })
+        Ok(Self {
+            service,
+            model,
+            effort: None,
+        })
     }
 
     pub fn validate(&self) -> Result<(), AgentError> {
+        if let Some(effort) = &self.effort {
+            if effort.trim().is_empty() {
+                return Err(AgentError::Invalid(format!("Unknown effort: {effort}")));
+            }
+            if self.service.provider().is_some() {
+                self.api_reasoning()?;
+            }
+        }
         if let Some(provider) = self.service.provider() {
             let id = self
                 .model
@@ -114,12 +129,44 @@ impl Selection {
         }
         Ok(())
     }
+
+    pub fn api_reasoning(&self) -> Result<Option<model::ReasoningLevel>, AgentError> {
+        self.effort
+            .as_ref()
+            .map(|effort| {
+                serde_json::from_value(serde_json::json!(effort))
+                    .map_err(|_| AgentError::Invalid(format!("Unsupported API effort: {effort}")))
+            })
+            .transpose()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelChoice {
     pub id: Option<String>,
     pub label: String,
+    pub resolved_model: Option<String>,
+    pub effort_levels: Vec<String>,
+}
+
+impl ModelChoice {
+    pub fn matches(&self, model: &Option<String>) -> bool {
+        &self.id == model || (self.id.is_some() && model.is_some() && &self.resolved_model == model)
+    }
+
+    pub fn selection(&self, service: Service, previous: &Selection) -> Selection {
+        Selection {
+            service,
+            model: self
+                .id
+                .as_ref()
+                .map(|id| self.resolved_model.clone().unwrap_or_else(|| id.clone())),
+            effort: previous
+                .effort
+                .clone()
+                .filter(|effort| self.effort_levels.contains(effort)),
+        }
+    }
 }
 
 pub async fn models(
@@ -140,6 +187,8 @@ pub async fn models(
                     .map(|spec| ModelChoice {
                         id: Some(spec.key.into()),
                         label: spec.display.into(),
+                        resolved_model: Some(spec.key.into()),
+                        effort_levels: ["low", "medium", "high"].map(str::to_string).into(),
                     })
                     .collect())
             }
@@ -157,22 +206,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn choices_pin_versions_and_drop_unsupported_effort() {
+        let model = ModelChoice {
+            id: Some("sonnet".into()),
+            resolved_model: Some("claude-sonnet-5".into()),
+            label: "Sonnet 5".into(),
+            effort_levels: vec!["low".into(), "high".into()],
+        };
+        let previous = Selection {
+            service: Service::Claude,
+            model: None,
+            effort: Some("high".into()),
+        };
+        let chosen = model.selection(Service::Claude, &previous);
+        assert_eq!(chosen.model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(chosen.effort.as_deref(), Some("high"));
+        assert!(model.matches(&chosen.model));
+        assert!(model.matches(&Some("sonnet".into())));
+        assert!(model
+            .selection(
+                Service::Claude,
+                &Selection {
+                    effort: Some("max".into()),
+                    ..previous
+                }
+            )
+            .effort
+            .is_none());
+        let default = ModelChoice { id: None, ..model };
+        assert!(default.matches(&None));
+        assert!(!default.matches(&chosen.model));
+    }
+
+    #[test]
     fn selections_never_silently_route_to_a_different_service() {
         assert!(Selection {
             service: Service::Anthropic,
-            model: Some("kimi-k3-fast".into())
+            model: Some("kimi-k3-fast".into()),
+            effort: None
         }
         .validate()
         .is_err());
         assert!(Selection {
             service: Service::OpenRouter,
-            model: Some("kimi-k3-fast".into())
+            model: Some("kimi-k3-fast".into()),
+            effort: None
         }
         .validate()
         .is_ok());
         assert!(Selection {
             service: Service::Vercel,
-            model: None
+            model: None,
+            effort: None
         }
         .validate()
         .is_err());
@@ -186,7 +271,16 @@ mod tests {
             let models = models(service, cwd.path()).await.unwrap();
             assert!(models.iter().any(|model| model.id.is_some()));
             assert!(models.iter().all(|model| !model.label.is_empty()));
-            eprintln!("{}: {} models", service.label(), models.len());
+            assert!(models.iter().any(|model| !model.effort_levels.is_empty()));
+            for model in &models {
+                eprintln!(
+                    "{}: {} {:?} {:?}",
+                    service.label(),
+                    model.label,
+                    model.resolved_model,
+                    model.effort_levels
+                );
+            }
         }
     }
 }
