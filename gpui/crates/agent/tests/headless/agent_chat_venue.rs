@@ -33,7 +33,7 @@ const AWAIT_HEADER: &str = r#"
     until("the chat header", (s) => {
         const send = s.find({ role: "button", label: "Send" });
         return send !== undefined && send.bounds.width > 0
-            && s.findAll({ role: "text" }).some((n) => n.label === "Venue agent");
+            && s.findAll({ role: "text" }).some((n) => n.label === "Luma");
     }).nodes
 "#;
 
@@ -60,7 +60,7 @@ fn the_chat_attaches_to_the_room_on_the_stage_and_patch_pages() {
     );
     let text = labels(&stage, "text");
     assert!(
-        text.iter().any(|label| label == "Venue agent"),
+        text.iter().any(|label| label == "Luma"),
         "the stage page did not point the centre at the room: {text:?}"
     );
     assert!(
@@ -89,7 +89,7 @@ fn the_chat_attaches_to_the_room_on_the_stage_and_patch_pages() {
     );
     let text = labels(&patch, "text");
     assert!(
-        text.iter().any(|label| label == "Venue agent"),
+        text.iter().any(|label| label == "Luma"),
         "the patch page did not point the centre at the room: {text:?}"
     );
 }

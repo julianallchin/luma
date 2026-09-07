@@ -27,6 +27,7 @@
 //! a database trigger, and it has to run headless — batch lighting runs and CI
 //! have no window.
 
+pub(crate) mod context;
 pub mod engine;
 pub mod host;
 pub mod model;
@@ -57,15 +58,14 @@ use crate::models::agent_threads::{
 };
 use model::{ModelClient, ModelError, StopReason, Usage};
 
-/// Which agent a thread belongs to. The durable column stores the snake-case
-/// name; a thread is never re-pointed at another kind.
+/// Legacy route tags retained in immutable thread creation metadata.
+/// Conversation behavior is unified; each turn supplies its working context.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     TrackCopilot,
     PatternGraph,
-    /// The room builder. Its thread carries a venue and nothing else — no
-    /// track, no score — and its namespace is `luma.venue` alone.
+    /// A venue route without an authored score or graph.
     VenueRig,
 }
 
@@ -92,28 +92,19 @@ impl AgentKind {
             ))),
         }
     }
+}
 
-    /// The system prompt: the kind's prose plus the `<available_skills>` block
-    /// the `skill` tool loads from.
-    ///
-    /// Byte-stable so it stays a cacheable prefix — the listing is name-sorted
-    /// and the whole string is composed once per process, so a prefix cannot
-    /// move under a running thread.
-    #[must_use]
-    pub fn system_prompt(self) -> &'static str {
-        static TRACK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        static GRAPH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        static VENUE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        let (cell, prose) = match self {
-            AgentKind::TrackCopilot => (&TRACK, include_str!("prompts/track.md")),
-            AgentKind::PatternGraph => (&GRAPH, include_str!("prompts/graph.md")),
-            AgentKind::VenueRig => (&VENUE, include_str!("prompts/venue.md")),
-        };
-        cell.get_or_init(|| match skills::bundled().listing() {
+/// One cacheable prompt for every conversation, independent of its context.
+#[must_use]
+pub fn system_prompt() -> &'static str {
+    static PROMPT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PROMPT.get_or_init(|| {
+        let prose = include_str!("prompts/luma.md");
+        match skills::bundled().listing() {
             "" => prose.to_string(),
             listing => format!("{prose}\n\n{listing}"),
-        })
-    }
+        }
+    })
 }
 
 /// What a conversation is *about*.
@@ -136,11 +127,6 @@ impl SubjectKind {
     }
 }
 
-/// The identity of a conversation, as a screen implies it.
-///
-/// The rule that `pattern_graph` requires an implementation and `track_copilot`
-/// forbids one is stated once, in the durable model's `authored_route`; this
-/// type carries the fields and lets that check own the invariant.
 /// One row of the history picker: a conversation, read by its own words.
 ///
 /// Threads are almost never titled, so a row is named by what was said in it —
@@ -362,6 +348,7 @@ fn excerpt(entry: usize, line: &[char], matched: std::ops::Range<usize>) -> Hist
     }
 }
 
+/// A validated resource route used for initial thread metadata and turn context.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadScope {
@@ -379,6 +366,7 @@ impl TryFrom<&AgentThread> for ThreadScope {
     fn try_from(thread: &AgentThread) -> Result<Self, Self::Error> {
         use crate::models::agent_threads::{AuthoredThreadRoute, ThreadRoute};
         match thread.route().map_err(AgentError::Invalid)? {
+            ThreadRoute::Unbound => Err(AgentError::Invalid("no editor context is open".into())),
             ThreadRoute::Venue { venue_id } => Ok(Self::venue(venue_id)),
             ThreadRoute::Authored(AuthoredThreadRoute::Track {
                 track_id,
@@ -467,16 +455,28 @@ impl ThreadScope {
     }
 }
 
+/// Host-selected context for one turn. `None` explicitly means nothing is open.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnContext {
+    pub scope: Option<ThreadScope>,
+}
+
 /// What the user asked for.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UserPrompt {
     pub text: String,
+    #[serde(default)]
+    pub context: Option<TurnContext>,
 }
 
 impl From<String> for UserPrompt {
     fn from(text: String) -> Self {
-        Self { text }
+        Self {
+            text,
+            context: None,
+        }
     }
 }
 

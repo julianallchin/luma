@@ -105,7 +105,7 @@ impl std::fmt::Display for ArtifactId {
 pub enum AgentKind {
     TrackCopilot,
     PatternGraph,
-    /// The room builder. Its namespace is `luma.venue` alone.
+    /// Legacy venue-only route tag; namespace availability is context-driven.
     VenueRig,
 }
 

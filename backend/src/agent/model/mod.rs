@@ -782,7 +782,7 @@ mod tests {
 
         // The shipped registry's own spec, not a hand-written stand-in: the
         // schema a real turn sends is the thing under test.
-        let specs = tools::registry(crate::agent::AgentKind::TrackCopilot).specs();
+        let specs = tools::registry_for_context(true).specs();
         assert_eq!(specs.len(), 1, "the track agent declares one tool");
         println!(
             "input_schema: {}",
@@ -872,11 +872,11 @@ mod tests {
     /// the blocks written *after* the tail marker as fresh, and a live service
     /// rounds.
     async fn two_steps_share_a_prefix(client: &dyn ModelClient, id: ModelId) {
-        use crate::agent::{tools, AgentKind};
+        use crate::agent::tools;
         use futures_util::StreamExt;
 
-        let specs = tools::registry(AgentKind::TrackCopilot).specs();
-        let system = vec![AgentKind::TrackCopilot.system_prompt().to_string()];
+        let specs = tools::registry_for_context(true).specs();
+        let system = vec![crate::agent::system_prompt().to_string()];
         let first = ModelMessage {
             role: ModelRole::User,
             content: vec![ContentBlock::Text("Say only: one.".into())],

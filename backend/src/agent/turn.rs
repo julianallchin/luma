@@ -23,8 +23,8 @@ use super::model::{
 use super::tools::{self, ToolContext, ToolProgress, ToolRegistry};
 use super::transcript::{self, Transcript};
 use super::{
-    AgentChatMessage, AgentError, AgentKind, AgentService, Role, ToolResult, TurnEvent,
-    TurnOutcome, UserPrompt,
+    AgentChatMessage, AgentError, AgentService, Role, ToolResult, TurnEvent, TurnOutcome,
+    UserPrompt,
 };
 use crate::database::local::agent_threads as db;
 use crate::models::agent_execution::PythonScopeInput;
@@ -113,7 +113,7 @@ struct TurnSetup<'a> {
     lease: &'a engine::state::RunLease,
     resume: Option<engine::state::NativeSession>,
     context: String,
-    kind: AgentKind,
+    system: String,
     registry: &'a ToolRegistry,
     scope: &'a PythonScopeInput,
     /// The private authored head this thread writes to, for a subagent
@@ -122,11 +122,7 @@ struct TurnSetup<'a> {
     /// same detached state `prepare_turn` will finalize, and no tool is in a
     /// position to disagree about which.
     workspace_id: Option<&'a str>,
-    /// Whether this thread's assistant rows reserve authored state. A venue
-    /// thread revises the room's relational rig, which has no revision history
-    /// to stage against, so its rows close without a preparation — the
-    /// invariant is "one preparation per assistant row *of a document
-    /// thread*", and this is where the two are told apart.
+    /// Whether this turn has an authored document to checkpoint.
     authored: bool,
     /// Resolved once per turn rather than once per step: every step of a turn
     /// writes into the same prefix, and re-reading the environment mid-turn
@@ -151,7 +147,7 @@ impl Turn {
             self.principal.as_deref(),
         )?;
 
-        let detail = db::get_thread(&pool, &self.thread_id, self.principal.as_deref())
+        let mut detail = db::get_thread(&pool, &self.thread_id, self.principal.as_deref())
             .await
             .map_err(AgentError::Storage)?;
         self.claim = engine::claim::Claim::acquire(
@@ -165,23 +161,34 @@ impl Turn {
             .map_err(AgentError::Storage)?
             .unwrap_or_default();
         self.spend.thread_id.clone_from(&self.thread_id);
-        let kind = AgentKind::parse(&detail.thread.agent_kind)?;
+        self.transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
+        self.head = self.transcript.head_message_id();
+        let resume_head = self.head.clone();
+        let mut turn_message_id = self
+            .append_user(&prompt.text, prompt.context.as_ref())
+            .await?;
+        detail.thread =
+            super::context::execution_thread(&pool, &self.thread_id, self.principal.as_deref())
+                .await
+                .map_err(AgentError::Invalid)?;
         let authored = matches!(
             detail.thread.route().map_err(AgentError::Invalid)?,
             ThreadRoute::Authored(_)
         );
-        self.transcript = Transcript::from_rows(&detail.messages).map_err(AgentError::Invalid)?;
-        self.head = self.transcript.head_message_id();
+        let scope = python_scope(&detail.thread);
+        let system = format!(
+            "{}\n\nCurrent editor context for this turn:\n{}",
+            super::system_prompt(),
+            serde_json::to_string(&scope)
+                .map_err(|error| AgentError::Invalid(error.to_string()))?
+        );
 
         let registry = self
             .service
             .tools
             .clone()
-            .unwrap_or_else(|| tools::registry(kind));
-        let scope = python_scope(&detail.thread);
-        // Only a document thread can have one: a workspace is a detached head
-        // of an authored document, and a venue thread has no document to
-        // detach from.
+            .unwrap_or_else(|| tools::registry_for_context(authored));
+        // Only an authored context can address a detached document workspace.
         let workspace_id = match authored {
             false => None,
             true => self
@@ -194,13 +201,13 @@ impl Turn {
         };
         let execution = self.resolve_execution(&detail.thread).await?;
         let context = engine::context_fingerprint(
-            kind.system_prompt(),
+            &system,
             &registry.specs(),
             detail.thread.effort.as_deref(),
         );
         let resume = match &execution {
             Execution::External { engine, model, .. } => {
-                lease.resume(*engine, model, self.head.as_deref(), &context)?
+                lease.resume(*engine, model, resume_head.as_deref(), &context)?
             }
             Execution::Api { .. } => None,
         };
@@ -210,7 +217,7 @@ impl Turn {
             lease: &lease,
             resume,
             context,
-            kind,
+            system,
             registry: &registry,
             scope: &scope,
             workspace_id: workspace_id.as_deref(),
@@ -218,7 +225,6 @@ impl Turn {
             cache_retention: CacheRetention::from_env(),
         };
 
-        let mut turn_message_id = self.append_user(&prompt.text).await?;
         // The thread's actor is restamped per turn, not per thread: the model
         // is chosen per turn, and this is the only point that knows which one
         // is about to answer. Every revision the turn writes reads it back off
@@ -254,7 +260,7 @@ impl Turn {
             // Steering is applied here and nowhere else: between one durable
             // assistant row and the next, so each row keeps its own preparation.
             match self.steer.try_recv() {
-                Ok(text) => turn_message_id = self.append_user(&text).await?,
+                Ok(text) => turn_message_id = self.append_user(&text, None).await?,
                 Err(_) => return Ok(()),
             }
         }
@@ -318,7 +324,7 @@ impl Turn {
             self.emit(TurnEvent::StepStarted);
             let request = ModelRequest {
                 model: *model,
-                system: vec![setup.kind.system_prompt().to_string()],
+                system: vec![setup.system.clone()],
                 messages: self.model_messages(setup.registry),
                 tools: setup.registry.specs(),
                 reasoning: *reasoning,
@@ -435,7 +441,11 @@ impl Turn {
     /// Persist the user's message before any remote call is made: the prompt is
     /// durable before it can produce a response. Returns its id, which is the
     /// turn message every tool call in the rows that follow is attributed to.
-    async fn append_user(&mut self, text: &str) -> Result<String, AgentError> {
+    async fn append_user(
+        &mut self,
+        text: &str,
+        context: Option<&super::TurnContext>,
+    ) -> Result<String, AgentError> {
         let id = uuid::Uuid::new_v4().to_string();
         self.emit(TurnEvent::MessageStarted {
             id: id.clone(),
@@ -444,7 +454,14 @@ impl Turn {
         self.emit(TurnEvent::TextDelta {
             text: text.to_string(),
         });
-        let message = AgentChatMessage::user(id.clone(), text);
+        let mut message = AgentChatMessage::user(id.clone(), text);
+        if let Some(context) = context {
+            message
+                .parts
+                .push(super::AgentChatPart::Unknown(serde_json::json!({
+                    "type": super::context::PART_TYPE, "data": context,
+                })));
+        }
         self.append(&message).await?;
         Ok(id)
     }
@@ -643,7 +660,7 @@ impl Turn {
             engine,
             model,
             effort,
-            system: setup.kind.system_prompt().into(),
+            system: setup.system.clone(),
             prompt,
             tools: setup.registry.specs(),
             cwd: directory,

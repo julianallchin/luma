@@ -916,9 +916,7 @@ fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
         "Cmd+L should loop exactly the cursor's range: {cursor:?} -> {looped:#}"
     );
     assert!(
-        !labels(looped, "status")
-            .iter()
-            .any(|label| label == "Track agent"),
+        !labels(looped, "status").iter().any(|label| label == "Luma"),
         "Cmd+L opened the agent chat instead of setting the loop: {looped:#}"
     );
     assert_eq!(

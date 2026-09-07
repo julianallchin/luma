@@ -41,9 +41,9 @@ use crate::storage::StorageRoot;
 pub use graph::GraphRunContribution;
 
 /// Why a track-derived branch is missing when the thread has no track at all.
-pub const NO_TRACK: &str = "no track is in scope for this agent thread";
+pub const NO_TRACK: &str = "no track is open";
 /// Why a venue-derived branch is missing when the thread has no venue.
-pub const NO_VENUE: &str = "no venue is in scope for this agent thread";
+pub const NO_VENUE: &str = "no venue is open";
 
 /// What the agent is looking at, resolved by the command/adapter layer.
 ///
@@ -154,16 +154,6 @@ pub async fn assemble_bindings(
         score_document: track::resolve_document(pool, scope).await,
         track,
     };
-
-    // A venue thread is about the room and nothing else. The track-, feature-
-    // and pattern-derived branches are *absent* from its namespace rather than
-    // present-and-unavailable: there is no track to be missing data for, so an
-    // entry saying so would be an error the agent has to learn to ignore. What
-    // `dir(luma)` lists is what this thread can answer.
-    if agent_kind == AgentKind::VenueRig {
-        venue::provide(&mut builder, &ctx, store).await?;
-        return builder.build().map_err(String::from);
-    }
 
     track::provide(&mut builder, &ctx).await?;
     audio::provide(&mut builder, &ctx, store).await?;

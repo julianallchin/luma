@@ -3212,3 +3212,85 @@ async fn score_local_pattern_creation_scope_and_archive_are_durable() {
 
 #[path = "tests/graph_scores.rs"]
 mod graph_scores;
+
+#[tokio::test]
+async fn a_conversation_edits_its_turns_track_and_stops_when_the_track_closes() {
+    let owner = "context-owner";
+    let fixture = Fixture::signed_in(owner).await;
+    let track_scope = fixture.track_scope().await;
+    let thread = fixture
+        .authored
+        .create_thread_with_authored_state(
+            &fixture.pool,
+            CreateAgentThreadInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                agent_kind: "venue_rig".into(),
+                subject_kind: Some("venue".into()),
+                subject_id: Some("venue".into()),
+                venue_id: Some("venue".into()),
+                ..Default::default()
+            },
+            Some(owner),
+        )
+        .await
+        .unwrap();
+    for scope in [
+        Some(crate::agent::ThreadScope::track("track", "venue", "score")),
+        None,
+    ] {
+        let head = agent_threads::transcript_head(&fixture.pool, &thread.id, Some(owner))
+            .await
+            .unwrap();
+        agent_threads::append_messages_at_head(
+            &fixture.pool,
+            &thread.id,
+            crate::models::agent_threads::AppendAgentThreadMessagesInput {
+                operation_id: uuid::Uuid::new_v4().to_string(),
+                expected_head_message_id: head.head_message_id,
+                messages: vec![crate::models::agent_threads::NewAgentThreadMessage {
+                    id: None,
+                    role: "user".into(),
+                    parts: json!([
+                        {"type": "text", "text": "Use the current track"},
+                        {"type": crate::agent::context::PART_TYPE, "data": {"scope": scope}}
+                    ]),
+                }],
+            },
+            Some(owner),
+        )
+        .await
+        .unwrap();
+        let result = fixture
+            .authored
+            .apply_track_edit_for_thread(
+                &fixture.pool,
+                Some(owner),
+                &thread.id,
+                &track_scope,
+                &uuid::Uuid::new_v4().to_string(),
+                "context-edit",
+                TrackEditPlan {
+                    base_revision: revision_for_clips(&[]),
+                    candidate: vec![TrackClip {
+                        id: "new:context-clip".into(),
+                        pattern_id: "pattern".into(),
+                        start_time: 0.0,
+                        end_time: 1.0,
+                        z_index: 0,
+                        blend_mode: BlendMode::Replace,
+                        args: json!({}),
+                    }],
+                },
+                "Edit the open track",
+            )
+            .await;
+        if scope.is_some() {
+            assert_eq!(result.unwrap().edit.clips.len(), 1);
+        } else {
+            assert!(
+                result.is_err(),
+                "closing the track must remove its edit capability"
+            );
+        }
+    }
+}

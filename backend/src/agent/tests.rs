@@ -1171,3 +1171,106 @@ async fn a_threads_model_is_independent_of_later_default_changes() {
     assert_eq!(scripted.requests()[0].model.spec().key, "kimi-k3-fast");
     assert_eq!(scripted.requests()[0].reasoning, model::ReasoningLevel::Low);
 }
+
+struct ContextProbe(Arc<std::sync::Mutex<Vec<crate::models::agent_execution::PythonScopeInput>>>);
+
+#[async_trait]
+impl Tool for ContextProbe {
+    fn name(&self) -> &'static str {
+        "context_probe"
+    }
+    fn description(&self) -> std::borrow::Cow<'static, str> {
+        "Read the working context.".into()
+    }
+    fn schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn call(&self, ctx: &ToolContext<'_>, _: Value) -> Result<Value, String> {
+        self.0.lock().unwrap().push(ctx.scope.clone());
+        Ok(json!({"track": ctx.scope.track_id, "venue": ctx.scope.venue_id}))
+    }
+}
+
+#[tokio::test]
+async fn one_conversation_follows_turn_context_without_changing_identity() {
+    let fixture = fixture().await;
+    let service = AgentService::new(fixture.services.clone());
+    let thread = service
+        .new_thread(&ThreadScope::venue("venue-1"))
+        .await
+        .unwrap()
+        .thread;
+    sqlx::query("INSERT INTO tracks (id, uid, track_hash, title, file_path) VALUES ('track-2', NULL, 'hash-2', 'Second', '/tmp/second.wav'); INSERT INTO scores (id, uid, track_id, venue_id, name) VALUES ('score-2', NULL, 'track-2', 'venue-1', 'Second');")
+        .execute(fixture.pool()).await.unwrap();
+    let contexts = [
+        Some(ThreadScope::track("track-1", "venue-1", "score-1")),
+        Some(ThreadScope::venue("venue-1")),
+        None,
+        Some(ThreadScope::track("track-2", "venue-1", "score-2")),
+    ];
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let steps = contexts
+        .iter()
+        .enumerate()
+        .flat_map(|(i, _)| {
+            [
+                call_step(&format!("context-{i}"), "context_probe", "{}"),
+                reply_step("Done"),
+            ]
+        })
+        .collect();
+    let service = service
+        .with_model(Arc::new(ScriptedModel::new(steps)))
+        .with_tools(ToolRegistry::new(vec![Arc::new(ContextProbe(
+            seen.clone(),
+        ))]));
+    for scope in contexts {
+        let events = drain(&mut service.turn(
+            &thread.id,
+            UserPrompt {
+                text: "Inspect the current context".into(),
+                context: Some(TurnContext { scope }),
+            },
+        ))
+        .await;
+        assert_eq!(
+            events.last(),
+            Some(&TurnEvent::TurnEnded {
+                outcome: TurnOutcome::Completed
+            }),
+            "{events:#?}"
+        );
+    }
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.iter()
+            .map(|scope| scope.track_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("track-1"), None, None, Some("track-2")]
+    );
+    assert_eq!(
+        seen.iter()
+            .map(|scope| scope.venue_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("venue-1"), Some("venue-1"), None, Some("venue-1")]
+    );
+    assert_eq!(preparations(fixture.pool(), &thread.id).await.len(), 2);
+    let documents: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT document_id) FROM authored_turn_preparations WHERE thread_id = ?",
+    )
+    .bind(&thread.id)
+    .fetch_one(fixture.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        documents, 2,
+        "each authored turn must retain its own document"
+    );
+    let reopened = service.open_thread(&thread.id).await.unwrap();
+    assert_eq!(reopened.messages.len(), 8);
+    assert_eq!(reopened.thread.id, thread.id);
+    assert_eq!(
+        reopened.thread.agent_kind, "venue_rig",
+        "creation metadata must remain immutable"
+    );
+}
