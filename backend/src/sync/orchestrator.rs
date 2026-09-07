@@ -187,6 +187,17 @@ impl SyncEngine {
         self.progress
             .phase("Finding shared libraries", None, "libraries");
 
+        report.errors.extend(
+            crate::agent::engine::claim::release_pending(
+                &self.pool,
+                &self.state_pool,
+                self.remote.as_ref(),
+                host.storage.path(),
+                &uid,
+            )
+            .await,
+        );
+
         // 1. Discovery
         match pull::discover_venues(&self.pool, self.remote.as_ref(), &uid, &token).await {
             Ok(ids) => {
