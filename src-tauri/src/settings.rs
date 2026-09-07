@@ -22,17 +22,13 @@ pub const AGENT_PROVIDERS: &[(&str, &str)] = &[
     ("openrouter", "OpenRouter"),
 ];
 
-/// Models the settings picker offers for the track agent, as
-/// `(stored value, label)`.
-///
-/// The Rust agent loop reads [`crate::agent::model::MODELS`], not this list;
-/// these are the wire ids the TypeScript loop stored, which `ModelId::parse`
-/// still resolves. The two are held together by a test below and this list
-/// retires with the TypeScript loop.
-pub const AGENT_MODELS: &[(&str, &str)] = &[
-    ("anthropic/claude-opus-5", "Claude Opus 5"),
-    ("moonshotai/kimi-k3-fast", "Kimi K3 Fast"),
-];
+/// The picker reads the same catalog as inference routing.
+pub fn agent_models() -> Vec<(&'static str, &'static str)> {
+    crate::agent::model::MODELS
+        .iter()
+        .map(|model| (model.key, model.display))
+        .collect()
+}
 
 /// The service the agents call when nothing has been chosen — the same one the
 /// agent loop falls back to, so an unset installation and a freshly written
@@ -40,7 +36,7 @@ pub const AGENT_MODELS: &[(&str, &str)] = &[
 pub const DEFAULT_AGENT_PROVIDER: &str = crate::agent::model::Provider::DEFAULT.as_str();
 
 /// The track agent's model when nothing has been chosen.
-pub const DEFAULT_AGENT_MODEL: &str = "moonshotai/kimi-k3-fast";
+pub const DEFAULT_AGENT_MODEL: &str = crate::agent::model::DEFAULT_MODEL;
 
 /// Wire shape of `get_settings`. Deliberately **not** `rename_all` —
 /// the frontend reads these keys in `snake_case`.
@@ -54,6 +50,8 @@ pub struct AppSettings {
     pub artnet_net: u8,
     pub artnet_subnet: u8,
     pub max_dimmer: u8,
+    #[serde(default)]
+    pub agent_engine: crate::agent::engine::Engine,
     pub agent_provider: String,
     pub agent_model: String,
 }
@@ -69,6 +67,7 @@ impl Default for AppSettings {
             artnet_net: 0,
             artnet_subnet: 0,
             max_dimmer: 100,
+            agent_engine: crate::agent::engine::Engine::default(),
             agent_provider: DEFAULT_AGENT_PROVIDER.to_string(),
             agent_model: DEFAULT_AGENT_MODEL.to_string(),
         }
@@ -86,8 +85,8 @@ fn one_of(options: &[(&str, &str)], stored: Option<&String>, default: &str) -> S
 }
 
 /// Read every setting and apply the typing and defaults. An unparseable value
-/// silently falls back to its default — a settings row must never be able to
-/// break startup.
+/// uses its default where the setting has one; invalid agent configuration
+/// is reported so the picker and runtime cannot silently disagree.
 pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
     let map = db::get_all_settings(pool).await?;
 
@@ -122,12 +121,16 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.min(100))
             .unwrap_or(100),
+        agent_engine: crate::agent::engine::Engine::configured(&map).map_err(|e| e.to_string())?,
         agent_provider: one_of(
             AGENT_PROVIDERS,
             map.get("agent_provider"),
             DEFAULT_AGENT_PROVIDER,
         ),
-        agent_model: one_of(AGENT_MODELS, map.get("agent_model"), DEFAULT_AGENT_MODEL),
+        agent_model: crate::agent::model::configured(&map)
+            .map_err(|e| e.to_string())?
+            .key()
+            .into(),
     })
 }
 
@@ -135,12 +138,10 @@ pub async fn load_settings(pool: &SqlitePool) -> Result<AppSettings, String> {
 mod tests {
     use super::*;
 
-    /// The picker must never offer a model the loop cannot route. Until the
-    /// TypeScript loop is deleted this list is a second spelling of
-    /// `agent::model::MODELS`, and this is what keeps the two from drifting.
+    /// Every offered model resolves through the same routing catalog.
     #[test]
     fn every_offered_model_resolves_in_the_model_table() {
-        for (stored, _) in AGENT_MODELS {
+        for (stored, _) in agent_models() {
             assert!(
                 crate::agent::model::ModelId::parse(stored).is_some(),
                 "settings offers '{stored}', which agent::model::MODELS does not carry"

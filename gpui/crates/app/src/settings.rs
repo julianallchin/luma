@@ -1,19 +1,11 @@
 //! The settings screen: the app's key/value table, typed and editable.
 //!
-//! Mirrors `src/features/settings/components/settings-dialog.tsx` — the same
-//! four sections behind the same `<ToggleGroup>`, the same controls and the
-//! same helper copy under each. The web version is a modal dialog; here it is
-//! a screen, because a native host has one window and no portal layer, and a
-//! full-window panel is what the ladder already knows how to draw.
-//!
 //! # The write path
 //!
 //! Every control writes through `set_setting` on the seam and then re-reads
 //! `get_settings`. Nothing is applied optimistically: the screen shows what
 //! the database holds, so a write that silently failed shows as the control
 //! springing back rather than as a lie that survives until the next reload.
-//! (The web side debounces its slider for the same reason it is *not*
-//! debounced here — see the max-brightness note below.)
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -22,7 +14,7 @@ use luma_ui::ladder;
 use luma_ui::node::{AgentNode, Instrument, Role};
 use luma_ui::Enabled;
 
-use luma_lib::settings::{AppSettings, AGENT_MODELS, AGENT_PROVIDERS};
+use luma_lib::settings::{agent_models, AppSettings, AGENT_PROVIDERS};
 
 use crate::Luma;
 
@@ -371,7 +363,23 @@ fn general(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
 }
 
 fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
-    vec![
+    use luma_lib::agent::engine::Engine;
+    let mut fields = vec![field(
+        Some("Agent engine"),
+        select(
+            state,
+            app,
+            "agent_engine",
+            Engine::CHOICES,
+            values.agent_engine.key(),
+        ),
+        Some("Applies to the next message in app and headless conversations."),
+    )];
+    if values.agent_engine != Engine::Api {
+        fields.push(note("Uses the locally installed agent and its signed-in account. Sign in with the agent's CLI on each machine."));
+        return fields;
+    }
+    fields.extend([
         field(
             Some("Model Provider"),
             select(
@@ -388,18 +396,21 @@ fn ai(state: &Settings, values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
         ),
         field(
             Some("Model"),
-            select(state, app, "agent_model", AGENT_MODELS, &values.agent_model),
+            select(
+                state,
+                app,
+                "agent_model",
+                &agent_models(),
+                &values.agent_model,
+            ),
             Some(
                 "The model behind the track agent. Applies from the next message, \
                  including in open threads.",
             ),
         ),
-        // The web dialog edits both providers' API keys here. They live in the
-        // browser's localStorage, which a native host does not have and should
-        // not grow an imitation of — a secret belongs in the OS keychain, not
-        // in a settings row. Said plainly rather than drawn as a dead control.
         note("API keys are not editable from the native host yet."),
-    ]
+    ]);
+    fields
 }
 
 fn artnet(values: &AppSettings, app: &Entity<Luma>) -> Vec<Div> {
