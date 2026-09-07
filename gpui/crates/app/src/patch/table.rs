@@ -58,6 +58,7 @@ pub(super) fn inspector(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap(px(8.0))
                 .child(label_cell(state, row, &name, editing, app, window))
@@ -145,7 +146,7 @@ pub(super) fn inspector(
     }
     div()
         .flex_none()
-        .px(px(16.0))
+        .px(px(12.0))
         .pb(px(8.0))
         .child(card)
         .agent_node(Role::Card, format!("Fixture {name}"))

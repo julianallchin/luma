@@ -50,7 +50,7 @@ pub(super) fn render(
     let add = app.clone();
     let venue = state.venue_id.clone();
     let details = app.clone();
-    let mut body = div()
+    let body = div()
         .size_full()
         .relative()
         .flex()
@@ -76,7 +76,13 @@ pub(super) fn render(
             .agent_node(Role::Card, "Patch details sheet")
             .into_any_element();
     }
-    body = body
+    let mut lights = div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
         .child(
             div()
                 .flex_none()
@@ -84,7 +90,7 @@ pub(super) fn render(
                 .flex_wrap()
                 .items_center()
                 .gap(px(8.0))
-                .px(px(16.0))
+                .px(px(12.0))
                 .py(px(8.0))
                 .child(
                     div()
@@ -93,7 +99,7 @@ pub(super) fn render(
                         .child(format!("Fixtures · {}", state.rows().len())),
                 )
                 .child(
-                    float::btn("Add fixtures", "venue-add-fixtures")
+                    float::btn("Add", "venue-add-fixtures")
                         .id("venue-add-fixtures")
                         .on_click(move |_, window, cx| {
                             add.update(cx, |this, cx| {
@@ -103,38 +109,50 @@ pub(super) fn render(
                         .agent_node(Role::Button, "Add fixtures"),
                 )
                 .child(
-                    float::btn("Patch details", "venue-details")
+                    float::btn("Patch", "venue-details")
                         .id("venue-details")
                         .on_click(move |_, _, cx| {
                             details.update(cx, |this, cx| this.show_patch_details(true, cx))
                         })
                         .agent_node(Role::Button, "Patch details"),
                 ),
-        )
-        .child(super::groups::strip(state, app));
-    if state.group_editor.is_some() {
-        body = body.child(super::groups::editor(state, app));
-    } else {
+        );
+    let mut inventory = div()
+        .id("venue-fixtures-scroll")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col();
+    if state.group_editor.is_none() {
         let fixture = (state.selected.len() == 1)
             .then(|| state.selected.iter().next())
             .flatten()
             .and_then(|id| state.row(id));
         if let Some(fixture) = fixture {
-            body = body.child(super::table::inspector(
+            inventory = inventory.child(super::table::inspector(
                 state, fixture, selection, app, window,
             ));
         } else if let Some(selection) = selection {
-            body = body.child(div().flex_none().px(px(16.0)).pb(px(8.0)).child(selection));
+            inventory =
+                inventory.child(div().flex_none().px(px(12.0)).pb(px(8.0)).child(selection));
         }
-        if let Some(error) = &state.error {
-            body = body.child(luma_ui::plate(error.clone(), ladder::danger()));
-        }
-        if state.data.is_none() && state.error.is_none() {
-            body = body.child(float::empty_row("Loading fixtures…"));
-        }
-        body = body.child(fixtures(state, app));
     }
-    body.children(
+    if let Some(error) = &state.error {
+        inventory = inventory.child(luma_ui::plate(error.clone(), ladder::danger()));
+    }
+    if state.data.is_none() && state.error.is_none() {
+        inventory = inventory.child(float::empty_row("Loading fixtures…"));
+    }
+    lights = lights.child(inventory.child(fixtures(state, app)));
+    body.child(
+        div()
+            .size_full()
+            .flex()
+            .child(lights.agent_node(Role::Card, "Venue fixtures"))
+            .child(super::groups::panel(state, app)),
+    )
+    .children(
         state
             .mode_menu
             .as_ref()
@@ -145,13 +163,14 @@ pub(super) fn render(
 }
 
 fn fixtures(state: &Patch, app: &Entity<Luma>) -> AnyElement {
+    let editing_members = state.group_editor.as_ref().is_some_and(|e| e.manual);
     let rows = state.rows().iter().map(|row| {
         let selected = state.selected.contains(&row.id);
         let click = app.clone();
         let venue = state.venue_id.clone();
         let id = row.id.clone();
         let name = row.label.clone().unwrap_or_else(|| row.model.clone());
-        div()
+        let item = div()
             .id(SharedString::from(format!("venue-light-{}", row.id)))
             .flex_none()
             .flex()
@@ -169,12 +188,16 @@ fn fixtures(state: &Patch, app: &Entity<Luma>) -> AnyElement {
             .hover(|d| d.bg(glass::glass_hover()))
             .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
                 click.update(cx, |this, cx| {
-                    this.pick_patch_row(
-                        venue.clone(),
-                        id.clone(),
-                        event.modifiers.shift || event.modifiers.platform,
-                        cx,
-                    )
+                    if editing_members {
+                        this.toggle_venue_group_member(&id, cx);
+                    } else {
+                        this.pick_patch_row(
+                            venue.clone(),
+                            id.clone(),
+                            event.modifiers.shift || event.modifiers.platform,
+                            cx,
+                        );
+                    }
                 })
             })
             .child(
@@ -208,25 +231,28 @@ fn fixtures(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                     .text_size(px(10.5))
                     .text_color(ladder::foreground_alpha(0.55))
                     .child("Unplaced")
-            }))
+            }));
+        let item = if editing_members {
+            item.agent_node(Role::Checkbox, format!("Include {name}"))
+                .agent_focused(selected)
+                .agent_disabled(state.group_busy)
+                .into_any_element()
+        } else {
+            item.into_any_element()
+        };
+        div()
+            .flex_none()
+            .child(item)
             .agent_node(Role::Row, name)
             .agent_focused(selected)
     });
     div()
-        .flex_1()
-        .min_h_0()
+        .id("venue-lights-list")
+        .flex_none()
         .flex()
         .flex_col()
-        .child(
-            div()
-                .id("venue-lights-list")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .children(rows),
-        )
+        .px(px(4.0))
+        .gap(px(2.0))
+        .children(rows)
         .into_any_element()
 }
