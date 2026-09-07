@@ -60,23 +60,15 @@ pub(super) async fn run(
         claim: None,
         actual_model: None,
     };
-    let mut outcome = match turn.drive(prompt).await {
+    let outcome = match turn.drive(prompt).await {
         Ok(()) => TurnOutcome::Completed,
         Err(error) => TurnOutcome::Failed {
             message: error.to_string(),
         },
     };
-    if let Some(claim) = turn.claim.take() {
-        if let Err(error) = claim.release().await {
-            if matches!(outcome, TurnOutcome::Completed) {
-                outcome = TurnOutcome::Failed {
-                    message: error.to_string(),
-                };
-            } else {
-                eprintln!("[agent] {error}");
-            }
-        }
-    }
+    // Cloud cleanup runs independently when Claim drops. Only local execution
+    // determines the result consumed by the parent and its merge.
+    drop(turn.claim.take());
     turn.emit(TurnEvent::TurnEnded { outcome });
 }
 
