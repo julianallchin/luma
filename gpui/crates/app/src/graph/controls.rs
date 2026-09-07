@@ -132,7 +132,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                         });
                     }
                     (Widget::Envelope(entity), Some(p::Value::Envelope(envelope))) => {
-                        entity.update(cx, |field, cx| field.set_value(envelope.points.clone(), cx))
+                        entity.update(cx, |field, cx| field.set_value(envelope.clone(), cx))
                     }
                     _ => (),
                 }
@@ -241,7 +241,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                 Widget::Gradient(field)
             }
             Some(p::Value::Envelope(envelope)) => {
-                let field = cx.new(|_| EnvelopeEditor::new(envelope.points.clone()));
+                let field = cx.new(|_| EnvelopeEditor::new(envelope.clone()));
                 subscriptions.push(cx.subscribe(
                     &field,
                     move |this: &mut Luma, _, event: &EnvelopeChanged, cx| {
@@ -249,9 +249,7 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
                             &target,
                             &node_id,
                             &input,
-                            p::Value::Envelope(p::Envelope {
-                                points: event.0.clone(),
-                            }),
+                            p::Value::Envelope(event.0.clone()),
                             cx,
                         );
                     },

@@ -316,3 +316,43 @@ have server sequence numbers and terminal integration records; no live authored
 proposals remain pending. The legacy `patterns.score_id` pull error still needs
 the remote schema fix. No remote DDL was attempted. App log:
 `/tmp/luma-graph-reset-regular-app-sync-fixed.log`.
+
+## Envelope curves — correction to the migration
+
+The first migration baked curved responses into dense linear point sets. That
+preserved samples but produced a poor editing model. Envelopes now store real
+cubic Bézier segments between authored anchors. There is one optional `curves`
+entry per segment; omitting the array retains straight segments in existing
+revision history. Each entry is `{"kind":"linear"}` or, for example:
+
+```json
+{
+  "points": [[0, 1], [1, 0]],
+  "curves": [{"kind": "bezier", "control1": [0.3, 1], "control2": [0.7, 0]}]
+}
+```
+
+Handles use the same normalized coordinates as anchors. Their x positions must
+stay ordered between their segment endpoints; y stays in 0..1. Evaluation
+solves the curve's x coordinate before sampling y. GPUI paints that same cubic
+directly and edits its handles, with no authored polyline approximation.
+Double-click inserts an anchor using de Casteljau subdivision without changing
+the shape; moving/removing anchors maintains the shared value's invariants.
+Straight/Curve controls and presets use the same value. Graph controls, clip
+overrides, Python source, saved history and playback retain the curve metadata.
+
+The migration tool now constructs one segment per phase and three anchors per
+stroke. Its `--repair-curves` path compares against the previous reviewed import
+and changes only still-unmodified sampled envelopes through authored CAS. The
+regular library repair replaced 462 envelopes on 14 scores: 39,930 sample knots
+became 1,207 anchors. The maximum measured normalized difference is 0.006943;
+all other score content is unchanged. No user-edited envelopes were encountered.
+No database schema migration is required.
+
+Backup: `~/luma-backups/bezier-pre-repair-20260906`. Live repair sources, before
+exports, and revision ledger: `~/luma-migration/graph-reset-20260906/bezier-regular-01`.
+Verification includes analytical Bézier inversion, shape-preserving subdivision,
+validation and atomic edit regressions, all core tests, core clippy, workspace
+check, native handle dragging through persistence, the real Python editing/
+rendering round trip, and saved nonempty previews for all 11 affected effect
+families. The regular GPUI app was rebuilt and restarted with this repair.

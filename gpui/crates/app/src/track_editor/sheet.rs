@@ -563,7 +563,7 @@ fn build(
             let stored = stored_arg(editor, def);
             let widget = match def.arg_type {
                 PatternArgType::Envelope => {
-                    let points = envelope_points(&stored, &def.default_value);
+                    let points = envelope_value(&stored, &def.default_value);
                     let entity = cx.new(|_| luma_ui::arg::envelope::EnvelopeEditor::new(points));
                     let arg_id = def.id.clone();
                     subs.push(cx.subscribe(
@@ -572,7 +572,11 @@ fn build(
                               _,
                               event: &luma_ui::arg::envelope::EnvelopeChanged,
                               cx| {
-                            this.arg_live(&arg_id, serde_json::json!({"points": event.0}), cx);
+                            this.arg_live(
+                                &arg_id,
+                                serde_json::to_value(&event.0).expect("validated envelope"),
+                                cx,
+                            );
                         },
                     ));
                     Widget::Envelope(entity)
@@ -756,7 +760,7 @@ fn resync(editor: &mut Editor, cx: &mut Context<Luma>) {
         }
         match &mut cell.widget {
             Widget::Envelope(entity) => {
-                let points = envelope_points(&stored, &cell.def.default_value);
+                let points = envelope_value(&stored, &cell.def.default_value);
                 entity.update(cx, |editor, cx| editor.set_value(points, cx));
             }
             Widget::Choice(_) => {}
@@ -1599,14 +1603,16 @@ fn gradient_widget(
     div().relative().child(bar).children(plate)
 }
 
-fn envelope_points(value: &serde_json::Value, default: &serde_json::Value) -> Vec<[f64; 2]> {
+fn envelope_value(
+    value: &serde_json::Value,
+    default: &serde_json::Value,
+) -> luma_patterns::Envelope {
     [value, default]
         .into_iter()
         .find_map(|value| {
             serde_json::from_value::<luma_patterns::Envelope>(value.clone())
                 .ok()
                 .filter(|e| e.validate().is_ok())
-                .map(|e| e.points)
         })
-        .unwrap_or_else(|| vec![[0., 1.], [1., 1.]])
+        .unwrap_or_else(|| luma_patterns::Envelope::soft_edges(0.))
 }

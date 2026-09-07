@@ -618,7 +618,8 @@ assert 'patterns' not in dir(luma)
 edit = luma.track.edit()
 graph = edit.graph(id='effect')
 shape = graph.node('soft_edges', id='shape', softness=.3)
-chase = graph.node('chase', id='chase', shape=shape.output(), mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
+path = {'points': [[0, 0], [1, 1]], 'curves': [{'kind': 'bezier', 'control1': [.3, 0], 'control2': [.7, 1]}]}
+chase = graph.node('chase', id='chase', shape=shape.output(), path=path, mapping='order', boundary='wrap', width=1.0, grid_aligned=False)
 position = graph.node('write_position', id='aim')
 combined = graph.node('add_lighting', id='combined', a=chase.output(), b=position.output())
 graph.output(combined.output())
@@ -642,6 +643,7 @@ assert luma.track.revision == revision
 assert len(luma.track.clips) == 2
 assert luma.track.document['definitions']['effect']['body']['kind'] == 'graph'
 assert len(luma.track.edit().candidate['clips']) == 2
+assert luma.track.edit().candidate['definitions']['effect']['body']['body']['nodes']['chase']['inputs']['path']['value']['value'] == path
 (len(luma.track.clips), rendered.shape)
 "#).await;
     expect_ok(

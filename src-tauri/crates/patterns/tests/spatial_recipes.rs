@@ -211,9 +211,7 @@ fn strobe_and_rainbow_are_graphs_and_preserve_output_capabilities() {
 fn chase_uses_an_editable_travel_envelope_for_bounce_and_offstage_endpoints() {
     let library = standard_library();
     let cells = cells();
-    let path = Value::Envelope(Envelope {
-        points: vec![[0., 0.], [0.5, 1.], [1., 0.]],
-    });
+    let path = Value::Envelope(Envelope::linear(vec![[0., 0.], [0.5, 1.], [1., 0.]]));
     assert!(matches!(library.definitions["motion"].body, Body::Graph(_)));
     for (elapsed, position, active) in [
         (0., -0.25, 1.),

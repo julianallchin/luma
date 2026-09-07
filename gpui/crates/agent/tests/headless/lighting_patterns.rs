@@ -158,7 +158,11 @@ fn edit_a_chase_envelope_per_clip() {
         until("envelope",s=>s.find({role:"card",label:"Envelope curve"}));
         app.click(app.snapshot().find({role:"button",label:"Ramp down"}));
         app.frames(4,{waitMs:80});
-        app.drag(app.snapshot().find({role:"card",label:"Envelope curve"}), {dx:30,dy:-20}, {steps:8});
+        app.click(app.snapshot().find({role:"button",label:"Envelope Curve"}));
+        app.frames(4,{waitMs:80});
+        until("Bézier handle",s=>s.find({role:"slider",label:"Envelope segment 1 handle 1"}));
+        const handle=app.snapshot().find({role:"slider",label:"Envelope segment 1 handle 1"});
+        app.drag(handle, {dx:30,dy:-20}, {steps:8});
         app.frames(12,{waitMs:80});
         app.click(app.snapshot().find({role:"button",label:"Make independent"}));
         app.frames(24,{waitMs:80});
@@ -197,17 +201,15 @@ fn edit_a_chase_envelope_per_clip() {
             let clip = score["clips"].as_object().unwrap().values().next().unwrap();
             let args = &clip["inputs"];
             let points = args["shape"]["value"]["points"].as_array().unwrap();
-            assert_eq!(
-                points.len(),
-                3,
-                "a canvas drag adds and moves a custom point"
-            );
+            assert_eq!(points.len(), 2, "bending a segment keeps its two anchors");
             assert_eq!(points[0][0].as_f64(), Some(0.));
             assert_eq!(points[0][1].as_f64(), Some(1.));
-            assert_eq!(points[2][0].as_f64(), Some(1.));
-            assert_eq!(points[2][1].as_f64(), Some(0.));
-            assert!(points[1][0].as_f64().unwrap() > 0.5);
-            assert!(points[1][1].as_f64().unwrap() > 0.5);
+            assert_eq!(points[1][0].as_f64(), Some(1.));
+            assert_eq!(points[1][1].as_f64(), Some(0.));
+            let curve = &args["shape"]["value"]["curves"][0];
+            assert_eq!(curve["kind"], "bezier");
+            assert!(curve["control1"][0].as_f64().unwrap() > 1. / 3.);
+            assert!(curve["control1"][1].as_f64().unwrap() > 2. / 3.);
             let graph = &score["definitions"][clip["graph"].as_str().unwrap()];
             assert_ne!(
                 graph["inputs"]["shape"]["default"]["value"]["points"],
