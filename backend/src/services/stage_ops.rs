@@ -18,13 +18,13 @@
 //! copies. They live here rather than in either caller because a composition
 //! written twice is two rigs that differ in the case nobody tested.
 //!
-//! # The two hard errors
+//! # Refusals and warnings
 //!
-//! [`StageError::Refused`] is the design doc's short list: a socket pair the
-//! catalog forbids, and an extend longer than the ray-measured gap. Everything
-//! else is a warning on the [`PlacementReport`]. Refusals carry the resolver's
-//! own message verbatim, because the caller's job is to show it, not to
-//! rewrite it.
+//! Invalid requests, unsupported parameters and forbidden placements return
+//! [`StageError::Refused`]. Conditions the resolver can represent without
+//! rejecting the operation appear on the [`PlacementReport`]. Callers preserve
+//! the operation's diagnostic so the same refusal has the same remedy in
+//! Python and the native editor.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -123,14 +123,12 @@ pub fn mirror_socket(name: &str) -> String {
 
 /// Why a verb produced no report.
 ///
-/// Three variants, and only one of them is a *design* error: [`Self::Refused`]
-/// is the pair of hard errors the design doc admits. The other two are the
-/// caller naming something that is not there and the database saying no.
+/// Distinguishes an invalid request from a missing resource or an internal
+/// read/write failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StageError {
-    /// The graph would not accept the edit: a socket pair its polarity forbids,
-    /// a cycle, an array asked to host, or an extend past the measured gap.
-    /// The message is the resolver's own.
+    /// The requested edit is invalid or unsupported. Preserve its explanation
+    /// at every caller rather than replacing it with a generic failure.
     #[error("{0}")]
     Refused(String),
     /// A node, socket or venue the caller named is not there.
@@ -245,6 +243,15 @@ impl<'a> Stage<'a> {
             &ResolvedVenue::from(&solved),
             &build::Scene::new(&graph, &solved, supply),
         ))
+    }
+
+    /// Compact spatial inventory. Details stay in `nodes()` and `describe()`.
+    pub async fn summary(&self) -> Result<String> {
+        let mut access = self.read().await?;
+        let graph = venue_graph::graph(&mut access).await?;
+        let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
+        let supply = venue_graph::sockets(self.fixtures_root)?;
+        Ok(summary(&graph, &solved, supply))
     }
 
     /// Cast along an open socket's outward normal and report the first
@@ -472,11 +479,12 @@ impl<'a> Stage<'a> {
     /// Merge parameters into a node, and optionally rename it.
     ///
     /// `yaw` is spelled as itself and lands on the edge, which is where the
-    /// mate's turn about the shared normal lives; every other key is a param.
+    /// mate's turn about the shared normal lives. Other keys must be parameters
+    /// consumed by this node's geometry; an unknown key is never a successful edit.
     ///
     /// # Errors
-    /// Fails if the venue is not writable or the node is not in it; refuses a
-    /// `yaw` on a node no edge places.
+    /// Fails if the venue is not writable or the node is not in it. Refuses
+    /// unsupported/non-finite parameters, including yaw without an edge.
     pub async fn set_params(
         &self,
         node_id: &str,
@@ -485,20 +493,17 @@ impl<'a> Stage<'a> {
     ) -> Result<PlacementReport> {
         let mut access = self.write().await?;
         require_in_venue(&mut access, &[node_id]).await?;
-        if let Some(yaw) = params.remove("yaw") {
-            let graph = venue_graph::graph(&mut access).await?;
-            let Some(edge) = graph.edge(node_id).cloned() else {
-                return Err(StageError::Refused(
-                    "an unplaced node has no yaw to set".into(),
-                ));
-            };
+        let graph = venue_graph::graph(&mut access).await?;
+        let (_, edge) = parameter_edit(&graph, node_id, &params)?;
+        if params.remove("yaw").is_some() {
+            let edge = edge.expect("parameter_edit validated the yaw edge");
             venue_graph_db::upsert_edge(
                 &mut access,
                 node_id,
                 &edge.parent,
                 &edge.my_socket,
                 &edge.their_socket,
-                yaw,
+                edge.roll,
             )
             .await?;
         }
@@ -694,7 +699,7 @@ impl<'a> Stage<'a> {
         self.report(access, &root_copy).await
     }
 
-    /// Patch, name, place and group `count` fixtures along one host face — the
+    /// Patch, name and place `count` fixtures along one host face — the
     /// only fixture constructor besides the patch page's non-placed add.
     ///
     /// One verb, one transaction: the rows, the nodes, the edges and the
@@ -1162,9 +1167,11 @@ pub struct Built {
 
 /// One node as the query side reports it.
 ///
-/// Every field is legal input to a write verb, which is the contract that makes
-/// read → edit → verify a round trip: `at` goes back into `place(at=)`, `face`
-/// into `face=`, a tip's direction into `end=` or `direction=`.
+/// Positions are world footprint centres in stage coordinates. A free place
+/// uses that plan centre directly; hosted placement uses host-local offsets.
+/// Centre height differs from bottom clearance, and an axis-aligned bounding
+/// span differs from construction length. Face and tip directions are stage
+/// vectors, matching the write verbs.
 pub struct NodeView {
     pub id: String,
     pub kind: String,
@@ -1179,6 +1186,23 @@ pub struct NodeView {
     /// leaves at rest.
     pub face: Option<[f64; 3]>,
     pub tips: Vec<build::Tip>,
+    pub member_count: usize,
+}
+
+impl NodeView {
+    /// The public read contract, shared by live queries and binding snapshots.
+    pub(crate) fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id, "kind": self.kind, "catalogRef": self.catalog_ref,
+            "short": self.short, "label": self.label, "host": self.host,
+            "at": self.at.at, "z": self.at.z, "size": self.at.size,
+            "face": self.face, "member_count": self.member_count,
+            "tips": self.tips.iter().map(|tip| serde_json::json!({
+                "node": tip.node, "socket": tip.socket,
+                "direction": tip.direction, "at": tip.at,
+            })).collect::<Vec<_>>(),
+        })
+    }
 }
 
 /// Which nodes a query is about.
@@ -1283,7 +1307,7 @@ pub enum AimTarget {
 }
 
 /// Read every placed node as the query side sees it.
-fn views(
+pub(crate) fn views(
     graph: &VenueGraph,
     solved: &Solved,
     supply: &VenueSockets,
@@ -1323,6 +1347,16 @@ fn views(
                 at,
                 face: scene.mounted_face(&node.id),
                 tips: scene.tips(&node.id),
+                member_count: if node.kind == NodeKind::Array {
+                    solved
+                        .poses()
+                        .filter(|p| {
+                            p.parent.as_deref() == Some(&node.id) && p.array_index.is_some()
+                        })
+                        .count()
+                } else {
+                    0
+                },
             })
         })
         .filter(|view| filter.matches(view, under.as_ref()))
@@ -1449,22 +1483,16 @@ impl Draft {
     /// Merge parameters into one of the draft's nodes and re-solve.
     ///
     /// # Errors
-    /// [`StageError::NotFound`] for a node the draft never built.
+    /// [`StageError::NotFound`] for a node the draft never built;
+    /// [`StageError::Refused`] for unsupported or non-finite parameters.
     pub fn set_params(
         &mut self,
         supply: &VenueSockets,
         node_id: &str,
         params: &BTreeMap<String, f64>,
     ) -> Result<()> {
-        let node = self
-            .graph
-            .node(node_id)
-            .ok_or_else(|| StageError::NotFound(format!("`{node_id}` is not in this draft")))?;
-        let mut updated = node.clone();
-        for (key, value) in params {
-            updated.params.set(key.clone(), *value);
-        }
-        match self.graph.edge(node_id).cloned() {
+        let (updated, edge) = parameter_edit(&self.graph, node_id, params)?;
+        match edge {
             Some(edge) => self.graph.insert_placed(updated, edge),
             None => self.graph.insert(updated),
         }
@@ -1518,6 +1546,18 @@ impl Draft {
 
     /// The tree as text, in the same shape a venue prints.
     #[must_use]
+    pub fn summary(&self, supply: &VenueSockets) -> String {
+        let mut text = summary(&self.graph, &self.solved, supply);
+        let fixtures: usize = self.pending.iter().map(|row| row.count).sum();
+        if fixtures > 0 {
+            text.push_str(&format!(
+                "{fixtures} pending fixtures in {} distributions; patched on stamp.\n",
+                self.pending.len()
+            ));
+        }
+        text
+    }
+
     pub fn describe(&self, supply: &VenueSockets) -> String {
         let mut out = describe(
             &self.graph,
@@ -2255,6 +2295,83 @@ fn describe<S: luma_scene::venue::NodeSockets + ?Sized>(
     out
 }
 
+/// Group identical kinds at the same depth/height rather than printing every
+/// UUID. Row order is spatial, independent of creation order and random ids.
+fn summary(graph: &VenueGraph, solved: &Solved, supply: &VenueSockets) -> String {
+    let nodes = views(graph, solved, supply, &Filter::default());
+    let scene = build::Scene::new(graph, solved, supply);
+    let mut out = String::from(
+        "Stage metres: +u stage right, +v crowd, +z up. at=footprint centre; angles=degrees.\n",
+    );
+    if let Some(e) = scene.extent(nodes.iter().map(|n| n.id.as_str())) {
+        out.push_str(&format!(
+            "Bounds min={:.2?} max={:.2?}; centre={:.2?}; size={:.2?}\n",
+            e.min, e.max, e.centre, e.size
+        ));
+    }
+    let projected = ResolvedVenue::from(solved);
+    out.push_str(&format!(
+        "{} placed nodes; {} unplaced branches; {} open sockets.\n",
+        nodes.len(),
+        projected.unplaced.len(),
+        projected.dangling.len()
+    ));
+    // Warnings precede potentially large inventories so they survive output caps.
+    for warning in &projected.warnings {
+        out.push_str(&format!("warning: {warning}\n"));
+    }
+    for check in &projected.constraints {
+        out.push_str(&format!(
+            "constraint: {} -> {}: {}\n",
+            check.node_id, check.target_node, check.status
+        ));
+    }
+    let mut rows: BTreeMap<(i64, i64, String), Vec<&NodeView>> = BTreeMap::new();
+    for n in &nodes {
+        rows.entry((
+            (n.at.at[1] * 100.0).round() as i64,
+            (n.at.z * 100.0).round() as i64,
+            n.kind.clone(),
+        ))
+        .or_default()
+        .push(n);
+    }
+    let total = rows.len();
+    for ((depth, height, kind), members) in rows.iter().take(48) {
+        let Some(e) = scene.extent(members.iter().map(|n| n.id.as_str())) else {
+            out.push_str(&format!("{} {kind}: no resolved geometry\n", members.len()));
+            continue;
+        };
+        let labels = members
+            .iter()
+            .filter_map(|n| n.label.as_deref())
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "v={:.2} z={:.2}: {} {kind}; u={:.2}..{:.2}{}\n",
+            *depth as f64 / 100.0,
+            *height as f64 / 100.0,
+            members.len(),
+            e.min[0],
+            e.max[0],
+            if labels.is_empty() {
+                String::new()
+            } else {
+                format!(" ({labels})")
+            }
+        ));
+    }
+    if total > 48 {
+        out.push_str(&format!(
+            "{} more depth/height rows; narrow nodes(kind=, label=, on=, region=).\n",
+            total - 48
+        ));
+    }
+    out.push_str("Inspect nodes()/extent() for measurements, groups() for selection names, render() for the scene.\n");
+    out
+}
+
 fn write_branch(
     graph: &VenueGraph,
     placed: &std::collections::HashSet<&str>,
@@ -2371,6 +2488,43 @@ fn confine(path: &str) -> Result<&str> {
 /// clearing a key, which the wire has no spelling for yet.
 fn keep(params: BTreeMap<String, f64>) -> BTreeMap<String, Option<f64>> {
     params.into_iter().map(|(k, v)| (k, Some(v))).collect()
+}
+
+/// Validate the whole edit before changing either the live graph or a draft.
+fn parameter_edit(
+    graph: &VenueGraph,
+    node_id: &str,
+    params: &BTreeMap<String, f64>,
+) -> Result<(Node, Option<Edge>)> {
+    let mut node = graph
+        .node(node_id)
+        .cloned()
+        .ok_or_else(|| StageError::NotFound(format!("node `{node_id}` does not exist")))?;
+    let mut edge = graph.edge(node_id).cloned();
+    let mut names = node.parameter_names();
+    if edge.is_some() {
+        names.push("yaw");
+    }
+    for (key, value) in params {
+        if !names.contains(&key.as_str()) {
+            return Err(StageError::Refused(format!(
+                "unsupported parameter `{key}` for {} `{node_id}`; available: {}",
+                node.catalog_ref.as_deref().unwrap_or(node.kind.as_str()),
+                names.join(", ")
+            )));
+        }
+        if !value.is_finite() {
+            return Err(StageError::Refused(format!(
+                "parameter `{key}` must be finite"
+            )));
+        }
+        if key == "yaw" {
+            edge.as_mut().expect("yaw requires an edge").roll = *value;
+        } else {
+            node.params.set(key.clone(), *value);
+        }
+    }
+    Ok((node, edge))
 }
 
 #[cfg(test)]

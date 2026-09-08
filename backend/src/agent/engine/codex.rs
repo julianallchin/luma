@@ -110,6 +110,12 @@ impl Session {
             let params = &frame["params"];
             match frame["method"].as_str().unwrap_or("") {
                 "item/agentMessage/delta" => return Ok(Event::Text(text(params, "delta")?)),
+                "item/completed"
+                    if params["item"]["type"] == "agentMessage"
+                        && params["item"]["phase"] == "final_answer" =>
+                {
+                    return Ok(Event::FinalAnswer(text(&params["item"], "text")?));
+                }
                 "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
                     return Ok(Event::Reasoning(text(params, "delta")?))
                 }
@@ -165,16 +171,13 @@ impl Session {
         self.usage
     }
 
+    pub(super) fn input(&self) -> super::process::Input {
+        self.process.input()
+    }
+
+    #[cfg(test)]
     pub async fn reply(&mut self, id: Value, outcome: ToolOutcome) -> Result<(), AgentError> {
-        let (blocks, failed) = content(outcome);
-        let items: Vec<_> = blocks.into_iter().filter_map(|b| match b {
-            ContentBlock::Text(text) => Some(json!({"type":"inputText","text":text})),
-            ContentBlock::Image {media_type,data} => Some(json!({"type":"inputImage","imageUrl":format!("data:{media_type};base64,{data}")})),
-            _ => None,
-        }).collect();
-        self.process
-            .send(json!({"id":id,"result":{"contentItems":items,"success":!failed}}))
-            .await
+        self.process.send(reply_frame(id, outcome)).await
     }
 }
 
@@ -365,4 +368,19 @@ pub(super) async fn models(
             _ => {}
         }
     }
+}
+
+pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
+    let (blocks, failed) = content(outcome);
+    let items: Vec<_> = blocks
+        .into_iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text(text) => Some(json!({"type":"inputText","text":text})),
+            ContentBlock::Image { media_type, data } => Some(
+                json!({"type":"inputImage","imageUrl":format!("data:{media_type};base64,{data}")}),
+            ),
+            _ => None,
+        })
+        .collect();
+    json!({"id":id,"result":{"contentItems":items,"success":!failed}})
 }

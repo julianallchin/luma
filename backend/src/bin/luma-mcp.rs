@@ -84,7 +84,7 @@ fn stale_binary() -> Option<String> {
         })
         .as_ref()?;
     if std::fs::metadata(&age.path).ok()?.modified().ok()? > age.built {
-        return Some("luma-mcp was rebuilt, but this client is still running the previous executable. Restart the MCP connection.".into());
+        return Some("luma-mcp was rebuilt, but this client is still running the previous executable. The host must restart the MCP connection. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
     }
     fn newer(path: &std::path::Path, built: std::time::SystemTime) -> bool {
         let Ok(entries) = std::fs::read_dir(path) else {
@@ -116,7 +116,7 @@ fn stale_binary() -> Option<String> {
         root.join("../gpui/crates/render/src"),
     ];
     if sources.iter().any(|path| newer(path, age.built)) {
-        return Some("luma-mcp is older than the source it serves. Run `cargo build --bin luma-mcp --manifest-path backend/Cargo.toml`, then restart this MCP connection before authoring.".into());
+        return Some("luma-mcp is older than the source it serves. The host must run `cargo +1.97.1 build --bin luma-mcp --manifest-path backend/Cargo.toml`, then restart this MCP connection before authoring. Retrying open, python or reset cannot repair this; stop and report the setup issue.".into());
     }
     None
 }
@@ -227,7 +227,7 @@ fn tools() -> Value {
                     },
                     "model": {
                         "type": "string",
-                        "description": "The model driving this session, recorded as the author of every edit it makes.",
+                        "description": "Optional authorship metadata, not a model selector. Omit unless the host supplied your exact running model identity; never guess a model name.",
                     },
                     "new_score": {
                         "type": "boolean",
@@ -420,11 +420,10 @@ async fn open(
         unreachable!("this path binds a track");
     };
     Ok(format!(
-        "opened {label}\ntrack {track_id}\nvenue {}, score {score_id}\nthread {}\n\n{}\n{}",
+        "opened {label}\ntrack {track_id}\nvenue {}, score {score_id}\nthread {}\n\n{}\nCraft guidance is available through the skill tool.",
         opened.venue_id,
         opened.thread_id,
         catalog.stdout,
-        skills::bundled().listing(),
     ))
 }
 
@@ -506,11 +505,10 @@ async fn open_venue(
         ));
     }
     Ok(format!(
-        "opened {label}\nvenue {}\nthread {}\n\n{}\n{}",
+        "opened {label}\nvenue {}\nthread {}\n\n{}\nCraft guidance is available through the skill tool.",
         opened.venue_id,
         opened.thread_id,
         catalog.stdout,
-        skills::bundled().listing(),
     ))
 }
 

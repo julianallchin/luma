@@ -1274,3 +1274,288 @@ async fn one_conversation_follows_turn_context_without_changing_identity() {
         "creation metadata must remain immutable"
     );
 }
+
+/// A real native JSON-lines session delegates to two real child turns. The
+/// parent's notebook read cannot return until both children have entered their
+/// tool calls, and neither child can finish until that read releases them.
+#[cfg(unix)]
+#[tokio::test]
+async fn native_parallel_children_do_not_block_parent_tools() {
+    use std::os::unix::fs::PermissionsExt;
+    struct Gate {
+        started: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+        cancel_release: tokio::sync::Semaphore,
+        cancel_started: tokio::sync::mpsc::UnboundedSender<String>,
+        cancel_dropped: tokio::sync::mpsc::UnboundedSender<String>,
+        late_completions: std::sync::atomic::AtomicUsize,
+    }
+    struct CancelWitness {
+        thread_id: String,
+        dropped: tokio::sync::mpsc::UnboundedSender<String>,
+    }
+    impl Drop for CancelWitness {
+        fn drop(&mut self) {
+            let _ = self.dropped.send(self.thread_id.clone());
+        }
+    }
+    #[async_trait]
+    impl Tool for Gate {
+        fn name(&self) -> &'static str {
+            "python"
+        }
+        fn description(&self) -> std::borrow::Cow<'static, str> {
+            "Causal test gate".into()
+        }
+        fn schema(&self) -> Value {
+            json!({"type":"object"})
+        }
+        async fn call(&self, ctx: &ToolContext<'_>, args: Value) -> Result<Value, String> {
+            if args["cancel"] == true {
+                let _witness = CancelWitness {
+                    thread_id: ctx.thread_id.to_owned(),
+                    dropped: self.cancel_dropped.clone(),
+                };
+                self.cancel_started.send(ctx.thread_id.to_owned()).unwrap();
+                self.cancel_release.acquire().await.unwrap().forget();
+                self.late_completions
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Ok(json!({"unexpectedLateReply":true}));
+            }
+            if args["child"] == true {
+                self.started.add_permits(1);
+                self.release.acquire().await.unwrap().forget();
+            } else {
+                self.started.acquire_many(2).await.unwrap().forget();
+                self.release.add_permits(2);
+            }
+            Ok(json!({"ok":true}))
+        }
+    }
+    let fixture = fixture().await;
+    sqlx::query("UPDATE agent_threads SET engine='codex', model=NULL, effort=NULL WHERE id=?")
+        .bind(&fixture.thread_id)
+        .execute(fixture.pool())
+        .await
+        .unwrap();
+    let executable = fixture._dir.path().join("scripted-codex");
+    std::fs::write(&executable, r#"#!/usr/bin/env python3
+import json,sys,uuid,os,pathlib
+read=lambda: json.loads(sys.stdin.readline())
+def send(x): print(json.dumps(x),flush=True)
+def call(id,name,args): send({'id':id,'method':'item/tool/call','params':{'callId':id,'tool':name,'arguments':args}})
+assert read()['method']=='initialize'
+send({'id':1,'result':{}})
+assert read()['method']=='initialized'
+assert read()['method']=='account/read'
+send({'id':4,'result':{'account':{'type':'chatgpt'}}})
+assert read()['method']=='config/read'
+send({'id':5,'result':{'config':{}}})
+start=read()
+assert start['method'] in ['thread/start','thread/resume']
+for tool in start['params']['dynamicTools']:
+    assert tool['inputSchema']['type']=='object', tool
+    assert 'anyOf' not in tool['inputSchema'], tool
+send({'id':2,'result':{'thread':{'id':str(uuid.uuid4())}}})
+turn=read()
+send({'id':3,'result':{}})
+prompt=turn['params']['input'][0]['text']
+if 'CANCEL_CHILD' in prompt:
+    pathlib.Path(__file__).with_name('cancel-' + str(os.getpid()) + '.pid').write_text(str(os.getpid()))
+    call('cancel-child-read','python',{'cancel':True})
+    read()
+    pathlib.Path(__file__).with_name('late-reply-' + str(os.getpid())).touch()
+elif 'CANCEL_PARENT' in prompt:
+    call('cancel-child-a','subagent',{'description':'Cancel first child','task':'CANCEL_CHILD'})
+    call('cancel-child-b','subagent',{'description':'Cancel second child','task':'CANCEL_CHILD'})
+    read()
+    read()
+elif 'EARLY_DONE' in prompt:
+    call('unfinished','python',{'child':True})
+elif 'GATED_CHILD' in turn['params']['input'][0]['text']:
+    call('child-read','python',{'child':True})
+    assert read()['result']['success']
+else:
+    call('child-a','subagent',{'description':'First child','task':'GATED_CHILD'})
+    call('child-b','subagent',{'description':'Second child','task':'GATED_CHILD'})
+    call('parent-read','python',{'child':False})
+    replies=[read(),read(),read()]
+    assert {x['id'] for x in replies}=={'child-a','child-b','parent-read'}
+    assert all(x['result']['success'] for x in replies), replies
+send({'method':'item/agentMessage/delta','params':{'delta':'Finished.'}})
+send({'method':'item/completed','params':{'item':{'type':'agentMessage','phase':'final_answer','text':'Finished.'}}})
+send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
+"#).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    struct RestoreEnv(Option<std::ffi::OsString>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            if let Some(value) = &self.0 {
+                std::env::set_var("LUMA_CODEX_EXECUTABLE", value);
+            } else {
+                std::env::remove_var("LUMA_CODEX_EXECUTABLE");
+            }
+        }
+    }
+    let _restore = RestoreEnv(std::env::var_os("LUMA_CODEX_EXECUTABLE"));
+    std::env::set_var("LUMA_CODEX_EXECUTABLE", &executable);
+    let (cancel_started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+    let (cancel_dropped, mut drops) = tokio::sync::mpsc::unbounded_channel();
+    let gate = Arc::new(Gate {
+        started: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+        cancel_release: tokio::sync::Semaphore::new(0),
+        cancel_started,
+        cancel_dropped,
+        late_completions: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let service = AgentService::new(fixture.services.clone()).with_tools(ToolRegistry::new(vec![
+        Arc::new(super::tools::subagent::SubagentTool),
+        gate.clone(),
+    ]));
+    let mut stream = service.turn(
+        &fixture.thread_id,
+        "Run concurrent children".to_string().into(),
+    );
+    let events = tokio::time::timeout(std::time::Duration::from_secs(15), drain(&mut stream))
+        .await
+        .expect("parent read must release both children without deadlock");
+    assert_eq!(
+        events.last(),
+        Some(&TurnEvent::TurnEnded {
+            outcome: TurnOutcome::Completed
+        }),
+        "{events:#?}"
+    );
+    let snapshot =
+        crate::database::local::agent_threads::get_thread(fixture.pool(), &fixture.thread_id, None)
+            .await
+            .unwrap();
+    let transcript = Transcript::from_rows(&snapshot.messages).unwrap();
+    let calls: Vec<_> = transcript
+        .messages
+        .iter()
+        .flat_map(|m| &m.parts)
+        .filter_map(|p| match p {
+            AgentChatPart::Tool(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        calls.iter().all(|t| t.output.is_some()),
+        "overlapping tool replies must all persist"
+    );
+    for child in children_of(fixture.pool(), &fixture.thread_id).await {
+        assert!(!fixture.services.subagents.is_running(&child));
+    }
+    let mut stream = service.turn(&fixture.thread_id, "EARLY_DONE".to_string().into());
+    let events = tokio::time::timeout(std::time::Duration::from_secs(15), drain(&mut stream))
+        .await
+        .unwrap();
+    assert!(
+        matches!(events.last(), Some(TurnEvent::TurnEnded { outcome: TurnOutcome::Failed { message } }) if message.contains("unfinished tool calls")),
+        "{events:#?}"
+    );
+    assert!(events.iter().any(|event| matches!(event, TurnEvent::ToolCallEnded { call_id, output: ToolResult::Failed { message } } if call_id == "unfinished" && message.contains("cancelled"))));
+
+    // Dropping the actual native parent stream is a different branch from
+    // premature provider Done: no reader remains to consume terminal events.
+    // Observe the children's owned tool futures and processes directly instead.
+    let head_before = live_head(&fixture).await;
+    let mut stream = service.turn(&fixture.thread_id, "CANCEL_PARENT".to_string().into());
+    let children = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let mut children = std::collections::BTreeSet::new();
+        while children.len() < 2 {
+            tokio::select! {
+                child = starts.recv() => { children.insert(child.expect("child gate entered")); }
+                event = stream.next() => { assert!(event.is_some(), "parent ended before both children blocked"); }
+            }
+        }
+        children
+    }).await.expect("both native child turns must enter their tool gates");
+    let pids: Vec<i32> = std::fs::read_dir(fixture._dir.path())
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            (name.starts_with("cancel-") && name.ends_with(".pid")).then(|| {
+                std::fs::read_to_string(entry.path())
+                    .unwrap()
+                    .parse()
+                    .unwrap()
+            })
+        })
+        .collect();
+    assert_eq!(
+        pids.len(),
+        2,
+        "both actual native child processes were running"
+    );
+    for child in &children {
+        assert!(fixture.services.subagents.is_running(child));
+        assert_eq!(active_workspaces(fixture.pool(), child).await, 1);
+    }
+    assert_eq!(live_head(&fixture).await, head_before);
+    drop(stream);
+    let cancelled = std::collections::BTreeSet::from([
+        drops.try_recv().expect("first child future dropped"),
+        drops.try_recv().expect("second child future dropped"),
+    ]);
+    assert_eq!(
+        cancelled, children,
+        "parent drop cancelled both child tool futures synchronously"
+    );
+    for child in &children {
+        assert!(!fixture.services.subagents.is_running(child));
+    }
+    gate.cancel_release.add_permits(2);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            // SAFETY: signal zero only probes these child PIDs; it sends no signal.
+            if pids.iter().all(|pid| unsafe { libc::kill(*pid, 0) } == -1) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both native child processes must be reaped after cancellation");
+    assert_eq!(
+        gate.late_completions
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(
+        std::fs::read_dir(fixture._dir.path())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("late-reply-")),
+        "cancelled native tools must never send a late result"
+    );
+    let recovered = crate::agent_execution::thread_cleanup::recover_threads(
+        fixture.pool(),
+        fixture.services.authored(),
+        fixture.services.workspaces(),
+        fixture.services.graph_runs(),
+        &fixture.services.subagents,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        recovered.workspaces, 2,
+        "normal recovery retires both cancelled workspaces"
+    );
+    for child in &children {
+        assert_eq!(active_workspaces(fixture.pool(), child).await, 0);
+    }
+    assert_eq!(
+        live_head(&fixture).await,
+        head_before,
+        "cancelled children never published live changes"
+    );
+}

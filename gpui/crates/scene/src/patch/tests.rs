@@ -262,6 +262,41 @@ impl Rig {
 // Reading an allocation
 // ---------------------------------------------------------------------------
 
+#[test]
+fn scoped_allocation_reserves_stored_addresses_without_turning_them_into_pins() {
+    let rig = Rig::new()
+        .run("a")
+        .run("z")
+        .fixture("right", "a", 2.0, 18)
+        .fixture("left", "a", -2.0, 18)
+        .fixture("middle", "a", 0.0, 18)
+        .fixture("real-pin", "a", 3.0, 18)
+        .pin("real-pin", 1, 400)
+        .fixture("untouched", "z", 0.0, 100)
+        .stored("untouched", 1, 1)
+        .unplaced("tray", 20)
+        .stored("tray", 1, 101);
+    let venue = resolve(&rig.graph, &table());
+    let full = allocate(&venue, &rig.fixtures);
+    let held = rig.fixtures.iter().find(|f| f.id == "untouched").unwrap();
+    assert!(at(&full, "left").overlaps(&held.address.footprint().unwrap()));
+
+    let scoped = allocate_run(&venue, &rig.fixtures, "a");
+    assert_eq!(scoped.assignments.len(), 4);
+    assert_eq!(at(&scoped, "left").address(), 121);
+    assert_eq!(at(&scoped, "middle").address(), 139);
+    assert_eq!(at(&scoped, "right").address(), 157);
+    assert!(scoped.get("real-pin").unwrap().pinned);
+    assert_eq!(at(&scoped, "real-pin").address(), 400);
+    assert!(scoped.get("untouched").is_none());
+    assert!(scoped.get("tray").is_none());
+    assert_eq!(
+        held.address,
+        Address::Derived(Footprint::new(1, 1, 100).unwrap())
+    );
+    assert!(scoped.notes.is_empty());
+}
+
 /// The fixtures of one universe in address order — what the rig sheet reads.
 fn order_in(allocation: &Allocation, universe: u16) -> Vec<&str> {
     let mut rows: Vec<&Assignment> = allocation

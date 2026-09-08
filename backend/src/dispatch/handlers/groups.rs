@@ -3,9 +3,7 @@ use crate::database::local::venue_access::{Read, VenueAccess, VenueResource, Wri
 use crate::dispatch::handlers::fixtures::require_changed;
 use crate::dispatch::{AppServices, CommandError};
 use crate::models::fixtures::PatchedFixture;
-use crate::models::groups::{
-    normalize_group_name, FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig,
-};
+use crate::models::groups::{FixtureGroup, FixtureGroupNode, GroupTreeNode, MovementConfig};
 use crate::models::selection::Selection;
 use crate::models::universe::UniverseState;
 use crate::services::groups as groups_service;
@@ -32,7 +30,14 @@ pub async fn create_group(
     crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    require_unique_name(services, &mut access, name.as_deref(), None).await?;
+    groups_service::require_unique_name(
+        &services.fixtures_root,
+        &mut access,
+        name.as_deref(),
+        None,
+    )
+    .await
+    .map_err(CommandError::Invalid)?;
     let result =
         groups_db::create_group(&mut access, name.as_deref(), axis_lr, axis_fb, axis_ab).await?;
     access.commit().await?;
@@ -65,7 +70,14 @@ pub async fn update_group(
         .to_string();
     crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Group(&id)).await?;
-    require_unique_name(services, &mut access, name.as_deref(), Some(&id)).await?;
+    groups_service::require_unique_name(
+        &services.fixtures_root,
+        &mut access,
+        name.as_deref(),
+        Some(&id),
+    )
+    .await
+    .map_err(CommandError::Invalid)?;
     let result =
         groups_db::update_group(&mut access, &id, name.as_deref(), axis_lr, axis_fb, axis_ab)
             .await?;
@@ -230,43 +242,6 @@ pub async fn update_movement_config(
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
-
-/// Group names are unique per venue under [`normalize_group_name`], across the
-/// **whole** namespace: the derived tree and the authored groups share it, so
-/// an authored `spots_right_wing` is refused rather than left for a selection
-/// expression to union with the wing of that name. A name that normalizes to
-/// empty is exempt, which is why this is a scan rather than a DB constraint.
-/// `exclude` is the group being renamed, if any.
-async fn require_unique_name(
-    services: &AppServices,
-    access: &mut VenueAccess<'_, Write>,
-    name: Option<&str>,
-    exclude: Option<&str>,
-) -> Result<(), CommandError> {
-    let Some(normalized) = name.map(normalize_group_name).filter(|n| !n.is_empty()) else {
-        return Ok(());
-    };
-    let tree = GroupSources::read(&services.fixtures_root, access)
-        .await?
-        .tree();
-    match groups_service::node_answering_to(&tree, &normalized, exclude.unwrap_or_default()) {
-        Some(clash) => Err(name_taken(&normalized, clash)),
-        None => Ok(()),
-    }
-}
-
-/// The refusal, in the words a human can act on: the name, and what already
-/// answers to it.
-fn name_taken(name: &str, clash: &GroupTreeNode) -> CommandError {
-    CommandError::Invalid(format!(
-        "`{name}` is already what `{}` is called in this venue",
-        clash.label
-    ))
-}
-
-// -----------------------------------------------------------------------------
 // The derived group tree, and the overrides on top of it
 // -----------------------------------------------------------------------------
 
@@ -302,6 +277,73 @@ mod tests {
     /// A shipped mover, so the tree's roles come out of the role table rather
     /// than out of the test.
     const MOVER: &str = "resources/fixtures/2511260420/Chauvet/Chauvet-Rogue-R2-Spot.qxf";
+
+    #[tokio::test]
+    async fn named_group_replacement_promotes_heads_and_preserves_membership_identity() {
+        use super::{
+            add_fixture_to_group, create_group, groups_db, groups_service, VenueAccess,
+            VenueResource, Write,
+        };
+        use crate::database::local::venue_access::AuthorizedVenue;
+        let (_dir, services, venue) = rig().await;
+        let nodes = tree(&services, &venue).await;
+        let fixture = nodes[0]["fixtures"][0].as_str().unwrap().to_string();
+        let group = create_group(
+            &services,
+            venue.clone(),
+            Some("Head Set".into()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        add_fixture_to_group(&services, fixture.clone(), group.id.clone(), Some(0))
+            .await
+            .unwrap();
+        let mut access = VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue))
+            .await
+            .unwrap();
+        let saved = groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "head-set",
+            &[fixture.clone()],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.id, group.id);
+        let before = groups_db::venue_memberships(&mut access).await.unwrap();
+        let member = before.iter().find(|m| m.group_id == group.id).unwrap();
+        assert_eq!(member.head_index, groups_db::WHOLE_FIXTURE);
+        let member_id: String =
+            sqlx::query_scalar("SELECT id FROM fixture_group_members WHERE group_id = ?")
+                .bind(&group.id)
+                .fetch_one(&mut *access.connection())
+                .await
+                .unwrap();
+        groups_service::set_named_group(
+            &services.fixtures_root,
+            &mut access,
+            "head_set",
+            &[fixture.clone(), fixture],
+            true,
+        )
+        .await
+        .unwrap();
+        let after = groups_db::venue_memberships(&mut access).await.unwrap();
+        let members: Vec<_> = after.iter().filter(|m| m.group_id == group.id).collect();
+        assert_eq!(members.len(), 1);
+        let after_id: String =
+            sqlx::query_scalar("SELECT id FROM fixture_group_members WHERE group_id = ?")
+                .bind(&group.id)
+                .fetch_one(&mut *access.connection())
+                .await
+                .unwrap();
+        assert_eq!(after_id, member_id);
+        access.commit().await.unwrap();
+    }
 
     #[tokio::test]
     async fn venue_group_save_rolls_back_all_members_on_failure() {
@@ -786,36 +828,19 @@ pub async fn save_venue_group(
     added: Vec<String>,
     removed: Vec<String>,
 ) -> Result<(), CommandError> {
-    crate::models::groups::validate_group_name(&normalize_group_name(&label))
-        .map_err(CommandError::Invalid)?;
     crate::venue_graph::ensure_migrated(&services.db.0, &venue_id, &services.fixtures_root).await?;
     let mut access =
         VenueAccess::<Write>::write(&services.db.0, VenueResource::Venue(&venue_id)).await?;
-    require_unique_name(services, &mut access, Some(&label), group_id.as_deref()).await?;
-    let id = if let Some(id) = group_id {
-        let before = groups_db::get_group(&mut access, &id).await?;
-        groups_db::update_group(
-            &mut access,
-            &id,
-            Some(&label),
-            before.axis_lr,
-            before.axis_fb,
-            before.axis_ab,
-        )
-        .await?;
-        id
-    } else {
-        groups_db::create_group(&mut access, Some(&label), None, None, None)
-            .await?
-            .id
-    };
-    for fixture in removed {
-        groups_db::remove_member_from_group(&mut access, &fixture, &id, None).await?;
-    }
-    for fixture in added {
-        groups_db::add_member_to_group(&mut access, &fixture, &id, groups_db::WHOLE_FIXTURE)
-            .await?;
-    }
+    groups_service::save_group_changes(
+        &services.fixtures_root,
+        &mut access,
+        group_id.as_deref(),
+        &label,
+        &added,
+        &removed,
+    )
+    .await
+    .map_err(CommandError::Invalid)?;
     access.commit().await?;
     invalidate_venue_fixture_cache();
     Ok(())

@@ -99,6 +99,67 @@ class Host:
         }
 
 
+class VenueRefreshTests(unittest.TestCase):
+    def test_cached_manifests_refresh_aliases_clear_cache_and_revoke_departed_venues(self):
+        from luma_exec.bindings import reconcile_facades
+        calls = []
+        workspace = Path(tempfile.mkdtemp(prefix="luma-venue-refresh-"))
+        def snapshot(venue, fixtures, revision):
+            return build_namespace({"schema_version": 1, "revision": revision,
+                "agent_kind": "venue_rig", "scope": {"venue_id": venue},
+                "root": {"venue": {"id": venue, "views": ["front"], "fixtures": fixtures}}},
+                workspace, host_call=lambda method, payload: calls.append((method, payload)))
+        cached_a = snapshot("room", [], "a")
+        cached_b = snapshot("room", [{"id": "fixture"}], "b")
+        first = reconcile_facades(cached_a, None)
+        v, fx = first.venue, first.venue.fixtures
+        v._cache["library"] = "previous cell"
+        second = reconcile_facades(cached_b, first)
+        self.assertIs(second.venue, v)
+        self.assertEqual((len(v.fixtures), len(fx)), (1, 0))
+        self.assertEqual(v._cache, {})
+        undone = reconcile_facades(cached_a, second)
+        self.assertIs(undone.venue, v)
+        self.assertEqual(len(v.fixtures), 0)
+        self.assertEqual(len(cached_b.venue.fixtures), 1)
+        elsewhere = reconcile_facades(snapshot("other", [], "other"), undone)
+        for operation in (v.render, v.tiles, v.describe):
+            with self.assertRaisesRegex(VenueHostUnavailableError, "no longer in scope"):
+                operation()
+        self.assertEqual(calls, [])
+        returned = reconcile_facades(cached_a, elsewhere)
+        self.assertIsNot(returned.venue, v)
+        with self.assertRaises(VenueHostUnavailableError):
+            v.render()
+
+
+class VenueGroupTests(unittest.TestCase):
+    def test_collections_accept_distribution_group_fixtures_and_return_host_name(self) -> None:
+        from luma_exec.venue import Group
+        calls = []
+        def host(method, payload):
+            calls.append((method, payload))
+            row = {"id": "saved", "name": "back_movers", "origin": "manual",
+                   "fixtures": [{"id": "f1", "label": "Mover", "heads": ["f1:0"], "headCount": 1}]}
+            return {"group": row} if method == "venue.group" else {"groups": [row]}
+        venue = Venue(record(), host_call=host, workspace=Path(tempfile.mkdtemp(prefix="luma-group-")))
+        distribution = Distribution({"report": {"fixtures": [
+            {"id": "f1", "label": "Mover", "universe": 1, "address": 1, "alongM": 0},
+        ]}})
+        group = venue.group("Back Movers", distribution)
+        self.assertEqual(group.name, "back_movers")
+        self.assertEqual(calls[-1], ("venue.group", {"name": "Back Movers", "fixtures": ["f1"], "replace": False}))
+        venue.group("back_movers", [group.fixtures[0], "f1"], replace=True)
+        self.assertEqual(calls[-1][1]["fixtures"], ["f1"])
+        self.assertTrue(calls[-1][1]["replace"])
+        venue.group("copy", group)
+        self.assertEqual(calls[-1][1]["fixtures"], ["f1"])
+        venue.group("empty", [])
+        self.assertEqual(calls[-1][1]["fixtures"], [])
+        self.assertEqual(venue.generate_groups().names(), ("back_movers",))
+        self.assertEqual(calls[-1], ("venue.generate_groups", {}))
+
+
 class VenueRenderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.workspace = Path(tempfile.mkdtemp(prefix="luma-venue-"))
@@ -245,7 +306,7 @@ class VenueRenderTests(unittest.TestCase):
         self.assertIsInstance(namespace.venue, Venue)
         self.assertEqual(namespace.venue.views, tuple(VIEWS))
         # The catalog still walks the underlying record, facade or not.
-        self.assertIn("luma.venue.id", namespace.catalog())
+        self.assertIn("luma.venue.id", namespace.catalog("venue"))
 
 
 class VenueTilesTests(unittest.TestCase):
@@ -297,7 +358,7 @@ CATALOG = {
             "name": "Truss",
             "group": "Trusses",
             "pieceKind": "truss",
-            "procedural": True,
+            "generator": "truss",
             "size": [3.0, 0.34, 0.34],
             "sockets": [
                 {
@@ -329,7 +390,7 @@ CATALOG = {
             "name": "Corner",
             "group": "Trusses",
             "pieceKind": "truss",
-            "procedural": True,
+            "generator": "corner",
             "size": [0.34, 0.34, 0.34],
             "sockets": [],
         },
@@ -414,7 +475,7 @@ class BuildHost:
             raise LumaHostCallError("refused", self.refuse)
         if method == "venue.catalog":
             return {"catalog": CATALOG}
-        if method == "venue.fixtures":
+        if method == "venue.fixture_library":
             return {
                 "fixtures": [
                     {
@@ -567,6 +628,19 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(catalog["truss/straight"].name, "truss")
         self.assertEqual(catalog["truss"].size, (3.0, 0.34, 0.34))
         self.assertTrue(catalog["truss"].sized)
+        self.assertFalse(catalog["corner"].sized)
+        self.assertEqual(catalog["corner"].generator, "corner")
+        self.assertIn("length= adjustable; default 3.00", repr(catalog["truss"]))
+        self.assertIn("generated corner; fixed size", repr(catalog["corner"]))
+        self.assertNotIn("length=", repr(catalog["corner"]))
+        from luma_exec.venue import CatalogPiece
+        hinge = CatalogPiece({**CATALOG["pieces"][1], "generator": "hinge", "short": "hinge"})
+        self.assertFalse(hinge.sized)
+        self.assertIn("angle= and axis=", repr(hinge))
+        self.assertNotIn("length=", repr(hinge))
+        mesh = CatalogPiece({**CATALOG["pieces"][1], "generator": None, "short": "deck"})
+        self.assertFalse(mesh.sized)
+        self.assertIn("fixed geometry", repr(mesh))
         self.assertIn("truss", catalog)
         # The printable page names pieces and sizes and does **not** steer a
         # reader toward socket names — those are the older layer's vocabulary.
@@ -890,9 +964,25 @@ class BuildTests(unittest.TestCase):
 
     # -- the library -----------------------------------------------------
 
+    def test_library_search_does_not_shadow_the_patch_snapshot(self) -> None:
+        self.venue = Venue(record(fixtures=()), host_call=self.host, workspace=self.workspace)
+        self.assertFalse(callable(self.venue.fixtures))
+        self.venue.fixture_library("robe")
+        self.assertFalse(callable(self.venue.fixtures))
+
+    def test_attachment_accepts_the_same_catalog_name_as_place(self) -> None:
+        self.venue.attach("truss", to="deck-1", socket="corner_fl")
+        self.assertEqual(self.host.last("venue.attach")["catalogRef"], "truss/straight")
+
+    def test_speaker_count_is_validated_before_building(self) -> None:
+        for count in [0, -1, True, 1.5, 65]:
+            with self.assertRaises(ValueError):
+                self.venue.hanging_speaker_array(count=count)
+        self.assertEqual(self.host.calls, [])
+
     def test_the_library_page_carries_what_distribute_is_named_out_of(self) -> None:
-        found = self.venue.fixtures("robe spiider")
-        self.assertEqual(self.host.last("venue.fixtures")["query"], "robe spiider")
+        found = self.venue.fixture_library("robe spiider")
+        self.assertEqual(self.host.last("venue.fixture_library")["query"], "robe spiider")
         self.assertEqual(found[0].path, "Robe/Robe-Spiider.qxf")
         self.assertEqual(found[0].beam_deg, (4.0, 50.0))
         self.assertEqual(found[0].mode(12), "Basic")
@@ -913,7 +1003,7 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(self.host.last("venue.distribute")["modeName"], "Basic")
 
     def test_a_mode_that_is_not_there_names_the_ones_that_are(self) -> None:
-        head = self.venue.fixtures()[0]
+        head = self.venue.fixture_library()[0]
         with self.assertRaises(LumaHostCallError) as caught:
             head.mode(7)
         self.assertIn("Mode 1 (39)", str(caught.exception))

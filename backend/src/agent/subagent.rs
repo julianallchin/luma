@@ -31,7 +31,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::tools::ToolContext;
-use super::{transcript, AgentChatMessage, Role, Transcript, TurnEvent, TurnOutcome, UserPrompt};
+use super::{transcript, AgentChatPart, Role, Transcript, TurnEvent, TurnOutcome, UserPrompt};
 use crate::database::local::agent_threads as db;
 use crate::models::agent_threads::{AgentThread, CreateAgentThreadInput};
 use crate::models::authored_state::{AuthoredMergeConflict, AuthoredWorkspaceMerge};
@@ -121,7 +121,8 @@ pub enum SubagentOutcome {
     Conflicted {
         conflicts: Vec<AuthoredMergeConflict>,
     },
-    /// The child produced nothing to publish. Its workspace is retired.
+    /// The child did not publish into its parent. Committed authored revisions
+    /// remain inspectable even if the working directory was retired.
     Failed {
         message: String,
     },
@@ -460,13 +461,36 @@ fn child_thread_input(
 
 /// The child's last word, which is the whole of what the parent model reads.
 fn final_assistant_text(transcript: &Transcript) -> String {
-    transcript
+    let Some(message) = transcript
         .messages
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)
-        .map(AgentChatMessage::text)
-        .unwrap_or_default()
+    else {
+        return String::new();
+    };
+    if let Some(text) = message.parts.iter().rev().find_map(|part| match part {
+        AgentChatPart::Unknown(value) if value["type"] == "data-final-answer" => {
+            value["text"].as_str()
+        }
+        _ => None,
+    }) {
+        return text.to_owned();
+    }
+    // API models have step boundaries instead of a separate final-answer frame.
+    let last_step = message
+        .parts
+        .iter()
+        .rposition(|part| matches!(part, AgentChatPart::StepStart))
+        .unwrap_or(0);
+    message.parts[last_step..]
+        .iter()
+        .filter_map(|part| match part {
+            AgentChatPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// One line naming the revision a child produced, within the 240 bytes a
@@ -487,27 +511,26 @@ fn revision_subject(text: &str) -> &str {
     }
 }
 
-/// What the parent model is shown: the child's answer, then the fate of its
-/// work — the same `<authored_merge/>` envelope the TypeScript stack used, so
-/// a prompt that taught one loop to read it teaches both.
+/// Publication state comes first: a child's private "applied" claim is not
+/// evidence that its proposal reached the parent.
 pub(super) fn report_for_model(report: &SubagentReport) -> Result<String, String> {
     let text =
         super::tools::clamp_for_model(&report.text, MAX_RESULT_CHARS, "subagent result", 0.4);
     match &report.outcome {
         SubagentOutcome::Merged { revision_id } => Ok(format!(
-            "{text}\n\n<authored_merge status=\"merged\" revision_id=\"{revision_id}\"/>"
+            "<authored_merge status=\"merged\" revision_id=\"{revision_id}\"/>\n\n{text}"
         )),
         SubagentOutcome::Conflicted { conflicts } => Err(format!(
-            "{text}\n\n<authored_merge status=\"conflicted\" conflicts=\"{}\"/>\n\
+            "<authored_merge status=\"conflicted\" conflicts=\"{}\"/>\n\
              The subagent's work is kept as a proposal on thread {} and was not applied. \
-             Conflicting paths: {}",
+             Conflicting paths: {}. Use subagent action=inspect with this childThreadId to read the proposal and resolve against your current draft.\n\n{text}",
             conflicts.len(),
             report.child_thread_id,
             conflict_paths(conflicts),
         )),
         SubagentOutcome::Failed { message } => Err(format!(
             "The subagent failed and nothing was applied: {message}\n\
-             Its thread is {} if you want to read what it did.",
+             Its thread is {}. Use subagent action=inspect with this childThreadId to recover any committed proposal work.",
             report.child_thread_id
         )),
     }
@@ -531,6 +554,35 @@ fn conflict_paths(conflicts: &[AuthoredMergeConflict]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_report_excludes_progress_and_prior_api_steps() {
+        let mut transcript = Transcript::default();
+        for event in [
+            TurnEvent::MessageStarted {
+                id: "answer".into(),
+                role: Role::Assistant,
+            },
+            TurnEvent::StepStarted,
+            TurnEvent::TextDelta {
+                text: "I am experimenting.".into(),
+            },
+            TurnEvent::StepStarted,
+            TurnEvent::TextDelta {
+                text: "The effect is ready.".into(),
+            },
+        ] {
+            transcript::apply(&mut transcript, &event);
+        }
+        assert_eq!(final_assistant_text(&transcript), "The effect is ready.");
+        transcript::apply(
+            &mut transcript,
+            &TurnEvent::FinalAnswer {
+                text: "Final native report.".into(),
+            },
+        );
+        assert_eq!(final_assistant_text(&transcript), "Final native report.");
+    }
 
     #[test]
     fn a_lease_is_released_when_it_drops() {

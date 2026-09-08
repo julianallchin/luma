@@ -567,12 +567,11 @@ async fn full_assembly_covers_every_schema_branch() {
     // mount normal is straight down and the word an agent reads is "down".
     // Both vectors come out of the solve, so they carry its float noise (a
     // `cos(PI/2)` lands at 6e-17, not 0) and are compared with a tolerance.
-    close3(&fixtures[0]["rotation"], [0.0, 0.0, 0.0]);
-    close3(&fixtures[0]["facing"], [0.0, 0.0, -1.0]);
+    close3(&fixtures[0]["face"], [0.0, 0.0, -1.0]);
     assert_eq!(fixtures[0]["facing_word"], "down");
     // Generated sets are snapshotted into saved groups when the venue is
     // initialized. The provider serves those collections beside front_wash.
-    let groups = at(&v, "venue.groups");
+    let groups = at(&v, "venue.group_snapshot");
     let rows = groups.as_array().expect("the tree is a list");
     let names: Vec<&str> = rows.iter().map(|g| g["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"front_wash"), "{names:?}");
@@ -603,26 +602,26 @@ async fn full_assembly_covers_every_schema_branch() {
         .iter()
         .find(|p| p["id"] == "pie-cdj")
         .expect("the cdj is placed");
-    // Two vocabularies, deliberately: `kind` is the graph's own alphabet and
-    // `catalog_kind` is the palette taxonomy the renderer branches on.
     assert_eq!(riser["kind"], "stage");
-    assert_eq!(riser["catalog_kind"], "floor");
-    assert_eq!(cdj["catalog_kind"], "cdj");
-    close3(&riser["position"], [1.0, 2.0, 3.0]);
-    // Nothing is "unparented": a piece on the floor hangs off the venue root
-    // like everything else, which is what makes the resolver have one branch
-    // instead of two.
-    assert!(
-        riser["parent_id"]
-            .as_str()
-            .is_some_and(|id| id.ends_with(":venue")),
-        "the riser sits on the venue floor, not on nothing: {}",
-        riser["parent_id"]
-    );
-    // The relation, not just the metres: the conversion recovered which socket
-    // met which, so the CDJ is *on* the riser and comes with it if it moves.
-    assert_eq!(cdj["parent_id"], "pie-truss");
-    close3(&cdj["position"], [1.5, 2.0, 3.25]);
+    // Snapshot and live query must describe the same footprint, never a mesh
+    // origin in a second coordinate frame.
+    let live = crate::services::stage_ops::Stage::new(&f.pool, &f.resource_root, &f.venue_id)
+        .nodes(&Default::default())
+        .await
+        .unwrap();
+    for piece in [riser, cdj] {
+        let view = live
+            .iter()
+            .find(|n| n.id == piece["id"].as_str().unwrap())
+            .unwrap()
+            .json();
+        for key in ["at", "z", "size", "face", "host"] {
+            assert_eq!(piece[key], view[key], "{key}: {piece}");
+        }
+    }
+    assert_eq!(cdj["host"], "pie-truss");
+    assert_eq!(cdj["attachment"]["host"], "pie-truss");
+    assert!(cdj["attachment"]["my_socket"].is_string());
     assert_eq!(shape(&v, "venue.positions"), vec![2, 3]);
 
     // §10.2 authored timeline + patterns. Persistence vocabulary (`score`)
@@ -1005,7 +1004,7 @@ async fn a_venue_is_describable_without_a_score() {
 /// poses are objects is the resolver's own answer now, not a filter this
 /// provider writes for itself.
 #[tokio::test]
-async fn an_array_is_reported_once_per_member_and_never_as_its_anchor() {
+async fn an_array_is_one_editable_node_with_its_resolved_member_count() {
     use crate::database::local::venue_access::{VenueAccess, VenueResource, Write};
     use crate::database::local::venue_graph as venue_graph_db;
 
@@ -1057,12 +1056,15 @@ async fn an_array_is_reported_once_per_member_and_never_as_its_anchor() {
         .map(|p| p["id"].as_str().unwrap())
         .filter(|id| id.starts_with(&array))
         .collect();
-    let members: Vec<String> = (0..3).map(|i| format!("{array}#{i}")).collect();
-    assert_eq!(
-        ids, members,
-        "three speakers, and the anchor is not one of them"
-    );
-    assert_eq!(pieces.as_array().unwrap().len(), before + 3);
+    assert_eq!(ids, vec![array.as_str()]);
+    let array_row = pieces
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == array)
+        .unwrap();
+    assert_eq!(array_row["member_count"], 3);
+    assert_eq!(pieces.as_array().unwrap().len(), before + 1);
 }
 
 /// The tray and anything a detach left hanging: rows with no pose, named
@@ -1089,7 +1091,7 @@ async fn an_unplaced_node_is_named_in_the_venue_binding() {
 
     let (manifest, _store) = f.assemble(&f.scope()).await;
     let v = root(&manifest);
-    let unplaced = at(&v, "venue.unplaced");
+    let unplaced = at(&v, "venue.unplaced_snapshot");
     let rows = unplaced.as_array().unwrap();
     assert_eq!(rows.len(), 1, "{unplaced}");
     assert_eq!(rows[0]["id"], json!(stray));
@@ -1126,16 +1128,22 @@ async fn missing_mix_cache_with_a_missing_source_file_says_so() {
 #[tokio::test]
 async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
     let f = Fixture::new().await;
+    // Nonzero depth and height catch swapped axes and an omitted depth mirror.
+    // Seed before migration, so the resolver converts this stored data pose.
+    sqlx::query("UPDATE fixtures SET pos_x = 1.25, pos_y = 3.5, pos_z = 4.75 WHERE id = 'fix-a'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
     let (manifest, store) = f.assemble(&f.scope()).await;
     let v = root(&manifest);
 
     let axes = &at(&v, "venue.positions")["axes"];
     assert_eq!(axes[0]["kind"], "labels");
     assert_eq!(axes[0]["labels"], json!(["fix-a:0", "fix-b:0"]));
-    assert_eq!(axes[1]["labels"], json!(["x", "y", "z"]));
+    assert_eq!(axes[1]["labels"], json!(["u", "v", "z"]));
 
     // …and they are exactly what the evaluator would resolve, in its order.
-    let expected: Vec<String> = crate::eval::context::resolve_primitive_ids(
+    let resolved = crate::eval::context::resolve_primitive_ids(
         &f.pool,
         &f.venue_id,
         &f.resource_root,
@@ -1144,10 +1152,8 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
         &HashMap::new(),
         None,
     )
-    .await
-    .into_iter()
-    .map(|(id, _)| id)
-    .collect();
+    .await;
+    let expected: Vec<_> = resolved.iter().map(|(id, _)| id).collect();
     assert_eq!(
         axes[0]["labels"],
         serde_json::to_value(&expected).unwrap(),
@@ -1156,7 +1162,18 @@ async fn position_rows_are_labeled_with_evaluator_primitive_ids() {
 
     let positions = read_f32(&manifest, &store, "venue.positions");
     assert_eq!(positions.len(), 6);
-    assert_eq!(positions[2], 2.0); // z of the first fixture
+    assert_eq!(&positions[..3], &[1.25, -3.5, 4.75]);
+    for (row, (_, data)) in positions.chunks_exact(3).zip(&resolved) {
+        assert_eq!(
+            row,
+            &[data[0], -data[1], data[2]],
+            "stage coordinates preserve x/z and mirror stored depth"
+        );
+    }
+    let patch = at(&v, "venue.fixtures").as_array().unwrap();
+    let fixture = patch.iter().find(|f| f["id"] == "fix-a").unwrap();
+    assert_eq!(fixture["at"], json!([1.25, -3.5]));
+    assert_eq!(fixture["z"], 4.75);
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,8 +1259,13 @@ async fn a_matching_graph_run_is_published_with_identity_on_every_axis() {
     scope.agent_kind = "pattern_graph".into();
     scope.window = Some((0.0, 3.0));
     scope.graph_definition = Some(serde_json::to_value(&graph).unwrap());
-    let contribution =
-        GraphRunContribution::new(Arc::new(evaluation(&graph, &f.venue_id, (0.0, 3.0))));
+    sqlx::query("UPDATE fixtures SET pos_x = 1.25, pos_y = 3.5, pos_z = 4.75 WHERE id = 'fix-a'")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let mut evaluated = evaluation(&graph, &f.venue_id, (0.0, 3.0));
+    evaluated.positions[0] = [1.25, 3.5, 4.75];
+    let contribution = GraphRunContribution::new(Arc::new(evaluated));
 
     let (manifest, store) = f.assemble_with(&scope, Some(&contribution)).await;
     let v = root(&manifest);
@@ -1267,6 +1289,22 @@ async fn a_matching_graph_run_is_published_with_identity_on_every_axis() {
         &json!(["fix-a:0", "fix-b:0"])
     );
     assert_eq!(shape(&v, "graph.run.positions"), vec![2, 3]);
+    assert_eq!(
+        at(&v, "graph.run.positions")["axes"][1]["labels"],
+        json!(["u", "v", "z"])
+    );
+    let run_positions = read_f32(&manifest, &store, "graph.run.positions");
+    assert_eq!(&run_positions[..3], &[1.25, -3.5, 4.75]);
+    let venue_positions = read_f32(&manifest, &store, "venue.positions");
+    assert_eq!(run_positions.len(), venue_positions.len());
+    // The synthetic run has exact zeros; the live socket solve carries
+    // trigonometric roundoff (about 2e-17 m at a quarter-turn).
+    for (run, venue) in run_positions.iter().zip(&venue_positions) {
+        assert!(
+            (run - venue).abs() < 1e-6,
+            "graph and venue stage coordinates disagree: {run} vs {venue}"
+        );
+    }
     assert_eq!(at(&v, "graph.run.span.end_s"), 3.0);
     assert_eq!(
         at(&v, "graph.run.fingerprints.graph"),
@@ -1401,7 +1439,7 @@ async fn venue_context_explains_that_no_track_is_open() {
     let v = root(&manifest);
 
     at(&v, "venue.pieces");
-    at(&v, "venue.unplaced");
+    at(&v, "venue.unplaced_snapshot");
     assert_eq!(reason(&v, "track"), "no track is open");
     assert!(v.get("patterns").is_some());
     assert!(v.get("audio").is_some());

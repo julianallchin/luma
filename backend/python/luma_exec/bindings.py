@@ -81,7 +81,7 @@ MMAP_THRESHOLD_BYTES = 4 << 20
 
 #: Ordinary record reprs are an orientation surface, not a catalog dump. Keep
 #: them small even for keyed families such as hundreds of pattern schemas; the
-#: explicit ``luma.catalog()`` path remains complete.
+#: explicit ``luma.catalog(path, depth=None)`` expands a complete subtree.
 RECORD_REPR_ITEM_LIMIT = 8
 
 
@@ -669,8 +669,34 @@ class LumaNamespace(LumaRecord):
     def revision(self) -> str:
         return str(object.__getattribute__(self, "manifest").get("revision", ""))
 
-    def catalog(self) -> str:
-        """A compact multi-line inventory of every binding path (design §7.3)."""
+    def catalog(self, path: str = "", *, depth: int | None = 1) -> str:
+        """Bounded binding inventory; inspect one branch before expanding it.
+
+        `catalog("venue")` lists venue snapshots and live query routes.
+        `catalog("features", depth=2)` expands another level. `depth=None`
+        explicitly requests the complete subtree, including large definitions.
+        Paths name bindings, never invoke methods. Use `track.nodes()` for the
+        node vocabulary and `inspect.signature` / `inspect.getdoc` for verbs.
+        """
+        if not isinstance(path, str):
+            raise TypeError("path must be a dotted binding path")
+        if depth is not None and (
+            isinstance(depth, bool) or not isinstance(depth, int) or depth < 0
+        ):
+            raise ValueError("depth must be a nonnegative integer or None")
+        parts = path.split(".") if path else []
+        if parts and parts[0] == "luma":
+            parts = parts[1:]
+        node: Any = self
+        selected = "luma"
+        for part in parts:
+            children = _catalog_children(node)
+            if children is None or part not in children:
+                raise KeyError(
+                    f"{selected} has no binding {part!r}; inspect luma.catalog({selected!r})"
+                )
+            node = children[part]
+            selected += "." + part
         manifest = object.__getattribute__(self, "manifest")
         header = [
             f"luma binding revision {manifest.get('revision')} "
@@ -692,7 +718,7 @@ class LumaNamespace(LumaRecord):
 
         available: list[str] = []
         unavailable: list[str] = []
-        _walk_catalog(self, "luma", available, unavailable)
+        _walk_catalog(node, selected, available, unavailable, depth)
         out = header + [""]
         out.append("available:")
         out.extend(available or ["  (none)"])
@@ -700,12 +726,20 @@ class LumaNamespace(LumaRecord):
             out.append("")
             out.append("unavailable:")
             out.extend(unavailable)
+        out.extend([
+            "",
+            'Discover: luma.catalog("venue") or luma.catalog("features"); depth=None expands a full subtree.',
+            "API: inspect.signature(verb), inspect.getdoc(verb). With a track open, luma.track.nodes() lists node definitions.",
+        ])
+        if scope.get("venue_id") and selected in ("luma", "luma.venue"):
+            out.append("Venue: describe()/nodes()/extent() measure live geometry; groups() lists exact selections; render() shows it.")
+            out.append("Build: place(), cursor.add(), distribute(); catalog() lists pieces; fixture_library(query) finds lights.")
         return "\n".join(out)
 
     def __repr__(self) -> str:
         # Evaluating ``luma`` is the natural first orientation step. Keep that
-        # ordinary repr bounded; callers opt into the complete inventory with
-        # ``luma.catalog()``.
+        # ordinary repr bounded; callers choose a branch with
+        # ``luma.catalog(path)``.
         return LumaRecord.__repr__(self)
 
 
@@ -721,7 +755,7 @@ def _environment_line(namespace: "LumaNamespace") -> str | None:
     """
     venue = _record_items(namespace).get("venue")
     try:
-        environment = venue["environment"]
+        environment = venue["environment_snapshot"]
     except (AttributeError, KeyError, TypeError):
         return None
     if not isinstance(environment, LumaRecord):
@@ -760,11 +794,20 @@ def _leaf_summary(value: Any) -> str:
     return f"  = {value!r}"
 
 
+def _catalog_children(node: Any) -> dict[str, Any] | None:
+    if isinstance(node, LumaRecord):
+        return _record_items(node)
+    # Facades expose snapshot records without making live host calls.
+    catalog_items = getattr(node, "_luma_catalog_items", None)
+    return dict(catalog_items()) if callable(catalog_items) else None
+
+
 def _walk_catalog(
     node: Any,
     path: str,
     available: list[str],
     unavailable: list[str],
+    depth: int | None,
 ) -> None:
     if isinstance(node, Unavailable):
         unavailable.append(f"  {path:<40} {node.reason}")
@@ -772,17 +815,28 @@ def _walk_catalog(
     if isinstance(node, LumaTensor):
         available.append(f"  {path:<40} {node.describe()}")
         return
-    if isinstance(node, LumaRecord):
-        for key, value in _record_items(node).items():
-            _walk_catalog(value, f"{path}.{key}", available, unavailable)
-        return
-    # Domain facades may enrich a binding record with methods while retaining
-    # its ordinary inventory. The hook avoids teaching this data-plane module
-    # about Track (or any future domain type) by name.
-    catalog_items = getattr(node, "_luma_catalog_items", None)
-    if callable(catalog_items):
-        for key, value in catalog_items():
-            _walk_catalog(value, f"{path}.{key}", available, unavailable)
+    children = _catalog_children(node)
+    if children is not None:
+        if depth == 0:
+            keys = list(children)
+            shown = keys[:RECORD_REPR_ITEM_LIMIT]
+            suffix = f", … ({len(keys) - len(shown)} more)" if len(keys) > len(shown) else ""
+            available.append(f"  {path:<40} {{" + ", ".join(shown) + suffix + "}")
+            return
+        # Bound both wide families and deep trees. Explicit full expansion is
+        # the only mode that may exceed the ordinary orientation budget.
+        items = list(children.items())
+        shown = items if depth is None else items[:32]
+        for key, value in shown:
+            if depth is not None and len(available) + len(unavailable) >= 128:
+                available.append(f"  … inventory limit; inspect luma.catalog({path!r})")
+                break
+            _walk_catalog(
+                value, f"{path}.{key}", available, unavailable,
+                None if depth is None else depth - 1,
+            )
+        if len(items) > len(shown):
+            available.append(f"  {path}: … ({len(items) - len(shown)} more; use .keys() or depth=None)")
         return
     if isinstance(node, (list, tuple)):
         available.append(f"  {path:<40} list[{len(node)}]")
@@ -913,6 +967,51 @@ def build_namespace(
         items["window"] = Unavailable("no analysis window in scope", "luma.window")
 
     return LumaNamespace(items, manifest, store)
+
+
+def reconcile_facades(namespace, previous):
+    """Refresh live score/venue facades without mutating cached snapshots."""
+    from .score import GraphTrack
+    from .venue import Venue
+
+    items = dict(_record_items(namespace))
+    snapshot = namespace.get("track")
+    before = previous.get("track") if previous is not None else None
+    def score_key(value):
+        scope = value.manifest.get("scope") or {}
+        return (value.manifest.get("agent_kind"),
+                *(scope.get(key) for key in ("track_id", "venue_id", "score_id")))
+    same_score = (isinstance(before, GraphTrack) and before._active
+                  and isinstance(snapshot, GraphTrack) and before.id == snapshot.id
+                  and score_key(previous) == score_key(namespace))
+    if isinstance(before, GraphTrack) and not same_score:
+        before._revoke()
+    if isinstance(snapshot, GraphTrack):
+        if same_score:
+            before._refresh(snapshot)
+            items["track"] = before
+        else:
+            items["track"] = GraphTrack(
+                snapshot._values, nodes=snapshot._nodes, features=snapshot._features,
+                host_call=snapshot._host_call, artifact_store=snapshot._artifact_store,
+            )
+
+    snapshot = namespace.get("venue")
+    before = previous.get("venue") if previous is not None else None
+    same_venue = (isinstance(before, Venue) and before._active
+                  and isinstance(snapshot, Venue) and before.id == snapshot.id)
+    if isinstance(before, Venue) and not same_venue:
+        before._revoke()
+    if isinstance(snapshot, Venue):
+        if same_venue:
+            before._refresh(snapshot)
+            items["venue"] = before
+        else:
+            items["venue"] = Venue(snapshot._values, host_call=snapshot._host_call,
+                                   figures=snapshot._figures, workspace=snapshot._workspace)
+    # Cache entries keep their original document/revision/records. Reinstalling
+    # an earlier manifest after undo refreshes from it, never from a live alias.
+    return LumaNamespace(items, namespace.manifest, namespace.store)
 
 
 def load_manifest(

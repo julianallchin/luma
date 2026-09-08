@@ -54,7 +54,7 @@ pub struct VenueHost {
     workspace: Arc<Workspace>,
     venue_id: String,
     /// The score that lights the room, when the thread has one. Without it the
-    /// rig is drawn on the editor's work light alone — geometry, no beams.
+    /// rig uses the venue's saved environment, with geometry and no score beams.
     lighting: Option<Arc<TrackHost>>,
     /// The scratch graphs open in this cell, by id.
     ///
@@ -86,6 +86,12 @@ impl VenueHost {
     }
 
     async fn render(&self, request: RenderRequest) -> Result<Value, HostCallError> {
+        if request.edit.is_some() && request.highlight.is_some() {
+            return Err(HostCallError::new(
+                "invalid_preview",
+                "choose an edit preview or a full-brightness group highlight, not both",
+            ));
+        }
         let view = View::from_str(&request.view)
             .map_err(|error| HostCallError::new("invalid_view", error.to_string()))?;
         let width = clamp_dimension("width", request.width)?;
@@ -117,19 +123,27 @@ impl VenueHost {
         // "which heads are these?", and a score playing over the answer is
         // only noise on top of it.
         let state = match request.highlight.as_deref() {
-            None => self.state_at(time).await?,
-            Some(expression) => Some(stage_render::highlight_state(
-                &groups::resolve_selection_expression_with_path(
-                    &self.resource_root,
-                    &mut access,
-                    &Selection::new(expression),
-                    // A highlight is a picture of one answer, so the random
-                    // selectors have to give the same answer twice.
-                    0,
-                )
-                .await
-                .map_err(|error| HostCallError::new("invalid_selection", error))?,
-            )),
+            None => self.state_at(time, request.edit.as_ref()).await?,
+            Some(expression) => {
+                let tree = groups::GroupSources::read(&self.resource_root, &mut access)
+                    .await
+                    .map_err(|error| HostCallError::new("invalid_selection", error))?
+                    .tree();
+                groups::validate_selection_names(expression, &tree)
+                    .map_err(|error| HostCallError::new("invalid_selection", error))?;
+                Some(stage_render::highlight_state(
+                    &groups::resolve_selection_expression_with_path(
+                        &self.resource_root,
+                        &mut access,
+                        &Selection::new(expression),
+                        // A highlight is a picture of one answer, so the random
+                        // selectors have to give the same answer twice.
+                        0,
+                    )
+                    .await
+                    .map_err(|error| HostCallError::new("invalid_selection", error))?,
+                ))
+            }
         };
         drop(access);
 
@@ -348,7 +362,7 @@ impl VenueHost {
     ///
     /// A read of the library, not of the venue: the vocabulary half of
     /// `catalog()`, which answers for structure and cannot answer for lights.
-    fn fixtures(&self, request: FixturesRequest) -> Result<Value, HostCallError> {
+    fn fixture_library(&self, request: FixturesRequest) -> Result<Value, HostCallError> {
         let found = crate::services::fixtures::library(
             &self.resource_root,
             request.query.as_deref().unwrap_or_default(),
@@ -359,8 +373,13 @@ impl VenueHost {
     }
 
     /// The tree as text — the channel a program reads after every mutation.
-    async fn describe(&self) -> Result<Value, HostCallError> {
-        Ok(json!({ "text": self.stage().describe().await? }))
+    async fn describe(&self, request: DescribeRequest) -> Result<Value, HostCallError> {
+        let text = if request.detail {
+            self.stage().describe().await?
+        } else {
+            self.stage().summary().await?
+        };
+        Ok(json!({ "text": text }))
     }
 
     /// Everything the solve left open: unplaced branches and dangling sockets.
@@ -373,12 +392,7 @@ impl VenueHost {
         Ok(json!({ "unplaced": venue.unplaced, "dangling": venue.dangling }))
     }
 
-    /// The venue's group tree, live: derivation, the overrides on it, and the
-    /// authored rows beside them, each node with the fixtures in it.
-    ///
-    /// The same rows as the `luma.venue["groups"]` snapshot, read now — a
-    /// script that has just hung six movers asks this to see the sets they
-    /// landed in, and the snapshot answers about the room it walked into.
+    /// Saved fixture collections, read live after the cell's edits.
     async fn groups(&self) -> Result<Value, HostCallError> {
         let mut access = self.read_access().await?;
         let sources = groups::GroupSources::read(&self.resource_root, &mut access)
@@ -392,6 +406,51 @@ impl VenueHost {
         let rows =
             crate::agent_execution::bindings::providers::venue::group_rows(&sources.hierarchy());
         Ok(json!({ "groups": rows }))
+    }
+
+    async fn group(&self, request: GroupRequest) -> Result<Value, HostCallError> {
+        crate::venue_graph::ensure_migrated(&self.pool, &self.venue_id, &self.resource_root)
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
+        let mut access =
+            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+                .await
+                .map_err(|error| HostCallError::new("invalid_group", error))?;
+        let group = groups::set_named_group(
+            &self.resource_root,
+            &mut access,
+            &request.name,
+            &request.fixtures,
+            request.replace,
+        )
+        .await
+        .map_err(|error| HostCallError::new("invalid_group", error))?;
+        access
+            .commit()
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
+        groups::invalidate_venue_fixture_cache();
+        let rows = crate::agent_execution::bindings::providers::venue::group_rows(&[group]);
+        Ok(json!({ "group": rows.into_iter().next() }))
+    }
+
+    async fn generate_groups(&self) -> Result<Value, HostCallError> {
+        crate::venue_graph::ensure_migrated(&self.pool, &self.venue_id, &self.resource_root)
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
+        let mut access =
+            VenueAccess::<Write>::write(&self.pool, VenueResource::Venue(&self.venue_id))
+                .await
+                .map_err(|error| HostCallError::new("invalid_group", error))?;
+        groups::snapshot_generated_groups(&self.resource_root, &mut access, true)
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
+        access
+            .commit()
+            .await
+            .map_err(|error| HostCallError::new("invalid_group", error))?;
+        groups::invalidate_venue_fixture_cache();
+        self.groups().await
     }
 
     async fn reach(&self, request: ReachRequest) -> Result<Value, HostCallError> {
@@ -481,7 +540,7 @@ impl VenueHost {
                 Err(error) => return Err(error.into()),
             }
         }
-        Ok(json!({ "describe": self.stage().describe().await? }))
+        Ok(json!({ "describe": self.stage().summary().await? }))
     }
 
     async fn params(&self, request: ParamsRequest) -> Result<Value, HostCallError> {
@@ -492,7 +551,7 @@ impl VenueHost {
         self.placed(report).await
     }
 
-    /// The one fixture constructor: place, name, group and patch a row in one
+    /// The fixture constructor: place, name and patch a row in one
     /// transaction. A fit failure is a report, not an error.
     ///
     /// Nothing republishes the Art-Net patch here: a cell has no live output,
@@ -541,7 +600,7 @@ impl VenueHost {
                     "dangling": [],
                     "unplaced": [],
                 },
-                "describe": draft.describe(supply),
+                "describe": draft.summary(supply),
             }));
         }
         let socket = match (request.face, request.host_socket.clone()) {
@@ -566,7 +625,7 @@ impl VenueHost {
             .await?;
         Ok(json!({
             "report": distributed.report,
-            "describe": self.stage().describe().await?,
+            "describe": self.stage().summary().await?,
         }))
     }
 
@@ -584,12 +643,10 @@ impl VenueHost {
             let mut drafts = self.drafts();
             let draft = Self::draft_mut(&mut drafts, draft_id)?;
             let built = draft.chain(supply, &plan)?;
-            let text = draft.describe(supply);
-            return Ok(built_json(&built, &text));
+            return Ok(built_json(&built));
         }
         let built = self.stage().chain(&plan).await?;
-        let text = self.stage().describe().await?;
-        Ok(built_json(&built, &text))
+        Ok(built_json(&built))
     }
 
     /// Every node a filter names, in the facade frame.
@@ -666,7 +723,7 @@ impl VenueHost {
         let aimed = self.stage().aim(&request.nodes, &target).await?;
         Ok(json!({
             "aimed": aimed,
-            "describe": self.stage().describe().await?,
+            "describe": self.stage().summary().await?,
         }))
     }
 
@@ -750,7 +807,7 @@ impl VenueHost {
         for node_id in &request.node_ids {
             draft.remove(supply, node_id);
         }
-        Ok(json!({ "text": draft.describe(supply) }))
+        Ok(json!({ "text": draft.summary(supply) }))
     }
 
     /// Edit one of a draft's own nodes.
@@ -759,7 +816,7 @@ impl VenueHost {
         let mut drafts = self.drafts();
         let draft = Self::draft_mut(&mut drafts, &request.draft_id)?;
         draft.set_params(supply, &request.node_id, &request.params)?;
-        Ok(json!({ "text": draft.describe(supply) }))
+        Ok(json!({ "text": draft.summary(supply) }))
     }
 
     fn draft_describe(&self, request: DraftRequest) -> Result<Value, HostCallError> {
@@ -822,7 +879,7 @@ impl VenueHost {
         };
         Ok(json!({
             "nodes": nodes,
-            "describe": self.stage().describe().await?,
+            "describe": self.stage().summary().await?,
         }))
     }
 
@@ -834,18 +891,31 @@ impl VenueHost {
         report: crate::models::venue_graph::PlacementReport,
     ) -> Result<Value, HostCallError> {
         Ok(json!({
-            "placement": report,
-            "describe": self.stage().describe().await?,
+            "placement": placement_json(&report),
+            "describe": placement_text(&report),
         }))
     }
 
     /// The evaluated universe at `time`, or `None` when this thread has no
     /// score to light the room with.
-    async fn state_at(&self, time: f32) -> Result<Option<UniverseState>, HostCallError> {
+    async fn state_at(
+        &self,
+        time: f32,
+        edit: Option<&crate::services::graph_scores::GraphScoreEdit>,
+    ) -> Result<Option<UniverseState>, HostCallError> {
         let Some(track) = self.lighting.as_ref() else {
+            if edit.is_some() {
+                return Err(HostCallError::new(
+                    "no_track",
+                    "an edit preview needs a track in scope",
+                ));
+            }
             return Ok(None);
         };
-        let scene = track.saved_scene().await?;
+        let scene = match edit {
+            Some(edit) => track.prepare_score(edit).await?,
+            None => track.saved_scene().await?,
+        };
         let mut arena = Arena::default();
         Ok(scene
             .render(&[time], Scope::Composite, &mut arena)
@@ -908,10 +978,12 @@ impl HostCallHandler for VenueHost {
                     "venue.tiles" => self.tiles(decode(payload)?).await,
                     "venue.environment" => self.environment(decode(payload)?).await,
                     "venue.catalog" => self.catalog(),
-                    "venue.fixtures" => self.fixtures(decode(payload)?),
-                    "venue.describe" => self.describe().await,
+                    "venue.fixture_library" => self.fixture_library(decode(payload)?),
+                    "venue.describe" => self.describe(decode(payload)?).await,
                     "venue.open" => self.open().await,
                     "venue.groups" => self.groups().await,
+                    "venue.group" => self.group(decode(payload)?).await,
+                    "venue.generate_groups" => self.generate_groups().await,
                     "venue.reach" => self.reach(decode(payload)?).await,
                     "venue.place" => self.place(decode(payload)?).await,
                     "venue.attach" => self.attach(decode(payload)?).await,
@@ -1068,8 +1140,16 @@ fn described(environment: VenueEnvironment) -> Value {
     value
 }
 
-/// The room's own light. Every field absent is a read; any field present is a
-/// write.
+/// Create a named collection, or explicitly replace its fixture membership.
+#[derive(Deserialize)]
+struct GroupRequest {
+    name: String,
+    fixtures: Vec<String>,
+    #[serde(default)]
+    replace: bool,
+}
+
+/// The room's own light. Every field absent is a read; any field present is a write.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EnvironmentRequest {
@@ -1379,7 +1459,38 @@ struct StampRequest {
 
 /// One chain op's answer: what was built, where it landed, and the end the next
 /// op grows from.
-fn built_json(built: &crate::services::stage_ops::Built, describe: &str) -> Value {
+fn placement_json(report: &crate::models::venue_graph::PlacementReport) -> Value {
+    json!({
+        "nodeId": report.node_id, "outcome": report.outcome,
+        "parentId": report.parent_id, "warnings": report.warnings,
+        "dangling": report.dangling, "constraints": report.constraints,
+    })
+}
+
+fn placement_text(report: &crate::models::venue_graph::PlacementReport) -> String {
+    let state = if report.outcome.is_placed() {
+        "placed"
+    } else {
+        "unplaced"
+    };
+    let mut text = format!(
+        "{} {state} on {}\n",
+        report.node_id,
+        report.parent_id.as_deref().unwrap_or("no host")
+    );
+    for warning in &report.warnings {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
+    for constraint in &report.constraints {
+        text.push_str(&format!(
+            "constraint: {} -> {}: {}\n",
+            constraint.node_id, constraint.target_node, constraint.status
+        ));
+    }
+    text
+}
+
+fn built_json(built: &crate::services::stage_ops::Built) -> Value {
     json!({
         "node": built.node_id,
         "at": built.at.at,
@@ -1387,8 +1498,8 @@ fn built_json(built: &crate::services::stage_ops::Built, describe: &str) -> Valu
         "size": built.at.size,
         "tip": built.tip.as_ref().map(tip_json),
         "announce": built.announce,
-        "placement": built.report,
-        "describe": describe,
+        "placement": placement_json(&built.report),
+        "describe": format!("{}at={:.2?}, z={:.2}, size={:.2?}\n", placement_text(&built.report), built.at.at, built.at.z, built.at.size),
     })
 }
 
@@ -1402,19 +1513,7 @@ fn tip_json(tip: &luma_scene::build::Tip) -> Value {
 }
 
 fn node_json(view: &crate::services::stage_ops::NodeView) -> Value {
-    json!({
-        "id": view.id,
-        "kind": view.kind,
-        "catalogRef": view.catalog_ref,
-        "short": view.short,
-        "label": view.label,
-        "host": view.host,
-        "at": view.at.at,
-        "z": view.at.z,
-        "size": view.at.size,
-        "face": view.face,
-        "tips": view.tips.iter().map(tip_json).collect::<Vec<_>>(),
-    })
+    view.json()
 }
 
 fn extent_json(extent: luma_scene::build::Extent) -> Value {
@@ -1444,7 +1543,13 @@ impl From<StageError> for HostCallError {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+struct DescribeRequest {
+    #[serde(default)]
+    detail: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RenderRequest {
     view: String,
     t: f64,
@@ -1453,6 +1558,9 @@ struct RenderRequest {
     /// A selection expression. Present, its heads are the only thing lit, and
     /// the score at `t` is not drawn at all. Absent, the score lights the room.
     highlight: Option<String>,
+    /// A private candidate score, evaluated by the same compositor as apply.
+    /// Omitted for the saved score. Never persisted or sent to the live viewport.
+    edit: Option<crate::services::graph_scores::GraphScoreEdit>,
     /// Draw each fixture's rest aim as an arrow. Defaulted on the Python side
     /// rather than here, so the answer to "on or off by default" has one home;
     /// this channel is a verification channel, and a picture that does not say

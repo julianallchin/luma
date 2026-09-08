@@ -37,11 +37,9 @@ use crate::camera::Camera;
 ///
 /// The extent is **the rig and its light**: every fixture head, every point
 /// those heads throw light at (see [`Beam`]), and the pieces the rig hangs on.
-/// It is deliberately not the room. A venue's guardrails, speakers, decks and
-/// booth furniture are drawn but not framed, because they are metres wider
-/// than anything that lights up and fitting them puts the show in the middle
-/// of the picture at half size — measured at 30% of the frame on a real club
-/// rig whose light occupied two thirds of it.
+/// Authored decks, guardrails, speakers and furniture also belong in the
+/// frame: they are part of the venue being inspected. The renderer's infinite
+/// ground plane does not contribute geometry to this finite point cloud.
 ///
 /// Framing the beams and not just the hardware is what makes the rule hold in
 /// both directions: a bank of movers over a stage lights the floor below its
@@ -110,7 +108,7 @@ impl Framing {
     /// space.
     ///
     /// Pieces come as boxes rather than points because a truss twelve metres
-    /// wide is not where its origin is, and only *rig-bearing* pieces belong
+    /// wide is not where its origin is, and every authored piece belongs
     /// here — see the type's own note.
     ///
     /// A head contributes the eight corners of its body box rather than its

@@ -1179,6 +1179,24 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use std::path::Path;
 
+    #[test]
+    fn interactive_selection_names_accept_empty_sets_and_check_boolean_expressions() {
+        let tree = vec![crate::models::groups::GroupTreeNode {
+            id: "empty".into(),
+            name: "empty".into(),
+            label: "Empty".into(),
+            parent_id: None,
+            origin: crate::models::groups::GroupOrigin::Manual,
+            role: None,
+            fixtures: vec![],
+        }];
+        assert!(super::validate_selection_names("empty | ALL", &tree).is_ok());
+        assert!(super::validate_selection_names("empty & ~empty", &tree).is_ok());
+        let error = super::validate_selection_names("missing | empty", &tree).unwrap_err();
+        assert!(error.contains("missing") && error.contains("Available groups: empty"));
+        assert!(super::validate_selection_names("empty |", &tree).is_err());
+    }
+
     /// `n` fixtures of `heads` heads each, all matched.
     fn whole(n: usize, heads: usize) -> (HeadSet, Vec<usize>) {
         let set = (0..n)
@@ -1365,6 +1383,127 @@ mod tests {
         assert_eq!(or_expression(&["a".to_string(), "b".to_string()]), "a | b");
         assert_eq!(or_terms(&or_expression(&[])), Some(vec![]));
     }
+}
+
+/// Check the one selector namespace inside the caller's write transaction.
+pub async fn require_unique_name(
+    resource_path: &Path,
+    access: &mut VenueAccess<'_, Write>,
+    name: Option<&str>,
+    exclude: Option<&str>,
+) -> Result<(), String> {
+    let Some(normalized) = name.map(normalize_group_name).filter(|n| !n.is_empty()) else {
+        return Ok(());
+    };
+    let tree = GroupSources::read(resource_path, access).await?.tree();
+    if let Some(clash) = node_answering_to(&tree, &normalized, exclude.unwrap_or_default()) {
+        return Err(format!(
+            "`{normalized}` is already what `{}` is called in this venue",
+            clash.label
+        ));
+    }
+    Ok(())
+}
+
+/// The native group editor and Python boundary share the same name and member edit.
+/// The caller commits the write transaction only after every member succeeds.
+pub async fn save_group_changes(
+    resource_path: &Path,
+    access: &mut VenueAccess<'_, Write>,
+    group_id: Option<&str>,
+    label: &str,
+    added: &[String],
+    removed: &[String],
+) -> Result<crate::models::groups::FixtureGroup, String> {
+    crate::models::groups::validate_group_name(&normalize_group_name(label))?;
+    require_unique_name(resource_path, access, Some(label), group_id).await?;
+    let group = if let Some(id) = group_id {
+        let before = groups_db::get_group(access, id).await?;
+        groups_db::update_group(
+            access,
+            id,
+            Some(label),
+            before.axis_lr,
+            before.axis_fb,
+            before.axis_ab,
+        )
+        .await?
+    } else {
+        groups_db::create_group(access, Some(label), None, None, None).await?
+    };
+    for fixture in removed {
+        groups_db::remove_member_from_group(access, fixture, &group.id, None).await?;
+    }
+    for fixture in added {
+        groups_db::add_member_to_group(access, fixture, &group.id, groups_db::WHOLE_FIXTURE)
+            .await?;
+    }
+    Ok(group)
+}
+
+/// Create a named whole-fixture collection, or explicitly replace its members.
+/// Resolve existing names under the same write lock as the edit; a retry keeps
+/// the group's identity, and an invalid member cannot leave a partial change.
+pub async fn set_named_group(
+    resource_path: &Path,
+    access: &mut VenueAccess<'_, Write>,
+    name: &str,
+    fixtures: &[String],
+    replace: bool,
+) -> Result<FixtureGroupNode, String> {
+    let normalized = normalize_group_name(name);
+    crate::models::groups::validate_group_name(&normalized)?;
+    let sources = GroupSources::read(resource_path, access).await?;
+    let tree = sources.tree();
+    let existing = node_answering_to(&tree, &normalized, "");
+    let id = if replace {
+        if let Some(existing) = existing {
+            // A legacy derived set is not an authored collection to overwrite.
+            groups_db::get_group(access, &existing.id).await?;
+            Some(existing.id.as_str())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let removed: Vec<String> = sources
+        .members
+        .iter()
+        .filter(|member| {
+            Some(member.group_id.as_str()) == id && !fixtures.contains(&member.fixture_id)
+        })
+        .map(|member| member.fixture_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let group = save_group_changes(resource_path, access, id, name, fixtures, &removed).await?;
+    GroupSources::read(resource_path, access)
+        .await?
+        .hierarchy()
+        .into_iter()
+        .find(|node| node.id == group.id)
+        .ok_or_else(|| "saved group could not be read".into())
+}
+
+/// Interactive previews refuse misspelled names, while a known empty group
+/// remains a valid empty selection. Score evaluation stays venue-portable.
+pub fn validate_selection_names(expression: &str, tree: &[GroupTreeNode]) -> Result<(), String> {
+    let missing: Vec<String> = selection_names(expression)?
+        .into_iter()
+        .filter(|name| !tree.iter().any(|node| node.name == *name))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let available: Vec<&str> = tree
+        .iter()
+        .filter(|node| !node.name.is_empty())
+        .take(12)
+        .map(|node| node.name.as_str())
+        .collect();
+    Err(format!("Unknown group name(s): {}. Available groups: {}. Use groups() for exact names, group(name, fixtures) to create one, or generate_groups() for suggestions.",
+        missing.join(", "), if available.is_empty() { "none".into() } else { available.join(", ") }))
 }
 
 /// Materialize generated sets once. Explicit generation only adds missing names;

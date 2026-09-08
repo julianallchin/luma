@@ -14,11 +14,29 @@ use tokio::{
 };
 
 pub(super) struct Process {
-    child: Child,
-    stdin: ChildStdin,
+    child: Option<Child>,
+    stdin: Input,
     lines: Lines<BufReader<ChildStdout>>,
     stderr: Arc<Mutex<VecDeque<String>>>,
     reader: tokio::task::JoinHandle<()>,
+}
+
+/// A separate writer lets a session keep its protocol read future alive while
+/// tool completions send replies. Never cancel a protocol handshake mid-write.
+#[derive(Clone)]
+pub(super) struct Input(Arc<tokio::sync::Mutex<ChildStdin>>);
+
+impl Input {
+    pub async fn send(&self, value: Value) -> Result<(), AgentError> {
+        let mut bytes = serde_json::to_vec(&value).map_err(|e| protocol(e.to_string()))?;
+        bytes.push(b'\n');
+        self.0
+            .lock()
+            .await
+            .write_all(&bytes)
+            .await
+            .map_err(|e| protocol(format!("agent stdin: {e}")))
+    }
 }
 
 impl Process {
@@ -48,21 +66,20 @@ impl Process {
             }
         });
         Ok(Self {
-            child,
-            stdin,
+            child: Some(child),
+            stdin: Input(Arc::new(tokio::sync::Mutex::new(stdin))),
             lines: BufReader::new(stdout).lines(),
             stderr,
             reader,
         })
     }
 
+    pub fn input(&self) -> Input {
+        self.stdin.clone()
+    }
+
     pub async fn send(&mut self, value: Value) -> Result<(), AgentError> {
-        let mut bytes = serde_json::to_vec(&value).map_err(|e| protocol(e.to_string()))?;
-        bytes.push(b'\n');
-        self.stdin
-            .write_all(&bytes)
-            .await
-            .map_err(|e| protocol(format!("agent stdin: {e}")))
+        self.stdin.send(value).await
     }
 
     pub async fn read(&mut self) -> Result<Value, AgentError> {
@@ -93,15 +110,38 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
         #[cfg(unix)]
-        if let Some(pid) = self.child.id() {
+        if let Some(pid) = child.id() {
             // SAFETY: this unreaped child is the leader of the group we created.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
-        let _ = self.child.start_kill();
+        let _ = child.start_kill();
         self.reader.abort();
+        // Child::drop delegates reaping to Tokio's orphan queue, which may not
+        // run again (especially during runtime shutdown). Own that final wait
+        // outside the runtime. Only process cleanup survives the turn's drop.
+        if matches!(child.try_wait(), Ok(None)) {
+            if let Err(error) = std::thread::Builder::new()
+                .name("agent-process-reaper".into())
+                .spawn(move || loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                        Err(error) => {
+                            eprintln!("[agent] could not reap native process: {error}");
+                            break;
+                        }
+                    }
+                })
+            {
+                eprintln!("[agent] could not start native process reaper: {error}");
+            }
+        }
     }
 }
 
@@ -123,6 +163,32 @@ pub(super) fn command(name: &str, cwd: &std::path::Path) -> Command {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_after_runtime_shutdown_reaps_the_process() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (process, pid) = runtime.block_on(async {
+            let mut command = tokio::process::Command::new("python3");
+            command.args(["-c", "import os,json,time; print(json.dumps({'pid':os.getpid()}),flush=True); time.sleep(60)"]);
+            let mut process = Process::start(command).unwrap();
+            let pid = process.read().await.unwrap()["pid"].as_i64().unwrap() as i32;
+            (process, pid)
+        });
+        drop(runtime);
+        drop(process);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // SAFETY: signal zero only probes this known child PID.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native process remained unreaped after runtime shutdown"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     #[tokio::test]
     async fn dropping_the_session_stops_descendants() {

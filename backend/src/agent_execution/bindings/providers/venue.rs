@@ -28,15 +28,15 @@ use crate::models::groups::{FixtureGroupNode, GroupOrigin};
 use crate::services::group_derivation::FixtureRole;
 use fixture_kinematics::StageDirection;
 use glam::DVec3;
-use luma_scene::venue::{NodePose, ResolvedVenue};
+use luma_scene::venue::ResolvedVenue;
 use luma_scene::View;
 
 /// One patched fixture, with what its pose *means* alongside the pose itself.
 ///
-/// `facing` and `facing_word` are derived, never stored: they are
+/// `face` and `facing_word` are derived, never stored: they are
 /// `fixture_kinematics`'s answer for this mount, so an agent asking "which
 /// fixtures point at the house" gets the renderer's answer rather than doing
-/// its own arithmetic on `rotation` and reaching a different one.
+/// reconstructing an Euler rotation and reaching a different one.
 #[derive(Serialize)]
 struct FixtureBinding {
     id: String,
@@ -48,39 +48,13 @@ struct FixtureBinding {
     address: i64,
     num_channels: i64,
     /// Absent when the fixture is patched but unplaced — it is in the tray.
-    position: Option<[f64; 3]>,
-    /// Euler triple in the stored convention, radians.
-    rotation: Option<[f64; 3]>,
-    /// Unit vector, data space, that a parked head emits along.
-    facing: Option<[f64; 3]>,
+    at: Option<[f64; 2]>,
+    z: Option<f64>,
+    /// Unit vector in the stage frame, matching aim(direction=).
+    face: Option<[f64; 3]>,
     /// The same direction as a stage word: `house`, `upstage`, `stage-left`,
     /// `stage-right`, `up`, `down`.
     facing_word: Option<&'static str>,
-}
-
-/// One stage piece in the same world frame as [`FixtureBinding::position`].
-///
-/// `position`/`rotation` are the **resolved** pose — poses exist nowhere else,
-/// so there is no chain for an agent asked to find the booth to walk.
-/// `parent_id` and the socket pair are kept so the *relation* is legible too:
-/// "the mover is on the downstage truss" is the sentence the flattened metres
-/// could never say.
-#[derive(Serialize)]
-struct PieceBinding {
-    id: String,
-    /// The graph's own alphabet: `stage`, `run`, `tower`, `piece`, `array`.
-    kind: String,
-    /// Snap/palette taxonomy: `floor`, `truss`, `speaker`, `cdj`, `mixer`, ...
-    catalog_kind: String,
-    catalog_ref: Option<String>,
-    label: Option<String>,
-    position: [f64; 3],
-    rotation: [f64; 3],
-    /// Unit vector, data space, that this node's mount frame faces.
-    facing: [f64; 3],
-    parent_id: Option<String>,
-    my_socket: Option<String>,
-    their_socket: Option<String>,
 }
 
 /// A node with no pose, by the root of its branch.
@@ -98,8 +72,8 @@ struct UnplacedBinding {
 /// The whole tree, flat and parents-first: a derived set is as real as an
 /// authored one and an agent that only saw `fixture_groups` saw nothing at all
 /// in a venue nobody had grouped by hand. `parent_id` carries the shape;
-/// `path` is that shape said in one string, because the name a score uses is
-/// the path.
+/// `path` is the human-readable hierarchy of labels. Scores select by the
+/// exact `name` field, never by that display path.
 #[derive(Serialize)]
 pub(crate) struct GroupBinding {
     id: String,
@@ -146,11 +120,11 @@ pub async fn provide(
         for path in [
             "venue.id",
             "venue.name",
-            "venue.environment",
+            "venue.environment_snapshot",
             "venue.fixtures",
             "venue.pieces",
-            "venue.unplaced",
-            "venue.groups",
+            "venue.unplaced_snapshot",
+            "venue.group_snapshot",
             "venue.positions",
             "venue.uv",
         ] {
@@ -175,11 +149,11 @@ pub async fn provide(
             for path in [
                 "venue.id",
                 "venue.name",
-                "venue.environment",
+                "venue.environment_snapshot",
                 "venue.fixtures",
                 "venue.pieces",
-                "venue.unplaced",
-                "venue.groups",
+                "venue.unplaced_snapshot",
+                "venue.group_snapshot",
                 "venue.positions",
                 "venue.uv",
             ] {
@@ -200,13 +174,13 @@ pub async fn provide(
             // is the live read for a program that has just moved it.
             inline(
                 b,
-                "venue.environment",
+                "venue.environment_snapshot",
                 environment_record(venue.environment),
             )?;
         }
         Err(e) => {
             inline(b, "venue.id", venue_id)?;
-            for path in ["venue.name", "venue.environment"] {
+            for path in ["venue.name", "venue.environment_snapshot"] {
                 unavailable(b, path, format!("the venue could not be loaded: {e}"))?;
             }
         }
@@ -218,11 +192,30 @@ pub async fn provide(
     match crate::venue_graph::resolved(&mut access, ctx.resource_root).await {
         Ok(venue) => {
             fixtures(b, &mut access, &venue).await?;
-            pieces(b, &venue)?;
+            let graph = crate::venue_graph::graph(&mut access).await?;
+            let supply = crate::venue_graph::sockets(ctx.resource_root)?;
+            let nodes =
+                crate::services::stage_ops::views(&graph, &venue, supply, &Default::default());
+            let pieces: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.kind != "fixture")
+                .map(|n| {
+                    let mut value = n.json();
+                    if let Some(edge) = graph.edge(&n.id) {
+                        value["attachment"] = serde_json::json!({
+                            "host": edge.parent, "my_socket": edge.my_socket,
+                            "their_socket": edge.their_socket,
+                            "roll_degrees": edge.roll.to_degrees(),
+                        });
+                    }
+                    value
+                })
+                .collect();
+            inline(b, "venue.pieces", pieces)?;
             unplaced(b, &venue)?;
         }
         Err(e) => {
-            for path in ["venue.fixtures", "venue.pieces", "venue.unplaced"] {
+            for path in ["venue.fixtures", "venue.pieces", "venue.unplaced_snapshot"] {
                 unavailable(b, path, format!("the venue could not be resolved: {e}"))?;
             }
         }
@@ -235,7 +228,7 @@ pub async fn provide(
 
 /// The patch, with where each fixture ended up.
 ///
-/// `facing` and `facing_word` are derived, never stored: a fixture's rest
+/// `face` and `facing_word` are derived, never stored: a fixture's rest
 /// direction is the outward normal of the socket it hangs from, so they are
 /// what the resolver says and what the renderer draws. Every consumer that used
 /// to do its own arithmetic on `rotation` got a different answer.
@@ -262,7 +255,10 @@ async fn fixtures(
         .iter()
         .map(|f| {
             let placed = venue.pose(&f.id);
-            let (position, rotation) = placed.map(NodePose::data_pose).unzip();
+            let position = placed.map(|pose| {
+                let (p, _) = pose.data_pose();
+                luma_scene::coords::world_from_data(glam::Vec3::from_array(p.map(|x| x as f32)))
+            });
             let facing = placed.map(|pose| {
                 let (_, basis) = pose.data_basis();
                 basis * DVec3::NEG_Z
@@ -276,48 +272,18 @@ async fn fixtures(
                 universe: f.universe,
                 address: f.address,
                 num_channels: f.num_channels,
-                position,
-                rotation,
-                facing: facing.map(|v| v.to_array()),
+                at: position.map(|p| [f64::from(p.x), f64::from(p.y)]),
+                z: position.map(|p| f64::from(p.z)),
+                face: facing.map(|v| {
+                    luma_scene::coords::world_from_data(v.as_vec3())
+                        .to_array()
+                        .map(f64::from)
+                }),
                 facing_word: facing.map(|v| StageDirection::of(v.as_vec3()).label()),
             }
         })
         .collect();
     inline(b, "venue.fixtures", &bindings)
-}
-
-/// The set design: everything in the room that is not a light.
-///
-/// The pose is the resolver's, the same one `render(view="dj")` draws, so the
-/// two agree about where the booth is by construction rather than by two copies
-/// of the same walk staying in step. Which poses are objects at all is
-/// [`NodePose::is_set_piece`] — the renderer's answer, not a second filter, so
-/// an array anchor, which carries its members' `catalog_ref` and has no
-/// geometry of its own, is not listed as an N+1th piece.
-fn pieces(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String> {
-    let bindings: Vec<PieceBinding> = venue
-        .poses()
-        .filter(|pose| pose.is_set_piece())
-        .map(|pose| {
-            let (position, rotation) = pose.data_pose();
-            let (_, basis) = pose.data_basis();
-            PieceBinding {
-                id: pose.node.clone(),
-                kind: pose.kind.as_str().to_string(),
-                catalog_kind: crate::stage_render::catalog_kind(pose.catalog_ref.as_deref())
-                    .to_string(),
-                catalog_ref: pose.catalog_ref.clone(),
-                label: pose.label.clone(),
-                position,
-                rotation,
-                facing: (basis * DVec3::NEG_Z).to_array(),
-                parent_id: pose.parent.clone(),
-                my_socket: None,
-                their_socket: None,
-            }
-        })
-        .collect();
-    inline(b, "venue.pieces", &bindings)
 }
 
 /// Everything the room has but has not placed: the patch tray, and any branch
@@ -338,7 +304,7 @@ fn unplaced(b: &mut BindingBuilder, venue: &ResolvedVenue) -> Result<(), String>
             descendants: u.descendants,
         })
         .collect();
-    inline(b, "venue.unplaced", &bindings)
+    inline(b, "venue.unplaced_snapshot", &bindings)
 }
 
 /// The camera names `luma.venue.render(view=...)` accepts.
@@ -357,10 +323,10 @@ async fn groups(
     access: &mut VenueAccess<'_, Read>,
 ) -> Result<(), String> {
     match crate::services::groups::GroupSources::read(ctx.resource_root, access).await {
-        Ok(sources) => inline(b, "venue.groups", group_rows(&sources.hierarchy())),
+        Ok(sources) => inline(b, "venue.group_snapshot", group_rows(&sources.hierarchy())),
         Err(e) => unavailable(
             b,
-            "venue.groups",
+            "venue.group_snapshot",
             format!("the venue's groups could not be loaded: {e}"),
         ),
     }
@@ -439,7 +405,12 @@ async fn positions(
     }
 
     let ids: Vec<String> = resolved.iter().map(|(id, _)| id.clone()).collect();
-    let data: Vec<f32> = resolved.iter().flat_map(|(_, p)| *p).collect();
+    let data: Vec<f32> = resolved
+        .iter()
+        .flat_map(|(_, p)| {
+            luma_scene::coords::world_from_data(glam::Vec3::from_array(*p)).to_array()
+        })
+        .collect();
     put_f32(
         b,
         store,
@@ -447,11 +418,11 @@ async fn positions(
         &data,
         vec![
             AxisSpec::labels("primitive", ids.clone()),
-            AxisSpec::labels("coordinate", vec!["x".into(), "y".into(), "z".into()]),
+            AxisSpec::labels("coordinate", vec!["u".into(), "v".into(), "z".into()]),
         ],
         Some("m"),
         Provenance::new("venue_layout").with_note(
-            "world positions in meters, Z-up; primitive ids are '<fixture id>:<head index>' \
+            "stage positions in metres: +u stage right, +v crowd, +z up; primitive ids are '<fixture id>:<head index>' \
              in the evaluator's own resolution order",
         ),
     )?;

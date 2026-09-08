@@ -406,8 +406,38 @@ fn on_run(venue: &ResolvedVenue, fixture: &str) -> Option<OnRun> {
 /// there was genuinely no room for, which is reported as [`Note::NoRoom`].
 #[must_use]
 pub fn allocate(venue: &ResolvedVenue, fixtures: &[Fixture]) -> Allocation {
+    allocate_scoped(venue, fixtures, None)
+}
+
+/// Re-derive one run while leaving every other stored address alone.
+///
+/// Use this when only this run's assignments will be written. Filtering a full
+/// [`allocate`] result is unsafe: it may have moved an untouched fixture out of
+/// the way in its plan, while that fixture still occupies its stored channels.
+/// Untouched footprints are reservations here, not hand-set pins; the result
+/// contains only this run and preserves its actual pin flags.
+#[must_use]
+pub fn allocate_run(venue: &ResolvedVenue, fixtures: &[Fixture], run: &str) -> Allocation {
+    allocate_scoped(venue, fixtures, Some(run))
+}
+
+fn allocate_scoped(venue: &ResolvedVenue, fixtures: &[Fixture], run: Option<&str>) -> Allocation {
     let mut allocation = Allocation::default();
     let mut occupancy = Occupancy::default();
+    let fixtures: Vec<&Fixture> = fixtures
+        .iter()
+        .filter(|fixture| {
+            let selected = run.is_none_or(|run| {
+                on_run(venue, &fixture.id).is_some_and(|placement| placement.run == run)
+            });
+            if !selected {
+                if let Some(footprint) = fixture.address.footprint() {
+                    occupancy.claim(footprint, fixture.id.clone());
+                }
+            }
+            selected
+        })
+        .collect();
 
     // Pins first, so every derived block flows around them rather than through
     // them. They are emitted in the input's order and keep their place in the
@@ -566,7 +596,7 @@ fn place(occupancy: &mut Occupancy, universe: u16, fixture: &Fixture) -> Option<
 /// are appended at the end of the run's block, which is the answer for the
 /// common case of distributing onto an empty truss; a distribution that
 /// interleaves with fixtures already on the run is put in physical order by the
-/// next [`allocate`], which is what auto-patch is for.
+/// subsequent [`allocate_run`]. Auto-patch uses [`allocate`] for the whole venue.
 ///
 /// `run` of `None` asks for tray addresses — the run-less rule, from universe 1.
 ///

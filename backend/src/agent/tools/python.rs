@@ -28,8 +28,6 @@ use crate::services::agent_execution::{
 /// second wording would be a second tool.
 pub const PYTHON_TOOL_DESCRIPTION: &str = include_str!("../prompts/python-tool.md");
 
-/// Above this, a single figure's base64 is not persisted in the transcript.
-const MAX_PERSISTED_FIGURE_BYTES: usize = 2_000_000;
 /// Above this total, remaining figures are not sent to the model.
 const MAX_MODEL_FIGURE_BYTES: usize = 6_000_000;
 
@@ -153,8 +151,9 @@ fn to_stored_output(result: PythonCellResult) -> PythonToolOutput {
             .map(|figure| PythonStoredFigure {
                 width: figure.width,
                 height: figure.height,
-                base64_png: (figure.base64_png.len() <= MAX_PERSISTED_FIGURE_BYTES)
-                    .then_some(figure.base64_png),
+                // Capture already bounds figure count and dimensions. Retain
+                // the evidence even when a model's per-call budget omits it.
+                base64_png: Some(figure.base64_png),
             })
             .collect(),
         duration_ms: result.duration_ms,
@@ -285,5 +284,30 @@ mod tests {
         let schema = PythonTool.schema();
         assert!(schema["properties"]["purpose"].is_object());
         assert!(schema["properties"]["code"].is_object());
+    }
+
+    #[test]
+    fn preview_evidence_survives_storage_independently_of_delivery_budget() {
+        let capture: PythonCellResult = serde_json::from_value(serde_json::json!({
+            "status":"ok", "stdout":"", "stderr":"", "repr":null,
+            "traceback":null, "notices":[], "durationMs":1,
+            "figures":[
+                {"artifactRel":"outputs/large.png", "width":1280, "height":720,
+                 "base64Png":"a".repeat(2_000_004)},
+                {"artifactRel":"outputs/other.png", "width":2000, "height":2000,
+                 "base64Png":"b".repeat(MAX_MODEL_FIGURE_BYTES)}
+            ]
+        }))
+        .unwrap();
+        let stored = to_stored_output(capture);
+        assert!(stored
+            .figures
+            .iter()
+            .all(|figure| figure.base64_png.is_some()));
+        let blocks = model_output(&stored);
+        assert!(matches!(&blocks[0], ContentBlock::Image { data, .. } if data.len() == 2_000_004));
+        assert!(
+            matches!(&blocks[1], ContentBlock::Text(note) if note.contains("1 further figure"))
+        );
     }
 }

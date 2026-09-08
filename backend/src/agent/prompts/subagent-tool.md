@@ -16,3 +16,14 @@ When it finishes, its edits are merged into the document you are editing and
 you are given its final message. If the merge conflicts, or the subagent fails,
 nothing is applied and you are told so — its work stays readable on its own
 thread.
+
+Independent calls run concurrently; Python cells in each conversation remain
+sequential. Parent cancellation cancels its children too.
+
+If a child conflicts, inspect its preserved proposal with
+`subagent({"action":"inspect","childThreadId":"..."})`. This lists source files
+and conflict values. Read a listed file using the same action with `path` and
+optional zero-based character `offset`; follow `nextOffset` for more. Compare the base and
+proposal with your current `luma.track.edit()` draft, incorporate the intended
+changes, validate, preview, then `apply()` normally. Preserve unrelated current
+edits; do not replace the whole current score with an old proposal.

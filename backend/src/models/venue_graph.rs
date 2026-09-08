@@ -488,7 +488,7 @@ pub struct CatalogPiece {
     pub name: String,
     /// The box the piece fills **as `place` lays it with no `direction=`**, in
     /// facade axes: `(u, v, z)`, metres. For a generated piece this is its
-    /// default; `length=` moves the axis it runs along.
+    /// default; `length=` changes the span only for the truss generator.
     ///
     /// Not the piece's own `(x, y, z)`: a mesh is modelled in whatever frame
     /// its author chose and the seat turns it, so a catalog that printed the
@@ -499,11 +499,11 @@ pub struct CatalogPiece {
     pub group: String,
     /// Snap taxonomy: `floor`, `truss`, `speaker`, `cdj`, ...
     pub piece_kind: String,
-    /// Whether the shape comes from a generator, in which case its sockets are
-    /// a function of its params and `span` is the one that moves them.
-    pub procedural: bool,
+    /// Canonical generator family (`truss`, `corner`, `hinge`), or no generator
+    /// for fixed geometry. Families expose different construction parameters.
+    pub generator: Option<String>,
     /// Resolved against this piece's **default** parameters. A generated piece
-    /// keeps these socket names at every span; only where they are moves.
+    /// can move its sockets as its geometry parameters change.
     pub sockets: Vec<CatalogSocket>,
 }
 
@@ -577,7 +577,13 @@ impl StageCatalog {
                     size: placed_size(supply, &probe),
                     group: piece.palette_group.as_str().to_string(),
                     piece_kind: piece.kind.as_str().to_string(),
-                    procedural: piece.geometry.is_procedural(),
+                    generator: match piece.geometry {
+                        luma_scene::catalog::Geometry::Procedural(family) => {
+                            Some(family.as_str().to_string())
+                        }
+                        luma_scene::catalog::Geometry::Mesh { .. }
+                        | luma_scene::catalog::Geometry::Assembly(_) => None,
+                    },
                     sockets: supply
                         .sockets(&probe)
                         .iter()
@@ -1254,6 +1260,32 @@ mod tests {
 
     use luma_scene::sockets::{ResolvedSocket, SocketType};
     use luma_scene::venue::{resolve, Node, NodeKind, NodeSockets, FLOOR_SOCKET};
+
+    #[test]
+    fn catalog_reports_canonical_generator_families() {
+        let supply = luma_render::catalog::VenueSockets::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/meshes"),
+            std::sync::Arc::new(luma_render::catalog::NoFixtures),
+        )
+        .unwrap();
+        let catalog = StageCatalog::build(&supply);
+        for (short, family) in [
+            ("truss", Some("truss")),
+            ("corner", Some("corner")),
+            ("hinge", Some("hinge")),
+            ("deck", None),
+        ] {
+            let piece = catalog
+                .pieces
+                .iter()
+                .find(|piece| piece.short == short)
+                .unwrap();
+            assert_eq!(piece.generator.as_deref(), family);
+            let json = serde_json::to_value(piece).unwrap();
+            assert!(json.get("procedural").is_none());
+            assert_eq!(json["generator"], serde_json::to_value(family).unwrap());
+        }
+    }
 
     /// One mount on the underside of everything, which is all a placement
     /// needs: this is about which rows become nodes, not about geometry.

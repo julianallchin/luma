@@ -45,19 +45,38 @@ impl Envelope {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.points.len() < 2
-            || self.points.len() > 256
-            || self.points[0][0] != 0.
-            || self.points.last().unwrap()[0] != 1.
-            || self.points.iter().any(|p| !normalized(*p))
-            || self.points.windows(2).any(|p| p[0][0] >= p[1][0])
-        {
-            return Err(Error(
-                "envelope needs 2–256 increasing normalized anchors from 0 to 1".into(),
-            ));
+        if !(2..=256).contains(&self.points.len()) {
+            return Err(Error(format!(
+                "envelope.points has {} anchors; expected 2–256",
+                self.points.len()
+            )));
+        }
+        for (i, point) in self.points.iter().enumerate() {
+            if !normalized(*point) {
+                return Err(Error(format!(
+                    "envelope.points[{i}] is {point:?}; both coordinates must be finite and in 0..1"
+                )));
+            }
+            if i > 0 && self.points[i - 1][0] >= point[0] {
+                return Err(Error(format!(
+                    "envelope.points[{i}].x is {}; must be greater than the preceding x ({})",
+                    point[0],
+                    self.points[i - 1][0]
+                )));
+            }
+        }
+        if self.points[0][0] != 0. || self.points.last().unwrap()[0] != 1. {
+            return Err(Error(format!(
+                "envelope.points must start at x=0 and end at x=1; got {} and {}",
+                self.points[0][0],
+                self.points.last().unwrap()[0]
+            )));
         }
         if !self.curves.is_empty() && self.curves.len() != self.points.len() - 1 {
-            return Err(Error("envelope needs one curve per segment".into()));
+            return Err(Error(format!(
+                "envelope.curves has {} entries; expected {} (one per segment), or omit curves for straight segments",
+                self.curves.len(), self.points.len() - 1
+            )));
         }
         for (i, curve) in self.curves.iter().enumerate() {
             if let EnvelopeCurve::Bezier { control1, control2 } = curve {
@@ -67,10 +86,10 @@ impl Envelope {
                     || control1[0] > control2[0]
                     || control2[0] > self.points[i + 1][0]
                 {
-                    return Err(Error(
-                        "Bézier handles must stay normalized and ordered between their anchors"
-                            .into(),
-                    ));
+                    return Err(Error(format!(
+                        "envelope.curves[{i}]: Bézier handles {control1:?}, {control2:?} must be normalized and ordered between anchors {:?} and {:?}",
+                        self.points[i], self.points[i + 1]
+                    )));
                 }
             }
         }

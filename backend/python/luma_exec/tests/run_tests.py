@@ -359,7 +359,7 @@ def test_unavailable_branch():
 @test
 def test_catalog():
     client = shared()
-    result = ok(client.execute("luma.catalog()"))
+    result = ok(client.execute("luma.catalog(depth=None)"))
     text = result["repr"]
     for needle in (
         "revision r-2",
@@ -370,6 +370,50 @@ def test_catalog():
         "sr=48000",
     ):
         assert needle in text, f"catalog missing {needle!r}:\n{text}"
+
+
+@test
+def test_catalog_bounded_discovery():
+    client = shared()
+    result = ok(client.execute('''from luma_exec.bindings import LumaNamespace, LumaRecord, Unavailable
+from luma_exec.venue import Venue
+family = LumaRecord({f"node_{i}": LumaRecord({"body": "large definition"}) for i in range(200)})
+room = Venue(LumaRecord({"name": "Test room", "fixtures": [], "environment_snapshot": LumaRecord({"mode": "indoor", "house": 0.25})}), workspace=".")
+ns = LumaNamespace({"patterns": LumaRecord({"nodes": family}), "venue": room, "audio": Unavailable("no track")}, {"scope": {"venue_id": "room"}}, luma.store)
+overview = ns.catalog()
+assert len(overview) < 2500, overview
+assert "luma.venue" in overview and "no track" in overview
+assert "environment: indoor, house 0.25" in overview
+assert "large definition" not in overview
+assert "describe()/nodes()/extent()" in overview
+branch = ns.catalog("patterns.nodes")
+assert "168 more" in branch and "node_199" not in branch
+assert "large definition" in ns.catalog("luma.patterns.nodes.node_199", depth=None)
+assert "luma.venue.fixtures" in ns.catalog("venue")
+assert "list[0]" in ns.catalog("venue.fixtures")
+assert "luma.audio" in ns.catalog("audio")
+wide = LumaRecord({f"field_{i}": i for i in range(40)})
+forest = LumaNamespace({f"branch_{i}": wide for i in range(40)}, {}, luma.store)
+bounded = forest.catalog(depth=2)
+assert "inventory limit" in bounded and len(bounded.splitlines()) < 160
+assert "branch_39.field_39" in forest.catalog(depth=None)
+assert "luma.patterns.nodes" not in ns.catalog(depth=0)
+for path in ("venue.render", "missing", "venue..name"):
+    try:
+        ns.catalog(path)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError(path)
+for depth in (-1, True, 1.5):
+    try:
+        ns.catalog(depth=depth)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(depth)
+print("bounded catalog discovery passed")'''))
+    assert "bounded catalog discovery passed" in result["stdout"], result
 
 
 @test
@@ -594,7 +638,7 @@ def test_shutdown():
 def run_stdlib_suites() -> int:
     """The focused suites next door, in the same command.
 
-    `test_track.py` and `test_venue.py` drive the same facades this file drives
+    `test_track.py`, `test_score.py`, and `test_venue.py` drive the same facades this file drives
     through a worker, at a smaller radius and with no venv — which is exactly
     why they are easy to forget. They went unrun for a whole surface; one
     command is the fix.
@@ -603,9 +647,9 @@ def run_stdlib_suites() -> int:
 
     loader = unittest.TestLoader()
     suite = unittest.TestSuite(
-        loader.loadTestsFromName(name) for name in ("test_track", "test_venue")
+        loader.loadTestsFromName(name) for name in ("test_track", "test_score", "test_venue")
     )
-    print("\n--- stdlib suites (test_track, test_venue) ---")
+    print("\n--- stdlib suites (test_track, test_score, test_venue) ---")
     result = unittest.TextTestRunner(verbosity=1, stream=sys.stdout).run(suite)
     return len(result.failures) + len(result.errors)
 

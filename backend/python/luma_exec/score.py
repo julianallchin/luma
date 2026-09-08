@@ -15,6 +15,8 @@ score.luma document, suitable for an agent workspace or a one-shot model.
 Envelope values store anchors and optional Bézier segments, for example:
     {"points": [[0, 1], [1, 0]], "curves": [
         {"kind": "bezier", "control1": [.3, 1], "control2": [.7, 0]}]}
+An envelope needs 2–256 anchors, starting at x=0 and ending at x=1 with strictly
+increasing x; both coordinates must be finite and in 0..1.
 Handles use the same normalized coordinates as anchors. Their x positions must
 stay ordered between their segment endpoints; y stays in 0..1. An omitted
 curves list means straight segments. Every editor and evaluator uses this value.
@@ -32,7 +34,7 @@ from dataclasses import dataclass
 from .track import (Track, TrackOutput, TrackError, TrackReadOnlyError,
                     TrackClosedError, _ImmutableSnapshot, _field, _items,
                     _freeze, _range_pair, _selection, _blend, _z,
-                    _downbeat_values, _check_result, _pattern_color)
+                    _downbeat_values, _check_result, _pattern_color, BLEND_MODES)
 
 
 def _plain(value):
@@ -90,6 +92,11 @@ def _label(definitions, key):
 
 @dataclass(frozen=True)
 class Clip:
+    """One clip: id, graph, start/duration in beats, selection, z, blend, inputs.
+
+    This is a read-only value. Use edit.update_clip(clip, ...) to change it.
+    The canonical JSON spells z and blend as z_index and blend_mode.
+    """
     id: str
     graph: str
     start: float
@@ -110,7 +117,6 @@ class Clip:
 
 class GraphTrack(_ImmutableSnapshot):
     """The current score. Edits capture a revision; apply advances this object."""
-    _call = Track._call
     __getattr__ = Track.__getattr__
     __dir__ = Track.__dir__
     _luma_catalog_items = Track._luma_catalog_items
@@ -120,6 +126,7 @@ class GraphTrack(_ImmutableSnapshot):
         self._values, self._features = values, features
         self._host_call, self._artifact_store = host_call, artifact_store
         self._nodes = _plain(nodes)
+        self._active = True
         self.id = str(_field(values, "id", default=""))
         self.title = str(_field(values, "title", default=""))
         self.duration_s = float(_field(values, "duration_s", default=0) or 0)
@@ -130,30 +137,61 @@ class GraphTrack(_ImmutableSnapshot):
         self._beats = _downbeat_values({"downbeats": _field(features, "beats", default=None)})
         self._seal()
 
+    def _require_active(self):
+        if not self._active:
+            raise TrackClosedError("this score is no longer in scope; use the current luma.track")
+
+    def _call(self, method, payload):
+        self._require_active()
+        return Track._call(self, method, payload)
+
+    def _refresh(self, snapshot):
+        # Edits own their candidate and base revision; only this live facade
+        # advances when the worker installs a new manifest for the same score.
+        for key, value in vars(snapshot).items():
+            object.__setattr__(self, key, value)
+
+    def _revoke(self):
+        object.__setattr__(self, "_active", False)
+
     @property
     def document(self):
+        """Read-only canonical score mapping; clips/definitions are keyed by ID.
+
+        Use track.clips to iterate Clip values. Raw clip keys include
+        start/duration (beats), z_index and blend_mode; they are not z/blend.
+        """
         return _freeze(self._document)
 
     @property
     def clips(self):
+        """All saved Clip values, ordered by start beat, layer z, then ID."""
         return tuple(Clip.read(id, clip) for id, clip in sorted(
             self._document["clips"].items(), key=lambda item: (item[1]["start"], item[1].get("z_index", 0), item[0])))
 
     def definition(self, id):
+        """Copy a built-in or score-local definition, with typed inputs and body."""
         definitions = self._nodes | self._document["definitions"]
         if id not in definitions:
             raise TrackError(f"unknown node definition {id!r}")
         return copy.deepcopy(definitions[id])
 
     def nodes(self, search=""):
+        """Map matching node IDs to names. Read definition(id) for input schemas."""
         definitions = self._nodes | self._document["definitions"]
         return {id: _label(definitions, id) for id in sorted(definitions)
                 if search.casefold() in (id + " " + _label(definitions, id)).casefold()}
 
     def source(self):
+        """The complete saved score as canonical score.luma JSON text."""
         return json.dumps(self._document, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
     def edit(self):
+        """Capture the complete saved score in a private, revision-checked Edit.
+
+        Existing clips are included. Changes stay private until edit.apply().
+        """
+        self._require_active()
         if not self.editable:
             raise TrackReadOnlyError("this score is read-only")
         return Edit(self)
@@ -215,6 +253,11 @@ class GraphTrack(_ImmutableSnapshot):
 
 
 class Edit:
+    """A complete private score candidate, including unchanged saved clips.
+
+    Build graphs and clips, check(), preview through venue.render(edit=self),
+    then apply(). Apply closes this edit; open a new one for further changes.
+    """
     def __init__(self, track):
         self._track = track
         self.base_revision = track.revision
@@ -223,15 +266,18 @@ class Edit:
         self._closed = False
 
     def _open(self):
+        self._track._require_active()
         if self._closed:
             raise TrackClosedError("this edit is closed; start a new edit")
 
     @property
     def candidate(self):
+        """A copy of the complete candidate mapping; changes to it are not edits."""
         return copy.deepcopy(self._candidate)
 
     @property
     def clips(self):
+        """All candidate Clip values: unchanged saved clips plus staged edits."""
         return tuple(Clip.read(id, clip) for id, clip in self._candidate["clips"].items())
 
     def definition(self, id):
@@ -241,6 +287,13 @@ class Edit:
         return copy.deepcopy(definitions[id])
 
     def graph(self, id=None, *, node=None, name=None):
+        """Create a local graph, or retrieve an existing graph by its ID.
+
+        graph(node="wash") wraps one effect and exposes its inputs for clips.
+        graph() starts an empty composition: add nodes, connect outputs, then
+        set graph.output(...). name is an optional human-readable label.
+        Built-in definitions can be read but not changed.
+        """
         self._open()
         definitions = self._candidate["definitions"]
         if id is not None and (id in definitions or id in self._track._nodes):
@@ -271,6 +324,7 @@ class Edit:
         self._candidate = candidate
 
     def source(self):
+        """The complete candidate as JSON text, including unchanged saved clips."""
         return json.dumps(self._candidate, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
     def _graph_id(self, graph):
@@ -291,6 +345,16 @@ class Edit:
 
     def add_clip(self, graph, *, id=None, beats=None, bars=None, seconds=None,
                  selection="all", subset=None, z=0, blend="replace", seed=None, inputs=None):
+        """Stage a clip and return its Clip value; graph may be a Graph or ID.
+
+        Supply exactly one half-open range: beats=(0,32), bars=(1,9), or
+        seconds=(0,16). Beats start at zero; bars at one. selection is a group
+        expression. subset accepts a fraction, head count, or "all".
+        inputs overrides the graph's exposed controls; definition(graph.id)
+        gives their types/defaults. Clips composite bottom-up by integer z.
+        replace covers the lower layer; add sums/clamps; screen brightens
+        without replacing the base color. Inspect overlaps before applying.
+        """
         self._open()
         graph = self._graph_id(graph)
         start, end = self._track._range(beats=beats, bars=bars, seconds=seconds)
@@ -306,6 +370,11 @@ class Edit:
 
     def update_clip(self, clip, *, beats=None, bars=None, seconds=None,
                     selection=None, subset=None, z=None, blend=None, seed=None, inputs=None):
+        """Update a Clip or clip ID and return its new value; other fields stay.
+
+        Ranges, selection, z and blend use add_clip's conventions. inputs
+        merges overrides; inputs={key: None} restores that graph default.
+        """
         self._open()
         id = clip.id if isinstance(clip, Clip) else str(clip)
         if id not in self._candidate["clips"]:
@@ -336,6 +405,7 @@ class Edit:
         return Clip.read(id, value)
 
     def remove_clip(self, clip):
+        """Remove a Clip or clip ID from the candidate; nothing is saved yet."""
         self._open()
         id = clip.id if isinstance(clip, Clip) else str(clip)
         if id not in self._candidate["clips"]:
@@ -343,6 +413,7 @@ class Edit:
         del self._candidate["clips"][id]
 
     def make_independent(self, clip, *, id=None):
+        """Copy this clip's graph dependencies so edits won't affect other clips."""
         self._open()
         id = id or str(uuid.uuid4())
         clip = clip.id if isinstance(clip, Clip) else str(clip)
@@ -354,10 +425,21 @@ class Edit:
         self._candidate = self._track._call("track.graph_edit", {"candidate": self.candidate, "graph": graph, "edits": edits})
 
     def check(self):
+        """Run the native score validator; return CheckResult without saving.
+
+        Reports incomplete graphs, invalid inputs and revision conflicts.
+        The validation verb is check(), not validate().
+        """
         self._open()
         return _check_result(self._track._call("track.score_check", {"baseRevision": self.base_revision, "candidate": self.candidate}))
 
     def apply(self):
+        """Validate and commit the complete candidate, then close this edit.
+
+        Returns the saved revision and advances luma.track. A child workspace
+        saves privately for its parent's merge. On conflict, inspect current
+        state and open a fresh edit; never silently overwrite other work.
+        """
         self._open()
         result = self._track._call("track.score_apply", {"baseRevision": self.base_revision, "candidate": self.candidate})
         self._track._advance(result)
@@ -365,6 +447,7 @@ class Edit:
         return result["revision"]
 
     def diff(self):
+        """IDs added, removed or updated versus this edit's captured base."""
         result = {}
         for kind in ("definitions", "clips"):
             before, after = self._base[kind], self._candidate[kind]
@@ -374,7 +457,29 @@ class Edit:
         return result
 
     def window(self, **range):
+        """Inspect a beats=, bars= or seconds= window of the complete candidate.
+
+        timeline() plots clips; output.heatmap() shows composited light output.
+        For the 3D scene, use luma.venue.render(edit=self, t=seconds).
+        """
         return Window(self._track, self.base_revision, self._candidate, self._track._range(**range))
+
+    def _preview(self, only=None):
+        """Snapshot for the venue camera; isolation never mutates the draft."""
+        self._open()
+        candidate = self.candidate
+        if only is not None:
+            clips = [only] if isinstance(only, (Clip, str)) else list(only)
+            ids = [clip.id if isinstance(clip, Clip) else str(clip) for clip in clips]
+            missing = [id for id in ids if id not in candidate["clips"]]
+            if missing:
+                raise TrackError(f"unknown preview clip(s): {', '.join(missing)}")
+            candidate["clips"] = {id: candidate["clips"][id] for id in ids}
+        return {"baseRevision": self.base_revision, "candidate": candidate}
+
+
+# Discovery and validation use the same mode vocabulary.
+Edit.add_clip.__doc__ += "\nAvailable blend modes: " + ", ".join(sorted(BLEND_MODES)) + "."
 
 
 @dataclass(frozen=True)
@@ -395,6 +500,7 @@ class Node:
     id: str
 
     def output(self, port=None):
+        """Reference an output for wiring; omit port when this node has only one."""
         spec = self.graph._node_spec(self.id)
         if port is None and len(spec["outputs"]) == 1:
             port = next(iter(spec["outputs"]))
@@ -403,6 +509,7 @@ class Node:
         return Output(self, port)
 
     def bind(self, **inputs):
+        """Change this node's input values/connections in place; None unbinds."""
         self.graph._bind(self.id, inputs)
         return self
 
@@ -418,13 +525,16 @@ class Node:
 
 
 class Graph:
+    """A score graph. Wire node outputs to inputs, then declare its output."""
     def __init__(self, edit, id):
         self._edit, self.id = edit, id
 
     def definition(self):
+        """Copy this graph's full definition, including ports and node body."""
         return self._edit.definition(self.id)
 
     def source(self):
+        """This graph's definition as JSON text; edit.source() exports the score."""
         return json.dumps(self.definition(), indent=2, sort_keys=True, allow_nan=False) + "\n"
 
     def _same(self, graph):
@@ -448,6 +558,11 @@ class Graph:
         return {"source": "value", "value": _typed(kind, value)}
 
     def node(self, definition, *, id=None, **inputs):
+        """Add a node by definition ID; inputs are constants or wired outputs.
+
+        Inspect edit.definition(definition) for its typed input/output ports.
+        Returns a Node; use node.output(port) to connect it to the next node.
+        """
         self._edit._open()
         spec = self._edit.definition(definition)
         id = id or str(uuid.uuid4())
@@ -461,6 +576,7 @@ class Graph:
         return Node(self, id)
 
     def get(self, id):
+        """Retrieve a node in this graph by its node ID, for example to bind()."""
         self._node_spec(id)
         return Node(self, id)
 
@@ -475,23 +591,31 @@ class Graph:
         self._edit._gesture(self.id, edits)
 
     def expose(self, node, input, *, key=None, name=None):
+        """Expose a node input as a graph/clip control; key defaults to input."""
         self._same(node.graph)
         key = key or input
         self._edit._gesture(self.id, [{"op": "expose", "node": node.id, "input": input, "key": key, "name": name}])
         return Input(self, key)
 
     def input(self, key):
+        """Reference an exposed graph input for wiring into a node."""
         if key not in self.definition()["inputs"]:
             raise TrackError(f"graph has no input {key!r}")
         return Input(self, key)
 
     def default(self, key, value):
+        """Change an exposed input's default; clip overrides remain explicit."""
         spec = self.definition()["inputs"].get(key)
         if spec is None:
             raise TrackError(f"graph has no input {key!r}")
         self._edit._gesture(self.id, [{"op": "default", "key": key, "value": _typed(spec["value_type"], value)}])
 
     def output(self, output, *, key="lighting"):
+        """Declare a Node.output(...) as this graph's output.
+
+        A playable clip needs one fixture-lighting output bundle. Combine
+        independent capabilities with add_lighting before declaring it.
+        """
         if not isinstance(output, Output):
             raise TrackError("a graph output must reference a node output")
         self._edit._gesture(self.id, [{"op": "output", "key": key, "binding": self._binding(output, None)}])

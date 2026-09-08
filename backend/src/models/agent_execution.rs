@@ -36,9 +36,8 @@ pub struct PythonCellResult {
     pub duration_ms: u64,
 }
 
-/// A Matplotlib figure the cell produced. `artifact_rel` is the durable
-/// workspace-relative path the transcript keeps; `base64_png` is the transient
-/// copy the model provider needs for an image part (design §14.7 / D10).
+/// A plot or headless scene frame the cell produced. `artifact_rel` locates
+/// its workspace file; `base64_png` supplies model delivery and synced history.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -72,10 +71,8 @@ pub struct PythonToolOutput {
     pub duration_ms: u64,
 }
 
-/// A figure as the transcript keeps it: geometry always, bytes only when the
-/// single-figure persistence cap allowed them. A figure whose bytes were
-/// dropped still occupies its slot, so a card's layout never depends on what
-/// was persisted.
+/// A figure as the transcript keeps it. New captures retain the image bytes;
+/// older append-only transcripts may contain dimensions alone.
 #[derive(TS, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
