@@ -586,6 +586,151 @@ async fn universes_in_use_names_every_universe_the_patch_touches() {
 // What a distribution asks for
 // ---------------------------------------------------------------------------
 
+#[tokio::test]
+async fn distributions_and_rebuilds_preserve_other_runs_stored_patch() {
+    use crate::services::distribute::{distribute, Request};
+    use luma_scene::distribute::Layout;
+
+    for order in [
+        ["run-downstage", "run-upstage"],
+        ["run-upstage", "run-downstage"],
+    ] {
+        let (_dir, pool) = seeded().await;
+        // A valid stored patch that differs from a full auto-patch, as happens
+        // after removing and rebuilding a row in the live venue builder.
+        let mut access = write(&pool).await;
+        let mut address = 1;
+        for row in fixtures_db::get_patched_fixtures(&mut access)
+            .await
+            .unwrap()
+        {
+            if !row.address_pinned {
+                fixtures_db::update_fixture_address(&mut access, &row.id, 1, address, false)
+                    .await
+                    .unwrap();
+                address += row.num_channels;
+            }
+        }
+        access.commit().await.unwrap();
+
+        for (step, run) in order.into_iter().cycle().take(4).enumerate() {
+            let mut access = write(&pool).await;
+            let before = fixtures_db::get_patched_fixtures(&mut access)
+                .await
+                .unwrap();
+            let solved = crate::venue_graph::resolved(&mut access, &fixtures_root())
+                .await
+                .unwrap();
+            let membership = luma_scene::patch::allocate(&solved, &inputs(&before));
+            let request = Request {
+                host_node: Some(run),
+                host_socket: Some("face_-y"),
+                fixture_path: "2511260420/Chauvet/Chauvet-Rogue-R2-Spot.qxf",
+                mode_name: "18 Channel",
+                count: 2,
+                layout: Layout::At(if step < 2 { -2.0 } else { -3.0 }),
+                label_prefix: None,
+            };
+            let report = distribute(&mut access, &fixtures_root(), request.clone())
+                .await
+                .unwrap();
+            assert!(report.refusal.is_none(), "{report:?}");
+            assert_eq!(report.fixtures.len(), 2);
+            let after = fixtures_db::get_patched_fixtures(&mut access)
+                .await
+                .unwrap();
+            for row in &before {
+                if row.address_pinned
+                    || membership.get(&row.id).unwrap().run.as_deref() != Some(run)
+                {
+                    let preserved = after.iter().find(|other| other.id == row.id).unwrap();
+                    assert_eq!(
+                        (
+                            preserved.universe,
+                            preserved.address,
+                            preserved.address_pinned
+                        ),
+                        (row.universe, row.address, row.address_pinned),
+                        "untouched fixture {} moved",
+                        row.id
+                    );
+                }
+            }
+            for (index, row) in after.iter().enumerate() {
+                for other in &after[index + 1..] {
+                    assert!(
+                        !footprint_of(row)
+                            .unwrap()
+                            .overlaps(&footprint_of(other).unwrap()),
+                        "{} overlaps {} after step {step} on {run}",
+                        row.id,
+                        other.id
+                    );
+                }
+            }
+            // A second row placed physically before the first must receive
+            // addresses before it even though it was created later.
+            if step >= 2 {
+                let new_last = report.fixtures.iter().map(|f| f.address).max().unwrap();
+                let old_first = before
+                    .iter()
+                    .filter(|f| {
+                        f.fixture_path == request.fixture_path
+                            && membership.get(&f.id).unwrap().run.as_deref() == Some(run)
+                    })
+                    .map(|f| after.iter().find(|row| row.id == f.id).unwrap().address)
+                    .min()
+                    .unwrap();
+                assert!(i64::from(new_last) < old_first);
+            }
+            // The exact same occupied band refuses without changing any row.
+            let refused = distribute(&mut access, &fixtures_root(), request.clone())
+                .await
+                .unwrap();
+            assert!(refused.refusal.is_some());
+            assert_eq!(
+                serde_json::to_value(&after).unwrap(),
+                serde_json::to_value(
+                    fixtures_db::get_patched_fixtures(&mut access)
+                        .await
+                        .unwrap()
+                )
+                .unwrap()
+            );
+            // Remove and rebuild the just-added row in the same transaction.
+            let ids: Vec<String> = report.fixtures.iter().map(|f| f.id.clone()).collect();
+            for id in &ids {
+                fixtures_db::delete_fixture(&mut access, id).await.unwrap();
+            }
+            crate::database::local::venue_graph::delete_nodes(&mut access, &ids)
+                .await
+                .unwrap();
+            let rebuilt = distribute(&mut access, &fixtures_root(), request)
+                .await
+                .unwrap();
+            assert!(rebuilt.refusal.is_none());
+            let rebuilt_rows = fixtures_db::get_patched_fixtures(&mut access)
+                .await
+                .unwrap();
+            for row in after.iter().filter(|row| !ids.contains(&row.id)) {
+                let preserved = rebuilt_rows
+                    .iter()
+                    .find(|other| other.id == row.id)
+                    .unwrap();
+                assert_eq!(
+                    (
+                        preserved.universe,
+                        preserved.address,
+                        preserved.address_pinned
+                    ),
+                    (row.universe, row.address, row.address_pinned)
+                );
+            }
+            access.commit().await.unwrap();
+        }
+    }
+}
+
 /// Every slot the allocator offers has to survive the door it will be carried
 /// through.
 ///

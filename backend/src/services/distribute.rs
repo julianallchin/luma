@@ -1,7 +1,7 @@
 //! `distribute` — the command that builds a rig instead of typing one.
 //!
 //! One call, one transaction: `count` fixtures are patched, named, placed,
-//! bolted to a host face and filed into groups. It is the *only* fixture
+//! bolted to a host face. It is the *only* fixture
 //! constructor besides the patch page's non-placed add
 //! ([`crate::services::fixture_create`]), which is what makes "a fixture at the
 //! origin that nobody placed" unrepresentable rather than merely discouraged
@@ -20,14 +20,14 @@
 //! | what pose is that | [`luma_scene::venue::place_on`], through the resolver |
 //! | which universe and address | [`luma_scene::patch`] |
 //! | what is it called | [`crate::services::fixture_create::ModelNumbering`] |
-//! | which group does it land in | [`crate::services::group_derivation`] |
+//! | suggested placement-derived group path | [`crate::services::group_derivation`] |
 //!
 //! # Addresses are derived twice, and the second time is the answer
 //!
 //! [`luma_scene::patch::next_addresses`] is asked where the row *would* go,
 //! because at that moment the rows do not exist and there is nothing for the
 //! allocator to order. Once they do exist, the host's run is put through
-//! [`luma_scene::patch::allocate`] — the one allocator — and the answer written
+//! [`luma_scene::patch::allocate_run`] — the one allocator — and the answer written
 //! down. That is what makes two distributions on one truss interleave in
 //! physical order rather than in the order somebody typed them, and it is why
 //! this module has no addressing rule of its own to disagree with.
@@ -51,7 +51,7 @@ use std::path::Path;
 
 use luma_render::face::host_face;
 use luma_scene::distribute::{offsets, Fit, Layout};
-use luma_scene::patch::{allocate, next_addresses, Footprint};
+use luma_scene::patch::{allocate_run, next_addresses, Footprint};
 use luma_scene::venue::{
     DanglingSocket, Edge, EdgeError, Node, NodeKind, NodeWarning, ResolvedVenue, UnplacedNode,
     VenueGraph, FLOOR_SOCKET,
@@ -105,8 +105,8 @@ pub struct Placed {
     /// venue's fixtures by this and reading their addresses is only monotone
     /// on a face that agrees with its run.
     pub along_m: f64,
-    /// The derived group it landed in, deepest first path. Empty only for a
-    /// venue whose derivation found no role for it.
+    /// Suggested placement-derived path, not a saved selector group. Empty
+    /// when the derivation found no role; group authoring is explicit.
     pub group_path: Vec<String>,
 }
 
@@ -191,12 +191,11 @@ impl Report {
     }
 }
 
-/// Patch, name, place and group `count` fixtures along one host face.
+/// Patch, name and place `count` fixtures along one host face.
 ///
 /// # Errors
-/// The design's two hard errors, both raised before any write: a face the host
-/// does not have, and a joint its polarity forbids. Plus the database's own,
-/// and a definition or mode that cannot be read.
+/// Invalid faces or joints are rejected before writing. Catalog, database or
+/// exhausted-address-space errors abort the caller's transaction.
 pub async fn distribute(
     access: &mut VenueAccess<'_, Write>,
     fixtures_root: &Path,
@@ -381,13 +380,21 @@ pub async fn distribute(
     // Only the host's own run is rewritten. A distribution is not an auto-patch:
     // re-addressing a truss on the other side of the room because somebody hung
     // two pars over here is a surprise nobody asked for, and pins are preserved
-    // either way because `allocate` reserves them first.
+    // either way. The allocator reserves untouched runs' stored footprints,
+    // since only this run's planned addresses are actually written.
     let solved = crate::venue_graph::resolved(access, fixtures_root).await?;
     if let Some(run) = run.as_deref() {
         let rows = fixtures_db::get_patched_fixtures(access).await?;
-        let allocation = allocate(&solved, &patch::inputs(&rows));
+        let allocation = allocate_run(&solved, &patch::inputs(&rows), run);
+        if let Some(luma_scene::patch::Note::NoRoom { fixture }) = allocation
+            .notes
+            .iter()
+            .find(|note| matches!(note, luma_scene::patch::Note::NoRoom { .. }))
+        {
+            return Err(format!("No DMX address available for fixture {fixture}"));
+        }
         for assignment in &allocation.assignments {
-            if assignment.pinned || assignment.run.as_deref() != Some(run) {
+            if assignment.pinned {
                 continue;
             }
             let universe = i64::from(assignment.footprint.universe());
@@ -589,11 +596,10 @@ fn run_of(solved: &ResolvedVenue, host: &str) -> Option<String> {
     None
 }
 
-/// Each fixture's deepest derived group path.
+/// Each fixture's deepest suggested placement-derived path.
 ///
-/// Deepest, because that is the group the human means when they ask where a
-/// light landed: `spots / left wing / top` says more than `spots`, and every
-/// ancestor is implied by it.
+/// This describes where a light landed; it does not create a saved selector
+/// group. A caller authors groups explicitly.
 async fn group_paths(
     access: &mut VenueAccess<'_, Write>,
     fixtures_root: &Path,

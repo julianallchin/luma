@@ -181,6 +181,35 @@ pub struct Node {
     pub params: Params,
 }
 
+impl Node {
+    /// Parameters the resolver and this node's geometry actually consume.
+    /// Joint yaw belongs to the edge and is validated by the editing operation.
+    #[must_use]
+    pub fn parameter_names(&self) -> Vec<&'static str> {
+        use crate::catalog::{self, Family, Geometry};
+
+        let mut names = vec!["u", "v", "trim"];
+        match self.kind {
+            NodeKind::Fixture => names.extend(ANGLE_PARAMS),
+            NodeKind::Array => names.extend(["count", "span"]),
+            _ => {}
+        }
+        if let Some(piece) = self.catalog_ref.as_deref().and_then(catalog::piece) {
+            match piece.geometry {
+                Geometry::Procedural(Family::Truss) => {
+                    if !names.contains(&"span") {
+                        names.push("span");
+                    }
+                }
+                Geometry::Procedural(Family::Hinge) => names.push("angle"),
+                Geometry::Procedural(Family::Corner) => names.push("faces"),
+                _ => {}
+            }
+        }
+        names
+    }
+}
+
 /// One row of `venue_edges` — the relation that produced a pose, kept rather
 /// than discarded the moment the drag ends.
 #[derive(Clone, Debug, PartialEq)]

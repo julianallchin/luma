@@ -112,7 +112,12 @@ impl Score {
                 }
             }
             for (key, value) in &clip.inputs {
-                authored_value(value)?;
+                authored_value(value).map_err(|error| {
+                    Error(format!(
+                        "clip {id}, graph {}, input {key}: {error}",
+                        clip.graph
+                    ))
+                })?;
                 let input = definition
                     .inputs
                     .get(key)

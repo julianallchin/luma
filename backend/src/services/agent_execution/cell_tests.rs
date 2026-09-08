@@ -637,6 +637,30 @@ assert np.max(rendered.values) > 0
 raw = edit.source()
 edit.replace_source(raw)
 assert json.loads(edit.source()) == json.loads(raw)
+# A staged score and an isolated clip use the real scene renderer without
+# publishing; the complete draft must composite an overlapping additive layer.
+from PIL import Image
+def frame(**kw):
+    shot = luma.venue.render(t=1.5, width=320, height=180, house=0, aim_arrows=False, **kw)
+    return np.array(Image.open(shot.path))
+saved_dark = frame()
+steady = edit.graph(node='wash', id='preview-wash')
+target = edit.add_clip(steady, id='preview-target', seconds=(1., 2.), z=2, inputs={'color':'#0000ff'})
+isolated = frame(edit=edit, only=target)
+assert np.any(saved_dark != isolated), 'draft lighting did not reach the scene'
+overlay = edit.add_clip(steady, id='preview-overlay', seconds=(1., 2.), z=3, blend='add',
+                        inputs={'color': '#ff0000'})
+composite = frame(edit=edit)
+assert np.any(composite != isolated), 'scene omitted the other draft layer'
+assert np.array_equal(frame(edit=edit, only=target), isolated), 'isolation retained the other layer'
+assert len(luma.track.clips) == 0, 'scene preview published the draft'
+edit.apply()
+assert np.array_equal(frame(), composite), 'applied lighting and private composite disagree'
+# Return to the original graph exercise after proving the lit composition
+# survives publication through the saved-score rendering path.
+edit = luma.track.edit()
+edit.remove_clip(overlay)
+edit.remove_clip(target)
 request = {'baseRevision': edit.base_revision, 'candidate': edit.candidate}
 revision = edit.apply()
 assert luma.track.revision == revision
@@ -646,11 +670,86 @@ assert len(luma.track.edit().candidate['clips']) == 2
 assert luma.track.edit().candidate['definitions']['effect']['body']['body']['nodes']['chase']['inputs']['path']['value']['value'] == path
 (len(luma.track.clips), rendered.shape)
 "#).await;
+    if let Ok(directory) = std::env::var("LUMA_PREVIEW_TEST_OUT") {
+        use base64::Engine;
+        std::fs::create_dir_all(&directory).unwrap();
+        for (index, figure) in out.figures.iter().enumerate() {
+            std::fs::write(
+                Path::new(&directory).join(format!("preview-{index}.png")),
+                base64::engine::general_purpose::STANDARD
+                    .decode(&figure.base64_png)
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+    }
     expect_ok(
         &out,
         "compose, expose, render and save a canonical graph score",
     );
     assert_eq!(out.repr.as_deref(), Some("(2, (2, 32, 3))"));
+    let out = f
+        .run_as_owner(
+            &thread,
+            turn,
+            r#"
+held_track = luma.track
+across_cells = luma.track.edit()
+conflicting = luma.track.edit()
+captured_base = across_cells.base_revision
+across_cells.add_clip('effect', id='across-cells', seconds=(3., 4.))
+len(across_cells.clips)
+"#,
+        )
+        .await;
+    expect_ok(&out, "open score edit in its own cell");
+    assert_eq!(out.repr.as_deref(), Some("3"));
+    let out = f
+        .run_as_owner(
+            &thread,
+            turn,
+            r#"
+assert held_track is luma.track
+assert across_cells.base_revision == captured_base
+assert across_cells.check()
+preview = across_cells.window(seconds=(3., 4.)).output.tensor
+assert len(luma.track.clips) == 2
+preview.shape[0] > 0
+"#,
+        )
+        .await;
+    expect_ok(&out, "preview retained edit in a later cell");
+    let out = f
+        .run_as_owner(
+            &thread,
+            turn,
+            r#"
+assert held_track is luma.track
+across_cells.apply()
+assert len(luma.track.clips) == 3
+assert len(luma.track.edit().clips) == 3
+assert luma.track.revision != captured_base
+assert conflicting.base_revision == captured_base
+# An independent candidate retains the captured base, so stale publication
+# must still conflict rather than adopting the refreshed facade's revision.
+conflicting.add_clip('effect', id='stale-conflict', seconds=(3., 4.))
+try:
+    conflicting.apply()
+    raise AssertionError('stale edit silently adopted the new revision')
+except LumaHostCallError as error:
+    assert error.code == 'conflict', (error.code, str(error))
+cleanup = luma.track.edit()
+cleanup.remove_clip('across-cells')
+cleanup.apply()
+len(luma.track.clips)
+"#,
+        )
+        .await;
+    expect_ok(
+        &out,
+        "apply retained edit and immediately read the current score",
+    );
+    assert_eq!(out.repr.as_deref(), Some("2"));
     let out = f.run_as_owner(&thread, turn, r#"
 assert luma.track.clips[0].seed == (1 << 64)-1
 edit = luma.track.edit()
@@ -1702,7 +1801,7 @@ legs = luma.venue.nodes(label="*leg")
         .run_in_venue(
             &thread,
             &venue_id,
-            "tree = luma.venue.describe()\n\
+            "tree = luma.venue.describe(detail=True)\n\
              plan = luma.venue.tiles()\n\
              (tree.count('truss/straight'), tree.count('fixture'), \
               'unplaced: none' in tree, len(plan.splitlines()) > 3, \
@@ -1761,7 +1860,7 @@ async fn describe_says_which_way_each_light_points() {
             &thread,
             &venue_id,
             &r#"
-head = luma.venue.fixtures("rogue r2 spot")[0]
+head = luma.venue.fixture_library("rogue r2 spot")[0]
 
 def beam(node_id, tree):
     line = [l for l in tree.splitlines() if node_id in l][0]
@@ -1779,13 +1878,13 @@ on_floor = luma.venue.distribute(head.path, 1, on=standing, face=(0, 0, -1),
 flown = luma.venue.distribute(head.path, 1, on=hanging, face=(0, 0, -1),
                               mode=head.mode(18))
 
-tree = luma.venue.describe()
+tree = luma.venue.describe(detail=True)
 rest = (beam(on_floor.fixtures[0].node_id, tree),
         beam(flown.fixtures[0].node_id, tree))
 
 # An aim is stated, not dialled: point it at the crowd and read the word back.
 luma.venue.aim(flown.fixtures[0], direction=(0, 1, 0))
-(rest, beam(flown.fixtures[0].node_id, luma.venue.describe()))
+(rest, beam(flown.fixtures[0].node_id, luma.venue.describe(detail=True)))
 "#,
         )
         .await;
@@ -1883,7 +1982,7 @@ async fn a_piece_the_catalog_does_not_have_is_refused() {
             \x20   refusal = None\n\
              except luma.VenueRefused as error:\n\
             \x20   refusal = str(error)\n\
-             (refusal, luma.venue.describe().count('\\n'))",
+             (refusal, luma.venue.describe(detail=True).count('\\n'))",
         )
         .await;
     expect_ok(&out, "unknown piece");
@@ -1960,7 +2059,7 @@ async fn venue_usability_run() {
             &venue_id,
             "shot = luma.venue.render(view='front', width=1280, height=720)\n\
              top = luma.venue.render(view='overhead', width=1280, height=720)\n\
-             print(luma.venue.describe())\n\
+             print(luma.venue.describe(detail=True))\n\
              print(luma.venue.tiles())\n\
              (str(shot.path), str(top.path))",
         )
@@ -1999,7 +2098,7 @@ async fn the_library_names_a_head_and_an_aim_points_it() {
             &venue_id,
             &r#"
 # The library, searched the way a person says the name.
-found = luma.venue.fixtures("rogue r2 spot")
+found = luma.venue.fixture_library("rogue r2 spot")
 head = found[0]
 
 # A tower, and a row of that head down its downstage face.
@@ -2010,7 +2109,7 @@ along = [f.along_m for f in row.fixtures]
 # Point the whole row at one place in the room. Each head gets its own turn,
 # solved from where that head actually hangs.
 aimed = luma.venue.aim(row.fixtures, at=(0.0, 6.0, 0.0))
-tree = luma.venue.describe()
+tree = luma.venue.describe(detail=True)
 line = [l for l in tree.splitlines() if row.fixtures[0].node_id in l][0]
 
 # The row comes back in face order, which is what indexing it means.
@@ -2050,13 +2149,13 @@ async fn an_extend_past_the_measured_gap_is_refused() {
 a = luma.venue.place("truss", at=(-3.0, 0.0), length=2.0, label="A")
 b = luma.venue.place("truss", at=(3.0, 0.0), length=2.0, label="B")
 gap = luma.venue.reach(a, "end_b").gap_m
-before = luma.venue.describe()
+before = luma.venue.describe(detail=True)
 try:
     luma.venue.extend(a, "end_b", gap + 1.0)
     refusal = None
 except luma.VenueRefused as error:
     refusal = str(error)
-(gap, refusal, luma.venue.describe() == before)
+(gap, refusal, luma.venue.describe(detail=True) == before)
 "#,
         )
         .await;
@@ -2091,5 +2190,180 @@ except luma.VenueRefused as error:
         out.stdout
     );
 
+    f.service.shutdown_all();
+}
+
+/// Agent-facing construction and inspection use the real resolver and patch.
+#[tokio::test]
+async fn venue_summary_and_standard_speaker_hang_are_spatially_consistent() {
+    let Some(f) = Fixture::new("venue spatial summary").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f.run_in_venue(&thread, &venue_id, r#"
+v = luma.venue
+hang = v.hanging_speaker_array(count=4, at=(-7, -2), trim=5, label="left_pa")
+boxes = v.nodes(label="left_pa_*")
+assert len(boxes) == 4
+assert all(abs(n.at[0] + 7) < 0.001 and abs(n.at[1] + 2) < 0.001 for n in boxes)
+ordered = sorted(boxes, key=lambda n: n.z)
+assert all(b.z - b.size[2]/2 >= a.z + a.size[2]/2 for a,b in zip(ordered, ordered[1:]))
+assert abs(ordered[0].z - ordered[0].size[2]/2 - 5) < 0.001
+for row in range(7):
+    v.place("truss", at=(0, row * 6), length=10, trim=8, label=f"lighting_row_{row}")
+summary = v.describe()
+assert len(summary) < 8000
+assert all(f"lighting_row_{i}" in summary for i in range(7))
+assert [summary.index(f"lighting_row_{i}") for i in range(7)] == sorted(summary.index(f"lighting_row_{i}") for i in range(7))
+print("speaker clearances and seven spatial rows verified")
+"#).await;
+    expect_ok(&out, "spatial summary and speaker helper");
+    assert!(out
+        .stdout
+        .contains("speaker clearances and seven spatial rows verified"));
+}
+
+/// The public Python group workflow persists native collections and identifies
+/// them through the actual renderer, including precise misspelling refusals.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn venue_groups_are_authored_atomically_and_highlight_names_are_checked() {
+    let Some(f) = Fixture::new("venue named groups").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f.run_in_venue(&thread, &venue_id, r#"
+import numpy as np
+from PIL import Image
+from luma_exec.host_errors import LumaHostCallError
+v = luma.venue
+assert len(v.groups()) == 0
+head = v.fixture_library('rogue r2 spot')[0]
+tower = v.place('truss', at=(-2, -2), length=3, direction=(0,0,1))
+row = v.distribute(head, 2, on=tower, face=(0,1,0), mode=head.mode(18))
+assert row.ok and len(row.fixtures) == 2
+assert len(v.groups()) == 0, 'placement silently authored groups'
+back = v.group('Back Movers', row)
+assert back.name == 'back_movers' and len(back.fixtures) == 2
+assert all(len(f.heads) == f.head_count for f in back.fixtures)
+try:
+    v.group('back-movers', [])
+    raise AssertionError('duplicate canonical name accepted')
+except LumaHostCallError as error:
+    assert 'already' in str(error)
+try:
+    v.group('back_movers', [row.fixtures[0], 'missing-fixture'], replace=True)
+    raise AssertionError('bad member accepted')
+except LumaHostCallError:
+    pass
+assert len(v.groups()['back_movers'].fixtures) == 2, 'failed replacement changed members'
+back = v.group('back_movers', [back.fixtures[0], back.fixtures[0]], replace=True)
+assert back.id == v.groups()['back_movers'].id and len(back.fixtures) == 1
+empty = v.group('empty', [])
+try:
+    v.render(highlight='back_mvoers | empty', width=320, height=180)
+    raise AssertionError('unknown highlight rendered silently')
+except LumaHostCallError as error:
+    assert 'back_mvoers' in str(error) and 'back_movers' in str(error)
+def frame(name):
+    return np.array(Image.open(v.render(highlight=name, house=0, aim_arrows=False, width=320, height=180).path))
+assert np.any(frame(empty.name) != frame(back.name)), 'selected collection did not light the render'
+before = back.fixture_ids
+suggested = v.generate_groups()
+assert len(suggested) > 2 and suggested['back_movers'].fixture_ids == before
+assert v.generate_groups().names() == suggested.names(), 'generation duplicated saved collections'
+'groups and highlights verified'
+"#).await;
+    expect_ok(
+        &out,
+        "author groups and identify them through public render",
+    );
+    assert_eq!(
+        out.repr.as_deref(),
+        Some("'groups and highlights verified'")
+    );
+    f.service.shutdown_all();
+}
+
+/// Unknown geometry edits must fail before applying any part of the request;
+/// the live room and scratch graph share both validation and joint yaw.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn venue_parameter_edits_refuse_unsupported_keys_atomically() {
+    let Some(f) = Fixture::new("venue parameter validation").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+from luma_exec.host_errors import VenueRefused
+v = luma.venue
+run = v.place('truss', at=(0, 0), length=4, direction=(1, 0, 0), label='original')
+before = v.describe(detail=True)
+for key in ['universe', 'address', 'dmx_address', 'count']:
+    try:
+        v.trim(run, yaw=90, label='must not persist', **{key: 7})
+        raise AssertionError('unsupported parameter accepted: ' + key)
+    except VenueRefused as error:
+        assert key in str(error) and 'available:' in str(error), str(error)
+    assert v.describe(detail=True) == before, 'refusal partially applied geometry or label'
+v.trim(run, span=6, label='longer')
+assert 'longer' in v.describe()
+assert v.extent().size[0] > 5.9
+draft = v.draft()
+piece = draft.place('truss', at=(0, 0), length=4, direction=(1, 0, 0))
+before_draft = draft.describe()
+try:
+    draft.trim(piece, yaw=90, dmx_address=20)
+    raise AssertionError('draft accepted unknown parameter')
+except VenueRefused as error:
+    assert 'dmx_address' in str(error)
+assert draft.describe() == before_draft, 'failed draft edit changed graph'
+assert draft.extent.size[0] > 3.9 and draft.extent.size[1] < 0.4
+draft.trim(piece, yaw=90)
+assert draft.extent.size[1] > 3.9 and draft.extent.size[0] < 0.4, draft.extent
+'parameter edits verified'
+"#,
+        )
+        .await;
+    expect_ok(&out, "validate live and draft geometry parameters");
+    assert_eq!(out.repr.as_deref(), Some("'parameter edits verified'"));
+    f.service.shutdown_all();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn venue_alias_refreshes_between_cells_without_mutating_extracted_snapshots() {
+    let Some(f) = Fixture::new("venue live facade").await else {
+        return;
+    };
+    let (venue_id, thread) = f.empty_venue().await;
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+v = luma.venue
+fx = v.fixtures
+assert len(fx) == 0
+head = v.fixture_library('rogue r2 spot')[0]
+tower = v.place('truss', at=(0,0), length=3, direction=(0,0,1))
+row = v.distribute(head, 2, on=tower, face=(0,1,0), mode=head.mode(18))
+assert row.ok
+"#,
+        )
+        .await;
+    expect_ok(&out, "hold venue alias and place fixtures");
+    let out = f
+        .run_in_venue(
+            &thread,
+            &venue_id,
+            r#"
+(v is luma.venue, len(v.fixtures), len(luma.venue.fixtures), len(fx))
+"#,
+        )
+        .await;
+    expect_ok(&out, "read venue alias in next cell");
+    assert_eq!(out.repr.as_deref(), Some("(True, 2, 2, 0)"));
     f.service.shutdown_all();
 }

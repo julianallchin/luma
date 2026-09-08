@@ -523,6 +523,10 @@ pub enum TurnEvent {
     ReasoningDelta {
         text: String,
     },
+    /// Provider-confirmed final answer, retained separately from streamed progress.
+    FinalAnswer {
+        text: String,
+    },
     /// Emitted once the call's arguments are complete, not when the provider
     /// opened the block — a half-parsed argument object is of no use to a host.
     ToolCallStarted {

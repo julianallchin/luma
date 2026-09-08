@@ -347,7 +347,9 @@ class Worker:
                 revision = namespace.revision or manifest_rel
                 self._manifests[revision] = namespace
                 self._manifest_rel_to_revision[manifest_rel] = revision
-            self._current = namespace
+            self._current = bindings.reconcile_facades(
+                namespace, self._current,
+            )
         if self._current is not None:
             self.namespace["luma"] = self._current
 

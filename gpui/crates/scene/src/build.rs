@@ -327,6 +327,14 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
     /// One node's footprint in the facade frame.
     #[must_use]
     pub fn footprint(&self, node: &str) -> Option<Footprint> {
+        if self.graph.node(node)?.kind == NodeKind::Array {
+            let extent = self.extent([node])?;
+            return Some(Footprint {
+                at: [extent.centre[0], extent.centre[1]],
+                z: extent.centre[2],
+                size: extent.size,
+            });
+        }
         Some(Footprint::of(&self.world(node)?, self.bounds(node)?))
     }
 
@@ -338,12 +346,26 @@ impl<'a, S: NodeSockets + ?Sized> Scene<'a, S> {
     /// which reads as "nothing is there".
     #[must_use]
     pub fn extent<'n>(&self, nodes: impl IntoIterator<Item = &'n str>) -> Option<Extent> {
-        Extent::of(nodes.into_iter().filter_map(|id| {
-            Some((
-                self.world(id)?,
-                self.bounds(id)
-                    .unwrap_or_else(|| DAabb::new(DVec3::ZERO, DVec3::ZERO)),
-            ))
+        Extent::of(nodes.into_iter().flat_map(|id| {
+            let bounds = self
+                .bounds(id)
+                .unwrap_or_else(|| DAabb::new(DVec3::ZERO, DVec3::ZERO));
+            if self
+                .graph
+                .node(id)
+                .is_some_and(|n| n.kind == NodeKind::Array)
+            {
+                self.solved
+                    .poses()
+                    .filter(|pose| pose.parent.as_deref() == Some(id) && pose.array_index.is_some())
+                    .map(|pose| (pose.world, bounds))
+                    .collect::<Vec<_>>()
+            } else {
+                self.world(id)
+                    .map(|world| (world, bounds))
+                    .into_iter()
+                    .collect()
+            }
         }))
     }
 

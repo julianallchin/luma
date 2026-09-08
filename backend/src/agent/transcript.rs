@@ -542,6 +542,10 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
         }
         TurnEvent::StepStarted => push_part(transcript, AgentChatPart::StepStart),
         TurnEvent::TextDelta { text } => append_text(transcript, text, false),
+        TurnEvent::FinalAnswer { text } => push_part(
+            transcript,
+            AgentChatPart::Unknown(serde_json::json!({"type":"data-final-answer","text":text})),
+        ),
         TurnEvent::ReasoningDelta { text } => append_text(transcript, text, true),
         TurnEvent::ToolCallStarted {
             call_id,

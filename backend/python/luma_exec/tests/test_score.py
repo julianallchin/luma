@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from luma_exec.score import GraphTrack, _typed
+from luma_exec.track import TrackError
 
 
 class ScoreTests(unittest.TestCase):
@@ -25,6 +26,80 @@ class ScoreTests(unittest.TestCase):
         return GraphTrack({"id": "track", "title": "Test", "revision": "base", "editable": True,
                            "beat_origin_s": 1.5, "document": {"version": 2, "definitions": {}, "clips": {}}},
                           nodes=nodes, features={"beats": [1., 1.5, 2., 3., 4.], "downbeats": [1.5, 5.]}, host_call=call)
+
+    def test_manifest_refresh_keeps_live_track_and_revokes_departed_scope(self):
+        from luma_exec.bindings import build_namespace, reconcile_facades
+        from luma_exec.track import TrackClosedError
+        import tempfile
+        track = self.track()
+        workspace = Path(tempfile.mkdtemp(prefix="luma-refresh-"))
+        def manifest(score, revision="manifest-1"):
+            return {"schema_version": 1, "revision": revision, "agent_kind": "track_copilot",
+                    "scope": {"track_id": "track", "venue_id": "venue", "score_id": score},
+                    "root": {"venue": {"id": "venue", "views": ["front"], "fixtures": []},
+                             "track": copy.deepcopy(track._values), "nodes": track._nodes,
+                             "features": {"beats": [1., 1.5, 2., 3., 4.], "downbeats": [1.5, 5.]}}}
+        def load(score, revision="manifest-1"):
+            return build_namespace(manifest(score, revision), workspace, host_call=track._host_call)
+        cached_first = load("score-a")
+        first = reconcile_facades(cached_first, None)
+        held = first.track
+        edit, stale = held.edit(), held.edit()
+        graph = edit.graph(node="chase", id="effect")
+        edit.add_clip(graph, id="clip", beats=(0, 1))
+        second = reconcile_facades(load("score-a", "manifest-2"), first)
+        self.assertIs(second.track, held)
+        edit.apply()
+        self.assertEqual(len(second.track.edit().clips), 1)
+        self.assertEqual(second.track.revision, "next")
+        self.assertEqual(stale.base_revision, "base")
+        pending = held.edit()
+        other = reconcile_facades(load("score-b"), second)
+        self.assertIsNot(other.track, held)
+        self.assertIs(other.venue, second.venue)
+        self.assertTrue(other.venue._active)
+        calls = len(self.calls)
+        with self.assertRaises(TrackClosedError):
+            pending._preview()
+        with self.assertRaises(TrackClosedError):
+            pending.apply()
+        self.assertEqual(len(self.calls), calls)
+        # Reinstalling the cached first scope must not reactivate old edits.
+        returned = reconcile_facades(cached_first, other)
+        self.assertIsNot(returned.track, held)
+        with self.assertRaises(TrackClosedError):
+            pending.apply()
+        with self.assertRaises(TrackClosedError):
+            other.track.edit().apply()
+
+    def test_cached_manifest_reinstall_restores_its_snapshot_without_changing_edit_base(self):
+        from luma_exec.bindings import build_namespace, reconcile_facades
+        import tempfile
+        track = self.track()
+        workspace = Path(tempfile.mkdtemp(prefix="luma-undo-"))
+        def snapshot(revision, definitions):
+            values = copy.deepcopy(track._values)
+            values["revision"] = revision
+            values["document"]["definitions"] = definitions
+            return build_namespace({"schema_version": 1, "revision": revision,
+                "agent_kind": "track_copilot", "scope": {"score_id": "score"},
+                "root": {"track": values, "nodes": track._nodes}}, workspace,
+                host_call=track._host_call)
+        cached_a = snapshot("a", {})
+        cached_b = snapshot("b", {"other": track._nodes["chase"]})
+        live_a = reconcile_facades(cached_a, None)
+        old_edit = live_a.track.edit()
+        live_b = reconcile_facades(cached_b, live_a)
+        self.assertIs(live_b.track, live_a.track)
+        self.assertEqual(live_b.track.revision, "b")
+        self.assertIn("other", live_b.track.document["definitions"])
+        undone = reconcile_facades(cached_a, live_b)
+        self.assertIs(undone.track, live_b.track)
+        self.assertEqual(undone.track.revision, "a")
+        self.assertEqual(dict(undone.track.document["definitions"]), {})
+        self.assertEqual(cached_a.track.revision, "a")
+        self.assertEqual(cached_b.track.revision, "b")
+        self.assertEqual(old_edit.base_revision, "a")
 
     def test_clock_roundtrip_uses_detected_tempo_and_origin(self):
         track = self.track()
@@ -73,6 +148,23 @@ class ScoreTests(unittest.TestCase):
                          {"stops": [{"t": 0, "color": [1., 0., 0.]}, {"t": 1, "color": [0., 0., 1.]}]})
         with self.assertRaises(ValueError):
             _typed("beats", {"type": "proportion", "value": .5})
+
+    def test_isolated_preview_preserves_clip_timing_and_the_complete_draft(self):
+        track = self.track()
+        edit = track.edit()
+        graph = edit.graph(node="chase", id="effect")
+        first = edit.add_clip(graph, id="first", beats=(1, 4), selection="front")
+        edit.add_clip(graph, id="second", beats=(2, 5), selection="rear", blend="add", z=1)
+        original = edit.candidate
+        preview = edit._preview(first)
+        self.assertEqual(preview["candidate"]["clips"], {"first": original["clips"]["first"]})
+        self.assertEqual(preview["baseRevision"], edit.base_revision)
+        preview["candidate"]["definitions"].clear()
+        self.assertEqual(edit.candidate, original)
+        self.assertEqual(len(track.clips), 0)
+        self.assertEqual(edit._preview()["candidate"], original)
+        with self.assertRaisesRegex(TrackError, "unknown preview clip"):
+            edit._preview("missing")
 
 
 if __name__ == "__main__":

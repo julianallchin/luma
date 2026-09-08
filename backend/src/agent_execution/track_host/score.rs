@@ -74,7 +74,7 @@ impl TrackHost {
         }
     }
 
-    async fn prepare_score(
+    pub(crate) async fn prepare_score(
         &self,
         plan: &GraphScoreEdit,
     ) -> Result<crate::eval::Scene, HostCallError> {

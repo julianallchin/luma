@@ -52,13 +52,23 @@ macro_rules! commands {
             match name {
                 $(
                     stringify!($name) => {
-                        $( let $arg: $ty = decode(args, stringify!($arg))?; )*
-                        let value: $ret = handlers::$domain::$name(services, $($arg),*).await?;
-                        serde_json::to_value(value).map_err(|error| {
-                            CommandError::Internal(format!(
-                                "failed to serialize `{name}` result: {error}"
-                            ))
-                        })
+                        // Keep each command's poll temporaries in its own frame.
+                        // In debug builds, one async match over every handler
+                        // otherwise reserves their combined stack space (>1 MiB).
+                        fn run<'a>(services: &'a AppServices, _args: &'a Value)
+                            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, CommandError>> + Send + 'a>>
+                        {
+                            Box::pin(async move {
+                                $( let $arg: $ty = decode(_args, stringify!($arg))?; )*
+                                let value: $ret = handlers::$domain::$name(services, $($arg),*).await?;
+                                serde_json::to_value(value).map_err(|error| {
+                                    CommandError::Internal(format!(
+                                        "failed to serialize `{}` result: {error}", stringify!($name)
+                                    ))
+                                })
+                            })
+                        }
+                        run(services, args).await
                     }
                 )*
                 other => Err(CommandError::NotFound(format!("unknown command `{other}`"))),
@@ -798,6 +808,17 @@ mod tests {
 
     fn dispatched() -> Vec<&'static str> {
         TABLE.iter().map(|command| command.name).collect()
+    }
+
+    #[test]
+    fn dispatch_does_not_embed_all_command_futures() {
+        fn size<F: std::future::Future>(
+            _: impl FnOnce(&'static AppServices, &'static Value) -> F,
+        ) -> usize {
+            std::mem::size_of::<F>()
+        }
+        let bytes = size(|services, args| dispatch(services, "", args));
+        assert!(bytes <= 1024, "dispatch embeds handler state ({bytes} bytes); keep per-command futures behind the boxed helper boundary");
     }
 
     #[test]

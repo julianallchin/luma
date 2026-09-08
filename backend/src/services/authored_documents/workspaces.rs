@@ -1278,6 +1278,99 @@ impl AuthoredDocuments {
         Ok(())
     }
 
+    /// Read a child's immutable proposal after its working directory has been
+    /// retired. Only its actual parent may inspect it through this surface.
+    pub(crate) async fn subagent_proposal(
+        &self,
+        pool: &SqlitePool,
+        principal: Option<&str>,
+        parent_thread_id: &str,
+        child_thread_id: &str,
+        path: Option<&str>,
+        offset: usize,
+    ) -> Result<serde_json::Value> {
+        let (_parent, parent_scope, _guard) = self
+            .lock_active_thread(pool, principal, parent_thread_id)
+            .await?;
+        let child = agent_threads::get_thread_row(pool, child_thread_id, principal)
+            .await
+            .map_err(AuthoredDocumentsError::Scope)?;
+        let scope = ResolvedScope::from_thread(&child, principal)?;
+        if child.parent_thread_id.as_deref() != Some(parent_thread_id)
+            || scope.document_id != parent_scope.document_id
+        {
+            return Err(AuthoredDocumentsError::Scope(
+                "only the delegating parent may inspect this proposal".into(),
+            ));
+        }
+        let (base, proposal): (String, String) = sqlx::query_as(
+            "SELECT base_revision_id, head_revision_id FROM authored_subagent_workspaces WHERE owner_thread_id = ? AND document_id = ? ORDER BY created_at DESC LIMIT 1"
+        ).bind(child_thread_id).bind(scope.document_id.as_str()).fetch_one(pool).await.map_err(storage("read subagent proposal"))?;
+        let mut connection = pool
+            .acquire()
+            .await
+            .map_err(storage("open subagent proposal"))?;
+        let (_, base_files) = self
+            .store
+            .read_revision(
+                &mut connection,
+                &scope.document_id,
+                &RevisionId::parse(&base)?,
+            )
+            .await?;
+        let (_, proposal_files) = self
+            .store
+            .read_revision(
+                &mut connection,
+                &scope.document_id,
+                &RevisionId::parse(&proposal)?,
+            )
+            .await?;
+        drop(connection);
+        let mut result = serde_json::json!({"childThreadId":child_thread_id,"baseRevisionId":base,"proposalRevisionId":proposal,
+            "files": proposal_files.iter().map(|(path, data)| serde_json::json!({"path":path,"bytes":data.len(),"changed":base_files.get(path)!=Some(data)})).collect::<Vec<_>>()});
+        let conflicts_json: Option<String> = sqlx::query_scalar(
+            "SELECT conflicts_json FROM authored_operation_outcomes WHERE document_id = ? AND operation_id = ? AND status = 'conflicted' LIMIT 1"
+        ).bind(scope.document_id.as_str()).bind(format!("subagent-merge-{child_thread_id}")).fetch_optional(pool).await.map_err(storage("read proposal conflicts"))?.flatten();
+        let conflicts: Vec<AuthoredMergeConflict> = conflicts_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
+                AuthoredDocumentsError::Storage(format!("decode proposal conflicts: {error}"))
+            })?
+            .unwrap_or_default();
+        result["conflictCount"] = serde_json::json!(conflicts.len());
+        result["conflicts"] = serde_json::Value::Array(conflicts.iter().take(4).map(|conflict| {
+            let mut value = serde_json::to_value(conflict).expect("serializable conflict");
+            for side in ["base", "ours", "theirs"] {
+                if value[side].to_string().len() > 512 {
+                    value[side] = serde_json::json!({"omitted":"value exceeds 512 bytes; inspect the source file"});
+                }
+            }
+            value
+        }).collect());
+        result["resolution"] = serde_json::json!("Inspect base and proposal source, incorporate the intended changes into the current luma.track.edit() draft, then validate, preview and apply normally. Conflict values describe merge time; reload current state before resolving.");
+        if let Some(path) = path {
+            let proposed = utf8_file(&proposal_files, path)?;
+            let base = utf8_file(&base_files, path)?;
+            let page = |source: &str| {
+                let total = source.chars().count();
+                let text: String = source.chars().skip(offset).take(3000).collect();
+                let next = offset.saturating_add(text.chars().count());
+                serde_json::json!({"text":text,"offset":offset,"totalChars":total,"nextOffset":(next<total).then_some(next)})
+            };
+            result
+                .as_object_mut()
+                .expect("proposal object")
+                .remove("conflicts");
+            result["path"] = serde_json::json!(path);
+            result["base"] = page(base);
+            result["proposal"] = page(proposed);
+        }
+        Ok(result)
+    }
+
     /// Merge one recursive child's committed head into its detached parent.
     /// Only root workspaces use [`Self::merge_workspace`] to publish live state.
     /// Publish a finished subagent's work into whatever head its parent writes.

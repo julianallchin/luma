@@ -268,7 +268,9 @@ impl Library {
         }
         for (name, input) in &def.inputs {
             if let Some(value) = &input.default {
-                value.validate()?;
+                value.validate().map_err(|error| {
+                    Error(format!("graph {id}, input {name}, default: {error}"))
+                })?;
                 if value.value_type() != input.value_type {
                     return Err(Error(format!("{id}.{name}: default type mismatch")));
                 }
@@ -312,13 +314,11 @@ impl Library {
                     }
                     for (key, input) in &child.inputs {
                         match node.inputs.get(key) {
-                            Some(binding) => self.check_binding(
-                                def,
-                                graph,
-                                binding,
-                                input.value_type,
-                                input.rate,
-                            )?,
+                            Some(binding) => self
+                                .check_binding(def, graph, binding, input.value_type, input.rate)
+                                .map_err(|error| {
+                                    Error(format!("graph {id}, node {name}, input {key}: {error}"))
+                                })?,
                             None if input.default.is_some() => (),
                             None => {
                                 return Err(Error(format!(
@@ -333,7 +333,8 @@ impl Library {
                         .outputs
                         .get(name)
                         .ok_or_else(|| Error(format!("{id}: missing output {name}")))?;
-                    self.check_binding(def, graph, binding, output.value_type, output.rate)?;
+                    self.check_binding(def, graph, binding, output.value_type, output.rate)
+                        .map_err(|error| Error(format!("graph {id}, output {name}: {error}")))?;
                 }
                 if graph.outputs.len() != def.outputs.len() {
                     return Err(Error(format!("{id}: undeclared graph output")));

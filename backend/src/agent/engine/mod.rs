@@ -75,6 +75,7 @@ pub(super) enum Event {
         model: Option<String>,
     },
     Text(String),
+    FinalAnswer(String),
     Reasoning(String),
     Tool {
         id: String,
@@ -130,11 +131,33 @@ impl Session {
         }
     }
 
-    pub async fn reply(&mut self, id: Value, outcome: ToolOutcome) -> Result<(), AgentError> {
+    pub fn replier(&self) -> Replier {
         match self {
-            Self::Codex(s) => s.reply(id, outcome).await,
-            Self::Claude(s) => s.reply(id, outcome).await,
+            Self::Codex(session) => Replier {
+                engine: Engine::Codex,
+                input: session.input(),
+            },
+            Self::Claude(session) => Replier {
+                engine: Engine::Claude,
+                input: session.input(),
+            },
         }
+    }
+}
+
+pub(super) struct Replier {
+    engine: Engine,
+    input: process::Input,
+}
+
+impl Replier {
+    pub async fn reply(&self, id: Value, outcome: ToolOutcome) -> Result<(), AgentError> {
+        let frame = match self.engine {
+            Engine::Codex => codex::reply_frame(id, outcome),
+            Engine::Claude => claude::reply_frame(id, outcome),
+            Engine::Api => unreachable!("API has no native session"),
+        };
+        self.input.send(frame).await
     }
 }
 
@@ -177,6 +200,34 @@ fn protocol(message: impl Into<String>) -> AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn emitted_subagent_definition_has_provider_compatible_object_schema() {
+        use crate::agent::tools::{subagent::SubagentTool, ToolRegistry};
+        let registry = ToolRegistry::new(vec![std::sync::Arc::new(SubagentTool)]);
+        let definitions = tool_definitions(&registry.specs());
+        let schema = &definitions[0]["inputSchema"];
+        assert_eq!(definitions[0]["name"], "subagent");
+        assert_eq!(
+            schema["type"], "object",
+            "actual MCP/native definition must have an object root: {schema}"
+        );
+        assert!(schema.get("anyOf").is_none() && schema.get("oneOf").is_none());
+        assert_eq!(schema["additionalProperties"], false);
+        for field in [
+            "action",
+            "description",
+            "task",
+            "childThreadId",
+            "path",
+            "offset",
+        ] {
+            assert!(
+                schema["properties"][field].is_object(),
+                "missing advertised field {field}"
+            );
+        }
+    }
+
     pub(super) fn request(engine: Engine, cwd: &std::path::Path) -> Request {
         Request {
             engine,
@@ -219,6 +270,7 @@ mod tests {
                             assert_eq!(input["value"], "hi");
                             called = true;
                             session
+                                .replier()
                                 .reply(reply, ToolOutcome::Text("hi".into()))
                                 .await
                                 .unwrap();

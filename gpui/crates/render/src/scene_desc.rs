@@ -1027,14 +1027,9 @@ impl Piece {
     /// Whether this piece is part of the *rig* — something fixtures hang on —
     /// rather than part of the room around it.
     ///
-    /// Only rig-bearing pieces are framed (see [`luma_scene::Framing`]). A
-    /// truss is where the lights are; a guardrail at the edge of the room is
-    /// six metres from anything that lights up, and letting it into the extent
-    /// is what drew a real club's rig at 30% of the frame.
-    ///
+    /// This selects the room bounds used for house lighting. Camera framing
+    /// includes every authored piece, so decks and speakers stay visible too.
     /// An unknown kind — including the empty one the goldens carry — is room.
-    /// The framing is a picture, and the failure mode of guessing wrong in
-    /// this direction is a tighter shot rather than an empty one.
     #[must_use]
     pub fn is_rig_bearing(&self) -> bool {
         matches!(self.kind.as_str(), "truss" | "stand")
@@ -1257,16 +1252,13 @@ impl Scene {
     /// says *which way* that is (see [`beam_direction`](crate::luminaire::beam_direction)):
     /// a pixel bar fires along its own length and a hazer not at all, and a
     /// framing that assumed every fixture was a mover put a club's extent six
-    /// metres wider than its rig. Only *rig-bearing* pieces contribute a box;
-    /// see [`Piece::is_rig_bearing`].
+    /// metres wider than its rig. Every authored piece contributes its bounds:
+    /// construction inspection must also show decks, speakers and guardrails.
+    /// The renderer's unbounded ground plane is not an authored piece.
     ///
-    /// A piece contributes a box *standing on* its origin — standing on, not
-    /// centred: a piece's stored position is where it meets the floor, and a
-    /// box centred there would sink the framed floor below the room and pull
-    /// every camera back by the difference. Its half-width comes from
-    /// [`Piece::framing_half_extent`], exact for a generated piece and an
-    /// approximation for an authored one, whose real size is in a mesh that is
-    /// loaded asynchronously and is not part of a scene description.
+    /// Generated pieces use their actual local bounds transformed by the
+    /// same pose as the renderer. Meshes retain an approximate standing box:
+    /// their assets load asynchronously and are not in a scene description.
     #[must_use]
     pub fn framing(&self, definitions: &BTreeMap<String, Definition>) -> luma_scene::Framing {
         luma_scene::Framing::of(
@@ -1278,10 +1270,7 @@ impl Scene {
                     self.primitive(&f.id, 0).map(|s| s.position),
                 ),
             }),
-            self.pieces
-                .iter()
-                .filter(|p| p.is_rig_bearing())
-                .map(piece_box),
+            self.pieces.iter().map(piece_box),
         )
     }
 
@@ -1325,12 +1314,21 @@ impl Scene {
     }
 }
 
-/// The box a piece occupies, **standing on** its origin.
-///
-/// Standing on, not centred: a piece's stored position is where it meets the
-/// floor. Shared by [`Scene::framing`] and [`Scene::room_bounds`] so a camera
-/// and a house rig cannot disagree about how big a truss is.
+/// Generated geometry uses its measured local envelope and renderer pose.
+/// Mesh-only scenes keep a standing-box estimate until their assets load.
+/// Shared by camera framing and house-lighting bounds.
 fn piece_box(piece: &Piece) -> luma_scene::Aabb {
+    if let Geometry::Procedural(params) = piece.geometry {
+        let local = crate::catalog::procedural_bounds(params);
+        let transform = glam::Mat4::from_mat3(crate::coords::three_to_world_basis())
+            * crate::coords::three_pose_from_data(piece.pos, piece.rot)
+            * glam::Mat4::from_scale(glam::Vec3::splat(piece.scale));
+        return luma_scene::Aabb::from_points(
+            luma_scene::Aabb::new(local.min.as_vec3(), local.max.as_vec3())
+                .corners()
+                .map(|point| transform.transform_point3(point)),
+        );
+    }
     let base = crate::coords::world_from_data(glam::Vec3::from(piece.pos));
     let half = piece.framing_half_extent();
     luma_scene::Aabb::new(
@@ -1482,13 +1480,83 @@ mod tests {
         assert!((generated.framing_half_extent() - 6.25).abs() < 1e-6);
     }
 
-    /// The room is drawn but not framed: a guardrail six metres out must not
-    /// widen the box, and the deck under the rig must not either.
     #[test]
-    fn only_rig_bearing_pieces_are_framed() {
+    fn authored_room_pieces_are_in_the_camera_frame() {
         let extent = scene().framing(&definitions()).bounds();
-        let pad = luma_scene::Framing::HEAD_RADIUS;
-        assert!(extent.max.x < 1.2 + pad + 1e-4, "{extent:?}");
-        assert!(extent.max.y < pad + 1e-4, "{extent:?}");
+        assert!(extent.max.x >= 7.0, "{extent:?}");
+        assert!(extent.min.y <= -7.0, "{extent:?}");
+    }
+
+    /// The gauntlet's 10x6 stage extends downstage of its overhead row.
+    /// A fit of just the heads and cubic truss estimates cropped that edge
+    /// while targeting empty space several metres above the actual hardware.
+    #[test]
+    fn front_frames_the_stage_foreground_below_a_horizontal_row() {
+        let mut scene = scene();
+        scene.fixtures.clear();
+        scene.pieces.clear();
+        for u in [-4.0, -2.0, 0.0, 2.0, 4.0] {
+            for v in [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5] {
+                scene.pieces.push(Piece {
+                    id: format!("deck-{u}-{v}"),
+                    geometry: Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
+                    kind: "floor".into(),
+                    pos: [u, v, 0.0],
+                    rot: [0.0; 3],
+                    scale: 1.0,
+                });
+            }
+        }
+        scene.pieces.push(Piece {
+            id: "overhead".into(),
+            geometry: Geometry::Procedural(Procedural::Truss { span: 10.0 }),
+            kind: "truss".into(),
+            pos: [0.0, -3.0, 5.17],
+            rot: [0.0; 3],
+            scale: 1.0,
+        });
+        let framing = scene.framing(&definitions());
+        assert!(framing.bounds().max.z < 5.35, "{framing:?}");
+        for aspect in [1.0, 16.0 / 9.0, 9.0 / 16.0] {
+            let finder = luma_scene::Viewfinder::new(50.0, aspect);
+            let camera =
+                luma_scene::Camera::for_view(luma_scene::View::Front, &framing, None, &finder);
+            for x in [-5.0, 5.0] {
+                for y in [-3.0, 3.0] {
+                    for z in [0.0, 1.01] {
+                        let point = glam::Vec3::new(x, y, z);
+                        let ndc = camera.project(point, aspect);
+                        assert!(
+                            ndc.x.abs() < 1.0 && ndc.y.abs() < 1.0 && (0.0..=1.0).contains(&ndc.z),
+                            "stage corner {point:?} cropped at aspect {aspect}: {ndc:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_truss_bounds_follow_length_rotation_and_scale() {
+        let mut piece = Piece {
+            id: "beam".into(),
+            geometry: Geometry::Procedural(Procedural::Truss { span: 10.0 }),
+            kind: "truss".into(),
+            pos: [0.0, -3.0, 5.17],
+            rot: [0.0; 3],
+            scale: 1.0,
+        };
+        let horizontal = piece_box(&piece);
+        assert!((horizontal.size().x - 10.0).abs() < 0.01, "{horizontal:?}");
+        assert!((horizontal.max.z - 5.34).abs() < 0.01, "{horizontal:?}");
+        assert!((horizontal.min.z - 5.0).abs() < 0.01, "{horizontal:?}");
+        piece.rot[1] = std::f32::consts::FRAC_PI_2;
+        piece.scale = 0.5;
+        let vertical = piece_box(&piece);
+        assert!((vertical.size().z - 5.0).abs() < 0.01, "{vertical:?}");
+        assert!(
+            vertical.size().x < 0.2 && vertical.size().y < 0.2,
+            "{vertical:?}"
+        );
     }
 }

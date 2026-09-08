@@ -204,7 +204,11 @@ fn run(
     }
 
     inline(b, "graph.run.primitive_ids", ids)?;
-    let positions: Vec<f32> = evaluation.positions.iter().flat_map(|p| *p).collect();
+    let positions: Vec<f32> = evaluation
+        .positions
+        .iter()
+        .flat_map(|p| luma_scene::coords::world_from_data(glam::Vec3::from_array(*p)).to_array())
+        .collect();
     if positions.len() == ids.len() * 3 {
         put_f32(
             b,
@@ -213,10 +217,10 @@ fn run(
             &positions,
             vec![
                 AxisSpec::labels("primitive", ids.clone()),
-                AxisSpec::labels("coordinate", vec!["x".into(), "y".into(), "z".into()]),
+                AxisSpec::labels("coordinate", vec!["u".into(), "v".into(), "z".into()]),
             ],
             Some("m"),
-            Provenance::new("graph_run").with_note("world positions of the run's own primitives"),
+            Provenance::new("graph_run").with_note("stage positions in metres: +u stage right, +v crowd, +z up; the run's own primitives, matching venue.positions"),
         )?;
     } else {
         unavailable(

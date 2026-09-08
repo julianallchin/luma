@@ -12,6 +12,7 @@ pub(in crate::agent) struct Session {
     process: Process,
     request: Request,
     completed: bool,
+    final_answer: Option<String>,
 }
 
 impl Session {
@@ -49,10 +50,14 @@ impl Session {
             process,
             request,
             completed: false,
+            final_answer: None,
         })
     }
 
     pub async fn next(&mut self) -> Result<Event, AgentError> {
+        if let Some(text) = self.final_answer.take() {
+            return Ok(Event::FinalAnswer(text));
+        }
         if self.completed {
             return Ok(Event::Done);
         }
@@ -146,6 +151,7 @@ impl Session {
                         return Err(claude_error(&frame));
                     }
                     self.completed = true;
+                    self.final_answer = frame["result"].as_str().map(str::to_owned);
                     let usage = &frame["usage"];
                     return Ok(Event::Usage(Usage {
                         input_tokens: count(usage, "input_tokens"),
@@ -171,20 +177,13 @@ impl Session {
         .await
     }
 
+    pub(super) fn input(&self) -> super::process::Input {
+        self.process.input()
+    }
+
+    #[cfg(test)]
     pub async fn reply(&mut self, id: Value, outcome: ToolOutcome) -> Result<(), AgentError> {
-        let (blocks, failed) = content(outcome);
-        let blocks: Vec<_> = blocks
-            .into_iter()
-            .filter_map(|b| match b {
-                ContentBlock::Text(text) => Some(json!({"type":"text","text":text})),
-                ContentBlock::Image { media_type, data } => {
-                    Some(json!({"type":"image","mimeType":media_type,"data":data}))
-                }
-                _ => None,
-            })
-            .collect();
-        self.mcp_reply(id, json!({"content":blocks,"isError":failed}))
-            .await
+        self.process.send(reply_frame(id, outcome)).await
     }
 }
 fn stream_command(cwd: &std::path::Path) -> tokio::process::Command {
@@ -378,4 +377,19 @@ send({'type':'result','is_error':False,'usage':{'input_tokens':10,'output_tokens
         );
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
+}
+
+pub(super) fn reply_frame(id: Value, outcome: ToolOutcome) -> Value {
+    let (blocks, failed) = content(outcome);
+    let blocks: Vec<_> = blocks
+        .into_iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text(text) => Some(json!({"type":"text","text":text})),
+            ContentBlock::Image { media_type, data } => {
+                Some(json!({"type":"image","mimeType":media_type,"data":data}))
+            }
+            _ => None,
+        })
+        .collect();
+    json!({"type":"control_response","response":{"subtype":"success","request_id":id["control"],"response":{"mcp_response":{"jsonrpc":"2.0","id":id["mcp"],"result":{"content":blocks,"isError":failed}}}}})
 }

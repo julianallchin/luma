@@ -111,3 +111,61 @@ fn score_validation_rejects_invalid_timing_even_without_a_resolved_venue() {
         .to_string()
         .contains("reserved"));
 }
+
+#[test]
+fn invalid_envelopes_identify_the_authored_location_and_anchor() {
+    let library = standard_library();
+    let mut original = Score::default();
+    original
+        .insert_effect(&library, "chase", "intro", 0., 16.)
+        .unwrap();
+    let invalid = Value::Envelope(Envelope::linear(vec![
+        [0., 0.],
+        [0.5, 1.],
+        [0.5, 0.],
+        [1., 0.],
+    ]));
+    let check = |score: &Score, location: &str| {
+        let error = score.validate(&library).unwrap_err().to_string();
+        assert!(error.contains(location), "{error}");
+        assert!(error.contains("points[2].x"), "{error}");
+        assert!(error.contains("preceding x (0.5)"), "{error}");
+    };
+    let mut score = original.clone();
+    score
+        .clips
+        .get_mut("intro")
+        .unwrap()
+        .inputs
+        .insert("shape".into(), invalid.clone());
+    check(&score, "clip intro, graph intro, input shape");
+    let mut score = original.clone();
+    score
+        .definitions
+        .get_mut("intro")
+        .unwrap()
+        .inputs
+        .get_mut("shape")
+        .unwrap()
+        .default = Some(invalid.clone());
+    check(&score, "graph intro, input shape, default");
+    let mut score = original;
+    let Body::Graph(graph) = &mut score.definitions.get_mut("intro").unwrap().body else {
+        unreachable!()
+    };
+    graph
+        .nodes
+        .get_mut("effect")
+        .unwrap()
+        .inputs
+        .insert("shape".into(), invalid.into());
+    check(&score, "graph intro, node effect, input shape");
+    let Body::Graph(graph) = &mut score.definitions.get_mut("intro").unwrap().body else {
+        unreachable!()
+    };
+    graph.nodes.get_mut("effect").unwrap().inputs.insert(
+        "shape".into(),
+        Value::Envelope(Envelope::linear(vec![[0., 0.], [0.5, 1.], [1., 0.]])).into(),
+    );
+    score.validate(&library).unwrap();
+}

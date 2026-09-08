@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// Python 3.12.12 from python-build-standalone
+// Python runtime from python-build-standalone
 // https://github.com/astral-sh/python-build-standalone/releases
 const PYTHON_VERSION: &str = "3.12.13";
 const PYTHON_BUILD_STANDALONE_VERSION: &str = "20260325";
@@ -26,7 +26,7 @@ fn main() {
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    // Download Python to backend/python-runtime so Tauri can bundle it
+    // Prepare the bundled Python runtime in backend/python-runtime.
     let python_dir = manifest_dir.join("python-runtime");
 
     // Check if Python actually exists (not just the directory)
@@ -62,7 +62,7 @@ fn main() {
         );
     }
 
-    // Download ffmpeg to backend/ffmpeg-runtime so Tauri can bundle it
+    // Prepare bundled ffmpeg in backend/ffmpeg-runtime.
     let ffmpeg_dir = manifest_dir.join("ffmpeg-runtime");
     let ffmpeg_binary = if cfg!(windows) {
         ffmpeg_dir.join("ffmpeg.exe")
@@ -94,6 +94,9 @@ fn main() {
 
     // Tell cargo to rerun if this build script changes
     println!("cargo:rerun-if-changed=build.rs");
+    // MCP checks worker-source freshness too. A Python-only edit must make the
+    // documented Cargo rebuild produce a fresh server, not a no-op binary.
+    println!("cargo:rerun-if-changed=python/luma_exec");
     // Also rerun if the Python runtime binary changes or is deleted
     if cfg!(windows) {
         println!("cargo:rerun-if-changed=python-runtime/python/python.exe");

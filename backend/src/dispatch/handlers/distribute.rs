@@ -9,7 +9,7 @@ use crate::dispatch::{AppServices, CommandError};
 use crate::models::distribute::{DistributeLayout, DistributeReport};
 use crate::services::stage_ops::Stage;
 
-/// Patch, name, place and group `count` fixtures along one host face.
+/// Patch, name and place `count` fixtures along one host face.
 ///
 /// `host_node_id` of `None` is the venue root, whose two synthesized planes are
 /// `floor` and `rig`; on a truss the faces are `face_-y` (underneath, beam

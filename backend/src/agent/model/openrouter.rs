@@ -190,6 +190,8 @@ fn lower(message: &ModelMessage) -> Vec<Value> {
     let mut out = Vec::new();
     let mut text = String::new();
     let mut tool_calls = Vec::new();
+    let mut images = Vec::new();
+    let mut tool_images = Vec::new();
     for block in &message.content {
         match block {
             ContentBlock::Text(value) => {
@@ -212,10 +214,12 @@ fn lower(message: &ModelMessage) -> Vec<Value> {
                     .iter()
                     .filter_map(|block| match block {
                         ContentBlock::Text(text) => Some(text.clone()),
-                        // Completions tool messages are text-only; an image
-                        // result is announced rather than silently dropped.
-                        ContentBlock::Image { media_type, .. } => {
-                            Some(format!("[{media_type} image omitted]"))
+                        // Keep tool replies contiguous; supply their images as
+                        // multimodal user content after the complete result batch.
+                        ContentBlock::Image { media_type, data } => {
+                            tool_images.push(json!({"type":"text", "text":format!("Image from tool result {id}:")}));
+                            tool_images.push(image_content(media_type, data));
+                            Some("[image supplied after tool results]".into())
                         }
                         _ => None,
                     })
@@ -226,18 +230,24 @@ fn lower(message: &ModelMessage) -> Vec<Value> {
                 }
                 out.push(json!({ "role": "tool", "tool_call_id": id, "content": body }));
             }
-            ContentBlock::Image { media_type, data } => tool_calls.push(json!({
-                "type": "image_url",
-                "image_url": { "url": format!("data:{media_type};base64,{data}") },
-            })),
+            ContentBlock::Image { media_type, data } => {
+                images.push(image_content(media_type, data))
+            }
         }
     }
     let role = match message.role {
         ModelRole::User => "user",
         ModelRole::Assistant => "assistant",
     };
-    if !text.is_empty() || !tool_calls.is_empty() {
-        let mut turn = json!({ "role": role, "content": text });
+    if !text.is_empty() || !tool_calls.is_empty() || !images.is_empty() {
+        let content = if images.is_empty() {
+            Value::String(text)
+        } else {
+            let mut content = vec![json!({"type":"text", "text":text})];
+            content.extend(images);
+            Value::Array(content)
+        };
+        let mut turn = json!({ "role": role, "content": content });
         if !tool_calls.is_empty() {
             turn.as_object_mut()
                 .expect("object literal")
@@ -245,7 +255,14 @@ fn lower(message: &ModelMessage) -> Vec<Value> {
         }
         out.insert(0, turn);
     }
+    if !tool_images.is_empty() {
+        out.push(json!({"role":"user", "content":tool_images}));
+    }
     out
+}
+
+fn image_content(media_type: &str, data: &str) -> Value {
+    json!({"type":"image_url", "image_url":{"url":format!("data:{media_type};base64,{data}")}})
 }
 
 #[derive(Default)]
@@ -650,5 +667,44 @@ mod tests {
         assert_eq!(lowered.len(), 1);
         assert_eq!(lowered[0]["role"], "tool");
         assert_eq!(lowered[0]["tool_call_id"], "c1");
+    }
+
+    #[test]
+    fn tool_images_follow_all_replies_as_multimodal_content() {
+        let picture = ContentBlock::Image {
+            media_type: "image/png".into(),
+            data: "cGl4ZWxz".into(),
+        };
+        let lowered = lower(&ModelMessage {
+            role: ModelRole::User,
+            content: ["first", "second"]
+                .into_iter()
+                .map(|id| ContentBlock::ToolResult {
+                    id: id.into(),
+                    content: vec![ContentBlock::Text(id.into()), picture.clone()],
+                    is_error: false,
+                })
+                .collect(),
+        });
+        assert_eq!(lowered.len(), 3);
+        assert_eq!(lowered[0]["tool_call_id"], "first");
+        assert_eq!(lowered[1]["tool_call_id"], "second");
+        assert_eq!(lowered[2]["role"], "user");
+        assert_eq!(
+            lowered[2]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,cGl4ZWxz"
+        );
+        assert_eq!(
+            lowered[2]["content"][3]["image_url"]["url"],
+            "data:image/png;base64,cGl4ZWxz"
+        );
+        assert!(lowered[2].get("tool_calls").is_none());
+
+        let standalone = lower(&ModelMessage {
+            role: ModelRole::User,
+            content: vec![picture],
+        });
+        assert_eq!(standalone[0]["content"][1]["type"], "image_url");
+        assert!(standalone[0].get("tool_calls").is_none());
     }
 }

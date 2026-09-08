@@ -598,3 +598,151 @@ async fn graph_score_initial_server_head_materializes_only_from_revision_files()
     assert_eq!(stored.score.clips.len(), 2);
     assert_eq!(stored.score.definitions.len(), 1);
 }
+
+#[tokio::test]
+async fn conflicted_subagent_proposal_is_readable_after_retirement_and_resolution_preserves_other_edits(
+) {
+    let (fixture, parent, scope) = legacy().await;
+    let initial = current(&fixture, &scope).await;
+    let base = chase();
+    fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "proposal-base",
+            &base.source().unwrap(),
+            initial.document.revision(),
+            "Base",
+        )
+        .await
+        .unwrap();
+    let child = fixture
+        .authored
+        .create_thread_with_authored_state(
+            &fixture.pool,
+            CreateAgentThreadInput {
+                request_id: Uuid::new_v4().to_string(),
+                agent_kind: parent.agent_kind.clone(),
+                subject_kind: parent.subject_kind.clone(),
+                subject_id: parent.subject_id.clone(),
+                venue_id: parent.venue_id.clone(),
+                score_id: parent.score_id.clone(),
+                parent_thread_id: Some(parent.id.clone()),
+                parent_call_id: Some("proposal-child".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let workspace: String = sqlx::query_scalar("SELECT workspace_id FROM authored_subagent_workspaces WHERE owner_thread_id=? AND status='active'")
+        .bind(&child.id).fetch_one(&fixture.pool).await.unwrap();
+    let child_scope = ResolvedScope::from_thread(&child, None).unwrap();
+    let path = fixture
+        .authored
+        .workspace_path(&child_scope, &workspace)
+        .unwrap();
+    let mut candidate = base.score.clone();
+    candidate.clips.get_mut("chase-1").unwrap().start = 8.0;
+    let proposal = GraphScoreDocument::new(candidate).unwrap();
+    std::fs::write(path.join(SCORE_PATH), proposal.source().unwrap()).unwrap();
+    let mut candidate = base.score.clone();
+    candidate.clips.get_mut("chase-1").unwrap().start = 12.0;
+    candidate.clips.get_mut("chase-2").unwrap().start = 56.0;
+    let current = GraphScoreDocument::new(candidate).unwrap();
+    fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "proposal-current",
+            &current.source().unwrap(),
+            &base.revision,
+            "Independent edits",
+        )
+        .await
+        .unwrap();
+    let merged = fixture
+        .authored
+        .merge_subagent(
+            &fixture.pool,
+            None,
+            &child.id,
+            "Child proposal",
+            &format!("subagent-merge-{}", child.id),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(merged, AuthoredWorkspaceMerge::Conflicted { .. }));
+    assert!(!path.exists());
+    let inspected = fixture
+        .authored
+        .subagent_proposal(
+            &fixture.pool,
+            None,
+            &parent.id,
+            &child.id,
+            Some(SCORE_PATH),
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(inspected["proposalRevisionId"].is_string());
+    assert!(inspected["conflictCount"].as_u64().unwrap() > 0);
+    let mut source = String::new();
+    let mut page = inspected;
+    loop {
+        source.push_str(page["proposal"]["text"].as_str().unwrap());
+        let Some(offset) = page["proposal"]["nextOffset"].as_u64() else {
+            break;
+        };
+        page = fixture
+            .authored
+            .subagent_proposal(
+                &fixture.pool,
+                None,
+                &parent.id,
+                &child.id,
+                Some(SCORE_PATH),
+                offset as usize,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        GraphScoreDocument::from_source(&source).unwrap().revision,
+        proposal.revision
+    );
+    // Resolve the intended field against current state, through the same
+    // canonical apply authority as the parent's normal track draft.
+    let mut resolved = stored(&fixture, &scope).await.unwrap();
+    resolved.score.clips.get_mut("chase-1").unwrap().start = proposal.score.clips["chase-1"].start;
+    let resolved = GraphScoreDocument::new(resolved.score).unwrap();
+    fixture
+        .authored
+        .apply_score_source_for_scope(
+            &fixture.pool,
+            None,
+            scope.clone(),
+            "proposal-resolution",
+            &resolved.source().unwrap(),
+            &current.revision,
+            "Resolve child timing",
+        )
+        .await
+        .unwrap();
+    let result = stored(&fixture, &scope).await.unwrap();
+    assert_eq!(result.score.clips["chase-1"].start, 8.0);
+    assert_eq!(result.score.clips["chase-2"].start, 56.0);
+    assert!(
+        fixture
+            .authored
+            .subagent_proposal(&fixture.pool, None, &child.id, &parent.id, None, 0)
+            .await
+            .is_err(),
+        "reverse parent/child access must be refused"
+    );
+}

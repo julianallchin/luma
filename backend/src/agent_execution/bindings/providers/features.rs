@@ -37,7 +37,7 @@ const MERT_FRAME_RATE_HZ: f64 = 75.0;
 /// different models. Renaming either would break stored data, so the mismatch is
 /// documented where the agent will actually read it.
 const DRUM_CLASS_NOTE: &str = "onset classes are kick/snare/hat/cymbal; \
-    the bar classifier's hi-hat tag is spelled 'hats' — different models, different vocabularies";
+    hi-hat uses 'hat' in drum_onsets, 'hats' in bar tags, and 'hihat' in score graph drum inputs";
 
 /// The stored mel spectrogram is a display asset, not an analysis product.
 pub const MEL_UNAVAILABLE: &str = "not exposed: Luma's stored mel spectrogram is \
