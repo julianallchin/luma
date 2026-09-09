@@ -1,4 +1,4 @@
-//! Unlit affordances: the aim arrows, the selection cage, the transform gizmo,
+//! Unlit affordances: the aim arrows, selection brackets, the transform gizmo,
 //! and what the venue builder is about to do (`scene_desc::Build`).
 //!
 //! Spec §2.3 calls these `Unlit` — flat colour, no lighting, optionally no
@@ -161,7 +161,12 @@ impl MeshKind {
                 indices: vec![0, 1].into(),
             },
             MeshKind::Octahedron => octahedron(0.1),
-            MeshKind::Quad => crate::frame::plane_mesh(0.295, 0.295),
+            MeshKind::Quad => {
+                // Mirroring one in-plane axis reverses winding. Keep both faces.
+                let mut mesh = crate::frame::plane_mesh(0.295, 0.295);
+                mesh.indices = vec![0, 1, 2, 0, 2, 3, 2, 1, 0, 3, 2, 0].into();
+                mesh
+            }
         }
     }
 
@@ -192,12 +197,7 @@ pub(crate) fn build(
         return out;
     }
 
-    // --- selection cages ---------------------------------------------------
-    // `fixture-object.tsx`: a wireframe box at the definition's physical
-    // dimensions, bright yellow for the primary and olive for the rest. Note
-    // the missing-dimension default is zero here, not the 300 mm
-    // `extractPhysicalDimensions` uses — a definition with no `Physical` block
-    // gets a degenerate cage in the app too.
+    // Shared selection brackets for fixtures and structure.
     for (i, id) in scene.selected_fixture_ids.iter().enumerate() {
         let Some(fixture) = scene.fixtures.iter().find(|f| &f.id == id) else {
             continue;
@@ -227,14 +227,14 @@ pub(crate) fn build(
             mesh,
             model: to_world * three_pose_from_data(fixture.pos, fixture.rot) * turned,
             lines: true,
-            color: hex_srgb(if i == 0 { 0xff_ff_00 } else { 0xb8_b8_46 }),
+            color: hex_srgb(if i == 0 { 0xb9_dd_ff } else { 0x68_8c_ab }),
             opacity: 1.0,
             depth: OverlayDepth::Tested,
         });
     }
 
     // --- selected stage pieces ---------------------------------------------
-    // The same wireframe cage a fixture wears, at the piece's own bounds —
+    // The same corner brackets a fixture wears, at the piece's own bounds —
     // one selection language for everything in the room. Measured mesh bounds
     // for catalog pieces, the generator's envelope for procedural ones.
     for (i, id) in scene.editor.selected_piece_ids.iter().enumerate() {
@@ -275,7 +275,7 @@ pub(crate) fn build(
             mesh,
             model,
             lines: true,
-            color: hex_srgb(if i == 0 { 0xff_ff_00 } else { 0xb8_b8_46 }),
+            color: hex_srgb(if i == 0 { 0xb9_dd_ff } else { 0x68_8c_ab }),
             opacity: 1.0,
             depth: OverlayDepth::Tested,
         });
@@ -419,29 +419,42 @@ pub(crate) fn build(
     let Some(pivot_world) = pivot else {
         return out;
     };
-    let pivot_three = to_world.transpose().transform_point3(pivot_world);
+    let space = scene.editor.gizmo_space;
+    let to_world = Mat4::from_quat(space.basis);
+    let pivot_local = to_world.transpose().transform_point3(pivot_world);
     let scale = gizmo_scale((camera.eye - pivot_world).length(), camera.fov_y_deg);
 
-    // `eye` is expressed in the gizmo's own (three) space, where the world axes
-    // are the unit vectors the hide/flip rules test against.
+    // Hide and mirror handles in the same UVZ frame used by the picker.
     let eye_world = (camera.eye - pivot_world).normalize_or_zero();
     let eye = to_world.transpose().transform_vector3(eye_world);
     let dots = [eye.x, eye.y, eye.z];
 
     if scene.editor.gizmo == GizmoMode::Rotate {
         out.extend(rotate_rings(
-            pivot_three,
+            pivot_local,
             scale,
             eye,
             scene.editor.hover,
             to_world,
             bank,
+            space,
         ));
         return out;
     }
 
     let hover = scene.editor.hover;
     for handle in translate_handles() {
+        let axis = |i| [Axis::X, Axis::Y, Axis::Z][i];
+        let kind = if let Some(i) = handle.axis_only {
+            GizmoHandle::TranslateAxis(axis(i))
+        } else if let Some(i) = handle.axes.iter().position(|present| !present) {
+            GizmoHandle::TranslatePlane(axis(i))
+        } else {
+            GizmoHandle::TranslateScreen
+        };
+        if !space.permits(kind) {
+            continue;
+        }
         let hovered = hover.is_some_and(|hover| handle_hovered(&handle, hover));
         if handle.axis_only.is_some_and(|a| dots[a].abs() > AXIS_HIDE)
             || handle
@@ -474,7 +487,7 @@ pub(crate) fn build(
         out.push(Overlay {
             mesh,
             model: to_world
-                * Mat4::from_translation(pivot_three)
+                * Mat4::from_translation(pivot_local)
                 * Mat4::from_scale(flip * scale)
                 * handle.local,
             lines: handle.mesh.lines(),
@@ -650,15 +663,15 @@ fn footprint_centre(geometry: &Geometry, lib: &mut Library) -> Vec3 {
 ///
 /// Rings rather than three's fuller `gizmoRotate` because these are the four
 /// shapes [`luma_scene::hit_test_gizmo`] picks, at the radius it picks them —
-/// the axis rings in the gizmo's own space, where three's X/Y/Z become world
-/// X/Z/Y under the mirror, and a ring is the same circle either way round.
+/// the axis rings in the same UVZ frame as the picker and drag solver.
 fn rotate_rings(
-    pivot_three: Vec3,
+    pivot_local: Vec3,
     scale: f32,
     eye: Vec3,
     hover: Option<GizmoHandle>,
     to_world: Mat4,
     bank: &mut crate::frame::Bank,
+    space: luma_scene::gizmo::GizmoSpace,
 ) -> Vec<Overlay> {
     let mesh = bank.insert("::gizmo-ring".to_string(), ring);
     let q = std::f32::consts::FRAC_PI_2;
@@ -692,18 +705,20 @@ fn rotate_rings(
                 handle,
             )
         })
-        // Grey, three's `XYZE`: the screen ring is the one handle that is not
-        // an axis, and yellow is the selection cage's colour — which is also
-        // why yellow is what a *hovered* ring turns.
+        // The screen ring stays neutral; yellow is reserved for a hovered handle.
         .chain(std::iter::once((
-            screen,
+            screen
+                * Mat4::from_scale(Vec3::splat(
+                    luma_scene::gizmo::SCREEN_RING_RADIUS / RING_RADIUS,
+                )),
             hex_srgb(0x78_78_78),
             GizmoHandle::RotateScreen,
         )))
+        .filter(|(_, _, handle)| space.permits(*handle))
         .map(|(orientation, color, handle)| Overlay {
             mesh,
             model: to_world
-                * Mat4::from_translation(pivot_three)
+                * Mat4::from_translation(pivot_local)
                 * Mat4::from_scale(Vec3::splat(scale))
                 * orientation,
             lines: true,
@@ -904,36 +919,24 @@ fn vertex(p: Vec3) -> crate::assets::Vertex {
     }
 }
 
-/// three's `BoxGeometry` in `wireframe` mode: the six faces are built
-/// independently and each is two triangles, so every face contributes four
-/// border edges *and* the diagonal between its triangles. Those diagonals are
-/// visible in the goldens; a plain twelve-edge box is the wrong picture.
+/// Short corner brackets frame the object without crossing its silhouette.
 fn box_wireframe(size: Vec3) -> MeshData {
+    let half = size * 0.5 + Vec3::splat(0.012);
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    // `buildPlane(u, v, w, udir, vdir, ...)` for each face, in three's order.
-    let faces: [(usize, usize, usize, f32, f32, f32); 6] = [
-        (2, 1, 0, -1.0, -1.0, 1.0),
-        (2, 1, 0, 1.0, -1.0, -1.0),
-        (0, 2, 1, 1.0, 1.0, 1.0),
-        (0, 2, 1, 1.0, -1.0, -1.0),
-        (0, 1, 2, 1.0, -1.0, 1.0),
-        (0, 1, 2, -1.0, -1.0, -1.0),
-    ];
-    for (u, v, w, udir, vdir, wsign) in faces {
-        let base = vertices.len() as u32;
-        // Corner order is `(ix, iy)` row-major over a 1x1 grid.
-        for (iy, ix) in [(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)] {
-            let mut p = Vec3::ZERO;
-            p[u] = (ix - 0.5) * size[u] * udir;
-            p[v] = (iy - 0.5) * size[v] * vdir;
-            p[w] = 0.5 * size[w] * wsign;
-            vertices.push(vertex(p));
-        }
-        // Triangles (a, b, d) and (b, c, d) with a=0, b=2, c=3, d=1; the shared
-        // edge 1-2 is the diagonal, and `checkEdge` dedups it to one segment.
-        for (i, j) in [(0, 2), (2, 1), (1, 0), (2, 3), (3, 1)] {
-            indices.extend([base + i, base + j]);
+    for x in [-1.0, 1.0] {
+        for y in [-1.0, 1.0] {
+            for z in [-1.0, 1.0] {
+                let sign = Vec3::new(x, y, z);
+                let corner = half * sign;
+                for axis in 0..3 {
+                    let mut end = corner;
+                    end[axis] -= sign[axis] * (size[axis] * 0.22).min(0.25);
+                    let base = vertices.len() as u32;
+                    vertices.extend([vertex(corner), vertex(end)]);
+                    indices.extend([base, base + 1]);
+                }
+            }
         }
     }
     MeshData {

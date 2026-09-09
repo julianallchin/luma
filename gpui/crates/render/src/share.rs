@@ -19,7 +19,7 @@
 //!   an `MTLTexture`; the compositor takes it as a `CVPixelBuffer`, the
 //!   currency gpui's surface primitive already speaks.
 //! - **wgpu** (Linux, FreeBSD): the compositor *is* wgpu, so the renderer
-//!   draws on the compositor's own device (see [`Gpu::adopt`]) and the shared
+//!   draws on the compositor's own device (see [`crate::device::DeviceContext::adopt`]) and the shared
 //!   target is an ordinary texture. Same device, same queue: the compositor's
 //!   draw is ordered after the renderer's submit by the queue itself, and
 //!   nothing here has to fence anything.
@@ -109,10 +109,20 @@ impl Shared {
     /// bytes. The asymmetry is the point: it is how the two paths produce one
     /// picture.
     pub(crate) fn new(gpu: &Gpu, width: u32, height: u32) -> Option<Self> {
+        Self::on(gpu.device(), gpu.queue(), gpu.is_adopted(), width, height)
+    }
+
+    pub(crate) fn on(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        adopted: bool,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
         if std::env::var_os(WITHHOLD).is_some() {
             return None;
         }
-        let (view, handle) = platform::allocate(gpu, width, height)?;
+        let (view, handle) = platform::allocate(device, queue, adopted, width, height)?;
         Some(Self {
             view,
             surface: Surface(handle),
@@ -180,8 +190,6 @@ mod platform {
         MTLTextureUsage,
     };
 
-    use crate::gpu::Gpu;
-
     /// `kCVPixelFormatType_32BGRA` / `'BGRA'`, the one format this module
     /// makes. It matches [`crate::gpu::Channels::Bgra`] byte for byte and it
     /// matches the format gpui's polychrome atlas already stores.
@@ -210,10 +218,16 @@ mod platform {
 
     /// Any Metal device can back a texture with an `IOSurface`, so this does
     /// not care whether `gpu` is adopted — only that it is Metal.
-    pub fn allocate(gpu: &Gpu, width: u32, height: u32) -> Option<(wgpu::TextureView, Handle)> {
+    pub fn allocate(
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _adopted: bool,
+        width: u32,
+        height: u32,
+    ) -> Option<(wgpu::TextureView, Handle)> {
         let surface = io_surface(width, height);
         let buffer = CVPixelBuffer::from_io_surface(&surface, None).ok()?;
-        let texture = import(gpu.device(), &surface, &super::descriptor(width, height))?;
+        let texture = import(device, &surface, &super::descriptor(width, height))?;
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Some((view, Handle(buffer)))
     }
@@ -372,8 +386,6 @@ mod platform {
 /// A texture on the compositor's own wgpu device.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod platform {
-    use crate::gpu::Gpu;
-
     /// The texture, plus the device and queue that can read it back. All
     /// three are `Arc`-backed handles, and `wgpu` makes them `Send + Sync`.
     #[derive(Clone)]
@@ -391,8 +403,14 @@ mod platform {
 
     /// Only an adopted device is one the compositor can see; a device this
     /// crate built for itself has a texture nobody else can bind.
-    pub fn allocate(gpu: &Gpu, width: u32, height: u32) -> Option<(wgpu::TextureView, Handle)> {
-        if !gpu.is_adopted() {
+    pub fn allocate(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        adopted: bool,
+        width: u32,
+        height: u32,
+    ) -> Option<(wgpu::TextureView, Handle)> {
+        if !adopted {
             return None;
         }
         let descriptor = wgpu::TextureDescriptor {
@@ -405,14 +423,14 @@ mod platform {
             view_formats: &[wgpu::TextureFormat::Bgra8Unorm],
             ..super::descriptor(width, height)
         };
-        let texture = gpu.device().create_texture(&descriptor);
+        let texture = device.create_texture(&descriptor);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Some((
             view,
             Handle {
                 texture,
-                device: gpu.device().clone(),
-                queue: gpu.queue().clone(),
+                device: device.clone(),
+                queue: queue.clone(),
             },
         ))
     }
@@ -471,8 +489,6 @@ mod platform {
 /// No shared memory: nothing here can be constructed.
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
 mod platform {
-    use crate::gpu::Gpu;
-
     pub type Handle = std::convert::Infallible;
     pub type Source = std::convert::Infallible;
 
@@ -480,7 +496,13 @@ mod platform {
         match *handle {}
     }
 
-    pub fn allocate(_gpu: &Gpu, _width: u32, _height: u32) -> Option<(wgpu::TextureView, Handle)> {
+    pub fn allocate(
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _adopted: bool,
+        _width: u32,
+        _height: u32,
+    ) -> Option<(wgpu::TextureView, Handle)> {
         None
     }
 
@@ -498,7 +520,7 @@ mod tests {
     ///
     /// On a wgpu compositor the device has to be adopted first, so the test
     /// plays the window: it makes a device and offers it through
-    /// [`crate::Gpu::adopt`], then builds on it the way `Gpu::shared` would.
+    /// [`crate::device::DeviceContext::adopt`], then builds on it the way `Gpu::shared` would.
     #[test]
     fn a_rendered_shared_surface_is_readable_through_its_surface() {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -517,7 +539,7 @@ mod tests {
             else {
                 return;
             };
-            crate::Gpu::adopt(
+            crate::device::DeviceContext::adopt(
                 std::sync::Arc::new(device),
                 std::sync::Arc::new(queue),
                 adapter,

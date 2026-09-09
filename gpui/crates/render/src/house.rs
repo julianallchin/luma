@@ -13,34 +13,10 @@
 //!   carries. They are resolved during frame assembly, which is the first
 //!   moment the venue's bounds are known.
 //!
-//! # The editor work light is not a separate thing any more
-//!
-//! There used to be an `editor_lit` preset: an ambient term and a bright
-//! directional key, switched on whenever a picture had to be legible. It was a
-//! second lighting system living beside the venue's own, and nothing said how
-//! the two composed. It is gone. What it used to produce is exactly
-//! `Indoor { house_level: 1.0 }`, which is every venue's default — so the app
-//! draws the picture it always drew, and now there is one answer to "why is
-//! this room lit" instead of two.
-//!
-//! `RenderSettings::object_lit` survives for the *thumbnails*, whose subject is
-//! one piece on nothing. That is not a room, and giving it a house would be
-//! answering a question nobody asked.
-//!
-//! # House lights are physical
-//!
-//! Not an ambient lift: a sparse coarse grid of warm downlights hung above the
-//! rig, each an ordinary [`FixtureCone`] going through the same light index
-//! every beam in the room goes through. The sources are not drawn: a rig is
-//! the subject of every picture this renderer takes, and sixty bright coins
-//! hung over it are sixty things in front of it. A frame reads "the house is
-//! on" from the pools they lay on the floor, which no scalar multiply on
-//! albedo will ever say.
-//!
-//! They are excluded from the volumetric march ([`FixtureCone::haze_gain`]).
-//! A house downlight is a diffuser, not a beam; sixty of them scattering into
-//! the medium would fill the room with warm fog and cost a frame's whole budget
-//! for a thing nobody wants to see.
+//! House lighting is an overlapping grid of broad, warm downlights. The same
+//! cones illuminate surfaces and scatter in haze. A small bounded ambient
+//! term approximates unresolved room bounce; there is no directional work
+//! light layered over the lamps. Object thumbnails keep their separate preset.
 
 use glam::{Vec2, Vec3};
 use luma_scene::Aabb;
@@ -48,13 +24,8 @@ use luma_scene::Aabb;
 use crate::frame::FixtureCone;
 use crate::scene_desc::{DirectionalLight, Environment, SkyParams, VenueEnvironment};
 
-/// Metres between house lamps.
-///
-/// Sparse on purpose, and the number is tied to [`LAMP_FIELD_DEG`]: a lamp at
-/// [`MAX_HEIGHT_M`] lays a pool a little under nine metres across, so at six
-/// metres apart the pools touch and their centres are still the brightest
-/// thing on the floor. At four they overlapped into a flat wash — sixty lights
-/// spent saying what one ambient term already said.
+/// Metres between house lamps. At the minimum six-metre mounting height,
+/// neighbouring 60-degree beams overlap at their half-intensity shoulders.
 pub const SPACING_M: f32 = 6.0;
 
 /// Smallest room the grid will light, per side. An empty venue has no bounds
@@ -69,14 +40,6 @@ pub const MIN_HEIGHT_M: f32 = 6.0;
 /// rig height" is the whole rule: a house lamp inside the truss would light
 /// the top of it and nothing else.
 pub const CLEARANCE_M: f32 = 1.5;
-
-/// How the lamps follow the dial.
-///
-/// Below one, so the sources hold on as the room goes: a house at 15% in a real
-/// venue is a dim lamp you can still see and a pool you can still stand in, not
-/// a lamp at a fifteenth of its output. [`fill`]'s square is the other end of
-/// the same statement — see [`lamps`].
-const LAMP_CURVE: f32 = 0.6;
 
 /// Highest the house rig ever hangs, whatever is under it.
 ///
@@ -101,28 +64,19 @@ pub const MAX_LAMPS: usize = 64;
 /// as aluminium.
 pub const WARM: Vec3 = Vec3::new(1.0, 0.80, 0.62);
 
-/// One lamp's cone gain at `house_level = 1`.
-///
-/// Much larger than [`crate::luminaire::cone_from_opening`]'s scale would
-/// suggest — a stock moving head at full is about 1.0 — and the reason is the
-/// floor. The venue ground plane's albedo is `#030303`: it is a black room,
-/// and a surface that reflects a thousandth of what lands on it needs a great
-/// deal landing on it before a pool is a thing you can see. At 0.55 there was
-/// no pool at any level, only a warm cast on the geometry. This is the level
-/// at which a lamp six metres up lays a circle the eye finds.
-const LAMP_GAIN: f32 = 3.5;
+/// Peak gain at full output, on the renderer's relative fixture scale.
+/// Absolute photometry remains uncalibrated across the renderer.
+const LAMP_GAIN: f32 = 0.6;
 
-/// Full opening of a house downlight, degrees.
-///
-/// Wide for an optic and narrow for a diffuser, and the trade is the pool: at
-/// 100 degrees a lamp ten metres up covers twenty-five metres of floor, every
-/// lamp overlaps every neighbour, and the room comes out evenly grey. This is
-/// the widest opening whose pool is smaller than [`SPACING_M`] is wide.
-const LAMP_FIELD_DEG: f32 = 50.0;
+/// Broad auditorium downlight, based on the 60-degree ETC ArcSystem optic.
+/// https://www.etcconnect.com/WorkArea/DownloadAsset.aspx?id=10737500333
+/// The renderer's field angle is a zero-energy cutoff (not a measured 10%
+/// field angle), so retain a soft skirt beyond the datasheet's 75.7° field.
+const LAMP_FIELD_DEG: f32 = 90.0;
+const LAMP_BEAM_DEG: f32 = 60.0;
 
-/// Where the profile is still at half. A downlight's shoulder is soft; this is
-/// what makes a pool a pool rather than a disc with an edge.
-const LAMP_BEAM_DEG: f32 = 28.0;
+/// Modest indirect fill while the renderer has no diffuse global illumination.
+const BOUNCE_GAIN: f32 = 0.04;
 
 /// Cull radius as a multiple of the hanging height, so a lamp's reach always
 /// clears the floor with a pool's worth of spill around it.
@@ -144,7 +98,7 @@ impl Lamp {
     ///
     /// An ordinary [`FixtureCone`]: the light index, the surface shader and the
     /// shadow-slot ranking all treat a house lamp exactly as they treat a par,
-    /// because it is one. Only [`FixtureCone::haze_gain`] separates them.
+    /// because it is one. The same light also scatters through the haze.
     #[must_use]
     pub fn cone(self) -> FixtureCone {
         FixtureCone {
@@ -160,8 +114,7 @@ impl Lamp {
             wash: 1.0,
             gobo: 0,
             gobo_rotation: 0.0,
-            // The whole reason the field exists — see the module note.
-            haze_gain: 0.0,
+            haze_gain: 1.0,
         }
     }
 }
@@ -183,22 +136,11 @@ pub struct Fill {
 ///
 /// # Indoor
 ///
-/// The fill is the room's own **bounce** — the light that has left the house
-/// lamps, hit a wall and come back. This renderer has no global illumination,
-/// so without it a downlight grid leaves every vertical face black, and a room
-/// whose only lit surface is its floor is not a legible picture of a rig.
-///
-/// It is [`Environment::EDITOR`] and [`DirectionalLight::EDITOR`] scaled by the
-/// square of the house level. At full it is *exactly* the pair the editor has
-/// always used, so a default venue is the picture the app already drew. It
-/// falls off faster than the lamps themselves because bounce does: halve the
-/// source and you have halved the first bounce twice over. By the bottom of
-/// the dial it is gone and the pools are the only thing left, which is what a
-/// house at 10% looks like.
-///
-/// At zero this is [`Environment::DARK`] with no sun — the show-stage
-/// environment, reached by turning the one dial down rather than by selecting
-/// a second preset.
+/// A small ambient term approximates diffuse room bounce. Direct light comes
+/// entirely from the downlights, so surfaces outside their reach no longer
+/// receive an unrelated directional key. Bounce follows source output linearly;
+/// changing a dimmer does not change the room's reflectance.
+/// At zero the environment is [`Environment::DARK`].
 ///
 /// # Outdoor
 ///
@@ -214,18 +156,15 @@ pub struct Fill {
 pub fn fill(env: VenueEnvironment) -> Fill {
     match env {
         VenueEnvironment::Indoor { .. } => {
-            let bounce = env.house_level() * env.house_level();
+            let level = env.house_level();
             Fill {
                 environment: Environment {
-                    background: scale(Environment::EDITOR.background, bounce),
+                    background: Environment::DARK.background,
                     ambient_color: Environment::EDITOR.ambient_color,
-                    ambient_intensity: Environment::EDITOR.ambient_intensity * bounce,
+                    ambient_intensity: BOUNCE_GAIN * level,
                     probe: None,
                 },
-                sun: (bounce > 0.0).then(|| DirectionalLight {
-                    intensity: DirectionalLight::EDITOR.intensity * bounce,
-                    ..DirectionalLight::EDITOR
-                }),
+                sun: None,
                 sky: None,
             }
         }
@@ -249,11 +188,8 @@ pub fn fill(env: VenueEnvironment) -> Fill {
 /// below [`MIN_HEIGHT_M`]. The grid is centred in the footprint and coarsened
 /// until it fits [`MAX_LAMPS`], so the answer is bounded for any room.
 ///
-/// Intensity follows the level to the power [`LAMP_CURVE`], where [`fill`]
-/// follows its square. That gap is the whole feel of the dial: the room goes
-/// down much faster than the lamps do, so winding the house back leaves warm
-/// circles on a dark floor rather than a uniformly grey picture. Both reach
-/// zero together, so "house off" is off.
+/// Direct and indirect light both follow the dial linearly and reach zero
+/// together at blackout.
 ///
 /// Outdoors there is no house rig, so there are no lamps.
 #[must_use]
@@ -267,8 +203,7 @@ pub fn lamps(env: VenueEnvironment, room: Aabb) -> Vec<Lamp> {
     let height = (room.max.z + CLEARANCE_M).clamp(MIN_HEIGHT_M, MAX_HEIGHT_M);
     let (nx, ny) = counts(size);
 
-    let dial = level.powf(LAMP_CURVE);
-    let intensity = LAMP_GAIN * dial;
+    let intensity = LAMP_GAIN * level;
     // A dimmer this far down is a lamp the picture cannot resolve; the same
     // threshold every fixture cone is held to.
     if intensity < 0.01 {
@@ -295,18 +230,8 @@ pub fn lamps(env: VenueEnvironment, room: Aabb) -> Vec<Lamp> {
 
 /// The plan a house lights, and how far its light carries past it.
 ///
-/// [`fill`]'s ambient and key stand in for a room's bounce, and a bounce term
-/// is *uniform*: a constant added at every shaded point, including out on a
-/// ground plane that runs to the horizon. That is the one thing a room's own
-/// light never does. Without this the picture of a venue at house full was the
-/// entire world lit to work-light level, out to the skyline — a rig standing
-/// on an infinite lit plain rather than in a room.
-///
-/// So the fill carries the room's plan with it. Inside the footprint it is
-/// exactly the light it always was; outside, it dies to nothing over
-/// [`Self::margin`], and the world past the room is the darkness it should
-/// always have been. The lamps themselves need none of this — a cone already
-/// falls off with distance.
+/// The ambient bounce approximation is confined to the room footprint with
+/// a short edge fade. Direct lamp light already has angular and range falloff.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Glow {
     /// Centre of the lit plan, world XY.
@@ -316,12 +241,7 @@ pub struct Glow {
     pub half: Vec2,
     /// Metres beyond the plan over which the fill dies to nothing.
     ///
-    /// Half the room's longer span, so the ramp is always in proportion to the
-    /// room it is leaving: a 40 m arena is dark 20 m outside its own walls and
-    /// a 12 m club 6 m outside them. Read as a picture rather than as physics —
-    /// a real room's light stops at a wall, and a hard edge on a floor with no
-    /// wall over it reads as a bug. This is long enough to be a glow dying and
-    /// short enough that the far ground is unambiguously dark.
+    /// A short fade avoids a hard edge where no wall geometry exists.
     pub margin: f32,
 }
 
@@ -341,7 +261,7 @@ pub fn glow(env: VenueEnvironment, room: Aabb) -> Option<Glow> {
     Some(Glow {
         centre: centre.truncate(),
         half,
-        margin: half.x.max(half.y),
+        margin: SPACING_M / 2.0,
     })
 }
 
@@ -387,10 +307,6 @@ fn cell(centre: f32, extent: f32, n: usize, i: usize) -> f32 {
     centre - extent / 2.0 + extent * (i + 0.5) / n
 }
 
-fn scale(rgb: [f32; 3], by: f32) -> [f32; 3] {
-    [rgb[0] * by, rgb[1] * by, rgb[2] * by]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,33 +315,31 @@ mod tests {
         Aabb::new(min, max)
     }
 
-    /// The equivalence is now stated *inside the room*: [`glow`] is what
-    /// carries the "and nowhere else" half of it, and the two together are the
-    /// whole of what the old editor work light meant.
     #[test]
-    fn an_indoor_house_at_full_is_the_editor_light_the_app_always_drew_inside_the_room() {
+    fn house_fill_has_no_directional_work_light() {
         let env = VenueEnvironment::default();
         let fill = fill(env);
-        assert_eq!(fill.environment, Environment::EDITOR);
-        assert_eq!(fill.sun, Some(DirectionalLight::EDITOR));
+        assert!(fill.environment.ambient_intensity < 0.1);
+        assert_eq!(fill.environment.background, [0.0; 3]);
+        assert!(fill.sun.is_none());
         let room = room(Vec3::new(-9.0, -7.0, 0.0), Vec3::new(9.0, 7.0, 8.0));
         let glow = glow(env, room).expect("an indoor house is bounded by its room");
         assert_eq!(glow.half, Vec2::new(9.0, 7.0), "the whole room is at full");
     }
 
     #[test]
-    fn the_house_fill_dies_out_in_proportion_to_the_room() {
+    fn house_bounce_has_a_short_edge_fade_even_in_large_rooms() {
         let wide = glow(
             VenueEnvironment::default(),
             room(Vec3::new(-20.0, -8.0, 0.0), Vec3::new(20.0, 8.0, 10.0)),
         )
         .expect("bounded");
         assert_eq!(wide.centre, Vec2::ZERO);
-        assert_eq!(wide.margin, 20.0, "half the longer span");
+        assert_eq!(wide.margin, SPACING_M / 2.0);
         // ...and an empty venue's minimum room is a lit plan like any other.
         let empty = glow(VenueEnvironment::default(), Aabb::EMPTY).expect("bounded");
         assert_eq!(empty.half, Vec2::splat(MIN_ROOM_M / 2.0));
-        assert_eq!(empty.margin, MIN_ROOM_M / 2.0);
+        assert_eq!(empty.margin, wide.margin);
     }
 
     /// An atmosphere lights the world because the world is what it is
@@ -445,12 +359,12 @@ mod tests {
     }
 
     #[test]
-    fn the_room_darkens_faster_than_its_lamps_dim() {
+    fn direct_and_indirect_light_follow_the_same_dimmer() {
         let half = VenueEnvironment::indoor(0.5);
-        let ambient =
-            fill(half).environment.ambient_intensity / Environment::EDITOR.ambient_intensity;
+        let ambient = fill(half).environment.ambient_intensity / BOUNCE_GAIN;
         let lamp = lamps(half, room(Vec3::ZERO, Vec3::ONE))[0].intensity / LAMP_GAIN;
-        assert!(ambient < lamp, "{ambient} should be under {lamp}");
+        assert_eq!(ambient, 0.5);
+        assert_eq!(lamp, ambient);
     }
 
     #[test]
@@ -497,9 +411,23 @@ mod tests {
     }
 
     #[test]
-    fn a_house_lamp_never_scatters_into_the_haze() {
+    fn a_house_lamp_scatters_into_the_haze() {
         for lamp in lamps(VenueEnvironment::default(), Aabb::EMPTY) {
-            assert_eq!(lamp.cone().haze_gain, 0.0);
+            assert_eq!(lamp.cone().haze_gain, 1.0);
+        }
+    }
+
+    #[test]
+    fn neighbouring_house_beams_overlap_at_half_intensity() {
+        let lamps = lamps(VenueEnvironment::default(), Aabb::EMPTY);
+        let first = lamps[0].cone();
+        let next = lamps[1].cone();
+        let midpoint = (first.position + next.position) * 0.5;
+        let floor = Vec3::new(midpoint.x, midpoint.y, 0.0);
+        for cone in [first, next] {
+            let ray = floor - cone.position;
+            assert!(ray.normalize().dot(cone.direction) >= cone.cos_beam);
+            assert!(ray.length() < cone.range);
         }
     }
 

@@ -1,17 +1,19 @@
 //! Pure transform-gizmo hit testing and drag math.
 
 use crate::Ray;
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 
 const AXIS_LENGTH: f32 = 1.0;
 const AXIS_RADIUS: f32 = 0.08;
-const PLANE_OFFSET: f32 = 0.22;
-const PLANE_RADIUS: f32 = 0.16;
+const PLANE_OFFSET: f32 = 0.15;
+const PLANE_RADIUS: f32 = 0.1475;
 const SCREEN_RADIUS: f32 = 0.13;
 /// Radius of a rotate ring, in gizmo-local units. Public because the drawer
 /// (`luma_render::overlay`) sizes its rings from it: a ring that is picked at
 /// one radius and painted at another is a handle nobody can hit.
 pub const RING_RADIUS: f32 = 0.8;
+/// Outer screen ring, separated from the three axis rings.
+pub const SCREEN_RING_RADIUS: f32 = 1.0;
 const RING_WIDTH: f32 = 0.08;
 const PARALLEL_EPSILON: f32 = 1e-5;
 
@@ -71,6 +73,143 @@ pub enum GizmoHandle {
     TranslateScreen,
     RotateAxis(Axis),
     RotateScreen,
+}
+
+/// The UVZ frame and freedoms shared by drawing, picking, and dragging.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GizmoSpace {
+    pub basis: Quat,
+    pub translation: [bool; 3],
+    pub rotation: [bool; 3],
+}
+
+impl Default for GizmoSpace {
+    fn default() -> Self {
+        Self {
+            basis: Quat::IDENTITY,
+            translation: [true; 3],
+            rotation: [true; 3],
+        }
+    }
+}
+
+impl GizmoSpace {
+    pub const DISABLED: Self = Self {
+        basis: Quat::IDENTITY,
+        translation: [false; 3],
+        rotation: [false; 3],
+    };
+
+    pub fn permits(self, handle: GizmoHandle) -> bool {
+        let index = |axis| match axis {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        };
+        match handle {
+            GizmoHandle::TranslateAxis(axis) => self.translation[index(axis)],
+            GizmoHandle::TranslatePlane(axis) => {
+                (0..3).all(|i| i == index(axis) || self.translation[i])
+            }
+            GizmoHandle::TranslateScreen => self.translation.iter().all(|v| *v),
+            GizmoHandle::RotateAxis(axis) => self.rotation[index(axis)],
+            GizmoHandle::RotateScreen => self.rotation.iter().all(|v| *v),
+        }
+    }
+
+    pub fn hit(
+        self,
+        ray: Ray,
+        pivot: Vec3,
+        scale: f32,
+        view: Vec3,
+        mode: GizmoMode,
+    ) -> Option<GizmoHit> {
+        let inverse = self.basis.inverse();
+        hit_test_allowed(
+            Ray::new(inverse * (ray.origin - pivot), inverse * ray.dir),
+            Vec3::ZERO,
+            scale,
+            inverse * view,
+            mode,
+            |handle| self.permits(handle),
+        )
+    }
+}
+
+/// Pointer motion in the same frame as the handles. Rotation follows the
+/// grabbed ring; translation intersects a plane containing the chosen axis.
+pub fn drag_delta(
+    handle: GizmoHandle,
+    camera: crate::Camera,
+    start: Vec2,
+    end: Vec2,
+    pivot: Vec3,
+    viewport: Vec2,
+    space: GizmoSpace,
+) -> Option<(Vec3, Quat)> {
+    if !space.permits(handle) || viewport.min_element() <= 1.0 {
+        return None;
+    }
+    let ray = |p: Vec2| {
+        camera.ray(
+            Vec2::new(p.x / viewport.x * 2.0 - 1.0, 1.0 - p.y / viewport.y * 2.0),
+            viewport.x / viewport.y,
+        )
+    };
+    let a = ray(start);
+    let b = ray(end);
+    let view = (camera.position() - pivot).normalize();
+    let vector = |axis: Axis| space.basis * axis.vector();
+    match handle {
+        GizmoHandle::TranslateAxis(axis) => {
+            let axis = vector(axis);
+            let normal = (view - axis * view.dot(axis)).normalize_or_zero();
+            let delta = ray_plane(b, pivot, normal)?.1 - ray_plane(a, pivot, normal)?.1;
+            Some((axis * delta.dot(axis), Quat::IDENTITY))
+        }
+        GizmoHandle::TranslatePlane(_) | GizmoHandle::TranslateScreen => {
+            let normal = match handle {
+                GizmoHandle::TranslatePlane(axis) => vector(axis),
+                _ => view,
+            };
+            Some((
+                ray_plane(b, pivot, normal)?.1 - ray_plane(a, pivot, normal)?.1,
+                Quat::IDENTITY,
+            ))
+        }
+        GizmoHandle::RotateAxis(_) | GizmoHandle::RotateScreen => {
+            let normal = match handle {
+                GizmoHandle::RotateAxis(axis) => vector(axis),
+                _ => view,
+            };
+            let angle = if normal.dot(view).abs() > 0.15 {
+                let from = (ray_plane(a, pivot, normal)?.1 - pivot).normalize_or_zero();
+                let to = (ray_plane(b, pivot, normal)?.1 - pivot).normalize_or_zero();
+                normal.dot(from.cross(to)).atan2(from.dot(to))
+            } else {
+                // Edge-on rings have no stable ray/plane intersection. Follow
+                // their projected tangent at the grabbed point instead.
+                let near = a.at((pivot - a.origin).dot(a.dir));
+                let radial = near - pivot;
+                let radial = (radial - normal * radial.dot(normal)).normalize_or_zero();
+                let radius = gizmo_scale((camera.position() - pivot).length(), camera.fov_y_deg)
+                    * RING_RADIUS;
+                let project = |world| {
+                    let p = camera.project(world, viewport.x / viewport.y);
+                    Vec2::new(p.x * viewport.x * 0.5, -p.y * viewport.y * 0.5)
+                };
+                let tangent = (project(pivot + (radial + normal.cross(radial) * 0.01) * radius)
+                    - project(pivot + radial * radius))
+                    / 0.01;
+                if tangent.length_squared() < 1.0 {
+                    return None;
+                }
+                (end - start).dot(tangent) / tangent.length_squared()
+            };
+            Some((Vec3::ZERO, Quat::from_axis_angle(normal, angle)))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -135,6 +274,17 @@ pub fn hit_test_gizmo(
     view_direction: Vec3,
     mode: GizmoMode,
 ) -> Option<GizmoHit> {
+    hit_test_allowed(ray, pivot, scale, view_direction, mode, |_| true)
+}
+
+fn hit_test_allowed(
+    ray: Ray,
+    pivot: Vec3,
+    scale: f32,
+    view_direction: Vec3,
+    mode: GizmoMode,
+    permits: impl Fn(GizmoHandle) -> bool,
+) -> Option<GizmoHit> {
     let scale = scale.abs().max(f32::EPSILON);
     let view = view_direction.normalize_or(Vec3::Y);
     let mut hits = Vec::new();
@@ -164,7 +314,11 @@ pub fn hit_test_gizmo(
                     let center = pivot
                         + u * (PLANE_OFFSET * scale * side(u.dot(view)))
                         + v * (PLANE_OFFSET * scale * side(v.dot(view)));
-                    if let Some(t) = ray_disc(ray, center, vector, PLANE_RADIUS * scale) {
+                    if let Some((t, _)) = ray_plane(ray, center, vector).filter(|(_, point)| {
+                        let offset = *point - center;
+                        offset.dot(u).abs() <= PLANE_RADIUS * scale
+                            && offset.dot(v).abs() <= PLANE_RADIUS * scale
+                    }) {
                         hits.push(GizmoHit {
                             handle: GizmoHandle::TranslatePlane(axis),
                             ray_t: t,
@@ -194,7 +348,13 @@ pub fn hit_test_gizmo(
                     });
                 }
             }
-            if let Some(t) = ray_ring(ray, pivot, view, RING_RADIUS * scale, RING_WIDTH * scale) {
+            if let Some(t) = ray_ring(
+                ray,
+                pivot,
+                view,
+                SCREEN_RING_RADIUS * scale,
+                RING_WIDTH * scale,
+            ) {
                 hits.push(GizmoHit {
                     handle: GizmoHandle::RotateScreen,
                     ray_t: t,
@@ -202,7 +362,9 @@ pub fn hit_test_gizmo(
             }
         }
     }
-    hits.into_iter().min_by(|a, b| a.ray_t.total_cmp(&b.ray_t))
+    hits.into_iter()
+        .filter(|hit| permits(hit.handle))
+        .min_by(|a, b| a.ray_t.total_cmp(&b.ray_t))
 }
 
 fn plane_basis(normal: Axis) -> (Vec3, Vec3) {
@@ -228,9 +390,17 @@ fn ray_disc(ray: Ray, center: Vec3, normal: Vec3, radius: f32) -> Option<f32> {
 }
 
 fn ray_ring(ray: Ray, center: Vec3, normal: Vec3, radius: f32, width: f32) -> Option<f32> {
-    let (t, point) = ray_plane(ray, center, normal)?;
-    let distance = (point - center).length();
-    ((distance - radius).abs() <= width).then_some(t)
+    // Segment capsules keep even edge-on rings pickable and match the
+    // renderer's 64-segment circle, unlike a ray/plane annulus test.
+    let u = normal.cross(Vec3::Y).normalize_or(Vec3::X);
+    let v = normal.cross(u);
+    let point = |i: usize| {
+        let angle = i as f32 * std::f32::consts::TAU / 64.0;
+        center + radius * (u * angle.cos() + v * angle.sin())
+    };
+    (0..64)
+        .filter_map(|i| ray_capsule(ray, point(i), point(i + 1), width))
+        .min_by(f32::total_cmp)
 }
 
 /// Closest points between a ray and a finite segment, used as a capsule test.
@@ -305,6 +475,109 @@ pub fn snap_angle_15(radians: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn screen(camera: crate::Camera, world: Vec3) -> Vec2 {
+        let p = camera.project(world, 1.5);
+        Vec2::new((p.x + 1.0) * 600.0, (1.0 - p.y) * 400.0)
+    }
+
+    #[test]
+    fn dragging_each_axis_follows_the_projected_axis_at_every_camera_angle() {
+        for azimuth in [0.3, 1.2, 2.4, 4.1, 5.5] {
+            let camera = crate::Camera {
+                azimuth,
+                ..Default::default()
+            };
+            for basis in [Quat::IDENTITY, Quat::from_rotation_x(0.6)] {
+                let space = GizmoSpace {
+                    basis,
+                    ..Default::default()
+                };
+                for axis in [Axis::X, Axis::Y, Axis::Z] {
+                    let vector = basis * axis.vector();
+                    let start = vector * 0.6;
+                    let end = vector * 0.95;
+                    let (delta, _) = drag_delta(
+                        GizmoHandle::TranslateAxis(axis),
+                        camera,
+                        screen(camera, start),
+                        screen(camera, end),
+                        Vec3::ZERO,
+                        Vec2::new(1200.0, 800.0),
+                        space,
+                    )
+                    .unwrap();
+                    assert!(
+                        delta.abs_diff_eq(vector * 0.35, 1e-4),
+                        "{axis:?}: {delta:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rotation_follows_the_grabbed_ring_without_forced_snapping() {
+        let camera = crate::Camera::default();
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            let normal = axis.vector();
+            let from = normal.cross(Vec3::new(0.2, 0.5, 0.7)).normalize() * RING_RADIUS;
+            let expected = Quat::from_axis_angle(normal, 0.07);
+            let (_, rotation) = drag_delta(
+                GizmoHandle::RotateAxis(axis),
+                camera,
+                screen(camera, from),
+                screen(camera, expected * from),
+                Vec3::ZERO,
+                Vec2::new(1200.0, 800.0),
+                GizmoSpace::default(),
+            )
+            .unwrap();
+            assert!((rotation * from).abs_diff_eq(expected * from, 1e-4));
+        }
+    }
+
+    #[test]
+    fn mounted_surface_only_picks_in_plane_motion_and_normal_rotation() {
+        let space = GizmoSpace {
+            basis: Quat::from_rotation_x(0.6),
+            translation: [true, true, false],
+            rotation: [false, false, true],
+        };
+        assert!(!space.permits(GizmoHandle::TranslateAxis(Axis::Z)));
+        assert!(!space.permits(GizmoHandle::RotateAxis(Axis::Y)));
+        assert!(!space.permits(GizmoHandle::RotateScreen));
+        assert!(space.permits(GizmoHandle::TranslatePlane(Axis::Z)));
+        let ray = Ray::new(
+            space.basis * Vec3::new(0.7, 0.0, 3.0),
+            space.basis * -Vec3::Z,
+        );
+        assert_eq!(
+            space
+                .hit(
+                    ray,
+                    Vec3::ZERO,
+                    1.0,
+                    space.basis * Vec3::new(0.2, 0.3, 1.0),
+                    GizmoMode::Translate
+                )
+                .unwrap()
+                .handle,
+            GizmoHandle::TranslateAxis(Axis::X)
+        );
+    }
+
+    #[test]
+    fn edge_on_ring_remains_pickable() {
+        assert!(ray_ring(
+            Ray::new(Vec3::new(0.5, -3.0, 0.0), Vec3::Y),
+            Vec3::ZERO,
+            Vec3::Z,
+            RING_RADIUS,
+            RING_WIDTH
+        )
+        .is_some());
+    }
 
     #[test]
     fn translate_axes_are_analytic_and_edge_on_axes_hide() {
@@ -386,7 +659,7 @@ mod tests {
         assert_eq!(screen.handle, GizmoHandle::TranslateScreen);
 
         let rotate = hit_test_gizmo(
-            Ray::new(Vec3::new(0.8, 0.0, 3.0), -Vec3::Z),
+            Ray::new(Vec3::new(0.5657, 0.5657, 3.0), -Vec3::Z),
             Vec3::ZERO,
             1.0,
             Vec3::new(0.2, 0.3, 1.0),
