@@ -1165,6 +1165,7 @@ async fn ensure_remote_delete_is_safe(
                     )
                     OR EXISTS(SELECT 1 FROM authored_documents WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_beats WHERE track_id = ?1)
+                    OR EXISTS(SELECT 1 FROM track_beat_validations WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_roots WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_waveforms WHERE track_id = ?1)
                     OR EXISTS(SELECT 1 FROM track_stems WHERE track_id = ?1)

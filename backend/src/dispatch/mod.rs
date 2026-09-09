@@ -139,13 +139,17 @@ use crate::models::scores::{
 };
 use crate::models::selection::Selection;
 use crate::models::sync::SyncStatus;
-use crate::models::tracks::{TrackBrowserRow, TrackImportResult, TrackSummary};
+use crate::models::tracks::{
+    BeatValidation, BeatValidationReason, BeatValidationVerdict, TrackBrowserRow,
+    TrackImportResult, TrackSummary,
+};
 use crate::models::universe::UniverseState;
 use crate::models::venue_graph::{
     PlacementReport, Reach, ResolvedVenue, StageCatalog, VenueGraphRows,
 };
 use crate::models::venues::Venue;
-use crate::models::waveforms::{TrackWaveform, WaveformWindow};
+use crate::models::waveforms::TrackWaveform;
+
 use crate::rekordbox::types::{RekordboxLibraryInfo, RekordboxPlaylist, RekordboxTrack};
 use crate::render_engine::PerformDeckInput;
 use crate::services::graph_documents::{GraphDocument, GraphEditResult};
@@ -158,6 +162,8 @@ use handlers::score_dsl::{
     ScoreDslExportResponse, ScoreDslImportResponse, ScoreDslValidationResponse,
 };
 use handlers::tracks::TrackAudioBase64;
+/// Large native audio payload; retains the dispatcher's visibility checks.
+pub use handlers::waveforms::get_track_waveform_signal;
 use luma_render::scene_desc::VenueEnvironment;
 use prodjlink::DiscoveredDevice;
 
@@ -390,12 +396,7 @@ commands! {
     artnet::unbind_output(universe: i64) -> ();
 
     waveforms::get_track_waveform(track_id: String) -> TrackWaveform;
-    waveforms::get_track_waveform_window(
-        track_id: String,
-        start_seconds: f64,
-        end_seconds: f64,
-        buckets: u32,
-    ) -> WaveformWindow;
+
     waveforms::reprocess_waveform(track_id: String) -> TrackWaveform;
 
     tracks::list_tracks() -> Vec<TrackSummary>;
@@ -408,6 +409,8 @@ commands! {
     ) -> ();
     tracks::delete_track(track_id: String) -> ();
     tracks::get_track_beats(track_id: String) -> Option<BeatGrid>;
+    tracks::get_track_beat_validation(track_id: String) -> Option<BeatValidation>;
+    tracks::set_track_beat_validation(track_id: String, grid: BeatGrid, verdict: BeatValidationVerdict, reason: Option<BeatValidationReason>) -> ();
     tracks::get_track_bar_classifications(
         track_id: String,
     ) -> Option<TrackBarClassifications>;

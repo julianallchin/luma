@@ -3,51 +3,8 @@
 //! The database layer stores/retrieves serialized waveform payloads only.
 //! All audio decoding and DSP happens here.
 //!
-//! # Two resolutions, one of them not fixed
-//!
-//! [`get_track_waveform`] returns the *stored* envelope: [`PREVIEW_WAVEFORM_SIZE`]
-//! and [`FULL_WAVEFORM_SIZE`] buckets, that many however long the track is. A
-//! five-minute track is 100 buckets a second, so past 100 pixels a second a
-//! renderer is stretching one bucket over several pixels and the picture is a
-//! staircase — detail that was thrown away at import, not detail the screen is
-//! too small to show.
-//!
-//! [`get_track_waveform_window`] is the other half: exactly the visible range,
-//! at exactly the caller's pixel density, measured from the audio each time.
-//!
-//! ## One picture, two sources
-//!
-//! Both return the *same three band envelopes in the same units*, so a renderer
-//! has one drawing routine and crossing the threshold shows more detail rather
-//! than a different waveform. What makes the units shared is [`BandGains`]:
-//! band peaks are normalised against a whole-track percentile, which a visible
-//! range cannot measure for itself, so the three divisors are stored beside the
-//! envelopes and every later measurement is compressed against them.
-//!
-//! ## Why on-demand aggregation and not a pyramid
-//!
-//! The alternative was a precomputed multi-resolution pyramid — the stored
-//! envelope at 30 000 buckets, then 60 000, 120 000, … — with window queries
-//! served by slicing whichever level is finest without exceeding the request.
-//! Two things sink it. A pyramid's deepest level *bounds* the precision, so
-//! "a bucket per pixel at every zoom" holds only until the zoom passes that
-//! level and interpolation resumes; making the bound unreachable means a
-//! deepest level of one bucket per frame, which is the decoded audio plus every
-//! coarser copy of it. And it is a schema migration plus a recompute of every
-//! already-imported track, for a stored artifact that can go stale against the
-//! file it was derived from — a third thing to invalidate.
-//!
-//! On-demand aggregation has neither cost because it reads what is already
-//! there. The decoded PCM is `audio::cache`'s business: a process-wide LRU of
-//! `Arc<DecodedAudio>` over an on-disk `.pcm` cache over the decoder. The track
-//! a timeline is showing is *already* in that LRU — `host_load_track` put it
-//! there to play it — so a window query is a strided scan over a slice of RAM
-//! the process already holds, and the worst case (a track never loaded for
-//! playback) is the decode playback would have done anyway.
-//!
-//! The seam does not leak which of the two it is: one command shape, buckets in
-//! and buckets out, and a pyramid could be slid underneath it later without a
-//! caller noticing.
+//! Stored envelopes serve library previews. Native timelines load filtered
+//! sample-rate bands once and aggregate their GPU hierarchy at draw time.
 
 use realfft::RealFftPlanner;
 use sqlx::SqlitePool;
@@ -58,7 +15,7 @@ use crate::audio::{decode_track_samples, filter_3band, FilteredBands};
 use crate::database::local;
 use crate::database::local::track_access::{Operate, Read, VisibleTrackAccess};
 use crate::database::local::waveforms::StoredWaveform;
-use crate::models::waveforms::{BandEnvelopes, BandGains, TrackWaveform, WaveformWindow};
+use crate::models::waveforms::{BandEnvelopes, BandGains, TrackWaveform, WaveformSignal};
 use crate::preprocessing::{AnalysisGuard, AnalysisTaskGroup};
 
 /// Number of samples in preview waveform (low resolution for overview/minimap)
@@ -323,39 +280,14 @@ async fn band_gains(
     }
 }
 
-/// The most buckets one window may be cut into.
-///
-/// A bucket is a pixel, and no display asks for sixteen thousand of them across
-/// one timeline. The cap is what keeps a mistyped request from turning into a
-/// gigabyte of `f32`s on the wire — not a limit any caller is expected to meet.
-const MAX_WINDOW_BUCKETS: usize = 16_384;
-
-/// Measure `start_seconds..end_seconds` of a track's audio into `buckets`
-/// three-band buckets — see the module docs for why this is measured rather
-/// than looked up.
-///
-/// The bands come back in the *stored* envelope's units (see [`BandGains`]), so
-/// a renderer draws this exactly as it draws [`get_track_waveform`]'s bands and
-/// the two are interchangeable at the same range.
-///
-/// Total by construction: the range is clamped to the decoded audio and the
-/// bucket count to `1..=`[`MAX_WINDOW_BUCKETS`], so a caller cannot ask a
-/// question this cannot answer. The returned `start_seconds`/`end_seconds` are
-/// the clamped range, and the three series always have the same length.
-///
-/// # Errors
-///
-/// If the track is not visible to the caller, its row has no audio path, or the
-/// file cannot be decoded.
-pub async fn get_track_waveform_window(
+/// Decode and filter once for the GPU waveform. Visibility and stored band
+/// gains are resolved through the same guarded path as library previews.
+pub async fn get_track_waveform_signal(
     pool: &SqlitePool,
     tasks: &AnalysisTaskGroup,
     track_id: &str,
-    start_seconds: f64,
-    end_seconds: f64,
-    buckets: u32,
     target_rate: u32,
-) -> Result<WaveformWindow, String> {
+) -> Result<WaveformSignal, String> {
     let gains = band_gains(pool, tasks, track_id).await?;
     let mut access = VisibleTrackAccess::<Read>::read(pool, track_id).await?;
     let (file_path, track_hash): (String, String) =
@@ -373,84 +305,20 @@ pub async fn get_track_waveform_window(
         crate::audio::load_or_decode_audio_shared(Path::new(&file_path), &track_hash, target_rate)
     })
     .await
-    .map_err(|error| format!("Waveform window decode task failed: {error}"))??;
+    .map_err(|error| format!("Waveform decode task failed: {error}"))??;
 
-    let buckets = (buckets as usize).clamp(1, MAX_WINDOW_BUCKETS);
-    let channels = usize::from(audio.channels).max(1);
-    let sample_rate = audio.sample_rate.max(1);
-    let rate = f64::from(sample_rate);
-    let frames = audio.samples.len() / channels;
-    let duration = frames as f64 / rate;
-
-    let start = start_seconds.max(0.).min(duration);
-    let end = end_seconds.clamp(start, duration);
-    let range = (start * rate) as usize..((end * rate).ceil() as usize).min(frames);
-
-    let peaks = tokio::task::spawn_blocking(move || {
-        window_band_peaks(&audio.samples, channels, sample_rate, range, buckets)
+    tokio::task::spawn_blocking(move || {
+        let mono = audio.to_mono();
+        let filtered = filter_3band(&mono, audio.sample_rate as f32);
+        WaveformSignal {
+            sample_rate: audio.sample_rate,
+            bands: [filtered.low, filtered.mid, filtered.high],
+            gains,
+            ceilings: BandGains::ceilings(),
+        }
     })
     .await
-    .map_err(|error| format!("Waveform window measurement failed: {error}"))?;
-
-    Ok(WaveformWindow {
-        track_id: track_id.to_owned(),
-        start_seconds: start,
-        end_seconds: end,
-        bands: gains.compress(&peaks),
-    })
-}
-
-// -----------------------------------------------------------------------------
-// DSP helpers
-// -----------------------------------------------------------------------------
-
-/// How much audio either side of a measured range is filtered and thrown away.
-///
-/// [`filter_3band`] is a chain of biquads, and a biquad started mid-signal rings
-/// for a few dozen samples before it settles. Starting it at the edge of the
-/// visible range would put that ringing on screen — a band bar taller or
-/// shorter than the stored envelope's at the same instant, which is precisely
-/// the seam this is all here to remove. A quarter second is orders of magnitude
-/// more than the lowest crossover needs.
-const FILTER_WARMUP_SECONDS: f64 = 0.25;
-
-/// Measure `frames` of interleaved `channels`-channel PCM into `buckets` raw
-/// three-band peaks — the same quantity [`bucketize_band_peaks`] takes off a
-/// whole track, over a shorter range and usually a much finer grid.
-///
-/// The result is *not* in envelope units; [`BandGains::compress`] puts it
-/// there, and only the track's stored gains can.
-fn window_band_peaks(
-    samples: &[f32],
-    channels: usize,
-    sample_rate: u32,
-    frames: std::ops::Range<usize>,
-    buckets: usize,
-) -> BandPeaks {
-    let total = samples.len() / channels.max(1);
-    if frames.end <= frames.start || total == 0 {
-        return BandPeaks::silent(buckets);
-    }
-
-    // Filtered over a padded range, bucketized over the asked-for one: the pad
-    // is what the filters settle in, so the buckets never see the transient.
-    let warmup = (f64::from(sample_rate) * FILTER_WARMUP_SECONDS) as usize;
-    let padded = frames.start.saturating_sub(warmup)..(frames.end + warmup).min(total);
-    let mono: Vec<f32> = padded
-        .clone()
-        .map(|index| {
-            let base = index * channels;
-            samples[base..base + channels].iter().sum::<f32>() / channels as f32
-        })
-        .collect();
-
-    let filtered = filter_3band(&mono, sample_rate as f32);
-    let offset = frames.start - padded.start;
-    bucketize_band_peaks(
-        &filtered,
-        offset..offset + (frames.end - frames.start),
-        buckets,
-    )
+    .map_err(|error| format!("Waveform filtering failed: {error}"))
 }
 
 /// The half-open sample range bucket `index` of `buckets` covers within
@@ -596,6 +464,11 @@ impl Band {
 }
 
 impl BandGains {
+    /// The display ceiling of each band, also supplied to GPU renderers.
+    pub fn ceilings() -> [f32; 3] {
+        [Band::Low.scale(), Band::Mid.scale(), Band::High.scale()]
+    }
+
     /// The divisor a band normalises against: the 99th percentile of its peaks,
     /// so a handful of transients cannot flatten the rest of the track.
     ///
@@ -819,3 +692,7 @@ pub fn bytes_to_band_envelopes(data: &[u8]) -> Option<BandEnvelopes> {
         high: floats[band_len * 2..].to_vec(),
     })
 }
+
+#[cfg(test)]
+#[path = "waveforms_bench.rs"]
+mod bench;
