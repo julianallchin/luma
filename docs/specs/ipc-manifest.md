@@ -8,7 +8,7 @@ prose and the event names in it are the only hand-written parts and are carried 
 name. The 2026-08-19 audit that motivated the dispatch seam — payload conventions, dead
 commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-audit-2026-08.md).
 
-**231 commands** across **35 domains** · **18 events**
+**232 commands** across **35 domains** · **18 events**
 
 ## Domains
 
@@ -46,10 +46,10 @@ commands, known issues — is kept verbatim in [`ipc-audit-2026-08.md`](./ipc-au
 | `stage` | 16 | `backend/src/dispatch/handlers/stage.rs` |
 | `sync` | 4 | `backend/src/dispatch/handlers/sync.rs` |
 | `telemetry` | 1 | `backend/src/dispatch/handlers/telemetry.rs` |
-| `tracks` | 12 | `backend/src/dispatch/handlers/tracks.rs` |
+| `tracks` | 14 | `backend/src/dispatch/handlers/tracks.rs` |
 | `venues` | 9 | `backend/src/dispatch/handlers/venues.rs` |
-| `waveforms` | 3 | `backend/src/dispatch/handlers/waveforms.rs` |
-| **total** | **231** | |
+| `waveforms` | 2 | `backend/src/dispatch/handlers/waveforms.rs` |
+| **total** | **232** | |
 
 ## Commands
 
@@ -431,6 +431,8 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | `update_track_metadata` | `trackId: String`<br>`title: Option<String>`<br>`artist: Option<String>`<br>`album: Option<String>` | `()` |
 | `delete_track` | `trackId: String` | `()` |
 | `get_track_beats` | `trackId: String` | `Option<BeatGrid>` |
+| `get_track_beat_validation` | `trackId: String` | `Option<BeatValidation>` |
+| `set_track_beat_validation` | `trackId: String`<br>`grid: BeatGrid`<br>`verdict: BeatValidationVerdict`<br>`reason: Option<BeatValidationReason>` | `()` |
 | `get_track_bar_classifications` | `trackId: String` | `Option<TrackBarClassifications>` |
 | `get_track_drum_onsets` | `trackId: String` | `Option<HashMap<String, Vec<f32>>>` |
 | `get_classifier_thresholds` | — | `HashMap<String, f64>` |
@@ -458,7 +460,6 @@ Arguments are shown in their wire spelling; types are the Rust types the table d
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `get_track_waveform` | `trackId: String` | `TrackWaveform` |
-| `get_track_waveform_window` | `trackId: String`<br>`startSeconds: f64`<br>`endSeconds: f64`<br>`buckets: u32` | `WaveformWindow` |
 | `reprocess_waveform` | `trackId: String` | `TrackWaveform` |
 
 ## Events

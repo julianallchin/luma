@@ -3,7 +3,7 @@
   "version": 2,
   "source": "generated from the `commands!` table in backend/src/dispatch/mod.rs by `cargo test -p luma ipc_manifest`",
   "summary": {
-    "commandCount": 231,
+    "commandCount": 232,
     "domainCount": 35,
     "eventCount": 18
   },
@@ -170,7 +170,7 @@
     },
     {
       "domain": "tracks",
-      "commandCount": 12,
+      "commandCount": 14,
       "handlers": "backend/src/dispatch/handlers/tracks.rs"
     },
     {
@@ -180,7 +180,7 @@
     },
     {
       "domain": "waveforms",
-      "commandCount": 3,
+      "commandCount": 2,
       "handlers": "backend/src/dispatch/handlers/waveforms.rs"
     }
   ],
@@ -190,7 +190,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 90
+        "line": 102
       },
       "args": [
         {
@@ -1231,7 +1231,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 24
+        "line": 22
       },
       "args": [
         {
@@ -1427,7 +1427,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 77
+        "line": 89
       },
       "args": [
         {
@@ -1519,7 +1519,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 71
+        "line": 98
       },
       "args": [
         {
@@ -2041,7 +2041,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 824
+        "line": 849
       },
       "args": [
         {
@@ -2059,7 +2059,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 63
+        "line": 90
       },
       "args": [],
       "returns": "HashMap<String, f64>",
@@ -2154,7 +2154,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 143
+        "line": 155
       },
       "args": [
         {
@@ -2418,7 +2418,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 97
+        "line": 124
       },
       "args": [
         {
@@ -2440,7 +2440,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 42
+        "line": 69
       },
       "args": [
         {
@@ -2454,6 +2454,21 @@
         "returns": "{ classifications: unknown; tagOrder: unknown } | null — both fields are opaque serde_json::Value re-parsed from TEXT columns",
         "sideEffects": []
       }
+    },
+    {
+      "name": "get_track_beat_validation",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs",
+        "line": 43
+      },
+      "args": [
+        {
+          "name": "trackId",
+          "rust": "String"
+        }
+      ],
+      "returns": "Option<BeatValidation>"
     },
     {
       "name": "get_track_beats",
@@ -2480,7 +2495,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 52
+        "line": 79
       },
       "args": [
         {
@@ -2521,47 +2536,11 @@
       }
     },
     {
-      "name": "get_track_waveform_window",
-      "domain": "waveforms",
-      "handler": {
-        "file": "backend/src/dispatch/handlers/waveforms.rs",
-        "line": 29
-      },
-      "args": [
-        {
-          "name": "trackId",
-          "rust": "String"
-        },
-        {
-          "name": "startSeconds",
-          "rust": "f64"
-        },
-        {
-          "name": "endSeconds",
-          "rust": "f64"
-        },
-        {
-          "name": "buckets",
-          "rust": "u32"
-        }
-      ],
-      "returns": "WaveformWindow",
-      "prose": {
-        "notes": "The fine half of the waveform pair: get_track_waveform is a fixed 30 000 buckets however long the track is, this is exactly the visible range at exactly the caller's pixel density, measured from the audio each time. No AnalysisTaskGroup lease and no DB write — it is a view of the audio, not a stored artifact. Total by construction: the range is clamped to the decoded audio (the returned startSeconds/endSeconds are the clamped range, not the requested one) and the bucket count to 1..=16384, so a request past either end is answered rather than refused. Only the GPUI editor calls it today; the web timeline can adopt it unchanged, and should above ~FULL_WAVEFORM_SIZE/duration pixels per second, which is where its stored envelope runs out of buckets.",
-        "returns": "WaveformWindow { trackId, startSeconds, endSeconds, min: number[], max: number[], rms: number[] } — the three series are the same length, and it is the requested bucket count clamped to 1..=16384",
-        "sideEffects": [
-          "VisibleTrackAccess::<Read> on the track, to read file_path/track_hash",
-          "Decodes the audio through audio::cache (process-wide LRU over the on-disk .pcm cache) on a blocking thread if it is not already resident — the same (hash, device rate) key host_load_track uses, so a track loaded for playback is already there",
-          "Writes nothing"
-        ]
-      }
-    },
-    {
       "name": "get_ungrouped_fixtures",
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 204
+        "line": 216
       },
       "args": [
         {
@@ -2645,7 +2624,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 185
+        "line": 197
       },
       "args": [
         {
@@ -2868,7 +2847,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 125
+        "line": 152
       },
       "args": [
         {
@@ -2979,7 +2958,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 277
+        "line": 252
       },
       "args": [
         {
@@ -2997,7 +2976,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 43
+        "line": 48
       },
       "args": [
         {
@@ -3140,7 +3119,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 116
+        "line": 143
       },
       "args": [
         {
@@ -4145,7 +4124,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 155
+        "line": 167
       },
       "args": [
         {
@@ -4421,7 +4400,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 108
+        "line": 120
       },
       "args": [
         {
@@ -4744,7 +4723,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 240
+        "line": 267
       },
       "args": [
         {
@@ -4762,7 +4741,7 @@
       "domain": "waveforms",
       "handler": {
         "file": "backend/src/dispatch/handlers/waveforms.rs",
-        "line": 55
+        "line": 42
       },
       "args": [
         {
@@ -4959,7 +4938,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 781
+        "line": 823
       },
       "args": [
         {
@@ -5380,6 +5359,33 @@
       }
     },
     {
+      "name": "set_track_beat_validation",
+      "domain": "tracks",
+      "handler": {
+        "file": "backend/src/dispatch/handlers/tracks.rs",
+        "line": 50
+      },
+      "args": [
+        {
+          "name": "trackId",
+          "rust": "String"
+        },
+        {
+          "name": "grid",
+          "rust": "BeatGrid"
+        },
+        {
+          "name": "verdict",
+          "rust": "BeatValidationVerdict"
+        },
+        {
+          "name": "reason",
+          "rust": "Option<BeatValidationReason>"
+        }
+      ],
+      "returns": "()"
+    },
+    {
       "name": "set_venue_environment",
       "domain": "venues",
       "handler": {
@@ -5612,7 +5618,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 52
+        "line": 57
       },
       "args": [
         {
@@ -5652,7 +5658,7 @@
       "domain": "groups",
       "handler": {
         "file": "backend/src/dispatch/handlers/groups.rs",
-        "line": 219
+        "line": 231
       },
       "args": [
         {
@@ -5709,7 +5715,7 @@
       "domain": "tracks",
       "handler": {
         "file": "backend/src/dispatch/handlers/tracks.rs",
-        "line": 422
+        "line": 449
       },
       "args": [
         {
@@ -5963,11 +5969,11 @@
     {
       "name": "library-changed",
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:334",
-        "backend/src/dispatch/handlers/tracks.rs:372",
-        "backend/src/dispatch/handlers/tracks.rs:437",
-        "backend/src/sync/orchestrator.rs:240",
-        "backend/src/sync/orchestrator.rs:286"
+        "backend/src/dispatch/handlers/tracks.rs:361",
+        "backend/src/dispatch/handlers/tracks.rs:399",
+        "backend/src/dispatch/handlers/tracks.rs:464",
+        "backend/src/sync/orchestrator.rs:251",
+        "backend/src/sync/orchestrator.rs:297"
       ],
       "listeners": [],
       "orphan": true
@@ -6028,9 +6034,9 @@
     {
       "name": "track-import-state",
       "emitters": [
-        "backend/src/dispatch/handlers/tracks.rs:288",
-        "backend/src/dispatch/handlers/tracks.rs:459",
-        "backend/src/dispatch/handlers/tracks.rs:529",
+        "backend/src/dispatch/handlers/tracks.rs:315",
+        "backend/src/dispatch/handlers/tracks.rs:486",
+        "backend/src/dispatch/handlers/tracks.rs:556",
         "backend/src/preprocessing/scheduler.rs:351",
         "backend/src/preprocessing/scheduler.rs:399",
         "backend/src/preprocessing/scheduler.rs:463",
@@ -6038,7 +6044,7 @@
         "backend/src/preprocessing/scheduler.rs:531"
       ],
       "listeners": [
-        "gpui/crates/app/src/library.rs:160"
+        "gpui/crates/app/src/library.rs:150"
       ],
       "orphan": false,
       "note": "Typed file/Engine DJ/Rekordbox phase-one and background-analysis progress; consumers must not parse status prose."
