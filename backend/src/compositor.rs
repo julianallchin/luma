@@ -406,7 +406,7 @@ pub(crate) async fn install_score_scene(
 
 /// Resolve and compile one score, including a caller's optional working copy.
 /// Rendering, performance decks and agent previews share this format boundary.
-pub(crate) async fn build_score_scene(
+pub async fn build_score_scene(
     pool: &sqlx::SqlitePool,
     storage: &StorageRoot,
     resource_root: &Path,

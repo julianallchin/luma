@@ -122,6 +122,7 @@ struct HazeUniform {
     depth: [f32; 4],
     /// x: shadowed fixture count, y: shadow texel size.
     shadow: [f32; 4],
+    medium: crate::medium::Uniform,
 }
 
 #[repr(C)]
@@ -152,6 +153,8 @@ struct CompositeUniform {
     params: [f32; 4],
     depth: [f32; 4],
     background: [f32; 4],
+    medium: crate::medium::Uniform,
+    camera_pos: [f32; 4],
 }
 
 #[repr(C)]
@@ -454,6 +457,7 @@ pub struct Renderer {
     haze_history_valid: bool,
     haze_history_index: usize,
     haze_history_key: Option<HazeHistoryKey>,
+    medium_cache: crate::medium::Cache,
     last_live_time: Option<f32>,
     live_noise_frame: u32,
     /// Measured-frame counter for the profiler's fragment-count pass cadence;
@@ -861,6 +865,8 @@ pub struct Gpu {
     material_layout: wgpu::BindGroupLayout,
     cluster_layout: wgpu::BindGroupLayout,
     haze_layout: wgpu::BindGroupLayout,
+    medium_cache_layout: wgpu::BindGroupLayout,
+    medium_cache_pipeline: wgpu::ComputePipeline,
     /// The baked volumetric density field. Belongs here rather than on the
     /// renderer because no frame mutates it — it is a function of the device
     /// and nothing else.
@@ -1140,6 +1146,10 @@ impl Gpu {
                     9,
                     wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ),
+                storage_entry(
+                    10,
+                    wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                ),
             ],
         });
 
@@ -1181,6 +1191,22 @@ impl Gpu {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -1207,7 +1233,8 @@ impl Gpu {
         // layout) is one file both volumetric passes prepend, so they cannot
         // draw two different beams.
         let beam_transport = format!(
-            "{}{}",
+            "{}{}{}",
+            include_str!("shaders/medium.wgsl"),
             crate::fog_grid::prelude(),
             include_str!("shaders/beam_transport.wgsl")
         );
@@ -1223,6 +1250,66 @@ impl Gpu {
                 include_str!("shaders/haze.wgsl")
             ),
         );
+        let medium_cache_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("medium-cache"),
+                entries: &[
+                    uniform_entry(0, wgpu::ShaderStages::COMPUTE),
+                    storage_entry(1, wgpu::ShaderStages::COMPUTE),
+                    storage_entry(2, wgpu::ShaderStages::COMPUTE),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let medium_cache_module = shader(
+            &device,
+            "medium-cache",
+            &format!(
+                "{}{}{}",
+                crate::haze_field::prelude(),
+                include_str!("shaders/medium.wgsl"),
+                include_str!("shaders/medium_cache.wgsl")
+            ),
+        );
+        let medium_cache_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("medium-cache"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("medium-cache"),
+                        bind_group_layouts: &[Some(&medium_cache_layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                module: &medium_cache_module,
+                entry_point: Some("build_cache"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         let temporal_module = shader(
             &device,
             "haze-temporal",
@@ -1232,7 +1319,9 @@ impl Gpu {
             &device,
             "composite",
             &format!(
-                "{}{}",
+                "{}{}{}{}",
+                crate::haze_field::prelude(),
+                include_str!("shaders/medium.wgsl"),
                 crate::atmosphere::composite_prelude(),
                 include_str!("shaders/composite.wgsl")
             ),
@@ -1848,6 +1937,8 @@ impl Gpu {
             material_layout,
             cluster_layout,
             haze_layout,
+            medium_cache_layout,
+            medium_cache_pipeline,
             haze_field,
             light_index_pipelines,
             temporal_layout,
@@ -1986,6 +2077,7 @@ impl Renderer {
         let light_index = LightIndex::new(device);
         let visibility = crate::visibility::Visibility::new(device);
 
+        let medium_cache = crate::medium::Cache::new(&gpu.device);
         Self {
             gpu,
             environment: EnvironmentCache::default(),
@@ -2025,6 +2117,7 @@ impl Renderer {
             haze_history_valid: false,
             haze_history_index: 0,
             haze_history_key: None,
+            medium_cache,
             last_live_time: None,
             live_noise_frame: 0,
             fragment_count_frame: 0,
@@ -2844,7 +2937,7 @@ impl Renderer {
 
         let instance_buf = self.storage(
             &mut encoder,
-            &instances,
+            &pad_at_least_one(instances),
             wgpu::BufferUsages::STORAGE,
             "instances",
         );
@@ -3019,7 +3112,9 @@ impl Renderer {
             .is_finite()
             .then_some(frame.haze_density.clamp(0.0, 4.0))
             .unwrap_or(0.0);
-        let sampled_haze = cached_shadows && fixture_cones.len() > 128 && self.wide_light_group > 1;
+        // Transport quality is a render setting, independent of how many
+        // emitters a dimmer cue happens to leave active.
+        let sampled_haze = cached_shadows && self.wide_light_group > 1;
         // Captures accumulating several subframes retain full per-ray detail.
         let grid_fog =
             sampled_haze && self.grid_fog && haze_density >= 0.001 && (temporal || subframes <= 1);
@@ -3452,8 +3547,57 @@ impl Renderer {
                 layout: &self.gpu.fog_grid_write_layout,
                 entries: &[binding(0, wgpu::BindingResource::TextureView(&fog_grid))],
             });
+        let medium =
+            crate::medium::Uniform::new(frame, haze_density * Transport::EXTINCTION, haze_time);
+        self.medium_cache
+            .ensure(&self.gpu.device, fixture_cones.len());
+        if haze_density > 0.0 && !fixture_cones.is_empty() {
+            let cache_uniform = crate::medium::CacheUniform {
+                medium,
+                count: [fixture_cones.len() as u32, 0, 0, 0],
+            };
+            let buffer = self.storage(
+                &mut encoder,
+                &[cache_uniform],
+                wgpu::BufferUsages::UNIFORM,
+                "medium-cache-uniform",
+            );
+            let group = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("medium-cache"),
+                    layout: &self.gpu.medium_cache_layout,
+                    entries: &[
+                        binding(0, buffer.as_entire_binding()),
+                        binding(1, index_bindings.core.as_entire_binding()),
+                        binding(2, index_bindings.rest.as_entire_binding()),
+                        binding(
+                            3,
+                            wgpu::BindingResource::TextureView(&self.gpu.haze_field.view),
+                        ),
+                        binding(
+                            4,
+                            wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
+                        ),
+                        binding(5, self.medium_cache.buffer.as_entire_binding()),
+                    ],
+                });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("medium-cache"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.gpu.medium_cache_pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(
+                medium.shape[3] as u32,
+                medium.shape[3] as u32,
+                fixture_cones.len() as u32,
+            );
+        }
         for k in 0..subframes {
             let uniform = HazeUniform {
+                medium,
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
                 camera_pos: frame.camera.eye.extend(1.0).to_array(),
                 params: [
@@ -3488,7 +3632,7 @@ impl Renderer {
                     CAMERA_NEAR,
                     CAMERA_FAR,
                     haze_density * Transport::EXTINCTION,
-                    if cached_shadows && fixture_cones.len() > 128 {
+                    if sampled_haze {
                         self.wide_light_group as f32
                     } else {
                         1.0
@@ -3525,6 +3669,7 @@ impl Renderer {
                     layout: &self.gpu.haze_layout,
                     entries: &[
                         binding(0, haze_buf.as_entire_binding()),
+                        binding(10, self.medium_cache.buffer.as_entire_binding()),
                         binding(1, index_bindings.core.as_entire_binding()),
                         binding(2, index_bindings.rest.as_entire_binding()),
                         binding(3, wgpu::BindingResource::TextureView(&depth_view)),
@@ -3697,6 +3842,8 @@ impl Renderer {
 
         // --- composite + readback --------------------------------------------
         let composite_uniform = CompositeUniform {
+            medium,
+            camera_pos: frame.camera.eye.extend(1.0).to_array(),
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             params: [
                 haze_size.0 as f32,
@@ -3729,6 +3876,14 @@ impl Renderer {
                     binding(0, composite_buf.as_entire_binding()),
                     binding(1, wgpu::BindingResource::TextureView(&scene_view)),
                     binding(2, wgpu::BindingResource::TextureView(&composite_haze)),
+                    binding(
+                        5,
+                        wgpu::BindingResource::TextureView(&self.gpu.haze_field.view),
+                    ),
+                    binding(
+                        6,
+                        wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
+                    ),
                     binding(3, wgpu::BindingResource::Sampler(&self.gpu.linear_sampler)),
                     binding(4, wgpu::BindingResource::TextureView(&depth_view)),
                 ],
@@ -4169,8 +4324,8 @@ mod tests {
     #[test]
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
         assert_eq!(std::mem::size_of::<Globals>(), 400);
-        assert_eq!(std::mem::size_of::<HazeUniform>(), 176);
-        assert_eq!(std::mem::size_of::<CompositeUniform>(), 112);
+        assert_eq!(std::mem::size_of::<HazeUniform>(), 240);
+        assert_eq!(std::mem::size_of::<CompositeUniform>(), 192);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 64);
         assert_eq!(std::mem::size_of::<FixtureShadowMatrix>(), 80);
@@ -4790,6 +4945,8 @@ mod tests {
             directional: None,
             sky: None,
             haze_density: 0.0,
+            haze_appearance: Default::default(),
+            haze_bounds: luma_scene::Aabb::new(Vec3::splat(-32.0), Vec3::splat(32.0)),
             haze_steps: 1,
             haze_resolution: 0.5,
             time: 0.0,
@@ -4892,6 +5049,8 @@ mod tests {
             }),
             sky: None,
             haze_density: 0.0,
+            haze_appearance: Default::default(),
+            haze_bounds: luma_scene::Aabb::new(Vec3::splat(-32.0), Vec3::splat(32.0)),
             haze_steps: 1,
             haze_resolution: 1.0,
             time: 0.0,
@@ -5279,6 +5438,16 @@ fn haze_history_key(
     let mut push = |value: u32| {
         topology = (topology ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3);
     };
+    let medium = crate::medium::Uniform::new(frame, density, 0.0);
+    for value in medium
+        .shape
+        .into_iter()
+        .chain(medium.wind)
+        .chain(medium.min)
+        .chain(medium.max)
+    {
+        push(value.to_bits());
+    }
     push(frame.fixture_cones.len() as u32);
     for light in &frame.fixture_cones {
         for value in light.position.to_array() {

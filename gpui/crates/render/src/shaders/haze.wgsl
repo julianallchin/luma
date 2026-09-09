@@ -1,7 +1,7 @@
 @group(2) @binding(0) var fog_grid: texture_3d<f32>;
 
 // Narrow beams and gobos use analytic cone/ray intersection and MIS transport.
-// Dense, shadowed live rigs share distant broad-wash lighting in a 3D grid;
+// Shadowed live rigs share distant broad-wash lighting in a 3D grid;
 // only their four-metre source regions remain in the per-ray candidate list.
 // The complementary smooth source/far windows sum to one. Captures with
 // several subframes retain the full per-ray path for converged spatial detail.
@@ -29,7 +29,7 @@ struct HazeOutput {
 
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> HazeOutput {
-    let ray = scene_ray(frag.xy);
+    var ray = scene_ray(frag.xy);
     let weight = haze.tuning.y;
     let density = haze.params.y;
 
@@ -37,33 +37,14 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> HazeOutput {
         return HazeOutput(vec4<f32>(0.0, 0.0, 0.0, ray.view_depth * weight), vec4<f32>(0.0));
     }
 
-    // Mean extinction, derived CPU-side from density (Transport::EXTINCTION —
-    // the composite attenuates the scene with the same value). The noise
-    // modulates in-scatter only; transmittance uses the mean so it stays an
-    // analytic exp(-sigma*t) with no flicker.
+    // The same local density governs scattering and optical depth on both
+    // the camera path and the cached light path.
     let sigma = haze.depth.z;
 
     var scattered = vec3<f32>(0.0);
     var sampled = vec3<f32>(0.0);
 
-    // Ambient medium fill — diffuse haze the beams cut through. Closed-form
-    // transmittance; eight stratified noise taps keep the drifting smoke
-    // structure visible instead of averaging it flat. The taps only resolve the
-    // near field; beyond it the noise (centred on 1) integrates as its mean, so
-    // in-scatter saturates toward the medium's asymptotic colour along the whole
-    // camera ray. Paired with the composite's matching extinction, a far surface
-    // and the sky converge to the same fog instead of meeting at a silhouette.
-    {
-        let amb_end = min(ray.hit_dist, 24.0);
-        let amb_step = amb_end / 8.0;
-        var amb = 0.0;
-        for (var i = 0; i < 8; i = i + 1) {
-            let t = (f32(i) + ray.jitter) * amb_step;
-            amb += haze_noise(haze.camera_pos.xyz + ray.dir * t, haze.params.w) * exp(-sigma * t);
-        }
-        let tail = exp(-sigma * amb_end) - exp(-sigma * ray.hit_dist);
-        scattered += vec3<f32>(0.014, 0.011, 0.009) * density * (amb * sigma * amb_step + tail);
-    }
+    ray.medium = medium_ray(haze.medium, haze.camera_pos.xyz, ray.dir, ray.hit_dist);
 
     // This pass renders at a fraction of output resolution; the light index
     // is defined in full-resolution pixels, so scale the fragment coordinate

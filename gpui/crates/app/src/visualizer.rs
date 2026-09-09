@@ -498,8 +498,8 @@ struct Stage {
 
 /// Everything a live frame is a function of.
 ///
-/// Two prepaints with equal keys ask for the same picture, so once the
-/// temporal haze has settled on one there is nothing left to render — the
+/// With stationary haze, two prepaints with equal keys ask for the same
+/// picture. Once temporal sampling has settled there is nothing left to render — the
 /// stage's prepaint skips the submission and re-presents the frame already on
 /// screen, which is what lets a still, paused stage cost zero GPU instead of
 /// re-marching the haze at display rate for nobody. The scene's own geometry
@@ -591,6 +591,7 @@ struct RenderLab {
     cluster_debug: bool,
     haze_enabled: bool,
     haze_density: f32,
+    haze_appearance: scene_desc::HazeAppearance,
     haze_steps: u32,
     haze_resolution: f32,
     grid_enabled: bool,
@@ -649,6 +650,7 @@ impl RenderLab {
         render.sky = house::fill(self.house).sky;
         render.haze.enabled = self.haze_enabled;
         render.haze.density = self.haze_density;
+        render.haze.appearance = self.haze_appearance;
         render.haze.steps = self.haze_steps;
         render.haze.resolution = self.haze_resolution;
         render.show_grid = self.grid_enabled;
@@ -693,7 +695,8 @@ impl RenderLab {
             geometry_shadows: true,
             cluster_debug: false,
             haze_enabled: true,
-            haze_density: 0.8,
+            haze_density: 0.24,
+            haze_appearance: scene_desc::HazeAppearance::default(),
             haze_steps: 8,
             haze_resolution: luma_render::LIVE_HAZE_RESOLUTION,
             grid_enabled: true,
@@ -750,6 +753,11 @@ enum LabToggle {
 #[derive(Clone, Copy)]
 enum LabValue {
     HazeDensity,
+    Cloudiness,
+    CloudSize,
+    Turbulence,
+    WindSpeed,
+    WindDirection,
 }
 impl RenderLab {
     fn toggle(&mut self, control: LabToggle) {
@@ -763,7 +771,13 @@ impl RenderLab {
     fn set(&mut self, control: LabValue, value: f32) {
         match control {
             LabValue::HazeDensity => self.haze_density = value.clamp(0.0, 2.0),
+            LabValue::Cloudiness => self.haze_appearance.cloudiness = value,
+            LabValue::CloudSize => self.haze_appearance.cloud_size = value,
+            LabValue::Turbulence => self.haze_appearance.turbulence = value,
+            LabValue::WindSpeed => self.haze_appearance.wind_speed = value,
+            LabValue::WindDirection => self.haze_appearance.wind_direction = value,
         }
+        self.haze_appearance = self.haze_appearance.sanitized();
     }
 }
 
@@ -2689,6 +2703,46 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             2.,
             LabValue::HazeDensity,
         ))
+        .child(lab_value(
+            app,
+            "Cloudiness",
+            lab.haze_appearance.cloudiness,
+            0.,
+            1.,
+            LabValue::Cloudiness,
+        ))
+        .child(lab_value(
+            app,
+            "Cloud size (m)",
+            lab.haze_appearance.cloud_size,
+            0.5,
+            20.,
+            LabValue::CloudSize,
+        ))
+        .child(lab_value(
+            app,
+            "Turbulence",
+            lab.haze_appearance.turbulence,
+            0.,
+            1.,
+            LabValue::Turbulence,
+        ))
+        .child(lab_value(
+            app,
+            "Wind speed (m/s)",
+            lab.haze_appearance.wind_speed,
+            0.,
+            10.,
+            LabValue::WindSpeed,
+        ))
+        .child(lab_value(
+            app,
+            "Wind direction (°)",
+            lab.haze_appearance.wind_direction,
+            0.,
+            360.,
+            LabValue::WindDirection,
+        ))
         .child(lab_toggle(
             state,
             app,
@@ -3335,7 +3389,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                             gizmo_hover,
                             universe: universe.clone(),
                         };
-                        let rest = if interacting {
+                        let moving_haze = key_lab.haze_enabled
+                            && key_lab.haze_density > 0.0
+                            && key_lab.haze_appearance.cloudiness > 0.0
+                            && (key_lab.haze_appearance.wind_speed > 0.0
+                                || key_lab.haze_appearance.turbulence > 0.0);
+                        let rest = if interacting || moving_haze {
                             stage.idle = None;
                             false
                         } else {

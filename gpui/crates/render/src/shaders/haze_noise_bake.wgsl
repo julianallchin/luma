@@ -2,8 +2,7 @@
 // device (`haze_field.rs`).
 //
 // This shader is the field's only definition: nothing on the CPU evaluates it
-// in the shipping path, and the sampling side (`beam_transport.wgsl`'s
-// `haze_noise`) is one `textureSampleLevel`. `FIELD_SIZE`, `FIELD_TEXELS` and
+// in the shipping path, and the sampling side (`medium.wgsl`) is one `textureSampleLevel`. `FIELD_SIZE`, `FIELD_TEXELS` and
 // `FIELD_CELLS` are injected at pipeline creation, the way `light_index.rs`
 // injects `NARROW_PHASE`.
 //
@@ -27,8 +26,8 @@
 /// Wrapping the cell coordinate before hashing is what makes the field
 /// periodic rather than merely truncated, and therefore what makes the texture
 /// tile seamlessly.
-fn wrapped_gradient(cell: vec3<f32>) -> vec3<f32> {
-    let wrapped = vec3<u32>(cell - floor(cell / FIELD_CELLS) * FIELD_CELLS);
+fn wrapped_gradient(cell: vec3<f32>, period: f32) -> vec3<f32> {
+    let wrapped = vec3<u32>(cell - floor(cell / period) * period);
     let h = wrapped * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
     let m = h.x ^ h.y ^ h.z;
     var s = vec3<u32>(m, m * 1597334677u, m * 3812015801u);
@@ -40,26 +39,33 @@ fn wrapped_gradient(cell: vec3<f32>) -> vec3<f32> {
     return -1.0 + 2.0 * (vec3<f32>(s >> vec3<u32>(9u)) * (1.0 / 8388608.0));
 }
 
-/// Gradient noise on the unit lattice — the same interpolation the per-sample
-/// `noise3d` used, so the field's spectrum is unchanged and only its gradient
-/// source and its periodicity differ.
-fn lattice_noise(p: vec3<f32>) -> f32 {
+/// Gradient noise on the unit lattice, with a period supplied per octave.
+fn lattice_noise(p: vec3<f32>, period: f32) -> f32 {
     let i = floor(p);
     let f = p - i;
     let u = f * f * (3.0 - 2.0 * f);
-    let g000 = dot(wrapped_gradient(i + vec3<f32>(0.0, 0.0, 0.0)), f - vec3<f32>(0.0, 0.0, 0.0));
-    let g100 = dot(wrapped_gradient(i + vec3<f32>(1.0, 0.0, 0.0)), f - vec3<f32>(1.0, 0.0, 0.0));
-    let g010 = dot(wrapped_gradient(i + vec3<f32>(0.0, 1.0, 0.0)), f - vec3<f32>(0.0, 1.0, 0.0));
-    let g110 = dot(wrapped_gradient(i + vec3<f32>(1.0, 1.0, 0.0)), f - vec3<f32>(1.0, 1.0, 0.0));
-    let g001 = dot(wrapped_gradient(i + vec3<f32>(0.0, 0.0, 1.0)), f - vec3<f32>(0.0, 0.0, 1.0));
-    let g101 = dot(wrapped_gradient(i + vec3<f32>(1.0, 0.0, 1.0)), f - vec3<f32>(1.0, 0.0, 1.0));
-    let g011 = dot(wrapped_gradient(i + vec3<f32>(0.0, 1.0, 1.0)), f - vec3<f32>(0.0, 1.0, 1.0));
-    let g111 = dot(wrapped_gradient(i + vec3<f32>(1.0, 1.0, 1.0)), f - vec3<f32>(1.0, 1.0, 1.0));
+    let g000 = dot(wrapped_gradient(i + vec3<f32>(0.0, 0.0, 0.0), period), f - vec3<f32>(0.0, 0.0, 0.0));
+    let g100 = dot(wrapped_gradient(i + vec3<f32>(1.0, 0.0, 0.0), period), f - vec3<f32>(1.0, 0.0, 0.0));
+    let g010 = dot(wrapped_gradient(i + vec3<f32>(0.0, 1.0, 0.0), period), f - vec3<f32>(0.0, 1.0, 0.0));
+    let g110 = dot(wrapped_gradient(i + vec3<f32>(1.0, 1.0, 0.0), period), f - vec3<f32>(1.0, 1.0, 0.0));
+    let g001 = dot(wrapped_gradient(i + vec3<f32>(0.0, 0.0, 1.0), period), f - vec3<f32>(0.0, 0.0, 1.0));
+    let g101 = dot(wrapped_gradient(i + vec3<f32>(1.0, 0.0, 1.0), period), f - vec3<f32>(1.0, 0.0, 1.0));
+    let g011 = dot(wrapped_gradient(i + vec3<f32>(0.0, 1.0, 1.0), period), f - vec3<f32>(0.0, 1.0, 1.0));
+    let g111 = dot(wrapped_gradient(i + vec3<f32>(1.0, 1.0, 1.0), period), f - vec3<f32>(1.0, 1.0, 1.0));
     let x00 = mix(g000, g100, u.x);
     let x10 = mix(g010, g110, u.x);
     let x01 = mix(g001, g101, u.x);
     let x11 = mix(g011, g111, u.x);
     return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+
+// Four spatial scales are combined once at startup, not at every ray sample.
+// Each octave wraps at its own scaled period, so the combined field is seamless.
+fn layered_noise(p: vec3<f32>) -> f32 {
+    return 0.45 * lattice_noise(p * 0.25, FIELD_CELLS * 0.25)
+        + 0.30 * lattice_noise(p.yzx * 0.75 + vec3<f32>(11.0, 3.0, 7.0), FIELD_CELLS * 0.75)
+        + 0.17 * lattice_noise(p.zxy * 1.75 + vec3<f32>(5.0, 17.0, 2.0), FIELD_CELLS * 1.75)
+        + 0.08 * lattice_noise(p * 3.75 + vec3<f32>(19.0, 6.0, 13.0), FIELD_CELLS * 3.75);
 }
 
 /// Lattice coordinate of a texel's centre. Baking at centres — not corners —
@@ -90,7 +96,7 @@ fn bake_field(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let pair = gid.y * pairs_per_slice + gid.x;
-    let lo = lattice_noise(texel_centre(texel_of(pair * 2u)));
-    let hi = lattice_noise(texel_centre(texel_of(pair * 2u + 1u)));
+    let lo = layered_noise(texel_centre(texel_of(pair * 2u)));
+    let hi = layered_noise(texel_centre(texel_of(pair * 2u + 1u)));
     packed[pair] = pack2x16float(vec2<f32>(lo, hi));
 }

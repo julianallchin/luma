@@ -1,0 +1,419 @@
+{
+  "schema": "luma.score-opening-profile/1",
+  "captured_at": "2026-09-09T19:39:05.197809+00:00",
+  "commit": "36e87427d19631ac9cd0b08ee87c0bf730148350",
+  "working_tree_diff_sha256": "d078e62330bcf14e8181d93fe0ddc89dab9eb473d87f357ac58553e0db5a6321",
+  "track": "Get Lucky (Radio Edit) [feat. Pharrell Williams and Nile Rodgers]",
+  "venue": "Gasworks Park",
+  "adapter": "NVIDIA GeForce RTX 5090",
+  "size": [
+    1634,
+    750
+  ],
+  "duration_seconds": 12,
+  "sample_rate": 144,
+  "warmup_frames": 60,
+  "camera": "Fitted front, not the live orbit",
+  "geometry_shadows": true,
+  "haze_density": 0.24,
+  "haze_resolution": 0.5,
+  "haze_steps": 8,
+  "cpu_optimization": "Measured backend, renderer, scene and pattern crates at opt-level 2, via /tmp/luma-score-profiler/Cargo.toml",
+  "limits": "Offscreen replay of persisted score. Excludes GPUI, picking, live orbit and presentation. Every frame carries GPU timestamps. Other desktop GPU clients remained running.",
+  "runs": {
+    "all": {
+      "raw": "/tmp/get-lucky-gasworks-live-settings.json",
+      "raw_sha256": "7a2fd5bda0d9ced5a7f718d7d8a93420d6528e7f35d87ffa2c8732942142f287",
+      "groups": {
+        "opening_grid": {
+          "count": 522,
+          "metrics": {
+            "gpu_ms": {
+              "median": 4.436576,
+              "p95": 4.831424
+            },
+            "haze_ms": {
+              "median": 3.0330399999999997,
+              "p95": 3.3464319999999996
+            },
+            "scene_ms": {
+              "median": 1.27432,
+              "p95": 1.5535679999999998
+            },
+            "grid_ms": {
+              "median": 1.079472,
+              "p95": 1.349152
+            },
+            "composite_ms": {
+              "median": 0.104864,
+              "p95": 0.106336
+            },
+            "eval_ms": {
+              "median": 0.8895065,
+              "p95": 1.074038
+            },
+            "build_ms": {
+              "median": 1.0158975,
+              "p95": 1.218159
+            },
+            "encode_ms": {
+              "median": 0.7537255,
+              "p95": 0.951877
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        },
+        "opening_direct": {
+          "count": 592,
+          "metrics": {
+            "gpu_ms": {
+              "median": 11.812704,
+              "p95": 13.143008
+            },
+            "haze_ms": {
+              "median": 10.870128,
+              "p95": 11.916544
+            },
+            "scene_ms": {
+              "median": 0.8555679999999999,
+              "p95": 1.253536
+            },
+            "grid_ms": {
+              "median": 0.0,
+              "p95": 0.0
+            },
+            "composite_ms": {
+              "median": 0.10470399999999999,
+              "p95": 0.107072
+            },
+            "eval_ms": {
+              "median": 0.946712,
+              "p95": 1.186189
+            },
+            "build_ms": {
+              "median": 1.064593,
+              "p95": 1.28104
+            },
+            "encode_ms": {
+              "median": 0.8070809999999999,
+              "p95": 1.0111569999999999
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        }
+      }
+    },
+    "no-haze": {
+      "raw": "/tmp/get-lucky-gasworks-no-haze.json",
+      "raw_sha256": "763ebbc74b11232bef33a181ba9c5d495f3be41866da0afafe7cc289c34824e2",
+      "groups": {
+        "opening_grid": {
+          "count": 522,
+          "metrics": {
+            "gpu_ms": {
+              "median": 1.324944,
+              "p95": 1.599232
+            },
+            "haze_ms": {
+              "median": 0.027424,
+              "p95": 0.07667199999999999
+            },
+            "scene_ms": {
+              "median": 1.274976,
+              "p95": 1.5485119999999999
+            },
+            "grid_ms": {
+              "median": 0.0,
+              "p95": 0.0
+            },
+            "composite_ms": {
+              "median": 0.018528,
+              "p95": 0.018944
+            },
+            "eval_ms": {
+              "median": 0.8637315000000001,
+              "p95": 1.102818
+            },
+            "build_ms": {
+              "median": 0.9774870000000001,
+              "p95": 1.195799
+            },
+            "encode_ms": {
+              "median": 0.6630244999999999,
+              "p95": 0.897557
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        },
+        "opening_direct": {
+          "count": 592,
+          "metrics": {
+            "gpu_ms": {
+              "median": 0.8867999999999999,
+              "p95": 1.260192
+            },
+            "haze_ms": {
+              "median": 0.024256,
+              "p95": 0.065856
+            },
+            "scene_ms": {
+              "median": 0.8422719999999999,
+              "p95": 1.194624
+            },
+            "grid_ms": {
+              "median": 0.0,
+              "p95": 0.0
+            },
+            "composite_ms": {
+              "median": 0.018335999999999998,
+              "p95": 0.019008
+            },
+            "eval_ms": {
+              "median": 0.849206,
+              "p95": 0.937647
+            },
+            "build_ms": {
+              "median": 0.967482,
+              "p95": 1.083178
+            },
+            "encode_ms": {
+              "median": 0.65707,
+              "p95": 0.790296
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        }
+      }
+    },
+    "uniform": {
+      "raw": "/tmp/get-lucky-gasworks-uniform.json",
+      "raw_sha256": "292338f65ac3d5e82a8de4e893bb77c3f98b388df28ecf5b2f165afeca9cd2a9",
+      "groups": {
+        "opening_grid": {
+          "count": 522,
+          "metrics": {
+            "gpu_ms": {
+              "median": 4.192159999999999,
+              "p95": 4.65632
+            },
+            "haze_ms": {
+              "median": 2.8447839999999998,
+              "p95": 3.173408
+            },
+            "scene_ms": {
+              "median": 1.266448,
+              "p95": 1.560096
+            },
+            "grid_ms": {
+              "median": 1.064944,
+              "p95": 1.357856
+            },
+            "composite_ms": {
+              "median": 0.06688,
+              "p95": 0.067392
+            },
+            "eval_ms": {
+              "median": 0.8915265000000001,
+              "p95": 1.025827
+            },
+            "build_ms": {
+              "median": 0.986627,
+              "p95": 1.076638
+            },
+            "encode_ms": {
+              "median": 0.718475,
+              "p95": 0.849757
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        },
+        "opening_direct": {
+          "count": 592,
+          "metrics": {
+            "gpu_ms": {
+              "median": 10.686015999999999,
+              "p95": 11.778944
+            },
+            "haze_ms": {
+              "median": 9.7656,
+              "p95": 10.64016
+            },
+            "scene_ms": {
+              "median": 0.8567199999999999,
+              "p95": 1.177088
+            },
+            "grid_ms": {
+              "median": 0.0,
+              "p95": 0.0
+            },
+            "composite_ms": {
+              "median": 0.06672,
+              "p95": 0.069696
+            },
+            "eval_ms": {
+              "median": 0.8963764999999999,
+              "p95": 1.194069
+            },
+            "build_ms": {
+              "median": 0.997808,
+              "p95": 1.141748
+            },
+            "encode_ms": {
+              "median": 0.7239304999999999,
+              "p95": 0.927547
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        }
+      }
+    },
+    "stable_path": {
+      "raw": "/tmp/get-lucky-gasworks-stable-path.json",
+      "raw_sha256": "98d3fff77820438290b152777c4102624943ae8716fe4d2c3a3cfab01b0690fd",
+      "groups": {
+        "opening_all": {
+          "count": 1152,
+          "metrics": {
+            "gpu_ms": {
+              "median": 3.9444,
+              "p95": 4.905504
+            },
+            "haze_ms": {
+              "median": 2.715936,
+              "p95": 3.4384639999999997
+            },
+            "scene_ms": {
+              "median": 1.115504,
+              "p95": 1.566144
+            },
+            "grid_ms": {
+              "median": 0.998752,
+              "p95": 1.395168
+            },
+            "composite_ms": {
+              "median": 0.104736,
+              "p95": 0.10617599999999999
+            },
+            "eval_ms": {
+              "median": 0.900077,
+              "p95": 1.2188590000000001
+            },
+            "build_ms": {
+              "median": 1.011863,
+              "p95": 1.26821
+            },
+            "encode_ms": {
+              "median": 0.7606204999999999,
+              "p95": 1.053558
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        },
+        "opening_previous_direct": {
+          "count": 592,
+          "metrics": {
+            "gpu_ms": {
+              "median": 3.365264,
+              "p95": 4.070463999999999
+            },
+            "haze_ms": {
+              "median": 2.302816,
+              "p95": 2.9312
+            },
+            "scene_ms": {
+              "median": 0.850576,
+              "p95": 1.2727359999999999
+            },
+            "grid_ms": {
+              "median": 0.882496,
+              "p95": 1.1739199999999999
+            },
+            "composite_ms": {
+              "median": 0.10460799999999999,
+              "p95": 0.10595199999999999
+            },
+            "eval_ms": {
+              "median": 0.8990415,
+              "p95": 1.186699
+            },
+            "build_ms": {
+              "median": 1.0095725,
+              "p95": 1.248089
+            },
+            "encode_ms": {
+              "median": 0.7625799999999999,
+              "p95": 1.006037
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        },
+        "opening_previous_grid": {
+          "count": 522,
+          "metrics": {
+            "gpu_ms": {
+              "median": 4.47912,
+              "p95": 5.022752
+            },
+            "haze_ms": {
+              "median": 3.060784,
+              "p95": 3.532224
+            },
+            "scene_ms": {
+              "median": 1.2745440000000001,
+              "p95": 1.6375359999999999
+            },
+            "grid_ms": {
+              "median": 1.069248,
+              "p95": 1.450304
+            },
+            "composite_ms": {
+              "median": 0.104928,
+              "p95": 0.1064
+            },
+            "eval_ms": {
+              "median": 0.9089365,
+              "p95": 1.26191
+            },
+            "build_ms": {
+              "median": 1.0158070000000001,
+              "p95": 1.2830000000000001
+            },
+            "encode_ms": {
+              "median": 0.7626255,
+              "p95": 1.145278
+            },
+            "shadow_redraws": {
+              "median": 0.0,
+              "p95": 2
+            }
+          }
+        }
+      }
+    }
+  },
+  "fix": "Shared-grid and reservoir eligibility no longer depends on the active emitter count. Explicit render quality settings still apply."
+}

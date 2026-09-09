@@ -576,6 +576,61 @@ impl Environment {
     };
 }
 
+/// Appearance of a shared procedural medium, independent of fixture output.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HazeAppearance {
+    /// Density contrast: zero is uniform, one has pronounced clouds.
+    pub cloudiness: f32,
+    /// Characteristic cloud size in metres.
+    pub cloud_size: f32,
+    /// Strength of evolving deformation and fine wisps.
+    pub turbulence: f32,
+    /// Horizontal drift in metres per second.
+    pub wind_speed: f32,
+    /// World XY direction, degrees from +X toward +Y.
+    pub wind_direction: f32,
+}
+
+impl Default for HazeAppearance {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl HazeAppearance {
+    /// Subtle indoor haze with a gentle horizontal drift.
+    pub const DEFAULT: Self = Self {
+        cloudiness: 0.35,
+        cloud_size: 4.0,
+        turbulence: 0.3,
+        wind_speed: 0.15,
+        wind_direction: 30.0,
+    };
+    /// Clamp invalid authored controls at the rendering boundary.
+    pub fn sanitized(self) -> Self {
+        let default = Self::default();
+        let bounded = |v: f32, fallback: f32, min: f32, max: f32| {
+            if v.is_finite() {
+                v.clamp(min, max)
+            } else {
+                fallback
+            }
+        };
+        Self {
+            cloudiness: bounded(self.cloudiness, default.cloudiness, 0.0, 1.0),
+            cloud_size: bounded(self.cloud_size, default.cloud_size, 0.5, 20.0),
+            turbulence: bounded(self.turbulence, default.turbulence, 0.0, 1.0),
+            wind_speed: bounded(self.wind_speed, default.wind_speed, 0.0, 10.0),
+            wind_direction: if self.wind_direction.is_finite() {
+                self.wind_direction.rem_euclid(360.0)
+            } else {
+                default.wind_direction
+            },
+        }
+    }
+}
+
 /// Serializable controls for the analytic fixture haze pass.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -586,8 +641,11 @@ pub struct HazeSettings {
     pub steps: u32,
     /// Render-target scale; one is native output resolution.
     pub resolution: f32,
-    /// Nominal density before hazer-fixture scaling.
+    /// Mean density, independent of hazer fixtures.
     pub density: f32,
+    /// Shared spatial appearance and movement.
+    #[serde(default)]
+    pub appearance: HazeAppearance,
 }
 
 /// One directional light. Direction points from the scene toward the light and
@@ -641,10 +699,11 @@ impl RenderSettings {
         Self {
             environment: Environment::DARK,
             haze: HazeSettings {
+                appearance: HazeAppearance::DEFAULT,
                 enabled: true,
                 steps: 8,
                 resolution: haze_resolution,
-                density: 0.8,
+                density: 0.24,
             },
             sun: None,
             show_grid: false,
@@ -674,10 +733,11 @@ impl RenderSettings {
         Self {
             environment: Environment::EDITOR,
             haze: HazeSettings {
+                appearance: HazeAppearance::DEFAULT,
                 enabled: true,
                 steps: 8,
                 resolution: haze_resolution,
-                density: 0.8,
+                density: 0.24,
             },
             sun: Some(DirectionalLight::EDITOR),
             show_grid: true,
@@ -712,10 +772,11 @@ impl RenderSettings {
         Self {
             environment: fill.environment,
             haze: HazeSettings {
+                appearance: HazeAppearance::DEFAULT,
                 enabled: true,
                 steps: 8,
                 resolution: haze_resolution,
-                density: 0.8,
+                density: 0.24,
             },
             sun: fill.sun,
             show_grid: true,

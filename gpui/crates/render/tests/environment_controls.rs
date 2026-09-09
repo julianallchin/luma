@@ -38,6 +38,7 @@ fn settings() -> RenderSettings {
         probe: None,
     };
     settings.haze = HazeSettings {
+        appearance: Default::default(),
         enabled: true,
         steps: 12,
         resolution: 0.5,
@@ -379,7 +380,7 @@ fn frame_resolves_sun_environment_and_haze_independently() {
         .abs_diff_eq(Vec3::new(2.0, -3.0, 6.0).normalize(), 1e-6));
     assert_eq!(sun.radiance, Vec3::new(2.0, 1.0, 0.5));
     assert!(!sun.shadows);
-    assert!((frame.haze_density - 0.21).abs() < 1e-6);
+    assert!((frame.haze_density - 0.7).abs() < 1e-6);
     assert_eq!(frame.haze_steps, 12);
     assert_eq!(frame.haze_resolution, 0.5);
 
@@ -394,7 +395,7 @@ fn frame_resolves_sun_environment_and_haze_independently() {
     )
     .unwrap();
     assert!(frame.directional.is_none());
-    assert!((frame.haze_density - 0.21).abs() < 1e-6);
+    assert!((frame.haze_density - 0.7).abs() < 1e-6);
 
     let mut clear_air = render;
     clear_air.haze.enabled = false;

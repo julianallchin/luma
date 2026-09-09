@@ -52,11 +52,11 @@ fn light_grid(@builtin(workgroup_id) cell: vec3<u32>,
         let angular = angular_profile(dot(q, rest.direction) / max(dist, 1e-4), rest.cos_beam, rest.cos_field);
         if angular <= 0.0 { continue; }
         let phase = henyey_greenstein(-dot(q, ray.dir) / max(dist, 1e-4),
-            mix(haze.transport.y, haze.transport.y * 0.3, rest.wash));
+            haze.transport.y);
         let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
         let radiance = tint * (rest.intensity * rest.haze_gain * haze.tuning.w
             * angular * beam_range_falloff(dist, core.range) * phase
-            * exp(-haze.depth.z * dist) * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) / max(d2, haze.tuning.z));
+            * exp(-light_optical_depth(li, world)) * smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist) / max(d2, haze.tuning.z));
         let importance = max(max(radiance.r, radiance.g), radiance.b);
         total += importance;
         if fog_random(seed ^ (li * 157823u)) * total < importance {

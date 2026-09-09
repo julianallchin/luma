@@ -787,3 +787,43 @@ fn missing_group_dialog_repairs_saved_score_selectors() {
     );
     assert_eq!(out["resolved"], true);
 }
+
+#[test]
+fn procedural_haze_controls_are_editable_and_survive_environment_switches() {
+    let mut harness = harness("venue-haze-controls", false);
+    let out = run(
+        &mut harness,
+        r#"
+        nav.patch("Test Venue");
+        nav.step("view settings", "toggle", "Render settings");
+        function field(name) {
+            return app.snapshot().findAll({role:"slider"}).find(n => n.label.startsWith(name + " = "));
+        }
+        const names = ["Haze density", "Cloudiness", "Cloud size (m)", "Turbulence", "Wind speed (m/s)", "Wind direction (°)"];
+        const before = names.map(n => field(n).label);
+        names.forEach(name => {
+            const box = field(name).bounds;
+            app.drag({x:box.x + 2, y:box.y + box.height / 2}, {dx:(box.width - 4) * 0.7, dy:0}, {steps:8});
+            app.frames(3);
+        });
+        const changed = names.map(n => field(n).label);
+        nav.step("outdoor", "toggle", "Outdoor");
+        app.frames(4);
+        const outdoor = names.map(n => field(n).label);
+        app.key("escape");
+        nav.step("reopen", "toggle", "Render settings");
+        app.frames(4);
+        ({before, changed, outdoor, reopened:names.map(n => field(n).label)})
+    "#,
+    );
+    for (before, after) in out["before"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(out["changed"].as_array().unwrap())
+    {
+        assert_ne!(before, after, "scrub did not change its value");
+    }
+    assert_eq!(out["changed"], out["outdoor"]);
+    assert_eq!(out["changed"], out["reopened"]);
+}
