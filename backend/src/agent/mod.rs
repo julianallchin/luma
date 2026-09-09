@@ -547,9 +547,10 @@ pub enum TurnEvent {
     StepEnded {
         stop_reason: StopReason,
         usage: Usage,
-        /// The [`model::ModelId`] key this step ran on. A `String` because
-        /// [`TurnEvent`] crosses the JSON seam to the webview.
+        /// The actual provider model ID, including dynamically discovered models.
         model: String,
+        #[serde(default)]
+        context_window: Option<u64>,
         /// Wall time from request to last frame. The provider does not report
         /// it; the loop measures it.
         duration_ms: u64,
@@ -668,12 +669,26 @@ impl AgentService {
             crate::database::local::settings::get_all_settings(&self.services.db().0)
                 .await
                 .map_err(AgentError::Storage)?;
+        settings.remove("agent_selection");
         settings.insert("agent_engine".into(), engine.key().into());
         self.set_thread_selection(
             thread_id,
             engine::catalog::Selection::configured(&settings)?,
         )
         .await
+    }
+
+    pub async fn preferred_selection(
+        &self,
+    ) -> Result<Option<engine::catalog::Selection>, AgentError> {
+        let settings = crate::database::local::settings::get_all_settings(&self.services.db().0)
+            .await
+            .map_err(AgentError::Storage)?;
+        if settings.contains_key("agent_selection") {
+            engine::catalog::Selection::configured(&settings).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn models(

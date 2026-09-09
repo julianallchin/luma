@@ -13,6 +13,9 @@ pub(in crate::agent) struct Session {
     request: Request,
     completed: bool,
     final_answer: Option<String>,
+    pub(super) last_usage: Option<Usage>,
+    pub(super) context_window: Option<u64>,
+    model: Option<String>,
 }
 
 impl Session {
@@ -51,6 +54,9 @@ impl Session {
             request,
             completed: false,
             final_answer: None,
+            last_usage: None,
+            context_window: None,
+            model: None,
         })
     }
 
@@ -141,6 +147,21 @@ impl Session {
                     }
                 }
                 "assistant" => {
+                    let message = &frame["message"];
+                    if let Some(model) = message["model"].as_str() {
+                        self.model = Some(model.to_owned());
+                    }
+                    if let Some(usage) = message.get("usage") {
+                        self.last_usage = Some(Usage {
+                            input_tokens: count(usage, "input_tokens"),
+                            output_tokens: count(usage, "output_tokens"),
+                            cache_creation_input_tokens: count(
+                                usage,
+                                "cache_creation_input_tokens",
+                            ),
+                            cache_read_input_tokens: count(usage, "cache_read_input_tokens"),
+                        });
+                    }
                     if frame.get("error").is_some() {
                         return Err(claude_error(&frame));
                     }
@@ -152,6 +173,26 @@ impl Session {
                     }
                     self.completed = true;
                     self.final_answer = frame["result"].as_str().map(str::to_owned);
+                    let models = frame["modelUsage"].as_object();
+                    let model_usage = models.and_then(|models| {
+                        self.model
+                            .as_ref()
+                            .and_then(|model| {
+                                models.get(model).or_else(|| {
+                                    models.values().find(|entry| {
+                                        entry["canonicalModel"].as_str() == Some(model)
+                                    })
+                                })
+                            })
+                            .or_else(|| {
+                                (models.len() == 1)
+                                    .then(|| models.values().next())
+                                    .flatten()
+                            })
+                    });
+                    self.context_window = model_usage
+                        .and_then(|usage| usage["contextWindow"].as_u64())
+                        .filter(|window| *window > 0);
                     let usage = &frame["usage"];
                     return Ok(Event::Usage(Usage {
                         input_tokens: count(usage, "input_tokens"),
@@ -343,8 +384,8 @@ reply=read()['response']['response']['mcp_response']
 assert reply['id']==2
 assert reply['result']['content'][0]['type']=='image'
 send({'type':'stream_event','event':{'delta':{'type':'text_delta','text':'done'}}})
-send({'type':'assistant','message':{'usage':{'input_tokens':10,'output_tokens':2}}})
-send({'type':'result','is_error':False,'usage':{'input_tokens':10,'output_tokens':2}})
+send({'type':'assistant','message':{'model':'claude-sonnet-5','usage':{'input_tokens':6,'output_tokens':1}}})
+send({'type':'result','is_error':False,'usage':{'input_tokens':10,'output_tokens':2},'modelUsage':{'claude-sonnet-5':{'contextWindow':200000},'child':{'contextWindow':1000000}}})
 "#;
         let mut command = tokio::process::Command::new("python3");
         command.args(["-c", script]);
@@ -375,6 +416,8 @@ send({'type':'result','is_error':False,'usage':{'input_tokens':10,'output_tokens
         assert!(
             matches!(session.next().await.unwrap(),Event::Usage(usage) if usage.input_tokens==10)
         );
+        assert_eq!(session.context_window, Some(200_000));
+        assert_eq!(session.last_usage.expect("last request").input_tokens, 6);
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
 }

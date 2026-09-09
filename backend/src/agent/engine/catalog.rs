@@ -84,6 +84,13 @@ impl Selection {
     }
 
     pub fn configured(settings: &HashMap<String, String>) -> Result<Self, AgentError> {
+        if let Some(saved) = settings.get("agent_selection") {
+            let selection: Self = serde_json::from_str(saved).map_err(|error| {
+                AgentError::Storage(format!("Invalid saved model selection: {error}"))
+            })?;
+            selection.validate()?;
+            return Ok(selection);
+        }
         let engine = Engine::configured(settings)?;
         let mut service = Service::of(engine, settings.get("agent_provider").map(String::as_str));
         let model = if engine == Engine::Api {

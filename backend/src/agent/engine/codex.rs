@@ -9,6 +9,8 @@ pub(in crate::agent) struct Session {
     process: Process,
     request: Request,
     usage: Usage,
+    pub(super) last_usage: Option<Usage>,
+    pub(super) context_window: Option<u64>,
 }
 
 impl Session {
@@ -27,6 +29,8 @@ impl Session {
             process,
             request,
             usage,
+            last_usage: None,
+            context_window: None,
         })
     }
 
@@ -145,6 +149,18 @@ impl Session {
                         ..Usage::default()
                     };
                     self.usage = total;
+                    self.last_usage = params["tokenUsage"].get("last").map(|last| {
+                        let cached = count(last, "cachedInputTokens");
+                        Usage {
+                            input_tokens: count(last, "inputTokens").saturating_sub(cached),
+                            output_tokens: count(last, "outputTokens"),
+                            cache_read_input_tokens: cached,
+                            ..Usage::default()
+                        }
+                    });
+                    self.context_window = params["tokenUsage"]["modelContextWindow"]
+                        .as_u64()
+                        .filter(|window| *window > 0);
                     return Ok(Event::Usage(delta));
                 }
                 "turn/completed" => {
@@ -235,7 +251,7 @@ reply=read()
 assert reply['id']=='call'
 assert reply['result']['success']
 assert reply['result']['contentItems'][0]['type']=='inputImage'
-send({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'total':{'inputTokens':100,'cachedInputTokens':40,'outputTokens':10}}}})
+send({'method':'thread/tokenUsage/updated','params':{'tokenUsage':{'total':{'inputTokens':100,'cachedInputTokens':40,'outputTokens':10},'last':{'inputTokens':50,'cachedInputTokens':30,'outputTokens':4},'modelContextWindow':258400}}})
 send({'method':'item/agentMessage/delta','params':{'delta':'done'}})
 send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
 "#;
@@ -279,6 +295,17 @@ send({'method':'turn/completed','params':{'turn':{'status':'completed'}}})
             ),
             (60, 40, 10)
         );
+        assert_eq!(session.context_window, Some(258_400));
+        let last = session.last_usage.expect("last request");
+        assert_eq!(
+            (
+                last.input_tokens,
+                last.cache_read_input_tokens,
+                last.output_tokens
+            ),
+            (20, 30, 4)
+        );
+        assert_eq!(session.usage_total().input_tokens, 60);
         assert!(matches!(session.next().await.unwrap(),Event::Text(text) if text == "done"));
         assert!(matches!(session.next().await.unwrap(), Event::Done));
     }
