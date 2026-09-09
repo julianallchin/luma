@@ -1,15 +1,9 @@
-//! `luma-render` — the offscreen wgpu light-transport renderer.
+//! Offscreen wgpu rendering for the stage and waveform strips.
 //!
-//! Implements the renderer core of `docs/specs/wgpu-renderer.md`: Z-up world,
-//! a closed set of materials, the analytic volumetric-haze pass, and one merged
-//! composite + `AgX` display transform, all rendering into a texture that is read
-//! back as bytes. There is no windowing here and no gpui dependency —
-//! `luma-viewport` will own presentation, and video export writes the same
-//! bytes to a pipe.
-//!
-//! Its acceptance test is the golden-scene gauntlet: the eight scenes in
-//! `src/harness/golden-scenes.ts` are rendered here and compared against the
-//! committed three.js captures with `harness/compare-shots.mjs`.
+//! Independent pipelines share a device context and compositor-compatible
+//! render targets. Live presentation shares textures on supported platforms;
+//! capture and export can explicitly read pixels back. This crate has no GPUI
+//! or windowing dependency.
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
@@ -34,10 +28,11 @@ pub mod atmosphere;
 pub(crate) mod cables;
 pub mod catalog;
 pub mod coords;
+pub mod device;
 mod environment;
 pub mod face;
-pub mod frame;
 mod fog_grid;
+pub mod frame;
 mod gpu;
 mod haze_field;
 pub mod house;
@@ -53,6 +48,7 @@ pub mod truss;
 pub mod venue_tiles;
 pub mod viewport;
 pub mod warmup;
+pub mod waveform;
 
 pub use frame::{build as build_frame, build_with as build_frame_with, Frame, StateSource};
 pub use gpu::{CpuSpans, FrameTimings, Gpu, Renderer, RendererProfile, ShadowStats, UploadStats};

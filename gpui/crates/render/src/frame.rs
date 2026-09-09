@@ -107,14 +107,8 @@ pub struct FixtureCone {
     pub gobo: u32,
     /// Gobo rotation in radians around the beam axis.
     pub gobo_rotation: f32,
-    /// How much of this cone scatters in the participating medium. One for a
-    /// lensed fixture, zero for a source that is not a beam.
-    ///
-    /// A cone is two things at once — it lights surfaces and it lights the
-    /// haze — and until now every light had to be both. A house downlight is a
-    /// diffuser behind a can: it lays a pool on the floor and there is nothing
-    /// in the air to see. Marching sixty of them would fill the room with warm
-    /// fog and spend the frame's whole volumetric budget saying so.
+    /// Scattering multiplier for this cone in the participating medium.
+    /// Stage fixtures and house lamps both use one; zero disables scattering.
     pub haze_gain: f32,
 }
 

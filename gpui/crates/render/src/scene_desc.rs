@@ -89,6 +89,8 @@ pub struct Editor {
     pub gizmo_piece_ids: Vec<String>,
     /// Which widget the transform gizmo shows.
     pub gizmo: luma_scene::GizmoMode,
+    /// UVZ frame and joint freedoms used by every handle.
+    pub gizmo_space: luma_scene::gizmo::GizmoSpace,
     /// The handle under the pointer (or being dragged), lit so the hand knows
     /// what it is about to grab before it grabs it.
     pub hover: Option<luma_scene::GizmoHandle>,
@@ -702,9 +704,8 @@ impl RenderSettings {
     /// builder reads [`Self::house`] back to hang the lamps once it knows the
     /// room's bounds.
     ///
-    /// At the default environment — indoor, house at full — this is exactly the
-    /// editor light the app has always drawn a venue under, plus the house rig
-    /// that light was always standing in for.
+    /// Indoors, the house downlights provide the direct light, with a small
+    /// ambient approximation for room bounce. There is no directional key.
     #[must_use]
     pub fn room(environment: VenueEnvironment, fov: f32, haze_resolution: f32) -> Self {
         let fill = crate::house::fill(environment);

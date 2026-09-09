@@ -296,6 +296,26 @@ fn draw_async(
 }
 
 #[test]
+fn house_lights_illuminate_haze_as_the_level_rises() {
+    let mut renderer = Renderer::new().unwrap();
+    let lamp = luma_render::house::lamps(
+        luma_render::scene_desc::VenueEnvironment::indoor(1.0),
+        luma_scene::Aabb::EMPTY,
+    )[0];
+    let mut brightness = Vec::new();
+    for level in [0.0, 0.5, 1.0] {
+        let mut cone = lamp.cone();
+        cone.intensity *= level;
+        let pixels = renderer
+            .render(&frame(Vec::new(), vec![cone]), WIDTH, HEIGHT, 4)
+            .unwrap();
+        brightness.push(mean_rgb(&pixels));
+    }
+    assert!(brightness[1] > brightness[0], "{brightness:?}");
+    assert!(brightness[2] > brightness[1], "{brightness:?}");
+}
+
+#[test]
 fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
     let mut renderer = Renderer::new().unwrap();
     let one = renderer

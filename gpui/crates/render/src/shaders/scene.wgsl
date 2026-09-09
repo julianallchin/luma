@@ -252,16 +252,9 @@ fn cascade_shadow(world: vec3<f32>, n: vec3<f32>, cascade: u32) -> f32 {
 
 /// How much of the room's own light reaches this point.
 ///
-/// The ambient term and the directional key are a house rig's stand-in for the
-/// bounce off walls this renderer does not model, and a stand-in for bounce is
-/// uniform — it lands on every shaded point, including the ground plane that
-/// runs to the horizon. A room's light does not do that. Inside the room's
-/// plan this is one, so the picture there is exactly the one the app has always
-/// drawn; outside, it dies to nothing over `room_falloff.x` metres and the
-/// world beyond the room is dark.
-///
-/// A zero margin means nothing bounds the light: outdoors it is a whole sky,
-/// and a thumbnail or a dark stage has no room to be contained by.
+/// Bound the indoor ambient bounce approximation to the room footprint and
+/// a short edge fade. Direct fixture cones have their own angular/range falloff.
+/// A zero margin leaves outdoor and standalone-object lighting unbounded.
 fn room_glow(world: vec3<f32>) -> f32 {
     let margin = globals.room_falloff.x;
     if margin <= 0.0 {

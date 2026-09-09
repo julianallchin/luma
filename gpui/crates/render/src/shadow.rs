@@ -64,14 +64,8 @@ pub(crate) fn fixture_shadow_matrix(light: &FixtureCone) -> Mat4 {
 /// that margin two cones of nearly equal priority trade the slot every frame
 /// and their shadows flicker.
 ///
-/// A cone that does not scatter is not a beam — it is a soft area source, and
-/// the only one so far is a house downlight. Those are excluded outright
-/// rather than ranked. A shadow map is a *hard* shadow, which is the wrong
-/// picture of a diffuser to begin with, and there are dozens of them against
-/// [`MAX_FIXTURE_SHADOWS`] slots: whichever few won would cast and the rest
-/// would not, so the floor came out blotched with shadows that belonged to an
-/// arbitrary subset of identical lamps. Worse, they were winning those slots
-/// off the show's own beams, which is the one thing the cap exists to protect.
+/// Only scattering cones compete for the limited shadow slots, including
+/// house lamps. Ranking and hysteresis keep the most visible shadows stable.
 pub(crate) fn assign_shadow_slots(
     cones: &[FixtureCone],
     eye: Vec3,

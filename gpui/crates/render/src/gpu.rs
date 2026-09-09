@@ -902,7 +902,7 @@ pub struct Gpu {
     material_defaults: MaterialDefaults,
     /// Set from the driver's device-lost callback; see [`Gpu::shared`].
     lost: Arc<AtomicBool>,
-    /// Whether `device` is the window compositor's; see [`Gpu::adopt`].
+    /// Whether `device` is the window compositor's; see [`crate::device::DeviceContext::adopt`].
     adopted: bool,
     /// How long [`Gpu::build`] took. Kept because it is the number the launch
     /// indicator is reporting on, and reading it from the device means the
@@ -988,61 +988,16 @@ impl Gpu {
 
     pub(crate) fn build() -> anyhow::Result<Self> {
         let started = Instant::now();
-        let adopted = ADOPTED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .filter(|adopted| !adopted.lost.load(Ordering::Relaxed));
-        if let Some(Adopted {
-            device,
-            queue,
-            adapter,
-            lost,
-        }) = adopted
-        {
-            let profile = RendererProfile::of(&adapter, &device, &queue);
-            return Self::on(device, queue, profile, lost, true, started);
-        }
-
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            // Bucketed limits trade exact hardware limits for cache-key
-            // stability across near-identical adapters; this device is
-            // process-local and never serialised, so exact limits are fine.
-            apply_limit_buckets: false,
-        }))?;
-        // Enabled whenever the adapter offers it, because this device is now
-        // the only one: refusing the feature here would mean no renderer built
-        // on it could ever be profiled. Declaring it costs nothing — the cost
-        // is writing timestamps, which is per-frame and stays opt-in.
-        let required_features = if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            wgpu::Features::TIMESTAMP_QUERY
-        } else {
-            wgpu::Features::empty()
-        };
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("luma-render"),
-                required_features,
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            }))?;
-        let profile = RendererProfile::of(&adapter, &device, &queue);
-        let lost = Arc::new(AtomicBool::new(false));
-        device.set_device_lost_callback({
-            let lost = Arc::clone(&lost);
-            move |reason, message| {
-                lost.store(true, Ordering::Relaxed);
-                // stderr for the same reason the worker supervisor uses it:
-                // this is the line that turns "everything went black" into a
-                // diagnosis, and it must not depend on a log sink being wired.
-                eprintln!("luma-render device lost ({reason:?}): {message}");
-            }
-        });
-        Self::on(device, queue, profile, lost, false, started)
+        let context = crate::device::DeviceContext::shared()?;
+        let profile = RendererProfile::of(&context.adapter, &context.device, &context.queue);
+        Self::on(
+            context.device.clone(),
+            context.queue.clone(),
+            profile,
+            context.lost.clone(),
+            context.adopted,
+            started,
+        )
     }
 
     /// Every pipeline, on a device somebody has already made.
@@ -1939,63 +1894,12 @@ impl Gpu {
         &self.queue
     }
 
-    /// Whether this device is the window compositor's — see [`Gpu::adopt`].
+    /// Whether this device is the window compositor's — see [`crate::device::DeviceContext::adopt`].
     #[must_use]
     pub fn is_adopted(&self) -> bool {
         self.adopted
     }
-
-    /// Draw on the window compositor's device from now on.
-    ///
-    /// Where the compositor is itself wgpu, a renderer built on its device
-    /// can hand it frames as they are: same device, same queue, so the
-    /// compositor's draw is ordered after the renderer's submit by the queue
-    /// and nothing is copied or fenced. This is that hand-over; the `share`
-    /// module is what cashes it in.
-    ///
-    /// Call it before [`Gpu::shared`] first builds — in practice, as the
-    /// window opens and before [`crate::warm`]. Idempotent, and cheap enough
-    /// to repeat every frame: a live adoption is kept, and only a lost one is
-    /// replaced, which is how a compositor that recovered from device loss
-    /// gets its renderer back.
-    ///
-    /// The arguments mirror `gpui::WgpuDevice` field for field; this crate
-    /// does not know gpui, so the caller spreads the struct.
-    pub fn adopt(
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        adapter: wgpu::Adapter,
-        lost: Arc<AtomicBool>,
-    ) {
-        let mut slot = ADOPTED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if slot
-            .as_ref()
-            .is_some_and(|adopted| !adopted.lost.load(Ordering::Relaxed))
-        {
-            return;
-        }
-        *slot = Some(Adopted {
-            device: (*device).clone(),
-            queue: (*queue).clone(),
-            adapter,
-            lost,
-        });
-    }
 }
-
-/// A compositor's device, offered through [`Gpu::adopt`].
-#[derive(Clone)]
-struct Adopted {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    adapter: wgpu::Adapter,
-    lost: Arc<AtomicBool>,
-}
-
-/// The device [`Gpu::build`] prefers, if a compositor has offered one.
-static ADOPTED: Mutex<Option<Adopted>> = Mutex::new(None);
 
 impl Renderer {
     /// Build a renderer on the process-wide device.

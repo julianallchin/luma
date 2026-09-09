@@ -82,6 +82,7 @@ fn pivot_of(fixtures: &[&str], pieces: &[&str]) -> Option<Vec3> {
     let mut scene = scene();
     scene.selected_fixture_ids = fixtures.iter().map(|id| (*id).to_string()).collect();
     scene.editor.selected_piece_ids = pieces.iter().map(|id| (*id).to_string()).collect();
+    scene.editor.gizmo_piece_ids = scene.editor.selected_piece_ids.clone();
     build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library())
         .expect("the frame should build")
         .gizmo_pivot
@@ -132,4 +133,139 @@ fn a_mixed_selection_anchors_between_its_members() {
 #[test]
 fn nothing_selected_draws_no_widget() {
     assert_eq!(pivot_of(&[], &[]), None);
+}
+
+#[test]
+fn painted_axes_and_pick_axes_share_uvz_including_a_tilted_mount() {
+    use luma_scene::{Axis, GizmoHandle, GizmoMode, Ray};
+    for basis in [glam::Quat::IDENTITY, glam::Quat::from_rotation_x(0.55)] {
+        let mut scene = scene();
+        scene.selected_fixture_ids = vec!["mover".into()];
+        scene.editor.gizmo_space.basis = basis;
+        let frame =
+            build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library()).unwrap();
+        let pivot = frame.gizmo_pivot.unwrap();
+        let eye = coords::world_from_three(Vec3::from(scene.camera.position));
+        let view = eye - pivot;
+        let scale = luma_scene::gizmo_scale(view.length(), 50.0);
+        for overlay in &frame.overlays {
+            if frame.meshes[overlay.mesh].key != "::gizmo-segment" {
+                continue;
+            }
+            let axis = if overlay.color == Vec3::X {
+                Axis::X
+            } else if overlay.color == Vec3::Y {
+                Axis::Y
+            } else if overlay.color == Vec3::Z {
+                Axis::Z
+            } else {
+                continue;
+            };
+            let point = overlay.model.transform_point3(Vec3::new(0.7, 0.0, 0.0));
+            let direction = (point - pivot).normalize();
+            assert!(direction.dot(basis * axis.vector()).abs() > 0.999);
+            let hit = scene
+                .editor
+                .gizmo_space
+                .hit(
+                    Ray::new(eye, point - eye),
+                    pivot,
+                    scale,
+                    view,
+                    GizmoMode::Translate,
+                )
+                .unwrap();
+            assert_eq!(hit.handle, GizmoHandle::TranslateAxis(axis));
+        }
+    }
+}
+
+#[test]
+fn mounted_piece_draws_only_the_normal_rotation_ring() {
+    let mut scene = scene();
+    scene.selected_fixture_ids = vec!["mover".into()];
+    scene.editor.gizmo = luma_scene::GizmoMode::Rotate;
+    scene.editor.gizmo_space.rotation = [false, false, true];
+    scene.editor.gizmo_space.basis = glam::Quat::from_rotation_x(0.55);
+    let frame =
+        build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library()).unwrap();
+    let rings: Vec<_> = frame
+        .overlays
+        .iter()
+        .filter(|overlay| frame.meshes[overlay.mesh].key == "::gizmo-ring")
+        .collect();
+    assert_eq!(rings.len(), 1);
+    let normal = rings[0].model.transform_vector3(Vec3::Z).normalize();
+    assert!(normal.abs_diff_eq(scene.editor.gizmo_space.basis * Vec3::Z, 1e-5));
+    assert_eq!(rings[0].color, Vec3::Z);
+}
+
+#[test]
+fn plane_handles_have_front_faces_in_every_camera_octant() {
+    for x in [-5.0, 5.0] {
+        for y in [-5.0, 5.0] {
+            for z in [-5.0, 5.0] {
+                let mut scene = scene();
+                scene.selected_fixture_ids = vec!["mover".into()];
+                let pivot = coords::three_from_data(Vec3::from(MOVER_POS));
+                scene.camera.position = (pivot + Vec3::new(x, y, z)).to_array();
+                let frame =
+                    build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library())
+                        .unwrap();
+                let eye = coords::world_from_three(Vec3::from(scene.camera.position));
+                let mut count = 0;
+                for overlay in &frame.overlays {
+                    let mesh = &frame.meshes[overlay.mesh];
+                    if mesh.key != "::gizmo-quad" {
+                        continue;
+                    }
+                    count += 1;
+                    let facing = mesh
+                        .indices
+                        .chunks_exact(3)
+                        .filter(|triangle| {
+                            let point = |i: u32| {
+                                overlay.model.transform_point3(Vec3::from(
+                                    mesh.vertices[i as usize].position,
+                                ))
+                            };
+                            let a = point(triangle[0]);
+                            (point(triangle[1]) - a)
+                                .cross(point(triangle[2]) - a)
+                                .dot(eye - a)
+                                > 0.0
+                        })
+                        .count();
+                    assert_eq!(facing, 2, "plane fill vanished at {x}, {y}, {z}");
+                }
+                assert_eq!(count, 3);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual GPU capture for selection styling"]
+fn capture_selection_brackets() {
+    let mut scene = scene();
+    scene.fixtures.clear();
+    scene.render.environment = luma_render::scene_desc::Environment::EDITOR;
+    scene.render.sun = Some(luma_render::scene_desc::DirectionalLight::EDITOR);
+    scene.render.haze.enabled = false;
+    scene.pieces[0].pos = [0.0, 0.0, 0.0];
+    scene.pieces[0].rot = [0.0; 3];
+    scene.editor.selected_piece_ids = vec![scene.pieces[0].id.clone()];
+    scene.camera.position = [-3.5, 3.0, 4.5];
+    scene.camera.target = [0.0, 0.5, 0.0];
+    let frame =
+        build_frame_with(&scene, &BTreeMap::new(), &|_, _| None, 0.0, &mut library()).unwrap();
+    let pixels = luma_render::Renderer::new()
+        .unwrap()
+        .render(&frame, 960, 640, 4)
+        .unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../harness/shots/gpui/selection-brackets.png");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    image::save_buffer(&path, &pixels, 960, 640, image::ColorType::Rgba8).unwrap();
+    eprintln!("{}", path.display());
 }
