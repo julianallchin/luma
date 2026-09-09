@@ -39,6 +39,7 @@ pub mod house;
 pub mod image_out;
 pub mod light_index;
 pub mod luminaire;
+mod medium;
 pub mod metrics;
 pub mod overlay;
 pub mod scene_desc;

@@ -8,6 +8,8 @@ mod canonical_json;
 mod classifier_worker;
 mod cmd_util;
 mod compositor;
+/// Compile a saved score for read-only render replay and diagnostics.
+pub use compositor::build_score_scene;
 pub mod config;
 mod controller_compositor;
 mod controller_manager;

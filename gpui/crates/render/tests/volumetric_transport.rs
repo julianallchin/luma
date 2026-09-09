@@ -124,6 +124,8 @@ struct StressCamera {
 struct StressRender {
     stage_size: f32,
     haze_density: f32,
+    #[serde(default)]
+    haze_appearance: luma_render::scene_desc::HazeAppearance,
     haze_resolution: f32,
     haze_steps: u32,
     debug_view: String,
@@ -172,6 +174,7 @@ fn stress_frame(descriptor: &StressDescriptor, count: usize) -> Frame {
     render.haze.enabled = true;
     render.haze.steps = descriptor.render.haze_steps;
     render.haze.density = descriptor.render.haze_density;
+    render.haze.appearance = descriptor.render.haze_appearance;
     render.debug_view = debug_view;
     let scene = Scene {
         id: "volumetric-stress-golden".into(),
@@ -332,10 +335,10 @@ fn one_overlap_and_gobo_transport_are_deterministic_and_energy_monotonic() {
     let gobo = renderer
         .render(&frame(Vec::new(), vec![light(1)]), WIDTH, HEIGHT, 4)
         .unwrap();
-    // Updated for advected pockets, source extinction and quartic range taper (2026-09-05).
+    // Updated for the shared procedural density and cached optical depth (2026-09-09).
     assert_eq!(
         (hash(&one), hash(&overlap), hash(&gobo)),
-        (0xfb6c90cb2c7285bc, 0x2c727ea1b208f7bc, 0xc05236f2e2194da4,),
+        (0x9ab29ee32527eeb2, 0x67cc4de977fed399, 0x76bf37bd8e435af9,),
         "one/overlap/gobo transport golden drifted"
     );
 
@@ -363,7 +366,7 @@ fn scene_depth_occludes_beams_and_invalid_inputs_stay_bounded() {
     // Same density and tail update as above; occlusion invariants stay unchanged.
     assert_eq!(
         (hash(&open), hash(&blocked)),
-        (0x735c17dcdfb50352, 0x9a5a721f72ac8c93),
+        (0x5bb5cb043128ba71, 0xe6f9d7329430056e),
         "depth-occlusion transport golden drifted"
     );
     assert!(mean_rgb(&blocked) < mean_rgb(&open));

@@ -10,6 +10,7 @@
   "render": {
     "stage_size": 48.0,
     "haze_density": 0.65,
+    "haze_appearance": {"cloudiness": 0.35, "cloudSize": 4.0, "turbulence": 0.3, "windSpeed": 0.15, "windDirection": 30.0},
     "haze_resolution": 0.5,
     "haze_steps": 8,
     "debug_view": "volumetric_accumulation"
@@ -35,17 +36,17 @@
     {
       "cones": 32,
       "image": "volumetric-stress-32.png",
-      "expected_fnv64": "0xe06c5fbb58a5e438"
+      "expected_fnv64": "0x6e6c3dc9b25de81e"
     },
     {
       "cones": 128,
       "image": "volumetric-stress-128.png",
-      "expected_fnv64": "0xba6b9cd412f81df3"
+      "expected_fnv64": "0x5a9b14a3cc2216fa"
     },
     {
       "cones": 512,
       "image": "volumetric-stress-512.png",
-      "expected_fnv64": "0x20151c00d78bf82e"
+      "expected_fnv64": "0xc32c3f9955732555"
     }
   ]
 }

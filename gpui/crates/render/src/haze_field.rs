@@ -1,37 +1,26 @@
-//! The volumetric density field, baked once per device.
+//! Four-scale volumetric noise, baked once per device.
 //!
-//! `haze_noise` used to evaluate two octaves of gradient noise per volumetric
-//! sample — sixteen hash evaluations, 48 `sin` — which measured 87–95 % of a
-//! sample's cost and therefore of the whole volumetric march
-//! (`docs/design/haze-noise-field.md` §2). The field is now a wrapping 3D
-//! texture read with hardware trilinear filtering, which costs no more than
-//! deleting the density term outright.
-//!
-//! The bake shader is the field's only definition. The CPU mirror below exists
-//! solely so the bake can be tested, in the same spirit as the light index's
-//! CPU reference builder — and it can exist at all only because the hash is
-//! integer, so the field is bit-reproducible off-device.
+//! Broad clouds and fine wisps share one wrapping 3D texture. Combining the
+//! octaves at startup avoids four trilinear reads at every camera/light-path
+//! sample. Cloudiness, cloud size, wind and deformation still apply at runtime.
+//! The bake shader owns the field; the CPU mirror exists only for verification.
 
-/// Texels per edge. Time is independent of this (the path is latency-hidden,
-/// not capacity-bound), so it buys repeat distance and nothing else, and 256³
-/// is the last size whose memory is unremarkable.
+/// Texels per edge; the R16Float field occupies 32 MiB.
 pub(crate) const SIZE: u32 = 256;
 
-/// Texels per lattice cell. Trilinear reconstruction error falls 4× per
-/// doubling — 34 % of the field's spread at 2, 11 % at 4, 2.9 % at 8 — while
-/// the repeat distance halves. 4 is the knee.
-pub(crate) const TEXELS_PER_CELL: u32 = 4;
+/// Texels per base coordinate unit. The finest octave uses 3.75 lattice cells
+/// per unit, leaving just over two texels per cell for reconstruction.
+pub(crate) const TEXELS_PER_CELL: u32 = 8;
 
-/// Lattice cells per edge, i.e. the field's period in units of `q`. Octave 1
-/// rides `q = p * 2`, so this is `CELLS / 2` metres; octave 2 rides `q * 3`,
-/// so it repeats three times as often — that is the binding constraint on
-/// visible tiling.
+/// Period of the combined field in base coordinates. Every octave wraps at
+/// its own scaled period. Runtime coordinates scale by 2/cloud_size, so the
+/// world repeat distance is 16 * cloud_size metres.
 pub(crate) const CELLS: u32 = SIZE / TEXELS_PER_CELL;
 
 /// `R16Float` over `R8Snorm` deliberately: quantisation is a *uniform* error and
 /// can contour where the reconstruction error, being random, does not. The
 /// speed is identical, so this is the safe end of a decision that can be swept
-/// downward later if the 16 MB matters.
+/// downward later if the 32 MiB matters.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// Density field plus the sampler that reconstructs it. Owned together because
@@ -44,8 +33,8 @@ pub(crate) struct HazeField {
 
 impl HazeField {
     /// Bakes the field. Runs one compute dispatch and one buffer→texture copy,
-    /// ~11 ms at 256³ against ~1 s for the same field on the CPU, which is why
-    /// this is a GPU bake and not a startup loop or a build-time asset.
+    /// performed on the GPU rather than a CPU startup loop. No bake work is
+    /// repeated while rendering or adjusting haze controls.
     pub(crate) fn bake(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let packed = bake_packed(device, queue);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -186,8 +175,7 @@ mod tests {
     /// Exact mirror of the bake shader's hash. Its existence is the argument
     /// for the hash being integer: a `sin`-based one cannot be reproduced
     /// off-device, so it could not be checked from here at all.
-    fn wrapped_gradient(cell: [f32; 3]) -> [f32; 3] {
-        let cells = CELLS as f32;
+    fn wrapped_gradient(cell: [f32; 3], cells: f32) -> [f32; 3] {
         let wrap = |v: f32| (v - (v / cells).floor() * cells) as u32;
         let h = [
             wrap(cell[0]).wrapping_mul(1_597_334_673),
@@ -213,14 +201,14 @@ mod tests {
     // `i`, `f`, `u`, `g` deliberately: this mirrors the bake shader
     // line for line, and renaming them here is how the two drift apart.
     #[allow(clippy::many_single_char_names)]
-    fn lattice_noise(p: [f32; 3]) -> f32 {
+    fn lattice_noise(p: [f32; 3], period: f32) -> f32 {
         let i = p.map(f32::floor);
         let f = [p[0] - i[0], p[1] - i[1], p[2] - i[2]];
         let u = f.map(|v| v * v * (3.0 - 2.0 * v));
         let mut g = [0.0_f32; 8];
         for (n, slot) in g.iter_mut().enumerate() {
             let c = [(n & 1) as f32, ((n >> 1) & 1) as f32, ((n >> 2) & 1) as f32];
-            let grad = wrapped_gradient([i[0] + c[0], i[1] + c[1], i[2] + c[2]]);
+            let grad = wrapped_gradient([i[0] + c[0], i[1] + c[1], i[2] + c[2]], period);
             *slot = (0..3).map(|k| grad[k] * (f[k] - c[k])).sum();
         }
         let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
@@ -229,6 +217,19 @@ mod tests {
         let x01 = mix(g[4], g[5], u[0]);
         let x11 = mix(g[6], g[7], u[0]);
         mix(mix(x00, x10, u[1]), mix(x01, x11, u[1]), u[2])
+    }
+
+    fn layered_noise(p: [f32; 3]) -> f32 {
+        let octave = |p: [f32; 3], scale: f32, offset: [f32; 3]| {
+            lattice_noise(
+                std::array::from_fn(|i| p[i] * scale + offset[i]),
+                CELLS as f32 * scale,
+            )
+        };
+        0.45 * octave(p, 0.25, [0.0; 3])
+            + 0.30 * octave([p[1], p[2], p[0]], 0.75, [11.0, 3.0, 7.0])
+            + 0.17 * octave([p[2], p[0], p[1]], 1.75, [5.0, 17.0, 2.0])
+            + 0.08 * octave(p, 3.75, [19.0, 6.0, 13.0])
     }
 
     /// The bake must reproduce an independent implementation of the field, and
@@ -285,7 +286,7 @@ mod tests {
                 (index as u32 / (SIZE * SIZE)) as f32,
             ];
             let centre = texel.map(|v| (v + 0.5) / TEXELS_PER_CELL as f32);
-            let expected = half::f16::from_f32(lattice_noise(centre)).to_f32();
+            let expected = half::f16::from_f32(layered_noise(centre)).to_f32();
             worst = worst.max((baked[index].to_f32() - expected).abs());
         }
         assert!(
@@ -307,7 +308,7 @@ mod tests {
             let centre = |v: usize| (v as f32 + 0.5) / TEXELS_PER_CELL as f32;
             // The wrap is a property of the field, so compare the texel at the
             // low edge against the CPU field evaluated one period further on.
-            let wrapped = lattice_noise([centre(x) + CELLS as f32, centre(y), centre(z)]);
+            let wrapped = layered_noise([centre(x) + CELLS as f32, centre(y), centre(z)]);
             assert!(
                 (at(x, y, z) - half::f16::from_f32(wrapped).to_f32()).abs() < 1.0e-3,
                 "field does not wrap at ({x}, {y}, {z})"

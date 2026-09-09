@@ -252,8 +252,12 @@ pub struct Frame {
     /// Its presence also decides [`Self::directional`], [`Self::ambient`] and
     /// [`Self::environment`] — see `atmosphere::SkyFrame`.
     pub sky: Option<crate::atmosphere::SkyFrame>,
-    /// Effective density after the hazer-dimmer scaling; zero disables the pass.
+    /// Authored mean density; zero disables the pass.
     pub haze_density: f32,
+    /// Authored procedural density and drift.
+    pub haze_appearance: crate::scene_desc::HazeAppearance,
+    /// Finite world-space support, including outdoor venue haze.
+    pub haze_bounds: luma_scene::Aabb,
     /// Equiangular samples per beam.
     pub haze_steps: u32,
     /// Fraction of the output resolution the haze pass runs at.
@@ -730,20 +734,8 @@ pub fn build_with(
         });
     }
 
-    // --- global haze density ----------------------------------------------
-    // Scaled by the strongest hazer's dimmer, with a 0.3 floor.
-    let mut hazer_level: f32 = 0.0;
-    for f in &scene.fixtures {
-        let Some(def) = definitions.get(&f.fixture_path) else {
-            continue;
-        };
-        if model_kind(def).is_some_and(|k| !k.emits_beam()) {
-            if let Some(s) = state(&f.id, 0) {
-                hazer_level = hazer_level.max(s.dimmer);
-            }
-        }
-    }
-    let haze_density = scene.render.haze.density * (0.3 + 0.7 * hazer_level);
+    // Haze is an authored environment, not a simulation of hazer fixtures.
+    let haze_density = scene.render.haze.density;
 
     // --- fixtures ----------------------------------------------------------
     for fixture in &scene.fixtures {
@@ -1063,6 +1055,22 @@ pub fn build_with(
             haze_density
         } else {
             0.0
+        },
+        haze_appearance: scene.render.haze.appearance.sanitized(),
+        haze_bounds: {
+            let room = scene.room_bounds();
+            let centre = if room.is_empty() {
+                glam::Vec3::ZERO
+            } else {
+                room.center()
+            };
+            let size = if room.is_empty() {
+                glam::Vec3::ZERO
+            } else {
+                room.size()
+            };
+            let half = (size * 0.5 + glam::Vec3::splat(8.0)).max(glam::Vec3::new(16.0, 16.0, 12.0));
+            luma_scene::Aabb::new(centre - half, centre + half)
         },
         haze_steps: scene.render.haze.steps,
         haze_resolution: scene.render.haze.resolution,

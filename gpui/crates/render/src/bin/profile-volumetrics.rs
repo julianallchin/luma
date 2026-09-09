@@ -1405,6 +1405,8 @@ fn frame_with_lights(
         directional: base.directional,
         sky: base.sky,
         haze_density: base.haze_density,
+        haze_appearance: base.haze_appearance,
+        haze_bounds: base.haze_bounds,
         haze_steps: base.haze_steps,
         haze_resolution: base.haze_resolution,
         time: 0.0,

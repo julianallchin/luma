@@ -12,6 +12,8 @@ struct Composite {
     // rgb: the frame's clear colour, i.e. what a pixel with no geometry and no
     // visible environment shows.
     background: vec4<f32>,
+    medium: ProceduralMedium,
+    camera_pos: vec4<f32>,
 };
 
 // The horizon dissolve. Surfaces wash into the background across this band of
@@ -43,6 +45,8 @@ fn horizon_dissolve(depth: f32) -> f32 {
 @group(0) @binding(2) var haze_tex: texture_2d<f32>;
 @group(0) @binding(3) var haze_sampler: sampler;
 @group(0) @binding(4) var depth_tex: texture_depth_2d;
+@group(0) @binding(5) var haze_noise_field: texture_3d<f32>;
+@group(0) @binding(6) var haze_noise_sampler: sampler;
 
 struct EnvironmentParams {
     intensity: f32,
@@ -241,20 +245,19 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     if raw_depth > 0.0 {
         scene = mix(scene, background, horizon_dissolve(depth));
     }
-    // Beer-Lambert over the camera path, with the same sigma the haze pass
-    // integrates in-scatter against. Surface radiance decays exactly as the
-    // medium's own glow builds, so everything converges to one fog colour with
-    // distance — geometry never silhouettes against the clear colour through
-    // the haze.
-    //
-    // One, under a sky. The medium is a hazer's: it fills a room, not a world,
-    // and `depth` at an empty pixel is the far plane — two kilometres of haze
-    // nobody put there, at a mean free path of seventy metres. That takes an
-    // atmosphere to black, which is how an open-air venue came back with no
-    // sky in it at all. What the air does over a real kilometre is already in
-    // the sky's own transmittance tables, and the horizon dissolve above still
-    // carries the ground into it.
-    let medium = select(exp(-cfg.depth.z * depth), 1.0, sky.sun.w > 0.5);
+    var medium = 1.0;
+    // Extinction cannot change black. Dark-stage sky pixels have no scene
+    // radiance, so skip their full-resolution optical-depth march entirely.
+    if any(scene != vec3<f32>(0.0)) && cfg.medium.min.w > 0.0 {
+        let clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0);
+        let far = cfg.inv_view_proj * clip;
+        let ray_dir = normalize(far.xyz / far.w - cfg.camera_pos.xyz);
+        // Convert view depth to metric ray distance before integrating density.
+        let hit_clip = cfg.inv_view_proj * vec4<f32>(clip.xy, raw_depth, 1.0);
+        let distance = length(hit_clip.xyz / hit_clip.w - cfg.camera_pos.xyz);
+        let optical = medium_ray(cfg.medium, cfg.camera_pos.xyz, ray_dir, distance);
+        medium = exp(-optical.optical[32]);
+    }
     let display = agx(scene * medium + haze);
     return vec4<f32>(display + sky_dither(display, frag.xy), 1.0);
 }

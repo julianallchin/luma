@@ -37,9 +37,7 @@ struct LightRest {
     // Shadow-map layer for this cone, or negative when it has none. Must match
     // `scene_bindings.wgsl` — the two shaders read the same buffer.
     shadow_slot: f32,
-    // How much of this cone scatters in the medium: one for a lensed fixture,
-    // zero for a source that is not a beam (a house downlight). Rides in what
-    // used to be the first pad word.
+    // Scattering multiplier; stage fixtures and house lamps both use one.
     haze_gain: f32,
     // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
     // alignment and push the struct to 80 bytes, disagreeing with the Rust
@@ -65,6 +63,7 @@ struct Haze {
     depth: vec4<f32>,
     // x: shadowed fixture count, y: shadow texel size, z: reference tracer sample budget, w: fog-grid radial extent.
     shadow: vec4<f32>,
+    medium: ProceduralMedium,
 };
 
 struct FixtureShadowMatrix {
@@ -86,19 +85,41 @@ struct FixtureShadowMatrix {
 @group(0) @binding(7) var fixture_shadow_map: texture_depth_2d_array;
 @group(0) @binding(9) var fixture_shadow_map_extra: texture_depth_2d_array;
 
-// Slowly advected world-space pockets carry finer, stretched wisps. Keep the
-// baked field: evaluating procedural lattice noise per march sample is costly.
-fn haze_noise(p: vec3<f32>, elapsed: f32) -> f32 {
-    let q = p - vec3<f32>(0.12, 0.065, 0.025) * elapsed;
-    let broad = textureSampleLevel(haze_noise_field, haze_noise_sampler,
-        q * 0.45 * FIELD_INV_CELLS, 0.0).x;
-    // Independent coordinates let the GPU issue both texture reads together.
-    // Anisotropic fine detail supplies wisps without a third micro-noise tap.
-    let wisp = textureSampleLevel(haze_noise_field, haze_noise_sampler,
-        (q * vec3<f32>(3.0, 2.0, 6.0) + vec3<f32>(0.0, 0.03, -0.06) * elapsed)
-        * FIELD_INV_CELLS, 0.0).x;
-    let pocket = smoothstep(-0.35, 0.05, broad);
-    return max(0.04, (0.3 + 0.9 * pocket) * (1.0 + 0.6 * wisp));
+@group(0) @binding(10) var<storage, read> medium_cache: array<f32>;
+
+fn haze_density_at(p: vec3<f32>) -> f32 {
+    return medium_density(haze.medium, p);
+}
+
+fn cached_column(li: u32, xy: vec2<u32>, z: f32) -> f32 {
+    let angles = u32(haze.medium.shape.w);
+    let base = ((li * angles + xy.y) * angles + xy.x) * 33u;
+    let lo = min(u32(z), 31u);
+    return mix(medium_cache[base + lo], medium_cache[base + lo + 1u], z - f32(lo));
+}
+fn light_optical_depth(li: u32, world: vec3<f32>) -> f32 {
+    let core = light_core[li];
+    let q = world - core.position;
+    let dist = length(q);
+    // A segment wholly inside the uniform core has exact analytic extinction.
+    // Paths through the boundary fade use the same density cache as clouds.
+    if haze.medium.shape.x <= 0.0 && medium_interior(haze.medium, core.position)
+        && medium_interior(haze.medium, world) {
+        return haze.medium.min.w * dist;
+    }
+    let direction = light_rest[li].direction;
+    let helper = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), abs(direction.z) > 0.98);
+    let right = normalize(cross(direction, helper));
+    let up = cross(right, direction);
+    let field = light_rest[li].cos_field;
+    let tangent = sqrt(max(1.0 - field * field, 0.0)) / max(field, 0.05);
+    let angles = haze.medium.shape.w;
+    let uv = clamp((vec2<f32>(dot(q, right), dot(q, up)) / max(dot(q, direction) * tangent, 1e-5) * 0.5 + 0.5) * (angles - 1.0), vec2<f32>(0.0), vec2<f32>(angles - 1.0));
+    let xy = min(vec2<u32>(uv), vec2<u32>(u32(angles) - 2u));
+    let f = uv - vec2<f32>(xy);
+    let z = clamp(dist / max(core.range, 1e-5) * 32.0, 0.0, 32.0);
+    return mix(mix(cached_column(li, xy, z), cached_column(li, xy + vec2<u32>(1u, 0u), z), f.x),
+        mix(cached_column(li, xy + vec2<u32>(0u, 1u), z), cached_column(li, xy + vec2<u32>(1u), z), f.x), f.y);
 }
 
 fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
@@ -190,6 +211,7 @@ struct SceneRay {
     hit_dist: f32,
     view_depth: f32,
     jitter: f32,
+    medium: MediumRay,
 };
 
 fn scene_ray(frag: vec2<f32>) -> SceneRay {
@@ -234,7 +256,7 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
         vec2<f32>(frag.x, haze.transport.z - frag.y),
         u32(haze.tuning.x + haze.tiles.w),
     );
-    return SceneRay(ray_dir, hit_dist, view_depth, j);
+    return SceneRay(ray_dir, hit_dist, view_depth, j, MediumRay());
 }
 
 fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
@@ -337,12 +359,12 @@ fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
     let q = oc + ray.dir * t;
     let dist = max(length(q), 1e-4);
     let angular = angular_profile(dot(q, rest.direction) / dist, rest.cos_beam, rest.cos_field);
-    let phase = henyey_greenstein(-(b + t) / dist, mix(haze.transport.y, haze.transport.y * 0.3, rest.wash));
+    let phase = henyey_greenstein(-(b + t) / dist, haze.transport.y);
     let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
     let spectrum = max(max(tint.r, tint.g), tint.b);
     let energy = rest.intensity * rest.haze_gain * spectrum;
     return energy * max(1e-6, (theta_b - theta_a) / h * angular
-        * beam_range_falloff(dist, core.range) * phase * exp(-sigma * (t + dist)));
+        * beam_range_falloff(dist, core.range) * phase * exp(-medium_depth(ray.medium, t) - light_optical_depth(li, haze.camera_pos.xyz + ray.dir * t)));
 }
 
 /// Single-scattering radiance this ray receives from light `li`, already
@@ -391,7 +413,7 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     let th_b = atan((t_b - delta) / h);
     let d_th = th_b - th_a;
 
-    let g = mix(haze.transport.y, haze.transport.y * 0.3, rest.wash);
+    let g = haze.transport.y;
     var acc = vec3<f32>(0.0);
 
     // Emitted spectrum: the saturated colour plus a small broadband leak —
@@ -459,10 +481,10 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         if GRID_FOG && rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5 {
             radiance *= 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, dist);
         }
-        let nz = haze_noise(sample_world, haze.params.w);
+        let nz = haze_density_at(sample_world);
         // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
         let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
-        acc += tint * (radiance * phase * nz * exp(-sigma * (t + dist)) * mis_w);
+        acc += tint * (radiance * phase * nz * exp(-medium_depth(ray.medium, t) - light_optical_depth(li, haze.camera_pos.xyz + ray.dir * t)) * mis_w);
     }
 
     return acc * sigma;
