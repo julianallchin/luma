@@ -124,6 +124,13 @@ impl Session {
         }
     }
 
+    pub fn request_usage(&self) -> (Option<Usage>, Option<u64>) {
+        match self {
+            Self::Codex(session) => (session.last_usage, session.context_window),
+            Self::Claude(session) => (session.last_usage, session.context_window),
+        }
+    }
+
     pub fn usage_total(&self) -> Usage {
         match self {
             Self::Codex(s) => s.usage_total(),

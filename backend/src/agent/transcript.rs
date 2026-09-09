@@ -438,14 +438,13 @@ const CACHE_MISS_NOISE_FLOOR: u64 = 1024;
 /// A *step*, not a turn: the last step is the one whose prompt was the whole
 /// conversation so far, so it — and not a sum over the turn — is what says how
 /// close the thread is to its window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestUsage {
     pub usage: super::model::Usage,
-    /// The model that served it, when the row names one this build still
-    /// carries. Rows written before the field existed, and rows naming a
-    /// retired model, leave it [`None`] — which is also the one case with no
-    /// window to measure against.
-    pub model: Option<super::model::ModelId>,
+    /// The provider's model identity, including models outside the API catalog.
+    pub model: Option<String>,
+    /// The request's reported limit, falling back to known API metadata.
+    pub context_window: Option<u64>,
     pub duration: Option<std::time::Duration>,
 }
 
@@ -458,7 +457,19 @@ impl RequestUsage {
             model: object
                 .get("model")
                 .and_then(Value::as_str)
-                .and_then(super::model::ModelId::parse),
+                .filter(|model| !model.trim().is_empty())
+                .map(str::to_owned),
+            context_window: object
+                .get("contextWindow")
+                .and_then(Value::as_u64)
+                .filter(|window| *window > 0)
+                .or_else(|| {
+                    object
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .and_then(super::model::ModelId::parse)
+                        .map(|model| u64::from(model.context_window()))
+                }),
             duration: object
                 .get("durationMs")
                 .and_then(Value::as_u64)
@@ -498,11 +509,11 @@ impl RequestUsage {
         }
     }
 
-    /// How full the window is, 0..1, or [`None`] when the row names no model
-    /// this build knows and there is therefore no window.
+    /// How full the window is, 0..1, or [`None`] without a known limit.
     #[must_use]
     pub fn fraction(&self) -> Option<f32> {
-        let window = f64::from(self.model?.context_window());
+        #[allow(clippy::cast_precision_loss)]
+        let window = self.context_window.filter(|window| *window > 0)? as f64;
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         Some(((self.prompt_tokens() as f64 / window) as f32).clamp(0.0, 1.0))
     }
@@ -597,6 +608,7 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
             }
         }
         TurnEvent::StepEnded {
+            context_window,
             stop_reason,
             usage,
             model,
@@ -609,6 +621,7 @@ pub fn apply(transcript: &mut Transcript, event: &TurnEvent) -> Applied {
                     "usage": usage,
                     "model": model,
                     "durationMs": duration_ms,
+                    "contextWindow": context_window,
                 }),
             },
         ),
@@ -934,6 +947,7 @@ mod tests {
         apply(
             &mut transcript,
             &TurnEvent::StepEnded {
+                context_window: None,
                 stop_reason: StopReason::EndTurn,
                 usage: Usage::default(),
                 model: "claude-opus-5".into(),
@@ -964,6 +978,7 @@ mod tests {
             apply(
                 &mut transcript,
                 &TurnEvent::StepEnded {
+                    context_window: None,
                     stop_reason: StopReason::EndTurn,
                     usage: Usage {
                         input_tokens: input,
@@ -994,10 +1009,7 @@ mod tests {
         let last = reloaded.last_request().expect("a step was recorded");
         assert_eq!(last.usage.input_tokens, 240_000);
         assert_eq!(last.duration, Some(std::time::Duration::from_millis(7_500)));
-        assert_eq!(
-            last.model.map(super::super::model::ModelId::key),
-            Some("claude-opus-5")
-        );
+        assert_eq!(last.model.as_deref(), Some("claude-opus-5"));
         // Cached tokens are context too — the reason this is not `input_tokens`.
         assert_eq!(last.prompt_tokens(), 240_000 + 500_000 + 10_000);
         assert_eq!(last.fraction(), Some(0.75));
@@ -1027,6 +1039,68 @@ mod tests {
         assert_eq!(last.model, None);
         assert_eq!(last.fraction(), None);
         assert_eq!(last.duration, None);
+    }
+
+    #[test]
+    fn external_models_and_live_limits_survive_transcript_reload() {
+        for model in [
+            "gpt-6-astra",
+            "claude-sonnet-5",
+            "future-provider/new-model",
+        ] {
+            let mut transcript = Transcript::default();
+            apply(
+                &mut transcript,
+                &TurnEvent::MessageStarted {
+                    id: "external".into(),
+                    role: Role::Assistant,
+                },
+            );
+            apply(
+                &mut transcript,
+                &TurnEvent::StepEnded {
+                    model: model.into(),
+                    context_window: Some(100_000),
+                    usage: Usage {
+                        input_tokens: 15_000,
+                        cache_read_input_tokens: 10_000,
+                        ..Usage::default()
+                    },
+                    stop_reason: StopReason::EndTurn,
+                    duration_ms: 42,
+                },
+            );
+            let parts = transcript.messages[0].parts_json();
+            transcript.messages[0].parts = AgentChatMessage::parse_parts(&parts).expect("reload");
+            let request = transcript.last_request().expect("request");
+            assert_eq!(request.model.as_deref(), Some(model));
+            assert_eq!(request.context_window, Some(100_000));
+            assert_eq!(request.fraction(), Some(0.25));
+        }
+    }
+
+    #[test]
+    fn historical_external_model_identity_does_not_require_a_known_window() {
+        for window in [Value::Null, serde_json::json!(0)] {
+            let request = RequestUsage::from_value(&serde_json::json!({
+                "model": "gpt-6-astra",
+                "contextWindow": window,
+                "usage": Usage::default(),
+            }))
+            .expect("request");
+            assert_eq!(request.model.as_deref(), Some("gpt-6-astra"));
+            assert_eq!(request.fraction(), None);
+        }
+        let request = RequestUsage::from_value(&serde_json::json!({
+            "model": "claude-opus-5", "contextWindow": 200_000,
+            "usage": Usage::default(),
+        }))
+        .expect("request");
+        assert_eq!(
+            request.context_window,
+            Some(200_000),
+            "live limit overrides catalog"
+        );
     }
 
     /// A thread of steps, as the miss detector reads it back.

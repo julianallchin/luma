@@ -327,6 +327,7 @@ impl Turn {
             let (stop_reason, usage, calls) = self.stream_step(&**client, request).await?;
             self.charge(setup.execution.model(), usage, started.elapsed());
             self.emit(TurnEvent::StepEnded {
+                context_window: Some(u64::from(model.context_window())),
                 stop_reason,
                 usage,
                 model: setup.execution.model().to_string(),
@@ -760,9 +761,11 @@ impl Turn {
                         .clone()
                         .unwrap_or_else(|| setup.execution.model().into());
                     self.charge(&model, usage, started.elapsed());
+                    let (last_usage, context_window) = session.request_usage();
                     self.emit(TurnEvent::StepEnded {
+                        context_window,
                         stop_reason: StopReason::EndTurn,
-                        usage,
+                        usage: last_usage.unwrap_or(usage),
                         model,
                         duration_ms: started.elapsed().as_millis() as u64,
                     });

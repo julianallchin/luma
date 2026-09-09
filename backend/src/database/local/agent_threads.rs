@@ -1445,7 +1445,8 @@ pub async fn set_thread_selection(
     owner_user_id: Option<&str>,
 ) -> Result<AgentThread, String> {
     selection.validate().map_err(|e| e.to_string())?;
-    sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
+    let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+    let thread = sqlx::query_as::<_, AgentThread>(sqlx::AssertSqlSafe(format!(
         "UPDATE agent_threads SET engine = ?, model = ?, provider = ?, effort = ?, synced_at = NULL
          WHERE id = ? AND id IN (SELECT thread.id {LIVE_THREADS_FOR_PRINCIPAL})
          RETURNING {THREAD_COLUMNS}"
@@ -1456,10 +1457,17 @@ pub async fn set_thread_selection(
     .bind(&selection.effort)
     .bind(thread_id)
     .bind(owner_user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|error| format!("Failed to change agent engine: {error}"))?
-    .ok_or_else(|| thread_not_found(thread_id))
+    .ok_or_else(|| thread_not_found(thread_id))?;
+    sqlx::query("INSERT INTO settings (key, value) VALUES ('agent_selection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(serde_json::to_string(selection).map_err(|error| error.to_string())?)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| format!("Failed to save model preference: {error}"))?;
+    tx.commit().await.map_err(|error| error.to_string())?;
+    Ok(thread)
 }
 
 /// Name the writer this thread's revisions are attributed to.
@@ -1686,6 +1694,48 @@ mod tests {
                 .engine,
             "codex"
         );
+    }
+
+    #[tokio::test]
+    async fn model_preference_survives_restart_and_seeds_other_views() {
+        use crate::agent::engine::catalog::{Selection, Service};
+        let (dir, pool) = test_pool().await;
+        let first = create_thread(&pool, track_thread("first"), None)
+            .await
+            .unwrap();
+        let selected = Selection {
+            service: Service::Codex,
+            model: Some("test-model".into()),
+            effort: Some("high".into()),
+        };
+        set_thread_selection(&pool, &first.id, &selected, None)
+            .await
+            .unwrap();
+        let other = Selection {
+            service: Service::Claude,
+            model: None,
+            effort: None,
+        };
+        assert!(set_thread_selection(&pool, "missing", &other, None)
+            .await
+            .is_err());
+        pool.close().await;
+        let pool = SqlitePoolOptions::new()
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(dir.path().join("luma-test.db"))
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        let settings = crate::database::local::settings::get_all_settings(&pool)
+            .await
+            .unwrap();
+        assert_eq!(Selection::configured(&settings).unwrap(), selected);
+        let next = create_thread(&pool, track_thread("another-view"), None)
+            .await
+            .unwrap();
+        assert_eq!(Selection::from_thread(&next).unwrap(), selected);
     }
 
     async fn legacy_graph_migration_pool() -> SqlitePool {
