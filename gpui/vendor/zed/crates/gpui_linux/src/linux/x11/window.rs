@@ -9,7 +9,7 @@ use gpui::{
     Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
     WindowDecorations, WindowKind, WindowParams, popup::PopupNotSupportedError, px,
 };
-use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
+use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 use collections::FxHashSet;
 use gpui_util::{ResultExt, maybe};
@@ -728,7 +728,11 @@ impl X11WindowState {
                     // If the window appearance changes, then the renderer will get updated
                     // too
                     transparent: false,
-                    preferred_present_mode: None,
+                    // LUMA LOCAL EDIT: the X11 refresh timer already paces frames.
+                    // Prefer Mailbox, as on Wayland, so FIFO backpressure does not
+                    // block that timer and make it skip refreshes. The renderer
+                    // falls back to FIFO when Mailbox is unsupported.
+                    preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
                 };
                 WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
             };

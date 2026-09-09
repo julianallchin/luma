@@ -1549,3 +1549,34 @@ mod tests {
         });
     }
 }
+
+// Luma's opt-in, bounded capture works in the ordinary dev build, so measuring
+// compositor stalls does not require rebuilding with a different feature set.
+static FRAME_TRACE_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static FRAME_TRACE: std::sync::Mutex<Vec<(std::time::Instant, &'static str, f64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Start a bounded in-memory recording of window draw and presentation CPU work.
+pub fn start_frame_trace() {
+    *FRAME_TRACE.lock().unwrap() = Vec::with_capacity(20000);
+    FRAME_TRACE_ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// Finish recording. Timestamps share the process's monotonic clock.
+pub fn take_frame_trace() -> Vec<(std::time::Instant, &'static str, f64)> {
+    FRAME_TRACE_ENABLED.store(false, Ordering::Relaxed);
+    std::mem::take(&mut *FRAME_TRACE.lock().unwrap())
+}
+
+pub(crate) struct FrameTracePhase(std::time::Instant, &'static str);
+pub(crate) fn trace_frame_phase(phase: &'static str) -> Option<FrameTracePhase> {
+    FRAME_TRACE_ENABLED.load(Ordering::Relaxed).then(|| FrameTracePhase(std::time::Instant::now(), phase))
+}
+impl Drop for FrameTracePhase {
+    fn drop(&mut self) {
+        let elapsed = self.0.elapsed().as_secs_f64() * 1000.;
+        let mut trace = FRAME_TRACE.lock().unwrap();
+        if FRAME_TRACE_ENABLED.load(Ordering::Relaxed) && trace.len() < 20000 {
+            trace.push((self.0, self.1, elapsed));
+        }
+    }
+}

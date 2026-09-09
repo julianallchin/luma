@@ -187,6 +187,107 @@ impl Scene {
         }
     }
 
+    /// Append a painted subtree scaled about `center`, preserving its layers
+    /// and blur radii. Layout and hit testing remain in the original space.
+    pub fn append_scaled(&mut self, child: &Scene, center: Point<ScaledPixels>, factor: f32) {
+        let point = |value: Point<ScaledPixels>| {
+            crate::point(
+                center.x + (value.x - center.x) * factor,
+                center.y + (value.y - center.y) * factor,
+            )
+        };
+        let bounds = |value: Bounds<ScaledPixels>| Bounds {
+            origin: point(value.origin),
+            size: crate::size(value.size.width * factor, value.size.height * factor),
+        };
+        let transform = TransformationMatrix::unit()
+            .translate(center)
+            .scale(crate::size(factor, factor))
+            .translate(crate::point(center.x * -1.0, center.y * -1.0));
+        let inverse = TransformationMatrix::unit()
+            .translate(center)
+            .scale(crate::size(1.0 / factor, 1.0 / factor))
+            .translate(crate::point(center.x * -1.0, center.y * -1.0));
+        // All primitives carry these two rectangles. Transform the stored
+        // bounds as well as sprite matrices so batching sees the painted area.
+        macro_rules! geometry {
+            ($value:expr) => {{
+                $value.bounds = bounds($value.bounds);
+                $value.content_mask.bounds = bounds($value.content_mask.bounds);
+            }};
+        }
+        for operation in &child.paint_operations {
+            match operation {
+                PaintOperation::Primitive(primitive) => {
+                    let mut primitive = primitive.clone();
+                    match &mut primitive {
+                        Primitive::Shadow(value) => {
+                            geometry!(value);
+                            value.element_bounds = bounds(value.element_bounds);
+                            value.corner_radii = value.corner_radii.map(|radius| *radius * factor);
+                            value.element_corner_radii =
+                                value.element_corner_radii.map(|radius| *radius * factor);
+                            value.blur_radius *= factor;
+                        }
+                        Primitive::Quad(value) => {
+                            geometry!(value);
+                            value.corner_radii = value.corner_radii.map(|radius| *radius * factor);
+                            value.border_widths = value.border_widths.map(|width| *width * factor);
+                        }
+                        Primitive::Underline(value) => {
+                            geometry!(value);
+                            value.thickness *= factor;
+                        }
+                        Primitive::Path(value) => {
+                            geometry!(value);
+                            value.start = point(value.start);
+                            value.current = point(value.current);
+                            for vertex in &mut value.vertices {
+                                vertex.xy_position = point(vertex.xy_position);
+                                vertex.content_mask.bounds = bounds(vertex.content_mask.bounds);
+                            }
+                        }
+                        Primitive::MonochromeSprite(value) => {
+                            geometry!(value);
+                            value.transformation =
+                                transform.compose(value.transformation).compose(inverse);
+                        }
+                        Primitive::SubpixelSprite(value) => {
+                            geometry!(value);
+                            value.transformation =
+                                transform.compose(value.transformation).compose(inverse);
+                        }
+                        Primitive::PolychromeSprite(value) => {
+                            geometry!(value);
+                            value.corner_radii = value.corner_radii.map(|radius| *radius * factor);
+                        }
+                        Primitive::Surface(value) => {
+                            geometry!(value);
+                        }
+                    }
+                    self.insert_primitive(primitive);
+                }
+                PaintOperation::BackdropBlur(blur) => {
+                    let mut blur = *blur;
+                    geometry!(blur);
+                    blur.corner_radii = blur.corner_radii.map(|radius| *radius * factor);
+                    self.insert_backdrop_blur(blur);
+                }
+                PaintOperation::ContentFilter(filter) => {
+                    let mut filter = filter.clone();
+                    geometry!(filter);
+                    let mut scene = Scene::default();
+                    scene.append_scaled(&filter.scene, center, factor);
+                    scene.finish();
+                    filter.scene = Arc::new(scene);
+                    self.insert_content_filter(filter);
+                }
+                PaintOperation::StartLayer(rect) => self.push_layer(bounds(*rect)),
+                PaintOperation::EndLayer => self.pop_layer(),
+            }
+        }
+    }
+
     pub fn finish(&mut self) {
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
@@ -627,13 +728,14 @@ impl From<Underline> for Primitive {
 
 /// A within-window backdrop blur region: the renderer snapshots everything
 /// painted below this order and paints it back gaussian-blurred inside the
-/// rounded bounds (frosted-glass popovers). macOS Metal only — see
+/// rounded bounds (frosted-glass popovers). Supported by Metal and wgpu — see
 /// [`crate::Window::paint_backdrop_blur`].
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 #[expect(missing_docs)]
 pub struct BackdropBlur {
     pub order: DrawOrder,
+    pub opacity: f32,
     pub blur_radius: ScaledPixels,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,

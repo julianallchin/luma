@@ -15,7 +15,8 @@ use image::RgbaImage;
 
 use core_foundation::base::TCFType;
 use core_video::{
-    metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
+    metal_texture::CVMetalTextureGetTexture,
+    metal_texture_cache::CVMetalTextureCache,
     pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
@@ -26,7 +27,6 @@ use objc::{self, class, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
 use std::{cell::Cell, ffi::c_void, mem, mem::MaybeUninit, ops::Range, ptr, slice, sync::Arc};
-
 
 /// Env-gated GPU timing for content-filter passes (`LUMA_FILTER_PROFILE=1`).
 ///
@@ -499,7 +499,7 @@ impl MetalRenderer {
             "shadow_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
-        let backdrop_blur_pipeline_state = build_pipeline_state_no_blend(
+        let backdrop_blur_pipeline_state = build_backdrop_pipeline_state(
             &device,
             &library,
             "backdrop_blur",
@@ -1397,6 +1397,7 @@ impl MetalRenderer {
         }
 
         let encoder = new_command_encoder_for_texture(command_buffer, texture, viewport_size, None);
+        encoder.set_blend_color(0.0, 0.0, 0.0, scene_blur.opacity.clamp(0.0, 1.0));
         self.draw_backdrop_blur(
             blur_index,
             &blur,
@@ -2077,7 +2078,7 @@ fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
     RgbaImage::from_raw(width, height, pixels).context("failed to create RgbaImage from pixel data")
 }
 
-fn build_pipeline_state_no_blend(
+fn build_backdrop_pipeline_state(
     device: &metal::DeviceRef,
     library: &metal::LibraryRef,
     label: &str,
@@ -2097,7 +2098,11 @@ fn build_pipeline_state_no_blend(
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
     let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
     color_attachment.set_pixel_format(pixel_format);
-    color_attachment.set_blending_enabled(false);
+    color_attachment.set_blending_enabled(true);
+    color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::BlendAlpha);
+    color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusBlendAlpha);
+    color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::BlendAlpha);
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusBlendAlpha);
     device
         .new_render_pipeline_state(&descriptor)
         .expect("could not create render pipeline state")
@@ -2546,6 +2551,7 @@ mod scratch_region_tests {
         let mut scene = Scene::default();
         scene.insert_backdrop_blur(BackdropBlur {
             order: 0,
+            opacity: 1.0,
             blur_radius: ScaledPixels(18.0),
             bounds,
             content_mask: ContentMask { bounds },
@@ -2670,6 +2676,7 @@ mod scratch_region_tests {
             let bounds = region(30.0 + index as f32 * 8.0, 30.0, 400.0, 300.0);
             backdrop.insert_backdrop_blur(BackdropBlur {
                 order: 0,
+                opacity: 1.0,
                 blur_radius: ScaledPixels(sigma),
                 bounds,
                 content_mask: ContentMask { bounds },
