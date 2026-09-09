@@ -27,9 +27,7 @@
 //! until it has something louder to say — which is [`HOT`], where the fill
 //! takes the danger hue.
 
-use gpui::{
-    div, prelude::*, px, AnyElement, Entity, Hsla, PathBuilder, Pixels, Point, SharedString, Window,
-};
+use gpui::{div, prelude::*, px, Entity, Hsla, PathBuilder, Pixels, Point, SharedString, Window};
 use luma_lib::agent::RequestUsage;
 use luma_ui::float;
 use luma_ui::node::{Instrument as _, Role as NodeRole};
@@ -50,55 +48,51 @@ const HOT: f32 = 0.8;
 /// a physical pixel at this diameter.
 const SEGMENTS: usize = 48;
 
-/// The ring, and the hover that discloses [`open_card`].
-///
-/// Whether the card is open is held by the panel rather than derived from a
-/// hover fade: the card is a disclosure, and a disclosure that decays on a
-/// timer would flicker shut while the pointer sat still. It is also why the
-/// card is not a child of this element — it hangs off the footer instead, and
-/// only the flag travels between them.
-pub fn gauge(request: &RequestUsage, chat: &Entity<AgentChat>, theme: &Theme) -> impl IntoElement {
+/// Click the ring to keep request details open over the composer.
+pub fn gauge(
+    request: &RequestUsage,
+    chat: &Entity<AgentChat>,
+    open: bool,
+    closing: Option<f32>,
+    theme: &Theme,
+) -> impl IntoElement {
     let fraction = request.fraction();
-    let hovered = chat.clone();
+    let clicked = chat.clone();
+    let dismissed = chat.clone();
     let label: SharedString = match fraction {
         Some(fraction) => format!("Context {}%", percent(fraction)).into(),
-        // No window means no gauge reading, and the label says so rather than
-        // naming a percentage of nothing.
         None => "Context usage".into(),
     };
-    div()
+    luma_ui::button("", luma_ui::Enabled::Yes)
         .id("chat-context-gauge")
-        .size(px(DIAMETER))
+        .relative()
+        .size(px(DIAMETER + 8.0))
+        .p_0()
         .flex_none()
-        .on_hover(move |over, _, cx| {
-            let over = *over;
-            hovered.update(cx, |chat, cx| chat.set_usage_open(over, cx));
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            clicked.update(cx, |chat, cx| chat.set_usage_open(!open, cx));
         })
         .child(ring(fraction, theme))
-        .agent_node(NodeRole::Text, label)
-}
-
-/// The card the ring discloses, hung above the footer it is placed in.
-///
-/// Placed against the *footer* — composer and status strip as one block —
-/// rather than against the ring, which is the only reason the card clears the
-/// composer at all: a 300px card hung off a 14px trigger inside the strip has
-/// nowhere to go but over the field above it, whatever corner it anchors to.
-/// The ring stays the hover trigger; only the rect the card is measured
-/// against moves. Its caller renders it as a child of that footer.
-///
-/// The clearance is zero because there is nothing to clear: the argument buys
-/// a flipped card its way off the element it hangs from, and the footer is
-/// docked to the window's bottom edge, so a card that cannot fit above it has
-/// no room below it either — gpui snaps it rather than switching sides.
-pub fn open_card(request: &RequestUsage, theme: &Theme) -> AnyElement {
-    // Hover discloses it and hover takes it away — see [`float::Dismiss`].
-    float::anchored_above(
-        "chat-context-card",
-        0.0,
-        float::Dismiss::Never,
-        card(request, theme),
-    )
+        .children((open || closing.is_some()).then(|| {
+            if let Some(progress) = closing {
+                return float::anchored_above_closing(
+                    "chat-context-card",
+                    DIAMETER + 8.0,
+                    card(request, theme),
+                    progress,
+                );
+            }
+            float::anchored_above(
+                "chat-context-card",
+                DIAMETER + 8.0,
+                float::Dismiss::on_press_out(move |_, cx| {
+                    dismissed.update(cx, |chat, cx| chat.set_usage_open(false, cx));
+                }),
+                card(request, theme),
+            )
+        }))
+        .agent_node(NodeRole::Button, label)
 }
 
 /// The ring itself: a track at full circle, a fill from twelve o'clock.
@@ -199,20 +193,23 @@ fn card(request: &RequestUsage, theme: &Theme) -> gpui::AnyElement {
     rows.push((
         "Window",
         request
-            .model
-            .map_or_else(|| "—".to_string(), |model| tokens(model.context_window())),
+            .context_window
+            .map_or_else(|| "—".to_string(), tokens),
     ));
     rows.push((
         "Model",
         request
             .model
-            .map_or_else(|| "unknown".to_string(), |model| model.key().to_string()),
+            .clone()
+            .unwrap_or_else(|| "Not reported".to_string()),
     ));
     if let Some(duration) = request.duration {
         rows.push(("Took", elapsed(duration)));
     }
 
     float::popover_card()
+        .id("chat-context-details")
+        .on_click(|_, _, cx| cx.stop_propagation())
         .min_w(px(196.0))
         .p(px(theme::SPACE_MD))
         .gap(px(theme::SPACE_XS))

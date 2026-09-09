@@ -156,7 +156,7 @@ impl Render for Counter {
                     .agent_node(Role::Text, format!("dropped {}", self.dropped)),
             )
             .child(
-                luma_ui::luma_button("Increment", Enabled::Yes)
+                luma_ui::button("Increment", Enabled::Yes)
                     .id("increment")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.count += 1;
@@ -165,7 +165,7 @@ impl Render for Counter {
                     .agent_node(Role::Button, "Increment"),
             )
             .child(
-                luma_ui::luma_button("Modal", Enabled::Yes)
+                luma_ui::button("Modal", Enabled::Yes)
                     .id("modal")
                     .on_click(cx.listener(|_, _, window, cx| {
                         let answer = window.prompt(
@@ -188,7 +188,7 @@ impl Render for Counter {
                     .agent_node(Role::Button, "Modal"),
             )
             .child(
-                luma_ui::luma_button("Locked", Enabled::No)
+                luma_ui::button("Locked", Enabled::No)
                     .id("locked")
                     .agent_node(Role::Button, "Locked")
                     .agent_disabled(true),
@@ -214,7 +214,7 @@ impl Render for Counter {
                 ),
             )
             .child(
-                luma_ui::luma_button("Stall", Enabled::Yes)
+                luma_ui::button("Stall", Enabled::Yes)
                     .id("stall")
                     .on_click(cx.listener(|this, _, _, _| std::thread::sleep(this.stall)))
                     .agent_node(Role::Button, "Stall"),
@@ -1208,4 +1208,36 @@ fn help_matches_the_bound_surface() {
         run(&mut harness, "app.help()"),
         Value::String(gpui_agent::API_DTS.to_string())
     );
+}
+
+/// A manual spring schedules its next step from render. A harness frame must
+/// deliver that callback, not merely paint the same frozen state again.
+#[test]
+fn frames_deliver_callbacks_scheduled_during_render() {
+    struct NextFrame(bool);
+    impl gpui::Render for NextFrame {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if !self.0 {
+                let view = cx.entity();
+                window.on_next_frame(move |_, cx| {
+                    view.update(cx, |view, cx| {
+                        view.0 = true;
+                        cx.notify();
+                    });
+                });
+            }
+            let label = if self.0 { "Advanced" } else { "Waiting" };
+            div().child(label).agent_node(Role::Text, label)
+        }
+    }
+    let root: gpui_agent::RootFactory = Arc::new(|_, cx| cx.new(|_| NextFrame(false)).into());
+    let mut harness = Harness::headless(Config::default(), root).unwrap();
+    let result = run(
+        &mut harness,
+        r#"
+        app.frames(2);
+        app.snapshot().find({role: "text", label: "Advanced"}).label
+    "#,
+    );
+    assert_eq!(result, "Advanced");
 }

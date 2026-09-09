@@ -1,25 +1,8 @@
-//! Controls for the things that float — dialogs, menus, pickers.
+//! Comet-style controls for panels, toolbars, dialogs, menus and pickers.
 //!
-//! # Why these are not the slab controls
-//!
-//! `luma_button` and its siblings are the *instrument* tier: square, on
-//! [`crate::ladder`]'s opaque greys, 9px uppercase silkscreen. That is the
-//! right language for a panel of controls bolted to a machine, and the wrong
-//! one for a picker floating over a blurred backdrop — an opaque slab on
-//! translucent glass paints out the tint that is the point of the surface, and
-//! square corners on a detached card leave it reading as a hole in the window
-//! rather than an object above it.
-//!
-//! So the split is the same one [`crate::glass`] already draws, and it is
-//! decided by *what a control sits on*, not by which crate it lives in: on a
-//! plane, take the slab; on glass, take these. Neither tier gets a second
-//! style of its own — there is one row, one key cap, one button pair here, the
-//! way there is one `luma_button` there.
-//!
-//! [`picker_chip`] is the one control here that lives on planes too, and it is
-//! not an exception to that rule but an application of it: a trigger's menu
-//! always floats, so the *pair* sits on glass even when the trigger's own
-//! ground is opaque. See its note.
+//! Buttons use rounded shapes, normal-case labels and subtle hover washes on
+//! every surface. Use `crate::button` for compact actions, `btn` for quiet
+//! actions, and `btn_primary` for the principal action in a dialog.
 //!
 //! Radii come from [`crate::radius`], every fill, edge and ring from
 //! [`crate::glass`], and every text colour from [`crate::ladder`]'s foreground
@@ -29,11 +12,11 @@
 
 use crate::icons::IconName;
 use gpui::prelude::*;
-use gpui::{div, px, AnyElement, App, Div, FontWeight, SharedString, Window};
+use gpui::{div, px, AnimationExt, AnyElement, App, Div, FontWeight, SharedString, Window};
 use gpui_component::Icon;
 
 use crate::node::Instrument as _;
-use crate::{glass, ladder, motion, radius, select};
+use crate::{glass, ladder, motion, radius, select, Enabled};
 
 // ---------------------------------------------------------------------------
 // Bands
@@ -291,6 +274,19 @@ pub fn field_row(label_text: impl Into<SharedString>, control: impl IntoElement)
         .child(control)
 }
 
+/// A compact inspector property with its label and value on the same baseline.
+pub fn inline_field_row(label_text: impl Into<SharedString>, control: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(px(12.0))
+        .w_full()
+        .child(label(label_text))
+        .child(control)
+}
+
 /// A quiet heading over a group of [`nav_row`]s.
 pub fn section_heading(text: impl Into<SharedString>) -> Div {
     label(text).px(px(8.0)).pb(px(4.0))
@@ -535,8 +531,7 @@ pub(crate) fn btn_primary_paint(shape: Div) -> Div {
 /// dims the plate and its label together.
 pub const INERT_OPACITY: f32 = 0.6;
 
-/// The shared box both buttons compose against — this tier's answer to the
-/// instrument tier's `slab`, so the pair cannot drift apart in geometry.
+/// The shared box for quiet and primary dialog buttons.
 fn btn_shape() -> Div {
     div()
         .flex()
@@ -560,12 +555,8 @@ fn btn_shape() -> Div {
 /// toolbar chips — model, space, device), carrying the current value and a
 /// chevron.
 ///
-/// It lives on *this* tier and not with the slabs because a trigger and the
-/// menu it opens are one object: the menu is a [`popover_card`], so a square
-/// opaque trigger under a rounded translucent card reads as two components
-/// stapled together. That is what makes this the canonical dropdown even
-/// where the trigger itself sits on a plane — the tier is decided by the
-/// menu, which always floats.
+/// A trigger and its menu share the same rounded control vocabulary,
+/// whether the trigger sits in a panel or on a floating surface.
 ///
 /// Comet's chips are 32px because they sit in a 46px composer band; ours are
 /// [`crate::CONTROL_HEIGHT`] so a chip in a row of controls reads as one
@@ -573,11 +564,11 @@ fn btn_shape() -> Div {
 /// [`btn_primary_chip`] makes about a button in a row of key caps.
 ///
 /// `options` are every value the chip can show. They size it, through the one
-/// ghost-stack the slabs use, so picking a different value never resizes the
+/// ghost stack the other selectors use, so picking a different value never resizes the
 /// trigger and never moves its neighbours.
 pub fn picker_chip(value: &str, options: &[&str]) -> Div {
     select::ghost_stack(
-        chip_plate().relative(),
+        chip_plate(Enabled::Yes).relative(),
         select::sentence_case(value),
         options.iter().map(|o| select::sentence_case(o)).collect(),
         PICKER_CHIP_PAD,
@@ -594,13 +585,15 @@ pub fn picker_chip(value: &str, options: &[&str]) -> Div {
 /// the row has two heights, two radii and two hovers. The caller supplies the
 /// `.id()`, the click and the children.
 pub fn chip() -> Div {
-    chip_plate().justify_center().px(px(PICKER_CHIP_PAD))
+    chip_plate(Enabled::Yes)
+        .justify_center()
+        .px(px(PICKER_CHIP_PAD))
 }
 
 /// The plate both chips wear. Padding is left off because [`picker_chip`]'s
 /// ghost stack applies its own inset to two overlapping layers, and a plate
 /// that already carried it would inset them twice.
-fn chip_plate() -> Div {
+pub(crate) fn chip_plate(enabled: Enabled) -> Div {
     div()
         .flex()
         .items_center()
@@ -612,18 +605,19 @@ fn chip_plate() -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(ladder::foreground_alpha(0.9))
         .bg(glass::ink(0.06))
-        .hover(|style| {
-            style
-                .bg(glass::glass_hover())
-                .text_color(ladder::foreground())
+        .when(enabled == Enabled::Yes, |el| {
+            el.cursor_pointer().hover(|style| {
+                style
+                    .bg(glass::glass_hover())
+                    .text_color(ladder::foreground())
+            })
         })
-        .cursor_pointer()
 }
 
 /// Comet's `px(10)` on its picker chips — and, through [`field`], on every
 /// other control in the row, so a value in a chip and a value in a field are
 /// inset by the same amount and their text lines up.
-const PICKER_CHIP_PAD: f32 = 10.0;
+pub(crate) const PICKER_CHIP_PAD: f32 = 10.0;
 
 // ---------------------------------------------------------------------------
 // Fields
@@ -667,22 +661,8 @@ pub fn field() -> Div {
 // Segmented
 // ---------------------------------------------------------------------------
 
-/// The float tier's one-of-N control: cells in a recessed track, the chosen
-/// one lit.
-///
-/// It is here and not beside [`crate::luma_toggle_group`] for the reason this
-/// module exists at all: that group is a row of `luma_button` slabs — opaque,
-/// square, 9px uppercase — and a row of those inside a popover paints out the
-/// glass it sits on. The two are the same *concept* on the two tiers, the way
-/// [`btn`] and `luma_button` are.
-///
-/// The track is [`field`]'s recessed box, so a segmented control and the field
-/// beside it read as one row of holes; the lit cell takes the **one** selection
-/// recipe ([`glass::card_selected_bg`] and its inset ring), so a chosen segment
-/// and a chosen [`menu_row`] cannot say "chosen" two different ways.
-///
-/// The caller builds the cells with [`segment`] so each can carry its own id
-/// and click.
+/// One-of-N controls use a recessed track and a rounded selected cell.
+/// Build cells with [`segment`] so each can carry its own id and handler.
 pub fn segmented() -> Div {
     div()
         .flex()
@@ -921,6 +901,12 @@ pub fn popover_card() -> Div {
         .overflow_hidden()
 }
 
+/// Apply the shared floating-card material. Anchored hosts do this already;
+/// viewport overlays use it directly, outside their positioned card contents.
+pub fn frosted_card(content: impl IntoElement) -> crate::dialog::Frosted {
+    crate::dialog::frosted(radius::CARD, crate::dialog::CARD_BLUR, content)
+}
+
 /// What a press outside a float means.
 ///
 /// # Why the whole floating layer owns this and no widget does
@@ -1018,7 +1004,7 @@ pub fn anchored_below(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    hang(id, Side::Below, trigger, dismiss, content)
+    hang(id, Side::Below, trigger, dismiss, content, None)
 }
 
 /// Hang `content` off the *top* of the trigger it is a child of — the mirror
@@ -1042,7 +1028,24 @@ pub fn anchored_above(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    hang(id, Side::Above, trigger, dismiss, content)
+    hang(id, Side::Above, trigger, dismiss, content, None)
+}
+
+/// Keep an upward-opening popover mounted while its exit finishes.
+pub fn anchored_above_closing(
+    id: impl Into<SharedString>,
+    trigger: f32,
+    content: AnyElement,
+    progress: f32,
+) -> AnyElement {
+    hang(
+        id,
+        Side::Above,
+        trigger,
+        Dismiss::Never,
+        content,
+        Some(progress),
+    )
 }
 
 /// Which edge of the trigger a menu hangs from. The only thing that differs
@@ -1055,12 +1058,30 @@ enum Side {
     Above,
 }
 
+/// A closing dropdown stays mounted until its exit reaches zero opacity.
+pub fn anchored_below_closing(
+    id: impl Into<SharedString>,
+    trigger: f32,
+    content: AnyElement,
+    progress: f32,
+) -> AnyElement {
+    hang(
+        id,
+        Side::Below,
+        trigger,
+        Dismiss::Never,
+        content,
+        Some(progress),
+    )
+}
+
 fn hang(
     id: impl Into<SharedString>,
     side: Side,
     trigger: f32,
     dismiss: Dismiss,
     content: AnyElement,
+    closing: Option<f32>,
 ) -> AnyElement {
     let id = id.into();
     let reserved = px(trigger + MENU_GAP);
@@ -1076,14 +1097,14 @@ fn hang(
             (gpui::Anchor::BottomRight, div().pb(gap).pt(reserved))
         }
     };
-    let card = card.child(dismiss.apply(div().occlude().child(content)));
+    let card = card.child(dismiss.apply(div().occlude().child(frosted_card(content))));
     origin
         .child(
-            gpui::deferred(
-                gpui::anchored()
-                    .anchor(anchor)
-                    .child(motion::menu_in(id, card)),
-            )
+            gpui::deferred(animate_popover(
+                id,
+                gpui::anchored().anchor(anchor).child(card),
+                closing,
+            ))
             .priority(1),
         )
         .into_any_element()
@@ -1105,17 +1126,55 @@ pub fn anchored_at(
     dismiss: Dismiss,
     content: AnyElement,
 ) -> AnyElement {
-    gpui::deferred(
+    gpui::deferred(animate_popover(
+        id.into(),
         gpui::anchored()
             .position(at)
             .anchor(gpui::Anchor::TopLeft)
-            .child(motion::menu_in(
-                id.into(),
-                dismiss.apply(div().occlude().child(content)),
-            )),
-    )
+            .child(dismiss.apply(div().occlude().child(frosted_card(content)))),
+        None,
+    ))
     .priority(1)
     .into_any_element()
+}
+
+/// Position first; animate toward the trigger using the anchor GPUI actually chose.
+fn animate_popover(id: SharedString, anchored: gpui::Anchored, closing: Option<f32>) -> AnyElement {
+    let displacement = std::rc::Rc::new(std::cell::Cell::new(0.0));
+    let offset = displacement.clone();
+    let anchored = anchored.resolved_offset(move |anchor| {
+        let distance = px(offset.get());
+        match anchor {
+            gpui::Anchor::TopLeft | gpui::Anchor::TopRight | gpui::Anchor::TopCenter => {
+                gpui::point(px(0.0), -distance)
+            }
+            gpui::Anchor::BottomLeft | gpui::Anchor::BottomRight | gpui::Anchor::BottomCenter => {
+                gpui::point(px(0.0), distance)
+            }
+            gpui::Anchor::LeftCenter => gpui::point(-distance, px(0.0)),
+            gpui::Anchor::RightCenter => gpui::point(distance, px(0.0)),
+        }
+    });
+    let spec = if closing.is_some() {
+        motion::MENU_OUT
+    } else {
+        motion::MENU_IN
+    };
+    // Switching phase resets the entrance clock if a closing popup is reopened.
+    let animation_id: SharedString =
+        format!("{id}-{}", if closing.is_some() { "exit" } else { "enter" }).into();
+    div()
+        .child(anchored)
+        .with_animation(animation_id, spec.animation(), move |element, progress| {
+            let amount = closing.unwrap_or(1.0 - progress);
+            displacement.set(2.0 * amount);
+            element.opacity(if closing.is_some() {
+                1.0 - amount
+            } else {
+                1.0 - 0.7 * amount
+            })
+        })
+        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------

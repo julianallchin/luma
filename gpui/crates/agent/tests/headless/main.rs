@@ -31,6 +31,7 @@ mod keyboard;
 mod library_foundation;
 mod pointer_ownership;
 mod score_menu;
+mod score_edit_focus;
 mod settings;
 mod shell_panels;
 mod sidebar_scores;

@@ -180,7 +180,15 @@ fn node_list(state: &Patch, universe: i64, app: &Entity<Luma>) -> AnyElement {
                 .id(SharedString::from(format!("bind-{universe}-{}", node.ip)))
                 .text_size(px(11.0))
                 .text_color(ladder::foreground_90())
-                .hover(|row| row.bg(ladder::hover()))
+                .bg(luma_ui::motion::hover_blend(
+                    &format!("bind-{universe}-{}", node.ip),
+                    luma_ui::glass::wash(0.),
+                    ladder::hover().into(),
+                ))
+                .on_hover(luma_ui::motion::hover_listener(format!(
+                    "bind-{universe}-{}",
+                    node.ip
+                )))
                 .child(label.clone())
                 .on_click(move |_, _, cx| {
                     let venue = venue.clone();

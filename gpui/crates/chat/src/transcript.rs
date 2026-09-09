@@ -655,13 +655,14 @@ pub struct RowCtx<'a> {
     /// Whether this is its turn's last row: the one that carries the working
     /// trailer and the timestamp lane.
     pub last_of_turn: bool,
+    pub flying: bool,
+    pub trailer_visible: bool,
     /// The working indicator, on the one row that carries it — the last. See
     /// [`crate::working`] for why it trails a row rather than pinning to the
     /// panel.
     pub trailer: Option<crate::working::Trailer>,
-    /// Tool calls the reader has closed, by call id — see
-    /// [`crate::AgentChat::toggle_tool`] for why the set is the negative one.
-    pub collapsed: &'a HashSet<SharedString>,
+    /// Tool calls the reader has opened, by call id.
+    pub expanded: &'a HashSet<SharedString>,
     /// Python calls, read. Interior-mutable because a row reads its call
     /// *during* the panel's own render, when the panel entity is already
     /// borrowed — see [`crate::python_cell`] for why the reading is cached at
@@ -678,7 +679,7 @@ impl RowCtx<'_> {
     /// Whether this call's detail is showing.
     #[must_use]
     pub fn is_expanded(&self, call_id: &str) -> bool {
-        !self.collapsed.contains(call_id)
+        self.expanded.contains(call_id)
     }
 
     /// How far through its fold this call is, or `None` when it is not moving.
@@ -707,7 +708,13 @@ pub fn row(
     let (body, plain) = match key.kind {
         RowKind::Prompt => {
             let text = prompt_text(message);
-            (user_bubble(&text, &turn.key, theme), text)
+            (
+                div()
+                    .opacity(if ctx.flying { 0.0 } else { 1.0 })
+                    .child(user_bubble(&text, &turn.key, theme))
+                    .into_any_element(),
+                text,
+            )
         }
         // Left-aligned and faint, deliberately unlike the user bubble beside
         // it: this line is a marker in the record, not something anyone said.
@@ -753,10 +760,13 @@ pub fn row(
         }
     };
     let view = ctx.chat.entity_id();
-    let trailer = ctx
-        .trailer
-        .as_ref()
-        .map(|state| crate::working::trailer(state, theme, view, cx));
+    let trailer = ctx.trailer.as_ref().map(|state| {
+        if ctx.trailer_visible {
+            crate::working::trailer(state, theme, view, cx)
+        } else {
+            crate::working::reserved_trailer()
+        }
+    });
     // A settled assistant turn is signed with when it arrived — comet's faint
     // line under the reply, revealed on hover. A live turn is not signed at
     // all: a turn still being written is not at a time yet.
@@ -817,11 +827,11 @@ pub fn row(
 /// paint pass registers it into the frame's selection registry through the
 /// same [`luma_md::render::paint_text_selection`] path the markdown rows take,
 /// so a drag from a reply up through a prompt carries it and Cmd+C copies it.
-fn user_bubble(text: &str, turn_key: &SharedString, theme: &Theme) -> AnyElement {
+pub(crate) fn user_bubble(text: &str, turn_key: &SharedString, theme: &Theme) -> AnyElement {
     let content: SharedString = text.to_string().into();
     let run = gpui::TextRun {
         len: content.len(),
-        font: gpui::font(theme.font_sans.clone()),
+        font: luma_ui::fonts::font(theme.font_sans.clone()),
         color: theme.text,
         background_color: None,
         underline: None,

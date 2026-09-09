@@ -137,7 +137,7 @@ fn toolbar(
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Close", Enabled::Yes)
+            luma_ui::button("Close", Enabled::Yes)
                 .id("close")
                 .track_focus(first_focus)
                 .tab_stop(true)
@@ -227,15 +227,23 @@ fn pattern_row(
         .text_color(ladder::foreground_90())
         .map(|row| {
             if track_open {
-                row.hover(|s| s.bg(ladder::hover()))
-                    .on_click(move |_, _, cx| {
-                        let id = id.clone();
-                        app.update(cx, |this, cx| {
-                            if let Some(pattern) = this.find_pattern(&id) {
-                                this.open_pattern(pattern, cx);
-                            }
-                        });
-                    })
+                row.bg(luma_ui::motion::hover_blend(
+                    &format!("pattern-row-{}", pattern.id),
+                    stripe.into(),
+                    ladder::hover().into(),
+                ))
+                .on_hover(luma_ui::motion::hover_listener(format!(
+                    "pattern-row-{}",
+                    pattern.id
+                )))
+                .on_click(move |_, _, cx| {
+                    let id = id.clone();
+                    app.update(cx, |this, cx| {
+                        if let Some(pattern) = this.find_pattern(&id) {
+                            this.open_pattern(pattern, cx);
+                        }
+                    });
+                })
             } else {
                 row.opacity(ladder::DISABLED_OPACITY)
             }

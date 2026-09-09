@@ -158,9 +158,8 @@ pub const SCRIM_ALPHA: f32 = 0.60;
 
 /// Alpha of the modal backdrop behind a dialog.
 ///
-/// Heavier than the 0.35 this was when the plane was *also* blurred: dimming is
-/// now the only thing separating the dialog from the shell, so it has to do
-/// that work alone. Lighter than [`SCRIM_ALPHA`], because the shell underneath
+/// The card blurs its own backdrop; the surrounding plane only dims the
+/// shell. Lighter than [`SCRIM_ALPHA`], because the shell underneath
 /// is meant to stay legible — a lighting desk's stage should still read as a
 /// stage while you pick a track to put on it, and a blackout would say the
 /// dialog had replaced the app rather than risen above it.
@@ -180,31 +179,22 @@ pub const GLASS_ALPHA: f32 = if cfg!(target_os = "macos") { 0.80 } else { 1.0 };
 /// painted it opaque, the coverage costs nothing at all.
 pub const PANEL_ALPHA: f32 = if cfg!(target_os = "macos") { 0.50 } else { 1.0 };
 
-/// Coverage of a floating chrome surface — menu, popover, picker. **Opaque**,
-/// because these are the surfaces whose whole job is carrying *text*, and text
-/// may not ghost under text: a menu row over a label ("subtract" over a
-/// strip's "REPLACE") reads as two broken strings, not as depth.
-///
-/// The four percent this used to keep — meant as a token membership in the
-/// glass family — was enough to do exactly that: measured over the timeline,
-/// a clip's own label and its lit blocks both read through the usage card.
-/// Four percent of a bright element on a near-black plane is not a texture,
-/// it is a second image. A surface that hangs over *content* rather than over
-/// the window's edge has no desktop behind it to be glass about, so there is
-/// nothing for the coverage to buy. Decorative glass ([`PANEL_ALPHA`],
-/// [`DIALOG_ALPHA`] — whose card sits on its own scrim) keeps its coverage.
-pub const OVERLAY_ALPHA: f32 = 1.0;
+/// Floating menus share the frosted backdrop pass with dialogs. Keep enough
+/// tint for labels while letting the blurred scene give the surface depth.
+/// Platforms without backdrop filtering retain an opaque fallback.
+pub const OVERLAY_ALPHA: f32 = if crate::dialog::BACKDROP_BLUR_SUPPORTED {
+    0.50
+} else {
+    1.0
+};
 
-/// Coverage of a large frosted picker.
-///
-/// Raised from the 0.34 this was when the modal plane behind it was ALSO
-/// blurred. With the plane reduced to a plain tint the card became the only
-/// thing separating a dialog from the shell, and at a third coverage it read
-/// as see-through rather than as glass — the content behind it stayed legible
-/// enough to compete with the content on it. Still well short of [`OVERLAY_ALPHA`]:
-/// a menu has to put rows on a *known* background, while a dialog is big
-/// enough that some of the blurred backdrop showing through is the point.
-pub const DIALOG_ALPHA: f32 = if cfg!(target_os = "macos") { 0.62 } else { 1.0 };
+/// Coverage of a large frosted picker. Its tint sits above the blurred
+/// backdrop; platforms without that pass keep an opaque fallback.
+pub const DIALOG_ALPHA: f32 = if crate::dialog::BACKDROP_BLUR_SUPPORTED {
+    0.62
+} else {
+    1.0
+};
 
 /// The chrome plane: what a surface takes to read as *frame* rather than
 /// content. [`ladder::chrome_plane`] at [`GLASS_ALPHA`] — the sidebar's own
@@ -531,7 +521,12 @@ mod tests {
     #[test]
     fn the_two_floating_surfaces_share_a_rung() {
         assert_eq!(dialog().l, overlay().l);
-        assert_ne!(dialog().a, overlay().a);
+        if crate::dialog::BACKDROP_BLUR_SUPPORTED {
+            assert_ne!(dialog().a, overlay().a);
+        } else {
+            assert_eq!(dialog().a, 1.0);
+            assert_eq!(overlay().a, 1.0);
+        }
     }
 
     /// Recessed paint has no rung to borrow (there is nothing below the

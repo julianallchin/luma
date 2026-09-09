@@ -24,11 +24,9 @@
 //! can await — a Tokio `JoinHandle` is an ordinary future, so no bridging
 //! machinery is needed beyond keeping the runtime alive.
 //!
-//! Results cross that boundary as JSON, because that is the dispatcher's
-//! host-facing shape: `dispatch` returns `serde_json::Value` and this module
-//! deserializes into the same models the frontend's bindings are generated
-//! from. It costs one round-trip through serde per call, which for a screenful
-//! of rows is not worth a second, typed entry point into the seam.
+//! Most commands cross that boundary as JSON and deserialize into shared models.
+//! The full-rate waveform uses a typed dispatch entry point: serializing tens
+//! of millions of samples would dominate its one-time upload cost.
 //!
 //! Failures keep the seam's structure, as [`LibraryError`]. Two designs lost.
 //! Returning [`CommandError`] itself is the smaller change, but the two ways a
@@ -87,7 +85,7 @@ use luma_lib::models::tracks::{TrackBrowserRow, TrackImportProgress, TrackImport
 use luma_lib::models::universe::UniverseState;
 use luma_lib::models::venue_graph::{PlacementReport, Reach, ResolvedVenue, VenueGraphRows};
 use luma_lib::models::venues::Venue;
-use luma_lib::models::waveforms::{TrackWaveform, WaveformWindow};
+use luma_lib::models::waveforms::{TrackWaveform, WaveformSignal};
 use luma_lib::services::fixtures as fixtures_service;
 use luma_lib::services::graph_documents::{GraphDocument, GraphEditResult};
 use luma_lib::services::group_derivation::FixtureRole;
@@ -129,14 +127,6 @@ pub struct NavigationFixture {
     /// immediate B must still persist B.
     pub session_write_delays: Vec<Duration>,
 }
-
-/// How long a fine waveform window waits before it is sent.
-///
-/// A wheel notch changes the zoom every few milliseconds and each one wants a
-/// different window; this is the pause that says the gesture has stopped. Short
-/// enough that a deliberate zoom is answered within a frame or two of settling,
-/// long enough that a flick asks once instead of forty times.
-const WINDOW_DEBOUNCE: Duration = Duration::from_millis(40);
 
 struct LibraryEvents {
     import_progress: tokio::sync::broadcast::Sender<TrackImportProgress>,
@@ -1820,6 +1810,26 @@ impl Library {
     ///
     /// Takes the graph by value, not by id: a live preview runs what the
     /// editor *holds*, which is routinely ahead of what the seam has saved.
+    pub(crate) fn preview_pattern_frames(
+        &self,
+        pattern: &str,
+        track: &str,
+        venue: &str,
+        start: f64,
+        end: f64,
+    ) -> impl Future<Output = Result<Vec<UniverseState>, LibraryError>> + use<> {
+        self.call("preview_pattern", json!({"patternId":pattern,"trackId":track,"venueId":venue,"startTime":start,"endTime":end,"beatGrid":null,"fps":15.}))
+    }
+
+    pub(crate) fn preview_definition_frames(
+        &self,
+        request: luma_lib::models::composable_patterns::ComposablePreviewRequest,
+    ) -> impl Future<
+        Output = Result<luma_lib::models::composable_patterns::ComposablePreview, LibraryError>,
+    > + use<> {
+        self.call("preview_composable_pattern", json!({"request":request}))
+    }
+
     pub fn graph_preview_image(
         &self,
         graph: &Graph,
@@ -2057,30 +2067,28 @@ impl Library {
         self.call("get_track_waveform", json!({ "trackId": track_id }))
     }
 
-    /// One visible range of a track's audio, measured into `buckets` min/max/RMS
-    /// buckets — the fine half of the pair, and the only source with a bucket
-    /// per pixel once the zoom outruns the stored envelope's fixed resolution.
-    ///
-    /// Waited before it is sent, because it is asked for while a zoom gesture
-    /// is still moving and only the window that gesture settles on is worth
-    /// measuring.
-    pub fn track_waveform_window(
+    /// Full filtered bands cross the native dispatch seam once, without JSON.
+    pub fn track_waveform_signal(
         &self,
         track_id: &str,
-        start_seconds: f64,
-        end_seconds: f64,
-        buckets: u32,
-    ) -> impl Future<Output = Result<WaveformWindow, LibraryError>> + use<> {
-        self.call_after(
-            "get_track_waveform_window",
-            json!({
-                "trackId": track_id,
-                "startSeconds": start_seconds,
-                "endSeconds": end_seconds,
-                "buckets": buckets,
-            }),
-            WINDOW_DEBOUNCE,
-        )
+    ) -> impl Future<Output = Result<WaveformSignal, LibraryError>> + use<> {
+        let services = self.services.clone();
+        let track_id = track_id.to_owned();
+        let task = self.runtime.spawn(async move {
+            luma_lib::dispatch::get_track_waveform_signal(&services, track_id)
+                .await
+                .map_err(|error| {
+                    LibraryError::at("get_track_waveform_signal", Cause::Command(error))
+                })
+        });
+        async move {
+            task.await.map_err(|error| {
+                LibraryError::at(
+                    "get_track_waveform_signal",
+                    Cause::Cancelled(error.to_string()),
+                )
+            })?
+        }
     }
 
     /// A track's analyzed beats, or `None` when it has not been analyzed.
@@ -2089,6 +2097,29 @@ impl Library {
         track_id: &str,
     ) -> impl Future<Output = Result<Option<BeatGrid>, LibraryError>> + use<> {
         self.call("get_track_beats", json!({ "trackId": track_id }))
+    }
+
+    pub fn track_beat_validation(
+        &self,
+        track_id: &str,
+    ) -> impl Future<Output = Result<Option<luma_lib::models::tracks::BeatValidation>, LibraryError>>
+           + use<> {
+        self.call("get_track_beat_validation", json!({ "trackId": track_id }))
+    }
+
+    pub fn set_track_beat_validation(
+        &self,
+        track_id: &str,
+        grid: &BeatGrid,
+        verdict: luma_lib::models::tracks::BeatValidationVerdict,
+        reason: Option<luma_lib::models::tracks::BeatValidationReason>,
+    ) -> impl Future<Output = Result<(), LibraryError>> + use<> {
+        self.call(
+            "set_track_beat_validation",
+            json!({
+                "trackId": track_id, "grid": grid, "verdict": verdict, "reason": reason,
+            }),
+        )
     }
 
     /// Create one clip.

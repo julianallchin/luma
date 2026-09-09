@@ -719,7 +719,7 @@ fn tracks_level(shell: &Luma, state: &Tracks, app: &Entity<Luma>, window: &Windo
                 luma_ui::plate("Loading tracks…".to_string(), ladder::muted_foreground())
             }
             None if state.shown.is_empty() => luma_ui::plate(
-                if state.query.is_empty() {
+                if state.rows.is_empty() {
                     "No tracks imported".to_string()
                 } else {
                     "No matching tracks".to_string()
@@ -895,8 +895,7 @@ const ACCOUNT_MENU_WIDTH: f32 = 200.0;
 /// — the picker overlay is the one venue-choosing mechanism, so the head is a
 /// door to it rather than a second selector that could disagree with it.
 ///
-/// Glass language, hand-set: the sidebar is chrome (spec §9), and a ladder
-/// slab up here would be the instrument tier leaking into the frame.
+/// The sidebar head uses the shared glass tones for window chrome.
 fn head(state: &Tracks, app: &Entity<Luma>, window: &Window) -> Div {
     let picker = app.clone();
     let venue_focus = state.venue_focus.clone();
@@ -1025,9 +1024,7 @@ fn search(state: &Tracks, app: &Entity<Luma>, window: &Window) -> impl IntoEleme
 /// constructed where the venue opens and rendered far below it.
 const PLACEHOLDER: &str = "Search tracks…";
 
-/// One glass filter pill: quiet ink that washes when pressed. The sidebar's
-/// own control, not `luma_toggle` — the ladder's slabs belong inside the
-/// content cards, and this is the frame.
+/// A compact sidebar filter pill with a latched selection wash.
 fn filter_pill(id: &'static str, label: &'static str, on: bool) -> gpui::Stateful<Div> {
     div()
         .id(id)
@@ -1228,7 +1225,15 @@ fn track_row(
                 .shadow(luma_ui::glass::card_selected_shadows())
         })
         .when(!picked, |row| {
-            row.hover(|row| row.bg(luma_ui::glass::glass_hover()))
+            row.bg(luma_ui::motion::hover_blend(
+                &format!("track-row-{}", track.id),
+                luma_ui::glass::wash(0.),
+                luma_ui::glass::glass_hover(),
+            ))
+            .on_hover(luma_ui::motion::hover_listener(format!(
+                "track-row-{}",
+                track.id
+            )))
         })
         // The row the shared element is carrying is drawn by the flight, not
         // here — one track, one row on screen.

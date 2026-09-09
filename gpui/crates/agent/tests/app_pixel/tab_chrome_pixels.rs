@@ -446,3 +446,34 @@ fn menu_and_three_tab_close_are_visible_and_follow_the_authored_motion() {
     );
     preserve(compact["crop"].as_str().unwrap(), "compact-menu-crop.png");
 }
+
+#[test]
+fn empty_workspace_action_rows_are_visible() {
+    let mut harness = Fixture::new(
+        "empty-workspace-pixels",
+        20,
+        vec![Clip::new("pattern-strobe", "Strobe", 2.0, 6.0).lane(0)],
+    )
+    .window(1280.0, 800.0)
+    .open(Mode::Pixel);
+    let out = run(
+        &mut harness,
+        &support::script(
+            r#"
+        nav.venue("Test Venue");
+        app.action("luma::NewTab");
+        until("empty workspace", s => s.find({ role: "card", label: "Empty panel" }) !== undefined);
+        app.frames(4);
+        ({ shot: app.screenshot().path,
+           rows: ["Venue", "Pattern editor", "Track editor"].map(label =>
+             app.snapshot().find({ role: "button", label }).bounds) })
+    "#,
+        ),
+    );
+    let path = preserve(out["shot"].as_str().unwrap(), "empty-workspace.png");
+    assert!(luma_range(&pixels(path)) > 30);
+    for bounds in out["rows"].as_array().unwrap() {
+        assert!(number(bounds, "width") > 200.0, "{out:#}");
+        assert!(number(bounds, "height") >= 50.0, "{out:#}");
+    }
+}

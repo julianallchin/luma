@@ -26,6 +26,60 @@ use gpui::{div, px, App, Div, ElementId, SharedString, Window};
 use crate::node::{Instrument, Role};
 use crate::{float, luma_select_item, CONTROL_HEIGHT};
 
+/// Logical visibility plus a retained, noninteractive closing frame.
+#[derive(Clone, Copy, Default)]
+pub enum MenuVisibility {
+    #[default]
+    Closed,
+    Open,
+    Closing(std::time::Instant),
+}
+impl From<bool> for MenuVisibility {
+    fn from(open: bool) -> Self {
+        if open {
+            Self::Open
+        } else {
+            Self::Closed
+        }
+    }
+}
+impl MenuVisibility {
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Open)
+    }
+    pub fn close(&mut self) {
+        if self.is_open() {
+            *self = Self::Closing(std::time::Instant::now());
+        }
+    }
+    pub fn toggle(&mut self) {
+        if self.is_open() {
+            self.close();
+        } else {
+            *self = Self::Open;
+        }
+    }
+    pub fn tick_close(&mut self, reduced_motion: bool) -> bool {
+        if let Some(t) = self.exit() {
+            if reduced_motion || t >= 1.0 {
+                *self = Self::Closed;
+            } else {
+                return true;
+            }
+        }
+        false
+    }
+    fn exit(self) -> Option<f32> {
+        match self {
+            Self::Closing(since) => Some(crate::motion::exit_progress(
+                &crate::motion::MENU_OUT,
+                since,
+            )),
+            _ => None,
+        }
+    }
+}
+
 /// The trigger, ghost-sized to the widest option, and — while `open` — its
 /// menu, floated by [`crate::float::anchored_below`] (which is what keeps it
 /// inside the window wherever the trigger sits). `on_toggle` fires on the
@@ -35,10 +89,13 @@ pub fn luma_arg_select(
     id: impl Into<SharedString>,
     value: &str,
     options: &[&str],
-    open: bool,
+    visibility: impl Into<MenuVisibility>,
     on_toggle: impl Fn(&mut Window, &mut App) + Clone + 'static,
     on_pick: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
 ) -> Div {
+    let visibility = visibility.into();
+    let open = visibility.is_open();
+    let closing = visibility.exit();
     let id = id.into();
     // The trigger's press and the dismissing press are the same gesture seen
     // from two sides: a click on an open trigger lands *outside* the card, so
@@ -55,27 +112,62 @@ pub fn luma_arg_select(
     // comfortable minimum, not the trigger's width — the same choice every
     // popover in the app makes (`add_tracks::source_menu` sets 248).
     let menu_id: SharedString = format!("{id}:menu").into();
-    div().relative().child(trigger).when(open, |el| {
-        el.child(float::anchored_below(
-            menu_id,
-            CONTROL_HEIGHT,
-            float::Dismiss::on_press_out(move |window, cx| dismiss(window, cx)),
-            options
+    div()
+        .relative()
+        .child(trigger)
+        .when(open || closing.is_some_and(|t| t < 1.0), |el| {
+            let content = options
                 .iter()
                 .enumerate()
                 .fold(
-                    float::popover_card().min_w(px(160.)),
+                    float::popover_card().min_w(px(144.)).gap(px(0.)).p(px(3.)),
                     |menu, (index, option)| {
                         let on_pick = on_pick.clone();
                         menu.child(
                             luma_select_item(option, float::RowState::of(*option == value, false))
+                                .h(px(26.))
+                                .py(px(0.))
+                                .text_size(px(12.))
                                 .id(ElementId::Name(format!("{id}:{option}").into()))
-                                .on_click(move |_, window, cx| on_pick(index, window, cx))
+                                .on_click(move |_, window, cx| {
+                                    if open {
+                                        on_pick(index, window, cx);
+                                    }
+                                })
                                 .agent_node(Role::Button, option.to_string()),
                         )
                     },
                 )
-                .into_any_element(),
-        ))
-    })
+                .into_any_element();
+            el.child(match closing {
+                Some(t) => float::anchored_below_closing(menu_id, CONTROL_HEIGHT, content, t),
+                None => float::anchored_below(
+                    menu_id,
+                    CONTROL_HEIGHT,
+                    float::Dismiss::on_press_out(move |window, cx| dismiss(window, cx)),
+                    content,
+                ),
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn closing_is_retained_then_removed_and_can_reopen() {
+        let mut state = MenuVisibility::Open;
+        state.close();
+        assert!(!state.is_open());
+        assert!(state.tick_close(false));
+        state.toggle();
+        assert!(state.is_open());
+        state.close();
+        assert!(!state.tick_close(true));
+        assert!(matches!(state, MenuVisibility::Closed));
+        state =
+            MenuVisibility::Closing(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert!(!state.tick_close(false));
+        assert!(matches!(state, MenuVisibility::Closed));
+    }
 }

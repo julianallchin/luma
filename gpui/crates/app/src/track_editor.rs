@@ -22,31 +22,8 @@
 //! turns that back into the box the stroke actually covered; the pixels are
 //! the same, the spelling is not.
 //!
-//! The waveform is where the two hosts deliberately part, at both ends of the
-//! zoom.
-//!
-//! *Below* one pixel per stored bucket the web overdraws a dozen bucket bars
-//! into one column and the last one painted wins, so what shows is an arbitrary
-//! bucket rather than the run — which shimmers under scroll as the phase
-//! shifts. [`columns`] folds the run to its envelope instead: same silhouette,
-//! no shimmer, and a twelfth of the quads, which is what put the frame inside
-//! budget.
-//!
-//! *Above* it, the web has nothing left to draw with — `get_track_waveform` is
-//! 30 000 buckets however long the track is, and a five-minute track runs out
-//! of them at 100 pixels a second — so it stretches each bucket over several
-//! pixels and shows detail that was averaged away at import. This host asks the
-//! seam to measure the visible range instead, at a bucket per pixel
-//! ([`Fine`]), and paints that.
-//!
-//! Both arrive as the *same three band envelopes in the same units* — the seam
-//! normalises every resolution of a track against one set of band gains — so
-//! [`paint_waveform`] has one drawing routine and crossing the threshold shows
-//! finer detail and nothing else. That is a contract, not a coincidence: a
-//! measured bucket covers a narrower slice of audio than a stored one, so its
-//! peak can only be lower, and the difference is troughs opening up between
-//! peaks that stay where they were. Nothing about the picture — colour,
-//! ceiling, shape — may depend on which source drew it.
+//! Both waveform strips query the same GPU peak hierarchy at every zoom. Audio
+//! is filtered and uploaded once; navigation only changes the rendered range.
 //!
 //! # One working copy, one write
 //!
@@ -68,8 +45,6 @@
 //! those and nothing else, and there is no per-command undo to write or to
 //! get wrong.
 //!
-//! What is still missing is the minimap.
-//!
 //! # Clip bodies are heatmap previews
 //!
 //! A clip's body carries its pattern's space-time heatmap — the same picture
@@ -88,8 +63,7 @@
 //! ```text
 //!   0 .. 32     ruler        scrub the playhead
 //!  32 .. 112    waveform     clear the selection — it does *not* scrub
-//! 112 .. lanes  dead air     clears too
-//! lanes ..      lanes        clip headers grab; everything else sweeps
+//! 112 .. floor  lanes        clip headers grab; everything else sweeps
 //! ```
 //!
 //! The lane block is **bottom-anchored** ([`Layout`]): z = 0 is pinned to the
@@ -126,8 +100,8 @@ use luma_lib::host_audio::HostAudioSnapshot;
 use luma_lib::models::node_graph::{BeatGrid, BlendMode};
 use luma_lib::models::patterns::{AnnotationPreview, PatternSummary};
 use luma_lib::models::scores::TrackScore;
-use luma_lib::models::tracks::TrackBrowserRow;
-use luma_lib::models::waveforms::{BandEnvelopes, TrackWaveform};
+use luma_lib::models::tracks::{BeatValidationReason, BeatValidationVerdict, TrackBrowserRow};
+use luma_lib::models::waveforms::TrackWaveform;
 use luma_lib::services::track_edits::TrackClip;
 
 use crate::history::History;
@@ -136,7 +110,14 @@ use crate::tabs::Target;
 use crate::{LibraryError, Luma};
 
 mod document;
+mod minimap;
+pub(crate) mod picker;
+mod playback_clock;
+mod playback_surface;
 mod sheet;
+mod trace;
+mod waveform;
+mod zoom_motion;
 
 /// The subset ladder and its reading, shared with the fixture picker so the
 /// two surfaces cannot offer different rungs.
@@ -168,18 +149,18 @@ pub struct Editor {
     /// listing taken before it was.
     score_chosen: bool,
     waveform: Option<Rc<TrackWaveform>>,
-    /// The measured envelope of the range on screen, at a bucket per pixel.
-    /// `None` until the zoom outruns the stored envelope and the seam answers
-    /// — see [`Fine`].
-    fine: Option<Rc<Fine>>,
-    /// The window a measurement is in flight for. One at a time: a zoom
-    /// gesture wants a different window every frame and only the one it
-    /// settles on is worth having, so the current want is re-issued when a
-    /// measurement lands rather than queued behind it.
-    fine_pending: Option<Cut>,
+    gpu_waveform: Rc<RefCell<waveform::Resource>>,
+    timeline_waveform: waveform::Strip,
+    overview_waveform: waveform::Strip,
+    minimap_drag: Option<minimap::Drag>,
     /// The analysed grid, or `None` for a track that has not been analysed —
     /// in which case the header falls back to a clock ruler, as on the web.
     beats: Option<Rc<BeatGrid>>,
+    beat_verdict: BeatValidationVerdict,
+    beat_reason: Option<BeatValidationReason>,
+    beat_reason_menu: luma_ui::arg::select::MenuVisibility,
+    beat_validation_pending: bool,
+    beat_validation_error: Option<String>,
     /// The **working copy**: every clip as the screen currently has it, with
     /// its lane resolved. Rebuilt whenever the clips change and never during a
     /// draw — a lane is a function of *every* clip's `zIndex`, so working it
@@ -222,7 +203,7 @@ pub struct Editor {
     /// not of the score — it is never written back, and a read-only score can
     /// still be looped over.
     loop_region: Option<(f64, f64)>,
-    /// The open insertion menu, if a right-click put one up.
+    /// The target and keyboard cursor of the open insertion dialog.
     menu: Option<InsertMenu>,
     menu_query: String,
     menu_search: Entity<luma_ui::text_input::TextInput>,
@@ -244,11 +225,13 @@ pub struct Editor {
     follow: bool,
     view: View,
     transport: Transport,
+    playback_surface: Option<Entity<playback_surface::Surface>>,
     gesture: Option<Gesture>,
     /// The latched zoom anchor: what was under the pointer when the gesture
     /// started, and when it was last fed. Held for the whole gesture so a
     /// momentum flick cannot walk the point it is zooming about.
     anchor: Option<Anchor>,
+    zoom_motion: Option<zoom_motion::Zoom>,
     /// The seek the throttle is holding back, and when the last one went out.
     /// A scrub writes the playhead every move and the transport at most once
     /// per [`SEEK_THROTTLE`] — the picture is free, the IPC is not.
@@ -285,7 +268,7 @@ pub struct Editor {
     /// landed later lighting the rig, and that is not necessarily the later
     /// edit. The reconcile re-issues from what it sees when this clears.
     compositing: bool,
-    /// The args inspector over the timeline's right edge — see [`sheet`].
+    /// The clip controls in the editing area — see [`sheet`].
     sheet: sheet::State,
 }
 
@@ -423,75 +406,6 @@ impl Preview {
     }
 }
 
-/// What the range on screen wants of the fine waveform — see
-/// [`Editor::fine_need`].
-enum FineNeed {
-    /// What is held answers the range on screen, a measurement of it is
-    /// already in flight, or this zoom has no use for one.
-    Nothing,
-    /// The view is back under the stored envelope's own resolution: the held
-    /// window should go.
-    Discard,
-    /// Measure this.
-    Measure(Cut),
-}
-
-/// A fine window's identity: the range measured, into how many buckets, for
-/// which zoom. Named for the cut rather than the window because `Window` in
-/// this module is gpui's.
-///
-/// `buckets` is redundant with the other three — it is `(end - start) * zoom` —
-/// but a request and the answer to it are compared field by field, and the seam
-/// clamps both the range and the count, so what came back is recorded rather
-/// than re-derived.
-#[derive(Clone, Copy, PartialEq)]
-struct Cut {
-    start: f64,
-    end: f64,
-    buckets: usize,
-    zoom: f32,
-}
-
-/// One measured window of audio: a bucket per pixel over the range on screen,
-/// which is the detail `get_track_waveform`'s fixed 30 000 buckets stopped
-/// having once the zoom passed them.
-///
-/// Held with a margin either side of the view, so a pan is answered from what
-/// is already here rather than by a round trip.
-struct Fine {
-    cut: Cut,
-    /// Where the audio ends. A window butting against it still covers a view
-    /// that runs past it — there is nothing out there to have measured.
-    duration: f64,
-    /// The same three envelopes `TrackWaveform::bands` carries and in the same
-    /// units, over a shorter range and a finer grid. That is what lets
-    /// [`paint_waveform`] pick a source and then forget which one it picked.
-    bands: BandEnvelopes,
-}
-
-impl Fine {
-    /// Whether this answers `start..end` at `zoom`.
-    fn covers(&self, start: f64, end: f64, zoom: f32) -> bool {
-        self.cut.zoom == zoom
-            && self.cut.start <= start.max(0.)
-            && self.cut.end >= end.min(self.duration)
-    }
-
-    /// Where its buckets sit on the timeline.
-    fn grid(&self) -> Grid {
-        Grid {
-            origin: self.cut.start,
-            per_second: self.bands.low.len() as f64 / (self.cut.end - self.cut.start),
-            count: self.bands.low.len(),
-        }
-    }
-}
-
-/// How much of a viewport is measured either side of it. A pan of up to half a
-/// screen is free; the cost is that every window measures twice the audio it
-/// shows, which is microseconds of a scan over a buffer already in memory.
-const FINE_MARGIN: f64 = 0.5;
-
 /// What a cut or a copy took, in the two shapes the web's clipboard has.
 ///
 /// The clips are whole rows so a paste can mint real clips from them, and the
@@ -538,10 +452,7 @@ struct InsertMenu {
     end: f64,
     row: usize,
     insert: bool,
-    /// Which pattern the keyboard would commit. The pointer never reads it —
-    /// a click names its own row — so this is the whole of what "the menu has
-    /// a keyboard" means, and there is no second notion of focus for the two
-    /// to disagree over.
+    /// The pattern highlighted by either keyboard or pointer navigation.
     active: usize,
 }
 
@@ -565,7 +476,7 @@ impl InsertChoice {
             Self::Graph { id, .. } => id.clone(),
         }
     }
-    fn origin(&self) -> &str {
+    fn origin(&self) -> &'static str {
         match self {
             Self::Node { .. } => "Built-in",
             Self::Graph { .. } => "This score",
@@ -769,16 +680,18 @@ struct View {
     lift: f32,
 }
 
-/// What the transport is doing. A mirror of the audio host's own state, which
-/// is the authority — every field here was last read from a snapshot.
+/// Audio-host state plus a display clock for motion between host snapshots.
+/// The host corrects position; animation frames advance the visible playhead.
 #[derive(Default)]
 struct Transport {
+    clock: playback_clock::Clock,
     playing: bool,
     position: f32,
     duration: f32,
     /// A poll loop is running. Exactly one at a time, or every play would
     /// leave another behind.
     polling: bool,
+    status_second: u64,
 }
 
 /// What a wheel notch means, which is entirely a question of the modifier
@@ -868,10 +781,10 @@ impl Edge {
 }
 
 impl View {
-    /// `MIN_ZOOM` / `MAX_ZOOM` from `utils/timeline-constants.ts`, in pixels
+    /// Horizontal zoom limits in logical pixels
     /// per second.
     const MIN_ZOOM: f32 = 25.;
-    const MAX_ZOOM: f32 = 500.;
+    const MAX_ZOOM: f32 = 5_000.;
     /// The web store's opening `zoom`.
     const DEFAULT_ZOOM: f32 = 50.;
     /// `ZOOM_SENSITIVITY`: the exponential rate a modified wheel notch scales
@@ -890,7 +803,7 @@ impl View {
 
     /// The time under a point `offset` pixels from the canvas's left edge.
     fn time_at(self, offset: f32) -> f64 {
-        f64::from((offset + self.scroll) / self.zoom)
+        (f64::from(offset) + f64::from(self.scroll)) / f64::from(self.zoom)
     }
 
     /// The time range a canvas `width` pixels wide shows.
@@ -898,10 +811,9 @@ impl View {
         (self.time_at(0.), self.time_at(width))
     }
 
-    /// Where a time lands, in pixels from the canvas's left edge. Floored,
-    /// because every coordinate in `timeline-drawing.ts` is.
+    /// Where a time lands in logical pixels. Preserve subpixel motion until paint.
     fn x_of(self, time: f64) -> f32 {
-        (time as f32 * self.zoom - self.scroll).floor()
+        (time * f64::from(self.zoom) - f64::from(self.scroll)) as f32
     }
 }
 
@@ -1007,76 +919,6 @@ impl Editor {
     /// The range on screen, from the canvas the last frame painted.
     fn visible(&self) -> (f64, f64) {
         self.view.visible(f32::from(self.canvas.get().size.width))
-    }
-
-    /// The window worth measuring, or `None` while the stored envelope still
-    /// has a bucket per pixel.
-    ///
-    /// That is most of the zoom range and every short track: 30 000 buckets
-    /// over ninety seconds is 333 a second, and only past 333 pixels a second
-    /// does a pixel have less than a bucket in it. Below the threshold there is
-    /// nothing a measurement could add, and asking would be a round trip for
-    /// data already in hand.
-    fn fine_window(&self) -> Option<Cut> {
-        let waveform = self.waveform.as_ref()?;
-        let duration = waveform.duration_seconds;
-        let stored = stored_grid(waveform, duration)?;
-        if f64::from(self.view.zoom) <= stored.per_second {
-            return None;
-        }
-        let (from, to) = self.visible();
-        let margin = (to - from) * FINE_MARGIN;
-        let start = (from - margin).max(0.);
-        let end = (to + margin).min(duration);
-        let buckets = ((end - start) * f64::from(self.view.zoom)).ceil();
-        if !buckets.is_finite() || buckets < 1. {
-            return None;
-        }
-        Some(Cut {
-            start,
-            end,
-            buckets: buckets as usize,
-            zoom: self.view.zoom,
-        })
-    }
-
-    /// What the range on screen wants of the fine waveform.
-    ///
-    /// The prepaint's gate and the request itself are the same question, so
-    /// they are the same function. Prepaint learns the canvas's width and has
-    /// to ask for a window measured in it, but it learns that width again on
-    /// every frame of a sidebar slide, and a deferred round trip through the
-    /// app per frame to be told the window in hand already covers it is the
-    /// whole cost of asking — [`FINE_MARGIN`] means it usually does.
-    fn fine_need(&self) -> FineNeed {
-        let Some(want) = self.fine_window() else {
-            // Back under the stored envelope's own resolution, where measuring
-            // would only reproduce it.
-            return if self.fine.is_some() {
-                FineNeed::Discard
-            } else {
-                FineNeed::Nothing
-            };
-        };
-        if self.fine_pending.is_some() || self.drawn_buckets().is_some() {
-            return FineNeed::Nothing;
-        }
-        FineNeed::Measure(want)
-    }
-
-    /// How many measured buckets the canvas is drawing from, or `None` when it
-    /// is drawing the stored envelope.
-    ///
-    /// The paint's choice of source, the toolbar's resolution readout and the
-    /// test for whether another measurement is worth asking for are all this
-    /// one question, so the panel cannot claim a resolution the canvas is not
-    /// drawing.
-    fn drawn_buckets(&self) -> Option<usize> {
-        let (from, to) = self.visible();
-        self.fine
-            .as_ref()
-            .filter(|fine| fine.covers(from, to, self.view.zoom))
-            .map(|fine| fine.cut.buckets)
     }
 
     /// The clip whose *header bar* covers `(time, y)` in `row`, if any.
@@ -1384,11 +1226,23 @@ impl Editor {
             .collect();
     }
 
+    /// Advance wheel zoom while keeping its latched time under the pointer.
+    fn tick_zoom(&mut self, now: std::time::Instant) -> bool {
+        let Some(motion) = &mut self.zoom_motion else {
+            return false;
+        };
+        let (zoom, settled) = motion.advance(now);
+        self.view.zoom = zoom;
+        if let Some(anchor) = self.anchor {
+            self.set_scroll(anchor.time as f32 * zoom - anchor.offset);
+        }
+        if settled {
+            self.zoom_motion = None;
+        }
+        true
+    }
+
     /// Centre the view on the playhead, if the eye is following it.
-    ///
-    /// Centring, not edge-paging: the web recentres whenever the drawn
-    /// position differs from the centred one, so the playhead sits still and
-    /// the timeline moves under it.
     fn follow_playhead(&mut self) {
         if !self.follow {
             return;
@@ -2070,13 +1924,13 @@ impl Luma {
 
         let waveform = self.library.track_waveform(track_id);
         let beats = self.library.track_beats(track_id);
+        let validation = self.library.track_beat_validation(track_id);
         let scores = self.library.scores_across_venues(track_id);
         let patterns = self.library.patterns();
         let audio = self.library.load_audio(track_id);
 
-        let menu_search = cx.new(|cx| {
-            luma_ui::text_input::TextInput::search("Search lighting nodes and Patterns…", cx)
-        });
+        let menu_search =
+            cx.new(|cx| luma_ui::text_input::TextInput::search("Search patterns…", cx));
         let search_target = target.clone();
         let menu_subscription = cx.subscribe(&menu_search, move |this, field, event, cx| {
             if event == &luma_ui::text_input::Event::Edited {
@@ -2096,9 +1950,16 @@ impl Luma {
             venue_id: venue_id.clone(),
             score: None,
             waveform: None,
-            fine: None,
-            fine_pending: None,
+            gpu_waveform: Rc::new(RefCell::new(waveform::Resource::default())),
+            timeline_waveform: waveform::Strip::default(),
+            overview_waveform: waveform::Strip::default(),
+            minimap_drag: None,
             beats: None,
+            beat_verdict: BeatValidationVerdict::Unreviewed,
+            beat_reason: None,
+            beat_reason_menu: Default::default(),
+            beat_validation_pending: false,
+            beat_validation_error: None,
             clips: Vec::new().into(),
             base: Vec::new().into(),
             graph_score: None,
@@ -2125,9 +1986,11 @@ impl Luma {
                 lift: 0.,
             },
             transport: Transport::default(),
+            playback_surface: None,
             gesture: None,
             canvas: Rc::new(Cell::new(Bounds::default())),
             anchor: None,
+            zoom_motion: None,
             seek_pending: None,
             seek_at: None,
             dirty: false,
@@ -2170,6 +2033,7 @@ impl Luma {
         cx.spawn(async move |this, cx| {
             let waveform = waveform.await;
             let beats = beats.await;
+            let validation = validation.await;
             let patterns = patterns.await;
             let scores = scores.await;
             let audio = audio.await;
@@ -2194,6 +2058,17 @@ impl Luma {
                         Err(error) => editor.error = Some(error.to_string()),
                     }
                     editor.beats = beats.ok().flatten().map(Rc::new);
+                    match validation {
+                        Ok(grid) => {
+                            if let Some(validation) = grid.filter(|validation| {
+                                Some(&validation.grid) == editor.beats.as_deref()
+                            }) {
+                                editor.beat_verdict = validation.verdict;
+                                editor.beat_reason = validation.reason;
+                            }
+                        }
+                        Err(error) => editor.beat_validation_error = Some(error.to_string()),
+                    }
                     if let Err(error) = audio {
                         editor.error = Some(error.to_string());
                     }
@@ -2232,7 +2107,6 @@ impl Luma {
                 // gesture. It needs the canvas's width, which the first
                 // prepaint supplies — this is a no-op before then and the
                 // prepaint asks again.
-                this.ensure_fine_waveform(cx);
             })
             .ok();
         })
@@ -2358,6 +2232,73 @@ impl Luma {
         }
     }
 
+    fn edit_waveform_tab(
+        &mut self,
+        target: &Target,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Editor),
+    ) {
+        if let Some(Body::TrackEditor(editor)) = self.workspace.body_mut(target) {
+            edit(editor);
+            // Playback already schedules the next display frame. Publishing a
+            // texture must not insert an extra, off-cadence animation step.
+            if editor.transport.playing && editor.timeline_waveform.frame.is_some() {
+                return;
+            }
+            if let Some(surface) = editor.playback_surface.clone() {
+                surface.update(cx, |_, cx| cx.notify());
+            } else {
+                cx.notify();
+            }
+        }
+    }
+
+    fn save_beat_validation(
+        &mut self,
+        verdict: BeatValidationVerdict,
+        reason: Option<BeatValidationReason>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Body::TrackEditor(editor)) = self.workspace.active_body() else {
+            return;
+        };
+        if editor.beat_validation_pending {
+            return;
+        }
+        let Some(grid) = editor.beats.as_deref() else {
+            return;
+        };
+        let target = Target::TrackEditor {
+            track: editor.track_id.clone(),
+            venue: editor.venue_id.clone(),
+        };
+        let request =
+            self.library
+                .set_track_beat_validation(&editor.track_id, grid, verdict, reason);
+        self.edit_track_tab(&target, cx, |editor| {
+            editor.beat_reason_menu.close();
+            editor.beat_validation_pending = true;
+            editor.beat_validation_error = None;
+        });
+        cx.spawn(async move |this, cx| {
+            let result = request.await;
+            this.update(cx, |this, cx| {
+                this.edit_track_tab(&target, cx, |editor| {
+                    editor.beat_validation_pending = false;
+                    match result {
+                        Ok(()) => {
+                            editor.beat_verdict = verdict;
+                            editor.beat_reason = reason;
+                        }
+                        Err(error) => editor.beat_validation_error = Some(error.to_string()),
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Start or stop playback, and read the transport back either way — the
     /// audio host is the authority on whether it is playing, so the button's
     /// own state is never assumed.
@@ -2443,11 +2384,27 @@ impl Luma {
             state.transport.polling = false;
             return false;
         };
+        let status_second = snapshot.current_time.max(0.) as u64;
+        let notify_status = state.transport.playing != snapshot.is_playing
+            || state.transport.status_second != status_second
+            || state.transport.duration != snapshot.duration_seconds;
+        state.transport.status_second = status_second;
         state.transport.playing = snapshot.is_playing;
         // A scrub in progress owns the playhead; adopting the host's position
         // under the pointer would fight the drag.
         if !matches!(state.gesture, Some(Gesture::Scrub)) {
-            state.transport.position = snapshot.current_time;
+            let now = std::time::Instant::now();
+            state.transport.clock.observe(
+                now,
+                f64::from(snapshot.current_time),
+                snapshot.is_playing,
+            );
+            state.transport.position = state
+                .transport
+                .clock
+                .position(now)
+                .unwrap_or(f64::from(snapshot.current_time))
+                as f32;
         }
         // The loaded segment's length is the authority once audio is in hand:
         // a waveform's `durationSeconds` is the decoded file's, and the two
@@ -2457,7 +2414,9 @@ impl Luma {
         }
         state.transport.polling = snapshot.is_playing;
         state.follow_playhead();
-        cx.notify();
+        if notify_status || !snapshot.is_playing {
+            cx.notify();
+        }
         snapshot.is_playing
     }
 
@@ -2579,6 +2538,36 @@ impl Luma {
         self.commit_clips(cx);
     }
 
+    fn add_pattern(&mut self, cx: &mut Context<Self>) {
+        self.with_track_editor(cx, |editor| {
+            if !editor.writable() {
+                return;
+            }
+            let time = editor
+                .cursor
+                .map_or(f64::from(editor.transport.position), |cursor| cursor.start);
+            let beats = editor.beats.as_deref();
+            let start = snap(beats, time, editor.view.zoom, SNAP_CAPTURE).max(0.);
+            let end = editor
+                .cursor
+                .and_then(Cursor::span)
+                .map_or_else(|| start + bar_length(beats, start), |(_, end)| end)
+                .min(f64::from(editor.transport.duration));
+            if end - start < MIN_CLIP {
+                return;
+            }
+            editor.menu = Some(InsertMenu {
+                start,
+                end,
+                row: editor.cursor.map_or(1, |cursor| cursor.row),
+                insert: false,
+                active: 0,
+            });
+            editor.menu_scroll.scroll_to_item(0);
+        });
+        picker::open(self, cx);
+    }
+
     /// A right-click: work out where a clip would go and offer the patterns.
     ///
     /// `computeInsertionTarget`. The span is one bar — the next downbeat if
@@ -2596,7 +2585,7 @@ impl Luma {
             let time = editor.view.time_at(f32::from(at.x - canvas.origin.x));
             let y = f32::from(at.y - canvas.origin.y);
             let layout = editor.layout();
-            if y < layout.start.max(TRACK_AREA_Y) {
+            if y < TRACK_AREA_Y {
                 return;
             }
 
@@ -2621,6 +2610,7 @@ impl Luma {
             });
             editor.menu_scroll.scroll_to_item(0);
         });
+        picker::open(self, cx);
     }
 
     /// A double-click on a clip opens its pattern's graph.
@@ -2704,7 +2694,14 @@ impl Luma {
     /// first business once nothing is floating over the screen.
     pub(crate) fn dismiss_sheet_menu(&mut self) -> bool {
         match self.workspace.active_body_mut() {
-            Some(Body::TrackEditor(state)) => state.sheet.dismiss_menu(),
+            Some(Body::TrackEditor(state)) => {
+                if state.beat_reason_menu.is_open() {
+                    state.beat_reason_menu.close();
+                    true
+                } else {
+                    state.sheet.dismiss_menu()
+                }
+            }
             _ => false,
         }
     }
@@ -2731,6 +2728,12 @@ impl Luma {
 
     /// Commit an insertion on the pattern the pointer chose.
     fn insert_pattern(&mut self, menu: InsertMenu, choice: InsertChoice, cx: &mut Context<Self>) {
+        if matches!(
+            self.overlay.as_open(),
+            Some(crate::shell::Overlay::InsertPattern(_))
+        ) {
+            self.close_overlay(cx);
+        }
         if matches!(self.workspace.active_body(), Some(Body::TrackEditor(editor)) if editor.graph_score.is_some())
         {
             self.track_command(
@@ -2798,6 +2801,7 @@ impl Luma {
         let mut seek = None;
         let (shift, alt) = (keys.shift, keys.alt);
         self.with_track_editor(cx, |editor| {
+            editor.zoom_motion = None;
             let canvas = editor.canvas.get();
             let offset = f32::from(at.x - canvas.origin.x);
             let time = editor.view.time_at(offset);
@@ -2808,6 +2812,7 @@ impl Luma {
 
             if y < HEADER_HEIGHT {
                 editor.gesture = Some(Gesture::Scrub);
+                editor.transport.clock.reset();
                 editor.transport.position =
                     time.clamp(0., f64::from(editor.transport.duration)) as f32;
                 editor.follow_playhead();
@@ -3030,12 +3035,14 @@ impl Luma {
         wheel: Wheel,
         cx: &mut Context<Self>,
     ) {
+        let reduced_motion = cx.reduce_motion();
         self.with_track_editor(cx, |editor| {
             let canvas = editor.canvas.get();
             let offset = f32::from(at.x - canvas.origin.x);
             let rate = match wheel {
                 Wheel::Scroll => {
                     editor.anchor = None;
+                    editor.zoom_motion = None;
                     let scroll = editor.view.scroll - delta.x;
                     editor.set_scroll(scroll);
                     editor.set_lift(editor.view.lift + delta.y);
@@ -3043,6 +3050,7 @@ impl Luma {
                 }
                 Wheel::Lanes => {
                     editor.anchor = None;
+                    editor.zoom_motion = None;
                     editor.zoom_lanes(
                         delta.y * View::ZOOM_Y_PER_PIXEL,
                         f32::from(at.y - canvas.origin.y),
@@ -3055,6 +3063,7 @@ impl Luma {
                 return;
             }
             let now = std::time::Instant::now();
+            editor.tick_zoom(now);
             let anchor = match editor.anchor {
                 Some(anchor) if now.duration_since(anchor.at) < ANCHOR_IDLE => anchor,
                 _ => Anchor {
@@ -3065,13 +3074,19 @@ impl Luma {
             };
             // Exponential in the scroll distance, so a fast flick and a slow
             // one over the same distance land in the same place.
-            editor.view.zoom =
-                (editor.view.zoom * (delta.y * rate).exp()).clamp(View::MIN_ZOOM, View::MAX_ZOOM);
-            let scroll = anchor.time as f32 * editor.view.zoom - anchor.offset;
-            editor.set_scroll(scroll);
+            if reduced_motion {
+                editor.zoom_motion = None;
+                editor.view.zoom = (editor.view.zoom * (delta.y * rate).exp())
+                    .clamp(View::MIN_ZOOM, View::MAX_ZOOM);
+                editor.set_scroll(anchor.time as f32 * editor.view.zoom - anchor.offset);
+            } else {
+                editor
+                    .zoom_motion
+                    .get_or_insert_with(|| zoom_motion::Zoom::new(editor.view.zoom, now))
+                    .push(delta.y * rate);
+            }
             editor.anchor = Some(Anchor { at: now, ..anchor });
         });
-        self.ensure_fine_waveform(cx);
     }
 
     /// Move the transport from a scrub, at most once per [`SEEK_THROTTLE`].
@@ -3097,74 +3112,6 @@ impl Luma {
         if send {
             self.seek(seconds, cx);
         }
-    }
-
-    /// Measure the range on screen, if the stored envelope has run out of
-    /// buckets for it and this measurement is not already in hand or in flight.
-    ///
-    /// Called from wherever the view can move — the two gestures that move it,
-    /// and the prepaint that first tells the canvas how wide it is. The old
-    /// measurement is kept until the new one lands, so a scrub or a pan draws
-    /// the coarse envelope at worst and never a blank bed.
-    /// Whether [`Self::ensure_fine_waveform`] would do anything, asked without
-    /// a deferred round trip through the app — see [`Editor::fine_need`].
-    fn wants_fine_waveform(&self) -> bool {
-        match self.workspace.active_body() {
-            Some(Body::TrackEditor(state)) => !matches!(state.fine_need(), FineNeed::Nothing),
-            _ => false,
-        }
-    }
-
-    fn ensure_fine_waveform(&mut self, cx: &mut Context<Self>) {
-        let Some(Body::TrackEditor(state)) = self.workspace.active_body_mut() else {
-            return;
-        };
-        let want = match state.fine_need() {
-            FineNeed::Nothing => return,
-            FineNeed::Discard => {
-                state.fine = None;
-                return;
-            }
-            FineNeed::Measure(want) => want,
-        };
-        state.fine_pending = Some(want);
-        let duration = state
-            .waveform
-            .as_ref()
-            .map_or(0., |waveform| waveform.duration_seconds);
-        let pending = self.library.track_waveform_window(
-            &state.track_id,
-            want.start,
-            want.end,
-            want.buckets as u32,
-        );
-        cx.spawn(async move |this, cx| {
-            let measured = pending.await;
-            this.update(cx, |this, cx| {
-                this.with_track_editor(cx, |editor| {
-                    editor.fine_pending = None;
-                    // A failed measurement is not an error the screen shows:
-                    // the coarse envelope is still a waveform, and the next
-                    // view change asks again.
-                    if let Ok(measured) = measured {
-                        editor.fine = Some(Rc::new(Fine {
-                            cut: Cut {
-                                start: measured.start_seconds,
-                                end: measured.end_seconds,
-                                buckets: measured.bands.low.len(),
-                                zoom: want.zoom,
-                            },
-                            duration,
-                            bands: measured.bands,
-                        }));
-                    }
-                });
-                // The view may have moved on while this was in the air.
-                this.ensure_fine_waveform(cx);
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// Move the transport, optimistically: the playhead is already where the
@@ -3520,10 +3467,8 @@ const LABEL_SIZE: f32 = 10.;
 /// waveform, and [`View::lift`] is what reaches them: still bottom-anchored,
 /// which is the whole point of anchoring it there.
 ///
-/// Above lane 0 — the empty insertion lane — sits one further lane of dead
-/// air, which is the web's `trackStartY = trackAreaY + trackHeight`. It scales
-/// with the lanes because it is one of them in every arithmetic that counts
-/// the content's height.
+/// Lanes expand to fill spare canvas height, so all visible editing space
+/// responds to selection and insertion, including scores with only one layer.
 #[derive(Clone, Copy)]
 struct Layout {
     /// The top of lane 0, the empty insertion lane. Negative once the lanes
@@ -3539,8 +3484,15 @@ struct Layout {
 
 impl Layout {
     fn new(rows: usize, height: f32, view: View) -> Self {
-        let lane = (LANE_HEIGHT * view.zoom_y).round();
-        let natural = TRACK_AREA_Y + (rows + 1) as f32 * lane;
+        let fitted = (height - TRACK_AREA_Y).max(0.) / rows.max(1) as f32;
+        // Sparse scores use the whole editing area at the default zoom.
+        // Explicit vertical zoom remains meaningful for larger arrangements.
+        let lane = if rows <= 2 && view.zoom_y == 1. {
+            fitted.max(1.)
+        } else {
+            (LANE_HEIGHT * view.zoom_y).round()
+        };
+        let natural = TRACK_AREA_Y + rows as f32 * lane;
         let max_lift = (natural - height).max(0.);
         Self {
             start: height - rows as f32 * lane + view.lift.clamp(0., max_lift),
@@ -3576,10 +3528,10 @@ impl Layout {
     /// runs *under* it, and a lane whose arithmetic reaches up there is one
     /// the pointer cannot see and must not answer for.
     fn row_at(self, y: f32) -> Option<usize> {
-        if y < self.start.max(TRACK_AREA_Y) {
+        if y < TRACK_AREA_Y {
             return None;
         }
-        let row = ((y - self.start) / self.lane) as usize;
+        let row = ((y - self.start).max(0.) / self.lane) as usize;
         (row < self.rows).then_some(row)
     }
 
@@ -3719,6 +3671,17 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
         })
 }
 
+/// Controls occupy the editing area above the timeline, even with the rig hidden.
+pub(crate) fn inspector(
+    state: &mut Editor,
+    app: &Entity<Luma>,
+    window: &mut Window,
+    cx: &mut Context<Luma>,
+) -> AnyElement {
+    sheet::sync(state, window, cx);
+    sheet::panel(state, app)
+}
+
 /// Render the screen: a toolbar strip over the canvas.
 ///
 /// The same split as the graph editor, and for the same reason — a panel is a
@@ -3731,11 +3694,17 @@ pub fn track_editor(
     window: &mut Window,
     cx: &mut Context<Luma>,
 ) -> Div {
-    // Reconcile the args sheet against the selection before drawing it — the
-    // render pass is where every path that can move the subject converges,
-    // and the one place a `Window` is in hand to build its entities and to
-    // ask for the slide's next frame.
-    let sheet_revealed = sheet::sync(state, window, cx);
+    let surface = state
+        .playback_surface
+        .get_or_insert_with(|| cx.new(|_| playback_surface::Surface::new(app.downgrade())))
+        .clone();
+    if state
+        .beat_reason_menu
+        .tick_close(luma_ui::motion::reduced_motion(cx))
+    {
+        window.request_animation_frame();
+    }
+
     // …and the rig against the working copy, for the same reason: an edit is
     // only real once the scene it changed has been installed.
     sync_composite(state, cx);
@@ -3765,112 +3734,20 @@ pub fn track_editor(
                 .flex_col()
                 .relative()
                 .overflow_hidden()
-                .child(canvas_element(state, app))
-                .children(state.menu.map(|target| insert_menu(state, target, app)))
-                // The args inspector, over the timeline's right edge and
-                // inside the tab rather than on the app's overlay plane: it
-                // belongs to this screen, and it must not outlive a tab swap
-                // or paint over the shell's chrome.
-                .children(sheet::sheet(state, sheet_revealed, app))
+                .child(surface)
                 .into_any_element(),
         })
-}
-
-/// The patterns a right-click offers, and where its clip would land.
-///
-/// A docked drawer rather than a popover at the pointer: the *target* is drawn
-/// on the canvas as a ghost, which is where the eye needs it, and a list that
-/// follows the pointer would be a second positioning system for one menu. The
-/// web anchors the menu itself — that difference is deliberate, and the
-/// insertion it commits is identical.
-fn insert_menu(state: &Editor, target: InsertMenu, app: &Entity<Luma>) -> Div {
-    div()
-        .key_context("PatternInsert")
-        .absolute()
-        // Opaque to the pointer: the canvas listens for presses over its whole
-        // hitbox and dismisses the menu on any of them, and a *Normal* hitbox
-        // stacked on top does not stop that — so the press that chose an item
-        // would tear the item down before its own click could land.
-        .occlude()
-        .top_0()
-        .right_0()
-        .w(px(320.))
-        .max_h_full()
-        .flex()
-        .flex_col()
-        .overflow_hidden()
-        .bg(ladder::control())
-        .border_1()
-        .border_color(ladder::control_border())
-        .child(luma_ui::silkscreen("INSERT PATTERN".to_string()).into_any_element())
-        .child(
-            div()
-                .flex_none()
-                .h(px(36.))
-                .px(px(8.))
-                .py(px(6.))
-                .child(state.menu_search.clone())
-                .agent_node(Role::Input, "Search lighting nodes and Patterns…"),
-        )
-        // A real scroller under the drawer's header, gutters outside it
-        // (`float::viewport`'s contract): the library outgrows the canvas, and
-        // `step_menu`'s `scroll_to_item` keeps the row `Enter` would commit on
-        // screen instead of clipped below the drawer's edge.
-        .child(
-            float::viewport()
-                // Content-sized and shrinkable, not `flex_1`: a dialog card
-                // hands the viewport a definite height to fill, while this
-                // drawer's height IS its content — a zero flex basis (or the
-                // list's own `h_full`, a percentage of this auto-height
-                // wrapper) collapses the rows. Past `max_h_full` the shrink
-                // engages and the scroller takes over.
-                .flex_initial()
-                .flex()
-                .flex_col()
-                .child(
-                    float::list()
-                        .id("insert-menu-list")
-                        .h_auto()
-                        .min_h_0()
-                        .flex_initial()
-                        .overflow_y_scroll()
-                        .track_scroll(&state.menu_scroll)
-                        .children(state.insertion_choices().iter().enumerate().map(
-                            |(index, pattern)| {
-                                let app = app.clone();
-                                let chosen = pattern.clone();
-                                let name: SharedString = pattern.name().to_string().into();
-                                // The active row wears the ladder's hover fill, so
-                                // what `Enter` would commit is the row a pointer
-                                // would be over — one affordance for "this one",
-                                // whichever moved it there.
-                                luma_ui::luma_button(
-                                    &format!("{} · {}", pattern.name(), pattern.origin()),
-                                    Enabled::Yes,
-                                )
-                                .when(index == target.active, |el| el.bg(ladder::hover()))
-                                .id(SharedString::from(format!("insert-{}", pattern.id())))
-                                .w_full()
-                                .on_click(move |_, _, cx| {
-                                    let chosen = chosen.clone();
-                                    app.update(cx, |this, cx| {
-                                        this.insert_pattern(target, chosen, cx);
-                                    });
-                                })
-                                .agent_node(Role::Row, name)
-                            },
-                        )),
-                ),
-        )
 }
 
 /// The way back, what is open, the transport, and whether a write is in the
 /// air.
 fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
     let transport = app.clone();
+    let insert = app.clone();
     let playing = state.transport.playing;
     div()
         .flex()
+        .flex_wrap()
         .flex_shrink_0()
         .items_center()
         .gap(px(12.))
@@ -3886,7 +3763,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .agent_node(Role::Text, state.track_name.clone()),
         )
         .child(
-            luma_ui::luma_button(if playing { "Pause" } else { "Play" }, Enabled::Yes)
+            luma_ui::button(if playing { "Pause" } else { "Play" }, Enabled::Yes)
                 .id("transport")
                 // One button, two labels — the label *is* the state, so a
                 // script reads what the transport is doing from the same place
@@ -3894,12 +3771,150 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
                 .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
                 .agent_node(Role::Button, if playing { "Pause" } else { "Play" }),
         )
+        .child(
+            luma_ui::button(
+                "Add pattern",
+                if state.writable() {
+                    Enabled::Yes
+                } else {
+                    Enabled::No
+                },
+            )
+            .id("add-score-pattern")
+            .on_click(move |_, _, cx| insert.update(cx, |app, cx| app.add_pattern(cx)))
+            .agent_node(Role::Button, "Add pattern"),
+        )
         .child(luma_ui::silkscreen(format!(
             "{} / {}",
             clock(state.transport.position),
             clock(state.transport.duration)
         )))
         .child(luma_ui::silkscreen(format!("{} CLIPS", state.clips.len())))
+        .when_some(state.beats.as_deref(), |el, grid| {
+            el.child(luma_ui::silkscreen(format!("{:.1} BPM", grid.bpm)))
+        })
+        .when(
+            state
+                .beats
+                .as_ref()
+                .is_some_and(|grid| !grid.beats.is_empty() && !grid.downbeats.is_empty()),
+            |el| {
+                let enabled = if state.beat_validation_pending {
+                    Enabled::No
+                } else {
+                    Enabled::Yes
+                };
+                let votes = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().text_size(px(12.)).child("Beat grid"))
+                    .children(
+                        [
+                            (
+                                BeatValidationVerdict::Correct,
+                                luma_ui::icons::IconName::ThumbsUp,
+                                if state.beat_verdict == BeatValidationVerdict::Correct {
+                                    "Beat grid approved"
+                                } else {
+                                    "Beat grid correct"
+                                },
+                            ),
+                            (
+                                BeatValidationVerdict::Incorrect,
+                                luma_ui::icons::IconName::ThumbsDown,
+                                if state.beat_verdict == BeatValidationVerdict::Incorrect {
+                                    "Beat grid flagged"
+                                } else {
+                                    "Needs correction"
+                                },
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(verdict, icon, label)| {
+                            let selected = state.beat_verdict == verdict;
+                            let next = if selected {
+                                BeatValidationVerdict::Unreviewed
+                            } else {
+                                verdict
+                            };
+                            let app = app.clone();
+                            luma_ui::button("", enabled)
+                                .w(px(28.))
+                                .px(px(0.))
+                                .id(label)
+                                .child(gpui_component::Icon::new(icon).size(px(14.)))
+                                .when(selected, |el| el.text_color(ladder::primary()))
+                                .on_click(move |_, _, cx| {
+                                    app.update(cx, |this, cx| {
+                                        this.save_beat_validation(next, None, cx)
+                                    })
+                                })
+                                .agent_node(Role::Button, label)
+                        }),
+                    );
+                el.child(votes.when(
+                    state.beat_verdict == BeatValidationVerdict::Incorrect,
+                    |el| {
+                        let value = match state.beat_reason {
+                            None => "Reason (optional)",
+                            Some(BeatValidationReason::Tempo) => "Wrong tempo",
+                            Some(BeatValidationReason::Offset) => "Offset",
+                            Some(BeatValidationReason::Drift) => "Drift",
+                            Some(BeatValidationReason::BarPhase) => "Bar phase",
+                        };
+                        let toggle = app.clone();
+                        let pick = app.clone();
+                        el.child(luma_ui::arg::select::luma_arg_select(
+                            "beat-grid-reason",
+                            value,
+                            &[
+                                "Reason (optional)",
+                                "Wrong tempo",
+                                "Offset",
+                                "Drift",
+                                "Bar phase",
+                            ],
+                            state.beat_reason_menu,
+                            move |_, cx| {
+                                toggle.update(cx, |this, cx| {
+                                    this.with_track_editor(cx, |editor| {
+                                        if !editor.beat_validation_pending {
+                                            editor.beat_reason_menu.toggle();
+                                        }
+                                    });
+                                })
+                            },
+                            move |index, _, cx| {
+                                pick.update(cx, |this, cx| {
+                                    let reason = [
+                                        None,
+                                        Some(BeatValidationReason::Tempo),
+                                        Some(BeatValidationReason::Offset),
+                                        Some(BeatValidationReason::Drift),
+                                        Some(BeatValidationReason::BarPhase),
+                                    ][index];
+                                    this.save_beat_validation(
+                                        BeatValidationVerdict::Incorrect,
+                                        reason,
+                                        cx,
+                                    );
+                                })
+                            },
+                        ))
+                    },
+                ))
+            },
+        )
+        .when_some(state.beat_validation_error.clone(), |el, message| {
+            el.child(
+                div()
+                    .text_size(px(9.))
+                    .text_color(ladder::danger())
+                    .child(message.clone())
+                    .agent_node(Role::Text, message),
+            )
+        })
         .when(!state.selected.is_empty(), |el| {
             el.child(luma_ui::silkscreen(format!(
                 "{} SELECTED",
@@ -3921,16 +3936,6 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         .when(state.follow, |el| {
             el.child(luma_ui::silkscreen("FOLLOW".to_string()))
         })
-        // How many buckets the canvas actually has, once that is more than the
-        // stored envelope carries — the way an instrument reads out its own
-        // range rather than leaving you to guess it.
-        //
-        // A readout and *only* a readout: the picture is the same three bands
-        // in the same units either side of the threshold, so this is the one
-        // place the source shows.
-        .when_some(state.drawn_buckets(), |el, buckets| {
-            el.child(luma_ui::silkscreen(format!("FINE {buckets}")))
-        })
         .child(div().flex_1())
         // Which score is on the timeline, by the handle the sidebar names it
         // by.
@@ -3948,6 +3953,9 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
             state
                 .error
                 .clone()
+                .or_else(|| state.gpu_waveform.borrow().error.clone())
+                .or_else(|| state.timeline_waveform.error.clone())
+                .or_else(|| state.overview_waveform.error.clone())
                 .or_else(|| state.preview_errors.values().next().cloned())
                 .filter(|_| state.waveform.is_some()),
             |el, message| {
@@ -3986,14 +3994,34 @@ pub(crate) fn clock(seconds: f32) -> String {
 /// entity to send the gesture to, because by the time one runs the frame it
 /// was registered in is already gone.
 fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
+    // Present a completed physical-pixel waveform and its camera together.
+    // This adds one pipeline frame of latency, without resampling the texture
+    // or letting the grid run ahead of the waveform during focus playback.
+    let (view, playhead) = state
+        .timeline_waveform
+        .frame
+        .as_ref()
+        .and_then(|frame| frame.camera)
+        .filter(|(view, _)| state.follow && state.transport.playing && view.zoom == state.view.zoom)
+        .map(|(view, position)| {
+            // At either scroll limit the waveform is stationary and reusable;
+            // its original capture time must not freeze the moving playhead.
+            let position = if view.scroll == state.view.scroll {
+                state.transport.position
+            } else {
+                position
+            };
+            (view, position)
+        })
+        .unwrap_or((state.view, state.transport.position));
     let scene = Scene {
         clips: Rc::clone(&state.clips),
         previews: Rc::clone(&state.previews),
-        waveform: state.waveform.clone(),
-        fine: state.fine.clone(),
+        waveform: state.timeline_waveform.frame.clone(),
         beats: state.beats.clone(),
-        view: state.view,
-        playhead: state.transport.position,
+        view,
+        playhead,
+        trace_active: state.transport.playing && state.follow,
         selected: state.selected.clone(),
         cursor: state.cursor,
         loop_region: state.loop_region,
@@ -4013,19 +4041,8 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
                 // next prepaint, so this is also the only place it is safe to
                 // write.
                 //
-                // How *wide* it is is also what a fine window is measured in,
-                // so a width this canvas has not seen before is the other
-                // moment one has to be asked for. Deferred, because a draw may
-                // not notify — and gated on the window in hand not answering
-                // the new width, because a sidebar slide hands this a new width
-                // every frame and all but a few of them are already covered.
-                let widened = canvas_bounds.replace(bounds).size.width != bounds.size.width;
-                if widened && resized.read(cx).wants_fine_waveform() {
-                    let resized = resized.clone();
-                    cx.defer(move |cx| {
-                        resized.update(cx, |this, cx| this.ensure_fine_waveform(cx));
-                    });
-                }
+                canvas_bounds.set(bounds);
+                waveform::prepaint(&resized, false, bounds, window, cx);
                 register(&registered, bounds, window, cx);
                 window.insert_hitbox(bounds, HitboxBehavior::Normal)
             },
@@ -4043,11 +4060,11 @@ fn canvas_element(state: &Editor, app: &Entity<Luma>) -> impl IntoElement {
 struct Scene {
     clips: Rc<[Clip]>,
     previews: Rc<RefCell<HashMap<SharedString, Preview>>>,
-    waveform: Option<Rc<TrackWaveform>>,
-    fine: Option<Rc<Fine>>,
+    waveform: Option<Rc<waveform::Painted>>,
     beats: Option<Rc<BeatGrid>>,
     view: View,
     playhead: f32,
+    trace_active: bool,
     selected: Vec<SharedString>,
     cursor: Option<Cursor>,
     loop_region: Option<(f64, f64)>,
@@ -4327,6 +4344,7 @@ fn listen(app: &Entity<Luma>, hitbox: &Hitbox, window: &mut Window) {
 /// run under both — which is what the web's `renderTile` does, and what makes
 /// a clip's translucent body show the beats through it.
 fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut App) {
+    let started = std::time::Instant::now();
     window.paint_quad(fill(bounds, ladder::background()));
     window.paint_quad(fill(
         Bounds {
@@ -4353,7 +4371,7 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
             },
             ladder::border(),
         ));
-        paint_waveform(bounds, scene, start, end, window);
+        paint_waveform(bounds, scene, window);
         // The lanes are masked to the band below the waveform, because that is
         // what "the lanes scroll and the navigation surface does not" means in
         // pixels: a lifted block runs *under* the waveform rather than over it.
@@ -4390,6 +4408,14 @@ fn paint(bounds: Bounds<Pixels>, scene: &Scene, window: &mut Window, cx: &mut Ap
         }
         paint_playhead(bounds, scene, start, end, window);
     });
+    trace::frame(
+        scene.trace_active,
+        started,
+        scene.view.scroll,
+        scene.view.zoom,
+        scene.playhead,
+        window.is_window_active(),
+    );
 }
 
 /// The box a canvas 2D stroke of `width` centred on `x + 0.5` actually covers.
@@ -4434,22 +4460,26 @@ fn paint_beat_grid(
         .map(|time| (f64::from(*time) * 1000.).round() as i64)
         .collect();
 
-    let mut last: Option<f32> = None;
+    // Anchor thinning to track time, so panning never changes the selected beats.
+    let mut last: Option<f64> = None;
     for beat in &beats.beats {
         let beat = f64::from(*beat);
-        if beat < start || beat > end {
-            continue;
+        if beat > end {
+            break;
         }
         if downbeats.contains(&((beat * 1000.).round() as i64)) {
             continue;
         }
-        let x = view.x_of(beat);
-        // Against the last *drawn* beat, so a run of suppressed downbeats does
-        // not reset the spacing. Pinned by the `dense*` golden cases.
-        if last.is_some_and(|last| x - last < MIN_BEAT_SPACING) {
+        if last
+            .is_some_and(|last| (beat - last) * f64::from(view.zoom) < f64::from(MIN_BEAT_SPACING))
+        {
             continue;
         }
-        last = Some(x);
+        last = Some(beat);
+        if beat < start {
+            continue;
+        }
+        let x = view.x_of(beat);
         window.paint_quad(fill(
             hairline(canvas, x, HEADER_HEIGHT, height, 1.),
             fade(ladder::primary(), 0.25),
@@ -4567,202 +4597,17 @@ fn paint_time_ruler(
     }
 }
 
-/// `drawWaveform`: three stacked band envelopes over a recessed bed, or the
-/// min/max sample pairs when a track has no bands.
-fn paint_waveform(
-    canvas: Bounds<Pixels>,
-    scene: &Scene,
-    start: f64,
-    end: f64,
-    window: &mut Window,
-) {
-    let width = f32::from(canvas.size.width);
-    let top = HEADER_HEIGHT;
-    window.paint_quad(fill(
+/// Draw the main strip using the same pixel sampler as the overview.
+fn paint_waveform(canvas: Bounds<Pixels>, scene: &Scene, window: &mut Window) {
+    waveform::paint(
         Bounds {
-            origin: point(canvas.origin.x, canvas.origin.y + px(top)),
+            origin: point(canvas.origin.x, canvas.origin.y + px(HEADER_HEIGHT)),
             size: size(canvas.size.width, px(WAVEFORM_HEIGHT)),
         },
-        ladder::card(),
-    ));
-    window.paint_quad(fill(
-        Bounds {
-            origin: point(
-                canvas.origin.x,
-                canvas.origin.y + px(top + WAVEFORM_HEIGHT - 0.5),
-            ),
-            size: size(canvas.size.width, px(1.)),
-        },
-        // The line under the waveform is a seam, not a plane: it divides the
-        // bed from the lanes below it, so it derives from both rather than
-        // being a value anyone chose.
-        ladder::seam(ladder::card(), ladder::background()),
-    ));
-
-    let Some(waveform) = &scene.waveform else {
-        return;
-    };
-    let duration = waveform.duration_seconds;
-    let centre = top + WAVEFORM_HEIGHT / 2.;
-    let half = (WAVEFORM_HEIGHT - 8.) / 2.;
-    let view = scene.view;
-
-    // No horizontal cull: [`columns`] walks the canvas's own pixels, so a
-    // column is on screen by construction and a second bound here would only
-    // be somewhere for the two to disagree.
-    let mut bar = |column: &Column, top: f32, height: f32, color: Rgba| {
-        if height <= 0. {
-            return;
-        }
-        window.paint_quad(fill(
-            Bounds {
-                origin: point(canvas.origin.x + px(column.x), canvas.origin.y + px(top)),
-                size: size(px(column.span), px(height)),
-            },
-            color,
-        ));
-    };
-
-    let (Some(stored), Some(stored_bands)) = (stored_grid(waveform, duration), &waveform.bands)
-    else {
-        return;
-    };
-
-    // **One picture at every zoom.** The two sources are the same three band
-    // envelopes in the same units — the backend normalises both against the
-    // track's stored band gains — so which one is in hand changes how much
-    // audio a bucket covers and nothing else. Pick it, then forget it: past
-    // this line there is a grid and three bands, and no second way to draw
-    // them.
-    //
-    // A measured window is the only source with a bucket per pixel, and it is
-    // asked for only where the stored envelope has stopped having one. Until
-    // one arrives — and while a pan is outrunning the one in hand — the stored
-    // envelope is still the same waveform, so the bed is never blank and the
-    // swap is invisible.
-    let (grid, bands) = match scene
-        .fine
-        .as_ref()
-        .filter(|fine| fine.covers(start, end, view.zoom))
-    {
-        Some(fine) => (fine.grid(), &fine.bands),
-        None => (stored, stored_bands),
-    };
-
-    for column in columns(grid, view, width) {
-        // `floor` is monotone, so the tallest bar's floored height is the
-        // floored peak — this is the same number a per-bucket walk drew,
-        // not an approximation of it.
-        let height = |band: &[f32]| {
-            (band[column.buckets.clone()]
-                .iter()
-                .fold(0., |peak: f32, value| peak.max(*value))
-                * half)
-                .floor()
-        };
-        // Painted low to high so the quieter bands read as an outline
-        // around the louder ones, which is the rekordbox look.
-        for (band, color) in [
-            (&bands.low, ladder::waveform_low()),
-            (&bands.mid, ladder::waveform_mid()),
-            (&bands.high, ladder::waveform_high()),
-        ] {
-            let height = height(band);
-            bar(&column, centre - height, height * 2., color);
-        }
-    }
-}
-
-/// One pixel column of the waveform, and the buckets that land in it.
-///
-/// Never empty: a column with no buckets under it is not drawn at all, rather
-/// than drawn as a hole.
-struct Column {
-    /// The column's left edge — a pixel index, so columns tile without seams.
-    x: f32,
-    /// The drawn width, `barWidth` in `drawWaveform`. One pixel, always.
-    span: f32,
-    buckets: std::ops::Range<usize>,
-}
-
-/// A run of buckets laid on the timeline: `count` of them, evenly spaced, the
-/// first starting `origin` seconds in.
-///
-/// The stored envelope's grid starts at zero and spans the track; a measured
-/// window's starts wherever it was cut and spans only itself. Both are these
-/// three numbers, and [`range`](Grid::range) is the only question anything asks
-/// of either — which is what "one bucket-walking system" means in code.
-#[derive(Clone, Copy)]
-struct Grid {
-    origin: f64,
-    per_second: f64,
-    count: usize,
-}
-
-impl Grid {
-    /// The half-open bucket range a time range covers.
-    ///
-    /// Empty only when the range falls wholly outside the grid. Inside it the
-    /// `floor`/`ceil` pair always spans at least one bucket, so a pixel that
-    /// has audio under it always has a bucket to draw — the property the
-    /// missing bars came from losing.
-    fn range(self, start: f64, end: f64) -> std::ops::Range<usize> {
-        let from = ((start - self.origin) * self.per_second).floor().max(0.);
-        let to = ((end - self.origin) * self.per_second).ceil().max(0.);
-        if !from.is_finite() || !to.is_finite() {
-            return 0..0;
-        }
-        (from as usize).min(self.count)..(to as usize).min(self.count)
-    }
-}
-
-/// The grid of a track's stored envelope: `FULL_WAVEFORM_SIZE` buckets over the
-/// whole track, however long it is. `None` for a waveform with no band
-/// envelopes, which is a waveform with nothing to draw — the backend
-/// recomputes such a row rather than serving it, so this is the empty case and
-/// not a legacy one.
-fn stored_grid(waveform: &TrackWaveform, duration: f64) -> Option<Grid> {
-    let count = waveform.bands.as_ref()?.low.len();
-    if count == 0 || !duration.is_finite() || duration <= 0. {
-        return None;
-    }
-    Some(Grid {
-        origin: 0.,
-        per_second: count as f64 / duration,
-        count,
-    })
-}
-
-/// The visible pixel columns, each with the buckets that land in it.
-///
-/// **Walks pixels, not buckets, and that is the whole point.** A column is one
-/// pixel of the canvas, so the columns tile the strip exactly: every pixel is
-/// drawn once, no pixel twice, and there is no arrangement of grid and zoom
-/// that leaves a hole.
-///
-/// Walking buckets instead — emitting one column per bucket and folding the
-/// runs that share a floored `x` — leaves a gap at any pixel no bucket happens
-/// to floor onto, and a measured window makes that routine. It is cut at
-/// *about* a bucket per pixel and never exactly: the range it answers is
-/// clamped to the audio it found, so its density is a hair under the zoom that
-/// asked, and a hair under one bucket per pixel is a missing bar every few
-/// hundred columns. Those were the gaps in the drawn waveform.
-///
-/// The quad count is what a frame costs here — gpui charges a `BoundsTree`
-/// insert per quad — and a pixel walk is what bounds it: three quads per
-/// visible pixel, whatever the zoom and whichever source is drawing.
-fn columns(grid: Grid, view: View, width: f32) -> impl Iterator<Item = Column> {
-    (0..width.max(0.) as usize).filter_map(move |x| {
-        let x = x as f32;
-        // Half-open in time exactly as it is in pixels, so two adjacent
-        // columns cannot both claim the instant on their shared edge.
-        let buckets = grid.range(view.time_at(x), view.time_at(x + 1.));
-        (!buckets.is_empty()).then_some(Column {
-            x,
-            span: 1.,
-            buckets,
-        })
-    })
+        scene.waveform.as_deref(),
+        Some(scene.view),
+        window,
+    );
 }
 
 /// `drawAnnotations`' ground: the alternating lane fills and the hairline
@@ -4779,7 +4624,7 @@ fn paint_lanes(canvas: Bounds<Pixels>, layout: Layout, window: &mut Window) {
         ));
     };
 
-    // The dead-air lane above lane 0 and the floor below the last one are
+    // The navigation surface above lane 0 and the floor below the last one are
     // painted by *not* painting: a region with no lane in it is the ground,
     // and the ground is already down. Darkening them would be depth below the
     // floor, which this ladder does not have.

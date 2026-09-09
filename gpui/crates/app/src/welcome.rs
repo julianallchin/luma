@@ -220,10 +220,10 @@ impl Luma {
         self.venue_picker_generation
     }
 
-    /// First paint is an explicit loading dialog. Once both durable facts
-    /// arrive, a valid remembered venue opens; every other state stays in the
-    /// picker with a truthful loading/empty/error route.
+    /// Restore behind the startup splash; only reveal the picker when a
+    /// choice or an error needs the user’s attention.
     pub(crate) fn restore_venue(&mut self, cx: &mut Context<Self>) {
+        self.restoring_venue = true;
         let generation = self.next_venue_picker_generation();
         self.overlay
             .open(Overlay::Venues(Box::new(VenuePicker::loading(
@@ -236,6 +236,7 @@ impl Luma {
             let venues = venues.await;
             let remembered = remembered.await;
             this.update(cx, |this, cx| {
+                this.restoring_venue = false;
                 let Some(Overlay::Venues(state)) = this.overlay.open_mut() else {
                     return;
                 };
@@ -263,6 +264,7 @@ impl Luma {
                     .and_then(|id| rows.iter().find(|venue| venue.id == id))
                     .cloned();
                 if let Some(venue) = restore {
+                    this.overlay = luma_ui::dialog::Popup::default();
                     this.open_venue(venue, cx);
                     return;
                 }

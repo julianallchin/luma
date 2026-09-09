@@ -85,6 +85,13 @@ impl<B> Default for ParkedTabs<B> {
 }
 
 impl<B> ParkedTabs<B> {
+    pub(crate) fn targets(&self, live: &Tabs<B>) -> Vec<Target> {
+        live.iter()
+            .chain(self.parked.values().flat_map(|tabs| tabs.iter()))
+            .map(|tab| tab.target.clone())
+            .collect()
+    }
+
     /// Put `scope`'s remembered tabs on screen, parking whatever was there.
     ///
     /// Returns whether anything moved, so a caller deriving the scope every
@@ -201,9 +208,7 @@ impl crate::Luma {
             // owed to a different element than the frame before.
             cx.notify();
         }
-        if self.workspace.is_empty() && self.sidebar.is_some() {
-            self.open_patch(cx);
-        }
+        self.refresh_agent_tabs(cx);
     }
 
     /// Forget the tab sets of tracks this venue no longer has.

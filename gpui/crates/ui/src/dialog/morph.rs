@@ -13,8 +13,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    px, AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, SharedString, Window,
+    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, Pixels, SharedString, Window, px,
 };
 
 use crate::motion::{self, SURFACE};
@@ -866,10 +866,11 @@ mod tests {
         assert_eq!(opening.layers[1].pose.blur, 16.0);
 
         let middle = dialog.sample(part(start, 0.5));
-        assert!((middle.size.width - 594.356).abs() < 0.01);
-        assert!((middle.size.height - 434.356).abs() < 0.01);
-        assert!((middle.layers[0].pose.x - 15.548).abs() < 0.01);
-        assert!((middle.layers[1].pose.x - -0.452).abs() < 0.01);
+        // The shared spring has covered 96.233% of the distance at half-time.
+        assert!((middle.size.width - 592.466).abs() < 0.01);
+        assert!((middle.size.height - 432.466).abs() < 0.01);
+        assert!((middle.layers[0].pose.x - 15.397).abs() < 0.01);
+        assert!((middle.layers[1].pose.x - -0.603).abs() < 0.01);
         assert_eq!(middle.layers[0].size, MorphSize::new(400.0, 240.0));
         assert_eq!(middle.layers[1].size, MorphSize::new(600.0, 440.0));
 

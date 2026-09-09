@@ -724,15 +724,19 @@ fn render_settings_follow_the_venue_across_score_and_reopen() {
         &mut harness,
         r#"
         function sun() {
-            return app.snapshot().findAll({role:"slider"})
-                .find(n => n.label.startsWith("visualizer-sun-elevation = "));
+            return app.snapshot().findAll({role:"text"})
+                .find(n => n.label.startsWith("Time of day = "));
         }
         nav.patch("Test Venue");
         nav.step("view settings", "toggle", "Render settings");
+        const trigger = app.snapshot().find({role:"toggle",label:"Render settings"});
+        app.click(trigger);
+        until("camera closes settings", s => !s.find({role:"card",label:"Render settings"}));
+        nav.step("view settings again", "toggle", "Render settings");
         nav.step("outdoor", "toggle", "Outdoor");
         until("sun", s => sun() !== undefined);
         const before = sun().label;
-        app.drag(sun(), {dx:14,dy:0}, {steps:12});
+        app.drag(app.snapshot().find({role:"slider",label:"Time of day"}), {dx:0,dy:-20}, {steps:12});
         const changed = sun().label;
         app.key("escape");
         until("settings closed", s => !s.find({role:"card",label:"Render settings"}));

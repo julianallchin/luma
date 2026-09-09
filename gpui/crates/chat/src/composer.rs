@@ -37,7 +37,7 @@
 //! one button reads Send, Steer or Stop — see [`Action`] — and there is no
 //! state in which the composer is inert while a conversation is happening.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui::{div, prelude::*, px, Context, Entity, Focusable as _, SharedString, Window};
 use gpui_component::Icon;
@@ -65,24 +65,16 @@ pub const PLACEHOLDER: &str = "Do anything…";
 /// its own outcome.
 ///
 /// - a newline always expands: two lines have no compact layout;
-/// - during an interactive resize an expanded composer stays expanded, so a
-///   narrowing pane never traps the controls in a compact row mid-drag;
 /// - a pill too narrow to hold both the field and the cluster always expands;
 /// - otherwise compact expands when the text *exceeds* capacity, and expanded
 ///   collapses only once the text is [`theme::COLLAPSE_HYSTERESIS`] clear of it.
 #[must_use]
-pub fn flip(
-    expanded: bool,
-    text_width: f32,
-    capacity: f32,
-    has_newline: bool,
-    resizing: bool,
-) -> bool {
+pub fn flip(expanded: bool, text_width: f32, capacity: f32, has_newline: bool) -> bool {
     if has_newline || capacity < theme::MIN_COMPACT_INPUT_WIDTH {
         return true;
     }
     if expanded {
-        resizing || text_width >= capacity - theme::COLLAPSE_HYSTERESIS
+        text_width >= capacity - theme::COLLAPSE_HYSTERESIS
     } else {
         text_width > capacity
     }
@@ -290,13 +282,6 @@ pub struct Composer {
     /// so a container resize while expanded shifts the carried capacity by the
     /// same amount.
     expanded_anchor: f32,
-    last_seen_width: f32,
-    /// When the container width last changed — an interactive resize defers
-    /// collapse until it settles.
-    width_changed_at: Option<Instant>,
-    /// Wakes the composer once the settle window has passed, so a resize that
-    /// stops moving still gets its collapse.
-    settle: Option<gpui::Task<()>>,
     morph: Option<FlipMorph>,
     /// Monotonic origin for the morph timeline, in plain milliseconds — the
     /// measurement knob is folded into [`FlipMorph::raw`]'s span, not here.
@@ -335,9 +320,6 @@ impl Composer {
             flip_epoch: 0,
             compact_capacity: 0.0,
             expanded_anchor: 0.0,
-            last_seen_width: 0.0,
-            width_changed_at: None,
-            settle: None,
             morph: None,
             clock: Instant::now(),
             last_height: 0.0,
@@ -348,6 +330,19 @@ impl Composer {
     #[must_use]
     pub fn prompt(&self, cx: &gpui::App) -> String {
         self.input.read(cx).text().trim().to_string()
+    }
+
+    /// Restore a prompt the backend never accepted, preserving any new draft.
+    pub(crate) fn restore(&self, prompt: &str, cx: &mut gpui::App) {
+        self.input.update(cx, |input, cx| {
+            let draft = input.text().to_string();
+            let text = if draft.is_empty() {
+                prompt.to_string()
+            } else {
+                format!("{prompt}\n\n{draft}")
+            };
+            input.set_text(text, cx);
+        });
     }
 
     /// Empty the field. A send does this, and so does a steer.
@@ -384,15 +379,9 @@ impl Composer {
                 input.layout_epoch(),
             )
         };
-        let now = Instant::now();
         // Only measurements taken *after* the last flip may drive the next one.
         let measured = epoch > self.flip_epoch && width > 0.0;
         if measured {
-            // A same-mode width change is an interactive resize of the pane.
-            if self.last_seen_width > 0.0 && (width - self.last_seen_width).abs() > 0.5 {
-                self.width_changed_at = Some(now);
-            }
-            self.last_seen_width = width;
             if self.expanded {
                 if self.expanded_anchor <= 0.0 {
                     self.expanded_anchor = width;
@@ -402,22 +391,6 @@ impl Composer {
                 // both thresholds are measured against.
                 self.compact_capacity = width - 8.0;
             }
-        }
-        let settle = Duration::from_millis(theme::RESIZE_SETTLE_MS);
-        let resizing = self
-            .width_changed_at
-            .is_some_and(|at| now.duration_since(at) < settle);
-        if resizing && self.settle.is_none() {
-            self.settle = Some(cx.spawn(async move |chat, cx| {
-                cx.background_executor()
-                    .timer(settle + Duration::from_millis(20))
-                    .await;
-                chat.update(cx, |chat, cx| {
-                    chat.composer.settle = None;
-                    cx.notify();
-                })
-                .ok();
-            }));
         }
         let capacity = if !self.expanded {
             // Before the first measurement, default to compact: an empty
@@ -437,14 +410,12 @@ impl Composer {
             f32::MAX
         };
 
-        let next = flip(self.expanded, text_width, capacity, has_newline, resizing);
+        let next = flip(self.expanded, text_width, capacity, has_newline);
         let committed = next != self.expanded && measured;
         if committed {
             self.expanded = next;
             self.flip_epoch = epoch;
             self.expanded_anchor = 0.0;
-            // The mode change moves the input width; that jump is not a resize.
-            self.last_seen_width = 0.0;
         }
         let now_ms = self.clock.elapsed().as_secs_f32() * 1000.0;
         self.morph = morph_step(
@@ -729,39 +700,33 @@ mod tests {
     #[test]
     fn expanding_and_collapsing_share_no_boundary() {
         let capacity = 400.0;
-        assert!(!flip(false, capacity, capacity, false, false));
-        assert!(flip(true, capacity, capacity, false, false));
+        assert!(!flip(false, capacity, capacity, false));
+        assert!(flip(true, capacity, capacity, false));
         // Just inside the collapse threshold: still expanded.
         let inside = capacity - theme::COLLAPSE_HYSTERESIS + 1.0;
-        assert!(flip(true, inside, capacity, false, false));
-        assert!(!flip(false, inside, capacity, false, false));
+        assert!(flip(true, inside, capacity, false));
+        assert!(!flip(false, inside, capacity, false));
         // Clear of it: collapses.
         assert!(!flip(
             true,
             capacity - theme::COLLAPSE_HYSTERESIS - 1.0,
             capacity,
-            false,
             false
         ));
     }
 
-    /// Three facts override the width entirely: a newline has no compact
-    /// layout, a pill too narrow to hold both halves has none either, and an
-    /// in-flight resize must not collapse under the pointer.
+    /// Newlines and narrow widths require the expanded layout.
     #[test]
-    fn a_newline_a_narrow_pill_and_a_live_resize_all_force_expanded() {
-        assert!(flip(false, 0.0, 400.0, true, false));
+    fn newlines_and_narrow_widths_force_expanded() {
+        assert!(flip(false, 0.0, 400.0, true));
         assert!(flip(
             false,
             0.0,
             theme::MIN_COMPACT_INPUT_WIDTH - 1.0,
-            false,
             false
         ));
-        assert!(flip(true, 0.0, 400.0, false, true));
-        // …but a resize does not *expand* a compact composer: the controls
-        // never squeeze the field away mid-drag.
-        assert!(!flip(false, 0.0, 400.0, false, true));
+        // As soon as the draft fits, the controls can move inline.
+        assert!(!flip(true, 0.0, 400.0, false));
     }
 
     /// The grow range is a range, and the plate can hold both ends of it.

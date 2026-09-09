@@ -177,6 +177,14 @@ impl Working {
     }
 }
 
+/// Reserve the indicator's line during send motion so revealing it cannot
+/// shift the newly landed message or change the scroll destination.
+const TRAILER_HEIGHT: f32 = 24.0;
+
+pub fn reserved_trailer() -> AnyElement {
+    div().h(px(TRAILER_HEIGHT)).flex_none().into_any_element()
+}
+
 /// The trailer: spinner, word, and — once there is something to time — how
 /// long it has been going.
 pub fn trailer(trailer: &Trailer, theme: &Theme, view: EntityId, cx: &mut gpui::App) -> AnyElement {
@@ -189,6 +197,9 @@ pub fn trailer(trailer: &Trailer, theme: &Theme, view: EntityId, cx: &mut gpui::
         ),
     };
     div()
+        .h(px(TRAILER_HEIGHT))
+        .flex_none()
+        .line_height(px(16.0))
         .flex()
         .flex_row()
         .items_center()
@@ -198,6 +209,8 @@ pub fn trailer(trailer: &Trailer, theme: &Theme, view: EntityId, cx: &mut gpui::
         .child(spinner(view, cx))
         .child(
             div()
+                .w(px(112.0))
+                .flex_none()
                 .text_color(theme.text_muted)
                 .child(SharedString::from(word)),
         )

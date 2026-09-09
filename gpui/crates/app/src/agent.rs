@@ -69,6 +69,7 @@ impl Luma {
         self.chat_subscription =
             Some(
                 cx.subscribe_in(&chat, window, |this, _, event, window, cx| match event {
+                    luma_chat::ChatEvent::DocumentChanged => this.agent_documents_changed(cx),
                     luma_chat::ChatEvent::HistoryRequested => this.show_chat_history(cx),
                     luma_chat::ChatEvent::SubagentsRequested(child) => {
                         this.show_subagents(child.clone(), window, cx);
@@ -77,5 +78,47 @@ impl Luma {
             );
         self.chat = Some(chat);
         cx.notify();
+    }
+}
+
+impl Luma {
+    fn agent_documents_changed(&mut self, cx: &mut Context<Self>) {
+        // A commit can touch several documents, including delegated work. The
+        // event deliberately carries no single editor subject.
+        self.agent_stale_tabs = self.parked.targets(&self.workspace);
+        self.refresh_agent_tabs(cx);
+        self.reload_stage(cx);
+        self.refresh_score_listing(cx);
+    }
+
+    pub(crate) fn refresh_agent_tabs(&mut self, cx: &mut Context<Self>) {
+        if self.agent_stale_tabs.is_empty() {
+            return;
+        }
+        let targets: Vec<_> = self
+            .workspace
+            .iter()
+            .map(|tab| tab.target.clone())
+            .collect();
+        for target in targets {
+            if !self.agent_stale_tabs.contains(&target) {
+                continue;
+            }
+            self.agent_stale_tabs.retain(|stale| stale != &target);
+            match self.workspace.body(&target) {
+                Some(Body::TrackEditor(editor)) => {
+                    if let Some(score) = editor.score_id().map(str::to_owned) {
+                        self.reload_score_contents(target, score, cx);
+                    }
+                }
+                Some(Body::Graph(_)) => self.reload_graph(&target, cx),
+                Some(Body::Patch(_)) => {
+                    if let Some(venue) = target.venue() {
+                        self.reload_patch(venue.to_owned(), cx);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }

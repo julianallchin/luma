@@ -9,7 +9,7 @@
 //!
 //! So the claim is a correspondence rather than a value: whichever score the
 //! sidebar opens, the stage names *that* one, and it keeps up when the choice
-//! changes. `RIG SCORE #n` is read rather than a screenshot because the fact
+//! changes. The stage’s automation label is read rather than a screenshot because the fact
 //! under test is which document was installed, not what it looks like — and
 //! the readout is written when the install lands, not when it is asked for.
 
@@ -54,7 +54,7 @@ const SCRIPT: &str = r##"
         app.snapshot().findAll({ role: "text" })
             .find((n) => n.label.startsWith("SCORE #"))?.label;
     const rig = () =>
-        app.snapshot().findAll({ role: "text" })
+        app.snapshot().findAll({ role: "card" })
             .find((n) => n.label.startsWith("RIG SCORE #"))?.label;
     const ordinal = (label) => label?.slice(label.indexOf("#"));
 

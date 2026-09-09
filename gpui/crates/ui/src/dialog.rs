@@ -39,10 +39,9 @@ pub const TITLEBAR_CLEARANCE: f32 = 38.0;
 /// blur is how a *surface* says it is translucent; dimming is how a *plane*
 /// says it is behind something. Blurring both said neither.
 pub const CARD_BLUR: f32 = 44.0;
-/// Per-element backdrop sampling currently has a native implementation on
-/// macOS. Other platforms deliberately render the already-opaque glass palette
-/// without asking a sharp translucent fallback to masquerade as blur.
-pub const BACKDROP_BLUR_SUPPORTED: bool = cfg!(target_os = "macos");
+/// Per-element backdrop sampling is implemented by Metal and Linux
+/// wgpu. Other compositors retain opaque floating surfaces.
+pub const BACKDROP_BLUR_SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "linux"));
 
 /// Route-owned policy for clicks on the modal ground.
 ///
@@ -82,6 +81,17 @@ pub struct Filtered {
     blur_radius: f32,
     scale: f32,
     child: AnyElement,
+}
+
+impl Filtered {
+    pub(crate) fn pose(mut self, scale: f32, opacity: f32) -> Self {
+        self.scale = scale;
+        self.child = gpui::div()
+            .opacity(opacity)
+            .child(self.child)
+            .into_any_element();
+        self
+    }
 }
 
 impl Element for Filtered {
@@ -128,9 +138,13 @@ impl Element for Filtered {
         window: &mut Window,
         cx: &mut App,
     ) {
-        window.paint_filtered_layer(bounds, px(self.blur_radius), self.scale, |window| {
-            self.child.paint(window, cx)
-        });
+        if self.blur_radius <= 0.0 {
+            window.paint_scaled_layer(bounds, self.scale, |window| self.child.paint(window, cx));
+        } else {
+            window.paint_filtered_layer(bounds, px(self.blur_radius), self.scale, |window| {
+                self.child.paint(window, cx)
+            });
+        }
     }
 }
 
@@ -241,12 +255,8 @@ impl Host<'_> {
     /// Paint the plane around `card`.
     #[must_use]
     pub fn render(self, card_body: AnyElement) -> AnyElement {
-        // Exit progress comes off the wall clock, never off an animation's own
-        // delta — see [`motion::exit_progress`]. `live` is the fraction of the
-        // dialog still present: the scrim's alpha and the card's blur both ride
-        // it. The blur especially — `paint_backdrop_blur` ignores element
-        // opacity, so a blur held at full strength through the fade would pop
-        // off at unmount instead of thinning out with the card.
+        // The scrim and card fade together. The backdrop keeps its full blur
+        // radius; the compositor applies element opacity to the glass itself.
         let exit = self
             .closing
             .map(|since| motion::exit_progress(&motion::SURFACE, since));
@@ -299,7 +309,7 @@ impl Host<'_> {
         // The card's own fill, rim and radius belong to `morph::card` — the
         // one place a dialog card is described. This wrapper only clamps and
         // clips it.
-        let card = frosted(radius::MODAL, CARD_BLUR * live, card);
+        let card = frosted(radius::MODAL, CARD_BLUR, card);
 
         let card = match exit {
             // A fresh animation id: reusing the entrance's would inherit its
@@ -622,7 +632,7 @@ mod tests {
         assert!(idle.is_open());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn unsupported_platforms_choose_an_opaque_readable_fallback() {
         assert!(!BACKDROP_BLUR_SUPPORTED);

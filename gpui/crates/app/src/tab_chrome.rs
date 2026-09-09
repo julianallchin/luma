@@ -551,15 +551,12 @@ impl Luma {
 
     /// Logical teardown, shared by every close gesture.
     ///
-    /// **The panel's width is not part of a close.** Closing the last tab used
-    /// to snap it to zero — a leftover from when emptiness hid the panel — and
-    /// the next frame's `retarget` read that as "open from nothing", so the
-    /// empty state arrived on a full slide-in that nobody had asked for. What
-    /// changed is which tabs are open; the region the user sized stays where
-    /// they put it.
     fn finish_close_tab(&mut self, target: &Target, cx: &mut gpui::Context<Self>) {
         if let Some(body) = self.workspace.close(target) {
             self.teardown(body, cx);
+            if self.workspace.is_empty() {
+                self.workspace_hidden = true;
+            }
         }
         cx.notify();
     }

@@ -295,7 +295,7 @@ fn toolbar(state: &Settings, app: &Entity<Luma>) -> Div {
         .border_b_1()
         .border_color(ladder::trim())
         .child(
-            luma_ui::luma_button("Back", Enabled::Yes)
+            luma_ui::button("Back", Enabled::Yes)
                 .id("settings-back")
                 .on_click(move |_, _, cx| back.update(cx, |this, cx| this.close_settings(cx)))
                 .agent_node(Role::Button, "Back"),
@@ -306,16 +306,14 @@ fn toolbar(state: &Settings, app: &Entity<Luma>) -> Div {
 }
 
 fn tabs(state: &Settings, app: &Entity<Luma>) -> Div {
-    div()
-        .flex()
-        .children(Tab::ALL.into_iter().enumerate().map(|(index, tab)| {
-            let app = app.clone();
-            luma_ui::luma_toggle_segment(tab.label(), tab == state.tab, index == 0)
-                .id(tab.label())
-                .tab_index(0)
-                .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_tab(tab, cx)))
-                .agent_node(Role::Toggle, tab.label())
-        }))
+    luma_ui::float::segmented().children(Tab::ALL.into_iter().map(|tab| {
+        let app = app.clone();
+        luma_ui::float::segment(tab.label(), tab == state.tab, tab.label())
+            .id(tab.label())
+            .tab_index(0)
+            .on_click(move |_, _, cx| app.update(cx, |this, cx| this.show_tab(tab, cx)))
+            .agent_node(Role::Toggle, tab.label())
+    }))
 }
 
 fn body(
@@ -505,7 +503,7 @@ fn account(shell: &Luma, app: &Entity<Luma>) -> Vec<Div> {
         field(Some("Signed in as"), readonly_value(&identity, ""), None),
         field(
             None,
-            luma_ui::luma_button(label, Enabled::from(pressable))
+            luma_ui::button(label, Enabled::from(pressable))
                 .id("settings-account-action")
                 .when(pressable, |button| {
                     button.on_click(move |_, _, cx| {
@@ -547,7 +545,7 @@ fn about() -> Vec<Div> {
         ),
         field(
             None,
-            luma_ui::luma_button("Check for Updates", Enabled::No)
+            luma_ui::button("Check for Updates", Enabled::No)
                 .agent_node(Role::Button, "Check for Updates")
                 .agent_disabled(true)
                 .into_any_element(),

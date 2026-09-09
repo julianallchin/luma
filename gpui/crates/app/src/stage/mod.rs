@@ -108,9 +108,6 @@ pub(crate) struct Build {
     sockets: VenueSockets,
     /// The selected node — a venue-graph id, not a render object.
     pub(crate) selected: Option<String>,
-    /// The trim field's draft text. Held as typed so a half-entered number is
-    /// not rounded under the operator's caret.
-    pub(crate) trim_draft: Option<String>,
     /// The distribution the selection belongs to: every fixture of the same
     /// model chained on the same host face, ordered along it. Filled by the
     /// click that selected a member, emptied with the selection — the card
@@ -156,7 +153,6 @@ impl Build {
             hand: Hand::default(),
             sockets,
             selected: None,
-            trim_draft: None,
             distribution: Vec::new(),
             distribution_layout: luma_scene::distribute::Layout::Even,
             rows: rig.rows.clone(),
@@ -450,21 +446,22 @@ impl Build {
         ))
     }
 
-    /// Whether a transform gizmo applies to what is selected right now.
-    ///
-    /// The design's rule reaching the one control that draws it: only a piece
-    /// sitting free on the venue's own floor has axes to drag, so a snapped
-    /// piece — or nothing selected at all — is a state the Translate/Rotate
-    /// track does not apply to, and a control that does not apply is not drawn.
-    /// See [`Room::pick`]. Ray in the socket layer's world space.
+    /// Pick a placed node with a ray in the socket layer's world space.
     pub(crate) fn room_pick(&self, origin: glam::DVec3, dir: glam::DVec3) -> Option<String> {
         self.room.pick(origin, dir)
     }
 
-    /// A node's position in the socket layer's world space, for whoever needs
-    /// a point to aim a camera at.
-    pub(crate) fn room_pose_point(&self, node: &str) -> Option<glam::DVec3> {
-        self.room.pose(node).map(|pose| pose.w_axis.truncate())
+    /// A placed object's geometry bounds in the camera's world space.
+    pub(crate) fn room_bounds(&self, node: &str) -> Option<luma_scene::Aabb> {
+        let pose = self.room.pose(node)?;
+        let bounds = self.room.bounds_of(node)?;
+        Some(luma_scene::Aabb::from_points(
+            bounds.as_aabb().corners().map(|corner| {
+                luma_render::coords::world_from_three(
+                    pose.transform_point3(corner.as_dvec3()).as_vec3(),
+                )
+            }),
+        ))
     }
 
     /// Changing the selected node clears drafts and distribution edits.
@@ -473,7 +470,6 @@ impl Build {
             return;
         }
         self.selected = node;
-        self.trim_draft = None;
         // The row follows the selection: whoever expands it fills it back in.
         self.distribution.clear();
     }
@@ -544,7 +540,6 @@ impl Build {
                     .and_then(|n| n.params.get("angle").copied())
                     .unwrap_or(f64::from(luma_render::catalog::DEFAULT_HINGE_ANGLE_DEG))
             }),
-            family,
             roll_step: self
                 .graph
                 .edge(node)
@@ -560,10 +555,48 @@ impl Build {
         })
     }
 
-    pub(crate) fn gizmo_offered(&self) -> bool {
-        self.selected
-            .as_ref()
-            .is_some_and(|node| self.freedom_of(node) == Freedom::Free)
+    /// The surface directly below this mount, excluding its moving subtree.
+    fn surface_below(&self, node: &str) -> Option<(String, f64)> {
+        let edge = self.graph.edge(node)?;
+        let point = self.room.socket_world(node, &edge.my_socket)?;
+        self.room.surface_below(point, &self.graph.subtree(node))
+    }
+
+    /// Surface placements translate in U/V and rotate only about the host
+    /// normal. Only free rig pieces offer lift; mounted pieces stay seated.
+    pub(crate) fn gizmo_space(&self, node: &str) -> Option<luma_scene::gizmo::GizmoSpace> {
+        if self.graph.node(node)?.kind == luma_scene::venue::NodeKind::Fixture {
+            return None;
+        }
+        let freedom = self.freedom_of(node);
+        if !matches!(freedom, Freedom::Free | Freedom::Slide) {
+            return None;
+        }
+        let edge = self.graph.edge(node)?;
+        let host = self.room.socket(&edge.parent, &edge.their_socket)?;
+        let parent = self.room.pose(&edge.parent)?;
+        let normal =
+            coords::world_from_three(parent.transform_vector3(host.normal).as_vec3()).normalize();
+        let tangent = coords::world_from_three(parent.transform_vector3(host.tangent).as_vec3());
+        let u = (tangent - normal * tangent.dot(normal)).normalize();
+        let basis = glam::Quat::from_mat3(&glam::Mat3::from_cols(u, normal.cross(u), normal));
+        let procedural = self
+            .graph
+            .node(node)
+            .and_then(|node| node.catalog_ref.as_deref())
+            .and_then(luma_scene::catalog::piece)
+            .is_some_and(|piece| {
+                matches!(piece.geometry, luma_scene::catalog::Geometry::Procedural(_))
+            });
+        Some(luma_scene::gizmo::GizmoSpace {
+            basis,
+            translation: [true, true, freedom == Freedom::Free && procedural],
+            rotation: [
+                false,
+                false,
+                host.roll != luma_scene::sockets::RollFreedom::Fixed,
+            ],
+        })
     }
 
     /// Whether this node's open sockets are *named* on the element layer right
@@ -628,15 +661,13 @@ impl Build {
 
 /// What a placed node may be moved by.
 ///
-/// The design's rule as a type: *snapped pieces have no transform gizmo*. Only
-/// [`Freedom::Free`] gets one; the rest move in the one freedom their joint
-/// admits, and a widget offering three axes to a bolted plate would be a widget
-/// that lies.
+/// Surface placements get a constrained UVZ gizmo. Other joints expose only
+/// their roll control, or no movement at all when bolted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Freedom {
     /// Nothing has placed it — it is in the tray.
     Unplaced,
-    /// Seated on the venue's own floor or grid: the gizmo's one case.
+    /// Seated on the venue's own floor or grid; rig pieces may also change trim.
     Free,
     /// Bolted onto a face — it slides along it, and nowhere else.
     Slide,
@@ -1530,6 +1561,36 @@ impl Luma {
         .detach();
     }
 
+    /// Preview the same vertical translation as trim, including attached children.
+    /// Leave graph rows untouched until release so history records one gesture.
+    pub(crate) fn stage_preview_trim(&mut self, metres: f64, cx: &mut Context<Self>) {
+        let Some(build) = self.build_state() else {
+            return;
+        };
+        if build.committing || !metres.is_finite() {
+            return;
+        }
+        let Some(selected) = build.selected_view() else {
+            return;
+        };
+        let delta = metres - selected.trim;
+        let poses: Vec<_> = build
+            .graph
+            .subtree(&selected.node)
+            .iter()
+            .filter_map(|id| {
+                let pose = build.solved.nodes.iter().find(|pose| &pose.id == id)?;
+                let mut position = pose.position;
+                position[2] += delta;
+                Some((id.clone(), position))
+            })
+            .collect();
+        if let Some(view) = self.visualizer_mut() {
+            view.preview_stage_positions(&poses);
+        }
+        cx.notify();
+    }
+
     /// Trim: how high a free placement flies. Children follow, because the
     /// resolver moves them — a subtree is a relation, not a set of poses.
     pub(crate) fn stage_set_trim(&mut self, metres: f64, cx: &mut Context<Self>) {
@@ -1539,7 +1600,19 @@ impl Luma {
         let (Some(node), venue) = (build.selected.clone(), build.venue_id.clone()) else {
             return;
         };
-        build.trim_draft = None;
+        if build.committing || !metres.is_finite() {
+            return;
+        }
+        let minimum = build
+            .selected_view()
+            .and_then(|view| {
+                let edge = build.graph.edge(&node)?;
+                let height = build.room.socket_world(&node, &edge.my_socket)?.y;
+                let (_, surface) = build.surface_below(&node)?;
+                Some((surface - (height - view.trim)).max(0.0))
+            })
+            .unwrap_or(0.0);
+        let metres = metres.max(minimum);
         let pending = self.library.set_params(
             &venue,
             &node,
@@ -1681,8 +1754,7 @@ impl Luma {
         .detach();
     }
 
-    /// Confirm removal. Removing structure unplaces its fixtures; removing a
-    /// fixture directly also removes its patch row.
+    /// Scene removal is undoable; fixtures retain their library/patch row.
     pub(crate) fn stage_delete(&mut self, cx: &mut Context<Self>) {
         let Some(build) = self.build_state() else {
             return;
@@ -1693,21 +1765,15 @@ impl Luma {
         if build.committing {
             return;
         }
-        let label = build.label_of(&node);
-        let is_fixture = build
+        if build
             .graph
             .node(&node)
-            .is_some_and(|node| node.kind == NodeKind::Fixture);
-        self.ask(crate::confirm::Confirm {
-            title: format!("Remove {label}?").into(),
-            body: if is_fixture {
-                "This removes the fixture from the stage and the patch."
-            } else {
-                "This removes the structure and its attached elements. Fixtures stay in the library, unplaced."
-            }.into(),
-            verb: "Remove".into(),
-            action: crate::confirm::Action::DeleteStageElement { venue_id: build.venue_id.clone(), node_id: node },
-        }, cx);
+            .is_some_and(|n| n.kind == NodeKind::Fixture)
+        {
+            self.stage_detach(cx);
+        } else {
+            self.run_stage_delete(build.venue_id.clone(), node, cx);
+        }
     }
 
     pub(crate) fn run_stage_delete(&mut self, venue: String, node: String, cx: &mut Context<Self>) {
@@ -1718,12 +1784,6 @@ impl Luma {
             return;
         }
         let snapshot = build.rows.clone();
-        // Deleting a fixture takes its patch row with it, and a snapshot
-        // cannot bring that back — so it does not pretend to.
-        let took_fixtures = build
-            .graph
-            .node(&node)
-            .is_some_and(|n| n.kind == NodeKind::Fixture);
         let pending = self.library.delete_subtree(&venue, &node);
         if let Some(build) = self.build_mut() {
             build.committing = true;
@@ -1735,7 +1795,6 @@ impl Luma {
                 if let Some(build) = this.build_mut() {
                     build.committing = false;
                     match &result {
-                        Ok(_) if took_fixtures => build.forget_history(),
                         Ok(_) => build.remember(snapshot),
                         Err(error) => build.report = vec![error.to_string()],
                     }
@@ -2125,8 +2184,7 @@ pub(crate) struct ConfigureView {
 pub(crate) struct SelectedView {
     pub(crate) node: String,
     pub(crate) label: String,
-    /// The freedom the joint admits. A snapped piece has no transform gizmo —
-    /// it moves in this and nowhere else.
+    /// The movement admitted by the mounting joint.
     pub(crate) freedom: Freedom,
     pub(crate) relation: Option<String>,
     pub(crate) constraint: Option<String>,
@@ -2142,11 +2200,6 @@ pub(crate) struct SelectedView {
     pub(crate) span: Option<f64>,
     /// A hinge's deflection, in degrees — its own "what it is" row.
     pub(crate) angle: Option<f64>,
-    /// The generator family, for the pieces that are generated. What gates
-    /// the rows only structure earns: trim is "how high it flies", and only
-    /// the truss family flies — a guardrail offered a trim scrub is a
-    /// guardrail the card claims can hover.
-    pub(crate) family: Option<luma_scene::catalog::Family>,
     /// The turn this joint's roll lands on, in degrees — `Steps(90)` for a
     /// corner on a bolt circle, `Steps(5)` for a rail at its post, a fine
     /// default for a free clamp. What the rotate buttons step by and the yaw
@@ -3440,7 +3493,8 @@ pub(crate) fn build_layer(
                             })
                             .agent_node(Role::Button, "Place run")
                             .agent_disabled(refused),
-                    ),
+                    )
+                    .map(float::frosted_card),
             ),
         );
     }
@@ -3497,7 +3551,8 @@ pub(crate) fn build_layer(
                                     });
                                 },
                             ))
-                            .agent_node(Role::Card, "Held span"),
+                            .agent_node(Role::Card, "Held span")
+                            .map(float::frosted_card),
                     ),
             );
         }
@@ -3729,12 +3784,55 @@ mod tests {
             hand: super::Hand::Idle,
             sockets,
             selected: None,
-            trim_draft: None,
             distribution: Vec::new(),
             distribution_layout: luma_scene::distribute::Layout::Even,
             report: Vec::new(),
             committing: false,
         }
+    }
+
+    #[test]
+    fn a_truss_on_a_table_uses_the_tables_normal_and_cannot_lift_or_tilt() {
+        use glam::{DMat4, Vec3};
+        let mut graph = VenueGraph::new(Node {
+            id: "venue".into(),
+            kind: NodeKind::Venue,
+            catalog_ref: None,
+            label: None,
+            params: Params::default(),
+        });
+        graph.insert_placed(
+            Node {
+                id: "table".into(),
+                kind: NodeKind::Stage,
+                catalog_ref: Some("stage_lab/stage_praticavel_2x1x1.glb".into()),
+                label: None,
+                params: Params::default(),
+            },
+            edge("venue", "bottom", luma_scene::venue::FLOOR_SOCKET, 0.0),
+        );
+        graph.insert_placed(piece("truss", 0.0), edge("table", "end_a", "top", 0.0));
+        let mut build = build_of(graph);
+        let tilted = DMat4::from_rotation_z(0.4);
+        build.room = Room::new(
+            &build.graph,
+            &build.sockets,
+            HashMap::from([
+                ("venue".into(), DMat4::IDENTITY),
+                ("table".into(), tilted),
+                ("truss".into(), DMat4::IDENTITY),
+            ]),
+        );
+        let space = build.gizmo_space("truss").unwrap();
+        assert_eq!(space.translation, [true, true, false]);
+        assert_eq!(space.rotation, [false, false, true]);
+        let normal = luma_scene::coords::world_from_three(
+            tilted.transform_vector3(glam::DVec3::Y).as_vec3(),
+        );
+        assert!((space.basis * Vec3::Z).abs_diff_eq(normal, 1e-5));
+        let table = build.gizmo_space("table").unwrap();
+        assert_eq!(table.translation, [true, true, false]);
+        assert_eq!(table.rotation, [false, false, true]);
     }
 
     fn params(u: f64) -> Params {
@@ -3881,62 +3979,58 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
     let unplaced = build.graph.edge(&selected.node).is_none();
     let place_node = selected.node.clone();
     let place_label = selected.label.clone();
-    {
-        card = card.child(
+    card = card.child(
+        div().w_full().child(
             div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.0))
-                        .text_color(ladder::foreground())
-                        .child(selected.label.clone())
-                        .agent_node(Role::Text, selected.label.clone()),
-                )
-                .child(
-                    float::btn(
-                        if unplaced { "Place" } else { "Duplicate" },
-                        "selection-duplicate",
-                    )
-                    .id("selection-duplicate")
-                    .on_click(move |_, _, cx| {
-                        duplicate.update(cx, |this, cx| {
-                            if unplaced {
-                                this.stage_take(
-                                    Holding::Unplaced {
-                                        node: place_node.clone(),
-                                        label: place_label.clone(),
-                                    },
-                                    cx,
-                                );
-                            } else {
-                                this.stage_duplicate(cx);
-                            }
-                        })
-                    })
-                    .agent_node(
-                        Role::Button,
-                        if unplaced {
-                            "Place element"
-                        } else {
-                            "Duplicate element"
-                        },
-                    ),
-                )
-                .child(
-                    float::btn("Remove", "selection-remove")
-                        .id("selection-remove")
-                        .on_click(move |_, _, cx| {
-                            remove.update(cx, |this, cx| this.stage_delete(cx))
-                        })
-                        .agent_node(Role::Button, "Remove element"),
-                ),
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(12.0))
+                .text_color(ladder::foreground())
+                .child(selected.label.clone())
+                .agent_node(Role::Text, selected.label.clone()),
+        ),
+    );
+    let actions = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(
+            float::btn(
+                if unplaced { "Place" } else { "Duplicate" },
+                "selection-duplicate",
+            )
+            .id("selection-duplicate")
+            .on_click(move |_, _, cx| {
+                duplicate.update(cx, |this, cx| {
+                    if unplaced {
+                        this.stage_take(
+                            Holding::Unplaced {
+                                node: place_node.clone(),
+                                label: place_label.clone(),
+                            },
+                            cx,
+                        );
+                    } else {
+                        this.stage_duplicate(cx);
+                    }
+                })
+            })
+            .agent_node(
+                Role::Button,
+                if unplaced {
+                    "Place element"
+                } else {
+                    "Duplicate element"
+                },
+            ),
+        )
+        .child(
+            float::btn("Remove", "selection-remove")
+                .id("selection-remove")
+                .on_click(move |_, _, cx| remove.update(cx, |this, cx| this.stage_delete(cx)))
+                .agent_node(Role::Button, "Remove element"),
         );
-    }
     // A fixture clicked out of a row selected the row, and the row
     // is what this card edits: count and layout re-run the same
     // `distribute` the configure popover committed, live.
@@ -3951,7 +4045,7 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         );
         let member = selected.node.clone();
         let set_count = app.clone();
-        card = card.child(float::field_row(
+        card = card.child(float::inline_field_row(
             "Count",
             float::scrub(
                 "stage-row-count",
@@ -3999,21 +4093,83 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
                     .agent_node(Role::Toggle, format!("Row {name}")),
             );
         }
-        card = card.child(float::field_row("Layout", track));
+        card = card.child(float::inline_field_row("Layout", track));
     }
-    let editable = selected.freedom.param().map_or_else(
-        || {
-            // Trim is "how high it flies", and only the truss
-            // family flies — a free-standing guardrail or speaker
-            // offered a trim scrub is a card claiming it can hover.
-            (selected.freedom == Freedom::Free && selected.family.is_some()).then_some((
-                "trim",
-                selected.trim,
-                MAX_TRIM_M,
-            ))
-        },
-        |key| Some((key, selected.param, if key == "u" { 1.0 } else { 360.0 })),
-    );
+    // Show the mount's solved elevation, including its supporting structure.
+    let height = build
+        .graph
+        .edge(&selected.node)
+        .and_then(|edge| build.room.socket_world(&selected.node, &edge.my_socket))
+        .map(|pose| pose.y);
+    if let Some(height) = height {
+        let liftable = build.graph.edge(&selected.node).is_some_and(|edge| {
+            build
+                .room
+                .socket(&edge.parent, &edge.their_socket)
+                .is_some_and(|host| {
+                    host.socket_type.kind() == luma_scene::sockets::SocketKind::Surface
+                        && build
+                            .room
+                            .pose(&edge.parent)
+                            .is_some_and(|pose| pose.transform_vector3(host.normal).y.abs() > 0.001)
+                })
+        });
+        let base = height - selected.trim;
+        let (surface_name, support) = build
+            .surface_below(&selected.node)
+            .map(|(id, height)| {
+                let label = if id == build.room.root() {
+                    "floor".to_string()
+                } else {
+                    build.label_of(&id)
+                };
+                (label, height.max(base))
+            })
+            .unwrap_or_else(|| ("surface".to_string(), base));
+        if liftable {
+            let preview = app.clone();
+            let app = app.clone();
+            card = card.child(float::inline_field_row(
+                "Height",
+                luma_ui::scrub_number::ScrubNumber::new(
+                    format!("stage-height-{}", selected.node),
+                    height,
+                    support..=(base + MAX_TRIM_M).max(support),
+                    0.01,
+                    SELECTED_CARD_CONTROL_W,
+                    "m",
+                    move |height, _, cx| {
+                        app.update(cx, |this, cx| {
+                            this.stage_set_trim((height - base).max(0.0), cx)
+                        });
+                    },
+                )
+                .on_preview(move |height, _, cx| {
+                    preview.update(cx, |this, cx| {
+                        this.stage_preview_trim((height - base).max(0.0), cx)
+                    });
+                }),
+            ));
+            card = card.child(note(if (height - support).abs() < 0.005 {
+                format!("Above floor · seated on {surface_name}")
+            } else {
+                format!(
+                    "Above floor · {:.2} m above {surface_name}",
+                    height - support
+                )
+            }));
+        } else {
+            card = card.child(float::inline_field_row(
+                "Height",
+                div().child(format!("{height:.2} m")),
+            ));
+            card = card.child(note("Above floor · follows its mount".to_string()));
+        }
+    }
+    let editable = selected
+        .freedom
+        .param()
+        .map(|key| (key, selected.param, if key == "u" { 1.0 } else { 360.0 }));
     if let Some((key, value, max)) = editable {
         let app = app.clone();
         let node = selected.node.clone();
@@ -4024,7 +4180,7 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         } else {
             0.05
         };
-        card = card.child(float::field_row(
+        card = card.child(float::inline_field_row(
             axis_title(key),
             float::scrub(
                 format!("stage-{key}"),
@@ -4036,9 +4192,7 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
                 move |value, _, cx| {
                     let node = node.clone();
                     app.update(cx, |this, cx| {
-                        if key == "trim" {
-                            this.stage_set_trim(value, cx);
-                        } else if key == "yaw" {
+                        if key == "yaw" {
                             this.stage_set_param(&node, key, value.to_radians(), cx);
                         } else {
                             this.stage_set_param(&node, key, value, cx);
@@ -4051,7 +4205,7 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
     if let Some(angle) = selected.angle {
         let app = app.clone();
         let node = selected.node.clone();
-        card = card.child(float::field_row(
+        card = card.child(float::inline_field_row(
             "Angle",
             float::scrub(
                 "stage-angle",
@@ -4072,7 +4226,7 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
     if let Some(span) = selected.span {
         let app = app.clone();
         let node = selected.node.clone();
-        card = card.child(float::field_row(
+        card = card.child(float::inline_field_row(
             "Span",
             float::scrub(
                 "stage-span",
@@ -4095,7 +4249,8 @@ pub(crate) fn selection_controls(build: &Build, app: &Entity<Luma>) -> Option<An
         .children(selected.constraint.clone().map(note));
 
     Some(
-        card.agent_node(Role::Card, "Selection card")
+        card.child(actions.mt(px(6.0)))
+            .agent_node(Role::Card, "Selection card")
             .into_any_element(),
     )
 }
@@ -4127,7 +4282,16 @@ fn elements(view: &StageView, app: &Entity<Luma>) -> AnyElement {
                 } else {
                     luma_ui::glass::wash(0.0)
                 })
-                .hover(|d| d.bg(luma_ui::glass::glass_hover()))
+                .when(!selected, |line| {
+                    line.bg(luma_ui::motion::hover_blend(
+                        &format!("venue-element-{id}"),
+                        luma_ui::glass::wash(0.),
+                        luma_ui::glass::glass_hover(),
+                    ))
+                    .on_hover(luma_ui::motion::hover_listener(format!(
+                        "venue-element-{id}"
+                    )))
+                })
                 .cursor_pointer()
                 .on_click(move |_, _, cx| {
                     click.update(cx, |this, cx| this.stage_select_element(id.clone(), cx))

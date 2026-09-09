@@ -6,7 +6,7 @@ use luma_ui::arg::gradient::{Gradient, GradientStop};
 use luma_ui::arg::number::DraftedNumber;
 use luma_ui::Enabled;
 use luma_ui::{
-    luma_button, luma_checkbox, luma_dropdown, luma_input, luma_select, luma_selector, luma_slider,
+    button, luma_checkbox, luma_dropdown, luma_input, luma_select, luma_selector, luma_slider,
     luma_toggle, luma_toggle_group,
 };
 
@@ -44,13 +44,13 @@ pub fn all() -> Vec<Fixture> {
             id: "button",
             width: 160.,
             height: 72.,
-            build: Build::Static(|| luma_button("Import Tracks", Enabled::Yes).into_any_element()),
+            build: Build::Static(|| button("Import Tracks", Enabled::Yes).into_any_element()),
         },
         Fixture {
             id: "button-disabled",
             width: 160.,
             height: 72.,
-            build: Build::Static(|| luma_button("Import Tracks", Enabled::No).into_any_element()),
+            build: Build::Static(|| button("Import Tracks", Enabled::No).into_any_element()),
         },
         Fixture {
             id: "button-row",
@@ -60,9 +60,9 @@ pub fn all() -> Vec<Fixture> {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(luma_button("Save", Enabled::Yes))
-                    .child(luma_button("Cancel", Enabled::Yes))
-                    .child(luma_button("Delete Track", Enabled::Yes))
+                    .child(button("Save", Enabled::Yes))
+                    .child(button("Cancel", Enabled::Yes))
+                    .child(button("Delete Track", Enabled::Yes))
                     .into_any_element()
             }),
         },

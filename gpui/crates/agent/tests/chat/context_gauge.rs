@@ -42,19 +42,25 @@ fn the_gauge_reports_the_whole_prompt_and_its_card_names_every_field() {
                 !s.findAll({{ role: "text" }}).some((n) => n.label === "Working"
                     || n.label === "Sending"));
 
-            const gauge = app.snapshot().find({{ role: "text", label: {reading:?} }});
+            const gauge = app.snapshot().find({{ role: "button", label: {reading:?} }});
             if (gauge === undefined) {{
                 throw new Error("no gauge: " + JSON.stringify(
                     app.snapshot().findAll({{ role: "text" }}).map((n) => n.label)));
             }}
 
-            // Hover it: `scroll` walks the pointer to a node and leaves it
-            // there, which is the only gesture the driver has that hovers
-            // without also clicking.
+            // Hovering alone must leave the disclosure closed.
             app.scroll(gauge, {{ dx: 0, dy: 0 }});
             app.frames(3, {{ waitMs: 20 }});
+            if (app.snapshot().findAll({{ role: "text" }}).some((n) => n.label.startsWith("MODEL "))) {{
+                throw new Error("hover opened the usage card");
+            }}
+            app.click(gauge);
+            app.frames(4, {{ waitMs: 40 }});
             const rows = app.snapshot().findAll({{ role: "text" }}).map((n) => n.label);
 
+            app.click(app.snapshot().find({{ role: "button", label: {reading:?} }}));
+            until("usage card exit", (s) =>
+                !s.findAll({{ role: "text" }}).some((n) => n.label.startsWith("MODEL ")));
             ({{ before: before.length, rows }})
         "#,
             until = chat::UNTIL,

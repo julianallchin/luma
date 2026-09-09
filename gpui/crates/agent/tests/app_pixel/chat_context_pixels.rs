@@ -62,8 +62,8 @@ fn the_context_gauge_is_captured_at_rest_and_open() {
             // the text it sits with.
             const settled = app.screenshot();
 
-            const gauge = app.snapshot().find({{ role: "text", label: {reading:?} }});
-            app.scroll(gauge, {{ dx: 0, dy: 0 }});
+            const gauge = app.snapshot().find({{ role: "button", label: {reading:?} }});
+            app.click(gauge);
             app.frames(4, {{ waitMs: 40 }});
             const open = app.screenshot();
             ({{ settled, open }})
@@ -79,4 +79,25 @@ fn the_context_gauge_is_captured_at_rest_and_open() {
     for name in ["settled", "open"] {
         shot(&result.result[name], name);
     }
+}
+
+#[test]
+#[ignore = "capture generator: needs a GPU"]
+fn model_picker_with_effort_slider() {
+    let mut session = chat::session(Mode::Pixel, WINDOW);
+    let result = session.app.exec(
+        &format!(r#"
+            {until}
+            {open}
+            until("model picker ready", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
+            app.frames(8, {{ waitMs: 40 }});
+            app.click(app.snapshot().find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}));
+            until("effort slider", (s) => s.find({{ role: "slider", label: "Reasoning effort" }}) !== undefined);
+            app.frames(4, {{ waitMs: 40 }});
+            app.screenshot()
+        "#, until = chat::UNTIL, open = chat::open_chat("chat-engine")),
+        Duration::from_secs(300),
+    );
+    assert_eq!(result.error, None, "capture failed: {}", result.stdout);
+    shot(&result.result, "model-picker");
 }

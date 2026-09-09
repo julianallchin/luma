@@ -1,25 +1,4 @@
-//! The waveform looks the same on both sides of the resolution threshold.
-//!
-//! `track_editor_waveform.rs` proves the editor *switches* source past the
-//! stored envelope's density. This proves the switch does not show. Two shots,
-//! one wheel notch apart, either side of the crossing: the palette either side
-//! has to be the same three band colours over the same bed, because the seam
-//! returns the same three envelopes in the same units whichever source answers
-//! and `paint_waveform` has one drawing routine for them.
-//!
-//! It is a *colour and structure* test, not a golden image. The two shots are
-//! at slightly different zooms — the threshold is crossed by zooming, so they
-//! cannot be at the same one — and the extra detail the deeper shot resolves is
-//! measured in `dispatch::handlers::waveforms`' seam tests, where it is a
-//! number rather than a picture. What a picture can settle, and nothing else
-//! can, is that the *rendering* did not change: the old peak-and-RMS hull drew
-//! a translucent accent outline round a solid accent core, so its palette had
-//! none of these colours in it and this test would have failed on the shot
-//! above the threshold.
-//!
-//! ```sh
-//! cargo test -p gpui-agent --features pixel --test track_editor_waveform_pixels
-//! ```
+//! Both waveform strips keep the same band palette and pixel coverage across zoom.
 
 #![cfg(all(feature = "app", feature = "pixel"))]
 
@@ -33,14 +12,11 @@ use image::RgbaImage;
 use serde_json::Value;
 use support::{Clip, Fixture};
 
-/// Three minutes, so `FULL_WAVEFORM_SIZE / 180` is 167 buckets a second and the
-/// threshold sits inside the wheel's range — the same track
-/// `track_editor_waveform.rs` uses, for the same reason.
 const TRACK_SECONDS: u32 = 180;
 
 /// One wheel notch. `View::ZOOM_PER_PIXEL` is 0.002, so this scales the zoom by
 /// `exp(0.08)` — about 8%, which is fine enough that the two shots are
-/// recognisably the same view and coarse enough to cross in a dozen notches.
+/// recognisably the same view.
 const NOTCH: i32 = 40;
 
 /// One clip, only so the track shows up under the venue: a venue lists the
@@ -59,70 +35,27 @@ fn harness() -> Harness {
     .open(Mode::Pixel)
 }
 
-/// Open the track, walk the zoom in one notch at a time, and shoot the waveform
-/// strip on the last notch before `FINE` appears and the first notch after.
-///
-/// The readout is the oracle for where the threshold is: it is computed from
-/// the same `drawn_buckets` the canvas asks before choosing its source, so
-/// "the notch before FINE" is exactly "the last notch drawn from the stored
-/// envelope" and no arithmetic here has to agree with the editor's.
 const SCRIPT: &str = r#"
-    function fine() {
-        return app.snapshot().findAll({ role: "text" })
-            .map((n) => n.label)
-            .find((label) => label.startsWith("FINE ")) ?? null;
-    }
-
-    function waveform() {
-        return app.snapshot().find({ role: "card", label: "Waveform" });
-    }
-
-    function settle(check, limit) {
-        for (let i = 0; i < limit; i++) {
-            const value = check();
-            if (value) return value;
-            app.frames(1, { waitMs: 60 });
-        }
-        return null;
-    }
-
-    function notch() {
-        app.scroll(waveform(), { dy: NOTCH, steps: 1, modifiers: ["platform"] });
-        app.frames(8, { waitMs: 60 });
-    }
-
-    // Pixel mode lays out with real glyph metrics on a real device, so the
-    // first frames take long enough that a fixed frame count can click at
-    // nothing. Every step waits for what it is about to press.
+    function waveform() { return app.snapshot().find({ role: "card", label: "Waveform" }); }
+    function settle() { app.frames(30, { waitMs: 60 }); }
     nav.trackEditor("Test Venue", "Aurora");
     nav.expand();
-    // A test about the editor's own geometry, so give it the whole column:
-    // the stage above it would otherwise take 40% of the height.
     nav.stageOff();
-
-    // Three minutes of audio to decode an envelope for, on a runtime gpui does
-    // not own — waited for by its result rather than by a frame count.
-    if (settle(waveform, 200) === null) throw new Error("the editor never drew a waveform");
-    app.frames(10, { waitMs: 60 });
-    if (fine() !== null) throw new Error("the opening zoom is already past the threshold");
-
-    // The last frame still drawn from the stored envelope, kept as we go: one
-    // notch later we may already be over, and stepping back would be a second
-    // way of naming the same zoom.
-    let below = app.screenshot({ node: waveform() });
-    let crossed = false;
-    for (let i = 0; i < 40; i++) {
-        notch();
-        if (settle(fine, 40) !== null) { crossed = true; break; }
-        below = app.screenshot({ node: waveform() });
+    settle();
+    for (let i = 0; i < 14; i++) {
+        app.scroll(waveform(), { dy: NOTCH, steps: 1, modifiers: ["platform"] });
     }
-    if (!crossed) throw new Error("the wheel never reached the resolution threshold");
-
-    ({ below, above: app.screenshot({ node: waveform() }), buckets: fine() })
+    settle();
+    const below = app.screenshot({ node: waveform() });
+    app.scroll(waveform(), { dy: NOTCH, steps: 1, modifiers: ["platform"] });
+    settle();
+    const above = app.screenshot({ node: waveform() });
+    const minimap = app.screenshot({ node: app.snapshot().find({ role: "slider", label: "Timeline minimap" }) });
+    ({ below, above, minimap, editor: app.screenshot() })
 "#;
 
 #[test]
-fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn() {
+fn waveform_and_minimap_keep_pixel_coverage_across_zoom() {
     let mut harness = harness();
     let result = harness.exec(
         &support::script(&SCRIPT.replace("NOTCH", &NOTCH.to_string())),
@@ -131,8 +64,8 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;
 
-    let below = support::image::keep_in("waveform-threshold", &out["below"], "below-threshold");
-    let above = support::image::keep_in("waveform-threshold", &out["above"], "above-threshold");
+    let below = support::image::keep_in("waveform-zoom", &out["below"], "lower-zoom");
+    let above = support::image::keep_in("waveform-zoom", &out["above"], "higher-zoom");
 
     // Every colour worth a percent of the strip, either side. The bed and the
     // three band bars are opaque fills, so these are exact quad colours and not
@@ -145,7 +78,7 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
             let share = palette.get(&color).copied().unwrap_or(0.);
             assert!(
                 share > 0.01,
-                "{name} the threshold, the {band} band is missing from the waveform \
+                "{name} zoom, the {band} band is missing from the waveform \
                  (it covers {share:.4} of the strip)\n  below: {}\n  above: {}",
                 below.0.display(),
                 above.0.display(),
@@ -162,7 +95,7 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
     assert_eq!(
         below_colors,
         above_colors,
-        "the waveform is drawn in different colours either side of the threshold\n  \
+        "the waveform is drawn in different colours at the two zooms\n  \
          below: {}\n  above: {}",
         below.0.display(),
         above.0.display(),
@@ -175,7 +108,7 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
     let drift = (above_ink - below_ink).abs() / below_ink;
     assert!(
         drift < 0.25,
-        "the waveform covers {below_ink:.3} of the strip below the threshold and \
+        "the waveform covers {below_ink:.3} of the strip at lower zoom and \
          {above_ink:.3} above it — that is a different picture, not more detail\n  \
          below: {}\n  above: {}",
         below.0.display(),
@@ -190,7 +123,7 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
         let structure = structure(&shot.1);
         assert!(
             structure.gaps.is_empty(),
-            "{name} the threshold, the waveform has {} missing bar(s) — \
+            "{name} zoom, the waveform has {} missing bar(s) — \
              blank columns inside the drawn range, at x={:?}\n  {}",
             structure.gaps.len(),
             &structure.gaps[..structure.gaps.len().min(12)],
@@ -198,7 +131,7 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
         );
         assert!(
             structure.tallest < 0.98,
-            "{name} the threshold, a column is painted {:.3} of the strip's \
+            "{name} zoom, a column is painted {:.3} of the strip's \
              height — the band stack caps well under that, so this is not the \
              band renderer drawing\n  {}",
             structure.tallest,
@@ -206,16 +139,12 @@ fn crossing_the_resolution_threshold_does_not_change_how_the_waveform_is_drawn()
         );
     }
 
-    // The deeper shot is deeper: the readout is the bucket count behind it.
-    let buckets = out["buckets"]
-        .as_str()
-        .and_then(|label| label.strip_prefix("FINE "))
-        .and_then(|count| count.parse::<f64>().ok())
-        .unwrap_or_else(|| panic!("the crossing shot has no resolution readout: {out:#}"));
-    assert!(buckets > 0., "a measured window with no buckets in it");
+    let minimap = support::image::keep_in("waveform-minimap", &out["minimap"], "minimap");
+    support::image::keep_in("waveform-minimap", &out["editor"], "editor");
+    assert!(minimap.1.width() > 500 && minimap.1.height() >= 40);
 
     eprintln!(
-        "waveform threshold shots:\n  below: {}\n  above: {}",
+        "waveform zoom shots:\n  below: {}\n  above: {}",
         below.0.display(),
         above.0.display()
     );

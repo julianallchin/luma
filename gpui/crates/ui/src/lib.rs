@@ -1,14 +1,9 @@
 //! Luma's design system, in GPUI.
 //!
-//! The UI contract (CLAUDE.md, "UI design system") is a brutalist instrument
-//! panel: a grey ladder carries the whole hierarchy, corners are square,
-//! nothing animates, and there is exactly *one* style per control. This crate
-//! is that contract expressed once for the native stack, so the screenshot
-//! harness and the real app cannot render two different buttons.
-//!
-//! Which *way* the ladder points is the one thing this stack does not share
-//! with the web app: here the content ground is the darkest plane and chrome is
-//! raised above it. See [`ladder`], which is where that lives and why.
+//! Comet (https://github.com/zeronsh/comet) is the reference for native
+//! buttons: rounded controls, normal-case labels and subtle hover washes.
+//! Use the shared button/chip/segment primitives on panels and floating
+//! surfaces alike. Do not restore the removed square uppercase button tier.
 //!
 //! # Interface
 //!
@@ -16,9 +11,9 @@
 //! composes into its own layout:
 //!
 //! ```ignore
-//! use luma_ui::{ladder, luma_button, Enabled};
+//! use luma_ui::{ladder, button, Enabled};
 //!
-//! div().bg(ladder::background()).child(luma_button("Import Tracks", Enabled::Yes))
+//! div().bg(ladder::background()).child(button("Import Tracks", Enabled::Yes))
 //! ```
 //!
 //! Returning `Div` rather than a component type is deliberate: these controls
@@ -62,6 +57,7 @@ pub mod pane;
 pub mod pill;
 pub mod radius;
 pub mod runtime;
+pub mod scrub_number;
 pub mod sheet;
 pub mod split;
 pub mod text_input;
@@ -86,7 +82,7 @@ mod toggle;
 /// it.
 pub const TEXT_INPUT: &str = "TextInput";
 
-/// The height of every control that sits in a row of controls: a slab
+/// The height of every control that sits in a row of controls: a value
 /// trigger, a drafted number field, a float [`float::picker_chip`], a group
 /// expression field.
 ///
@@ -96,13 +92,13 @@ pub const TEXT_INPUT: &str = "TextInput";
 /// existed, which is exactly how a baseline drifts.
 pub const CONTROL_HEIGHT: f32 = 24.;
 
-pub use button::{luma_button, Enabled};
+pub use button::{button, Enabled};
 pub use checkbox::luma_checkbox;
 pub use dropdown::luma_dropdown;
 pub use input::luma_input;
 pub use select::{luma_select, luma_select_item, luma_selector};
 pub use slider::luma_slider;
 pub use text::{plate, silkscreen, silkscreen_in};
-pub use toggle::{luma_toggle, luma_toggle_group, luma_toggle_segment};
+pub use toggle::{luma_toggle, luma_toggle_group};
 
 pub mod icons;

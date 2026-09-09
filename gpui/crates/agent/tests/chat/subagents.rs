@@ -153,7 +153,7 @@ fn a_delegation_reads_as_a_pill_a_count_and_a_read_only_thread() {
     assert!(
         child_chips
             .iter()
-            .any(|chip| chip.starts_with("Ran python")),
+            .any(|chip| chip == "ramp bounds"),
         "the child's own transcript is missing its tool call: {child_chips:?}"
     );
 

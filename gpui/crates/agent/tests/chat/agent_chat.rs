@@ -97,7 +97,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     );
     assert_eq!(
         labels(&streaming, "chip"),
-        vec!["Running python cell · ramp peak check"],
+        vec!["Running ramp peak check"],
         "the tool call has no chip"
     );
 
@@ -105,7 +105,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     let settled = run(
         &mut session,
         r#"
-            until("the turn end", (s) => chips(s).some((c) => c.startsWith("Ran"))
+            until("the turn end", (s) => chips(s).some((c) => c === "ramp peak check")
                 && !s.findAll({ role: "text" }).some((n) => n.label === "Working")).nodes
         "#,
     );
@@ -120,7 +120,7 @@ fn a_turn_streams_markdown_and_shows_its_tool_call() {
     );
     assert_eq!(
         labels(&settled, "chip"),
-        vec!["Ran python cell · ramp peak check"],
+        vec!["ramp peak check"],
         "the chip did not settle"
     );
     assert!(
@@ -506,7 +506,7 @@ fn the_history_picker_reopens_the_conversation_that_was_picked() {
 }
 
 #[test]
-fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
+fn model_selection_survives_reopening_and_is_shared_with_new_chats() {
     let mut session = chat::session(Mode::Headless, WINDOW);
     run(
         &mut session,
@@ -519,19 +519,31 @@ fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
         {open}
         until("the engine picker", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
         app.click(app.snapshot().find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}));
+        until("model heading", (s) => s.find({{ role: "button", label: "Choose model" }}) !== undefined);
+        const trigger = app.snapshot().find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }});
+        if (trigger.bounds.height > 24 || trigger.bounds.width > 190) throw new Error("oversized model trigger");
+        if (!app.snapshot().find({{ role: "text", label: "Vercel AI Gateway" }})) throw new Error("missing provider");
+
+        app.click(app.snapshot().find({{ role: "button", label: "Choose model" }}));
         until("the engine menu", (s) => s.find({{ role: "button", label: "OpenRouter" }}) !== undefined);
         app.click(app.snapshot().find({{ role: "button", label: "OpenRouter" }}));
         until("OpenRouter models", (s) => s.find({{ role: "button", label: "Kimi K3 Fast" }}) !== undefined);
-        if (!app.snapshot().find({{ role: "text", label: "kimi-k3-fast" }})) throw new Error("model version missing");
         app.click(app.snapshot().find({{ role: "button", label: "Kimi K3 Fast" }}));
         until("the saved engine", (s) => s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
-        app.click(app.snapshot().find({{ role: "select", label: "Effort · Auto" }}));
-        until("effort choices", (s) => s.find({{ role: "button", label: "Effort Low" }}) !== undefined);
-        app.click(app.snapshot().find({{ role: "button", label: "Effort Low" }}));
-        until("saved effort", (s) => s.find({{ role: "select", label: "Effort · Low" }}) !== undefined);
+        until("effort slider", (s) => s.find({{ role: "slider", label: "Reasoning effort" }}) !== undefined);
+        app.drag(app.snapshot().find({{ role: "slider", label: "Reasoning effort" }}), {{ dx: 170, dy: 0 }}, {{ steps: 8 }});
+        until("dragged high effort", (s) => s.find({{ role: "text", label: "Effort · High" }}) !== undefined);
+        app.key("home");
+        until("auto effort", (s) => s.find({{ role: "text", label: "Effort · Auto" }}) !== undefined);
+        app.key("right");
+        until("saved effort", (s) => s.find({{ role: "text", label: "Effort · Low" }}) !== undefined);
+        until("effort persisted", (s) => s.find({{ role: "slider", label: "Reasoning effort" }})?.enabled);
 
+
+        app.key("escape");
+        until("picker dismissed", (s) => s.find({{ role: "slider", label: "Reasoning effort" }}) === undefined);
         app.click(app.snapshot().find({{ role: "button", label: "New chat" }}));
-        until("the new chat's default", (s) => s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined);
+        until("the new chat's saved selection", (s) => s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
         app.click(app.snapshot().find({{ role: "button", label: "Chat history" }}));
         const rows = () => app.snapshot().findAll({{ role: "card", label: "New chat" }});
         until("both conversations", () => rows().length >= 2);
@@ -543,17 +555,38 @@ fn model_selection_survives_reopening_and_leaves_new_chats_on_the_default() {
             }}
             app.click(rows()[index]);
             until("the reopened picker", (s) =>
-                s.find({{ role: "select", label: "Vercel AI Gateway · Claude Opus 5" }}) !== undefined ||
                 s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
             engines.push(app.snapshot().findAll({{ role: "select" }}).map((n) => n.label)[0]);
-            const expectedEffort = engines.at(-1).startsWith("OpenRouter") ? "Effort · Low" : "Effort · Auto";
-            until("reopened effort", (s) => s.find({{ role: "select", label: expectedEffort }}) !== undefined);
+            app.frames(4, {{ waitMs: 20 }});
+            app.click(app.snapshot().find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}));
+            const expectedEffort = "Effort · Low";
+            until("reopened effort", (s) => s.find({{ role: "text", label: expectedEffort }}) !== undefined);
+            app.key("escape");
 
         }}
-        if (!engines.includes("OpenRouter · Kimi K3 Fast") || !engines.includes("Vercel AI Gateway · Claude Opus 5"))
+        if (!engines.every((engine) => engine === "OpenRouter · Kimi K3 Fast"))
             throw new Error("thread choices were not preserved: " + JSON.stringify(engines));
     "#,
             open = chat::open_chat("chat-engine")
+        ),
+    );
+    drop(session);
+    let mut restarted = chat::session(Mode::Headless, WINDOW);
+    run(
+        &mut restarted,
+        &format!("{}\n{}", chat::UNTIL, chat::PICK_VENUE),
+    );
+    run(
+        &mut restarted,
+        &format!(
+            r#"
+        {open}
+        until("model restored after restarting on another view", (s) => s.find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}) !== undefined);
+        app.frames(4, {{ waitMs: 20 }});
+        app.click(app.snapshot().find({{ role: "select", label: "OpenRouter · Kimi K3 Fast" }}));
+        until("effort restored after restart", (s) => s.find({{ role: "text", label: "Effort · Low" }}) !== undefined);
+    "#,
+            open = chat::open_chat("chat-turn")
         ),
     );
 }

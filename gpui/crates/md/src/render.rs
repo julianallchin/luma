@@ -17,12 +17,12 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    canvas, div, font, point, prelude::*, px, quad, size, AnyElement, BorderStyle, Bounds,
-    ClipboardItem, FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StyledText, TextRun,
+    canvas, div, point, prelude::*, px, quad, size, AnyElement, BorderStyle, Bounds, ClipboardItem,
+    FontStyle, FontWeight, Hsla, InteractiveText, SharedString, StyledText, TextRun,
     UnderlineStyle, Window,
 };
 
-use luma_ui::radius;
+use luma_ui::{fonts::font, radius};
 
 use crate::theme::Theme;
 use crate::{HighlightSpan, HighlightedCode, Highlighter};
@@ -1081,7 +1081,7 @@ fn render_code_block(
                 .overflow_x_scroll()
                 .px(px(CODE_PADDING_X))
                 .py(px(CODE_PADDING_Y))
-                .font_family(theme.font_mono.clone())
+                .font(font(theme.font_mono.clone()))
                 .text_size(px(CODE_TEXT_SIZE))
                 .line_height(px(CODE_LINE_HEIGHT))
                 .whitespace_nowrap()

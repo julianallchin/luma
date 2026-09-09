@@ -200,12 +200,13 @@ impl Luma {
     /// The one wait at launch that has to finish before the app knows whose
     /// library this is, so it stands behind [`splash`] rather than behind the
     /// gate: a person whose token merely expired should not be asked to type
-    /// a code they do not need. Any answer short of a principal — refused,
-    /// unreachable — is the gate, which says why.
+    /// a code they do not need. A refused session reaches sign-in; a connection
+    /// failure preserves the session and offers another refresh attempt.
     pub(crate) fn refresh_session(&mut self, cx: &mut Context<Self>) {
         if self.refreshing_session {
             return;
         }
+        self.session_refresh_error = None;
         self.refreshing_session = true;
         let pending = self.library.refresh_session();
         cx.notify();
@@ -218,7 +219,7 @@ impl Luma {
                     Ok(None) => this.show_sign_in(true, cx),
                     Err(error) => {
                         eprintln!("[luma] the stored session could not be refreshed: {error}");
-                        this.show_sign_in(true, cx);
+                        this.session_refresh_error = Some(error.to_string());
                     }
                 }
                 cx.notify();
@@ -349,6 +350,15 @@ impl Luma {
                         Err(error) => state.error = Some(error.to_string()),
                     }
                 });
+                if let Some(state) = this.sign_in.as_ref() {
+                    if state.generation == generation
+                        && state.route == Route::Code
+                        && state.code.is_empty()
+                    {
+                        let field = state.code_field.clone();
+                        field.update(cx, |field, cx| field.set_text("", cx));
+                    }
+                }
             })
             .ok();
         })
@@ -391,7 +401,6 @@ impl Luma {
                     }
                     Err(error) => this.with_current_sign_in(generation, cx, |state| {
                         state.busy = false;
-                        state.code.clear();
                         state.error = Some(error.to_string());
                         state.focus_pending = Some(Route::Code);
                     }),
@@ -461,6 +470,47 @@ pub(crate) fn screen(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>
 /// the library being brought up to date ([`Luma::sync_then_restore`]): the
 /// same ground and chrome as the gate, the mark, and one quiet `line`. Not a
 /// place — the moment before one.
+pub(crate) fn refresh_error(window: &Window, error: &str, cx: &Context<Luma>) -> AnyElement {
+    ground(
+        window,
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(16.0))
+            .child(
+                div()
+                    .child("Could not reconnect to your account")
+                    .agent_node(Role::Text, "Could not reconnect to your account"),
+            )
+            .child(
+                div()
+                    .max_w(px(480.0))
+                    .text_size(px(13.0))
+                    .text_color(ladder::muted_foreground())
+                    .child(error.to_string()),
+            )
+            .child(
+                luma_ui::button("Retry", Enabled::Yes)
+                    .id("retry-session")
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh_session(cx)))
+                    .agent_node(Role::Button, "Retry"),
+            )
+            .child(
+                luma_ui::button("Sign in again", Enabled::Yes)
+                    .id("sign-in-again")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.session_refresh_error = None;
+                        this.show_sign_in(false, cx);
+                    }))
+                    .agent_node(Role::Button, "Sign in again"),
+            ),
+    )
+    .into_any_element()
+}
+
 pub(crate) fn splash(window: &Window, line: &'static str) -> AnyElement {
     ground(
         window,

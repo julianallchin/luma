@@ -702,6 +702,11 @@ impl Backend {
         let parked = start.elapsed();
 
         let drawn = Instant::now();
+        // Deliver the previous frame's callbacks once, just as a platform
+        // frame does. Drawing alone leaves live springs frozen in the harness.
+        self.in_window(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
         self.in_window(|window, cx| window.draw(cx).clear(cx));
         let draw = drawn.elapsed();
 

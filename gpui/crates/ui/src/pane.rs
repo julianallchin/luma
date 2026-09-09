@@ -154,19 +154,24 @@ pub fn pane(width: Pixels, content: Pixels, inner: AnyElement) -> Div {
     } else {
         1.0
     };
-    div().h_full().flex_none().overflow_hidden().w(width).child(
-        div()
-            .h_full()
-            .w(content)
-            .flex()
-            .flex_col()
-            // Only while it is actually arriving: a resting region should
-            // carry no opacity at all rather than a redundant ×1.
-            .when(openness < 1.0, |content| {
-                content.opacity(motion::reveal_opacity(openness))
-            })
-            .child(inner),
-    )
+    let inner = div()
+        .size_full()
+        .when(openness < 1.0, |content| {
+            content.opacity(motion::reveal_opacity(openness))
+        })
+        .child(inner)
+        .into_any_element();
+    opaque_pane(width, content, inner)
+}
+
+/// Reveal a solid workspace by clipping its width, without fading its surface.
+pub fn opaque_pane(width: Pixels, content: Pixels, inner: AnyElement) -> Div {
+    div()
+        .h_full()
+        .flex_none()
+        .overflow_hidden()
+        .w(width)
+        .child(div().h_full().w(content).flex().flex_col().child(inner))
 }
 
 /// Which boundary a seam is: the axis it *moves along*, not the one it spans.

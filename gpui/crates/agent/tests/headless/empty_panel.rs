@@ -150,67 +150,61 @@ fn an_empty_panel_offers_the_three_ways_to_open_a_tab() {
     );
 }
 
-/// Closing the last tab changes *what the panel holds*, not how wide it is.
-///
-/// It used to change both: the close snapped the pane's width to zero — the
-/// leftover from when emptiness hid the panel — and the next frame read that
-/// as "open from nothing", so the empty state arrived on a full slide-in from
-/// the window's edge. Motion is on here for exactly that reason: with it off,
-/// the snap and the recovery land in the same frame and the bug is invisible.
+/// The last tab collapses the panel; reopening reveals choices, not a new tab.
 #[test]
-fn closing_the_last_tab_does_not_resize_the_panel() {
+fn closing_the_last_tab_springs_closed_and_reopens_empty() {
     let mut harness = fixture("empty-panel-width")
         .with_motion()
         .open(Mode::Headless);
-    let result = harness.exec(
-        &support::script(
-            r#"
-            function seam() {
-                const node = app.snapshot().find({ role: "slider", label: "Workspace width" });
-                return node === undefined ? null : node.bounds.x;
-            }
-            nav.trackEditor("Test Venue", "Aurora");
-            until("the timeline", (s) => s.find({ role: "card", label: "Waveform" }) !== undefined);
-            // Long enough for the panel's own entrance (RESIZE is one SWEEP,
-            // 270ms) to settle, so the reading below is the resting width.
-            app.frames(10, { waitMs: 40 });
-            const opened = seam();
-
-            // Every frame of the transition, not just the settled one: a slide
-            // that leaves and returns is invisible from the ends.
-            app.action("luma::CloseTab");
-            const during = [];
-            for (let i = 0; i < 24; i++) {
-                app.frames(1, { waitMs: 12 });
-                during.push(seam());
-            }
-            const empty = app.snapshot().find({ role: "card", label: "Empty panel" });
-            ({ opened, during, empty: empty === undefined ? null : empty.bounds.width })
-        "#,
-        ),
-        Duration::from_secs(300),
-    );
-    assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
-    let out: Value = result.result;
-
-    let opened = out["opened"].as_f64().expect("the seam before the close");
-    for (frame, seam) in out["during"]
-        .as_array()
-        .expect("an array of frames")
-        .iter()
-        .enumerate()
-    {
-        assert_eq!(
-            seam.as_f64(),
-            Some(opened),
-            "the panel resized on frame {frame} of the close: {:#}",
-            out["during"]
+    let result = harness.exec(&support::script(r#"
+        function seam() {
+            const n = app.snapshot().find({ role: "slider", label: "Workspace width" });
+            return n === undefined ? null : n.bounds.x;
+        }
+        nav.venue("Test Venue");
+        app.action("luma::NewTab");
+        until("empty panel", s => s.find({ role: "button", label: "Venue" }) !== undefined);
+        app.click(app.snapshot().find({ role: "button", label: "Venue" }));
+        until("venue tab", s => s.nodes.some(n => n.role === "button" && n.label.startsWith("Close ")));
+        app.frames(20, { waitMs: 40 });
+        const opened = seam();
+        app.action("luma::CloseTab");
+        const closing = [];
+        for (let i = 0; i < 20; i++) {
+            app.frames(1, { waitMs: 40 }); closing.push(seam());
+        }
+        const closed = seam();
+        app.action("luma::ToggleWorkspace");
+        const opening = [];
+        for (let i = 0; i < 20; i++) {
+            app.frames(1, { waitMs: 40 }); opening.push(seam());
+        }
+        const shot = app.snapshot();
+        ({ opened, closing, closed, opening, reopened: seam(),
+           empty: shot.find({ role: "card", label: "Empty panel" }) !== undefined,
+           tabs: shot.nodes.filter(n => n.role === "button" && n.label.startsWith("Close ")).length })
+    "#), Duration::from_secs(300));
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = result.result;
+    let opened = out["opened"].as_f64().expect("open seam");
+    assert!(out["closed"].is_null(), "{out:#}");
+    for direction in ["closing", "opening"] {
+        assert!(
+            out[direction]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_f64)
+                .any(|x| x > opened + 2.0 && x < 1270.0),
+            "no intermediate spring frames: {out:#}"
         );
     }
     assert!(
-        !out["empty"].is_null(),
-        "the panel kept its width but never showed the empty state: {out:#}"
+        (out["reopened"].as_f64().unwrap() - opened).abs() < 1.0,
+        "{out:#}"
     );
+    assert_eq!(out["empty"], true, "{out:#}");
+    assert_eq!(out["tabs"], 0, "{out:#}");
 }
 
 #[test]

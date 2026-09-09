@@ -53,13 +53,11 @@ const CENTER_MIN: f32 = 360.0;
 /// How wide a seam between two regions is. One device pixel's worth of rule at
 /// 1×, and the only structural line the shell draws.
 const SEAM_WIDTH: f32 = 1.0;
-/// The empty panel's three buttons: one width for all of them so the stack
-/// reads as a column rather than three sizes, wide enough for the longest
-/// label ("Patch") at 13px without wrapping.
-const EMPTY_PANEL_BUTTON_WIDTH: f32 = 168.0;
+/// Shared maximum width for the empty workspace’s action rows.
+const EMPTY_PANEL_BUTTON_WIDTH: f32 = 420.0;
 /// Between those buttons, and between one and the reason it cannot act.
 const EMPTY_PANEL_GAP: f32 = 8.0;
-const EMPTY_PANEL_REASON_GAP: f32 = 3.0;
+const EMPTY_PANEL_REASON_GAP: f32 = 4.0;
 
 /// One plane over the whole shell. The regions persist beneath it — closing
 /// an overlay reveals them exactly as they were.
@@ -86,6 +84,7 @@ pub(crate) enum Overlay {
     /// rest: it carries the venue's group list, a parked render sequence and
     /// the frame on screen.
     FixturePicker(Box<fixture_picker::FixturePicker>),
+    InsertPattern(Box<track_editor::picker::Picker>),
     /// Picking a definition, a mode and a count for the patch page. Boxed like
     /// the rest: it carries a morph, a search field and a number field.
     AddFixtures(Box<patch::AddFixtures>),
@@ -108,6 +107,7 @@ impl Overlay {
             Self::AddTracks(_) => keymap::context::ADD_TRACKS,
             Self::Subagents(_) => keymap::context::SUBAGENTS,
             Self::FixturePicker(_) => keymap::context::FIXTURE_PICKER,
+            Self::InsertPattern(_) => keymap::context::PATTERN_INSERT,
             Self::AddFixtures(_) => keymap::context::ADD_FIXTURES,
             Self::Confirm(_) => keymap::context::CONFIRM,
             Self::GroupRepair(_) => keymap::context::ROOT,
@@ -292,6 +292,9 @@ impl Luma {
     pub(crate) fn close_overlay(&mut self, cx: &mut Context<Self>) {
         // The exit is reaped from the render frame (see `shell`), not from a
         // timer — so all this owes is the first repaint.
+        if matches!(self.overlay.as_open(), Some(Overlay::InsertPattern(_))) {
+            self.dismiss_insert_menu();
+        }
         self.overlay.begin_close(cx);
         cx.notify();
     }
@@ -302,6 +305,10 @@ impl Luma {
     pub(crate) fn dismiss_overlay(&mut self, cx: &mut Context<Self>) {
         if self.tab_chrome.dismiss_menu() {
             cx.notify();
+            return;
+        }
+        if matches!(self.overlay.as_open(), Some(Overlay::InsertPattern(_))) {
+            self.close_overlay(cx);
             return;
         }
         if self.dismiss_insert_menu() {
@@ -419,13 +426,44 @@ impl Luma {
 /// from edge to edge. Regions are flush and square: no insets, no gutters, no
 /// rounded cards. Depth is a value step across a seam — the one structural
 /// line this shell draws, and the only border it has in either axis.
+/// The browser is independently invalidated; timeline ticks do not rebuild it.
+pub(crate) struct SidebarView {
+    app: gpui::WeakEntity<Luma>,
+    _subscription: gpui::Subscription,
+}
+impl gpui::Render for SidebarView {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let Some(app) = self.app.upgrade() else {
+            return div();
+        };
+        let state = app.read(cx);
+        match &state.sidebar {
+            Some(browser) => tracks::sidebar(state, browser, &app, window),
+            None => div(),
+        }
+    }
+}
+
 pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -> Div {
     let entity = cx.entity();
+    let sidebar_view = app
+        .sidebar_view
+        .get_or_insert_with(|| {
+            cx.new(|cx| SidebarView {
+                app: entity.downgrade(),
+                _subscription: cx.observe(&entity, |_, _, cx| cx.notify()),
+            })
+        })
+        .clone();
     // Geometry follows state. Each edge region's resting width is restated
     // here every frame as a pure function of what the shell is showing, so a
     // toggle only flips a flag and `retarget` — a no-op while the destination
     // is unchanged — turns that into a slide.
-    app.sidebar_width.retarget(app.sidebar_slot(), cx);
+    if app.shell_presented {
+        app.sidebar_width.retarget(app.sidebar_slot(), cx);
+    } else {
+        app.sidebar_width.set(app.sidebar_slot());
+    }
     // The sidebar's level change is stepped in the same place and for the same
     // reason as its width: a hand-driven tween has nothing else asking for the
     // next frame, and both have to be settled before the column is rendered
@@ -440,22 +478,27 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // stored panel width would instead have spent the entire delta on the
     // thread, because the thread is the flexible one.
     let room = shared_room(viewport, f32::from(sidebar_w));
-    let workspace_open_w = app.workspace_split.resolve(room).1;
-    // The panel's width is *derived* while it is open and *tweened* when it is
-    // toggled, and those are different motions. A derived width has to track
-    // the sidebar exactly — the sidebar's own tween is the animation, and a
-    // second tween chasing a target that moves every frame would trail it and
-    // then catch up in a lurch. So a settled pane is set, and only a pane
-    // mid-toggle is retargeted.
+    let squeezed = room < CENTER_MIN + WORKSPACE_MIN;
+    let workspace_open_w = if app.expanded || squeezed {
+        room
+    } else {
+        app.workspace_split.resolve(room).1
+    };
     let workspace_slot = if app.workspace_hidden {
         0.0
     } else {
         workspace_open_w
     };
-    if app.workspace_width.settled() {
+    // Crossing zero is a visibility change and always takes the shared spring.
+    // At rest, resizing follows the sidebar/window directly.
+    let toggled = (app.workspace_width.target() == 0.0) != (workspace_slot == 0.0);
+    if !app.shell_presented {
         app.workspace_width.set(workspace_slot);
-    } else {
+        app.shell_presented = true;
+    } else if toggled || !app.workspace_width.settled() {
         app.workspace_width.retarget(workspace_slot, cx);
+    } else {
+        app.workspace_width.set(workspace_slot);
     }
     let workspace_w = app.workspace_width.eval(window);
 
@@ -470,8 +513,8 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     // panel ground down to a sliver takes every tab and the `+` with it, and
     // the thread cannot host them instead without the strip having two homes
     // again. The panel takes the room, through the branch takeover already is.
-    let squeezed = room < CENTER_MIN + WORKSPACE_MIN;
-    let takeover = !app.workspace_hidden && (app.expanded || squeezed);
+    let takeover =
+        !app.workspace_hidden && (app.expanded || squeezed) && f32::from(workspace_w) >= room - 0.5;
     let show_sidebar = app.sidebar.is_some() && sidebar_w > px(0.0);
     let show_thread = !takeover;
     // The panel is up exactly when it has not been put away. Emptiness used to
@@ -530,7 +573,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         .on_drag_move(cx.listener(Luma::drag_workspace_seam))
         .on_drag_move(cx.listener(Luma::drag_visualizer_seam));
 
-    if let Some(browser) = &app.sidebar {
+    if app.sidebar.is_some() {
         if show_sidebar {
             // The sidebar's content is laid out at its full width for the whole
             // slide (see `pane::pane`), so its band is spanned that way too —
@@ -553,7 +596,10 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 // inside the clipping pane rather than between the regions.
                 .bg(glass::tone_column())
                 .key_context(keymap::context::SIDEBAR)
-                .child(tracks::sidebar(app, browser, &entity, window))
+                .child(luma_ui::node::cached_view(
+                    sidebar_view,
+                    gpui::StyleRefinement::default().size_full(),
+                ))
                 .into_any_element();
             // Laid out at its full width for the whole slide, so a sidebar
             // easing open reveals its rows rather than re-wrapping them.
@@ -608,7 +654,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
                 // the band that fades to it disappears into it by construction.
                 .bg(glass::panel_opaque())
                 .key_context(keymap::context::THREAD)
-                .children(app.chat.clone()),
+                .children(app.chat.clone().map(|chat| {
+                    luma_ui::node::cached_view(chat, gpui::StyleRefinement::default().size_full())
+                })),
         );
     }
 
@@ -648,7 +696,7 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
         row = row.child(if takeover {
             div().h_full().flex_1().min_w_0().child(panel)
         } else {
-            pane::pane(workspace_w, px(workspace_open_w), panel)
+            pane::opaque_pane(workspace_w, px(workspace_open_w), panel)
         });
         if show_thread {
             // After both panes it divides, so the strip it overhangs is its
@@ -709,6 +757,9 @@ pub(crate) fn regions(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma
     }
     if let Some(Overlay::ChatHistory(state)) = app.overlay.open_mut() {
         chat_history::tick(state, window, cx);
+    }
+    if matches!(app.overlay.as_open(), Some(Overlay::InsertPattern(_))) {
+        track_editor::picker::tick(app, window, cx);
     }
     if matches!(app.overlay.as_open(), Some(Overlay::FixturePicker(_))) {
         fixture_picker::tick(app, window, cx);
@@ -861,11 +912,23 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
     if app.workspace.is_empty() {
         return empty_panel(app, &cx.entity());
     }
+    let inspector = match app.workspace.active_body_mut() {
+        Some(Body::TrackEditor(editor)) => {
+            Some(track_editor::inspector(editor, &cx.entity(), window, cx))
+        }
+        _ => None,
+    };
     if app.visualizer.is_none() {
-        return active_tab(app, window, cx);
+        return div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .children(inspector)
+            .child(active_tab(app, window, cx))
+            .into_any_element();
     }
     let available = f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
-    let (stage_height, _) = app.visualizer_split.resolve(available);
+    let (stage_height, _) = app.active_visualizer_split().resolve(available);
     let grip = visualizer_grip(stage_height + SEAM_WIDTH / 2.0, cx);
     // Split the borrow the way `active_tab` does: the stage's element mutates
     // its own state and reads the library synchronously, and the two fields
@@ -885,9 +948,9 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
         library,
         ..
     } = app;
-    let stage = visualizer
-        .as_mut()
-        .map(|state| visualizer::visualizer(state, &cx.entity(), library, window, venue_tools));
+    let stage = visualizer.as_mut().map(|state| {
+        visualizer::visualizer(state, &cx.entity(), library, window, venue_tools).into_any_element()
+    });
     div()
         .flex_1()
         .min_h_0()
@@ -895,14 +958,22 @@ fn workspace_body(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) -
         .flex_col()
         // The grip below is placed against this column's own top edge.
         .relative()
-        .children(stage.map(|stage| {
+        .child(
             div()
                 .h(px(stage_height))
                 .flex_none()
+                .flex()
                 .overflow_hidden()
-                .key_context(keymap::context::VISUALIZER)
-                .child(stage)
-        }))
+                .children(inspector)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .key_context(keymap::context::VISUALIZER)
+                        .children(stage),
+                ),
+        )
         .child(visualizer_seam())
         .child(active_tab(app, window, cx))
         .child(grip)
@@ -925,28 +996,34 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
     let mut stack = div()
         .flex()
         .flex_col()
-        .items_center()
+        .w_full()
+        .max_w(px(EMPTY_PANEL_BUTTON_WIDTH))
         .gap(px(EMPTY_PANEL_GAP));
     for availability in tab_chrome::menu_choices(&prerequisites) {
         let choice = availability.choice;
         let enabled = availability.enabled();
         let label = choice.label();
-        // One primary per card (see `float::btn_primary`): the patch page is the
-        // room itself, and the other two open something inside it.
-        let button = if matches!(choice, tab_chrome::NewTabChoice::Patch) {
-            luma_ui::float::btn_primary(label)
-        } else {
-            luma_ui::float::btn(label, format!("empty-panel-{label}"))
-        }
-        .id(SharedString::from(format!("empty-panel:{label}")))
-        .w(px(EMPTY_PANEL_BUTTON_WIDTH));
+        let icon = match choice {
+            tab_chrome::NewTabChoice::Patch => luma_ui::icons::IconName::Cpu,
+            tab_chrome::NewTabChoice::Pattern => luma_ui::icons::IconName::Network,
+            tab_chrome::NewTabChoice::Track => luma_ui::icons::IconName::Play,
+        };
+        let button = luma_ui::button("", enabled.into())
+            .justify_start()
+            .gap(px(12.0))
+            .px(px(16.0))
+            .h(px(52.0))
+            .child(gpui_component::Icon::new(icon).size(px(18.0)))
+            .child(label)
+            .id(SharedString::from(format!("empty-panel:{label}")))
+            .w_full();
         let button = if enabled {
             let opened = entity.clone();
             button.on_click(move |_, _, cx| {
                 opened.update(cx, |this, cx| this.activate_new_tab_choice(choice, cx));
             })
         } else {
-            button.opacity(0.35)
+            button
         };
         stack = stack.child(
             div()
@@ -958,6 +1035,7 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
                 // `Stateful`, and the button has an id because it is clickable.
                 .child(
                     div()
+                        .w_full()
                         .child(button)
                         .agent_node(Role::Button, label)
                         .agent_disabled(!enabled),
@@ -977,6 +1055,7 @@ fn empty_panel(app: &Luma, entity: &gpui::Entity<Luma>) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
+        .px(px(24.0))
         .child(stack)
         .agent_node(Role::Card, "Empty panel")
         .into_any_element()
@@ -1011,7 +1090,7 @@ fn visualizer_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
         pane::Seam::Horizontal,
         at,
         || VisualizerResize,
-        |app: &mut Luma, _| app.visualizer_split.reset(),
+        |app: &mut Luma, _| app.active_visualizer_split().reset(),
         glass::glass_hover(),
         cx,
     )
@@ -1024,6 +1103,14 @@ fn visualizer_grip(at: f32, cx: &mut Context<Luma>) -> impl IntoElement {
 struct VisualizerResize;
 
 impl Luma {
+    fn active_visualizer_split(&mut self) -> &mut luma_ui::split::SplitFraction {
+        if matches!(self.workspace.active_body(), Some(Body::TrackEditor(_))) {
+            &mut self.score_editor_split
+        } else {
+            &mut self.visualizer_split
+        }
+    }
+
     /// Track the pointer while the stage seam is dragged. Like the workspace
     /// seam, the height follows the pointer directly — a drag is already
     /// continuous, and tweening toward it would only add lag.
@@ -1037,7 +1124,7 @@ impl Luma {
             f32::from(window.viewport_size().height) - chrome::HEIGHT - pane::HANDLE_WIDTH;
         // The column starts below the band, and the pointer holds the seam.
         let offset = f32::from(event.event.position.y) - chrome::HEIGHT;
-        self.visualizer_split.drag_to(offset, available);
+        self.active_visualizer_split().drag_to(offset, available);
         cx.notify();
     }
 }
@@ -1147,6 +1234,15 @@ fn overlay_layer(
         Overlay::Subagents(state) => (
             subagents::render(state, entity, window, cx),
             "Subagents dialog",
+        ),
+        Overlay::InsertPattern(state) => (
+            match app.workspace.active_body() {
+                Some(Body::TrackEditor(editor)) => {
+                    track_editor::picker::render(state, editor, entity)
+                }
+                _ => div().into_any_element(),
+            },
+            "Insert pattern dialog",
         ),
         Overlay::FixturePicker(state) => (
             fixture_picker::render(state, entity, window, cx),

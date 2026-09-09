@@ -499,7 +499,7 @@ fn a_run_measures_its_gap_refuses_a_longer_one_and_bridges_an_exact_one() {
 /// A free placement flies: trim moves it, and the number the box comes back
 /// with is the one the *solve* now holds, not the one the drag asked for.
 #[test]
-fn trim_lifts_a_free_placement() {
+fn height_drags_types_cancels_and_undoes_a_free_placement() {
     let mut harness = harness("venue-builder-trim");
     let out = exec(
         &mut harness,
@@ -510,22 +510,33 @@ fn trim_lifts_a_free_placement() {
         // Still stamping: place mode is sticky, so the sheet the placement
         // selected is *withheld* rather than slid over the room the next click
         // is aimed at.
-        const sheetWhileStamping = app.snapshot().findAll({{ role: "slider" }})
-            .some((n) => n.label.startsWith("stage-trim = "));
+        const heightNode = () => app.snapshot().findAll({{ role: "slider" }})
+            .find(n => n.label.startsWith("stage-height-"));
+        const reading = () => parseFloat(heightNode().label.split(" = ")[1]);
+        const sheetWhileStamping = !!heightNode();
         app.key("escape");
         app.frames(6);
         select(0.15, 0.82);
         const gizmo = gizmoModes();
-        const resting = scrub("stage-trim");
-        // Swept to the middle of the box's own travel rather than to a number
-        // this script picked: what is being claimed is that the graph took the
-        // lift and says so, and every readout below is re-rendered from the
-        // re-solved venue — so the value the box comes back with is the
-        // graph's answer and not the drag's request.
-        sweep("stage-trim", 0.5);
-        const lifted = settled("stage-trim");
+        const resting = reading();
+        app.drag(heightNode(), {{dx: 80, dy: 0}}, {{steps: 8}});
+        app.frames(12, {{waitMs: 40}});
+        const lifted = reading();
+        app.click(heightNode());
+        app.key("ctrl-a 3 . 2 5");
+        app.key("enter");
+        app.frames(12, {{waitMs: 40}});
+        const typed = reading();
+        app.click(heightNode());
+        app.key("ctrl-a 9");
+        app.key("escape");
+        app.frames(3);
+        const cancelled = reading();
+        app.action("luma::UndoStage");
+        app.frames(12, {{waitMs: 40}});
+        const undone = reading();
         const relation = one("Edge: ");
-        ({{ gizmo, resting, lifted, relation, sheetWhileStamping }})
+        ({{ gizmo, resting, lifted, typed, cancelled, undone, relation, sheetWhileStamping }})
     "#
         ),
     );
@@ -546,6 +557,9 @@ fn trim_lifts_a_free_placement() {
         lifted > 0.0,
         "sweeping the trim box left the piece on the floor at {lifted}\n{out:#}"
     );
+    assert_eq!(out["typed"], 3.25, "{out:#}");
+    assert_eq!(out["cancelled"], 3.25, "{out:#}");
+    assert_eq!(out["undone"], out["lifted"], "{out:#}");
     let relation = out["relation"].as_str().unwrap_or_default();
     assert!(
         relation.contains("venue floor"),
@@ -898,7 +912,7 @@ fn detaching_is_not_a_refusal() {
         ({{
             complaints: complaints().filter((l) => !resting.includes(l)),
             selected: app.snapshot().findAll({{ role: "slider" }})
-                .some((n) => n.label.startsWith("stage-trim = ")),
+                .some((n) => n.label.startsWith("stage-height-")),
         }})
     "#
         ),
@@ -1076,7 +1090,8 @@ fn undo_takes_a_placement_back_and_redo_replays_it() {
             r#"{OPEN}
         const was = sockets().length;
         arm("Truss · straight");
-        dropAt(0.5, 0.35);
+        // Use open floor away from the seeded deck and its fixtures.
+        dropAt(0.15, 0.82);
         app.key("escape");
         app.frames(4);
         // Beads at rest belong to the selection, so "is the piece there" is
@@ -1084,7 +1099,7 @@ fn undo_takes_a_placement_back_and_redo_replays_it() {
         // re-asked each poll, because the verbs are asynchronous and the room
         // only changes when their round trip lands.
         const there = () => {{
-            select(0.5, 0.35);
+            select(0.15, 0.82);
             return sockets().length;
         }};
         settle("the placement to land", () => there() > 0);
@@ -1110,7 +1125,7 @@ fn undo_takes_a_placement_back_and_redo_replays_it() {
 }
 
 #[test]
-fn the_element_list_selects_and_confirms_removal() {
+fn the_element_list_removes_immediately_and_undo_restores_it() {
     let mut harness = harness("venue-element-list");
     let out = exec(
         &mut harness,
@@ -1126,15 +1141,8 @@ fn the_element_list_selects_and_confirms_removal() {
         const label = elements()[0].label;
         nav.step("element", "row", label);
         nav.step("remove", "button", "Remove element");
-        until("confirmation", s => s.find({role:"card",label:"Confirm dialog"}));
-        app.key("escape");
-        until("cancelled", s => !s.find({role:"card",label:"Confirm dialog"}));
-        nav.step("objects after cancel", "toggle", "Stage objects");
-        const cancelled = elements().length;
-        app.key("escape");
-        nav.step("remove again", "button", "Remove element");
-        nav.step("confirm", "button", "Remove");
-        until("closed confirmation", s => !s.find({role:"card",label:"Confirm dialog"}));
+        app.frames(6);
+        const confirmed = !!app.snapshot().find({role:"card",label:"Confirm dialog"});
         nav.step("remaining objects", "toggle", "Stage objects");
         until("removed", () => elements().length < before);
         const after = elements().length;
@@ -1144,11 +1152,68 @@ fn the_element_list_selects_and_confirms_removal() {
         app.action("luma::UndoStage");
         nav.step("restored objects", "toggle", "Stage objects");
         until("restored elements", () => elements().length === before);
-        ({before, cancelled, after, restored:elements().length, fixtureCount, remainingFixtures})
+        ({before, confirmed, after, restored:elements().length, fixtureCount, remainingFixtures})
     "#,
     );
-    assert_eq!(out["before"], out["cancelled"]);
+    assert_eq!(out["confirmed"], false);
     assert!(out["after"].as_u64().unwrap() < out["before"].as_u64().unwrap());
     assert_eq!(out["before"], out["restored"]);
     assert_eq!(out["fixtureCount"], out["remainingFixtures"]);
+}
+
+#[test]
+fn height_row_is_inline_and_drag_previews_before_one_commit() {
+    use gpui::{prelude::*, App, Context, Render, Window};
+    use std::sync::{Arc, Mutex};
+    struct Probe(Arc<Mutex<Vec<(bool, f64)>>>);
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            use luma_ui::node::{Instrument, Role};
+            let commit = self.0.clone();
+            let preview = self.0.clone();
+            gpui::div().p(gpui::px(20.)).w(gpui::px(260.)).child(
+                luma_ui::float::inline_field_row(
+                    "Height",
+                    luma_ui::scrub_number::ScrubNumber::new(
+                        "height-probe",
+                        1.,
+                        0.5..=10.,
+                        0.01,
+                        90.,
+                        "m",
+                        move |value, _, _| commit.lock().unwrap().push((false, value)),
+                    )
+                    .on_preview(move |value, _, _| preview.lock().unwrap().push((true, value))),
+                )
+                .agent_node(Role::Row, "Height property"),
+            )
+        }
+    }
+    let samples = Arc::new(Mutex::new(Vec::new()));
+    let root_samples = samples.clone();
+    let root: gpui_agent::RootFactory = Arc::new(move |_: &mut Window, cx: &mut App| {
+        cx.new(|_| Probe(root_samples.clone())).into()
+    });
+    let mut harness = gpui_agent::Harness::headless(gpui_agent::Config::default(), root).unwrap();
+    let out = harness.exec(r#"
+        app.frames(3);
+        const row = app.snapshot().find({role:"row", label:"Height property"}).bounds;
+        const value = app.snapshot().findAll({role:"slider"}).find(n => n.label.startsWith("height-probe"));
+        const bounds = value.bounds;
+        app.drag(value, {dx:80,dy:0}, {steps:8});
+        ({row,bounds})
+    "#, std::time::Duration::from_secs(30));
+    assert_eq!(out.error, None, "{}", out.stdout);
+    let row = &out.result["row"];
+    let value = &out.result["bounds"];
+    assert!((row["height"].as_f64().unwrap() - value["height"].as_f64().unwrap()).abs() < 2.);
+    let samples = samples.lock().unwrap();
+    assert!(
+        samples.len() > 2,
+        "drag must preview intermediate values: {samples:?}"
+    );
+    assert!(samples[..samples.len() - 1]
+        .iter()
+        .all(|(preview, _)| *preview));
+    assert_eq!(samples.last(), Some(&(false, 1.2)));
 }

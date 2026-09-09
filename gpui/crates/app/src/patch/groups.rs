@@ -319,7 +319,12 @@ pub(super) fn panel(state: &Patch, app: &Entity<Luma>) -> AnyElement {
                             .py(px(7.0))
                             .rounded(px(6.0))
                             .cursor_pointer()
-                            .hover(|d| d.bg(luma_ui::glass::glass_hover()))
+                            .bg(luma_ui::motion::hover_blend(
+                                &format!("patch-group-{id}"),
+                                luma_ui::glass::wash(0.),
+                                luma_ui::glass::glass_hover(),
+                            ))
+                            .on_hover(luma_ui::motion::hover_listener(format!("patch-group-{id}")))
                             .child(
                                 div()
                                     .flex_1()
