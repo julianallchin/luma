@@ -1329,8 +1329,8 @@ fragment float4 backdrop_blur_fragment(
                                    filter::linear);
   BackdropBlur blur = blurs[input.blur_id];
 
-  // Rounded-rect clip: blending is disabled on this pipeline (the blur
-  // REPLACES the region), so fragments outside must discard, not return 0.
+  // Constant-alpha blending fades the blurred backdrop without changing its
+  // radius. Outside the rounded region, preserve the original pixels.
   float distance = quad_sdf(input.position.xy, blur.bounds, blur.corner_radii);
   if (distance > 0.) {
     discard_fragment();

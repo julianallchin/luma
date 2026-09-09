@@ -4463,11 +4463,16 @@ dependencies = [
 name = "luma-ui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "bytemuck",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
  "luma-patterns",
+ "naga",
+ "pollster 0.4.0",
  "unicode-segmentation",
+ "wgpu",
 ]
 
 [[package]]

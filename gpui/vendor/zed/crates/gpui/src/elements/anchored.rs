@@ -1,9 +1,9 @@
 use smallvec::SmallVec;
 
 use crate::{
-    Anchor, AnyElement, App, Axis, Bounds, Display, Edges, Element, GlobalElementId,
+    point, px, Anchor, AnyElement, App, Axis, Bounds, Display, Edges, Element, GlobalElementId,
     InspectorElementId, IntoElement, LayoutId, ParentElement, Pixels, Point, Position, Size, Style,
-    Window, point, px,
+    Window,
 };
 
 /// The state that the anchored element element uses to track its children.
@@ -20,6 +20,7 @@ pub struct Anchored {
     anchor_position: Option<Point<Pixels>>,
     position_mode: AnchoredPositionMode,
     offset: Option<Point<Pixels>>,
+    resolved_offset: Option<Box<dyn Fn(Anchor) -> Point<Pixels>>>,
 }
 
 /// anchored gives you an element that will avoid overflowing the window bounds.
@@ -32,6 +33,7 @@ pub fn anchored() -> Anchored {
         anchor_position: None,
         position_mode: AnchoredPositionMode::Window,
         offset: None,
+        resolved_offset: None,
     }
 }
 
@@ -53,6 +55,13 @@ impl Anchored {
     /// Useful when you want to anchor to an element but offset from it, such as in PopoverMenu.
     pub fn offset(mut self, offset: Point<Pixels>) -> Self {
         self.offset = Some(offset);
+        self
+    }
+
+    /// Offset the fitted element using its final anchor, after collision handling.
+    /// This does not affect measurement or the decision to switch anchors.
+    pub fn resolved_offset(mut self, offset: impl Fn(Anchor) -> Point<Pixels> + 'static) -> Self {
+        self.resolved_offset = Some(Box::new(offset));
         self
     }
 
@@ -152,9 +161,8 @@ impl Element for Anchored {
             size: window.viewport_size(),
         };
 
+        let mut anchor = self.anchor;
         if self.fit_mode == AnchoredFitMode::SwitchAnchor {
-            let mut anchor = self.anchor;
-
             if desired.left() < limits.left() || desired.right() > limits.right() {
                 let switched = Bounds::from_anchor_and_size(
                     anchor.other_side_along(Axis::Horizontal),
@@ -174,6 +182,7 @@ impl Element for Anchored {
                     children_bounds.size,
                 );
                 if !(switched.top() < limits.top() || switched.bottom() > limits.bottom()) {
+                    anchor = anchor.other_side_along(Axis::Vertical);
                     desired = switched;
                 }
             }
@@ -202,6 +211,10 @@ impl Element for Anchored {
         }
         if desired.top() < limits.top() {
             desired.origin.y = limits.origin.y + edges.top;
+        }
+
+        if let Some(offset) = &self.resolved_offset {
+            desired.origin += offset(anchor);
         }
 
         let offset = desired.origin - bounds.origin;
@@ -291,8 +304,8 @@ impl AnchoredPositionMode {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Context, Pixels, PlatformInput, Point, TestAppContext, Window, deferred, div, point,
-        prelude::*, px, size,
+        deferred, div, point, prelude::*, px, size, Context, Pixels, PlatformInput, Point,
+        TestAppContext, Window,
     };
 
     struct AnchoredTestView {

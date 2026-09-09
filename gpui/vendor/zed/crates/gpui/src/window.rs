@@ -2850,6 +2850,7 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        let _frame_trace = profiler::trace_frame_phase("draw");
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3012,6 +3013,7 @@ impl Window {
 
     #[profiling::function]
     fn present(&mut self) {
+        let _frame_trace = profiler::trace_frame_phase("present");
         #[cfg(feature = "profiler")]
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
@@ -3967,6 +3969,29 @@ impl Window {
         result
     }
 
+    /// Scale painted content about its center without changing layout. This
+    /// paint-only transform is intended for transient surface animations.
+    pub fn paint_scaled_layer<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        scale: f32,
+        paint: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+        if !scale.is_finite() || (scale - 1.0).abs() <= f32::EPSILON {
+            return paint(self);
+        }
+        let parent = mem::take(&mut self.next_frame.scene);
+        let result = paint(self);
+        let child = mem::replace(&mut self.next_frame.scene, parent);
+        self.next_frame.scene.append_scaled(
+            &child,
+            bounds.center().scale(self.scale_factor()),
+            scale.max(0.01),
+        );
+        result
+    }
+
     /// Rasterize only the subtree painted by `f` into a transparent offscreen
     /// layer, Gaussian-blur it, then composite it at `scale` about the center
     /// of `bounds`. Content below the subtree is never sampled. This is the
@@ -4126,6 +4151,7 @@ impl Window {
         });
         self.next_frame.scene.insert_backdrop_blur(BackdropBlur {
             order: 0,
+            opacity: self.element_opacity(),
             blur_radius: blur_radius.scale(scale_factor),
             bounds: scaled_bounds,
             content_mask,

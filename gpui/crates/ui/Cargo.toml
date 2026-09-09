@@ -16,3 +16,10 @@ luma-patterns = { path = "../../../backend/crates/patterns" }
 # Off by default: with the feature disabled `agent_node()` is the identity and
 # nothing is registered, so a normal build pays nothing.
 agent = []
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+naga = { version = "30", features = ["wgsl-in"] }
+pollster = "0.4"
+wgpu = "30"

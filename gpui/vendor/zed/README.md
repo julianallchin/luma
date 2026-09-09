@@ -45,6 +45,11 @@ diff is complete by construction. What the diff currently holds:
   - `gpui_wgpu` is on **wgpu 30** (upstream: 29) so the compositor and
     `luma_render` share one `wgpu::Device` type; the two API deltas are
     `SurfaceConfiguration::color_space` and `Queue::present`.
+- **X11 Mailbox presentation**, matching Wayland's preference in
+  `gpui_linux/src/linux/x11/window.rs`. The X11 refresh timer paces frames;
+  FIFO backpressure can block that timer past its next deadline and halve the
+  delivered rate. The existing surface-capability check falls back to FIFO
+  when Mailbox is unavailable.
 - **In-place atlas tile refresh**, so a live viewport can publish under one
   stable `ImageId` instead of churning a full-screen texture every frame. Three
   parts, and all three are load-bearing: `gpui/src/platform.rs` (the trait
@@ -55,6 +60,29 @@ diff is complete by construction. What the diff currently holds:
 - **`set_maximum_drawable_count(2)`** in `gpui_apple/src/metal_renderer.rs`, down
   from upstream's 3. It is coupled to `luma_render::viewport::RESERVED` — see
   the comment at both sites.
+- **Within-window backdrop blur on wgpu** — `gpui_wgpu/src/backdrop.rs` and
+  `backdrop.wgsl`, integrated at scene draw-order boundaries in `wgpu_renderer.rs`.
+  Frames with glass use a sampleable color target; each visible backdrop is
+  padded, downsampled, Gaussian-blurred in two passes, and replaced inside its
+  rounded clip before drawing the foreground. Scratch targets grow in 64-pixel
+  increments and are released after 60 frames without glass. Normal frames
+  still draw directly to the surface. Device recovery drops all blur resources.
+  Backdrop operations carry element opacity, and both Metal and wgpu blend
+  between sharp and blurred pixels at a constant Gaussian radius. Dialog
+  dismissal fades and scales the painted subtree with the shared spring;
+  `Window::paint_scaled_layer` / `Scene::append_scaled` transform its primitives
+  and clip bounds together without adding an offscreen content pass.
+  Linux enables the existing `luma_ui::dialog::frosted` primitive and floating
+  tint tokens; desktop-window translucency remains a separate macOS feature.
+  Run the exact compositor's GPU pixel tests from the workspace with
+  `cargo +1.97.1 test --manifest-path gpui/Cargo.toml -p luma-ui --test backdrop`.
+- **Color emoji font selection** in `gpui_wgpu/src/cosmic_text_system.rs`.
+  Color emoji faces are valid without a Latin `m` glyph. Explicit emoji
+  presentation selectors choose the emoji face for the whole grapheme,
+  including characters also covered by the primary text font.
+- **Resolved anchor offsets** in `gpui/src/elements/anchored.rs`. Popover
+  motion receives the final anchor after collision flips, so its translation
+  follows the displayed side without affecting the placement calculation.
 - **`filter_profile`** in `gpui_apple/src/metal_renderer.rs`.
 
 The workspace keeps its upstream Git dependency declarations so

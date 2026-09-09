@@ -285,6 +285,7 @@ impl CosmicTextSystemState {
             ];
 
             if font.as_swash().charmap().map('m') == 0
+                && !check_is_known_emoji_font(&postscript_name)
                 && !allowed_bad_font_names.contains(&postscript_name.as_str())
             {
                 self.font_system.db_mut().remove_face(font.id());
@@ -867,7 +868,18 @@ fn compute_run_spans(
     for (grapheme_idx, grapheme) in run_text.grapheme_indices(true) {
         let abs = run_offset + grapheme_idx;
         let ch = grapheme.chars().next().unwrap_or('\0');
-        let next_slot = pick_covering_slot(ch, span_slot, primary, fallback_chain, covers);
+        // VS16 requests color presentation even when the text face has a
+        // monochrome glyph for the base character (hearts, arrows, keycaps).
+        let emoji_slot = grapheme
+            .contains('\u{fe0f}')
+            .then(|| {
+                fallback_chain
+                    .iter()
+                    .position(|(id, family)| check_is_known_emoji_font(family) && covers(*id, ch))
+            })
+            .flatten();
+        let next_slot = emoji_slot
+            .or_else(|| pick_covering_slot(ch, span_slot, primary, fallback_chain, covers));
         if next_slot == span_slot {
             continue;
         }
@@ -989,8 +1001,15 @@ fn face_info_into_properties(
 }
 
 fn check_is_known_emoji_font(postscript_name: &str) -> bool {
-    // TODO: Include other common emoji fonts
-    postscript_name == "NotoColorEmoji"
+    matches!(
+        postscript_name,
+        "NotoColorEmoji"
+            | "Noto Color Emoji"
+            | "AppleColorEmoji"
+            | "Apple Color Emoji"
+            | "SegoeUIEmoji"
+            | "Segoe UI Emoji"
+    )
 }
 
 #[cfg(test)]

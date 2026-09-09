@@ -1,3 +1,4 @@
+use crate::backdrop::{Backdrop, batch_first_order};
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -196,6 +197,7 @@ struct WgpuResources {
     path_intermediate_view: Option<wgpu::TextureView>,
     path_msaa_texture: Option<wgpu::Texture>,
     path_msaa_view: Option<wgpu::TextureView>,
+    backdrop: Option<Backdrop>,
 }
 
 impl WgpuResources {
@@ -204,6 +206,7 @@ impl WgpuResources {
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
         self.path_msaa_view = None;
+        self.backdrop = None;
     }
 }
 
@@ -583,6 +586,7 @@ impl WgpuRenderer {
             path_intermediate_view: None,
             path_msaa_texture: None,
             path_msaa_view: None,
+            backdrop: None,
         };
 
         Ok(Self {
@@ -1371,6 +1375,28 @@ impl WgpuRenderer {
     }
 
     fn record_frame(&mut self, scene: &Scene, frame_view: &wgpu::TextureView) -> Result<()> {
+        let has_backdrop = !scene.backdrop_blurs.is_empty();
+        let size = [self.surface_config.width, self.surface_config.height];
+        let format = self.surface_config.format;
+        let resources = self.resources_mut();
+        if has_backdrop && resources.backdrop.is_none() {
+            resources.backdrop = Some(Backdrop::new(&resources.device, format));
+        }
+        if let Some(backdrop) = &mut resources.backdrop {
+            backdrop.prepare(&resources.device, size, format, &scene.backdrop_blurs);
+        }
+        // Clone the handle so the normal instance-buffer growth path can still
+        // borrow the renderer mutably while a render pass uses this view.
+        let backdrop_view = has_backdrop
+            .then(|| {
+                resources
+                    .backdrop
+                    .as_ref()
+                    .and_then(Backdrop::frame_view)
+                    .cloned()
+            })
+            .flatten();
+        let scene_view = backdrop_view.as_ref().unwrap_or(frame_view);
         let mut instance_offset = 0;
         let instance_bindings = self
             .write_instances(scene, &mut instance_offset)
@@ -1398,7 +1424,7 @@ impl WgpuRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: frame_view,
+                    view: scene_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1410,7 +1436,31 @@ impl WgpuRenderer {
                 ..Default::default()
             });
 
+            let mut blurs = scene.backdrop_blurs.iter().peekable();
             for batch in scene.batches() {
+                let order = batch_first_order(scene, &batch);
+                if blurs.peek().is_some_and(|blur| blur.order <= order) {
+                    drop(pass);
+                    let resources = self.resources();
+                    if let Some(backdrop) = &resources.backdrop {
+                        while let Some(blur) = blurs.next_if(|blur| blur.order <= order) {
+                            backdrop.encode(&resources.device, &mut encoder, blur);
+                        }
+                    }
+                    pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("main_pass_after_backdrop"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: scene_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                }
                 match batch {
                     PrimitiveBatch::Quads(range) => self.draw_instances(
                         &instance_bindings.quads,
@@ -1440,7 +1490,7 @@ impl WgpuRenderer {
                         pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("main_pass_continued"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: frame_view,
+                                view: scene_view,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Load,
@@ -1518,6 +1568,13 @@ impl WgpuRenderer {
                         }
                     }
                 }
+            }
+            drop(pass);
+            if let Some(backdrop) = self.resources().backdrop.as_ref().filter(|_| has_backdrop) {
+                for blur in blurs {
+                    backdrop.encode(&self.resources().device, &mut encoder, blur);
+                }
+                backdrop.present(&self.resources().device, &mut encoder, frame_view);
             }
         }
 
