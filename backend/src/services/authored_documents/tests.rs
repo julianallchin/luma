@@ -827,13 +827,32 @@ async fn pulled_server_head_replaces_optimistic_tip_and_preserves_exact_clock() 
     .await
     .unwrap();
 
+    // A genuinely competing server revision still supersedes the local tip.
+    // An acknowledgement of its ancestor is covered by the score regression.
+    let mut transaction = fixture.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let server_graph = graph_with_node("server-winner", 2.0);
+    let server = fixture
+        .authored
+        .store
+        .insert_revision(
+            &mut transaction,
+            &AuthoredDocumentId::parse(document_id.clone()).unwrap(),
+            &[RevisionId::parse(initial).unwrap()],
+            &graph_files(&server_graph).unwrap(),
+            &revision_metadata("sync_integration", Some("server-winner"), "Server winner").unwrap(),
+        )
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    let server_id = server.id.to_string();
+
     fixture
         .authored
         .apply_server_head(
             &fixture.pool,
             owner,
             &document_id,
-            &initial,
+            &server_id,
             7,
             "2026-08-02T01:02:03.456Z",
         )
@@ -849,17 +868,17 @@ async fn pulled_server_head_replaces_optimistic_tip_and_preserves_exact_clock() 
     .unwrap();
     assert_eq!(
         projected,
-        (initial.clone(), 7, "2026-08-02T01:02:03.456Z".into())
+        (server_id.clone(), 7, "2026-08-02T01:02:03.456Z".into())
     );
     let graph_json: String =
         sqlx::query_scalar("SELECT graph_json FROM implementations WHERE id = 'implementation'")
             .fetch_one(&fixture.pool)
             .await
             .unwrap();
-    assert!(serde_json::from_str::<Graph>(&graph_json)
-        .unwrap()
-        .nodes
-        .is_empty());
+    assert_eq!(
+        exact_graph_json(&serde_json::from_str::<Graph>(&graph_json).unwrap()),
+        exact_graph_json(&server_graph)
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM authored_revisions WHERE revision_id = ?",
@@ -880,7 +899,7 @@ async fn pulled_server_head_replaces_optimistic_tip_and_preserves_exact_clock() 
             &fixture.pool,
             owner,
             &document_id,
-            &initial,
+            &server_id,
             11,
             "2026-08-02T04:05:06Z",
         )
@@ -895,7 +914,7 @@ async fn pulled_server_head_replaces_optimistic_tip_and_preserves_exact_clock() 
         .fetch_one(&fixture.pool)
         .await
         .unwrap(),
-        (initial, 11, "2026-08-02T04:05:06Z".into())
+        (server_id, 11, "2026-08-02T04:05:06Z".into())
     );
 }
 

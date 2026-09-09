@@ -41,9 +41,9 @@ struct ResolvedSyncSnapshot {
 }
 
 impl AuthoredDocuments {
-    /// Apply the exact server-authoritative head and projection. Optimistic
-    /// proposal tips remain immutable, visible in history, and restorable, but
-    /// never replace the server head as a second current-state authority.
+    /// Apply the server head and projection unless it only acknowledges an
+    /// ancestor of the current local revision. A competing server branch still
+    /// supersedes the optimistic tip, which remains restorable in history.
     pub(crate) async fn apply_server_head(
         &self,
         pool: &SqlitePool,
@@ -226,6 +226,23 @@ impl AuthoredDocuments {
                 .commit()
                 .await
                 .map_err(storage("finish current server head observation"))?;
+            return Ok(());
+        }
+
+        // Saves continue while their proposals are in flight. An earlier
+        // receipt (or head-table pull) can therefore acknowledge a parent of
+        // the current tip. Installing that parent would undo our own save and
+        // make the editor's next CAS fail. Restores are new revisions, so an
+        // ancestor observation is never a request to restore older content.
+        if self
+            .store
+            .is_ancestor(&mut write, &document_id, &server_revision_id, &local_head)
+            .await?
+        {
+            write
+                .commit()
+                .await
+                .map_err(storage("finish ancestor server head observation"))?;
             return Ok(());
         }
 

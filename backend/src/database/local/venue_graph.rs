@@ -216,6 +216,46 @@ pub async fn insert_node_with_id(
     Ok(())
 }
 
+/// Restore the metadata of an existing node without deleting its relations.
+pub async fn update_node(
+    access: &mut VenueAccess<'_, Write>,
+    node: &VenueNode,
+) -> Result<(), String> {
+    let venue_id = access.venue_id().to_string();
+    sqlx::query(
+        "UPDATE venue_nodes SET kind = ?, catalog_ref = ?, label = ?
+         WHERE id = ? AND venue_id = ?",
+    )
+    .bind(&node.kind)
+    .bind(&node.catalog_ref)
+    .bind(&node.label)
+    .bind(&node.id)
+    .bind(venue_id)
+    .execute(&mut *access.connection())
+    .await
+    .map_err(|e| format!("Failed to restore venue node: {e}"))?;
+    graph_changed();
+    Ok(())
+}
+
+/// Remove the far-end check on one socket.
+pub async fn delete_constraint(
+    access: &mut VenueAccess<'_, Write>,
+    node_id: &str,
+    my_socket: &str,
+) -> Result<(), String> {
+    sync_delete::delete_synced_where(
+        access.connection(),
+        "venue_constraints",
+        "node_id = ? AND my_socket = ?",
+        &[node_id, my_socket],
+    )
+    .await
+    .map_err(|e| format!("Failed to remove venue constraint: {e}"))?;
+    graph_changed();
+    Ok(())
+}
+
 /// Place a node, replacing whatever edge it had. One statement, because
 /// "exactly one parent" is the primary key and an insert-then-delete would be
 /// two states the invariant is false in.
