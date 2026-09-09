@@ -12,7 +12,7 @@
 //! use luma_ui::node::{Instrument, Role};
 //! use luma_ui::Enabled;
 //!
-//! luma_ui::luma_button("Back", Enabled::Yes)
+//! luma_ui::button("Back", Enabled::Yes)
 //!     .id("back")
 //!     .on_click(…)
 //!     .agent_node(Role::Button, "Back")   // closes the chain
@@ -261,6 +261,18 @@ mod imp {
     }
 }
 
+/// Cache an entity's rendered subtree, retaining its automation nodes on reuse.
+/// `style` must give the view a definite size, as for `Entity::cached`.
+pub fn cached_view<T: gpui::Render>(
+    entity: gpui::Entity<T>,
+    style: gpui::StyleRefinement,
+) -> impl IntoElement {
+    let element = entity.cached(style);
+    #[cfg(feature = "agent")]
+    let element = imp::CachedView { element };
+    element
+}
+
 #[cfg(feature = "agent")]
 pub use imp::{Instrumented, NodeRegistry};
 
@@ -348,6 +360,117 @@ mod imp {
             let id = registry.nodes.len();
             let node = node(id);
             registry.nodes.push(node);
+        }
+    }
+
+    /// GPUI replays its own prepaint/paint data on a cache hit. Replay the
+    /// corresponding external node records alongside it, with this frame's IDs.
+    pub(super) struct CachedView<T: gpui::Render> {
+        pub(super) element: gpui::ViewElement<gpui::Entity<T>>,
+    }
+
+    #[derive(Default)]
+    struct CachedNodes {
+        prepaint: Vec<Node>,
+        paint: Vec<Node>,
+    }
+
+    fn retain_or_replay(nodes: &mut Vec<Node>, start: usize, rendered: bool, cx: &mut App) {
+        let registry = cx.default_global::<NodeRegistry>();
+        if rendered {
+            *nodes = registry.nodes[start..].to_vec();
+        } else {
+            for node in nodes.iter() {
+                let mut node = node.clone();
+                node.id = registry.nodes.len();
+                registry.nodes.push(node);
+            }
+        }
+    }
+
+    impl<T: gpui::Render> IntoElement for CachedView<T> {
+        type Element = Self;
+
+        fn into_element(self) -> Self {
+            self
+        }
+    }
+
+    impl<T: gpui::Render> Element for CachedView<T> {
+        type RequestLayoutState = Option<gpui::AnyElement>;
+        type PrepaintState = Option<gpui::AnyElement>;
+
+        fn id(&self) -> Option<ElementId> {
+            self.element.id()
+        }
+
+        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+            self.element.source_location()
+        }
+
+        fn request_layout(
+            &mut self,
+            id: Option<&GlobalElementId>,
+            inspector_id: Option<&InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, Self::RequestLayoutState) {
+            self.element.request_layout(id, inspector_id, window, cx)
+        }
+
+        fn prepaint(
+            &mut self,
+            id: Option<&GlobalElementId>,
+            inspector_id: Option<&InspectorElementId>,
+            bounds: Bounds<Pixels>,
+            request_layout: &mut Self::RequestLayoutState,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> Self::PrepaintState {
+            let start = cx.default_global::<NodeRegistry>().nodes.len();
+            let rendered =
+                self.element
+                    .prepaint(id, inspector_id, bounds, request_layout, window, cx);
+            window.with_element_state(
+                id.expect("cached entity has an ID"),
+                |nodes: Option<CachedNodes>, _| {
+                    let mut nodes = nodes.unwrap_or_default();
+                    retain_or_replay(&mut nodes.prepaint, start, rendered.is_some(), cx);
+                    ((), nodes)
+                },
+            );
+            rendered
+        }
+
+        fn paint(
+            &mut self,
+            id: Option<&GlobalElementId>,
+            inspector_id: Option<&InspectorElementId>,
+            bounds: Bounds<Pixels>,
+            request_layout: &mut Self::RequestLayoutState,
+            prepaint: &mut Self::PrepaintState,
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            let start = cx.default_global::<NodeRegistry>().nodes.len();
+            let rendered = prepaint.is_some();
+            self.element.paint(
+                id,
+                inspector_id,
+                bounds,
+                request_layout,
+                prepaint,
+                window,
+                cx,
+            );
+            window.with_element_state(
+                id.expect("cached entity has an ID"),
+                |nodes: Option<CachedNodes>, _| {
+                    let mut nodes = nodes.unwrap_or_default();
+                    retain_or_replay(&mut nodes.paint, start, rendered, cx);
+                    ((), nodes)
+                },
+            );
         }
     }
 

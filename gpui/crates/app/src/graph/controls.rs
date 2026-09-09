@@ -322,7 +322,7 @@ pub(super) fn add_button(editor: &Editor, app: &Entity<Luma>) -> Option<AnyEleme
     let app = app.clone();
     let target = editor.target();
     Some(
-        luma_ui::luma_button("Add node", Enabled::Yes)
+        luma_ui::button("Add node", Enabled::Yes)
             .id("graph-add-node")
             .on_click(move |_, window, cx| {
                 app.update(cx, |this, cx| {
@@ -385,7 +385,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             let id = id.clone();
             let label = source.library.display_name(&id);
             content = content.child(
-                luma_ui::luma_button(&label, Enabled::Yes)
+                luma_ui::button(&label, Enabled::Yes)
                     .flex_none()
                     .id(SharedString::from(format!("graph-add-{id}")))
                     .on_click(move |_, _, cx| {
@@ -434,7 +434,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             .unwrap_or("lighting")
             .to_string();
         content = content.child(
-            luma_ui::luma_button("Use as graph output", Enabled::Yes)
+            luma_ui::button("Use as graph output", Enabled::Yes)
                 .id("graph-use-output")
                 .on_click(move |_, _, cx| {
                     app.update(cx, |this, cx| {
@@ -469,7 +469,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
         let target = target.clone();
         let node = controls.node.clone();
         content = content.child(
-            luma_ui::luma_button("Edit a copy", Enabled::from(source.draft.is_none()))
+            luma_ui::button("Edit a copy", Enabled::from(source.draft.is_none()))
                 .id("graph-customize-node")
                 .on_click(move |_, _, cx| {
                     app.update(cx, |this, cx| {
@@ -606,7 +606,7 @@ pub(super) fn panel(editor: &Editor, app: &Entity<Luma>) -> Option<AnyElement> {
             "Expose on clip"
         };
         row = row.child(
-            luma_ui::luma_button(label, Enabled::Yes)
+            luma_ui::button(label, Enabled::Yes)
                 .id(SharedString::from(format!(
                     "expose-{}-{input}",
                     controls.node

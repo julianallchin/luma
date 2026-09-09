@@ -94,12 +94,18 @@ fn exec(harness: &mut Harness, script: &str) -> Value {
 }
 
 #[test]
-fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
+fn a_failed_session_refresh_offers_retry_and_a_sign_in_route() {
     let dir = fixture_dir("unproven", Stored::Unproven);
     let mut harness = harness(&dir);
     let out = exec(
         &mut harness,
         r#"
+        const failure = until("the refresh failure", s =>
+            s.find({ role: "button", label: "Retry" }) !== undefined);
+        if (failure.find(n => n.role === "text" && n.label.startsWith("Your session expired"))) {
+            throw new Error("A refresh error was mislabeled as expiry");
+        }
+        app.click(failure.find({ role: "button", label: "Sign in again" }));
         const gate = until("the sign-in screen", (s) =>
             s.find({ role: "text", label: "Sign in to Luma" }) !== undefined);
         ({
@@ -141,7 +147,10 @@ fn a_session_that_proves_nobody_launches_signed_out_at_the_gate() {
     );
     assert_eq!(out["failure"], false, "nothing is reported as a failure");
     assert_eq!(out["offline"], false, "there is no guest door");
-    assert_eq!(out["expired"], true, "the gate says why it is up");
+    assert_eq!(
+        out["expired"], false,
+        "a refresh error does not prove expiry"
+    );
     assert_eq!(out["held"], true, "escape must not get past the gate");
 }
 

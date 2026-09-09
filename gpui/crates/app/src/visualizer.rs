@@ -66,10 +66,10 @@ use luma_render::{
     scene_desc::VenueEnvironment, AsyncViewport, FrameTimings, MetricSummary, SubmitOutcome,
 };
 use luma_scene::{
-    apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, hit_test_gizmo, snap_angle_15,
-    Camera, ClickOrbit, ClickOrbitRelease, ClickOrbitUpdate, Framing, GizmoHandle, GizmoMode,
-    Insets, Marquee, MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph,
-    Selection, Transform, TransformTarget, TriMesh, View, Viewfinder,
+    apply_rotation, apply_translation, bvh::MeshSource, gizmo_scale, Aabb, Camera, ClickOrbit,
+    ClickOrbitRelease, ClickOrbitUpdate, Framing, GizmoHandle, GizmoMode, Insets, Marquee,
+    MaterialHandle, MeshHandle, NodeContent, NodeFlags, PivotMode, SceneGraph, Selection,
+    Transform, TransformTarget, TriMesh, View, Viewfinder,
 };
 use luma_ui::ladder;
 use luma_ui::node::{agent_paint_node, Instrument, Role};
@@ -137,10 +137,13 @@ struct PickSnapshot {
     ordered: Vec<EditorObject>,
     /// Where each object is, for the marquee to test against.
     anchors: HashMap<EditorObject, Vec3>,
+    /// Geometry bounds in camera world space, including every draw of an object.
+    bounds: HashMap<EditorObject, Aabb>,
     /// The pivot the frame drew its gizmo on, carried over from
     /// [`luma_render::Frame::gizmo_pivot`] so a press tests the widget that is
     /// actually on screen.
     gizmo_pivot: Option<Vec3>,
+    gizmo_space: luma_scene::gizmo::GizmoSpace,
 }
 
 impl MeshSource for PickSnapshot {
@@ -156,7 +159,7 @@ impl PickSnapshot {
         camera: Camera,
         cache: &mut HashMap<String, Arc<TriMesh>>,
     ) -> Self {
-        let meshes = frame
+        let meshes: Vec<Arc<TriMesh>> = frame
             .meshes
             .iter()
             .map(|mesh| {
@@ -177,11 +180,24 @@ impl PickSnapshot {
         let mut graph = SceneGraph::new();
         let mut objects: Vec<Option<EditorObject>> = Vec::new();
         let mut anchors = HashMap::new();
+        let mut bounds: HashMap<EditorObject, Aabb> = HashMap::new();
         let mut ordered = Vec::new();
         for draw in &frame.draws[..frame.draws.len().saturating_sub(frame.transparent.len())] {
             let Some(object) = draw.editor_object.clone() else {
                 continue;
             };
+            let mesh_bounds = meshes[draw.mesh].bounds();
+            if !mesh_bounds.is_empty() {
+                let draw_bounds = Aabb::from_points(
+                    mesh_bounds
+                        .corners()
+                        .map(|corner| draw.model.transform_point3(corner)),
+                );
+                bounds
+                    .entry(object.clone())
+                    .or_insert(Aabb::EMPTY)
+                    .union(&draw_bounds);
+            }
             let (scale, rotation, translation) = draw.model.to_scale_rotation_translation();
             let node = graph.insert(
                 None,
@@ -217,7 +233,9 @@ impl PickSnapshot {
             objects,
             ordered,
             anchors,
+            bounds,
             gizmo_pivot: frame.gizmo_pivot,
+            gizmo_space: scene.editor.gizmo_space,
         }
     }
 
@@ -324,12 +342,7 @@ impl Drag {
 /// Why the viewport is not showing a lit rig.
 enum Status {
     Loading,
-    /// Drawing. `lit` is the difference between a rig that is dark because the
-    /// cue says so and a rig that is dark because nothing is composited onto
-    /// it — two identical pictures with different causes.
-    Live {
-        lit: bool,
-    },
+    Live,
     /// No GPU, a venue with nothing patched, or a load that failed. Shown
     /// verbatim.
     Empty(String),
@@ -398,6 +411,8 @@ pub(crate) struct Visualizer {
     venue_environment: VenueEnvironment,
     render_lab: RenderLab,
     pub(crate) settings_open: bool,
+    settings_motion: RefCell<settings::DockMotion>,
+    selection_motion: SelectionMotion,
     environment_error: Option<String>,
     environment_saving: bool,
     environment_edited: bool,
@@ -469,9 +484,6 @@ struct Stage {
     /// True while the idle gate is skipping submissions: the settled frame is
     /// on screen and the renderer is doing nothing at all.
     resting: bool,
-    /// The size frames are drawn at, which lags the size the element occupies
-    /// for as long as that size keeps moving.
-    rendered_size: RenderSize,
     /// Where the viewport sits in the window, as of the last layout.
     ///
     /// Recorded by a measuring element that is mounted whether or not there is
@@ -480,81 +492,8 @@ struct Stage {
     /// [`Visualizer::viewport_origin`] both exist only once a frame has been
     /// drawn.
     pane: Bounds<Pixels>,
-}
-
-/// The size the stage renders at, held still while its element is resizing.
-///
-/// # Why this is not simply the element's size
-///
-/// Every distinct size costs the renderer a full reallocation — seven
-/// textures, [`luma_render::viewport::PRESENTATION_SLOTS`] presentation
-/// surfaces — and resets the temporal haze history, whose accumulation is what
-/// makes a lit frame affordable. That is the right trade for a size that
-/// changed once. It is the wrong trade for a size that is *animating*: a ⌘B
-/// slides the sidebar over [`luma_ui::motion::SWEEP`] and takes its width out
-/// of the panel beside it, so the stage is handed a width it has never seen on
-/// every frame of the slide, and pays that reallocation ~32 times for a picture
-/// nobody is looking at yet. Measured at 2560x1440 with a 120-fixture rig, that
-/// is a renderer frame of 16.2 ms median / 31.7 ms p95 against 6.5 ms held
-/// still — the whole of the reported "⌘B is not 120 Hz".
-///
-/// So the stage keeps drawing at the size it already has and lets the paint
-/// scale that picture into the element's live bounds, adopting the new size
-/// once the layout stops moving. This is the same trade [`luma_ui::pane::pane`]
-/// already makes one layer up — a sliding panel lays its content out at the
-/// destination width for the whole slide rather than re-wrapping it forty times
-/// on the way in — and it introduces no new visual mode: a resting stage
-/// already re-presents one frame into changing bounds.
-///
-/// The rule is a size, not a gesture: a window-resize drag, a seam drag and a
-/// ⌘B all produce the same stream of never-repeating sizes and all want the
-/// same answer.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct RenderSize {
-    /// What frames are being drawn at. `None` before the first laid-out frame,
-    /// which adopts immediately — there is no picture to hold on to.
-    current: Option<(u32, u32)>,
-    /// A size seen but not yet adopted, and how many more frames it must
-    /// survive unchanged. An animating size restarts this every frame and so
-    /// never arrives.
-    pending: Option<((u32, u32), u32)>,
-}
-
-/// Frames a new size must repeat before the stage redraws at it.
-///
-/// Three, not one. An eased tween is slowest at its ends, so short runs of an
-/// unchanged rounded size are reachable *within* a slide; the count is what
-/// decides how long a run has to be before it is believed. No count makes that
-/// impossible — a slide can always crawl — so the guarantee this offers is a
-/// **bound**, not zero: a gesture costs the renderer one or two reallocations
-/// instead of one per frame, and the ones it does cost land within a pixel or
-/// two of where the slide was going anyway. Three frames of holding is 25 ms at
-/// display rate, which is what a settled resize waits before it is honoured.
-const SIZE_HOLD_FRAMES: u32 = 3;
-
-impl RenderSize {
-    /// Observe this frame's laid-out size and answer with the size to draw at.
-    fn settle(&mut self, observed: (u32, u32)) -> (u32, u32) {
-        let Some(current) = self.current else {
-            self.current = Some(observed);
-            return observed;
-        };
-        if observed == current {
-            self.pending = None;
-            return current;
-        }
-        let remaining = match self.pending {
-            Some((held, remaining)) if held == observed => remaining.saturating_sub(1),
-            _ => SIZE_HOLD_FRAMES - 1,
-        };
-        if remaining == 0 {
-            self.pending = None;
-            self.current = Some(observed);
-            return observed;
-        }
-        self.pending = Some((observed, remaining));
-        current
-    }
+    /// Measured card size; short cards align with the object just like tall ones.
+    selection_card_size: gpui::Size<Pixels>,
 }
 
 /// Everything a live frame is a function of.
@@ -610,6 +549,8 @@ enum EditorDrag {
         /// rotation of the press-time poses about a pivot that has since
         /// travelled is a different rotation every frame.
         pivot: Vec3,
+        camera: Camera,
+        space: luma_scene::gizmo::GizmoSpace,
         originals: Vec<(EditorObject, Vec3, Quat)>,
     },
 }
@@ -666,7 +607,59 @@ fn editor_sun_angles() -> (f32, f32) {
     (y.atan2(x).to_degrees(), z.atan2(x.hypot(y)).to_degrees())
 }
 
+impl Visualizer {
+    pub(crate) fn render_settings(&self) -> scene_desc::RenderSettings {
+        self.render_lab.settings(self.camera.fov_y_deg)
+    }
+}
+
 impl RenderLab {
+    /// One settings snapshot for the main viewport and both picker previews.
+    fn settings(&self, fov: f32) -> scene_desc::RenderSettings {
+        let mut render = scene_desc::RenderSettings::room(self.house, fov, self.haze_resolution);
+        render.fov = fov;
+        render.environment = scene_desc::Environment {
+            background: if self.environment_enabled {
+                self.background_color
+            } else {
+                scene_desc::Environment::DARK.background
+            },
+            ambient_color: self.ambient_color,
+            ambient_intensity: self.ambient_intensity,
+            probe: self.probe_enabled.then(|| scene_desc::EnvironmentProbe {
+                asset: "environments/studio.hdr".into(),
+                intensity: self.probe_intensity,
+                rotation_deg: self.probe_rotation_deg,
+                visible: self.probe_visible,
+            }),
+        };
+        render.sun = self.sun_enabled.then_some(scene_desc::DirectionalLight {
+            direction: self.sun_direction(),
+            color: self.sun_color,
+            intensity: self.sun_intensity,
+            shadows: self.sun_shadows,
+            shadow_softness: self.sun_shadow_softness,
+        });
+        // The room's own two halves, which are not fill
+        // dials and so are not the lab's to override: the
+        // house rig the frame builder hangs once it knows
+        // the bounds, and the atmosphere an open-air venue
+        // takes its background, ambient and sun from.
+        render.house = Some(self.house);
+        render.sky = house::fill(self.house).sky;
+        render.haze.enabled = self.haze_enabled;
+        render.haze.density = self.haze_density;
+        render.haze.steps = self.haze_steps;
+        render.haze.resolution = self.haze_resolution;
+        render.show_grid = self.grid_enabled;
+        render.debug_view = self.debug_view;
+        render.fixture_surface_lighting = self.fixture_surface_lighting;
+        render.fixture_shadows = self.fixture_shadows;
+        render.geometry_shadows = self.geometry_shadows;
+        render.cluster_debug = self.cluster_debug;
+        render
+    }
+
     fn new(environment: VenueEnvironment) -> Self {
         let (azimuth_deg, elevation_deg) = editor_sun_angles();
         let mut lab = Self {
@@ -844,6 +837,8 @@ impl Visualizer {
             venue_environment: VenueEnvironment::default(),
             render_lab: RenderLab::new(environment),
             settings_open: false,
+            settings_motion: RefCell::new(settings::DockMotion::new(cx.reduce_motion())),
+            selection_motion: SelectionMotion::new(cx.reduce_motion()),
             environment_error: None,
             environment_saving: false,
             environment_edited: false,
@@ -969,8 +964,7 @@ impl Visualizer {
         // exactly the venue the builder exists to fill, and returning here left
         // it with no scene — so no floor, no grid, and nothing to put a first
         // piece *on*. The room is built whether or not anything is patched;
-        // "nothing patched" is a fact the header states, not a reason to draw
-        // an empty pane.
+        // an empty rig is no reason to draw an empty pane.
         let definitions: BTreeMap<_, _> = rig
             .definitions
             .iter()
@@ -1001,16 +995,7 @@ impl Visualizer {
         // stayed on screen until a click or the camera changed the key.
         stage.idle = None;
         drop(stage);
-        self.status = Status::Live { lit: false };
-    }
-
-    /// How many fixtures are being drawn, for the toolbar's readout.
-    fn fixture_count(&self) -> usize {
-        self.stage
-            .borrow()
-            .scene
-            .as_ref()
-            .map_or(0, |s| s.fixtures.len())
+        self.status = Status::Live;
     }
 
     /// Start the renderer worker once, on the first frame with something to draw.
@@ -1073,15 +1058,6 @@ impl Visualizer {
         Viewfinder::new(FOV_Y_DEG, w / h).inset(Insets::vertical(0.0, toolbar))
     }
 
-    /// Frame the selection: target its centroid, dolly to a radius that fits
-    /// its spread. `F`, the way every 3D editor spells it.
-    ///
-    /// Anchors come from the displayed frame's pick snapshot — the same
-    /// answer a click gets — and are in the renderer's (three) space, so the
-    /// centroid crosses back through `world_from_three` before it becomes the
-    /// camera's target.
-    /// Empty the selection — the stage's escape reaches it here so the two
-    /// stores cannot disagree about "nothing".
     /// Replace the selection outright — the redistribute round trip lands new
     /// fixture ids and the old ones no longer exist to keep.
     pub(crate) fn replace_selection(&mut self, targets: impl IntoIterator<Item = EditorObject>) {
@@ -1117,43 +1093,73 @@ impl Visualizer {
         Some(self.camera.ray(ndc, viewport.x / viewport.y))
     }
 
-    pub(crate) fn focus_selection(&mut self) -> bool {
-        let mut points: Vec<Vec3> = Vec::new();
-        {
-            let stage = self.stage.borrow();
-            let pick = stage.displayed_pick.as_ref();
+    fn selection_card_position(&self, size: gpui::Size<Pixels>) -> Point<Pixels> {
+        let viewport = Vec2::new(f32::from(size.width), f32::from(size.height));
+        let stage = self.stage.borrow();
+        let camera = stage
+            .displayed_pick
+            .as_ref()
+            .map_or(self.camera, |pick| pick.camera);
+        let mut lo = Vec2::splat(f32::INFINITY);
+        let mut hi = Vec2::splat(f32::NEG_INFINITY);
+        if viewport.min_element() > 1.0 {
             for object in self.selection.selected() {
                 let (EditorObject::Fixture(id) | EditorObject::StagePiece(id)) = object;
-                // The room's own solve first — it exists with the renderer
-                // off — and the displayed frame's anchor as the fallback for
-                // anything the room does not pose.
-                if let Some(at) = self
-                    .build
+                let bounds = stage
+                    .displayed_pick
                     .as_ref()
-                    .and_then(|build| build.room_pose_point(id))
-                {
-                    points.push(at.as_vec3());
-                } else if let Some(at) = pick.and_then(|pick| pick.anchors.get(object)) {
-                    points.push(*at);
+                    .and_then(|pick| pick.bounds.get(object).copied())
+                    .or_else(|| self.build.as_ref().and_then(|build| build.room_bounds(id)));
+                if let Some(bounds) = bounds {
+                    for corner in bounds.corners() {
+                        if (corner - camera.position()).dot(camera.target - camera.position())
+                            <= 0.0
+                        {
+                            continue;
+                        }
+                        let ndc = camera.project(corner, viewport.x / viewport.y);
+                        let p = Vec2::new(
+                            (ndc.x + 1.0) * viewport.x * 0.5,
+                            (1.0 - ndc.y) * viewport.y * 0.5,
+                        );
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
                 }
             }
         }
-        if points.is_empty() {
+        let measured = stage.selection_card_size;
+        let card = Vec2::new(
+            f32::from(measured.width).max(280.0),
+            f32::from(measured.height).max(1.0),
+        );
+        let at = selection_card_at(lo, hi, viewport, card);
+        Point::new(px(at.x), px(at.y))
+    }
+
+    /// Fit the selected objects' combined geometry bounds into the usable viewport.
+    pub(crate) fn focus_selection(&mut self) -> bool {
+        let mut bounds = Aabb::EMPTY;
+        {
+            let stage = self.stage.borrow();
+            for object in self.selection.selected() {
+                let (EditorObject::Fixture(id) | EditorObject::StagePiece(id)) = object;
+                if let Some(object_bounds) = stage
+                    .displayed_pick
+                    .as_ref()
+                    .and_then(|pick| pick.bounds.get(object).copied())
+                    .or_else(|| self.build.as_ref().and_then(|build| build.room_bounds(id)))
+                {
+                    bounds.union(&object_bounds);
+                }
+            }
+        }
+        if bounds.is_empty() {
             return false;
         }
-        let sum: Vec3 = points.iter().copied().sum();
-        let centre = sum / points.len() as f32;
-        let spread = points
-            .iter()
-            .map(|p| p.distance(centre))
-            .fold(0.0f32, f32::max);
-        self.camera.target = coords::world_from_three(centre);
-        let (near, far) = self
-            .framing
-            .radius_bounds(opening_camera(&self.framing, &self.view_finder()).radius);
-        // Enough radius to see the whole spread plus a body's worth of room;
-        // a single small object gets a close, deliberate look.
-        self.camera.radius = (spread * 2.5 + 3.0).clamp(near, far);
+        let framing = Framing::of([], [bounds]);
+        let direction = self.camera.position() - self.camera.target;
+        self.camera = framing.fit(bounds.center(), direction, &self.view_finder());
         true
     }
 
@@ -1236,7 +1242,7 @@ impl Visualizer {
                 (pick.camera.position() - pivot).length(),
                 pick.camera.fov_y_deg,
             );
-            if let Some(hit) = hit_test_gizmo(
+            if let Some(hit) = pick.gizmo_space.hit(
                 pick.ray(at, viewport),
                 pivot,
                 scale,
@@ -1253,9 +1259,9 @@ impl Visualizer {
                     .iter()
                     .filter(|object| match object {
                         EditorObject::Fixture(_) => true,
-                        EditorObject::StagePiece(id) => build.is_some_and(|build| {
-                            build.freedom_of(id) == crate::stage::Freedom::Free
-                        }),
+                        EditorObject::StagePiece(id) => {
+                            build.is_some_and(|build| build.gizmo_space(id).is_some())
+                        }
                     })
                     .filter_map(|object| {
                         let pose = stage
@@ -1265,9 +1271,7 @@ impl Visualizer {
                         Some((object.clone(), pose.position, pose.rotation))
                     })
                     .collect();
-                // Nothing draggable under the widget is an orbit, not a drag
-                // that moves nothing: see [`set_object_pose`] for why a stage
-                // piece is not draggable.
+                // With no movable targets, the press remains a camera gesture.
                 if !originals.is_empty() {
                     // The grabbed handle stays lit for the whole drag: the
                     // hover is only recomputed on unbuttoned moves.
@@ -1276,6 +1280,8 @@ impl Visualizer {
                         handle: hit.handle,
                         start: at,
                         pivot,
+                        camera: pick.camera,
+                        space: pick.gizmo_space,
                         originals,
                     });
                     return;
@@ -1304,14 +1310,34 @@ impl Visualizer {
             (pick.camera.position() - pivot).length(),
             pick.camera.fov_y_deg,
         );
-        hit_test_gizmo(
-            pick.ray(at, viewport),
-            pivot,
-            scale,
-            pick.camera.position() - pivot,
-            self.gizmo_mode,
-        )
-        .map(|hit| hit.handle)
+        pick.gizmo_space
+            .hit(
+                pick.ray(at, viewport),
+                pivot,
+                scale,
+                pick.camera.position() - pivot,
+                self.gizmo_mode,
+            )
+            .map(|hit| hit.handle)
+    }
+
+    fn selection_gizmo_space(&self) -> luma_scene::gizmo::GizmoSpace {
+        if self.selection.selected().is_empty() {
+            return luma_scene::gizmo::GizmoSpace::DISABLED;
+        }
+        if let Some(build) = self.build.as_ref() {
+            let mut spaces = self.selection.selected().iter().map(|object| match object {
+                EditorObject::StagePiece(id) => build.gizmo_space(id),
+                EditorObject::Fixture(_) => None,
+            });
+            spaces
+                .next()
+                .flatten()
+                .filter(|space| spaces.all(|next| next == Some(*space)))
+                .unwrap_or(luma_scene::gizmo::GizmoSpace::DISABLED)
+        } else {
+            luma_scene::gizmo::GizmoSpace::default()
+        }
     }
 
     /// Switch which transform widget the selection wears — the toolbar's two
@@ -1350,12 +1376,7 @@ impl Visualizer {
                 }
             }
             EditorDrag::Marquee(marquee) => marquee.moved(at),
-            EditorDrag::Gizmo {
-                handle,
-                start,
-                pivot,
-                originals,
-            } => self.apply_gizmo(*handle, at - *start, *pivot, viewport, originals),
+            gizmo @ EditorDrag::Gizmo { .. } => self.apply_gizmo(gizmo, at, viewport),
         }
         self.editor_drag = Some(interaction);
     }
@@ -1420,11 +1441,9 @@ impl Visualizer {
                         EditorObject::Fixture(_) => None,
                     })
                     .collect();
-                if !pieces.is_empty() {
-                    return Some(ReleaseAct::CommitPose(pieces));
-                }
+                return (!pieces.is_empty()).then_some(ReleaseAct::CommitPose(pieces));
             }
-            _ => {}
+            _ => return None,
         }
         // The builder selects the *node*, not the render object: a subtree, a
         // trim and a detach are all things the graph has names for — and the
@@ -1475,6 +1494,26 @@ impl Visualizer {
             build.distribution = expanded;
         }
         None
+    }
+
+    /// Update only transient scene positions; the builder owns persistence on release.
+    pub(crate) fn preview_stage_positions(&mut self, positions: &[(String, [f64; 3])]) {
+        let mut stage = self.stage.borrow_mut();
+        let Some(scene) = stage.scene.as_mut() else {
+            return;
+        };
+        for (id, position) in positions {
+            let position = position.map(|value| value as f32);
+            if let Some(piece) = scene.pieces.iter_mut().find(|piece| &piece.id == id) {
+                piece.pos = position;
+            }
+            if let Some(fixture) = scene.fixtures.iter_mut().find(|fixture| &fixture.id == id) {
+                fixture.pos = position;
+            }
+        }
+        // Position changes are intentionally absent from IdleKey. Numeric drags
+        // do not set editor_drag, so invalidate the cached image explicitly.
+        stage.idle = None;
     }
 
     /// One dragged piece's current *previewed* pose, in the socket layer's
@@ -1556,18 +1595,24 @@ impl Visualizer {
             .map(|world| (world, None))
     }
 
-    fn apply_gizmo(
-        &mut self,
-        handle: GizmoHandle,
-        pixels: Vec2,
-        pivot: Vec3,
-        viewport: Vec2,
-        originals: &[(EditorObject, Vec3, Quat)],
-    ) {
-        let mut stage = self.stage.borrow_mut();
-        let Some(camera) = stage.displayed_pick.as_ref().map(|pick| pick.camera) else {
+    fn apply_gizmo(&mut self, drag: &EditorDrag, end: Vec2, viewport: Vec2) {
+        let EditorDrag::Gizmo {
+            handle,
+            start,
+            pivot,
+            camera,
+            space,
+            originals,
+        } = drag
+        else {
             return;
         };
+        let Some((translation, rotation)) =
+            luma_scene::gizmo::drag_delta(*handle, *camera, *start, end, *pivot, viewport, *space)
+        else {
+            return;
+        };
+        let mut stage = self.stage.borrow_mut();
         let Some(scene) = stage.scene.as_mut() else {
             return;
         };
@@ -1581,43 +1626,83 @@ impl Visualizer {
                 anchor: *position,
             })
             .collect();
-        let forward = (camera.target - camera.position()).normalize();
-        let right = forward.cross(Vec3::Z).normalize_or(Vec3::X);
-        let up = right.cross(forward).normalize_or(Vec3::Z);
-        let extent = 2.0
-            * (pivot - camera.position()).length()
-            * (camera.fov_y_deg.to_radians() / 2.0).tan();
-        let world_screen = (right * pixels.x - up * pixels.y) * (extent / viewport.y.max(1.0));
         for ((object, _, _), target) in originals.iter().zip(targets) {
-            let changed = match handle {
-                GizmoHandle::TranslateAxis(axis) => {
-                    let axis = axis.vector();
-                    apply_translation(target, axis * world_screen.dot(axis))
-                }
-                GizmoHandle::TranslatePlane(normal) => {
-                    let normal = normal.vector();
-                    apply_translation(target, world_screen - normal * world_screen.dot(normal))
-                }
-                GizmoHandle::TranslateScreen => apply_translation(target, world_screen),
-                GizmoHandle::RotateAxis(axis) => apply_rotation(
-                    target,
-                    Quat::from_axis_angle(
-                        axis.vector(),
-                        snap_angle_15((pixels.x - pixels.y) * 0.01),
-                    ),
-                    pivot,
-                    PivotMode::Group,
-                ),
-                GizmoHandle::RotateScreen => apply_rotation(
-                    target,
-                    Quat::from_axis_angle(-forward, snap_angle_15((pixels.x - pixels.y) * 0.01)),
-                    pivot,
-                    PivotMode::Group,
-                ),
-            };
+            let changed = apply_translation(
+                apply_rotation(target, rotation, *pivot, PivotMode::Group),
+                translation,
+            );
             set_object_pose(scene, object, changed.position, changed.rotation);
         }
     }
+}
+
+/// A continuously integrated version of the sidebar spring. Camera updates
+/// change its destination without restarting its acceleration from rest.
+struct SelectionMotion {
+    position: Vec2,
+    velocity: Vec2,
+    target: Vec2,
+    since: Option<Instant>,
+    reduced: bool,
+}
+
+impl SelectionMotion {
+    fn new(reduced: bool) -> Self {
+        Self {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            target: Vec2::ZERO,
+            since: None,
+            reduced,
+        }
+    }
+
+    fn sample(&mut self, target: Vec2, now: Instant) -> Vec2 {
+        let Some(previous) = self.since.filter(|_| !self.reduced) else {
+            self.position = target;
+            self.velocity = Vec2::ZERO;
+            self.target = target;
+            self.since = Some(now);
+            return target;
+        };
+        let elapsed = now.saturating_duration_since(previous).as_secs_f32();
+        let duration = luma_ui::motion::span(&luma_ui::motion::SURFACE).as_secs_f32();
+        for axis in 0..2 {
+            let (offset, velocity) = luma_ui::motion::ROOT.advance(
+                self.position[axis] - self.target[axis],
+                self.velocity[axis],
+                elapsed,
+                duration,
+            );
+            self.position[axis] = self.target[axis] + offset;
+            self.velocity[axis] = velocity;
+        }
+        self.since = Some(now);
+        self.target = target;
+        self.position
+    }
+}
+
+/// Prefer beside the object's silhouette, flip sides when space runs out,
+/// and keep the whole scrollable card reachable at viewport edges.
+fn selection_card_at(lo: Vec2, hi: Vec2, viewport: Vec2, card: Vec2) -> Vec2 {
+    let inset = Vec2::splat(12.0);
+    let max = (viewport - card - inset).max(inset);
+    if !lo.is_finite() || !hi.is_finite() {
+        return Vec2::new(max.x, inset.y);
+    }
+    let right = hi.x + 16.0;
+    let left = lo.x - card.x - 16.0;
+    let x = if right <= max.x {
+        right
+    } else if left >= inset.x {
+        left
+    } else if viewport.x - hi.x >= lo.x {
+        right
+    } else {
+        left
+    };
+    Vec2::new(x, (lo.y + hi.y - card.y) * 0.5).clamp(inset, max)
 }
 
 /// Data space to the world the renderer draws in, and back.
@@ -2145,7 +2230,7 @@ pub fn warm_renderer(window: &Window) {
         lost,
     }) = window.wgpu_device()
     {
-        luma_render::Gpu::adopt(device, queue, adapter, lost);
+        luma_render::device::DeviceContext::adopt(device, queue, adapter, lost);
     }
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     let _ = window;
@@ -2312,7 +2397,7 @@ struct StageSubject {
 /// The score a stage is lit by.
 ///
 /// The id is the answer to *which document*; the ordinal is only how a person
-/// names it, carried alongside so the toolbar can say `SCORE #2` without a
+/// names it, carried alongside so stage automation can identify it without a
 /// second read. Compared whole rather than by id, so a renumbering — a
 /// sibling score deleted out from under this one — refreshes the readout
 /// instead of leaving it naming a position the sidebar no longer uses.
@@ -2447,7 +2532,7 @@ impl Luma {
     }
 }
 
-/// The stage pane: chrome above, viewport below.
+/// The stage pane with floating controls.
 ///
 /// # Calling this is what starts the redraw loop
 ///
@@ -2465,7 +2550,7 @@ pub(crate) fn visualizer(
     library: &Library,
     window: &mut Window,
     venue_tools: Option<AnyElement>,
-) -> Div {
+) -> impl IntoElement {
     // Continuous redraw: asking at the top of a render is what makes the next
     // one happen, and CVDisplayLink paces it (spec §4.3).
     window.request_animation_frame();
@@ -2478,7 +2563,6 @@ pub(crate) fn visualizer(
         stage.renders_since_prepaint = stage.renders_since_prepaint.saturating_add(1);
     }
     let venue = venue_tools.is_some();
-    let chrome = (!venue).then(|| toolbar(state, library));
     let floating = overlay_toolbar(state, app, venue_tools);
     let fps = fps_overlay(state, app);
     let pane = state.stage.borrow().pane;
@@ -2505,6 +2589,7 @@ pub(crate) fn visualizer(
         .absolute()
         .inset_0()
     };
+    let selection_target = state.selection_card_position(pane.size);
     let selection = if venue {
         state
             .build
@@ -2513,12 +2598,21 @@ pub(crate) fn visualizer(
     } else {
         None
     };
+    let selection_at = if selection.is_some() {
+        let at = state.selection_motion.sample(
+            Vec2::new(f32::from(selection_target.x), f32::from(selection_target.y)),
+            Instant::now(),
+        );
+        Point::new(px(at.x), px(at.y))
+    } else {
+        state.selection_motion.since = None;
+        selection_target
+    };
     div()
         .size_full()
         .flex()
         .flex_col()
         .bg(ladder::background())
-        .children(chrome)
         .child(
             div()
                 .flex_1()
@@ -2529,12 +2623,13 @@ pub(crate) fn visualizer(
                 .children(builder)
                 .child(fps)
                 .child(floating)
+                .when(matches!(state.status, Status::Live), |d| {
+                    d.child(settings::trigger(state, app))
+                })
                 .children(selection.map(|controls| {
+                    let stage = Rc::clone(&state.stage);
                     luma_ui::float::popover_card()
                         .occlude()
-                        .absolute()
-                        .left(px(12.))
-                        .top(px(12.))
                         .w(px(280.))
                         .p(px(10.))
                         .child(
@@ -2544,45 +2639,33 @@ pub(crate) fn visualizer(
                                 .overflow_y_scroll()
                                 .child(controls),
                         )
+                        .child(
+                            canvas(
+                                move |bounds, _, _| {
+                                    stage.borrow_mut().selection_card_size = bounds.size;
+                                },
+                                |_, (), _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                        .agent_node(Role::Card, "Selected object")
+                        .map(|card| {
+                            div()
+                                .absolute()
+                                .left(selection_at.x)
+                                .top(selection_at.y)
+                                .child(luma_ui::float::frosted_card(card))
+                        })
                 })),
         )
-}
-
-fn toolbar(state: &Visualizer, library: &Library) -> Div {
-    let readout = match &state.status {
-        Status::Loading => "LOADING".to_string(),
-        Status::Live { lit } => format!(
-            "{} FIXTURES · {}",
-            state.fixture_count(),
-            if *lit { "LIVE" } else { "UNLIT" }
-        ),
-        Status::Empty(_) => "NO RIG".to_string(),
-    };
-    div()
-        .flex()
-        .flex_wrap()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(12.))
-        .px(px(16.))
-        .py(px(8.))
-        .border_b_1()
-        .border_color(ladder::trim())
-        .child(
-            div()
-                .text_size(px(12.))
-                .child(state.venue_name.clone())
-                .agent_node(Role::Text, state.venue_name.clone()),
+        .agent_node(
+            Role::Card,
+            state.lit.as_ref().map_or_else(
+                || state.venue_name.clone(),
+                |lit| format!("RIG SCORE #{}", lit.ordinal),
+            ),
         )
-        .child(clock_readout(library))
-        // Which document is on the rig — by the handle the sidebar and the
-        // timeline both name it by, so "the editor is showing #2" and "the rig
-        // is lit by #2" are comparable at a glance. Reads what the install
-        // *landed*, not what was asked for.
-        .when_some(state.lit.as_ref(), |el, lit| {
-            el.child(luma_ui::silkscreen(format!("RIG SCORE #{}", lit.ordinal)))
-        })
-        .child(luma_ui::silkscreen(readout))
 }
 
 fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
@@ -2591,7 +2674,13 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
         .flex()
         .flex_col()
         .gap(px(8.))
-        .child(lab_toggle(app, "Haze", lab.haze_enabled, LabToggle::Haze))
+        .child(lab_toggle(
+            state,
+            app,
+            "Haze",
+            lab.haze_enabled,
+            LabToggle::Haze,
+        ))
         .child(lab_value(
             app,
             "Haze density",
@@ -2601,28 +2690,70 @@ fn view_controls(state: &Visualizer, app: &Entity<Luma>) -> impl IntoElement {
             LabValue::HazeDensity,
         ))
         .child(lab_toggle(
+            state,
             app,
             "Fixture shadows",
             lab.fixture_shadows,
             LabToggle::FixtureShadows,
         ))
-        .child(lab_toggle(app, "Grid", lab.grid_enabled, LabToggle::Grid))
+        .child(lab_toggle(
+            state,
+            app,
+            "Grid",
+            lab.grid_enabled,
+            LabToggle::Grid,
+        ))
 }
 
 fn lab_toggle(
+    state: &Visualizer,
     app: &Entity<Luma>,
     label: &'static str,
     checked: bool,
     control: LabToggle,
 ) -> impl IntoElement {
+    use luma_ui::node::AgentNode as _;
+    let index = match control {
+        LabToggle::Haze => 0,
+        LabToggle::FixtureShadows => 1,
+        LabToggle::Grid => 2,
+    };
+    let t = state.settings_motion.borrow_mut().switches[index].sample(checked);
     let app = app.clone();
     div()
         .id(label)
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(luma_ui::luma_checkbox(checked))
-        .child(div().text_size(px(11.)).child(label))
+        .justify_between()
+        .h(px(28.))
+        .cursor_pointer()
+        .child(div().text_size(px(12.)).child(label))
+        .child(
+            div()
+                .relative()
+                .w(px(32.))
+                .h(px(18.))
+                .rounded_full()
+                .bg(luma_ui::motion::mix(
+                    luma_ui::glass::wash(0.15),
+                    ladder::foreground().into(),
+                    t,
+                ))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(2.))
+                        .left(px(2. + 14. * t))
+                        .size(px(14.))
+                        .rounded_full()
+                        .bg(luma_ui::motion::mix(
+                            ladder::foreground_alpha(0.7),
+                            ladder::background().into(),
+                            t,
+                        )),
+                ),
+        )
         .on_click(move |_, _, cx| {
             app.update(cx, |this, cx| {
                 if let Some(state) = this.visualizer_mut() {
@@ -2631,17 +2762,11 @@ fn lab_toggle(
                 cx.notify();
             });
         })
-        .agent_node(Role::Checkbox, label)
+        .agent_node(Role::Toggle, label)
+        .agent_focused(checked)
 }
 
-/// One labelled parameter: a name and the slider that sets it.
-///
-/// The slider is the whole control. It used to be a picture flanked by
-/// `Decrease`/`Increase` buttons, because the picture could not be dragged —
-/// two ways to set one number, and the pair only existed to stand in for the
-/// one that did not work. With the drag ported the buttons are the duplicate,
-/// so they are gone; the slab's own bounds are the range, and `set` is where
-/// that range is enforced.
+/// A labelled value scrub on the floating settings surface.
 fn lab_value(
     app: &Entity<Luma>,
     label: &'static str,
@@ -2654,50 +2779,28 @@ fn lab_value(
     div()
         .flex()
         .items_center()
-        .gap(px(6.))
-        .child(div().w(px(104.)).text_size(px(10.)).child(label))
+        .justify_between()
+        .gap(px(12.))
+        .child(div().text_size(px(12.)).child(label))
         .child(
-            luma_ui::luma_slider(label, value, min, max, 140.0, move |value, _, cx| {
-                app.update(cx, |this, cx| {
-                    if let Some(state) = this.visualizer_mut() {
-                        state.render_lab.set(control, value);
-                    }
-                    cx.notify();
-                });
-            })
+            luma_ui::float::scrub(
+                label,
+                value.into(),
+                min.into(),
+                max.into(),
+                0.01,
+                76.0,
+                move |value, _, cx| {
+                    app.update(cx, |this, cx| {
+                        if let Some(state) = this.visualizer_mut() {
+                            state.render_lab.set(control, value as f32);
+                        }
+                        cx.notify();
+                    });
+                },
+            )
             .agent_node(Role::Slider, label),
         )
-}
-
-/// Play/pause and the clock, over the *host's* transport rather than the track
-/// editor's.
-///
-/// The editor keeps a playhead of its own because it draws one; this view draws
-/// none — every frame reads [`Library::render_time`] afresh — so what it needs
-/// is the host running, and nothing in between. That is why this is two calls
-/// and not a share of `track_editor`'s transport, which is mostly the machinery
-/// for keeping a local playhead in step with a remote one.
-/// Where the host transport has got to, as the stage sees it.
-///
-/// A **readout and not a control**: the stage sits over an editor that owns a
-/// timeline, and that editor's transport already drives this very clock —
-/// `library.play()`/`pause()` is one host transport, not one per view. A second
-/// Play button here would be the same verb spelled twice, which is both a
-/// design smell and, for anything addressing controls by label, an ambiguity.
-///
-/// The readout itself is not duplicated: it reports `render_time`, which is
-/// what the *renderer* last drew, and no editor shows that.
-fn clock_readout(library: &Library) -> Div {
-    let host = library.transport();
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .child(luma_ui::silkscreen(format!(
-            "{} / {}",
-            crate::track_editor::clock(library.render_time()),
-            crate::track_editor::clock(host.duration_seconds)
-        )))
 }
 
 /// The bottom-centre floating toolbar: how the camera is driven, and which
@@ -2731,7 +2834,7 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<A
         .right_0()
         .flex()
         .justify_center()
-        .when(matches!(state.status, Status::Live { .. }), |el| {
+        .when(matches!(state.status, Status::Live), |el| {
             el.child(
                 luma_ui::float::popover_card()
                     .flex_row()
@@ -2743,27 +2846,14 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<A
                     // (see [`listen`]), and the row is air either side of it.
                     .occlude()
                     .children(venue_tools)
-                    .child(settings::trigger(state, app))
                     // The two gizmo modes are one choice, so they share one
                     // track. Zoom is the wheel's (and `=`/`-`), not a button's
                     // — a camera verb with a pointer gesture needs no chrome.
                     //
-                    // And the track is drawn exactly where the widget is. A
-                    // selected fixture always wears one; a piece wears one only
-                    // free on the floor (`Build::gizmo_offered`) — a snapped
-                    // piece moves in its joint's one freedom, and a
-                    // Translate/Rotate pair beside it would be two modes of a
-                    // widget that is not there.
+                    // The mode switch uses the same joint freedoms as the
+                    // handles, including mixed selections with no shared frame.
                     .when(
-                        state
-                            .selection
-                            .selected()
-                            .iter()
-                            .any(|object| matches!(object, EditorObject::Fixture(_)))
-                            || state
-                                .build
-                                .as_ref()
-                                .is_none_or(crate::stage::Build::gizmo_offered),
+                        state.selection_gizmo_space() != luma_scene::gizmo::GizmoSpace::DISABLED,
                         |bar| {
                             bar.child(
                                 luma_ui::float::segmented()
@@ -2771,7 +2861,8 @@ fn overlay_toolbar(state: &Visualizer, app: &Entity<Luma>, venue_tools: Option<A
                                     .child(mode("Rotate", GizmoMode::Rotate)),
                             )
                         },
-                    ),
+                    )
+                    .map(luma_ui::float::frosted_card),
             )
         })
 }
@@ -2832,7 +2923,7 @@ fn fps_reading(stage: &Stage) -> FpsReading {
 /// numbers the hitch ring already records, under the same labels the harness
 /// has always read (`DRAW`, `UI`, `PRES`, `CPU`).
 fn fps_overlay(state: &Visualizer, app: &Entity<Luma>) -> Div {
-    let live = matches!(state.status, Status::Live { .. });
+    let live = matches!(state.status, Status::Live);
     let expanded = state.fps_expanded;
     let (resting, reading, draw, ui, pres, gpu, shadows) = {
         let stage = state.stage.borrow();
@@ -3049,7 +3140,7 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
         return plate(match &state.status {
             Status::Loading => "Loading the rig…".to_string(),
             Status::Empty(why) => why.clone(),
-            Status::Live { .. } => "Nothing to draw".to_string(),
+            Status::Live => "Nothing to draw".to_string(),
         });
     }
 
@@ -3123,39 +3214,12 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
     let sampled = std::time::Instant::now();
     let universe = library.sample_universe(time);
     let sample_ms = sampled.elapsed().as_secs_f32() * 1_000.0;
-    state.status = Status::Live {
-        lit: universe.is_some(),
-    };
+    state.status = Status::Live;
 
     // Only resolved values cross into the `'static` paint closure; the mutable
     // lab remains owned by the screen.
     let stage = Rc::clone(&state.stage);
     let camera = state.camera;
-    let house = state.render_lab.house;
-    let sun_enabled = state.render_lab.sun_enabled;
-    let sun_direction = state.render_lab.sun_direction();
-    let sun_intensity = state.render_lab.sun_intensity;
-    let sun_color = state.render_lab.sun_color;
-    let sun_shadows = state.render_lab.sun_shadows;
-    let sun_shadow_softness = state.render_lab.sun_shadow_softness;
-    let environment_enabled = state.render_lab.environment_enabled;
-    let ambient_intensity = state.render_lab.ambient_intensity;
-    let ambient_color = state.render_lab.ambient_color;
-    let background_color = state.render_lab.background_color;
-    let probe_enabled = state.render_lab.probe_enabled;
-    let probe_intensity = state.render_lab.probe_intensity;
-    let probe_rotation_deg = state.render_lab.probe_rotation_deg;
-    let probe_visible = state.render_lab.probe_visible;
-    let fixture_surface_lighting = state.render_lab.fixture_surface_lighting;
-    let fixture_shadows = state.render_lab.fixture_shadows;
-    let geometry_shadows = state.render_lab.geometry_shadows;
-    let cluster_debug = state.render_lab.cluster_debug;
-    let haze_enabled = state.render_lab.haze_enabled;
-    let haze_density = state.render_lab.haze_density;
-    let haze_steps = state.render_lab.haze_steps;
-    let haze_resolution = state.render_lab.haze_resolution;
-    let grid_enabled = state.render_lab.grid_enabled;
-    let debug_view = state.render_lab.debug_view;
     // Overlay builder expects primary first; Selection keeps primary at the
     // tail for deterministic shift-toggle reassignment.
     let selected_fixture_ids: Vec<String> = state
@@ -3177,22 +3241,19 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
             EditorObject::Fixture(_) => None,
         })
         .collect();
-    // **No transform gizmo on snapped pieces.** The widget is drawn from this
-    // narrower list (`luma_render::overlay::pivot`), so the rule is enforced
-    // where the widget is decided rather than beside it: a bolted piece's pose
-    // is a relation, and three axes of freedom over a relation is a widget
-    // that lies about what it can do. The *selection highlight* reads the full
-    // list above — a snapped piece is still selected, it just is not grabbed.
+    // Keep selection highlights on bolted pieces while surface placements
+    // receive only the handles admitted by their mounting frame.
     let gizmo_piece_ids: Vec<String> = selected_piece_ids
         .iter()
         .filter(|id| {
             state
                 .build
                 .as_ref()
-                .is_none_or(|build| build.freedom_of(id) == crate::stage::Freedom::Free)
+                .is_none_or(|build| build.gizmo_space(id).is_some())
         })
         .cloned()
         .collect();
+    let gizmo_space = state.selection_gizmo_space();
     let gizmo_mode = state.gizmo_mode;
     let gizmo_hover = state.gizmo_hover;
     // The builder's ghost, measurement and socket beads, snapshotted for the
@@ -3253,25 +3314,10 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                 }
             };
             let scale = window.scale_factor();
-            // What the element occupies, and — while that is still moving —
-            // the size the stage keeps drawing at instead. See [`RenderSize`].
-            let laid_out = (
+            let (width, height) = (
                 (f32::from(bounds.size.width) * scale).round().max(1.0) as u32,
                 (f32::from(bounds.size.height) * scale).round().max(1.0) as u32,
             );
-            let (width, height) = {
-                let mut stage = stage.borrow_mut();
-                let settled = stage.rendered_size.settle(laid_out);
-                if stage.rendered_size.pending.is_some() {
-                    // The hold has to be able to end on its own. The shell's
-                    // tween stops asking for frames the moment it lands, and a
-                    // paused stage asks for none of its own — without this a
-                    // ⌘B over a still rig would leave the last picture
-                    // stretched until something else happened to redraw.
-                    window.request_animation_frame();
-                }
-                settled
-            };
 
             let image = {
                 let mut stage = stage.borrow_mut();
@@ -3324,52 +3370,13 @@ fn body(state: &mut Visualizer, app: &Entity<Luma>, library: &Library) -> AnyEle
                                 coords::three_from_world(camera.position()).to_array();
                             scene.camera.target =
                                 coords::three_from_world(camera.target).to_array();
-                            scene.render.fov = camera.fov_y_deg;
-                            scene.render.environment = scene_desc::Environment {
-                                background: if environment_enabled {
-                                    background_color
-                                } else {
-                                    scene_desc::Environment::DARK.background
-                                },
-                                ambient_color,
-                                ambient_intensity,
-                                probe: probe_enabled.then(|| scene_desc::EnvironmentProbe {
-                                    asset: "environments/studio.hdr".into(),
-                                    intensity: probe_intensity,
-                                    rotation_deg: probe_rotation_deg,
-                                    visible: probe_visible,
-                                }),
-                            };
-                            scene.render.sun =
-                                sun_enabled.then_some(scene_desc::DirectionalLight {
-                                    direction: sun_direction,
-                                    color: sun_color,
-                                    intensity: sun_intensity,
-                                    shadows: sun_shadows,
-                                    shadow_softness: sun_shadow_softness,
-                                });
-                            // The room's own two halves, which are not fill
-                            // dials and so are not the lab's to override: the
-                            // house rig the frame builder hangs once it knows
-                            // the bounds, and the atmosphere an open-air venue
-                            // takes its background, ambient and sun from.
-                            scene.render.house = Some(house);
-                            scene.render.sky = house::fill(house).sky;
-                            scene.render.haze.enabled = haze_enabled;
-                            scene.render.haze.density = haze_density;
-                            scene.render.haze.steps = haze_steps;
-                            scene.render.haze.resolution = haze_resolution;
-                            scene.render.show_grid = grid_enabled;
-                            scene.render.debug_view = debug_view;
-                            scene.render.fixture_surface_lighting = fixture_surface_lighting;
-                            scene.render.fixture_shadows = fixture_shadows;
-                            scene.render.geometry_shadows = geometry_shadows;
-                            scene.render.cluster_debug = cluster_debug;
+                            scene.render = key_lab.settings(camera.fov_y_deg);
                             scene.selected_fixture_ids = selected_fixture_ids.clone();
                             scene.editor = scene_desc::Editor {
                                 selected_piece_ids: selected_piece_ids.clone(),
                                 gizmo_piece_ids: gizmo_piece_ids.clone(),
                                 gizmo: gizmo_mode,
+                                gizmo_space,
                                 hover: gizmo_hover,
                                 build: build_affordances.clone(),
                             };
@@ -3940,87 +3947,373 @@ mod hitch_tests {
 }
 
 #[cfg(test)]
-mod render_size_tests {
-    use super::{RenderSize, SIZE_HOLD_FRAMES};
+mod selection_card_tests {
+    use super::*;
 
-    /// A `SWEEP` slide at display rate, eased the way `motion::ROOT` is: the
-    /// stream of sizes one ⌘B hands the stage.
-    fn slide(frames: u32) -> impl Iterator<Item = (u32, u32)> {
-        (1..=frames).map(move |frame| {
-            let t = f64::from(frame) / f64::from(frames);
-            let eased = 1.0 - (1.0 - t).powi(3);
-            (2560 - (eased * 256.0) as u32, 1440)
-        })
+    #[test]
+    fn motion_uses_the_sidebar_curve_and_retargets_without_jumping() {
+        let mut motion = SelectionMotion::new(false);
+        let start = Instant::now();
+        let duration = luma_ui::motion::span(&luma_ui::motion::SURFACE);
+        let first = Vec2::new(600.0, 200.0);
+        let flipped = Vec2::new(100.0, 240.0);
+        assert_eq!(motion.sample(first, start), first);
+        assert_eq!(motion.sample(flipped, start), first);
+        let midway = start + duration / 2;
+        let expected = first.lerp(flipped, luma_ui::motion::SURFACE.progress(0.5));
+        let orbit_target = Vec2::new(130.0, 280.0);
+        assert!(motion
+            .sample(orbit_target, midway)
+            .abs_diff_eq(expected, 1e-3));
+        assert!(motion
+            .sample(orbit_target, midway + duration * 3)
+            .abs_diff_eq(orbit_target, 1e-3));
+        motion.since = None;
+        assert_eq!(motion.sample(first, midway + duration * 3), first);
     }
 
-    /// Nothing on screen to protect, so nothing to wait for.
     #[test]
-    fn the_first_size_is_adopted_at_once() {
-        let mut size = RenderSize::default();
-        assert_eq!(size.settle((1920, 1080)), (1920, 1080));
-        assert!(size.pending.is_none());
-    }
-
-    /// The whole point. Without the hold the renderer reallocates once per
-    /// frame of the slide; the claim is a bound on that count, not zero — see
-    /// [`SIZE_HOLD_FRAMES`] for why no count can promise zero.
-    #[test]
-    fn a_slide_costs_a_bounded_number_of_redraws_not_one_per_frame() {
-        let mut size = RenderSize::default();
-        size.settle((2560, 1440));
-        let mut drawn = Vec::new();
-        let mut last = (2560, 1440);
-        for observed in slide(32) {
-            let at = size.settle(observed);
-            if at != last {
-                drawn.push(at);
-            }
-            last = at;
+    fn jittering_targets_preserve_velocity_and_follow_without_stalling() {
+        let mut motion = SelectionMotion::new(false);
+        let start = Instant::now();
+        motion.sample(Vec2::ZERO, start);
+        motion.sample(Vec2::splat(500.0), start);
+        for frame in 1..=30 {
+            let now = start + Duration::from_millis(frame * 16);
+            let target = Vec2::splat(if frame % 2 == 0 { 490.0 } else { 510.0 });
+            let position = motion.sample(target, now);
+            let velocity = motion.velocity;
+            // An arbitrarily sharp reversal changes neither position nor
+            // velocity at that instant; only subsequent acceleration changes.
+            assert_eq!(motion.sample(-target, now), position);
+            assert_eq!(motion.velocity, velocity);
+            motion.sample(target, now);
         }
         assert!(
-            drawn.len() <= 2,
-            "the stage redrew {} times during one slide: {drawn:?}",
-            drawn.len()
+            motion.position.x > 450.0,
+            "tracking stalled: {:?}",
+            motion.position
         );
-        // And whatever it did redraw at was within a hair of the destination,
-        // so the reallocations it spent were not wasted on the way past.
-        for (width, _) in &drawn {
-            assert!(
-                (2304..=2308).contains(width),
-                "redrew at {width}, far from where the slide was going"
+    }
+
+    #[test]
+    fn spring_tracking_is_independent_of_frame_partition() {
+        let start = Instant::now();
+        let mut whole = SelectionMotion::new(false);
+        let mut frames = SelectionMotion::new(false);
+        for motion in [&mut whole, &mut frames] {
+            motion.sample(Vec2::ZERO, start);
+            motion.sample(Vec2::splat(500.0), start);
+        }
+        let expected = whole.sample(Vec2::splat(500.0), start + Duration::from_millis(160));
+        for frame in 1..=10 {
+            frames.sample(
+                Vec2::splat(500.0),
+                start + Duration::from_millis(frame * 16),
             );
         }
+        assert!(frames.position.abs_diff_eq(expected, 1e-3));
+        assert!(frames.velocity.abs_diff_eq(whole.velocity, 1e-2));
     }
 
-    /// And the destination does arrive, which is what stops a held size from
-    /// being a permanently stretched picture.
     #[test]
-    fn a_settled_size_arrives_after_the_hold() {
-        let mut size = RenderSize::default();
-        size.settle((2560, 1440));
-        for _ in 1..SIZE_HOLD_FRAMES {
-            assert_eq!(size.settle((2304, 1440)), (2560, 1440));
-            assert!(size.pending.is_some(), "the hold must keep asking to end");
+    fn reduced_motion_tracks_the_object_immediately() {
+        let mut motion = SelectionMotion::new(true);
+        let now = Instant::now();
+        motion.sample(Vec2::ZERO, now);
+        assert_eq!(
+            motion.sample(Vec2::new(300.0, 200.0), now),
+            Vec2::new(300.0, 200.0)
+        );
+    }
+
+    #[test]
+    fn card_follows_the_selection_and_flips_at_the_right_edge() {
+        let viewport = Vec2::new(1200.0, 800.0);
+        let right = selection_card_at(
+            Vec2::new(400.0, 300.0),
+            Vec2::new(500.0, 400.0),
+            viewport,
+            Vec2::new(280.0, 230.0),
+        );
+        assert_eq!(right.x, 516.0);
+        let left = selection_card_at(
+            Vec2::new(900.0, 300.0),
+            Vec2::new(1000.0, 400.0),
+            viewport,
+            Vec2::new(280.0, 230.0),
+        );
+        assert_eq!(left.x, 604.0);
+        assert_eq!(left.y, right.y);
+        let edge = selection_card_at(
+            Vec2::new(-100.0, 790.0),
+            Vec2::new(1400.0, 1000.0),
+            viewport,
+            Vec2::new(280.0, 230.0),
+        );
+        assert!(edge.x >= 12.0 && edge.x <= 908.0);
+        assert!(edge.y >= 12.0 && edge.y <= 558.0);
+    }
+}
+
+#[cfg(test)]
+mod orbit_selection_tests {
+    use super::*;
+
+    fn visualizer(build: Option<crate::stage::Build>, pick: PickSnapshot) -> Visualizer {
+        let camera = pick.camera;
+        Visualizer {
+            venue_id: "venue".into(),
+            venue_name: "Venue".into(),
+            subject: None,
+            lit: None,
+            gpu_enabled: false,
+            status: Status::Loading,
+            camera,
+            framing: Default::default(),
+            owes_opening_pose: false,
+            drag: None,
+            editor_drag: None,
+            selection: Default::default(),
+            gizmo_mode: Default::default(),
+            gizmo_hover: None,
+            size: gpui::size(px(1200.0), px(800.0)),
+            viewport_origin: Default::default(),
+            venue_environment: Default::default(),
+            render_lab: RenderLab::new(Default::default()),
+            settings_open: false,
+            settings_motion: RefCell::new(settings::DockMotion::new(true)),
+            selection_motion: SelectionMotion::new(true),
+            environment_error: None,
+            environment_saving: false,
+            environment_edited: false,
+            environment_pending: Rc::default(),
+            fps_expanded: false,
+            build,
+            stage: Rc::new(RefCell::new(Stage {
+                displayed_pick: Some(pick),
+                ..Default::default()
+            })),
         }
-        assert_eq!(size.settle((2304, 1440)), (2304, 1440));
-        assert!(size.pending.is_none());
-        // Adopted, so the steady state costs no countdown at all.
-        assert_eq!(size.settle((2304, 1440)), (2304, 1440));
-        assert!(size.pending.is_none());
     }
 
-    /// A slide reversed mid-flight — ⌘B twice in quick succession — ends where
-    /// it started, and the stage never redrew at anything between.
     #[test]
-    fn a_reversed_slide_costs_no_resize_at_all() {
-        let mut size = RenderSize::default();
-        size.settle((2560, 1440));
-        for width in [2540, 2480, 2400, 2360, 2400, 2480, 2540, 2560] {
-            assert_eq!(size.settle((width, 1440)), (2560, 1440));
+    fn height_preview_invalidates_a_settled_viewport_before_release() {
+        let camera = Camera::default();
+        let pick = PickSnapshot {
+            camera,
+            graph: SceneGraph::new(),
+            meshes: Vec::new(),
+            objects: Vec::new(),
+            ordered: Vec::new(),
+            anchors: HashMap::new(),
+            bounds: HashMap::new(),
+            gizmo_pivot: None,
+            gizmo_space: Default::default(),
+        };
+        let mut view = visualizer(None, pick);
+        let lab = view.render_lab.clone();
+        let key = || IdleKey {
+            time_bits: 0.0_f32.to_bits(),
+            camera,
+            size: (1200, 800),
+            lab: lab.clone(),
+            selected: Vec::new(),
+            selected_pieces: vec!["deck".into()],
+            gizmo_mode: Default::default(),
+            gizmo_hover: None,
+            universe: None,
+        };
+        view.stage.borrow_mut().scene = Some(scene_desc::Scene {
+            id: "height-preview".into(),
+            times: vec![0.0],
+            editing: true,
+            aim_arrows: false,
+            camera: scene_desc::CameraPose {
+                position: [4.0, 3.0, 5.0],
+                target: [0.0; 3],
+            },
+            render: scene_desc::RenderSettings::dark_stage(50.0, 0.5),
+            selected_fixture_ids: Vec::new(),
+            editor: Default::default(),
+            state: BTreeMap::new(),
+            pieces: vec![scene_desc::Piece {
+                id: "deck".into(),
+                geometry: scene_desc::Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
+                kind: "floor".into(),
+                pos: [0.0; 3],
+                rot: [0.0; 3],
+                scale: 1.0,
+            }],
+            fixtures: vec![scene_desc::Fixture {
+                id: "child".into(),
+                fixture_path: "Luma/Mover.qxf".into(),
+                mode_name: "Default".into(),
+                pos: [0.0, 0.0, 1.0],
+                rot: [0.0; 3],
+            }],
+        });
+        // Numeric scrubbing has neither a camera drag nor a gizmo drag to
+        // hold the idle gate open. Each intermediate position must owe a frame.
+        for height in [0.1, 0.2, 0.3] {
+            view.stage.borrow_mut().idle = Some((key(), 0));
+            assert!(view.editor_drag.is_none() && view.drag.is_none());
+            view.preview_stage_positions(&[
+                ("deck".into(), [0.0, 0.0, height]),
+                ("child".into(), [0.0, 0.0, height + 1.0]),
+            ]);
+            let stage = view.stage.borrow();
+            assert!(
+                stage.idle.is_none(),
+                "preview reused the image from before the drag"
+            );
+            let scene = stage.scene.as_ref().unwrap();
+            assert_eq!(scene.pieces[0].pos[2], height as f32);
+            assert_eq!(scene.fixtures[0].pos[2], (height + 1.0) as f32);
+        }
+    }
+
+    #[test]
+    fn panel_and_focus_use_the_rendered_objects_world_bounds_once() {
+        let camera = Camera {
+            target: Vec3::new(1.0, -2.0, 3.0),
+            ..Default::default()
+        };
+        let scene = scene_desc::Scene {
+            id: "bounds".into(),
+            times: vec![0.0],
+            editing: true,
+            aim_arrows: false,
+            camera: scene_desc::CameraPose {
+                position: coords::three_from_world(camera.position()).to_array(),
+                target: coords::three_from_world(camera.target).to_array(),
+            },
+            render: scene_desc::RenderSettings::dark_stage(50.0, 0.5),
+            selected_fixture_ids: Vec::new(),
+            editor: scene_desc::Editor {
+                selected_piece_ids: vec!["deck".into()],
+                ..Default::default()
+            },
+            fixtures: Vec::new(),
+            state: std::collections::BTreeMap::new(),
+            pieces: vec![scene_desc::Piece {
+                id: "deck".into(),
+                geometry: scene_desc::Geometry::mesh("stage_lab/stage_praticavel_2x1x1.glb"),
+                kind: "floor".into(),
+                pos: [1.0, 2.0, 3.0],
+                rot: [0.0, 0.0, 0.6],
+                scale: 1.0,
+            }],
+        };
+        let mut library = assets::Library::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+        );
+        let frame =
+            build_frame_with(&scene, &Default::default(), &|_, _| None, 0.0, &mut library).unwrap();
+        let cage = frame
+            .overlays
+            .iter()
+            .find(|overlay| frame.meshes[overlay.mesh].key.starts_with("::piece-cage:"))
+            .unwrap();
+        let expected = Aabb::from_points(
+            frame.meshes[cage.mesh]
+                .vertices
+                .iter()
+                .map(|vertex| cage.model.transform_point3(Vec3::from(vertex.position))),
+        );
+        let pick = PickSnapshot::from_frame(&frame, &scene, camera, &mut HashMap::new());
+        let object = EditorObject::StagePiece("deck".into());
+        let actual = pick.bounds[&object];
+        assert!(
+            actual.min.abs_diff_eq(expected.min, 1e-4),
+            "{actual:?} != {expected:?}"
+        );
+        assert!(actual.max.abs_diff_eq(expected.max, 1e-4));
+        let mut state = visualizer(None, pick);
+        state.selection.replace([object]);
+        state.stage.borrow_mut().selection_card_size = gpui::size(px(280.0), px(80.0));
+        let at = state.selection_card_position(state.size);
+        let points: Vec<_> = expected
+            .corners()
+            .map(|corner| camera.project(corner, 1.5))
+            .into_iter()
+            .collect();
+        let top = points
+            .iter()
+            .map(|p| (1.0 - p.y) * 400.0)
+            .fold(f32::INFINITY, f32::min);
+        let bottom = points
+            .iter()
+            .map(|p| (1.0 - p.y) * 400.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!((f32::from(at.y) + 40.0 - (top + bottom) * 0.5).abs() < 1e-3);
+        assert!(state.focus_selection());
+        for corner in expected.corners() {
+            let ndc = state.camera.project(corner, 1.5);
+            assert!(
+                ndc.x.abs() < 1.0 && ndc.y.abs() < 1.0,
+                "F clipped the selected object: {ndc:?}"
+            );
         }
         assert!(
-            size.pending.is_none(),
-            "arriving back at the drawn size must clear the countdown"
+            state.camera.target.z > 3.0,
+            "F must frame the raised object, not the floor"
         );
+    }
+
+    #[test]
+    fn releasing_a_camera_orbit_preserves_the_selected_distribution() {
+        use luma_lib::models::venue_graph::{VenueGraphRows, VenueNode};
+        let rig = crate::library::Rig {
+            fixtures: Vec::new(),
+            venue: Default::default(),
+            definitions: HashMap::new(),
+            environment: Default::default(),
+            rows: VenueGraphRows {
+                nodes: vec![VenueNode {
+                    id: "venue".into(),
+                    venue_id: "venue".into(),
+                    kind: "venue".into(),
+                    catalog_ref: None,
+                    label: None,
+                }],
+                ..Default::default()
+            },
+        };
+        let sockets = luma_render::catalog::VenueSockets::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../resources/meshes"),
+            Arc::new(luma_render::catalog::NoFixtures),
+        )
+        .unwrap();
+        let mut build = crate::stage::Build::new("venue", &rig, sockets).unwrap();
+        build.selected = Some("first".into());
+        build.distribution = vec!["first".into(), "second".into()];
+        let camera = Camera::default();
+        let pick = PickSnapshot {
+            camera,
+            graph: SceneGraph::new(),
+            meshes: Vec::new(),
+            objects: Vec::new(),
+            ordered: Vec::new(),
+            anchors: HashMap::new(),
+            bounds: HashMap::new(),
+            gizmo_pivot: None,
+            gizmo_space: Default::default(),
+        };
+        let mut state = visualizer(Some(build), pick);
+        state.selection.replace([
+            EditorObject::Fixture("second".into()),
+            EditorObject::Fixture("first".into()),
+        ]);
+        state.editor_press(gpui::point(px(100.0), px(100.0)), false);
+        state.editor_moved(gpui::point(px(200.0), px(150.0)));
+        assert_ne!(state.camera, camera);
+        assert!(state
+            .editor_release(gpui::point(px(200.0), px(150.0)))
+            .is_none());
+        let build = state.build.as_ref().unwrap();
+        assert_eq!(build.selected.as_deref(), Some("first"));
+        assert_eq!(build.distribution, ["first", "second"]);
+        assert_eq!(state.selection.selected().len(), 2);
     }
 }

@@ -378,3 +378,41 @@ fn a_held_fixture_draws_a_body_over_the_face_it_is_aimed_at() {
         held_path.display()
     );
 }
+
+#[test]
+fn the_selected_object_card_follows_camera_orbit() {
+    let mut harness = harness("venue-selected-card-orbit");
+    let out = exec(
+        &mut harness,
+        r#"
+        nav.stage("Test Venue");
+        nav.expand();
+        until("stage", s => s.find({role:"toggle",label:"Stage objects"}));
+        nav.step("objects", "toggle", "Stage objects");
+        app.frames(12, {waitMs:60});
+        until("element", s => s.findAll({role:"row"}).some(n => n.label.startsWith("Element ")));
+        const element = app.snapshot().findAll({role:"row"}).find(n => n.label.startsWith("Element "));
+        nav.step("select element", "row", element.label);
+        app.frames(12, {waitMs:60});
+        const card = () => app.snapshot().find({role:"card",label:"Selected object"});
+        until("object card", () => card());
+        const before = card().bounds;
+        const room = app.snapshot().find({role:"card",label:"Stage"}).bounds;
+        const camera = () => app.snapshot().findAll({role:"text"}).find(n => n.label.startsWith("CAMERA ")).label;
+        const cameraBefore = camera();
+        const x = room.x + room.width * 0.5;
+        const y = room.y + room.height * 0.25;
+        app.drag({x,y}, {dx:110,dy:35}, {steps:10});
+        app.frames(12, {waitMs:60});
+        ({before, after:card().bounds, room, cameraBefore, cameraAfter:camera()})
+    "#,
+    );
+    assert_ne!(
+        out["cameraBefore"], out["cameraAfter"],
+        "the drag did not orbit: {out:#}"
+    );
+    assert_ne!(
+        out["before"], out["after"],
+        "the card stayed fixed while the camera orbited: {out:#}"
+    );
+}

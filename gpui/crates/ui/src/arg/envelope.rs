@@ -345,7 +345,7 @@ impl Render for EnvelopeEditor {
                     [("Straight", false), ("Curve", true)]
                         .into_iter()
                         .map(|(label, mode)| {
-                            crate::luma_button(label, crate::Enabled::Yes)
+                            crate::button(label, crate::Enabled::Yes)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| this.choose_curve(mode, cx)),
@@ -373,7 +373,7 @@ impl Render for EnvelopeEditor {
                     ]
                     .into_iter()
                     .map(|(label, value)| {
-                        crate::luma_button(label, crate::Enabled::Yes)
+                        crate::button(label, crate::Enabled::Yes)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {

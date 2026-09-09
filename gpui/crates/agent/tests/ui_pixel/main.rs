@@ -10,6 +10,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod button_styles;
 mod dialog_blur;
 mod dialog_morph;
 mod pixel;

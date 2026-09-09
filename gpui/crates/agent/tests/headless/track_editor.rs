@@ -247,3 +247,51 @@ fn status(reading: &Value) -> Vec<String> {
 fn transport(reading: &Value) -> Vec<String> {
     serde_json::from_value(reading["transport"].clone()).expect("a reading has transport buttons")
 }
+
+#[test]
+fn beat_grid_approval_survives_reopening_and_can_be_undone() {
+    let mut harness = harness();
+    let result = harness.exec(
+        &support::script(
+            r#"
+        nav.venue("Test Venue");
+        nav.track("Aurora");
+        function button(label) { return app.snapshot().find({role: "button", label}); }
+        until("grid approval", () => button("Beat grid correct") !== undefined);
+        app.click(button("Beat grid correct"));
+        until("saved approval", () => button("Beat grid approved") !== undefined);
+        nav.closeTab();
+        nav.track("Aurora");
+        until("reloaded approval", () => button("Beat grid approved") !== undefined);
+        app.click(button("Beat grid approved"));
+        until("undone approval", () => button("Beat grid correct") !== undefined);
+        nav.closeTab();
+        nav.track("Aurora");
+        until("reloaded undo", () => button("Beat grid correct") !== undefined);
+        app.click(button("Needs correction"));
+        until("saved rejection", () => button("Beat grid flagged") !== undefined);
+        app.click(app.snapshot().find({role: "select", label: "Reason (optional)"}));
+        app.click(button("Drift"));
+        until("saved reason", () => app.snapshot().find({role: "select", label: "Drift"}) !== undefined);
+        nav.closeTab();
+        nav.track("Aurora");
+        until("reloaded rejection", () => app.snapshot().find({role: "select", label: "Drift"}) !== undefined);
+        app.click(button("Beat grid correct"));
+        until("replaced rejection", () => button("Beat grid approved") !== undefined);
+        if (app.snapshot().find({role: "select", label: "Drift"}) !== undefined) throw new Error("Approval retained a rejection reason");
+        app.click(button("Needs correction"));
+        until("rejected again", () => button("Beat grid flagged") !== undefined);
+        app.click(button("Beat grid flagged"));
+        until("cleared rejection", () => button("Needs correction") !== undefined);
+        nav.closeTab();
+        nav.track("Aurora");
+        until("reloaded cleared rejection", () => button("Needs correction") !== undefined);
+        if (button("Beat grid approved") !== undefined) throw new Error("Cleared rejection became approval");
+        true
+    "#,
+        ),
+        Duration::from_secs(120),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    assert_eq!(result.result, Value::Bool(true));
+}

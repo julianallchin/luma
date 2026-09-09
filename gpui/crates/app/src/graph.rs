@@ -1178,7 +1178,7 @@ impl Luma {
     /// Unlike [`Self::open_pattern`] this keeps the screen — the catalogue,
     /// the viewport and the message explaining what happened all survive; only
     /// the document is replaced.
-    fn reload_graph(&mut self, target: &Target, cx: &mut Context<Self>) {
+    pub(crate) fn reload_graph(&mut self, target: &Target, cx: &mut Context<Self>) {
         let Some(TabBody::Graph(editor)) = self.workspace.body_mut(target) else {
             return;
         };
@@ -2433,7 +2433,7 @@ fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
         })
         .child(luma_ui::silkscreen(format!("{nodes} NODES")))
         .child(
-            luma_ui::luma_button(
+            luma_ui::button(
                 if state.preview_running {
                     "Rendering…"
                 } else {
@@ -2477,7 +2477,7 @@ fn graph_breadcrumbs(state: &Editor, app: &Entity<Luma>) -> Vec<AnyElement> {
         .map(|(depth, label)| {
             let app = app.clone();
             let target = state.target();
-            luma_ui::luma_button(&label, luma_ui::Enabled::Yes)
+            luma_ui::button(&label, luma_ui::Enabled::Yes)
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     app.update(cx, |this, cx| {
                         this.edit_graph_tab(&target, cx, |editor| {

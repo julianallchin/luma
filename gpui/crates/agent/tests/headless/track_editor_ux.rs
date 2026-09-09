@@ -66,11 +66,12 @@ fn harness() -> Harness {
             .collect(),
     )
     // Every pixel-arithmetic premise in SCRIPT was authored against a
-    // 1200-wide canvas. In takeover the shell spends 280 of the row (the
+    // 1200-wide canvas. The inspector now uses another 320px alongside it.
+    // In takeover the shell spends 280 of the row (the
     // sidebar and the card gaps) and 46 of the column (the titlebar band and
     // the bottom gap), so the window grows by exactly that much and the
     // timeline keeps its size.
-    .window(1480., 818.)
+    .window(1800., 818.)
     .open(Mode::Headless)
 }
 
@@ -328,14 +329,9 @@ const SCRIPT: &str = r#"
     function count(label) {
         return shot().findAll({ role: "card" }).filter((c) => c.label === label).length;
     }
-    // Clips, by elimination: every card on the screen that is not chrome.
-    // The args sheet is chrome that comes and goes with the selection, so it
-    // has to be named here or a count taken with a clip selected would differ
-    // from one taken without by the sheet rather than by a clip.
-    const CHROME = ["Waveform", "Ruler", "Clip inputs"];
+    // Read the document count, independent of inspector and shell cards.
     function total() {
-        return shot().findAll({ role: "card" })
-            .filter((c) => !CHROME.includes(c.label)).length;
+        return parseInt(status().find(label => label.endsWith(" CLIPS")), 10);
     }
     function reopen() {
         settled();
@@ -482,6 +478,8 @@ const SCRIPT: &str = r#"
         .findAll({ role: "row" })
         .map((n) => n.label)
         .filter((label) => !rowsBefore.includes(label));
+    app.type(shot().find({ role: "input", label: "Search patterns…" }), "Wash");
+    app.frames(2);
     app.click(shot().find({ role: "row", label: "Wash" }));
     app.frames(20);
     settled();
@@ -617,6 +615,16 @@ const SCRIPT: &str = r#"
 fn the_timeline_answers_the_pointer_and_the_wheel_the_way_the_web_one_does() {
     let mut harness = harness();
     let script = SCRIPT.replace("ZOOM", &ZOOM.to_string());
+    // Control-wheel uses the pinch rate (5× the Command-wheel rate) on Linux.
+    let script = if cfg!(target_os = "macos") {
+        script
+    } else {
+        script
+            .replace("cmd-", "ctrl-")
+            .replace("\"platform\"", "\"control\"")
+            .replace("dy: 300,", "dy: 60,")
+            .replace("dy: 600,", "dy: 120,")
+    };
     let result = harness.exec(&support::script(&script), Duration::from_secs(300));
     assert_eq!(result.error, None, "script failed:\n{}", result.stdout);
     let out: Value = result.result;

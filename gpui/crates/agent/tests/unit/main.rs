@@ -4,5 +4,10 @@
 //! These need no library and no renderer, so they are the one group that runs
 //! in full with no features turned on.
 
+mod cached_view;
 mod harness;
 mod mcp;
+
+mod popover;
+
+mod emoji;

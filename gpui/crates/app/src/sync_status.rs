@@ -209,7 +209,7 @@ pub(crate) fn sidebar(shell: &Luma, app: &Entity<Luma>) -> AnyElement {
                     .children(details.into_iter().map(|message| div().child(message)))
                     .when(!status.syncing && count > 0, |el| {
                         el.child(
-                            luma_ui::luma_button(
+                            luma_ui::button(
                                 "Retry sync",
                                 (!state.retrying && !status.syncing).into(),
                             )

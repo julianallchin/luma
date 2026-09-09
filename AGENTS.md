@@ -55,6 +55,15 @@ Venues, scores, patterns and authored history all live in that one database — 
 
 ## UI Conventions
 
+Comet (https://github.com/zeronsh/comet) is the button-style reference. Use
+`luma_ui::button` for compact actions, `luma_ui::float::btn` / `btn_primary`
+for dialog actions, and the shared chip/segment primitives for triggers and
+toggles. This applies to panels and toolbars as well as floating surfaces.
+Buttons have rounded corners, normal-case labels and subtle hover fills.
+Never recreate the removed square, bordered, 9px uppercase button style or
+copy controls from the obsolete web frontend. Keep styling in the shared UI
+primitives so fixes reach every caller.
+
 Use native GPUI confirmation dialogs for destructive actions.
 
 Always use Nucleo icons for new or replaced icons. The local bundle lives at `~/github/nucleo` (MCP: `mcp/dist/index.js`; skills: `skills/nucleo-icons/SKILL.md`). Copy chosen SVGs into the app’s embedded assets; never require an absolute home-directory path at runtime.

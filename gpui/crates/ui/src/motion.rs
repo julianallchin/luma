@@ -1,6 +1,6 @@
 //! Ported from zeron (MIT, © 2026 Wing) — crates/ui/src/motion.rs
 //!
-//! Animation kit — one curve, four durations, and the helpers that ride them
+//! Animation kit — one spring, five durations, and the helpers that ride them
 //! over gpui [`Animation`]/[`AnimationExt`].
 //!
 //! # One curve
@@ -10,14 +10,14 @@
 //! only thing that distinguishes a menu pop from a panel slide is how far and
 //! for how long, never *how*.
 //!
-//! Durations come from the ladder — [`SNAP`], [`QUICK`], [`BASE`], [`SLOW`] —
+//! Durations come from the ladder — [`SNAP`], [`QUICK`], [`BASE`], [`SWEEP`], [`SLOW`] —
 //! for the same reason the greys do: a new animation picks a rung rather than
-//! inventing a number, and a fifth rung is a design decision, not a literal.
+//! inventing a number, and another rung is a design decision, not a literal.
 //! Loader *periods* ([`PULSE`], [`GRADIENT_SPIN`]) are not on the ladder — they
 //! are the length of a loop, not of a transition.
 //!
-//! Custom easing is a closure over gpui's `Fn(f32) -> f32` easing shape; CSS
-//! `cubic-bezier()` is evaluated exactly by [`CubicBezier`].
+//! The normalized spring is evaluated through gpui's `Fn(f32) -> f32` easing
+//! closure. Every duration preserves its gentle start and settling shape.
 //!
 //! Reduced motion: gpui's `App::reduce_motion` flag is honored *automatically* by
 //! every `with_animation` element — oneshot animations snap to their end state,
@@ -121,103 +121,69 @@ pub fn pulse_delta(spec: &MotionSpec, view: EntityId, cx: &mut App) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Cubic bezier
+// Spring
 // ---------------------------------------------------------------------------
 
-/// A CSS `cubic-bezier(x1, y1, x2, y2)` timing function (endpoints fixed at
-/// (0,0) and (1,1)). Evaluation solves x(t) = input by Newton iteration with a
-/// bisection fallback — the standard UnitBezier approach.
+/// The desktop ChatGPT spring, normalized to a unit-duration transition from
+/// rest. Its duration-based spring solver uses damping ratio `1 - bounce` and
+/// a 0.001 settling envelope. With bounce 0.1 this gives normalized angular
+/// frequency `ln(0.9 / (sqrt(1 - 0.9²) * 0.001)) / 0.9`.
+///
+/// All durations use this same shape. GPUI requires easing in [0,1], so the
+/// tiny overshoot is clamped; layout and opacity never leave their valid range.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CubicBezier {
-    pub x1: f32,
-    pub y1: f32,
-    pub x2: f32,
-    pub y2: f32,
-}
+pub struct Spring;
 
-impl CubicBezier {
-    pub const fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
-        Self { x1, y1, x2, y2 }
-    }
+impl Spring {
+    const DAMPING: f32 = 0.9;
+    const FREQUENCY: f32 = 8.480_845;
 
-    fn coefficients(a: f32, b: f32) -> (f32, f32, f32) {
-        let c = 3.0 * a;
-        let bb = 3.0 * (b - a) - c;
-        let aa = 1.0 - c - bb;
-        (aa, bb, c)
-    }
-
-    fn sample_x(&self, t: f32) -> f32 {
-        let (a, b, c) = Self::coefficients(self.x1, self.x2);
-        ((a * t + b) * t + c) * t
-    }
-
-    fn sample_y(&self, t: f32) -> f32 {
-        let (a, b, c) = Self::coefficients(self.y1, self.y2);
-        ((a * t + b) * t + c) * t
-    }
-
-    fn sample_x_derivative(&self, t: f32) -> f32 {
-        let (a, b, c) = Self::coefficients(self.x1, self.x2);
-        (3.0 * a * t + 2.0 * b) * t + c
-    }
-
-    /// Curve parameter `t` for a given progress `x` (both 0..1).
-    fn solve_t_for_x(&self, x: f32) -> f32 {
-        // Newton–Raphson.
-        let mut t = x;
-        for _ in 0..8 {
-            let err = self.sample_x(t) - x;
-            if err.abs() < 1e-6 {
-                return t;
-            }
-            let d = self.sample_x_derivative(t);
-            if d.abs() < 1e-6 {
-                break;
-            }
-            t -= err / d;
+    /// Advance a live spring without discarding its velocity on retarget.
+    /// Displacement is relative to the target; velocity is units per second.
+    /// Unlike a bounded easing fraction, this preserves the physical state.
+    pub fn advance(
+        &self,
+        displacement: f32,
+        velocity: f32,
+        seconds: f32,
+        duration: f32,
+    ) -> (f32, f32) {
+        if duration <= 0.0 {
+            return (0.0, 0.0);
         }
-        // Bisection fallback (x(t) is monotonic for valid CSS beziers).
-        let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
-        for _ in 0..32 {
-            let mid = (lo + hi) / 2.0;
-            if self.sample_x(mid) < x {
-                lo = mid
-            } else {
-                hi = mid
-            }
-        }
-        (lo + hi) / 2.0
+        let frequency = Self::FREQUENCY / duration;
+        let decay = Self::DAMPING * frequency;
+        let damped = frequency * (1.0 - Self::DAMPING * Self::DAMPING).sqrt();
+        let (sin, cos) = (damped * seconds).sin_cos();
+        let envelope = (-decay * seconds).exp();
+        (
+            envelope * (displacement * cos + (velocity + decay * displacement) / damped * sin),
+            envelope
+                * (velocity * cos
+                    - (decay * velocity + frequency * frequency * displacement) / damped * sin),
+        )
     }
 
-    /// Eased output for input progress `x ∈ [0,1]` (clamped).
-    pub fn eval(&self, x: f32) -> f32 {
-        if x <= 0.0 {
+    /// Eased progress with exact endpoints and bounded output.
+    pub fn eval(&self, progress: f32) -> f32 {
+        if progress <= 0.0 {
             return 0.0;
         }
-        if x >= 1.0 {
+        if progress >= 1.0 {
             return 1.0;
         }
-        // f32 rounding can push sample_y a hair past 1.0 (observed 1.000000119
-        // near the end of menu animations); gpui's animation element asserts
-        // `delta ∈ [0,1]` and aborts, so clamp the output hard.
-        self.sample_y(self.solve_t_for_x(x)).clamp(0.0, 1.0)
-    }
-
-    /// This curve as a gpui easing closure.
-    pub fn easing(self) -> impl Fn(f32) -> f32 + 'static {
-        move |x| self.eval(x)
+        let damping = Self::DAMPING;
+        let frequency = Self::FREQUENCY;
+        let damped_ratio = (1.0 - damping * damping).sqrt();
+        let phase = frequency * damped_ratio * progress;
+        let remaining = (-damping * frequency * progress).exp()
+            * (phase.cos() + damping / damped_ratio * phase.sin());
+        (1.0 - remaining).clamp(0.0, 1.0)
     }
 }
 
-/// **The** curve — CSS `cubic-bezier(0.16, 1, 0.3, 1)`, an exponential ease-out:
-/// leaves immediately, arrives slowly, never overshoots.
-///
-/// It is comet's signature easing (its `fade-in`, its iOS `Motion.swift`), and
-/// it is the only curve in this app. Panel slides in the original ride CSS
-/// `ease-out` instead; that is a milder shape of the same idea, and one shape
-/// beats two nearly-identical ones.
-pub const ROOT: CubicBezier = CubicBezier::new(0.16, 1.0, 0.3, 1.0);
+/// One spring shape for every transition: gentle acceleration and a soft settle.
+pub const ROOT: Spring = Spring;
 
 // ---------------------------------------------------------------------------
 // Motion specs (the catalog)
@@ -231,11 +197,11 @@ pub const ROOT: CubicBezier = CubicBezier::new(0.16, 1.0, 0.3, 1.0);
 pub struct MotionSpec {
     pub duration_ms: u64,
     pub delay_ms: u64,
-    pub curve: CubicBezier,
+    pub curve: Spring,
 }
 
 impl MotionSpec {
-    pub const fn new(duration_ms: u64, curve: CubicBezier) -> Self {
+    pub const fn new(duration_ms: u64, curve: Spring) -> Self {
         Self {
             duration_ms,
             delay_ms: 0,
@@ -281,30 +247,17 @@ impl MotionSpec {
 
 // -- the duration ladder ------------------------------------------------------
 
-/// Getting out of the way (100ms): an exit whose end state is what the eye
-/// already wants.
-pub const SNAP: u64 = 100;
-/// Something small appearing where the pointer already is (150ms): menus,
-/// hover washes, a chip sliding one slot over.
-pub const QUICK: u64 = 150;
-/// A contained structural change (200ms) — comet's panel duration, and the
-/// rung a dialog entrance or a row collapse takes.
-pub const BASE: u64 = 200;
-/// A large region travelling a long way (270ms): the sidebar and the workspace
-/// panel opening, the dialog card morphing between routes.
-///
-/// A rung of its own rather than [`BASE`] because the eye *tracks* a moving
-/// edge that crosses a third of the window, and at the contained rung it
-/// arrives before the eye has caught up — which reads as a jump rather than as
-/// speed. Contained things keep [`BASE`]: a chevron or a row collapse given
-/// this long reads as hesitation.
-///
-/// 270 continues the ladder's own step (×1.35, the same ratio [`BASE`] takes
-/// over [`QUICK`]) instead of picking a number between the rungs.
-pub const SWEEP: u64 = 270;
-/// A whole surface arriving (500ms): entrances, the splash, a scroll that
-/// crosses the viewport.
-pub const SLOW: u64 = 500;
+/// Small exits (180ms).
+pub const SNAP: u64 = 180;
+/// Menus, hover fades, and tab slides (280ms).
+pub const QUICK: u64 = 280;
+/// Contained structural changes: row collapses and chevrons (360ms).
+pub const BASE: u64 = 360;
+/// Panels, dialogs, and navigation pushes (500ms), matching the desktop
+/// ChatGPT sidebar's duration as well as its spring shape.
+pub const SWEEP: u64 = 500;
+/// Entrances, the splash, and viewport-crossing scrolls (700ms).
+pub const SLOW: u64 = 700;
 
 // -- the catalog --------------------------------------------------------------
 
@@ -312,33 +265,16 @@ pub const SLOW: u64 = 500;
 pub const FADE_IN: MotionSpec = MotionSpec::new(SLOW, ROOT);
 /// Opacity-only fade.
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(QUICK, ROOT);
-/// Popover-in (scale 0.96 approximated, translateY −2).
+/// Popover entrance, moving away from its trigger.
 pub const MENU_IN: MotionSpec = MotionSpec::new(QUICK, ROOT);
-/// Popover-out — a rung below the entrance, the one asymmetry the ladder
-/// keeps: a menu the user has dismissed is already gone as far as they are
-/// concerned, and matching the open would read as lag.
-pub const MENU_OUT: MotionSpec = MotionSpec::new(SNAP, ROOT);
+/// Popover exit uses the same timing and spring as its entrance.
+pub const MENU_OUT: MotionSpec = MENU_IN;
 /// Boot splash exit: fade + 6px lift after a hold.
 pub const SPLASH_OUT: MotionSpec = MotionSpec::new(SLOW, ROOT).with_delay(QUICK);
-/// A large surface changing shape: arriving, leaving, sliding open, resizing.
-///
-/// Riders: the sidebar and workspace panel sliding open and shut
-/// ([`crate::pane`]), the chat pane's width settle, the dialog card's route
-/// morph ([`crate::dialog::morph`]), and the dialog's own entrance and exit
-/// ([`dialog_in`]/[`dialog_out`]).
-///
-/// One name rather than a per-rider name because these are one gesture at
-/// different scales — a card arriving and a panel sliding are the same weight
-/// of thing moving the same way, and one of them arriving first is the tell
-/// that they are two systems. Retuning this retunes all of them, which is the
-/// point.
-///
-/// The dialog is symmetric here, the one place the ladder's
-/// entrance/exit asymmetry ([`MENU_OUT`]) does *not* apply: a surface that
-/// leaves faster than it arrived is a surface that was never the same object
-/// on the way out, and the sidebar — the reference for this spec — has always
-/// closed over the span it opens.
+/// Shared spring timing for panes, dialog route morphs, and dialog exits.
 pub const SURFACE: MotionSpec = MotionSpec::new(SWEEP, ROOT);
+/// Dialogs open more quickly while retaining the same spring shape.
+pub const DIALOG_IN: MotionSpec = MotionSpec::new(BASE, ROOT);
 /// A navigation *push*: one level of a column leaving to the left while the
 /// next arrives from the right, over the column's own width.
 ///
@@ -388,60 +324,34 @@ where
     element.with_animation(id, FADE_QUICK.animation(), |el, t| el.opacity(t))
 }
 
-/// Popover entrance: fade + translateY −2→0 over [`MENU_IN`].
-/// (zeron also scales 0.96→1; divs have no scale transform in gpui — approximated.)
-pub fn menu_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// Dialog entrance: fade and scale 0.98→1 using the shared spring.
+pub fn dialog_in<E>(
+    id: impl Into<ElementId>,
+    element: E,
+) -> AnimationElement<crate::dialog::Filtered>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, MENU_IN.animation(), |el, t| {
-        el.relative()
-            .opacity(0.3 + 0.7 * t)
-            .top(px(-2.0 * (1.0 - t)))
+    crate::dialog::filtered(0.0, 1.0, element).with_animation(id, DIALOG_IN.animation(), |el, t| {
+        el.pose(0.98 + 0.02 * t, t)
     })
 }
 
-/// Popover exit: the reverse of [`menu_in`] — fade to 0 + translateY 0→−2 over
-/// [`MENU_OUT`]. Unlike the entrances, the eased progress `t` comes from the
-/// caller (computed off the closing panel's own instant at render
-/// time): `with_animation`'s element-id-keyed clock replays from 0 on remount
-/// (the hover-blend comment's warning), and a replay mid-exit is a full-opacity
-/// flash. The wall-clock progress is monotonic by construction; the animation
-/// wrapper here only pumps frames for the exit's span, its own delta unused.
-pub fn menu_out<E>(id: impl Into<ElementId>, t: f32, element: E) -> AnimationElement<E>
+/// Dialog exit: the reverse entrance, driven by the closing instant so a
+/// remount cannot restart the animation. The wrapper only pumps frames.
+pub fn dialog_out<E>(
+    id: impl Into<ElementId>,
+    t: f32,
+    element: E,
+) -> AnimationElement<crate::dialog::Filtered>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, MENU_OUT.animation(), move |el, _| {
-        el.relative().opacity(1.0 - t).top(px(-2.0 * t))
-    })
-}
-
-/// Dialog entrance over [`SURFACE`] — the sidebar's spec, so a card arriving
-/// and a panel sliding open are one gesture (scale approximated with fade + a
-/// 2px rise, since gpui divs have no scale transform at the pinned rev).
-pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, SURFACE.animation(), |el, t| {
-        el.relative().opacity(t).top(px(2.0 * (1.0 - t)))
-    })
-}
-
-/// Dialog exit: the reverse of [`dialog_in`] — fade to 0 while dropping the
-/// 2px the entrance rose. Like [`menu_out`], the eased progress `t` is the
-/// caller's, computed from the closing card's own instant by [`exit_progress`];
-/// the animation wrapper only pumps frames for the exit's span and its own
-/// delta goes unused. See [`menu_out`] for why that indirection is not
-/// optional.
-pub fn dialog_out<E>(id: impl Into<ElementId>, t: f32, element: E) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, SURFACE.animation(), move |el, _| {
-        el.relative().opacity(1.0 - t).top(px(2.0 * t))
-    })
+    crate::dialog::filtered(0.0, 1.0, element).with_animation(
+        id,
+        SURFACE.animation(),
+        move |el, _| el.pose(1.0 - 0.02 * t, 1.0 - t),
+    )
 }
 
 /// The wall-clock span of one run of `spec` — its total stretched by
@@ -486,7 +396,7 @@ pub fn exit_progress_at(spec: &MotionSpec, since: Instant, now: Instant) -> f32 
     spec.progress(raw)
 }
 
-/// Boot-splash exit: hold 150ms, then fade out + lift 6px over 500ms.
+/// Boot-splash exit: hold QUICK, then fade out + lift 6px over SLOW.
 pub fn splash_out<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
@@ -591,7 +501,7 @@ pub fn reveal_opacity(openness: f32) -> f32 {
 //
 // gpui `.hover()` styles snap by construction — the style applies the frame
 // the pointer enters. The original puts a colour transition on every
-// interactive wash, so hover states FADE. This is the manual-drive tween for
+// interactive wash. Enter is immediate; only leave fades. This is the manual-drive tween for
 // that ([`crate::pane::PaneWidth`]'s pattern — never `with_animation`, whose
 // element-id-keyed clock replays on
 // remount): a per-element-key hover progress, advanced from wall time on each
@@ -662,7 +572,7 @@ impl HoverFades {
         if target == 0.0 && !self.entries.contains_key(key) {
             return; // never-hovered element reporting a leave — nothing to do
         }
-        let origin = if reduced { target } else { current };
+        let origin = if hovered || reduced { target } else { current };
         let seen = self.frame;
         self.entries.insert(
             key.to_string(),
@@ -787,7 +697,7 @@ pub fn hover_blend(key: &str, rest: Hsla, hover: Hsla) -> Hsla {
 // ---------------------------------------------------------------------------
 
 /// Dev/measurement knob (default 1): stretches every catalog timeline by this
-/// factor — e.g. `10` slows the 200ms pane tweens to 2s so screenshot bursts
+/// factor — e.g. `10` slows the 500ms pane tweens to 5s so screenshot bursts
 /// can sample the geometry per frame. Never set in production.
 ///
 /// Per-app rather than per-process, so two harnesses in one test binary can
@@ -824,36 +734,6 @@ pub fn reduced_motion(cx: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// [`ROOT`] plus the CSS curves it replaced. The solver is general — a
-    /// caller may pass any `cubic-bezier()` — so it is exercised against
-    /// shapes with slow starts and steep tails too, not only the app's one.
-    const CURVES: [CubicBezier; 5] = [
-        ROOT,
-        CubicBezier::new(0.0, 0.0, 0.58, 1.0),  // ease-out
-        CubicBezier::new(0.25, 0.1, 0.25, 1.0), // ease
-        CubicBezier::new(0.22, 1.0, 0.36, 1.0), // ease-out-quint
-        CubicBezier::new(0.42, 0.0, 0.58, 1.0), // ease-in-out
-    ];
-
-    #[test]
-    fn eval_never_escapes_unit_interval_dense_sweep() {
-        // Regression: f32 rounding produced 1.000000119 near the tail of
-        // ROOT, tripping gpui's `delta ∈ [0,1]` assert (SIGABRT on the
-        // user's machine). Sweep densely, including the values right below
-        // 1.0 where Newton lands closest to the endpoint.
-        for curve in CURVES {
-            for i in 0..=100_000u32 {
-                let x = i as f32 / 100_000.0;
-                let y = curve.eval(x);
-                assert!((0.0..=1.0).contains(&y), "eval({x}) = {y} escaped [0,1]");
-            }
-            for x in [0.999_999f32, 0.999_999_9, 1.0 - f32::EPSILON] {
-                let y = curve.eval(x);
-                assert!((0.0..=1.0).contains(&y), "eval({x}) = {y} escaped [0,1]");
-            }
-        }
-    }
-
     use super::*;
 
     fn assert_close(actual: f32, expected: f32, tol: f32, ctx: &str) {
@@ -864,73 +744,45 @@ mod tests {
     }
 
     #[test]
-    fn bezier_linear_is_identity() {
-        let linear = CubicBezier::new(0.0, 0.0, 1.0, 1.0);
-        for x in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
-            assert_close(linear.eval(x), x, 1e-4, "linear");
+    fn spring_matches_desktop_reference() {
+        // Samples from the installed app's duration-based spring solver with
+        // duration 500ms, bounce 0.1, and zero initial velocity.
+        for (ms, expected) in [
+            (0.0, 0.0),
+            (50.0, 0.217_610),
+            (100.0, 0.537_156),
+            (250.0, 0.962_330),
+            (400.0, 1.0), // the reference's tiny overshoot is clamped
+            (500.0, 1.0),
+        ] {
+            assert_close(ROOT.eval(ms / 500.0), expected, 1e-5, "desktop spring");
         }
     }
 
     #[test]
-    fn bezier_known_values() {
-        // References computed independently with 80-step bisection.
-        let cases: [(&str, CubicBezier, [f32; 5]); 3] = [
-            (
-                "root",
-                CURVES[0],
-                [0.494391, 0.825622, 0.971779, 0.997677, 0.999878],
-            ),
-            (
-                "ease-out",
-                CURVES[1],
-                [0.160572, 0.378138, 0.684643, 0.906535, 0.982973],
-            ),
-            (
-                "ease",
-                CURVES[2],
-                [0.094796, 0.408511, 0.802403, 0.960459, 0.994316],
-            ),
-        ];
-        for (name, curve, expected) in cases {
-            for (x, want) in [0.1, 0.25, 0.5, 0.75, 0.9].into_iter().zip(expected) {
-                assert_close(curve.eval(x), want, 1e-3, name);
-            }
+    fn spring_is_bounded_and_monotone() {
+        let mut previous = 0.0;
+        for i in 0..=100_000 {
+            let value = ROOT.eval(i as f32 / 100_000.0);
+            assert!((0.0..=1.0).contains(&value), "GPUI requires bounded easing");
+            assert!(value >= previous - 1e-6, "spring moved away from target");
+            previous = value;
         }
-    }
-
-    #[test]
-    fn bezier_endpoints_and_clamping() {
-        for curve in CURVES {
-            assert_eq!(curve.eval(0.0), 0.0);
-            assert_eq!(curve.eval(1.0), 1.0);
-            assert_eq!(curve.eval(-0.5), 0.0);
-            assert_eq!(curve.eval(1.5), 1.0);
-        }
-    }
-
-    #[test]
-    fn bezier_is_monotonic_for_catalog_curves() {
-        for curve in CURVES {
-            let mut last = 0.0;
-            for i in 0..=100 {
-                let y = curve.eval(i as f32 / 100.0);
-                assert!(y >= last - 1e-4, "monotonicity violated at {i}");
-                last = y;
-            }
-        }
+        assert_eq!(ROOT.eval(-0.5), 0.0);
+        assert_eq!(ROOT.eval(1.5), 1.0);
     }
 
     #[test]
     fn spec_delay_holds_then_runs() {
-        // SPLASH_OUT: 150ms delay + 500ms run = 650ms total.
-        assert_eq!(SPLASH_OUT.total(), Duration::from_millis(650));
+        // The delay and run share the catalog timing ladder.
+        assert_eq!(SPLASH_OUT.total(), Duration::from_millis(QUICK + SLOW));
         assert_eq!(SPLASH_OUT.progress(0.0), 0.0);
-        // Still inside the delay window at raw 0.2 (130ms < 150ms).
+        // Still inside the delay window.
         assert_eq!(SPLASH_OUT.progress(0.2), 0.0);
         // Fully done at the end; clamped beyond.
         assert_eq!(SPLASH_OUT.progress(1.0), 1.0);
         assert_eq!(SPLASH_OUT.progress(2.0), 1.0);
-        // Midway through the run: raw 0.65 → 272.5ms into the 500ms run.
+        // Part-way through the run.
         let mid = SPLASH_OUT.progress(0.65);
         assert!(mid > 0.0 && mid < 1.0);
         // No-delay specs pass straight through the curve.
@@ -967,13 +819,7 @@ mod tests {
                 "{spec:?} invents a delay"
             );
         }
-        assert_eq!(ROOT, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
-        // The panel slide is the one place the app deliberately left comet's
-        // 200ms: a travelling edge needs longer than a contained one, and every
-        // surface that slides or morphs reads this spec so they stay one
-        // gesture. Pinned because it is a judgement, not a derivation.
-        assert_eq!(SURFACE.duration_ms, SWEEP);
-        assert_eq!(SWEEP, 270);
+        assert_eq!(SURFACE.duration_ms, 500);
         // Strictly increasing, so "a rung below" is a statement about speed and
         // no two rungs are the same number wearing two names.
         let ladder = [SNAP, QUICK, BASE, SWEEP, SLOW];
@@ -983,23 +829,13 @@ mod tests {
         );
     }
 
-    /// A popover exit lands a rung below its entrance — the asymmetry the
-    /// ladder keeps on purpose (see [`MENU_OUT`]).
     #[test]
-    fn exits_land_a_rung_below_their_entrances() {
-        assert!(MENU_OUT.duration_ms < MENU_IN.duration_ms);
-        assert_eq!(MENU_OUT.duration_ms, SNAP);
+    fn popover_exit_matches_its_entrance() {
+        assert_eq!(MENU_OUT, MENU_IN);
     }
 
-    /// The dialog and the sidebar are one gesture, not two that happen to
-    /// agree: the card's entrance, its exit, its route morph and the pane
-    /// slide all read [`SURFACE`], so retuning the sidebar retunes the
-    /// dialogs. There is deliberately no second dialog spec to drift from
-    /// this one — [`crate::dialog`] pins the other half of the coupling.
     #[test]
-    fn the_surface_spec_is_symmetric_and_shared() {
-        // Symmetric on purpose, unlike the popovers above: one spec drives
-        // both directions, so an exit cannot be retimed without the entrance.
+    fn panes_and_dialog_exits_share_the_surface_spec() {
         assert_eq!(SURFACE.curve, ROOT);
         assert_eq!(SURFACE.duration_ms, SWEEP);
         assert_eq!(SURFACE.delay_ms, 0);
@@ -1064,16 +900,16 @@ mod tests {
     }
 
     #[test]
-    fn hover_fade_ramps_and_reverses_continuously() {
+    fn hover_enters_instantly_and_fades_out() {
         let mut fades = HoverFades::default();
         let t0 = Instant::now();
         let ms = |m: u64| t0 + Duration::from_millis(m);
 
-        // Enter: 0 at the flip, mid-flight strictly between, 1 at 150ms.
+        // Enter is immediate, including re-entry during an outgoing fade.
         fades.set_at("pill", true, false, t0);
-        assert_eq!(fades.value_at("pill", t0), 0.0);
+        assert_eq!(fades.value_at("pill", t0), 1.0);
         let mid = fades.value_at("pill", ms(75));
-        assert!(mid > 0.0 && mid < 1.0, "mid-flight enter: {mid}");
+        assert_eq!(mid, 1.0);
         assert_eq!(fades.value_at("pill", ms(150)), 1.0);
         assert_eq!(fades.value_at("pill", ms(400)), 1.0, "clamps past the end");
 
@@ -1088,7 +924,7 @@ mod tests {
         );
         let falling = fades.value_at("pill", ms(140));
         assert!(falling < after_flip, "fades back down");
-        assert_eq!(fades.value_at("pill", ms(225)), 0.0, "lands at rest");
+        assert_eq!(fades.value_at("pill", ms(75 + QUICK)), 0.0, "lands at rest");
     }
 
     #[test]
@@ -1118,9 +954,9 @@ mod tests {
 
         fades.set_at("a", true, false, t0);
         // Mid-flight: active, frames must keep coming (read each frame).
-        assert!(fades.tick_at(ms(50)));
+        assert!(!fades.tick_at(ms(50)));
         fades.value_at("a", ms(50));
-        assert!(fades.tick_at(ms(100)));
+        assert!(!fades.tick_at(ms(100)));
         fades.value_at("a", ms(100));
         // Settled hovered (still read): no more frames needed, entry kept.
         assert!(!fades.tick_at(ms(200)));
@@ -1131,7 +967,7 @@ mod tests {
         fades.set_at("a", false, false, ms(250));
         assert!(fades.tick_at(ms(300)));
         fades.value_at("a", ms(300));
-        assert!(!fades.tick_at(ms(500)), "settled at rest");
+        assert!(!fades.tick_at(ms(250 + QUICK)), "settled at rest");
         assert!(fades.entries.is_empty(), "rest entries are pruned");
     }
 

@@ -619,6 +619,49 @@ impl Room {
             .filter(|(_, s)| s.socket_type != SocketType::Grab)
     }
 
+    /// Highest authored upward-facing surface under a mount point. Test the
+    /// intersection in the host's local bounds, so rotated decks keep their footprint.
+    pub(crate) fn surface_below(&self, point: DVec3, exclude: &[String]) -> Option<(String, f64)> {
+        self.sockets
+            .iter()
+            .filter(|(id, _)| !exclude.contains(id))
+            .flat_map(|(id, sockets)| {
+                sockets.iter().filter_map(move |socket| {
+                    if socket.socket_type.kind() != SocketKind::Surface
+                        || !socket.socket_type.polarity().can_host()
+                    {
+                        return None;
+                    }
+                    let pose = self.pose(id)?;
+                    let normal = pose.transform_vector3(socket.normal).normalize_or_zero();
+                    if normal.y <= 0.001 {
+                        return None;
+                    }
+                    let center = pose.transform_point3(socket.position);
+                    let height = center.y
+                        - (normal.x * (point.x - center.x) + normal.z * (point.z - center.z))
+                            / normal.y;
+                    if height > point.y + 0.005 {
+                        return None;
+                    }
+                    if id != &self.root {
+                        let bounds = self.bounds_of(id)?;
+                        let local = pose
+                            .inverse()
+                            .transform_point3(DVec3::new(point.x, height, point.z));
+                        let slack = DVec3::splat(0.005);
+                        if !local.cmpge(bounds.min - slack).all()
+                            || !local.cmple(bounds.max + slack).all()
+                        {
+                            return None;
+                        }
+                    }
+                    Some((id.clone(), height))
+                })
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
     /// The named face socket under a viewport hit: the closest hosting
     /// surface socket on the hit piece whose plane the hit lies in.
     ///
@@ -1005,6 +1048,48 @@ pub(crate) fn compatible(host: &ResolvedSocket, held: &[ResolvedSocket], kind: N
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimum_height_uses_the_surface_below_and_its_rotated_footprint() {
+        let floor = root_socket(FLOOR_SOCKET).unwrap();
+        let mut top = floor.clone();
+        top.position.y = 1.0;
+        let room = Room {
+            root: "venue".into(),
+            poses: HashMap::from([
+                ("venue".into(), DMat4::IDENTITY),
+                (
+                    "deck".into(),
+                    DMat4::from_rotation_y(std::f64::consts::FRAC_PI_4),
+                ),
+            ]),
+            sockets: HashMap::from([("venue".into(), vec![floor]), ("deck".into(), vec![top])]),
+            pieces: Vec::new(),
+            boxes: HashMap::from([(
+                "deck".into(),
+                luma_scene::aabb::DAabb {
+                    min: DVec3::new(-2.0, 0.0, -0.5),
+                    max: DVec3::new(2.0, 1.0, 0.5),
+                },
+            )]),
+        };
+        assert_eq!(
+            room.surface_below(DVec3::new(1.0, 3.0, -1.0), &[]),
+            Some(("deck".into(), 1.0))
+        );
+        assert_eq!(
+            room.surface_below(DVec3::new(1.0, 3.0, 1.0), &[]),
+            Some(("venue".into(), 0.0))
+        );
+        assert_eq!(
+            room.surface_below(DVec3::new(1.0, 0.5, -1.0), &[]),
+            Some(("venue".into(), 0.0))
+        );
+        assert_eq!(
+            room.surface_below(DVec3::new(1.0, 3.0, -1.0), &["deck".into()]),
+            Some(("venue".into(), 0.0))
+        );
+    }
 
     #[test]
     fn a_length_longer_than_the_gap_is_refused_and_an_equal_one_is_not() {

@@ -24,6 +24,8 @@ pub enum IconName {
     Play,
     Plus,
     SquareTerminal,
+    ThumbsUp,
+    ThumbsDown,
     Undo,
     RotateLeft,
     RotateRight,
@@ -51,6 +53,8 @@ impl IconNamed for IconName {
             Self::Play => "nucleo/media-play.svg".into(),
             Self::Plus => "nucleo/plus.svg".into(),
             Self::SquareTerminal => "nucleo/square-terminal.svg".into(),
+            Self::ThumbsDown => "nucleo/thumbs-down.svg".into(),
+            Self::ThumbsUp => "nucleo/thumbs-up.svg".into(),
             Self::Undo => "nucleo/undo.svg".into(),
             Self::RotateLeft => "nucleo/arrow-rotate-anticlockwise.svg".into(),
             Self::RotateRight => "nucleo/arrow-rotate-clockwise.svg".into(),
@@ -64,6 +68,9 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "nucleo/thumbs-up.svg" => Some(include_bytes!("../assets/nucleo/thumbs-up.svg")),
+            "nucleo/thumbs-down.svg" => Some(include_bytes!("../assets/nucleo/thumbs-down.svg")),
+            "nucleo/camera.svg" => Some(include_bytes!("../assets/nucleo/camera.svg")),
             "nucleo/arrow-down.svg" | "icons/arrow-down.svg" => {
                 Some(include_bytes!("../assets/nucleo/arrow-down.svg"))
             }
@@ -165,6 +172,8 @@ impl AssetSource for Assets {
                 "nucleo/sidebar-left.svg",
                 "nucleo/sidebar-right.svg",
                 "nucleo/square-terminal.svg",
+                "nucleo/thumbs-up.svg",
+                "nucleo/thumbs-down.svg",
                 "nucleo/undo.svg",
                 "nucleo/xmark.svg",
             ]

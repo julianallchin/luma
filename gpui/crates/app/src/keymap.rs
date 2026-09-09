@@ -66,6 +66,7 @@ pub(crate) mod context {
     pub const SUBAGENTS: &str = "Subagents";
     /// Picking a clip's fixtures off the room.
     pub const FIXTURE_PICKER: &str = "FixturePicker";
+    pub const PATTERN_INSERT: &str = "PatternInsert";
     /// Picking a definition and a count for the patch page.
     pub const ADD_FIXTURES: &str = "AddFixtures";
     /// The one confirmation dialog — see [`crate::confirm`].
@@ -82,7 +83,7 @@ pub(crate) mod context {
     /// and a context named in one but not the other is a dialog whose Escape
     /// or whose ⌘B is silently wrong. Naming them here is what keeps the two
     /// from drifting.
-    pub const DIALOGS: [&str; 9] = [
+    pub const DIALOGS: [&str; 10] = [
         VENUES,
         PATTERNS,
         SETTINGS,
@@ -90,6 +91,7 @@ pub(crate) mod context {
         CHAT_HISTORY,
         SUBAGENTS,
         FIXTURE_PICKER,
+        PATTERN_INSERT,
         ADD_FIXTURES,
         CONFIRM,
     ];
@@ -238,10 +240,10 @@ pub(crate) fn init(cx: &mut App) {
     // fields for the usual reason: `=` and `-` are characters.
     let viewing = format!("{} && !{}", context::VISUALIZER, context::TEXT_INPUT);
     let mut bindings = vec![
-        KeyBinding::new("down", NextInsertOption, Some("PatternInsert")),
-        KeyBinding::new("up", PrevInsertOption, Some("PatternInsert")),
-        KeyBinding::new("enter", CommitInsertOption, Some("PatternInsert")),
-        KeyBinding::new("escape", DismissOverlay, Some("PatternInsert")),
+        KeyBinding::new("down", NextInsertOption, Some(context::PATTERN_INSERT)),
+        KeyBinding::new("up", PrevInsertOption, Some(context::PATTERN_INSERT)),
+        KeyBinding::new("enter", CommitInsertOption, Some(context::PATTERN_INSERT)),
+        KeyBinding::new("escape", DismissOverlay, Some(context::PATTERN_INSERT)),
         KeyBinding::new("space", PlayPause, Some(&editing)),
         KeyBinding::new("delete", DeleteNodes, Some(&graphing)),
         KeyBinding::new("backspace", DeleteNodes, Some(&graphing)),

@@ -110,7 +110,7 @@ pub const SCROLL_BUTTON_THRESHOLD_PX: f32 = 320.0;
 pub const JUMP_DIAMETER: f32 = 30.0;
 /// A tool chip's height. **Declared, never measured** — a fold whose height is
 /// measured makes every collapse a relayout.
-pub const CHIP_HEIGHT: f32 = 38.0;
+pub const CHIP_HEIGHT: f32 = 28.0;
 /// One line of an expanded chip's detail. Also declared: the card counts its
 /// own lines and multiplies, so opening a chip is a known height change rather
 /// than a measurement of a wrapped blob.
@@ -121,12 +121,6 @@ pub const CHIP_DETAIL_LINE: f32 = 16.0;
 pub const CHIP_DETAIL_MAX_LINES: usize = 10;
 /// The disclosure chevron's box, at the chip's trailing edge.
 pub const CHIP_CHEVRON: f32 = 14.0;
-/// The guide rail down a tool group: where it starts, how wide it is, and how
-/// far the chips clear it.
-pub const RAIL_INSET: f32 = 12.0;
-pub const RAIL_WIDTH: f32 = 1.0;
-pub const RAIL_GUTTER: f32 = 11.0;
-
 // -- composer (composer.rs) --------------------------------------------------
 
 /// Vertical padding inside the composer's text box: `pt-4 pb-1`.
@@ -160,10 +154,6 @@ pub const MIN_COMPACT_INPUT_WIDTH: f32 = 200.0;
 /// Slack on the expanded→compact flip. Expanding and collapsing share no
 /// boundary, so a draft parked at the threshold cannot oscillate.
 pub const COLLAPSE_HYSTERESIS: f32 = 32.0;
-/// During an interactive resize, collapsing waits until the measured widths
-/// have been stable this long. Expansion stays immediate, so a narrowing pane
-/// never traps the controls in a compact row.
-pub const RESIZE_SETTLE_MS: u64 = 150;
 /// How hard the pill blurs the transcript scrolling under it.
 pub const PILL_BLUR: f32 = 16.0;
 /// Send and stop are one circular button that changes what it holds — never

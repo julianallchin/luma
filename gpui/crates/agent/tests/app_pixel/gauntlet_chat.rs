@@ -74,7 +74,7 @@ fn the_chat_panel_is_captured_across_one_turn() {
             // shows a grey block instead of a reply mid-arrival.
             app.frames(6, {{ waitMs: 30 }});
             const streaming = app.screenshot();
-            until("the turn end", (s) => chips(s).some((c) => c.startsWith("Ran"))
+            until("the turn end", (s) => chips(s).some((c) => c === "ramp peak check")
                 && !s.findAll({{ role: "text" }}).some((n) => n.label === "Working"));
             app.frames(4, {{ waitMs: 40 }});
             const finished = app.screenshot();

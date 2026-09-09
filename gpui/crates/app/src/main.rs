@@ -70,6 +70,17 @@ fn main() {
         };
 
         cx.open_window(options, |window, cx| {
+            if let Some(gpu) = window.gpu_specs() {
+                eprintln!(
+                    "[graphics] {} — {}",
+                    gpu.device_name,
+                    if gpu.is_software_emulated {
+                        "CPU software renderer"
+                    } else {
+                        "hardware renderer"
+                    },
+                );
+            }
             luma_app::hide_native_window_buttons(window);
             // As early as there is a window, because compiling every render
             // pipeline is the longest thing between launch and a first frame

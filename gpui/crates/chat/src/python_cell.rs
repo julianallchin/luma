@@ -52,21 +52,11 @@ const FIGURE_HEIGHT_MAX: f32 = 240.0;
 const FIGURE_HEIGHT_MIN: f32 = 48.0;
 
 /// The width a figure's box is sized *as if* it had: the reading column
-/// ([`theme::MAX_CONTENT_WIDTH`]) less the tool rail, the chip's indent under
-/// its tile, and the card's own padding. Measuring the real width would make
+/// ([`theme::MAX_CONTENT_WIDTH`]) less the card's own padding.
+/// Measuring the real width would make
 /// the height a measurement; `ObjectFit::Contain` absorbs whatever the panel's
 /// actual width turns out to be.
-const FIGURE_WIDTH: f32 = theme::MAX_CONTENT_WIDTH
-    - theme::RAIL_INSET
-    - theme::RAIL_WIDTH
-    - theme::RAIL_GUTTER
-    - CARD_INDENT
-    - 2.0 * theme::SPACE_MD;
-
-/// How far a chip's card is inset under its narration, past the icon tile.
-/// Spelled here because the figure box is sized against it; the element that
-/// applies it lives in [`crate::chip`].
-pub const CARD_INDENT: f32 = 32.0;
+const FIGURE_WIDTH: f32 = theme::MAX_CONTENT_WIDTH - 2.0 * theme::SPACE_MD;
 
 /// How many lines of one stream a card shows.
 ///
@@ -133,10 +123,9 @@ pub struct Cell {
     streams: Vec<Stream>,
     figures: Vec<Figure>,
     status: Status,
-    duration_ms: Option<u64>,
 }
 
-/// How a call ended, as the chip's dot reads it.
+/// How a call ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Running,
@@ -145,18 +134,6 @@ pub enum Status {
     Raised,
     /// The cell never finished — interrupted, or the worker failed under it.
     Stopped,
-}
-
-impl Status {
-    /// The dot's colour. Hue is meaning here, which is the one thing it is for.
-    #[must_use]
-    pub fn color(self, theme: &Theme) -> Hsla {
-        match self {
-            Status::Running => theme.warning,
-            Status::Ok => theme.success,
-            Status::Raised | Status::Stopped => theme.danger,
-        }
-    }
 }
 
 impl Cell {
@@ -217,19 +194,12 @@ impl Cell {
             streams,
             figures,
             status,
-            duration_ms: output.map(|output| output.duration_ms),
         })
     }
 
     #[must_use]
     pub fn status(&self) -> Status {
         self.status
-    }
-
-    /// How long the cell ran, once it has.
-    #[must_use]
-    pub fn duration_ms(&self) -> Option<u64> {
-        self.duration_ms
     }
 
     /// The card's exact open height — the element below, term for term.
@@ -536,7 +506,6 @@ mod tests {
             .unwrap();
         assert_eq!(cell.status(), Status::Running);
         assert!(cell.streams.is_empty());
-        assert_eq!(cell.duration_ms(), None);
     }
 
     /// The four ways a call ends, and the one that is not the cell's fault.

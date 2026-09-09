@@ -48,6 +48,7 @@ mod keymap;
 mod library;
 mod patch;
 mod patterns;
+mod picker_preview;
 mod settings;
 mod shell;
 mod signin;
@@ -109,6 +110,7 @@ pub struct Luma {
     /// keeps itself open: the two states are one fact read twice.
     pub(crate) sidebar: Option<tracks::Tracks>,
     pub(crate) sidebar_hidden: bool,
+    pub(crate) sidebar_view: Option<Entity<shell::SidebarView>>,
     /// The sidebar's live width — the slide [`sidebar_hidden`](Self::sidebar_hidden)
     /// asks for. Intent and geometry are kept apart because only one of them
     /// is true mid-slide: the flag says where the region is going, this says
@@ -128,6 +130,9 @@ pub struct Luma {
     pub(crate) selected_track: Option<String>,
     pub(crate) selected_pattern: Option<luma_lib::models::patterns::PatternSummary>,
     pub(crate) workspace_hidden: bool,
+    pub(crate) shell_presented: bool,
+    pub(crate) restoring_venue: bool,
+    pub(crate) session_refresh_error: Option<String>,
     /// The workspace panel's live width — what the open/close toggle tweens.
     /// Where it rests when open is *derived* from the split below rather than
     /// stored, so the two can never disagree about how wide "open" is.
@@ -157,6 +162,7 @@ pub struct Luma {
     /// How the workspace column divides between the stage and the editor.
     /// Session-lived, like `workspace_split`: a split chosen for one window is
     /// not a preference about every future window.
+    pub(crate) score_editor_split: luma_ui::split::SplitFraction,
     pub(crate) visualizer_split: luma_ui::split::SplitFraction,
     /// The sign-in screen, or none. **Not an overlay**: while it is up it is
     /// the app's whole content and the shell is not rendered at all — see
@@ -214,6 +220,8 @@ pub struct Luma {
     /// belongs to the picker instance that requested it, never merely to
     /// whichever venue overlay happens to be visible when it lands.
     pub(crate) venue_picker_generation: u64,
+    /// Agent commits invalidate parked editors too; reload them on restoration.
+    pub(crate) agent_stale_tabs: Vec<crate::tabs::Target>,
     /// Correlates a history read with the dialog that asked for it — a slow
     /// list arriving after the reader reopened the picker is a stale answer.
     pub(crate) chat_history_generation: u64,
@@ -237,9 +245,9 @@ impl Luma {
             next_track_import: 0,
             sidebar: None,
             sidebar_hidden: false,
-            // Both regions start closed and slide open when they first have
-            // something to show, so first paint is one gesture rather than a
-            // window that assembles itself.
+            sidebar_view: None,
+            // The first shell frame resolves both widths without animation;
+            // subsequent visibility changes use the shared spring.
             sidebar_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace: Tabs::default(),
             parked: workspace::ParkedTabs::default(),
@@ -247,12 +255,16 @@ impl Luma {
             selected_track: None,
             selected_pattern: None,
             workspace_hidden: false,
+            shell_presented: false,
+            restoring_venue: false,
+            session_refresh_error: None,
             workspace_width: luma_ui::pane::PaneWidth::new(0.0),
             workspace_split: shell::workspace_split(),
             expanded: false,
             visualizer: None,
             visualizer_hidden: false,
             visualizer_split: shell::visualizer_split(),
+            score_editor_split: luma_ui::split::SplitFraction::new(0.65, 300., 240.),
             sign_in: None,
             refreshing_session: false,
             syncing: false,
@@ -274,6 +286,7 @@ impl Luma {
             overlay_return_focus: None,
             focused_slot: FocusSlot::Shell,
             venue_picker_generation: 0,
+            agent_stale_tabs: Vec::new(),
             sign_in_generation: 0,
             venue_selection_generation: 0,
         };
@@ -408,6 +421,12 @@ impl Render for Luma {
         // to show it in — the gate is the app, not a plane over it.
         if self.refreshing_session {
             return signin::splash(window, "Signing in…");
+        }
+        if let Some(error) = &self.session_refresh_error {
+            return signin::refresh_error(window, error, cx);
+        }
+        if self.restoring_venue {
+            return signin::splash(window, "Opening your library…");
         }
         if self.syncing {
             return signin::splash(window, "Syncing your library…");

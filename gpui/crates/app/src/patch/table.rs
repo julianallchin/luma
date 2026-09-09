@@ -151,7 +151,17 @@ fn compact_row(
         } else {
             glass::wash(0.0)
         })
-        .hover(|d| d.bg(glass::glass_hover()))
+        .when(!selected, |line| {
+            line.bg(luma_ui::motion::hover_blend(
+                &format!("venue-light-{}", row.id),
+                glass::wash(0.),
+                glass::glass_hover(),
+            ))
+            .on_hover(luma_ui::motion::hover_listener(format!(
+                "venue-light-{}",
+                row.id
+            )))
+        })
         .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
             picked.update(cx, |this, cx| {
                 if editing_members {

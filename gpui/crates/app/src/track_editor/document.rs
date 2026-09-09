@@ -357,7 +357,7 @@ impl Luma {
         }).detach();
     }
 
-    pub(super) fn reload_score_contents(
+    pub(crate) fn reload_score_contents(
         &mut self,
         target: Target,
         score_id: String,
@@ -377,9 +377,23 @@ impl Luma {
                     }
                     match result {
                         Ok(contents) => {
+                            // Installing a read initializes its scene baseline. Keep
+                            // the actual installed baseline so the rig recompiles
+                            // changed clips and definition-only agent edits.
+                            let composited = editor.composited.clone();
+                            let definitions = editor
+                                .graph_score
+                                .as_ref()
+                                .map(|graph| graph.composited_definitions.clone());
                             if let Err(error) = editor.install_contents(contents) {
                                 editor.error = Some(error);
                                 return;
+                            }
+                            editor.composited = composited;
+                            if let (Some(graph), Some(definitions)) =
+                                (editor.graph_score.as_mut(), definitions)
+                            {
+                                graph.composited_definitions = definitions;
                             }
                             editor.history = History::default();
                             editor.selected.clear();
@@ -393,6 +407,7 @@ impl Luma {
                 for id in previews {
                     this.refresh_clip_preview_for(target.clone(), id, cx);
                 }
+                this.refresh_working_scene_for(&target, cx);
             })
             .ok();
         })

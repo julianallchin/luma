@@ -259,6 +259,49 @@ impl Luma {
         .detach();
     }
 
+    pub(crate) fn refresh_score_listing(&mut self, cx: &mut Context<Self>) {
+        let Some(browser) = &self.sidebar else {
+            return;
+        };
+        let venue = browser.venue_id().to_owned();
+        let generation = browser.load_generation();
+        let tracks = self.library.tracks(&venue);
+        cx.spawn(async move |this, cx| {
+            let result = tracks.await;
+            this.update(cx, |this, cx| {
+                this.with_tracks_for_venue(&venue, generation, cx, |browser| match result {
+                    Ok(rows) => browser.replace_rows(rows),
+                    Err(error) => browser.error = Some(error.to_string()),
+                });
+            })
+            .ok();
+        })
+        .detach();
+        let Level::Scores(level) = &browser.level else {
+            return;
+        };
+        let track = level.track.id.clone();
+        let pending = self.library.scores_across_venues(&track);
+        let user = self.library.user_id();
+        cx.spawn(async move |this, cx| {
+            let result = pending.await;
+            this.update(cx, |this, cx| {
+                this.with_scores(&track, cx, |level| {
+                    level.loaded = true;
+                    match result {
+                        Ok(summaries) => {
+                            level.rows = rows(&summaries, user.as_deref());
+                            level.error = None;
+                        }
+                        Err(error) => level.error = Some(error.to_string()),
+                    }
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Run `edit` against the scores level, only while it is still showing
     /// `track_id` — the same admission rule the venue's own reads take.
     fn with_scores(
@@ -563,8 +606,12 @@ fn head(scores: &Scores, app: &Entity<Luma>, window: &Window, flying: bool) -> D
                 .items_center()
                 .gap(px(6.))
                 .text_size(px(11.))
-                .text_color(glass::ink(0.55))
-                .hover(|row| row.text_color(glass::ink(0.9)))
+                .text_color(luma_ui::motion::hover_blend(
+                    "scores-back",
+                    glass::ink(0.55),
+                    glass::ink(0.9),
+                ))
+                .on_hover(luma_ui::motion::hover_listener("scores-back"))
                 .on_click(move |_, _, cx| {
                     back.update(cx, |this, cx| this.leave_scores(cx));
                 })

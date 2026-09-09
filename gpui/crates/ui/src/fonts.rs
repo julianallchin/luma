@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use gpui::App;
+use gpui::{App, Font, FontFallbacks, SharedString};
 
 /// The family name to pass to `.font_family(…)`.
 pub const FAMILY: &str = "Inter";
@@ -22,6 +22,24 @@ pub const FAMILY: &str = "Inter";
 /// that fails to match falls back to the UI face silently, which renders a
 /// proportional number where a tabular one belongs.
 pub const MONO: &str = "Menlo";
+
+/// Prefer the platform's color emoji face before generic symbol fallback.
+pub fn font(family: impl Into<SharedString>) -> Font {
+    static FALLBACKS: std::sync::LazyLock<FontFallbacks> = std::sync::LazyLock::new(|| {
+        let family = if cfg!(target_os = "macos") {
+            "Apple Color Emoji"
+        } else if cfg!(target_os = "windows") {
+            "Segoe UI Emoji"
+        } else {
+            "Noto Color Emoji"
+        };
+        FontFallbacks::from_fonts(vec![family.to_owned()])
+    });
+    Font {
+        fallbacks: Some(FALLBACKS.clone()),
+        ..gpui::font(family)
+    }
+}
 
 /// Register Inter with the app's text system. Call once, at startup, before
 /// opening a window.

@@ -17,3 +17,5 @@ mod agent_chat;
 mod context_gauge;
 mod dialog_keyboard;
 mod subagents;
+
+mod send_motion;

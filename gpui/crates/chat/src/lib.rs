@@ -21,7 +21,7 @@
 //!  ├ rows       Vec<Row>     render state beside it, one per message
 //!  ├ list       ListState    the virtualized transcript
 //!  ├ composer   TextareaState
-//!  ├ collapsed  HashSet      which tool chips the reader has closed
+//!  ├ expanded  HashSet      which tool chips the reader has opened
 //!  └ turn       TurnState    Idle | Streaming { task, since, steer }
 //! ```
 //!
@@ -40,14 +40,16 @@ pub mod chip;
 pub mod composer;
 mod model_picker;
 pub mod python_cell;
+mod send_motion;
 pub mod subagents;
 pub mod theme;
 pub mod transcript;
 pub mod usage;
 pub mod working;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use gpui::{
     div, list, prelude::*, px, AnyElement, Context, Entity, FocusHandle, ListAlignment, ListState,
@@ -164,6 +166,19 @@ impl Agent {
         async move { task.await.map_err(|error| error.to_string())? }
     }
 
+    pub fn preferred_selection(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<Selection>, String>> + use<> {
+        let service = self.service.clone();
+        let task = self.runtime.spawn(async move {
+            service
+                .preferred_selection()
+                .await
+                .map_err(|error| error.to_string())
+        });
+        async move { task.await.map_err(|error| error.to_string())? }
+    }
+
     pub fn models(
         &self,
         service: Service,
@@ -203,12 +218,14 @@ impl Agent {
 
 /// What the panel asks its host for.
 ///
-/// One variant, and it exists because the chat cannot open a modal: overlays
+/// Shell requests exist because the chat cannot open a modal: overlays
 /// are the shell's to mount, and a chat crate that reached for one would invert
 /// the dependency. Starting a *new* conversation is not here — that is entirely
 /// the panel's own business, so it just does it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatEvent {
+    /// An agent commit changed persisted documents; refresh the editors.
+    DocumentChanged,
     /// Open this account’s conversation history.
     HistoryRequested,
     /// Show this thread's subagents. `Some` names the child to open straight
@@ -314,6 +331,9 @@ pub struct AgentChat {
     /// settled transcript resting at the bottom schedules no frames at all).
     pinned: bool,
     spring: transcript::StickSpring,
+    send_motion: send_motion::SendMotion,
+    composer_bounds: Rc<Cell<gpui::Bounds<gpui::Pixels>>>,
+    plate_bounds: Rc<Cell<gpui::Bounds<gpui::Pixels>>>,
     /// Last tick's wall clock, for the elapsed-frames conversion, and last
     /// tick's distance, which is what makes the re-stick rule direction-aware.
     spring_tick: Option<std::time::Instant>,
@@ -327,9 +347,9 @@ pub struct AgentChat {
     selection: Option<Selection>,
     model_picker: model_picker::Picker,
     selection_saving: bool,
-    /// Whether the context gauge's card is showing. Held here rather than
-    /// derived from a hover fade — see [`usage::gauge`].
+    /// Whether the context gauge's click-open card is showing.
     usage_open: bool,
+    usage_closing: Option<std::time::Instant>,
     /// Live delegation state, newest child last, one entry per subagent this
     /// panel has seen a snapshot for.
     ///
@@ -351,14 +371,10 @@ pub struct AgentChat {
     trailer_row: Option<usize>,
     /// What went wrong, in the panel's own words. Cleared by the next send.
     error: Option<String>,
-    /// Tool calls the reader has *closed*, by call id.
-    ///
-    /// The negative set, because a call's detail is open by default: the work
-    /// an agent did is the reason to trust what it says, and a transcript that
-    /// hides it behind a chevron nobody presses is a transcript of assertions.
+    /// Tool calls the reader has opened, by call id. Details start closed.
     /// Keyed by the call rather than by row index so a chip keeps its state
     /// while rows arrive above it.
-    collapsed: HashSet<SharedString>,
+    expanded: HashSet<SharedString>,
     /// Python calls, read once each — see [`python_cell`]. Lives on the panel
     /// rather than on a turn because a call is named by its id, and a `RefCell`
     /// because a row reads its call while the panel is mid-render.
@@ -390,25 +406,29 @@ impl AgentChat {
             entries: Vec::new(),
             rows: Vec::new(),
             live: None,
-            list: ListState::new(0, ListAlignment::Bottom, px(theme::OVERDRAW_PX)),
+            list: ListState::new(1, ListAlignment::Top, px(theme::OVERDRAW_PX)),
             // A fresh thread opens at the bottom, which is where a conversation
             // is read from.
             pinned: true,
             spring: transcript::StickSpring::default(),
+            send_motion: send_motion::SendMotion::default(),
+            composer_bounds: Rc::default(),
+            plate_bounds: Rc::default(),
             spring_tick: None,
             spring_settled: None,
             distance: 0.0,
             composer: Composer::new(cx),
             selection: None,
-            model_picker: model_picker::Picker::default(),
+            model_picker: model_picker::Picker::new(cx),
             selection_saving: false,
             usage_open: false,
+            usage_closing: None,
             subagents: Vec::new(),
             read_only: false,
             turn: TurnState::Idle,
             trailer_row: None,
             error: None,
-            collapsed: HashSet::new(),
+            expanded: HashSet::new(),
             cells: RefCell::default(),
             fold: None,
             focus: cx.focus_handle(),
@@ -462,33 +482,96 @@ impl AgentChat {
     /// gauge is painted from a free function in [`usage`], which has no
     /// `&mut self` to reach.
     pub(crate) fn set_usage_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.usage_open != open {
-            self.usage_open = open;
-            cx.notify();
+        if self.usage_open == open {
+            return;
         }
+        self.usage_open = open;
+        self.usage_closing =
+            (!open && !luma_ui::motion::reduced_motion(cx)).then(std::time::Instant::now);
+        if let Some(since) = self.usage_closing {
+            cx.spawn(async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+                let keep_animating = this.update(cx, |this, cx| {
+                    if this.usage_closing != Some(since) {
+                        return false;
+                    }
+                    let done = since.elapsed() >= luma_ui::motion::span(&luma_ui::motion::MENU_OUT);
+                    if done {
+                        this.usage_closing = None;
+                    }
+                    cx.notify();
+                    !done
+                });
+                if !matches!(keep_animating, Ok(true)) {
+                    break;
+                }
+            })
+            .detach();
+        }
+        cx.notify();
     }
 
-    fn toggle_model_picker(&mut self, cx: &mut Context<Self>) {
+    fn toggle_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_streaming() || self.selection_saving {
             return;
         }
-        self.model_picker.effort_open = false;
         self.model_picker.open = !self.model_picker.open;
         if self.model_picker.open {
+            self.model_picker.models_open = false;
+            window.focus(&self.model_picker.focus, cx);
             if let Some(selection) = &self.selection {
                 self.browse_models(selection.service, cx);
             }
+        } else {
+            window.focus(&self.composer.focus_handle(cx), cx);
         }
         cx.notify();
     }
 
-    fn toggle_effort_picker(&mut self, cx: &mut Context<Self>) {
-        if self.is_streaming() || self.selection_saving {
+    fn commit_effort(&mut self, cx: &mut Context<Self>) {
+        self.model_picker.dragging = false;
+        let Some(fraction) = self.model_picker.preview else {
+            return;
+        };
+        let Some(mut selection) = self.selection.clone() else {
+            return;
+        };
+        let levels = self.model_picker.efforts(&selection);
+        selection.effort = levels[model_picker::effort_index(fraction, levels.len())].clone();
+        self.select_model(selection, cx);
+        cx.notify();
+    }
+
+    fn step_effort(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.model_picker.models_open || self.is_streaming() {
             return;
         }
-        self.model_picker.open = false;
-        self.model_picker.effort_open = !self.model_picker.effort_open;
-        cx.notify();
+        let Some(selection) = &self.selection else {
+            return;
+        };
+        let levels = self.model_picker.efforts(selection);
+        if levels.len() < 2 {
+            return;
+        }
+        let index = levels
+            .iter()
+            .position(|effort| effort == &selection.effort)
+            .unwrap_or(0);
+        let index = self
+            .model_picker
+            .preview
+            .map(|fraction| model_picker::effort_index(fraction, levels.len()))
+            .unwrap_or(index);
+        let next = match key {
+            "home" => 0,
+            "end" => levels.len() - 1,
+            "left" => index.saturating_sub(1),
+            _ => (index + 1).min(levels.len() - 1),
+        };
+        self.model_picker.preview = Some(next as f32 / (levels.len() - 1) as f32);
+        self.commit_effort(cx);
     }
 
     fn browse_models(&mut self, service: Service, cx: &mut Context<Self>) {
@@ -515,9 +598,11 @@ impl AgentChat {
     }
 
     fn select_model(&mut self, selection: Selection, cx: &mut Context<Self>) {
-        self.model_picker.open = false;
-        self.model_picker.effort_open = false;
-        if self.is_streaming() || self.selection_saving {
+        if self.is_streaming() {
+            return;
+        }
+        if self.selection_saving {
+            self.model_picker.queued = Some(selection);
             return;
         }
         let Some(thread) = self.thread().map(str::to_owned) else {
@@ -534,9 +619,21 @@ impl AgentChat {
                     return;
                 }
                 this.selection_saving = false;
+                let queued = this.model_picker.queued.take();
+                if queued.is_none() {
+                    this.model_picker.preview = None;
+                }
                 match result {
-                    Ok(thread) => this.selection = Selection::from_thread(&thread).ok(),
+                    Ok(thread) => {
+                        this.selection = Selection::from_thread(&thread).ok();
+                        if let Some(selection) = &this.selection {
+                            this.browse_models(selection.service, cx);
+                        }
+                    }
                     Err(error) => this.error = Some(error),
+                }
+                if let Some(selection) = queued {
+                    this.select_model(selection, cx);
                 }
                 cx.notify();
             })
@@ -568,8 +665,10 @@ impl AgentChat {
         self.conversation = Conversation::Loading(self.reads);
         self.selection = None;
         self.model_picker.open = false;
-        self.model_picker.effort_open = false;
+        self.model_picker.preview = None;
+        self.model_picker.dragging = false;
         self.selection_saving = false;
+        self.model_picker.queued = None;
         self.error = None;
         self.seat(Transcript::default(), cx);
         self.reads
@@ -594,10 +693,12 @@ impl AgentChat {
         self.subagents.clear();
         self.rows = transcript::rows_for(&self.transcript, &self.entries, None);
         self.list = ListState::new(
-            self.rows.len(),
-            ListAlignment::Bottom,
+            self.rows.len() + 1,
+            ListAlignment::Top,
             px(theme::OVERDRAW_PX),
         );
+        self.send_motion = send_motion::SendMotion::default();
+        self.list.scroll_to_end();
         self.trailer_row = None;
         // A fresh list is a fresh scroll handler: the old one watched a
         // `ListState` this panel no longer shows.
@@ -619,14 +720,121 @@ impl AgentChat {
     /// `remeasure_items` keeps the old heights as hints and holds the anchor.
     fn reconcile_rows(&mut self) {
         let next = transcript::rows_for(&self.transcript, &self.entries, self.live);
-        let Some((old_range, count)) = transcript::diff_rows(&self.rows, &next) else {
+        let pending = self.send_motion.pending.len();
+        let changed = transcript::diff_rows(&self.rows, &next);
+        if changed.is_none() && pending == self.send_motion.rendered_pending {
             return;
-        };
-        self.rows = next;
-        if old_range.len() == count {
-            self.list.remeasure_items(old_range);
+        }
+        let old_pending = self.send_motion.rendered_pending;
+        self.send_motion.rendered_pending = pending;
+        if pending == old_pending {
+            if let Some((range, count)) = changed {
+                self.rows = next;
+                if range.len() == count {
+                    self.list.remeasure_items(range);
+                } else {
+                    self.list.splice(range, count);
+                }
+            }
         } else {
-            self.list.splice(old_range, count);
+            let start = changed.map_or(self.rows.len(), |(range, _)| range.start);
+            let old_end = self.rows.len() + old_pending;
+            let new_end = next.len() + pending;
+            self.rows = next;
+            if old_end == new_end {
+                self.list.remeasure_items(start..new_end + 1);
+            } else {
+                self.list.splice(start..old_end, new_end - start);
+            }
+        }
+    }
+
+    fn start_send_motion(&mut self, text: String, cx: &mut Context<Self>) {
+        self.send_motion.start(
+            text,
+            f32::from(self.composer_bounds.get().top()),
+            luma_ui::motion::reduced_motion(cx),
+        );
+        self.reconcile_rows();
+        // Bring an offscreen append into the measured range before the spring
+        // lifts it. Its visible copy still starts at the composer.
+        self.list
+            .scroll_to_reveal_item(self.rows.len() + self.send_motion.pending.len() - 1);
+        self.pinned = true;
+        self.spring.reset();
+        self.spring_tick = Some(std::time::Instant::now());
+        self.spring_settled = None;
+    }
+
+    fn anchor_row(&self) -> Option<usize> {
+        let id = self.send_motion.anchor.as_ref()?;
+        self.rows
+            .iter()
+            .position(|row| {
+                matches!(row.kind, transcript::RowKind::Prompt)
+                    && self.transcript.messages[row.turn].id == id.as_ref()
+            })
+            .or_else(|| {
+                self.send_motion
+                    .pending
+                    .iter()
+                    .position(|prompt| &prompt.id == id)
+                    .map(|ix| self.rows.len() + ix)
+            })
+    }
+
+    /// Read this frame's layout, consume reserved room, then advance the
+    /// message toward its moving on-screen destination with the shared spring.
+    fn step_send_motion(&mut self, reduced: bool) {
+        let viewport = self.list.viewport_bounds();
+        let scroll = -f32::from(self.list.scroll_px_offset_for_scrollbar().y);
+        let anchor = self.anchor_row();
+        if let Some(bounds) = anchor.and_then(|ix| self.list.bounds_for_item(ix)) {
+            self.send_motion.anchor_offset =
+                Some(f32::from(bounds.top() - viewport.top()) + scroll);
+        }
+        let old_room = self.send_motion.room;
+        if let Some(offset) = self.send_motion.anchor_offset {
+            let end = self.rows.len() + self.send_motion.pending.len();
+            if let Some(bounds) = end
+                .checked_sub(1)
+                .and_then(|ix| self.list.bounds_for_item(ix))
+            {
+                let content_end = f32::from(bounds.bottom() - viewport.top()) + scroll;
+                let room = send_motion::room(f32::from(viewport.size.height), content_end - offset);
+                if (room - self.send_motion.room).abs() > 0.5 {
+                    self.send_motion.room = room;
+                    self.list.remeasure_items(end..end + 1);
+                }
+            }
+        }
+
+        if let Some(flight) = &mut self.send_motion.flight {
+            if let Some(top) = anchor
+                .and_then(|ix| self.list.bounds_for_item(ix))
+                .map(|bounds| f32::from(bounds.top()))
+                .or_else(|| {
+                    self.send_motion
+                        .anchor_offset
+                        .map(|offset| f32::from(viewport.top()) + offset - scroll)
+                })
+            {
+                let gap =
+                    anchor
+                        .filter(|ix| *ix < self.rows.len())
+                        .map_or(theme::GAP_BLOCK, |ix| {
+                            transcript::top_gap_for(
+                                ix.checked_sub(1).and_then(|prev| self.rows.get(prev)),
+                                &self.rows[ix],
+                            )
+                        });
+                if flight.step(top + gap, reduced)
+                    && old_room == self.send_motion.room
+                    && self.spring.is_idle()
+                {
+                    self.send_motion.flight = None;
+                }
+            }
         }
     }
 
@@ -655,6 +863,8 @@ impl AgentChat {
             let chat = chat.clone();
             cx.defer(move |cx| {
                 chat.update(cx, |this, cx| {
+                    // A deliberate reader scroll ends the send flight.
+                    this.send_motion.flight = None;
                     let distance = this.distance_from_bottom();
                     let previous = std::mem::replace(&mut this.distance, distance);
                     if this.pinned && transcript::should_unpin(distance, previous) {
@@ -703,7 +913,12 @@ impl AgentChat {
             distance = glide_max;
         }
         let pos = target - distance;
-        let next = self.spring.step(pos, target, frames);
+        let rate = if self.send_motion.flight.is_some() {
+            send_motion::SCROLL_RATE
+        } else {
+            1.0
+        };
+        let next = self.spring.step(pos, target, frames * rate);
         if next > pos {
             self.list.scroll_by(px(next - pos));
         }
@@ -724,11 +939,10 @@ impl AgentChat {
         }
     }
 
-    /// Re-engage the pin and ride back down — the jump button, and what a send
-    /// does so the reply lands in view.
+    /// Re-engage following and ride back to the latest reply.
     pub fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.pinned = true;
-        self.spring_tick = None;
+        self.spring_tick = Some(std::time::Instant::now());
         self.spring_settled = None;
         cx.notify();
     }
@@ -812,6 +1026,35 @@ impl AgentChat {
                     self.selection = Selection::from_thread(&detail.thread).ok();
                     self.conversation = Conversation::Open(detail.thread.id);
                     self.seat(transcript, cx);
+                    if !self.read_only {
+                        self.selection_saving = true;
+                        let pending = self.agent.preferred_selection();
+                        cx.spawn(async move |this, cx| {
+                            let result = pending.await;
+                            this.update(cx, |this, cx| {
+                                if this.reads != read {
+                                    return;
+                                }
+                                this.selection_saving = false;
+                                cx.notify();
+                                match result {
+                                    Ok(Some(selection))
+                                        if this.selection.as_ref() != Some(&selection) =>
+                                    {
+                                        this.select_model(selection, cx)
+                                    }
+                                    Err(error) => {
+                                        this.error = Some(error);
+                                        cx.notify();
+                                    }
+                                    _ => {}
+                                }
+                            })
+                            .ok();
+                        })
+                        .detach();
+                    }
+
                     if let Some(selection) = &self.selection {
                         self.browse_models(selection.service, cx);
                     }
@@ -860,11 +1103,15 @@ impl AgentChat {
         matches!(self.turn, TurnState::Streaming { .. })
     }
 
-    /// Escape inside the composer: stop a running turn. The thread is the
-    /// shell's centre and cannot be hidden, so with nothing streaming the key
-    /// means nothing here — an escape that dismissed the whole conversation
-    /// would be the panel-era reflex pointed at a region.
+    /// Dismiss the model picker first; otherwise stop a running turn.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.model_picker.open {
+            self.model_picker.open = false;
+            self.model_picker.preview = None;
+            self.model_picker.dragging = false;
+            cx.notify();
+            return;
+        }
         if self.is_streaming() {
             self.cancel(cx);
         }
@@ -876,8 +1123,8 @@ impl AgentChat {
     /// streamed delta does: the height that changed is one row's, and
     /// remeasuring the list is the frame budget.
     pub fn toggle_tool(&mut self, call_id: SharedString, row: usize, cx: &mut Context<Self>) {
-        if !self.collapsed.remove(&call_id) {
-            self.collapsed.insert(call_id.clone());
+        if !self.expanded.remove(&call_id) {
+            self.expanded.insert(call_id.clone());
         }
         // The fold is timed from the click, and only from a click: a chip that
         // scrolls back into view has no fold in flight and renders at rest.
@@ -911,6 +1158,21 @@ impl AgentChat {
     /// has to remember to settle the live turn's parse.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
         self.turn = TurnState::Idle;
+        if !self.send_motion.pending.is_empty() {
+            let draft = self
+                .send_motion
+                .pending
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            self.composer.restore(&draft, cx);
+            self.send_motion.pending.clear();
+            self.send_motion.flight = None;
+            self.send_motion.anchor = None;
+            self.send_motion.anchor_offset = None;
+            self.send_motion.room = 0.0;
+        }
         // The live turn stops fading and switches from the display parse to
         // the canonical one, which moves every one of its row versions.
         if let Some(ix) = self.live.take() {
@@ -941,13 +1203,15 @@ impl AgentChat {
             return;
         }
         self.model_picker.open = false;
-        self.model_picker.effort_open = false;
+        self.model_picker.preview = None;
+        self.model_picker.dragging = false;
         let prompt = self.composer.prompt(cx);
         if prompt.is_empty() {
             return;
         }
         if let TurnState::Streaming { steer, .. } = &self.turn {
-            steer.send(prompt);
+            steer.send(prompt.clone());
+            self.start_send_motion(prompt, cx);
             self.composer.clear(cx);
             cx.notify();
             return;
@@ -959,9 +1223,7 @@ impl AgentChat {
         };
         self.composer.clear(cx);
         self.error = None;
-        // Your own send always brings you back down: a reply you asked for
-        // arriving off-screen is the one case where following is not a guess.
-        self.jump_to_bottom(cx);
+        self.start_send_motion(prompt.clone(), cx);
 
         let turn = self
             .agent
@@ -1060,6 +1322,16 @@ impl AgentChat {
 
     /// Fold one event, reparse what it touched, and tell the list what moved.
     fn on_event(&mut self, event: &TurnEvent, cx: &mut Context<Self>) {
+        if matches!(event, TurnEvent::DocumentChanged { .. }) {
+            cx.emit(ChatEvent::DocumentChanged);
+        }
+        if let TurnEvent::MessageStarted {
+            id,
+            role: luma_lib::agent::Role::User,
+        } = event
+        {
+            self.send_motion.accept(id);
+        }
         let applied = luma_lib::agent::apply(&mut self.transcript, event);
         // `apply` is the only thing that appends messages, so growing beside it
         // is the whole of keeping the two in step.
@@ -1149,6 +1421,8 @@ impl AgentChat {
                 selection,
                 self.is_streaming() || self.selection_saving,
                 &cx.entity(),
+                window,
+                cx,
             )
         });
         let error = self.error.clone();
@@ -1165,12 +1439,31 @@ impl AgentChat {
         // The condition self-terminates: once a settled transcript has landed
         // the spring parks, `spring_tick` clears, and an idle panel schedules
         // nothing at all.
-        if self.pinned && (streaming || self.spring_tick.is_some()) {
+        if (self.pinned && (streaming || self.spring_tick.is_some()))
+            || self.send_motion.flight.is_some()
+            || self.send_motion.anchor.is_some()
+        {
             let chat = cx.entity();
+            let reduced = luma_ui::motion::reduced_motion(cx);
             window.on_next_frame(move |_, cx| {
                 chat.update(cx, |this, cx| {
-                    this.step_spring();
-                    cx.notify();
+                    let old_room = this.send_motion.room;
+                    let had_flight = this.send_motion.flight.is_some();
+                    let old_scroll = this.list.scroll_px_offset_for_scrollbar();
+                    this.step_send_motion(reduced);
+                    if reduced && this.pinned {
+                        this.list.scroll_to_end();
+                        this.spring_tick = None;
+                    } else {
+                        this.step_spring();
+                    }
+                    if old_room != this.send_motion.room
+                        || had_flight
+                        || this.spring_tick.is_some()
+                        || old_scroll != this.list.scroll_px_offset_for_scrollbar()
+                    {
+                        cx.notify();
+                    }
                 });
             });
         }
@@ -1195,7 +1488,24 @@ impl AgentChat {
             let held = rows.clone();
             held.update(cx, |state, cx| {
                 let Some(key) = state.rows.get(ix).copied() else {
-                    return div().into_any_element();
+                    if let Some(prompt) = state.send_motion.pending.get(ix - state.rows.len()) {
+                        let flying = state
+                            .send_motion
+                            .flight
+                            .as_ref()
+                            .is_some_and(|flight| flight.id == prompt.id);
+                        return div()
+                            .pt(px(theme::GAP_BLOCK))
+                            .opacity(if flying { 0.0 } else { 1.0 })
+                            .child(transcript::user_bubble(
+                                &prompt.text,
+                                &prompt.id,
+                                &state.theme,
+                            ))
+                            .agent_node(NodeRole::Text, prompt.text.clone())
+                            .into_any_element();
+                    }
+                    return div().h(px(state.send_motion.room)).into_any_element();
                 };
                 let (Some(turn), Some(message)) = (
                     state.entries.get(key.turn),
@@ -1223,8 +1533,14 @@ impl AgentChat {
                             &key,
                         ),
                         last_of_turn,
+                        flying: state
+                            .send_motion
+                            .flight
+                            .as_ref()
+                            .is_some_and(|flight| flight.id.as_ref() == message.id),
                         trailer: (last_row == Some(ix)).then_some(trailer).flatten(),
-                        collapsed: &state.collapsed,
+                        trailer_visible: state.send_motion.flight.is_none(),
+                        expanded: &state.expanded,
                         cells: &state.cells,
                         fold: fold.as_ref().map(|(call, progress)| (call, *progress)),
                         theme: &state.theme,
@@ -1236,12 +1552,49 @@ impl AgentChat {
         })
         .size_full();
 
+        let plate_bounds = self.plate_bounds.clone();
+        let composer_bounds = self.composer_bounds.clone();
+        let flight = self.send_motion.flight.as_ref().map(|flight| {
+            div()
+                .absolute()
+                .top(px(flight.y - f32::from(self.plate_bounds.get().top())))
+                .left(px(theme::CONTENT_GUTTER))
+                .right(px(theme::CONTENT_GUTTER))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(theme::MAX_CONTENT_WIDTH))
+                        .child(transcript::user_bubble(&flight.text, &flight.id, &theme)),
+                )
+                .agent_node(NodeRole::Card, "Sending message")
+        });
         self.plate(&this, &theme)
+            .font(luma_ui::fonts::font(theme.font_sans.clone()))
+            .child(
+                gpui::canvas(
+                    |_, _, _| (),
+                    move |bounds, _, _, _| plate_bounds.set(bounds),
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.pinned = false;
+                            this.spring.reset();
+                            this.spring_tick = None;
+                            this.send_motion.flight = None;
+                            cx.notify();
+                        }),
+                    )
                     // The reading column's minimum gutters. The 736 cap lives
                     // on each row (`transcript::row`) because a `list` hands
                     // its items the full width; the gutters live here because
@@ -1258,7 +1611,10 @@ impl AgentChat {
                     // painted over that is a conversation with history being
                     // told it has none — see [`Conversation`].
                     .when(
-                        attached && self.transcript.messages.is_empty() && self.is_open(),
+                        attached
+                            && self.transcript.messages.is_empty()
+                            && self.send_motion.pending.is_empty()
+                            && self.is_open(),
                         |el| {
                             // A turn sent from the empty state has no row to
                             // trail yet — the user's own row arrives with the
@@ -1277,20 +1633,19 @@ impl AgentChat {
                                 .children(opening_trailer)
                         },
                     )
-                    .when(!self.transcript.messages.is_empty(), |el| {
-                        el.child(transcript_list)
-                            .children(fade_bands())
-                            .child(self.rail(&theme))
-                            .children(adrift.then(|| jump_to_bottom(&this, &theme)))
-                    }),
+                    .when(
+                        !self.transcript.messages.is_empty()
+                            || !self.send_motion.pending.is_empty(),
+                        |el| {
+                            el.child(transcript_list)
+                                .children(fade_bands())
+                                .child(self.rail(&theme))
+                                .children(adrift.then(|| jump_to_bottom(&this, &theme)))
+                        },
+                    )
+                    .agent_node(NodeRole::Card, "Conversation"),
             )
-            // The footer: composer and strip as one block, on the reading
-            // column the transcript above them keeps. The column is stated
-            // here and nowhere below, because one thing hangs off the *pair* —
-            // the context card measures itself against this rect, so opening
-            // it lifts it clear of the field instead of over it, and lands it
-            // on the column's edge rather than the pane's
-            // (see [`usage::open_card`]).
+            // Keep the composer and status strip on the transcript's reading column.
             .when(attached && !self.read_only, |el| {
                 el.child(
                     div()
@@ -1306,6 +1661,14 @@ impl AgentChat {
                                 .flex_col()
                                 .w_full()
                                 .max_w(px(theme::MAX_CONTENT_WIDTH))
+                                .child(
+                                    gpui::canvas(
+                                        |_, _, _| (),
+                                        move |bounds, _, _, _| composer_bounds.set(bounds),
+                                    )
+                                    .absolute()
+                                    .size_full(),
+                                )
                                 .child(composer::composer(
                                     &mut self.composer,
                                     &this,
@@ -1319,23 +1682,22 @@ impl AgentChat {
                                     streaming,
                                     error.as_deref(),
                                     self.transcript.last_request().as_ref(),
+                                    self.usage_open,
+                                    self.usage_closing.map(|since| {
+                                        luma_ui::motion::exit_progress(
+                                            &luma_ui::motion::MENU_OUT,
+                                            since,
+                                        )
+                                    }),
                                     &this,
                                     &theme,
                                 ))
-                                .children(
-                                    self.usage_open
-                                        .then(|| self.transcript.last_request())
-                                        .flatten()
-                                        .map(|request| usage::open_card(&request, &theme)),
-                                )
-                                // Hung off the footer for the reason the context
-                                // card is: composer and strip are one block, and a
-                                // pill measured against the strip alone would sit
-                                // over the field.
+                                // The subagent pill clears the full composer.
                                 .children(subagents::pill(&self.subagents, &this, &theme)),
                         ),
                 )
             })
+            .children(flight)
             .into_any_element()
     }
 
@@ -1393,6 +1755,7 @@ impl AgentChat {
     /// place where the chat meets the shell.
     fn plate(&self, chat: &Entity<AgentChat>, theme: &Theme) -> gpui::Div {
         let plate = div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -1724,6 +2087,8 @@ fn status_strip(
     streaming: bool,
     error: Option<&str>,
     request: Option<&luma_lib::agent::RequestUsage>,
+    usage_open: bool,
+    usage_closing: Option<f32>,
     chat: &Entity<AgentChat>,
     theme: &Theme,
 ) -> AnyElement {
@@ -1762,6 +2127,8 @@ fn status_strip(
         .when(!streaming, |el| el.child(SharedString::from("⏎ to send")))
         // Trailing, past the send hint: the gauge answers a question nobody is
         // asking yet, so it takes the far edge and the hint keeps its place.
-        .children(request.map(|request| usage::gauge(request, chat, theme)))
+        .children(
+            request.map(|request| usage::gauge(request, chat, usage_open, usage_closing, theme)),
+        )
         .into_any_element()
 }

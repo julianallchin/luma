@@ -1,62 +1,7 @@
-//! The args inspector: a sheet over the right edge of the timeline.
-//!
-//! A selected clip slides one in; clearing the selection slides it out;
-//! selecting a *different* clip retargets the one that is up, without a
-//! close-and-reopen bounce. The frame, the slide and the ghost are
-//! [`luma_ui::sheet`]'s; this module owns what goes in it.
-//!
-//! # Non-modal, and that is load-bearing
-//!
-//! The timeline keeps every click, key and wheel it had while the sheet is
-//! open — the sheet occludes its own box and nothing else. That is what lets a
-//! person nudge a clip and then correct its intensity without dismissing
-//! anything, and it is why this is a sheet rather than a dialog.
-//!
-//! # What populates it
-//!
-//! The clip selection. One clip shows its pattern's name; several sharing a
-//! pattern show the name and a count; a mixed selection names only the count
-//! and offers no args, because there is no one schema to edit against. The
-//! blend select follows the *primary* (first selected) clip; blend applies to
-//! every selected clip, args batch-apply whenever the whole selection shares
-//! the pattern.
-//!
-//! A clip's span is not here. Bounds are edited by dragging the clip on the
-//! timeline, which is the one place they can be read against the waveform they
-//! mean something relative to; the sheet is for args.
-//!
-//! # Two write paths, deliberately
-//!
-//! A blend pick is an ordinary committed write: it rides
-//! [`Luma::track_command`], so the gesture is one [`History`] checkpoint and
-//! one compare-and-swap publish, exactly like a drag on the canvas.
-//!
-//! Arg edits ride the web's fast path instead. A change lands in the working
-//! copy at once and re-renders the touched clips' heatmap previews (through
-//! [`Luma::refresh_clip_preview`]'s per-clip coalescing), so the picture
-//! answers the pointer live; the *write* trails on a ~250 ms debounce
-//! ([`ARG_FLUSH`]) and goes through the same serialized [`Luma::commit_clips`]
-//! as everything else, so a burst of picker motion is one checkpoint and one
-//! write, and two consecutive tweaks cannot race their own compare-and-swap.
-//!
-//! # The rendered state is [`Built`], never the selection
-//!
-//! Every reading the sheet draws — the pattern line, the blend mode, each
-//! cell's value — is taken from [`Built`], which [`resync`] refreshes against
-//! the working copy once per frame. Nothing in the render path reaches for the
-//! primary clip. That is what makes a *leaving* sheet legible: the selection is
-//! already empty while the exit plays, so a render that read through it would
-//! spend the slide showing a pattern's defaults instead of what the user just
-//! deselected.
-//!
-//! # Where the schema comes from
-//!
-//! The arg definitions are the pattern's, read venue-resolved through
-//! [`Library::pattern_args`] and cached per pattern for the life of the
-//! editor. The blend list is [`BlendMode::ALL`] — the seam's one canonical
-//! list — matched exhaustively nowhere and copied nowhere. The autocomplete
-//! vocabulary for selection expressions is the venue's group names, read once
-//! through [`Library::venue_groups`].
+//! Clip controls in the dedicated editing area, beside the visualizer.
+//! The inspector has its own scrolling viewport, independent of timeline height.
+//! Selection retargets the existing controls; argument writes retain their
+//! debounced history and persistence path.
 
 use luma_lib::models::node_graph::{PatternArgDef, PatternArgType};
 use luma_lib::models::selection::{Selection, Subset};
@@ -67,7 +12,6 @@ use luma_ui::arg::gradient::{luma_gradient_bar, Gradient, GradientEvent, Gradien
 use luma_ui::arg::number::{DraftedNumber, NumberEvent};
 use luma_ui::arg::palette::{luma_palette_row, PaletteEvent};
 use luma_ui::arg::select::luma_arg_select;
-use luma_ui::pane::PaneWidth;
 use luma_ui::CONTROL_HEIGHT;
 
 use super::*;
@@ -119,19 +63,13 @@ pub(crate) fn subset_label(subset: Subset) -> SharedString {
 
 /// The sheet's own state, owned by the [`Editor`].
 pub(crate) struct State {
-    /// How much of the sheet is on screen — see [`luma_ui::sheet`]. The one
-    /// place "is the sheet up" is stored: [`PaneWidth::target`] is the
-    /// destination and [`PaneWidth::current`] is the picture, so the two
-    /// cannot disagree mid-slide the way a separate flag would.
-    slide: PaneWidth,
     /// The venue's group names, for the expression editor's autocomplete.
     groups: Groups,
     /// Arg definitions per pattern id, venue-resolved, cached for the life of
     /// the editor — the web store's `patternArgs`.
     defs: HashMap<String, Rc<[PatternArgDef]>>,
     defs_inflight: HashSet<String>,
-    /// Everything the sheet draws, for as long as it is on screen — including
-    /// the slide out, after the selection it was built from is already gone.
+    /// Controls and readings for the current selection.
     built: Option<Built>,
     /// Which sheet-owned menu is open. One at a time — opening one closes the
     /// rest, which is what a single field states for free.
@@ -147,7 +85,6 @@ pub(crate) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            slide: PaneWidth::new(0.),
             groups: Groups::NotAsked,
             defs: HashMap::new(),
             defs_inflight: HashSet::new(),
@@ -167,7 +104,7 @@ impl State {
     /// Whether the sheet is up — heading open, not merely still painted. What
     /// `Escape` asks before it decides the key meant "clear the selection".
     pub(crate) fn is_open(&self) -> bool {
-        self.slide.target() > 0.
+        self.built.is_some()
     }
 
     /// Close whichever menu the sheet has up, reporting whether there was one.
@@ -408,43 +345,14 @@ fn stored_arg(editor: &Editor, def: &PatternArgDef) -> serde_json::Value {
 
 // -- sync ---------------------------------------------------------------------
 
-/// Reconcile the sheet against the editor, on every frame the editor draws,
-/// and report how much of it is on screen this frame.
-///
-/// Four jobs, all idempotent: aim the slide at whatever the selection says;
-/// ask for the vocabulary and the schema the sheet is missing (venue groups,
-/// the selected pattern's arg defs — each asked for once); rebuild the widget
-/// entities when the *subject* changed (another primary clip, another pattern,
-/// the defs arriving); and refresh [`Built`]'s readings from the working copy,
-/// guarded per cell so a draft in progress is never stomped by its own echo.
-///
-/// Runs in the render pass because that is the one place every path that can
-/// change the subject already converges — and the one place a [`Window`] is
-/// in hand to build entities with and to ask for the slide's next frame.
-pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) -> Pixels {
+/// Refresh controls from the selected clip without overwriting active drafts.
+pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Luma>) {
     ensure_groups(editor, cx);
     ensure_defs(editor, cx);
-
-    let primary = primary_clip(editor).map(|clip| clip.id.clone());
-    editor.sheet.slide.retarget(
-        if primary.is_some() {
-            luma_ui::sheet::WIDTH
-        } else {
-            0.
-        },
-        cx,
-    );
-    let revealed = editor.sheet.slide.eval(window);
-
-    let Some(primary) = primary else {
-        // Nothing selected: the sheet is leaving, and what it draws on the way
-        // out is what it was already drawing. Only once it is wholly gone is
-        // the state it was drawing from let go.
-        if revealed <= px(0.) {
-            editor.sheet.built = None;
-            editor.sheet.open = None;
-        }
-        return revealed;
+    let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
+        editor.sheet.built = None;
+        editor.sheet.open = None;
+        return;
     };
     let pattern = shared_pattern(editor);
     let defs = pattern
@@ -464,7 +372,6 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
         editor.sheet.built = Some(built);
     }
     resync(editor, cx);
-    revealed
 }
 
 /// Ask for the venue's group names, once.
@@ -976,30 +883,43 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
-/// The sheet, when there is any of it on screen.
-///
-/// `revealed` is [`sync`]'s return — zero means gone. Being *painted* and
-/// being *open* are different questions and both are asked here: a sheet on
-/// its way out is still painted, so it is still built, but it is no longer
-/// open, which is what makes it a ghost.
-pub(super) fn sheet(
-    state: &Editor,
-    revealed: Pixels,
-    app: &Entity<Luma>,
-) -> Option<impl IntoElement> {
-    if revealed <= px(0.) {
-        return None;
-    }
-    let built = state.sheet.built.as_ref()?;
-    Some(
-        luma_ui::sheet::Sheet {
-            label: "Clip inputs".into(),
-            width: luma_ui::sheet::WIDTH,
-            revealed,
-            interactive: state.sheet.is_open(),
-        }
-        .render(body(state, built, app)),
-    )
+pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
+    let content = match state.sheet.built.as_ref() {
+        Some(built) => body(state, built, app),
+        None => div()
+            .size_full()
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child("Pattern")
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(ladder::muted_foreground())
+                    .child("Select a clip to edit its pattern and fixtures."),
+            )
+            .into_any_element(),
+    };
+    div()
+        .id("clip-inspector")
+        .h_full()
+        .w(px(luma_ui::sheet::WIDTH))
+        .flex_none()
+        .overflow_hidden()
+        .bg(ladder::background())
+        .border_r_1()
+        .border_color(ladder::trim())
+        .child(content)
+        .agent_node(
+            Role::Card,
+            if state.sheet.built.is_some() {
+                "Clip inputs"
+            } else {
+                "Pattern inspector"
+            },
+        )
+        .into_any_element()
 }
 
 /// The sheet's content: what is selected, then the controls for it.
@@ -1058,7 +978,7 @@ fn body(state: &Editor, built: &Built, app: &Entity<Luma>) -> AnyElement {
                     .gap(px(ROW_GAP))
                     .children(state.graph_score.as_ref().map(|_| {
                         let app = app.clone();
-                        luma_ui::luma_button("Make independent", Enabled::Yes)
+                        luma_ui::button("Make independent", Enabled::Yes)
                             .id("make-clip-independent")
                             .on_click(move |_, _, cx| {
                                 app.update(cx, |this, cx| this.make_clips_independent(cx));

@@ -12,7 +12,7 @@ use gpui::*;
 use gpui_component::Icon;
 
 use crate::float::RowState;
-use crate::{ladder, CONTROL_HEIGHT};
+use crate::ladder;
 
 /// The `size-3` chevron every trigger ends with (`[&_svg]:size-3`). The color
 /// differs by call site — `<Select>` dims it with `opacity-50`, `<Dropdown>`
@@ -23,23 +23,9 @@ pub(crate) fn chevron(color: Hsla) -> Icon {
         .text_color(color)
 }
 
-/// The shared trigger shell: [`CONTROL_HEIGHT`] (`h-6`) `border px-2` on
-/// control fill, square, no
-/// focus ring. Padding is expressed as a margin on the content instead of
-/// padding on the shell so that absolutely-positioned children (the ghost
-/// stack overlay in `luma_selector`) share one unambiguous box.
+/// Rounded chip shared by fixed-width and self-sizing dropdown triggers.
 pub(crate) fn trigger_shell() -> Div {
-    div()
-        .relative()
-        .flex()
-        .items_center()
-        .flex_shrink_0()
-        .h(px(CONTROL_HEIGHT))
-        .border_1()
-        .border_color(ladder::control_border())
-        .bg(ladder::control())
-        .text_color(ladder::foreground_90())
-        .hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground()))
+    crate::float::chip_plate(crate::Enabled::Yes).relative()
 }
 
 /// Raw `<Select>` trigger: an explicit width (`w-40`, `w-28`, …) and the
@@ -68,7 +54,7 @@ pub fn luma_select(value: &str, width: f32) -> Div {
 /// rows sit at); this owns only the stacking, so a second tier cannot acquire
 /// a second sizing rule. `rows` are the strings that participate in sizing,
 /// `visible` the one actually drawn, already cased by the caller — casing is
-/// the tier's, and the two tiers disagree about it.
+/// shared by triggers and menu items.
 pub(crate) fn ghost_stack(
     shell: Div,
     visible: String,
@@ -105,22 +91,18 @@ pub(crate) fn ghost_stack(
         )
 }
 
-/// The instrument tier's self-sizing trigger: [`ghost_stack`] in a
-/// [`trigger_shell`], uppercased as `BUTTON_CLASS` does.
+/// A self-sizing chip with the same casing as its menu items.
 pub(crate) fn ghost_trigger(visible: &str, rows: &[&str], chevron_color: Hsla) -> Div {
     ghost_stack(
-        trigger_shell()
-            .text_size(px(9.))
-            .font_weight(FontWeight::BOLD),
-        visible.to_uppercase(),
-        rows.iter().map(|r| r.to_uppercase()).collect(),
-        8.,
+        trigger_shell(),
+        sentence_case(visible),
+        rows.iter().map(|row| sentence_case(row)).collect(),
+        10.,
         chevron_color,
     )
 }
 
-/// `<Selector>`: the brutalist control font over the ghost stack, sized to the
-/// widest option.
+/// A rounded selector sized to its widest option.
 pub fn luma_selector(value: &str, options: &[&str]) -> Div {
     ghost_trigger(value, options, ladder::foreground_alpha(0.45))
 }
@@ -129,7 +111,7 @@ pub fn luma_selector(value: &str, options: &[&str]) -> Div {
 /// [`crate::float::menu_row`] carrying the label, and a check on the chosen
 /// row (a fixed-width hole otherwise, so a label does not shift when the
 /// selection moves to it). Float menu rows are sentence case, and the row owns
-/// its tier's casing the way [`ghost_trigger`] owns the slabs' uppercase: wire
+/// its casing together with [`ghost_trigger`]: wire
 /// spellings arrive raw ("replace") and are display-cased here, so no caller
 /// keeps a parallel display list. Rows that are *code* (the expression
 /// suggestions) use [`crate::float::menu_row`] directly and stay lowercase.

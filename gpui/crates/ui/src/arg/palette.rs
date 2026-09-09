@@ -115,7 +115,7 @@ pub fn luma_palette_row(
         .gap(px(4.))
         .children(swatches)
         .child(
-            action_slab(crate::icons::IconName::Plus)
+            action_button(crate::icons::IconName::Plus)
                 .id(add_id)
                 .on_click(move |_, window, cx| add(PaletteEvent::Add, window, cx))
                 .agent_node(Role::Button, "add color"),
@@ -124,7 +124,7 @@ pub fn luma_palette_row(
         Some(index) if count > 1 => {
             let remove = on_event;
             row.child(
-                action_slab(crate::icons::IconName::Close)
+                action_button(crate::icons::IconName::Close)
                     .id(remove_id)
                     .on_click(move |_, window, cx| {
                         remove(PaletteEvent::Remove(index), window, cx);
@@ -136,19 +136,10 @@ pub fn luma_palette_row(
     }
 }
 
-/// The `+` / `×` slab: a square button in the control voice.
-fn action_slab(icon: crate::icons::IconName) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .flex_shrink_0()
-        .size(px(CONTROL_HEIGHT))
-        .border_1()
-        .border_color(ladder::control_border())
-        .bg(ladder::control())
-        .text_size(px(12.))
-        .text_color(ladder::foreground_90())
-        .hover(|s| s.bg(ladder::hover()).text_color(ladder::foreground()))
+/// Compact icon actions share the same rounded chip as text buttons.
+fn action_button(icon: crate::icons::IconName) -> Div {
+    crate::float::chip()
+        .w(px(CONTROL_HEIGHT))
+        .px(px(0.))
         .child(gpui_component::Icon::new(icon).size(px(12.)))
 }

@@ -101,15 +101,7 @@ impl Sheet {
         } else {
             card
         };
-        // No backdrop blur, and that follows from the fill rather than being a
-        // separate decision: a blur is how a *translucent* surface says it is
-        // translucent, and behind [`glass::overlay`]'s full coverage there is
-        // nothing to see through it — the pass would cost an offscreen target
-        // and a gaussian every frame to change no pixel. The dialog card is
-        // the other case: a modal is large enough that some of the backdrop
-        // showing through is the point. An inspector is not; it is read
-        // against the timeline it edits, and the timeline is the busiest
-        // surface in the app to put 12px labels over.
+        let card = crate::dialog::frosted(radius::MODAL, crate::dialog::CARD_BLUR, card);
 
         // The slide, as a clip rather than a transform: a right-anchored
         // window onto a full-width card. gpui divs have no translate, and a

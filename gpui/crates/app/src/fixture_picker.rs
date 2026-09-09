@@ -1,8 +1,8 @@
 //! Choosing fixtures by pointing at them.
 //!
 //! The strip's expression field is the power user's spelling of a selection.
-//! This dialog is the other one: the room on the left, the venue's groups as a
-//! column of checkboxes on the right, and the heads a tick would light going
+//! This dialog has searchable groups on the left and the venue on the right,
+//! with the heads a tick would light going
 //! white in the picture. An LD who has never typed `front_wash | back_movers`
 //! writes exactly that by ticking two boxes.
 //!
@@ -22,7 +22,7 @@
 //! the matched heads white and leaves everything else dark, with no strobe, no
 //! motion and no clock. So the preview is one still per selection, drawn
 //! through [`Sequence`] — the process-wide offscreen renderer, on the same
-//! `luma_render` device, the same frame builder and the same `View::Front`
+//! `luma_render` device, the same frame builder and the same `luma_scene::View::Front`
 //! camera fit the visualizer uses. The venue is installed once when the dialog
 //! opens and lit repeatedly, which is what that type is for.
 //!
@@ -32,23 +32,20 @@
 //! visualizer's prepaint. One renderer, two ways of asking it for a frame, is
 //! the seam that already exists.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use gpui::{
-    canvas, div, prelude::*, px, AnyElement, Bounds, Context, Corners, Entity, FocusHandle,
-    FontWeight, Hitbox, HitboxBehavior, ImageId, KeyDownEvent, Pixels, RenderImage, SharedString,
-    Window,
+    div, prelude::*, px, AnyElement, Context, Entity, FocusHandle, Focusable as _, FontWeight,
+    KeyDownEvent, RenderImage, ScrollHandle, SharedString, Subscription, Window,
 };
 use luma_lib::models::node_graph::PatternArgDef;
 use luma_lib::models::selection::{Selection, Subset};
 use luma_lib::services::groups::{or_expression, or_terms};
-use luma_lib::stage_render::{self, Continuity, Sequence};
-use luma_scene::View;
+use luma_lib::stage_render::{Continuity, Sequence};
 use luma_ui::dialog::morph::{self, MorphSize};
 use luma_ui::float::{self, RowState};
 use luma_ui::ladder;
-use luma_ui::node::{agent_paint_node, AgentNode as _, Instrument as _, Role};
+use luma_ui::node::{AgentNode as _, Instrument as _, Role};
 
 use crate::shell::Overlay;
 use crate::track_editor::SUBSETS;
@@ -78,16 +75,13 @@ const PREVIEW_PIXELS: (u32, u32) = ((PREVIEW_W * 2.0) as u32, (PREVIEW_H * 2.0) 
 /// A group row.
 const ROW_HEIGHT: f32 = 26.0;
 
-/// The atlas identity every preview frame is published under.
-///
-/// One identity for the life of the process, for the reason
-/// `visualizer::STAGE_IMAGE_ID` is: the tile is refreshed in place
-/// ([`Window::update_image`]) rather than reinserted, so a fresh id per frame
-/// would create and strand a texture on every hover.
-static PREVIEW_IMAGE_ID: std::sync::OnceLock<ImageId> = std::sync::OnceLock::new();
-
 /// The dialog's state.
 pub(crate) struct FixturePicker {
+    generation: uuid::Uuid,
+    search: Entity<luma_ui::text_input::TextInput>,
+    query: String,
+    scroll: ScrollHandle,
+    _search_subscription: Subscription,
     /// The arg being edited, which is what [`Luma::arg_selection`] writes back
     /// through. Held whole because the write path wants the def, not just its id.
     def: PatternArgDef,
@@ -122,16 +116,26 @@ struct Preview {
     /// lands; dropping it uninstalls.
     sequence: Option<Arc<Sequence>>,
     /// The frame on screen and the expression it pictures.
-    shown: Option<(String, Arc<RenderImage>)>,
+    shown: Option<(Selection, Arc<RenderImage>)>,
     /// The expression a frame is being drawn for. At most one at a time: a
     /// hover that arrives mid-render is picked up when this one lands, which
     /// is what keeps a sweep down the list from queueing twenty frames.
-    inflight: Option<String>,
+    inflight: Option<Selection>,
+    attempted: Option<Selection>,
     /// Why there is no picture. Shown in place of one.
     error: Option<String>,
 }
 
 impl FixturePicker {
+    fn filtered(&self) -> Vec<SharedString> {
+        let query = self.query.to_lowercase();
+        self.groups
+            .iter()
+            .filter(|group| group.to_lowercase().contains(&query))
+            .cloned()
+            .collect()
+    }
+
     /// The expression the picture should be showing: the hovered group alone,
     /// or the composed selection.
     fn wanted(&self) -> String {
@@ -183,8 +187,25 @@ impl Luma {
         selection: &Selection,
         cx: &mut Context<Self>,
     ) {
+        let search = cx.new(|cx| luma_ui::text_input::TextInput::search("Search groups…", cx));
+        let subscription = cx.subscribe(&search, |this, field, event, cx| {
+            if event != &luma_ui::text_input::Event::Edited {
+                return;
+            }
+            if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
+                state.query = field.read(cx).text().to_string();
+                state.hovered = state.filtered().first().cloned();
+                state.scroll.scroll_to_item(0);
+                cx.notify();
+            }
+        });
         let terms = or_terms(&selection.expression);
         let state = FixturePicker {
+            generation: uuid::Uuid::new_v4(),
+            search,
+            query: String::new(),
+            scroll: ScrollHandle::new(),
+            _search_subscription: subscription,
             def,
             venue_id: venue_id.clone(),
             // Only names the venue actually has can be ticked; a term naming a
@@ -216,46 +237,35 @@ impl Luma {
 
     /// Load the venue's geometry and park it on the offscreen renderer.
     ///
-    /// Editor-lit, because a highlight is a work light on a dark rig: the same
-    /// combination `venue.render` uses for a highlight, and the same one the
-    /// visualizer picks for a venue with no score composited onto it.
+    /// Inherit the current viewport settings; use the venue environment when
+    /// the main visualizer is hidden.
     fn install_preview_scene(&mut self, venue_id: String, cx: &mut Context<Self>) {
         let rig = self.library.venue_rig(&venue_id);
+        let settings = self
+            .visualizer
+            .as_ref()
+            .map(crate::visualizer::Visualizer::render_settings);
+        let generation = match self.overlay.as_open() {
+            Some(Overlay::FixturePicker(state)) => state.generation,
+            _ => return,
+        };
         cx.spawn(async move |this, cx| {
             let loaded = rig.await;
             let installed = match loaded {
                 Err(error) => Err(error.to_string()),
-                Ok(rig) if rig.is_empty() => Err("this venue has nothing patched".to_string()),
                 Ok(rig) => {
-                    let definitions: BTreeMap<_, _> = rig
-                        .definitions
-                        .iter()
-                        .map(|(path, def)| (path.clone(), stage_render::definition(def)))
-                        .collect();
-                    // The subject is one fixture on nothing, so the room's
-                    // environment is thrown away a line later — `object_lit`
-                    // is the preset for a thumbnail, and it hangs no house.
-                    let mut scene = crate::visualizer::scene(&rig, &definitions, rig.environment);
-                    scene.render = luma_render::scene_desc::RenderSettings::object_lit(
-                        crate::visualizer::FOV_Y_DEG,
-                        luma_render::LIVE_HAZE_RESOLUTION,
-                    );
-                    Sequence::install(
-                        scene,
-                        definitions,
-                        stage_render::meshes_root(None),
-                        View::Front,
-                        None,
-                        PREVIEW_PIXELS,
-                    )
-                    .map(Arc::new)
+                    cx.background_executor()
+                        .spawn(async move {
+                            crate::picker_preview::install(&rig, settings, PREVIEW_PIXELS)
+                        })
+                        .await
                 }
             };
             this.update(cx, |this, cx| {
                 let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() else {
                     return;
                 };
-                if state.venue_id != venue_id {
+                if state.generation != generation {
                     return;
                 }
                 match installed {
@@ -275,14 +285,9 @@ impl Luma {
         let Some(Overlay::FixturePicker(state)) = self.overlay.open_mut() else {
             return;
         };
-        let wanted = state.wanted();
-        if state.preview.inflight.is_some()
-            || state
-                .preview
-                .shown
-                .as_ref()
-                .is_some_and(|(shown, _)| shown == &wanted)
-        {
+        let wanted = Selection::new(state.wanted()).with_subset(state.subset);
+        let generation = state.generation;
+        if state.preview.inflight.is_some() || state.preview.attempted.as_ref() == Some(&wanted) {
             return;
         }
         let Some(sequence) = state.preview.sequence.clone() else {
@@ -290,8 +295,10 @@ impl Luma {
         };
         let sequence_size = sequence.size();
         let venue = state.venue_id.clone();
-        let selection = Selection::new(wanted.clone()).with_subset(state.subset);
+        let selection = wanted.clone();
         state.preview.inflight = Some(wanted.clone());
+        state.preview.attempted = Some(wanted.clone());
+        state.preview.error = None;
         // The call is minted here, not inside the spawn: `Library` owns a
         // runtime and is not `Clone`, so what crosses the await is its future.
         let pending = self.library.highlight_selection(&venue, &selection);
@@ -313,7 +320,7 @@ impl Luma {
                         .await
                         .and_then(|rgba| {
                             let (width, height) = sequence_size;
-                            image_from_rgba(rgba, width, height)
+                            crate::picker_preview::image_from_rgba(rgba, width, height)
                         })
                         .map(Arc::new)
                 }
@@ -322,7 +329,14 @@ impl Luma {
                 let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() else {
                     return;
                 };
+                if state.generation != generation {
+                    return;
+                }
                 state.preview.inflight = None;
+                if Selection::new(state.wanted()).with_subset(state.subset) != wanted {
+                    cx.notify();
+                    return;
+                }
                 match frame {
                     Ok(image) => {
                         state.preview.error = None;
@@ -350,39 +364,62 @@ impl Luma {
         self.close_overlay(cx);
     }
 
-    pub(crate) fn fixture_picker_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    pub(crate) fn fixture_picker_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         if !matches!(self.overlay.as_open(), Some(Overlay::FixturePicker(_))) {
             return;
         }
-        // Escape is deliberately absent: the shell's own binding reaches
-        // `dismiss_overlay`, and two handlers on one key would close twice.
-        if event.keystroke.key == "enter" {
+        let key = event.keystroke.key.as_str();
+        let Some(Overlay::FixturePicker(state)) = self.overlay.as_open() else {
+            return;
+        };
+        if key == "enter" && state.cancel_focus.is_focused(window) {
+            self.close_overlay(cx);
+            cx.stop_propagation();
+            return;
+        }
+        if key == "enter"
+            && (event.keystroke.modifiers.secondary() || state.apply_focus.is_focused(window))
+        {
             self.apply_fixture_picker(cx);
+            cx.stop_propagation();
+            return;
         }
-    }
-}
-
-/// Wrap a readback as the image gpui paints.
-///
-/// The offscreen renderer writes RGBA — the order a PNG wants — and
-/// `RenderImage` reads its buffer as **BGRA**, so the two channels are
-/// exchanged here. Swapping in place rather than through the renderer because
-/// the byte order is this consumer's business and every other caller of
-/// `Sequence` is encoding a PNG.
-fn image_from_rgba(mut rgba: Vec<u8>, width: u32, height: u32) -> Result<RenderImage, String> {
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-    let buffer = image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| "the frame was not width * height * 4 bytes".to_string())?;
-    let mut image = RenderImage::new([image::Frame::new(buffer)]);
-    match PREVIEW_IMAGE_ID.get() {
-        Some(id) => image.id = *id,
-        None => {
-            let _ = PREVIEW_IMAGE_ID.set(image.id);
+        let Some(Overlay::FixturePicker(state)) = self.overlay.open_mut() else {
+            return;
+        };
+        let rows = state.filtered();
+        match key {
+            "up" | "down" => {
+                if rows.is_empty() {
+                    return;
+                }
+                let current = state
+                    .hovered
+                    .as_ref()
+                    .and_then(|name| rows.iter().position(|row| row == name));
+                let next = match (current, key) {
+                    (Some(index), "down") => (index + 1).min(rows.len() - 1),
+                    (Some(index), _) => index.saturating_sub(1),
+                    (None, _) => 0,
+                };
+                state.hovered = Some(rows[next].clone());
+                state.scroll.scroll_to_item(next);
+            }
+            "enter" => {
+                if let Some(name) = state.hovered.clone() {
+                    state.toggle(&name);
+                }
+            }
+            _ => return,
         }
+        cx.stop_propagation();
+        cx.notify();
     }
-    Ok(image)
 }
 
 /// Keep the picture in step with what the pointer is on. Runs every frame the
@@ -395,7 +432,10 @@ pub(crate) fn tick(app: &mut Luma, window: &mut Window, cx: &mut Context<Luma>) 
     if state.apply_focus.is_focused(window) || state.cancel_focus.is_focused(window) {
         return;
     }
-    let wanted = state.apply_focus.clone();
+    let wanted = state.search.read(cx).focus_handle(cx);
+    if wanted.is_focused(window) {
+        return;
+    }
     window.focus(&wanted, cx);
 }
 
@@ -417,9 +457,9 @@ fn body(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElemen
         .flex_col()
         .overflow_hidden()
         .text_color(ladder::foreground())
-        .on_key_down(move |event, _, cx| {
+        .on_key_down(move |event, window, cx| {
             let event = event.clone();
-            keys.update(cx, |this, cx| this.fixture_picker_key(&event, cx));
+            keys.update(cx, |this, cx| this.fixture_picker_key(&event, window, cx));
         })
         .child(header(state, app, window))
         .child(
@@ -428,8 +468,8 @@ fn body(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> AnyElemen
                 .min_h_0()
                 .flex()
                 .flex_row()
-                .child(preview(state))
-                .child(rows(state, app, window)),
+                .child(rows(state, app, window))
+                .child(preview(state, app)),
         )
         .child(footer(state))
         .into_any_element()
@@ -480,7 +520,6 @@ fn header(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl In
                     applied.update(cx, |this, cx| this.apply_fixture_picker(cx));
                 })
                 // The glyph must name the chord the footer legend promises.
-                .child("↵")
                 .child("Apply")
                 .agent_node(Role::Button, "Apply")
                 .agent_focused(state.apply_focus.is_focused(window)),
@@ -500,64 +539,58 @@ fn header(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl In
 }
 
 /// The room, lit by whatever the picker is pointing at.
-fn preview(state: &FixturePicker) -> impl IntoElement {
-    let body: AnyElement = match (&state.preview.shown, &state.preview.error) {
-        (Some((_, image)), _) => {
-            let image = Arc::clone(image);
-            canvas(
-                move |bounds: Bounds<Pixels>, window, cx| {
-                    agent_paint_node(Role::Card, "Selection preview", bounds, window, cx);
-                    window.insert_hitbox(bounds, HitboxBehavior::Normal)
-                },
-                move |bounds, _: Hitbox, window, _| {
-                    // New pixels under a fixed identity, so the atlas has to be
-                    // told — see `PREVIEW_IMAGE_ID`.
-                    window.update_image(&image).ok();
-                    window
-                        .paint_image(
-                            bounds,
-                            bounds,
-                            Corners::default(),
-                            Arc::clone(&image),
-                            0,
-                            false,
-                        )
-                        .ok();
-                },
-            )
-            .size_full()
-            .into_any_element()
-        }
-        (None, Some(error)) => centered(error.clone()),
-        (None, None) => centered("Lighting the room…".to_string()),
-    };
+fn preview(state: &FixturePicker, app: &Entity<Luma>) -> impl IntoElement {
+    let combined = app.clone();
+    let label: SharedString = format!("Preview: {}", state.wanted()).into();
     div()
         .flex_none()
         .w(px(PREVIEW_W))
-        .h(px(PREVIEW_H))
+        .h_full()
         .bg(ladder::background())
-        .child(body)
-}
-
-fn centered(message: String) -> AnyElement {
-    let message: SharedString = message.into();
-    div()
-        .size_full()
         .flex()
-        .items_center()
-        .justify_center()
-        .px(px(24.0))
-        .text_size(px(12.0))
-        .text_color(ladder::foreground_alpha(0.45))
-        .child(message.clone())
-        .agent_node(Role::Text, message)
-        .into_any_element()
+        .flex_col()
+        .child(
+            div()
+                .flex_none()
+                .p(px(10.))
+                .flex()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .child(label.clone())
+                        .agent_node(Role::Text, label),
+                )
+                .child(
+                    luma_ui::button("Preview selection", luma_ui::Enabled::Yes)
+                        .id("preview-combined-selection")
+                        .on_click(move |_, _, cx| {
+                            combined.update(cx, |app, cx| {
+                                if let Some(Overlay::FixturePicker(state)) = app.overlay.open_mut()
+                                {
+                                    state.hovered = None;
+                                    cx.notify();
+                                }
+                            })
+                        }),
+                ),
+        )
+        .child(div().flex_1().min_h_0().child(crate::picker_preview::image(
+            "Selection preview",
+            state.preview.shown.as_ref().map(|(_, image)| image),
+            state.preview.error.as_ref(),
+        )))
 }
 
 /// One row per venue group.
 fn rows(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl IntoElement {
-    let list = if state.groups.is_empty() {
-        let message = "This venue has no groups yet";
+    let filtered = state.filtered();
+    let list = if filtered.is_empty() {
+        let message = if state.groups.is_empty() {
+            "This venue has no groups yet"
+        } else {
+            "No matching groups"
+        };
         float::list()
             .child(float::empty_row(message).agent_node(Role::Text, message))
             .into_any_element()
@@ -565,7 +598,8 @@ fn rows(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl Into
         float::list()
             .id("fixture-picker-groups")
             .overflow_y_scroll()
-            .children(state.groups.iter().map(|group| row(state, group, app)))
+            .track_scroll(&state.scroll)
+            .children(filtered.iter().map(|group| row(state, group, app)))
             .into_any_element()
     };
     div()
@@ -574,8 +608,15 @@ fn rows(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl Into
         .h_full()
         .flex()
         .flex_col()
-        .border_l_1()
+        .border_r_1()
         .border_color(ladder::trim())
+        .child(
+            div()
+                .flex_none()
+                .p(px(10.))
+                .child(state.search.clone())
+                .agent_node(Role::Input, "Search groups…"),
+        )
         .child(float::viewport().child(list))
         .child(float::divider())
         .child(how_many(state, app, window))
@@ -583,7 +624,6 @@ fn rows(state: &FixturePicker, app: &Entity<Luma>, window: &Window) -> impl Into
 
 fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyElement {
     let checked = state.is_checked(group);
-    let hovered = state.hovered.as_ref() == Some(group);
     let clicked = app.clone();
     let entered = app.clone();
     let name = group.clone();
@@ -598,7 +638,10 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
         // Hovering previews this group alone — the answer to "which ones are
         // these?" without spending a tick to ask it.
         .on_hover(move |over, _, cx| {
-            let next = over.then(|| hover_name.clone());
+            if !*over {
+                return;
+            }
+            let next = Some(hover_name.clone());
             entered.update(cx, |this, cx| {
                 if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
                     if state.hovered != next {
@@ -609,33 +652,36 @@ fn row(state: &FixturePicker, group: &SharedString, app: &Entity<Luma>) -> AnyEl
             });
         })
         .child(
-            float::menu_row(RowState::of(checked, hovered), format!("group-{group}"))
-                .id(gpui::ElementId::Name(group.clone()))
-                .w_full()
-                .h(px(ROW_HEIGHT))
-                .px(px(10.0))
-                .gap(px(10.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.5))
-                        .child(group.clone()),
-                )
-                // The float tier's chosen-mark, the same one an open menu's
-                // rows wear — a ticked row here is a chosen row there.
-                .child(float::check(checked))
-                .on_click(move |_, _, cx| {
-                    let name = name.clone();
-                    clicked.update(cx, |this, cx| {
-                        if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
-                            state.toggle(&name);
-                            cx.notify();
-                        }
-                    });
-                })
-                .agent_node(Role::Checkbox, group.clone()),
+            float::menu_row(
+                RowState::of(checked, state.hovered.as_ref() == Some(group)),
+                format!("group-{group}"),
+            )
+            .id(gpui::ElementId::Name(group.clone()))
+            .w_full()
+            .h(px(ROW_HEIGHT))
+            .px(px(10.0))
+            .gap(px(10.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.5))
+                    .child(group.clone()),
+            )
+            // The float tier's chosen-mark, the same one an open menu's
+            // rows wear — a ticked row here is a chosen row there.
+            .child(float::check(checked))
+            .on_click(move |_, _, cx| {
+                let name = name.clone();
+                clicked.update(cx, |this, cx| {
+                    if let Some(Overlay::FixturePicker(state)) = this.overlay.open_mut() {
+                        state.toggle(&name);
+                        cx.notify();
+                    }
+                });
+            })
+            .agent_node(Role::Checkbox, group.clone()),
         )
         .into_any_element()
 }
@@ -685,7 +731,9 @@ fn how_many(state: &FixturePicker, app: &Entity<Luma>, _window: &Window) -> impl
 fn footer(state: &FixturePicker) -> impl IntoElement {
     let summary: SharedString = state.expression().into();
     float::footer_band()
-        .child(float::key_hint_text("↵", "Apply"))
+        .child(float::key_hint_text("↑ ↓", "Navigate"))
+        .child(float::key_hint_text("↵", "Toggle"))
+        .child(float::key_hint_text("Ctrl/Cmd ↵", "Apply"))
         .child(div().flex_1().min_w_0())
         .child(
             div()
