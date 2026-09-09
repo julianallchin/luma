@@ -90,6 +90,7 @@ pub async fn flush_pending_with_integrator(
     }
     super::transition::drain_legacy_push_queue(pool).await?;
     let principal_key = crate::database::local::auth::principal_key(Some(&admitted_user_id));
+    push_state::prune_missing_rows(pool, &principal_key).await?;
     let mut delivered = 0usize;
 
     // Parents before children: a child whose parent has not landed is skipped
@@ -282,6 +283,22 @@ async fn settle(
             )
             .await?;
             Ok(Settlement::Delivered)
+        }
+        Err(SyncError::NotFound { .. })
+            if kind == Subject::Row
+                && !row_exists(pool, subject.table, &subject.pk_values).await? =>
+        {
+            // Deleted between scan and payload read; its tombstone, if any,
+            // owns delivery now. There is no row left to retry.
+            push_state::clear(
+                pool,
+                principal_key,
+                subject.table.name,
+                &subject.record_id,
+                kind,
+            )
+            .await?;
+            Ok(Settlement::Recorded)
         }
         // The session is the batch's problem, not this row's.
         Err(SyncError::Api { status: 401, .. }) => {

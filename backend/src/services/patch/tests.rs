@@ -886,3 +886,76 @@ async fn a_fixture_wider_than_a_universe_is_repaired_into_something_writable() {
         .await
         .expect("the repaired row is updatable");
 }
+
+/// Undo must preserve sync receipts for the rest of the rig.
+#[tokio::test]
+async fn stage_restore_only_changes_different_rows() {
+    let (_directory, pool) = seeded().await;
+    let fixtures = fixtures_root();
+    let stage = crate::services::stage_ops::Stage::new(&pool, &fixtures, VENUE);
+    let original = stage.rows().await.unwrap();
+    let versions = |pool: SqlitePool| async move {
+        sqlx::query_as::<_, (String, i64)>(
+            "SELECT 'node:' || id, version FROM venue_nodes
+             UNION ALL SELECT 'edge:' || child_id, version FROM venue_edges
+             UNION ALL SELECT 'param:' || node_id || ':' || key, version FROM venue_node_params
+             ORDER BY 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    let before = versions(pool.clone()).await;
+    stage.restore(&original).await.unwrap();
+    assert_eq!(
+        versions(pool.clone()).await,
+        before,
+        "no-op undo must not rewrite rows"
+    );
+
+    let mut edited = original.clone();
+    edited
+        .params
+        .get_mut("run-downstage")
+        .unwrap()
+        .insert("span".into(), 6.0);
+    stage.restore(&edited).await.unwrap();
+    let after = versions(pool.clone()).await;
+    let changed: Vec<_> = before.iter().zip(&after).filter(|(a, b)| a != b).collect();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].1 .0, "param:run-downstage:span");
+    stage.restore(&original).await.unwrap();
+    assert_eq!(stage.rows().await.unwrap().params, original.params);
+    let tombstones: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_tombstones")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        tombstones, 0,
+        "undoing a parameter must not queue graph deletions"
+    );
+
+    // Removing a parent deletes its children's edges. A snapshot that keeps
+    // those children and reparents them must recreate the missing relations.
+    let mut reduced = original.clone();
+    reduced.nodes.retain(|node| node.id != "run-downstage");
+    reduced.params.remove("run-downstage");
+    reduced
+        .edges
+        .retain(|edge| edge.child_id != "run-downstage");
+    for edge in &mut reduced.edges {
+        if edge.parent_id == "run-downstage" {
+            edge.parent_id = "run-upstage".into();
+        }
+    }
+    stage.restore(&reduced).await.unwrap();
+    let restored = stage.rows().await.unwrap();
+    assert_eq!(restored.nodes, reduced.nodes);
+    assert_eq!(restored.edges, reduced.edges);
+    assert_eq!(restored.params, reduced.params);
+    stage.restore(&original).await.unwrap();
+    let restored = stage.rows().await.unwrap();
+    assert_eq!(restored.nodes, original.nodes);
+    assert_eq!(restored.edges, original.edges);
+    assert_eq!(restored.params, original.params);
+}

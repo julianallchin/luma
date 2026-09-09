@@ -856,8 +856,8 @@ impl<'a> Stage<'a> {
     /// answered earlier: structure only. Patch rows are not part of it, so a
     /// snapshot naming a fixture whose patch row has since been deleted is
     /// refused whole — restoring half a fixture would be a node no page can
-    /// draw. One transaction: wipe every non-root node, lay the snapshot
-    /// down, re-solve.
+    /// draw. One transaction: reconcile changed rows, preserving unchanged
+    /// rows and their sync receipts, then re-solve.
     ///
     /// # Errors
     /// [`StageError::Refused`] if the rows do not form a graph or a fixture
@@ -881,53 +881,96 @@ impl<'a> Stage<'a> {
         }
         let current = venue_graph::graph(&mut access).await?;
         let root = current.root().to_string();
-        let standing: Vec<String> = current
+        let removed: Vec<String> = current
             .nodes()
+            .filter(|node| node.id != root && !rows.nodes.iter().any(|row| row.id == node.id))
             .map(|node| node.id.clone())
-            .filter(|id| *id != root)
             .collect();
         drop(current);
-        venue_graph_db::delete_nodes(&mut access, &standing).await?;
+        venue_graph_db::delete_nodes(&mut access, &removed).await?;
+        // Deletion can also remove edges/constraints on retained nodes. Read
+        // after the cascade so those relations are restored when necessary.
+        let current = venue_graph_db::get_graph(&mut access).await?;
         for node in &rows.nodes {
             if node.kind == "venue" {
                 continue;
             }
-            venue_graph_db::insert_node_with_id(
-                &mut access,
-                &node.id,
-                &node.kind,
-                node.catalog_ref.as_deref(),
-                node.label.as_deref(),
-            )
-            .await?;
-            if let Some(params) = rows.params.get(&node.id) {
-                let params: BTreeMap<String, Option<f64>> = params
-                    .iter()
-                    .map(|(key, value)| (key.clone(), Some(*value)))
-                    .collect();
-                venue_graph_db::set_params(&mut access, &node.id, &params).await?;
+            match current.nodes.iter().find(|old| old.id == node.id) {
+                None => {
+                    venue_graph_db::insert_node_with_id(
+                        &mut access,
+                        &node.id,
+                        &node.kind,
+                        node.catalog_ref.as_deref(),
+                        node.label.as_deref(),
+                    )
+                    .await?;
+                }
+                Some(old) if old != node => {
+                    venue_graph_db::update_node(&mut access, node).await?;
+                }
+                Some(_) => {}
+            }
+        }
+        for node in &rows.nodes {
+            let desired = rows.params.get(&node.id);
+            let existing = current.params.get(&node.id);
+            let mut changes = BTreeMap::new();
+            for (key, value) in desired.into_iter().flatten() {
+                if existing.and_then(|params| params.get(key)) != Some(value) {
+                    changes.insert(key.clone(), Some(*value));
+                }
+            }
+            for key in existing.into_iter().flatten().map(|(key, _)| key) {
+                if !desired.is_some_and(|params| params.contains_key(key)) {
+                    changes.insert(key.clone(), None);
+                }
+            }
+            if !changes.is_empty() {
+                venue_graph_db::set_params(&mut access, &node.id, &changes).await?;
+            }
+        }
+        for edge in &current.edges {
+            if !rows.edges.iter().any(|row| row.child_id == edge.child_id) {
+                venue_graph_db::delete_edge(&mut access, &edge.child_id).await?;
             }
         }
         for edge in &rows.edges {
-            venue_graph_db::upsert_edge(
-                &mut access,
-                &edge.child_id,
-                &edge.parent_id,
-                &edge.my_socket,
-                &edge.their_socket,
-                edge.roll,
-            )
-            .await?;
+            if !current.edges.contains(edge) {
+                venue_graph_db::upsert_edge(
+                    &mut access,
+                    &edge.child_id,
+                    &edge.parent_id,
+                    &edge.my_socket,
+                    &edge.their_socket,
+                    edge.roll,
+                )
+                .await?;
+            }
+        }
+        for constraint in &current.constraints {
+            if !rows.constraints.iter().any(|row| {
+                row.node_id == constraint.node_id && row.my_socket == constraint.my_socket
+            }) {
+                venue_graph_db::delete_constraint(
+                    &mut access,
+                    &constraint.node_id,
+                    &constraint.my_socket,
+                )
+                .await?;
+            }
         }
         for constraint in &rows.constraints {
-            venue_graph_db::upsert_constraint(
-                &mut access,
-                &constraint.node_id,
-                &constraint.my_socket,
-                &constraint.target_node,
-                &constraint.target_socket,
-            )
-            .await?;
+            if !current.constraints.contains(constraint) {
+                venue_graph_db::upsert_constraint(
+                    &mut access,
+                    &constraint.node_id,
+                    &constraint.my_socket,
+                    &constraint.target_node,
+                    &constraint.target_socket,
+                )
+                .await?;
+            }
         }
         let solved = venue_graph::resolved(&mut access, self.fixtures_root).await?;
         let out = ResolvedVenue::from(&solved);

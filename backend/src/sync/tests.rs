@@ -1959,6 +1959,61 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn deleted_rows_stop_retrying_without_losing_deletion_or_other_principal_failures() {
+        use crate::sync::push_state::{self, Subject, Verdict};
+        let (_directory, pool) = test_pool().await;
+        authenticate(&pool, "u-1").await;
+        seed_venue(&pool, VENUE, "u-1", "Existing").await;
+        for (principal, id, subject, table) in [
+            ("signed-in:u-1", "missing", Subject::Row, "fixtures"),
+            ("signed-in:u-1", "missing", Subject::Tombstone, "fixtures"),
+            ("signed-in:u-2", "missing", Subject::Row, "fixtures"),
+            ("signed-in:u-1", VENUE, Subject::Row, "venues"),
+            (
+                "signed-in:u-1",
+                "proposal",
+                Subject::Row,
+                "authored_head_integrations",
+            ),
+        ] {
+            push_state::record_failure(
+                &pool,
+                principal,
+                table,
+                id,
+                subject,
+                Some(2),
+                Verdict::Transient,
+                "not found",
+            )
+            .await
+            .unwrap();
+        }
+        push_state::prune_missing_rows(&pool, "signed-in:u-1")
+            .await
+            .unwrap();
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT principal_key, table_name, record_id, subject FROM sync_push_failures",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!(!rows.contains(&(
+            "signed-in:u-1".into(),
+            "fixtures".into(),
+            "missing".into(),
+            "row".into()
+        )));
+        assert!(rows.contains(&(
+            "signed-in:u-1".into(),
+            "fixtures".into(),
+            "missing".into(),
+            "tombstone".into()
+        )));
+    }
+
     /// Stamp a table's delivery marker the way the migration does.
     async fn stamp_delivered(pool: &SqlitePool, table: &str) {
         let mut transaction = pool.begin().await.unwrap();

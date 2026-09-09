@@ -2,9 +2,9 @@
 //!
 //! The only push state that is not derivable from the tables: how many times a
 //! row has failed, why, and when to try again. It is keyed on `(table, record)`
-//! and written *only* by failures — the scan never touches it, which is why the
-//! backoff cannot be reset by the act of noticing a dirty row again (audit
-//! T2.1).
+//! and created only by failures. Scanning an existing row never resets its
+//! backoff; retries are removed when delivery succeeds or their source row
+//! disappears.
 //!
 //! It carries no payload and no intent. Delete every row of it and push still
 //! knows exactly what to send; it just forgets what already went wrong.
@@ -76,6 +76,37 @@ pub fn ready_predicate(version_expr: &str) -> String {
 /// ready when it is not permanent and its backoff has elapsed.
 pub const TOMBSTONE_READY_PREDICATE: &str = "(failure.record_id IS NULL
       OR (failure.permanent = 0 AND failure.next_retry_at <= CURRENT_TIMESTAMP))";
+
+/// Forget row retries whose source disappeared. Tombstones and server-authority
+/// operations have independent lifecycles and must retain their retry state.
+pub async fn prune_missing_rows(pool: &SqlitePool, principal_key: &str) -> Result<(), SyncError> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT table_name FROM sync_push_failures WHERE principal_key = ? AND subject = 'row'",
+    ).bind(principal_key).fetch_all(pool).await?;
+    for name in tables {
+        let Some(table) = super::registry::get_table(&name) else {
+            continue;
+        };
+        if super::registry::push_policy(table.name) == super::registry::PushPolicy::ServerAuthority
+        {
+            continue;
+        }
+        let sql = format!(
+            "DELETE FROM sync_push_failures WHERE principal_key = ? AND table_name = ?
+             AND subject = 'row' AND NOT EXISTS (
+                 SELECT 1 FROM {} source WHERE {} = sync_push_failures.record_id
+             )",
+            table.name,
+            table.record_id_expr("source"),
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(principal_key)
+            .bind(table.name)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
 
 /// Record a failed delivery. `version` is the row's `version` column where it
 /// has one; `None` (immutable rows, tombstones) means the budget never resets.

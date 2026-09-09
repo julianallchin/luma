@@ -19,7 +19,7 @@ use luma_scene::venue::{
 };
 
 /// One `venue_nodes` row.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, FromRow)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueNode {
@@ -35,7 +35,7 @@ pub struct VenueNode {
 }
 
 /// One `venue_edges` row: the relation that produces a pose.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, FromRow)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueEdge {
@@ -48,7 +48,7 @@ pub struct VenueEdge {
 }
 
 /// One `venue_constraints` row: a far end, checked after the solve.
-#[derive(TS, Serialize, Deserialize, Clone, Debug, FromRow)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq, FromRow)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct VenueConstraint {

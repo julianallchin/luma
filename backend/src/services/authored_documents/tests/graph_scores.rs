@@ -2,6 +2,76 @@ use super::*;
 use crate::services::graph_scores::{self, GraphScoreDocument};
 
 #[tokio::test]
+async fn delayed_sync_acknowledgements_do_not_conflict_with_normal_score_edits() {
+    let owner = "score-owner";
+    let fixture = Fixture::signed_in(owner).await;
+    let scope = fixture.track_scope().await;
+    let resolved = ResolvedScope::track(Some(owner), scope.clone()).unwrap();
+    let initial = fixture
+        .authored
+        .load_current_locked(&fixture.pool, &resolved)
+        .await
+        .unwrap();
+    let mut revision = initial.document.revision().to_owned();
+    let mut score = chase().score;
+    let mut previous_head = initial.head.to_string();
+    for step in 0..3 {
+        score.clips.get_mut("chase-1").unwrap().start = step as f64;
+        let candidate = GraphScoreDocument::new(score.clone()).unwrap();
+        let saved = fixture
+            .authored
+            .apply_score_source_for_scope(
+                &fixture.pool,
+                Some(owner),
+                scope.clone(),
+                &format!("native-edit-{step}"),
+                &candidate.source().unwrap(),
+                &revision,
+                "Move clip",
+            )
+            .await
+            .unwrap();
+        let AuthoredProjectedDocument::TrackScore {
+            revision: saved_revision,
+        } = saved.document
+        else {
+            panic!("expected score");
+        };
+        revision = saved_revision;
+        // Both the RPC receipt and the head-table pull can arrive after the
+        // next local save. Neither may rewind it to the acknowledged parent.
+        fixture
+            .authored
+            .apply_integrated_server_head(&fixture.pool, owner, &saved.document_id, &previous_head)
+            .await
+            .unwrap();
+        fixture
+            .authored
+            .apply_server_head(
+                &fixture.pool,
+                owner,
+                &saved.document_id,
+                &previous_head,
+                step + 1,
+                "2026-09-09T00:00:00Z",
+            )
+            .await
+            .unwrap();
+        previous_head = saved.revision_id;
+    }
+    let stored = graph_scores::load(
+        &mut fixture.pool.acquire().await.unwrap(),
+        &scope,
+        Some(owner),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(stored.revision, revision);
+    assert_eq!(stored.score, score);
+}
+
+#[tokio::test]
 async fn new_scores_start_as_graph_documents_and_creation_replay_preserves_edits() {
     let fixture = Fixture::new().await;
     let existing = fixture.track_scope().await;
