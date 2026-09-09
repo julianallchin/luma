@@ -1,5 +1,27 @@
 # Building the gpui workspace
 
+## Rebuild on save
+
+From the repository root, run:
+
+```sh
+python3 gpui/dev.py
+```
+
+The watcher builds and launches `luma-app`, then rebuilds after source or asset
+changes in `gpui/`, `backend/`, and `resources/`. It includes new untracked files
+and ignores Git-ignored outputs and Markdown documentation. Saves are debounced;
+changes during a build trigger another build before launch.
+
+The current app stays running during compilation and on build errors. After a
+successful build, the watcher stops its app and launches the new executable.
+This is a full restart: playback and transient editing state are not preserved.
+Close any separately launched Luma instance before using the watcher; it only
+manages the process it starts. Ctrl-C stops both the watcher and its app.
+
+Requires Python 3, Git, and the normal Rust build prerequisites below. Cargo's
+target-directory configuration is respected; no additional watcher tool is needed.
+
 ## Linux system libraries
 
 The link line is the only place a missing one shows up, and it shows up as
