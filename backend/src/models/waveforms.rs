@@ -65,29 +65,15 @@ pub struct TrackWaveform {
     pub duration_seconds: f64,
 }
 
-/// One visible range of a track, bucketed at whatever density the caller asked
-/// for — the answer to "what does this second of audio look like across these
-/// 900 pixels", which the fixed-resolution [`TrackWaveform`] cannot give once a
-/// zoom puts fewer than one stored bucket under a pixel.
-///
-/// The bands are [`TrackWaveform::bands`] over a shorter range and at a finer
-/// density, in the same units: the same three series a renderer already draws,
-/// so crossing the resolution threshold shows more detail and nothing else. A
-/// bucket here is a *narrower* slice of audio than a stored one, so its peak
-/// can only be lower — the extra detail is troughs appearing between the peaks,
-/// never a differently shaped or differently coloured waveform.
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-pub struct WaveformWindow {
-    pub track_id: String,
-    /// The range actually measured. A request that ran past either end of the
-    /// decoded audio is clamped to what exists rather than refused, so the
-    /// caller positions the buckets from these two numbers, not from the two
-    /// it sent.
-    pub start_seconds: f64,
-    pub end_seconds: f64,
-    pub bands: BandEnvelopes,
+/// Full sample-rate filtered audio for a native GPU waveform. This large payload
+/// crosses the typed dispatch seam once, without JSON serialization.
+pub struct WaveformSignal {
+    pub sample_rate: u32,
+    /// Signed low/mid/high band samples, all of equal length.
+    pub bands: [Vec<f32>; 3],
+    pub gains: BandGains,
+    /// Display ceilings shared with stored waveform normalization.
+    pub ceilings: [f32; 3],
 }
 
 impl<'r> FromRow<'r, SqliteRow> for TrackWaveform {

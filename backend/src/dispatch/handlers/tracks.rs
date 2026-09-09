@@ -37,6 +37,33 @@ pub async fn get_track_beats(
     Ok(track_service::get_track_beats(&services.db.0, &track_id).await?)
 }
 
+use crate::models::tracks::{BeatValidation, BeatValidationReason, BeatValidationVerdict};
+
+/// The reviewed reference grid, retained across reanalysis.
+pub async fn get_track_beat_validation(
+    services: &AppServices,
+    track_id: String,
+) -> Result<Option<BeatValidation>, CommandError> {
+    Ok(crate::database::local::beat_validations::get(&services.db.0, &track_id).await?)
+}
+
+pub async fn set_track_beat_validation(
+    services: &AppServices,
+    track_id: String,
+    grid: BeatGrid,
+    verdict: BeatValidationVerdict,
+    reason: Option<BeatValidationReason>,
+) -> Result<(), CommandError> {
+    Ok(crate::database::local::beat_validations::set(
+        &services.db.0,
+        &track_id,
+        &grid,
+        verdict,
+        reason,
+    )
+    .await?)
+}
+
 /// `None` when bar classification has not run. Both fields are opaque JSON —
 /// there is no Rust-side schema for the classification shape.
 pub async fn get_track_bar_classifications(

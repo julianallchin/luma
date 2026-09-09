@@ -216,3 +216,30 @@ pub struct MelSpec {
     pub data: Vec<f32>,
     pub beat_grid: Option<crate::models::node_graph::BeatGrid>,
 }
+
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(rename_all = "snake_case")]
+pub enum BeatValidationVerdict {
+    Unreviewed,
+    Correct,
+    Incorrect,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
+#[serde(rename_all = "snake_case")]
+#[sqlx(rename_all = "snake_case")]
+pub enum BeatValidationReason {
+    Tempo,
+    Offset,
+    Drift,
+    BarPhase,
+}
+
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BeatValidation {
+    pub grid: crate::models::node_graph::BeatGrid,
+    pub verdict: BeatValidationVerdict,
+    pub reason: Option<BeatValidationReason>,
+}

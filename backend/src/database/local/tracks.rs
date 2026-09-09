@@ -1142,6 +1142,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn beat_validation_snapshots_survive_reanalysis_and_reject_stale_approval() {
+        use super::super::beat_validations;
+        use crate::models::tracks::{
+            BeatValidation, BeatValidationReason as Reason, BeatValidationVerdict as Verdict,
+        };
+        let (_directory, pool) = test_pool().await;
+        crate::database::local::auth::arm_write_admission(&pool, None)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO tracks (id, track_hash, file_path) VALUES ('reviewed', 'audio-hash', '/audio.ogg')")
+            .execute(&pool).await.unwrap();
+        upsert_track_beats(
+            &pool,
+            "reviewed",
+            "[0,0.5,1,1.5,2]",
+            "[0,2]",
+            Some(120.),
+            Some(0.),
+            Some(4),
+            7,
+        )
+        .await
+        .unwrap();
+        let grid = crate::services::tracks::get_track_beats(&pool, "reviewed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(beat_validations::get(&pool, "reviewed")
+            .await
+            .unwrap()
+            .is_none());
+        beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            beat_validations::get(&pool, "reviewed").await.unwrap(),
+            Some(BeatValidation {
+                grid: grid.clone(),
+                verdict: Verdict::Correct,
+                reason: None
+            })
+        );
+        beat_validations::set(
+            &pool,
+            "reviewed",
+            &grid,
+            Verdict::Incorrect,
+            Some(Reason::Drift),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            beat_validations::get(&pool, "reviewed").await.unwrap(),
+            Some(BeatValidation {
+                grid: grid.clone(),
+                verdict: Verdict::Incorrect,
+                reason: Some(Reason::Drift)
+            })
+        );
+        assert!(beat_validations::set(
+            &pool,
+            "reviewed",
+            &grid,
+            Verdict::Correct,
+            Some(Reason::Drift)
+        )
+        .await
+        .is_err());
+        beat_validations::set(&pool, "reviewed", &grid, Verdict::Unreviewed, None)
+            .await
+            .unwrap();
+        assert!(beat_validations::get(&pool, "reviewed")
+            .await
+            .unwrap()
+            .is_none());
+        beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
+            .await
+            .unwrap();
+        upsert_track_beats(
+            &pool,
+            "reviewed",
+            "[0,1,2,3,4]",
+            "[0,4]",
+            Some(60.),
+            Some(0.),
+            Some(4),
+            8,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            beat_validations::get(&pool, "reviewed").await.unwrap(),
+            Some(BeatValidation {
+                grid: grid.clone(),
+                verdict: Verdict::Correct,
+                reason: None
+            })
+        );
+        assert!(
+            beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
+                .await
+                .unwrap_err()
+                .contains("changed")
+        );
+        let snapshot: (String, i64, String) = sqlx::query_as("SELECT track_hash, processor_version, verdict FROM track_beat_validations WHERE track_id = 'reviewed'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(snapshot, ("audio-hash".into(), 7, "correct".into()));
+        crate::database::local::auth::arm_write_admission(&pool, Some("another-user"))
+            .await
+            .unwrap();
+        assert!(
+            beat_validations::set(&pool, "reviewed", &grid, Verdict::Correct, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn shared_track_artifacts_are_deleted_only_by_the_last_owner() {
         let (_directory, pool) = test_pool().await;
         for (id, uid) in [("one", "alice"), ("two", "bob")] {

@@ -1,5 +1,6 @@
 pub mod agent_threads;
 pub mod auth;
+pub mod beat_validations;
 pub mod categories;
 pub mod database;
 pub mod fixtures;

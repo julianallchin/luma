@@ -220,7 +220,7 @@ pub struct GraphContext {
     pub instance_seed: Option<u64>,
 }
 
-#[derive(TS, Serialize, Deserialize, Clone, Debug)]
+#[derive(TS, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BeatGrid {
     pub beats: Vec<f32>,

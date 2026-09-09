@@ -697,6 +697,23 @@ pub static TABLES: &[TableMeta] = &[
         local_only: &[],
     },
     TableMeta {
+        name: "track_beat_validations",
+        conflict_key: "track_id",
+        parents: &[Parent::fk("tracks", "track_id")],
+        columns: &[
+            "track_id",
+            "uid",
+            "track_hash",
+            "grid_json",
+            "processor_version",
+            "verdict",
+            "reason",
+            "created_at",
+            "updated_at",
+        ],
+        local_only: &[],
+    },
+    TableMeta {
         name: "track_beats",
         conflict_key: "track_id",
         parents: &[Parent::fk("tracks", "track_id")],
