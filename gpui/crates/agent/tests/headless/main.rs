@@ -30,8 +30,8 @@ mod graph;
 mod keyboard;
 mod library_foundation;
 mod pointer_ownership;
-mod score_menu;
 mod score_edit_focus;
+mod score_menu;
 mod settings;
 mod shell_panels;
 mod sidebar_scores;
@@ -52,6 +52,7 @@ mod tracks;
 mod venue_builder;
 mod venue_patch;
 mod venues;
+mod visualizer_fullscreen;
 mod visualizer_score;
 mod workspace_scope;
 

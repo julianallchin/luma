@@ -1,0 +1,24 @@
+{
+  "catalogue": "haze-warm-shadow.json",
+  "width": 960,
+  "height": 640,
+  "cases": [
+    {
+      "id": "warm-truss-close",
+      "scene": "warm-truss",
+      "time": 1,
+      "eye": [
+        -2,
+        3.5,
+        7.5
+      ],
+      "target": [
+        -0.5,
+        -1,
+        7.17
+      ],
+      "fov": 50,
+      "purpose": "Oblique warm-source shadows and overlapping emitter highlights"
+    }
+  ]
+}

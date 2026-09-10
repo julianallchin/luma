@@ -306,10 +306,10 @@ pub(crate) struct LightRest {
     /// It rides in what used to be the first padding word, so the struct is
     /// still 64 bytes and the index's id space is untouched.
     pub haze_gain: f32,
-    /// WGSL rounds this struct to its 16-byte `vec3` alignment; Rust does
-    /// not. Without the explicit tail the array strides disagree and every
-    /// light after the first reads the previous one's bytes.
-    pub _pad: [f32; 2],
+    /// Reciprocal length of the aperture's unnormalised right vector.
+    pub inverse_right_length: f32,
+    /// Tangent of the field half-angle used by the optical-depth cache.
+    pub field_tangent: f32,
 }
 
 #[repr(C)]

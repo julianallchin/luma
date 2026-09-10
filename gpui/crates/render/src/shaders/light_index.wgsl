@@ -55,7 +55,7 @@ fn light_index_cursor(frag_xy: vec2<f32>, min_id: u32, max_id: u32) -> LightCurs
     cursor.word = min(min_id / 32u, LIGHT_INDEX_WORDS - 1u);
     cursor.bits = light_index_masks[base + cursor.word];
     cursor.min_id = min_id;
-    cursor.max_id = max_id;
+    cursor.max_id = min(max_id, max(light_index_params.counts.x, 1u) - 1u);
     return cursor;
 }
 
@@ -81,7 +81,7 @@ fn light_index_next(cursor: ptr<function, LightCursor>, id: ptr<function, u32>) 
     loop {
         if (*cursor).bits == 0u {
             (*cursor).word += 1u;
-            if (*cursor).word >= LIGHT_INDEX_WORDS {
+            if (*cursor).word >= LIGHT_INDEX_WORDS || (*cursor).word * 32u > (*cursor).max_id {
                 return false;
             }
             (*cursor).bits = light_index_masks[(*cursor).base + (*cursor).word];

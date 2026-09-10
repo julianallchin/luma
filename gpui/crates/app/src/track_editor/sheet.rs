@@ -69,8 +69,9 @@ pub(crate) struct State {
     /// the editor — the web store's `patternArgs`.
     defs: HashMap<String, Rc<[PatternArgDef]>>,
     defs_inflight: HashSet<String>,
-    /// Controls and readings for the current selection.
+    /// Controls and readings for the current selection, retained during exit.
     built: Option<Built>,
+    width: luma_ui::pane::PaneWidth,
     /// Which sheet-owned menu is open. One at a time — opening one closes the
     /// rest, which is what a single field states for free.
     open: Option<Menu>,
@@ -89,6 +90,7 @@ impl Default for State {
             defs: HashMap::new(),
             defs_inflight: HashSet::new(),
             built: None,
+            width: luma_ui::pane::PaneWidth::new(0.0),
             open: None,
             burst: false,
             flush_gen: 0,
@@ -104,7 +106,7 @@ impl State {
     /// Whether the sheet is up — heading open, not merely still painted. What
     /// `Escape` asks before it decides the key meant "clear the selection".
     pub(crate) fn is_open(&self) -> bool {
-        self.built.is_some()
+        self.width.target() > 0.0
     }
 
     /// Close whichever menu the sheet has up, reporting whether there was one.
@@ -350,10 +352,11 @@ pub(super) fn sync(editor: &mut Editor, window: &mut Window, cx: &mut Context<Lu
     ensure_groups(editor, cx);
     ensure_defs(editor, cx);
     let Some(primary) = primary_clip(editor).map(|clip| clip.id.clone()) else {
-        editor.sheet.built = None;
+        editor.sheet.width.retarget(0.0, cx);
         editor.sheet.open = None;
         return;
     };
+    editor.sheet.width.retarget(luma_ui::sheet::WIDTH, cx);
     let pattern = shared_pattern(editor);
     let defs = pattern
         .as_ref()
@@ -883,43 +886,31 @@ impl Luma {
 
 // -- rendering ----------------------------------------------------------------
 
-pub(super) fn panel(state: &Editor, app: &Entity<Luma>) -> AnyElement {
-    let content = match state.sheet.built.as_ref() {
-        Some(built) => body(state, built, app),
-        None => div()
-            .size_full()
-            .p(px(16.))
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child("Pattern")
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(ladder::muted_foreground())
-                    .child("Select a clip to edit its pattern and fixtures."),
-            )
-            .into_any_element(),
-    };
-    div()
+pub(super) fn panel(
+    state: &mut Editor,
+    app: &Entity<Luma>,
+    window: &mut Window,
+) -> Option<AnyElement> {
+    let width = state.sheet.width.eval(window);
+    if state.sheet.width.settled() && !state.sheet.is_open() {
+        state.sheet.built = None;
+        return None;
+    }
+    let built = state.sheet.built.as_ref()?;
+    let content = div()
         .id("clip-inspector")
-        .h_full()
-        .w(px(luma_ui::sheet::WIDTH))
-        .flex_none()
+        .size_full()
         .overflow_hidden()
         .bg(ladder::background())
         .border_r_1()
         .border_color(ladder::trim())
-        .child(content)
-        .agent_node(
-            Role::Card,
-            if state.sheet.built.is_some() {
-                "Clip inputs"
-            } else {
-                "Pattern inspector"
-            },
-        )
-        .into_any_element()
+        .child(body(state, built, app))
+        .into_any_element();
+    Some(
+        luma_ui::pane::pane(width, px(luma_ui::sheet::WIDTH), content)
+            .agent_node(Role::Card, "Clip inputs")
+            .into_any_element(),
+    )
 }
 
 /// The sheet's content: what is selected, then the controls for it.
