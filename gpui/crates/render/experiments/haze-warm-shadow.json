@@ -1,0 +1,188 @@
+{
+  "definitions": {
+    "Martin/Martin-Atomic-3000-LED.qxf": {
+      "Mode": [
+        {
+          "@Name": "3-Channel",
+          "Head": []
+        },
+        {
+          "@Name": "4-Channel",
+          "Head": []
+        },
+        {
+          "@Name": "Extended",
+          "Head": []
+        }
+      ],
+      "Physical": {
+        "Dimensions": {
+          "@Depth": 245.0,
+          "@Height": 240.0,
+          "@Width": 425.0
+        },
+        "Layout": null,
+        "Lens": {
+          "@DegreesMax": 0.0,
+          "@DegreesMin": 0.0
+        }
+      },
+      "Type": "Strobe"
+    }
+  },
+  "deviceScaleFactor": 1,
+  "provenance": {
+    "source": "Two warm Atomic strobes behind a truss; oblique source-shadow stress case based on the reported close-up"
+  },
+  "scenes": [
+    {
+      "aimArrows": false,
+      "camera": {
+        "position": [
+          -2,
+          7.5,
+          -3.5
+        ],
+        "target": [
+          -0.5,
+          7.17,
+          1
+        ]
+      },
+      "editing": false,
+      "fixtures": [
+        {
+          "fixturePath": "Martin/Martin-Atomic-3000-LED.qxf",
+          "id": "warm-left",
+          "modeName": "3-Channel",
+          "pos": [
+            -1,
+            2,
+            7.17
+          ],
+          "rot": [
+            1.57079632679,
+            0,
+            0
+          ]
+        },
+        {
+          "fixturePath": "Martin/Martin-Atomic-3000-LED.qxf",
+          "id": "warm-right",
+          "modeName": "3-Channel",
+          "pos": [
+            1.4,
+            2,
+            7.17
+          ],
+          "rot": [
+            1.57079632679,
+            0,
+            0
+          ]
+        }
+      ],
+      "id": "warm-truss",
+      "pieces": [
+        {
+          "id": "occluder",
+          "kind": "truss",
+          "pos": [
+            0,
+            0.5,
+            7.17
+          ],
+          "procedural": {
+            "truss": {
+              "span": 6
+            }
+          },
+          "rot": [
+            0,
+            0,
+            0
+          ],
+          "scale": 1
+        }
+      ],
+      "render": {
+        "clusterDebug": false,
+        "debugView": "pbr",
+        "environment": {
+          "ambientColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "ambientIntensity": 0.0,
+          "background": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "fixtureShadows": true,
+        "fixtureSurfaceLighting": true,
+        "fov": 50.0,
+        "geometryShadows": true,
+        "haze": {
+          "appearance": {
+            "cloudSize": 2,
+            "cloudiness": 0.35,
+            "turbulence": 0,
+            "windDirection": 30.0,
+            "windSpeed": 0
+          },
+          "density": 0.23999999463558197,
+          "enabled": true,
+          "resolution": 0.5,
+          "steps": 8
+        },
+        "house": null,
+        "showCables": false,
+        "showFloor": true,
+        "showGizmos": false,
+        "showGrid": false,
+        "sky": null,
+        "sun": null
+      },
+      "selectedFixtureIds": [],
+      "state": {
+        "warm-left:0": {
+          "dimmer": 0.65,
+          "color": [
+            1,
+            0.42,
+            0.09
+          ],
+          "strobe": 0,
+          "position": [
+            0,
+            0
+          ]
+        },
+        "warm-right:0": {
+          "dimmer": 0.65,
+          "color": [
+            1,
+            0.42,
+            0.09
+          ],
+          "strobe": 0,
+          "position": [
+            0,
+            0
+          ]
+        }
+      },
+      "times": [
+        1.0
+      ]
+    }
+  ],
+  "viewport": {
+    "height": 640,
+    "width": 960
+  },
+  "warmupFrames": 64
+}

@@ -307,13 +307,20 @@ fn the_sheet_arrives_writes_batches_retargets_and_leaves() {
         out["cleared"]
     );
 
-    // The timeline never reflows for the sheet: it overlays, it does not
-    // occupy, so the canvas's box is the same in every state.
+    // With the stage hidden, the inspector shares the timeline's row and
+    // returns that space when the selection clears.
     let waveform = &out["empty"]["waveform"];
-    for state in ["populated", "edited", "retargeted", "mixed", "cleared"] {
+    for state in ["populated", "edited", "retargeted", "mixed"] {
+        let (start, end) = rect(&out[state]["waveform"]);
+        let (empty_start, empty_end) = rect(waveform);
+        let (sheet_start, sheet_end) = rect(&out[state]["sheet"]);
+        assert_eq!(start, empty_start + sheet_end - sheet_start, "{out:#}");
+        assert_eq!(end, empty_end, "{out:#}");
+    }
+    for state in ["throughClick", "cleared"] {
         assert_eq!(
             &out[state]["waveform"], waveform,
-            "the timeline reflowed between empty and {state}"
+            "the inspector did not return its space after {state}"
         );
     }
 }

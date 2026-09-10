@@ -3536,15 +3536,15 @@ fn same_scene(a: &[Clip], b: &[Clip]) -> bool {
         })
 }
 
-/// Controls occupy the editing area above the timeline, even with the rig hidden.
+/// Selected clip controls occupy the editing area, even with the rig hidden.
 pub(crate) fn inspector(
     state: &mut Editor,
     app: &Entity<Luma>,
     window: &mut Window,
     cx: &mut Context<Luma>,
-) -> AnyElement {
+) -> Option<AnyElement> {
     sheet::sync(state, window, cx);
-    sheet::panel(state, app)
+    sheet::panel(state, app, window)
 }
 
 /// Render the screen: a toolbar strip over the canvas.
@@ -3604,8 +3604,59 @@ pub fn track_editor(
         })
 }
 
-/// The way back, what is open, the transport, and whether a write is in the
-/// air.
+/// Keep the working score and its transport live while the timeline is hidden.
+pub(crate) fn fullscreen_transport(
+    state: &mut Editor,
+    app: &Entity<Luma>,
+    cx: &mut Context<Luma>,
+) -> AnyElement {
+    sync_composite(state, cx);
+    let transport = app.clone();
+    let position = state
+        .transport
+        .clock
+        .position(std::time::Instant::now())
+        .unwrap_or(f64::from(state.transport.position))
+        .min(f64::from(state.transport.duration)) as f32;
+    let label = if state.transport.playing {
+        "Pause"
+    } else {
+        "Play"
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(
+            luma_ui::button(
+                label,
+                (state.waveform.is_some()
+                    && state.transport.ready
+                    && state.transport.session.is_some())
+                .into(),
+            )
+            .id("fullscreen-transport")
+            .on_click(move |_, _, cx| transport.update(cx, |this, cx| this.toggle_playback(cx)))
+            .agent_node(Role::Button, label),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .pr(px(8.))
+                .child(format!(
+                    "{} / {}",
+                    clock(position),
+                    clock(state.transport.duration)
+                ))
+                .agent_node(
+                    Role::Text,
+                    format!("{} / {}", clock(position), clock(state.transport.duration)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The way back, what is open, the transport, and whether a write is in the air.
 fn toolbar(state: &Editor, app: &Entity<Luma>) -> Div {
     let transport = app.clone();
     let insert = app.clone();

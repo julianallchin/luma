@@ -1,6 +1,6 @@
 @group(2) @binding(0) var fog_grid: texture_3d<f32>;
 
-// Narrow beams and gobos use analytic cone/ray intersection and MIS transport.
+// Ungoboed beams use deterministic visible-interval integration; gobos use MIS.
 // Shadowed live rigs share distant broad-wash lighting in a 3D grid;
 // only their four-metre source regions remain in the per-ray candidate list.
 // The complementary smooth source/far windows sum to one. Captures with
@@ -42,9 +42,12 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> HazeOutput {
     let sigma = haze.depth.z;
 
     var scattered = vec3<f32>(0.0);
+    var deterministic = vec3<f32>(0.0);
+    let include_shared = GRID_FOG && haze.tiles.z > 1.5;
     var sampled = vec3<f32>(0.0);
 
-    ray.medium = medium_ray(haze.medium, haze.camera_pos.xyz, ray.dir, ray.hit_dist);
+    if haze.tiles.z > 0.5 {
+    if !GRID_FOG { ray.medium = medium_ray(haze.medium, haze.camera_pos.xyz, ray.dir, ray.hit_dist); }
 
     // This pass renders at a fraction of output resolution; the light index
     // is defined in full-resolution pixels, so scale the fragment coordinate
@@ -57,7 +60,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> HazeOutput {
         cursor.bits = light_index_masks[cursor.base + cursor.word];
     }
     var li = 0u;
-    let group_size = select(max(u32(haze.depth.w), 1u), 4u, GRID_FOG);
+    let group_size = select(max(u32(haze.depth.w), 1u), 1u, GRID_FOG);
     let seed = light_sample_hash(u32(frag.x) + u32(frag.y) * 65537u
         + u32(haze.tuning.x + haze.tiles.w) * 747796405u);
     var grouped = 0u;
@@ -66,6 +69,10 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> HazeOutput {
     var selected_importance = 1.0;
     while light_index_next(&cursor, &li) {
         let rest = light_rest[li];
+        if GRID_FOG && rest.gobo < 0.5 {
+            if include_shared { deterministic += beam_scatter(li, ray, sigma); }
+            continue;
+        }
         if group_size > 1u && rest.wash >= FOG_BROAD_WASH && rest.gobo < 0.5 && rest.haze_gain > 0.0 {
             // Weighted reservoir in small groups. The inverse selection
             // probability preserves each emitter's expected radiance. Narrow
@@ -93,16 +100,21 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> HazeOutput {
         sampled += beam_scatter(selected, ray, sigma) * (total_importance / selected_importance);
     }
 
-    if GRID_FOG {
+    }
+
+    if include_shared {
         let size = vec3<f32>(textureDimensions(fog_grid));
         let uv = clamp(frag.xy / vec2<f32>(haze.transport.w, haze.transport.z), 0.5 / size.xy, 1.0 - 0.5 / size.xy);
-        let radial = sqrt(min(ray.hit_dist / haze.shadow.w, 1.0));
+        let span = ray.fog_span;
+        let radial = sqrt(clamp((ray.hit_dist - span.x) / max(span.y - span.x, 1e-5), 0.0, 1.0));
         let z = (radial * (size.z - 1.0) + 0.5) / size.z;
-        sampled += textureSampleLevel(fog_grid, haze_noise_sampler, vec3<f32>(uv, z), 0.0).rgb * 256.0;
+        deterministic += textureSampleLevel(fog_grid, haze_noise_sampler, vec3<f32>(uv, z), 0.0).rgb * 256.0;
     }
 
     // Alpha carries linear view depth in metres so temporal rejection and the
     // composite's bilateral upsample have a distance-independent threshold.
-    // Both channels are pre-weighted for subframe accumulation (spec §6).
-    return HazeOutput(vec4<f32>(scattered * weight, ray.view_depth * weight), vec4<f32>(sampled * weight, 0.0));
+    // Stochastic work is weighted by its sample count; deterministic work is
+    // emitted once, including the full depth needed by the composite.
+    let depth_weight = select(weight, select(0.0, 1.0, include_shared), GRID_FOG);
+    return HazeOutput(vec4<f32>(scattered * weight + deterministic, ray.view_depth * depth_weight), vec4<f32>(sampled * weight, 0.0));
 }

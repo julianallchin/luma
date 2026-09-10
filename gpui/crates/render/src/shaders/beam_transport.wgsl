@@ -1,21 +1,7 @@
-// The beam transport: everything both volumetric consumers run.
-//
-// `haze.wgsl` (the full-screen tiled marcher) and `beam.wgsl` (the per-beam
-// proxy pass, when it lands) prepend this file and call two functions:
-// `scene_ray` reconstructs a fragment's camera ray, and `beam_scatter`
-// integrates one light's single-scatter contribution along it. There is
-// exactly one copy of the integrand, and it is a function, not an included
-// fragment body — a reviewer checking the two passes draw the same beam reads
-// this file and nothing else.
-//
-// This file also owns the group-0 layout: the passes bind the same buffers in
-// the same slots, so the layout lives with the functions that read it.
-//
-// Everything here moved verbatim from `haze.wgsl`; the contract goldens are
-// byte-exact across the move. When the emissive-only beam bucket lands it
-// must be an early return inside `beam_scatter`, never a second pipeline —
-// one beam pipeline is a hard rule (a shipping previz product measured 63+63
-// fps fixtures collapsing to 3 fps purely on per-beam-type pipeline swaps).
+// Shared single-scattering transport and camera/fixture shadow queries.
+// Live ungoboed beams integrate visible shadow-map intervals deterministically;
+// gobos and exhaustive reference captures use the progressive MIS estimator.
+// The same density, photometry, and extinction model feed both integrators.
 
 override GRID_FOG: bool = false;
 const MAX_SAMPLES: i32 = 32;
@@ -42,8 +28,8 @@ struct LightRest {
     // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
     // alignment and push the struct to 80 bytes, disagreeing with the Rust
     // stride. Scalars keep it at 64.
-    _pad1: f32,
-    _pad2: f32,
+    inverse_right_length: f32,
+    field_tangent: f32,
 };
 
 struct Haze {
@@ -57,7 +43,8 @@ struct Haze {
     // x: white leak, y: phase g, zw: this target's height and width in px.
     transport: vec4<f32>,
     // xy: this pass's pixel → full-resolution pixel scale (the light index is
-    // defined in full-res space), z: unused, w: fixed capture seed.
+    // defined in full-res space), z: 2 on the first grid pass, 1 otherwise;
+    // w: fixed capture seed.
     tiles: vec4<f32>,
     // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: light sampling group size.
     depth: vec4<f32>,
@@ -85,18 +72,30 @@ struct FixtureShadowMatrix {
 @group(0) @binding(7) var fixture_shadow_map: texture_depth_2d_array;
 @group(0) @binding(9) var fixture_shadow_map_extra: texture_depth_2d_array;
 
-@group(0) @binding(10) var<storage, read> medium_cache: array<f32>;
+@group(0) @binding(10) var medium_cache: texture_3d<f32>;
+@group(0) @binding(11) var shadow_ranges: texture_2d_array<f32>;
+@group(0) @binding(12) var shadow_ranges_extra: texture_2d_array<f32>;
+
+@group(3) @binding(0) var camera_fog: texture_3d<f32>;
+
+fn transport_transmittance(ray: SceneRay, li: u32, t: f32, world: vec3<f32>) -> f32 {
+    let light_depth = light_optical_depth(li, world);
+    if GRID_FOG {
+        let size = vec3<f32>(textureDimensions(camera_fog));
+        let span = ray.fog_span;
+        let radial = sqrt(clamp((t - span.x) / max(span.y - span.x, 1e-5), 0.0, 1.0));
+        let z = (radial * (size.z - 1.0) + 0.5) / size.z;
+        let uv = clamp(ray.uv, 0.5 / size.xy, 1.0 - 0.5 / size.xy);
+        let transmittance = textureSampleLevel(camera_fog, haze_noise_sampler, vec3<f32>(uv, z), 0.0).a;
+        return transmittance * exp(-light_depth);
+    }
+    return exp(-medium_depth(ray.medium, t) - light_depth);
+}
 
 fn haze_density_at(p: vec3<f32>) -> f32 {
     return medium_density(haze.medium, p);
 }
 
-fn cached_column(li: u32, xy: vec2<u32>, z: f32) -> f32 {
-    let angles = u32(haze.medium.shape.w);
-    let base = ((li * angles + xy.y) * angles + xy.x) * 33u;
-    let lo = min(u32(z), 31u);
-    return mix(medium_cache[base + lo], medium_cache[base + lo + 1u], z - f32(lo));
-}
 fn light_optical_depth(li: u32, world: vec3<f32>) -> f32 {
     let core = light_core[li];
     let q = world - core.position;
@@ -109,17 +108,15 @@ fn light_optical_depth(li: u32, world: vec3<f32>) -> f32 {
     }
     let direction = light_rest[li].direction;
     let helper = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), abs(direction.z) > 0.98);
-    let right = normalize(cross(direction, helper));
+    let right = cross(direction, helper) * light_rest[li].inverse_right_length;
     let up = cross(right, direction);
-    let field = light_rest[li].cos_field;
-    let tangent = sqrt(max(1.0 - field * field, 0.0)) / max(field, 0.05);
+    let tangent = light_rest[li].field_tangent;
     let angles = haze.medium.shape.w;
     let uv = clamp((vec2<f32>(dot(q, right), dot(q, up)) / max(dot(q, direction) * tangent, 1e-5) * 0.5 + 0.5) * (angles - 1.0), vec2<f32>(0.0), vec2<f32>(angles - 1.0));
-    let xy = min(vec2<u32>(uv), vec2<u32>(u32(angles) - 2u));
-    let f = uv - vec2<f32>(xy);
     let z = clamp(dist / max(core.range, 1e-5) * 32.0, 0.0, 32.0);
-    return mix(mix(cached_column(li, xy, z), cached_column(li, xy + vec2<u32>(1u, 0u), z), f.x),
-        mix(cached_column(li, xy + vec2<u32>(0u, 1u), z), cached_column(li, xy + vec2<u32>(1u), z), f.x), f.y);
+    let origin = vec2<f32>(vec2<u32>(li % 16u, li / 16u)) * angles;
+    let coordinate = vec3<f32>(origin + uv + 0.5, z + 0.5) / vec3<f32>(textureDimensions(medium_cache));
+    return textureSampleLevel(medium_cache, haze_noise_sampler, coordinate, 0.0).r;
 }
 
 fn world_from_ndc(ndc: vec3<f32>) -> vec3<f32> {
@@ -135,6 +132,10 @@ fn fixture_shadow_visibility(world: vec3<f32>, light_index: u32) -> f32 {
     }
     let layer = i32(slot);
     let clip = fixture_shadow_matrices[layer].view_proj * vec4<f32>(world, 1.0);
+    return projected_shadow_visibility(clip, layer);
+}
+
+fn projected_shadow_visibility(clip: vec4<f32>, layer: i32) -> f32 {
     let ndc = clip.xyz / clip.w;
     if ndc.z < 0.0 || ndc.z > 1.0 {
         return 1.0;
@@ -160,6 +161,49 @@ fn fixture_shadow_visibility(world: vec3<f32>, light_index: u32) -> f32 {
     return select(0.0, 1.0, reference >= stored);
 }
 
+// Use the cached conservative depth bounds to prove a whole segment lit or
+// shadowed. Only a segment containing a shadow edge needs the four samples.
+fn segment_shadow_visibility(ray_dir: vec3<f32>, a: f32, b: f32, li: u32) -> f32 {
+    let layer = i32(light_rest[li].shadow_slot);
+    if layer < 0 {
+        var visibility = 0.0;
+        for (var i = 0u; i < 4u; i += 1u) {
+            let t = mix(a, b, (f32(i) + 0.5) * 0.25);
+            visibility += fixture_shadow_visibility(haze.camera_pos.xyz + ray_dir * t, li) * 0.25;
+        }
+        return visibility;
+    }
+    let matrix = fixture_shadow_matrices[layer].view_proj;
+    let origin = matrix * vec4<f32>(haze.camera_pos.xyz, 1.0);
+    let direction = matrix * vec4<f32>(ray_dir, 0.0);
+    let first = origin + direction * mix(a, b, 0.125);
+    let last = origin + direction * mix(a, b, 0.875);
+    let p = first.xyz / first.w;
+    let q = last.xyz / last.w;
+    if first.w > 0.0 && last.w > 0.0 && min(p.z, q.z) >= 0.0 && max(p.z, q.z) <= 1.0
+        && all(abs(p.xy) <= vec2<f32>(1.0)) && all(abs(q.xy) <= vec2<f32>(1.0)) {
+        let dims = textureDimensions(fixture_shadow_map);
+        let c0 = min(vec2<u32>((p.xy * vec2<f32>(0.5, -0.5) + 0.5) * vec2<f32>(dims)), dims - 1u);
+        let c1 = min(vec2<u32>((q.xy * vec2<f32>(0.5, -0.5) + 0.5) * vec2<f32>(dims)), dims - 1u);
+        let difference = (c0.x ^ c1.x) | (c0.y ^ c1.y);
+        let level = max(i32(firstLeadingBit(difference)), 0);
+        let coordinate = vec2<i32>(c0 >> vec2<u32>(u32(level + 1)));
+        var depths: vec2<f32>;
+        if layer < 256 { depths = textureLoad(shadow_ranges, coordinate, layer, level).rg; }
+        else { depths = textureLoad(shadow_ranges_extra, coordinate, layer - 256, level).rg; }
+        let planes = fixture_shadow_matrices[layer].params;
+        let ref0 = shadow_compare_reference(p.z, planes.x, planes.y, 0.02);
+        let ref1 = shadow_compare_reference(q.z, planes.x, planes.y, 0.02);
+        if min(ref0, ref1) >= depths.y { return 1.0; }
+        if max(ref0, ref1) < depths.x { return 0.0; }
+    }
+    let delta = (last - first) / 3.0;
+    return (projected_shadow_visibility(first, layer)
+        + projected_shadow_visibility(first + delta, layer)
+        + projected_shadow_visibility(first + delta * 2.0, layer)
+        + projected_shadow_visibility(last, layer)) * 0.25;
+}
+
 fn linear_view_depth(raw_depth: f32) -> f32 {
     let near = haze.depth.x;
     let far = haze.depth.y;
@@ -173,7 +217,8 @@ fn linear_view_depth(raw_depth: f32) -> f32 {
 fn henyey_greenstein(cos_t: f32, g: f32) -> f32 {
     let g2 = g * g;
     let denom = 1.0 + g2 - 2.0 * g * cos_t;
-    return (1.0 - g2) / pow(max(denom, 1e-4), 1.5);
+    let inverse = inverseSqrt(max(denom, 1e-4));
+    return (1.0 - g2) * inverse * inverse * inverse;
 }
 
 // Progressive best-candidate rank tile. Ranks are visited in a toroidal
@@ -196,7 +241,10 @@ fn blue_noise(frag: vec2<f32>, frame: u32) -> f32 {
     let index = (pixel.y & 7u) * 8u + (pixel.x & 7u);
     let tile = floor(frag / 8.0);
     let rotation = fract(sin(dot(tile, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    return fract((f32(BLUE_NOISE_RANK[index]) + 0.5) / 64.0 + rotation);
+    // Moving an 8x8 tile repeats after eight frames. Advance the stratum
+    // itself too, so temporal accumulation and reference captures converge.
+    let temporal_rotation = fract(f32(frame) * 0.61803398875);
+    return fract((f32(BLUE_NOISE_RANK[index]) + 0.5) / 64.0 + rotation + temporal_rotation);
 }
 
 /// One fragment's camera ray, its scene-occlusion distance and its blue-noise
@@ -212,6 +260,8 @@ struct SceneRay {
     view_depth: f32,
     jitter: f32,
     medium: MediumRay,
+    uv: vec2<f32>,
+    fog_span: vec2<f32>,
 };
 
 fn scene_ray(frag: vec2<f32>) -> SceneRay {
@@ -256,7 +306,7 @@ fn scene_ray(frag: vec2<f32>) -> SceneRay {
         vec2<f32>(frag.x, haze.transport.z - frag.y),
         u32(haze.tuning.x + haze.tiles.w),
     );
-    return SceneRay(ray_dir, hit_dist, view_depth, j, MediumRay());
+    return SceneRay(ray_dir, hit_dist, view_depth, j, MediumRay(), uv, medium_lighting_span(haze.medium, haze.camera_pos.xyz, ray_dir, haze.shadow.w));
 }
 
 fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
@@ -342,8 +392,8 @@ fn beam_span(li: u32, ray: SceneRay) -> vec2<f32> {
     return vec2<f32>(t_a, t_b);
 }
 
-// Unshadowed equiangular midpoint estimate guides light selection. It costs
-// no texture reads. Positive support over the complete analytic span keeps
+// Unshadowed equiangular midpoint estimate guides reference light selection.
+// Positive support over the complete analytic span keeps
 // selection unbiased even where haze pockets or blockers defeat the estimate.
 fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
     let span = beam_span(li, ray);
@@ -364,7 +414,7 @@ fn beam_importance(li: u32, ray: SceneRay, sigma: f32) -> f32 {
     let spectrum = max(max(tint.r, tint.g), tint.b);
     let energy = rest.intensity * rest.haze_gain * spectrum;
     return energy * max(1e-6, (theta_b - theta_a) / h * angular
-        * beam_range_falloff(dist, core.range) * phase * exp(-medium_depth(ray.medium, t) - light_optical_depth(li, haze.camera_pos.xyz + ray.dir * t)));
+        * beam_range_falloff(dist, core.range) * phase * transport_transmittance(ray, li, t, haze.camera_pos.xyz + ray.dir * t));
 }
 
 /// Single-scattering radiance this ray receives from light `li`, already
@@ -383,6 +433,10 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
     let t_a = span.x;
     let t_b = span.y;
     if t_b <= t_a { return vec3<f32>(0.0); }
+    if GRID_FOG && light_rest[li].gobo < 0.5 {
+        if haze.shadow.x <= 0.0 { return lit_interval(li, ray, span.x, span.y); }
+        if light_rest[li].shadow_slot >= 0.0 { return beam_shadow_integral(li, ray, span); }
+    }
     let ray_dir = ray.dir;
     let near_clamp = haze.tuning.z;
     let beam_gain = haze.tuning.w * haze_gain;
@@ -484,8 +538,168 @@ fn beam_scatter(li: u32, ray: SceneRay, sigma: f32) -> vec3<f32> {
         let nz = haze_density_at(sample_world);
         // dot(sample->source, rayDir) = -(b + t)/dist, since q = oc + t·rayDir.
         let phase = henyey_greenstein(-(b + t) / max(dist, 1e-4), g);
-        acc += tint * (radiance * phase * nz * exp(-medium_depth(ray.medium, t) - light_optical_depth(li, haze.camera_pos.xyz + ray.dir * t)) * mis_w);
+        acc += tint * (radiance * phase * nz * transport_transmittance(ray, li, t, haze.camera_pos.xyz + ray.dir * t) * mis_w);
     }
 
     return acc * sigma;
+}
+
+// Integrate a visible interval with Gauss-Legendre quadrature in equiangular
+// coordinates. Shadow boundaries are supplied by the shadow-map traversal.
+fn lit_interval(li: u32, ray: SceneRay, a: f32, b: f32) -> vec3<f32> {
+    if b <= a { return vec3<f32>(0.0); }
+    let core = light_core[li];
+    let rest = light_rest[li];
+    let oc = haze.camera_pos.xyz - core.position;
+    let delta = -dot(oc, ray.dir);
+    let h = sqrt(max(dot(oc, oc) - delta * delta, haze.tuning.z));
+    let th0 = atan((a - delta) / h);
+    let th1 = atan((b - delta) / h);
+    let pieces = clamp(u32(ceil(max((b - a) / max(haze.medium.shape.y * 0.5, 0.1), (th1 - th0) / 0.4))), 1u, 32u);
+    let nodes = array<f32, 4>(-0.8611363116, -0.3399810436, 0.3399810436, 0.8611363116);
+    let weights = array<f32, 4>(0.3478548451, 0.6521451549, 0.6521451549, 0.3478548451);
+    let tint = mix(rest.color, vec3<f32>(1.0), haze.transport.x);
+    var sum = 0.0;
+    let width = (th1 - th0) / f32(pieces);
+    for (var piece = 0u; piece < pieces; piece += 1u) {
+        let center = th0 + (f32(piece) + 0.5) * width;
+        for (var j = 0u; j < 4u; j += 1u) {
+            let tangent = tan(center + nodes[j] * width * 0.5);
+            let t = delta + h * tangent;
+            let q = oc + ray.dir * t;
+            let d2 = dot(q, q);
+            let distance = sqrt(d2);
+            let angular = angular_profile(dot(q, rest.direction) / max(distance, 1e-4), rest.cos_beam, rest.cos_field);
+            let world = haze.camera_pos.xyz + ray.dir * t;
+            let phase = henyey_greenstein(-dot(q, ray.dir) / max(distance, 1e-4), haze.transport.y);
+            let source_weight = select(1.0, 1.0 - smoothstep(FOG_SOURCE_INNER, FOG_SOURCE_OUTER, distance), rest.wash >= FOG_BROAD_WASH);
+            let value = angular * phase * beam_range_falloff(distance, core.range) * source_weight
+                * haze_density_at(world) * transport_transmittance(ray, li, t, world)
+                / max(d2, haze.tuning.z);
+            sum += value * h * (1.0 + tangent * tangent) * width * 0.5 * weights[j];
+        }
+    }
+    return tint * (sum * rest.intensity * rest.haze_gain * haze.tuning.w * haze.depth.z);
+}
+
+// Intersect the camera ray with the piecewise constant shadow-map height
+// field. Consecutive visible texels form one interval; empty space therefore
+// requires no repeated medium/phase evaluations and there is no sample noise.
+fn beam_shadow_integral(li: u32, ray: SceneRay, full_span: vec2<f32>) -> vec3<f32> {
+    let layer = i32(light_rest[li].shadow_slot);
+    let matrix = fixture_shadow_matrices[layer].view_proj;
+    let origin = matrix * vec4<f32>(haze.camera_pos.xyz, 1.0);
+    let direction = matrix * vec4<f32>(ray.dir, 0.0);
+    let planes = fixture_shadow_matrices[layer].params;
+    // The photometric cone can be wider than the shadow camera's capped FOV.
+    // Outside that projection the existing visibility contract is unshadowed.
+    // Clip once in homogeneous coordinates instead of walking outside its map.
+    var span = full_span;
+    let offsets = array<f32, 6>(origin.w + origin.x, origin.w - origin.x, origin.w + origin.y, origin.w - origin.y, origin.z, origin.w - origin.z);
+    let slopes = array<f32, 6>(direction.w + direction.x, direction.w - direction.x, direction.w + direction.y, direction.w - direction.y, direction.z, direction.w - direction.z);
+    for (var plane = 0u; plane < 6u; plane += 1u) {
+        if slopes[plane] > 1e-8 { span.x = max(span.x, -offsets[plane] / slopes[plane]); }
+        else if slopes[plane] < -1e-8 { span.y = min(span.y, -offsets[plane] / slopes[plane]); }
+        else if offsets[plane] < 0.0 { return lit_interval(li, ray, full_span.x, full_span.y); }
+    }
+    if span.y <= span.x { return lit_interval(li, ray, full_span.x, full_span.y); }
+    let dims = vec2<i32>(textureDimensions(fixture_shadow_map));
+    let first = origin + direction * (span.x + 1e-6);
+    let uv = vec2<f32>(first.x, -first.y) / max(first.w, 1e-6) * 0.5 + 0.5;
+    var cell = clamp(vec2<i32>(floor(uv * vec2<f32>(dims))), vec2<i32>(0), dims - 1);
+    let derivative = vec2<f32>(direction.x * origin.w - origin.x * direction.w,
+        origin.y * direction.w - direction.y * origin.w);
+    let step = vec2<i32>(sign(derivative));
+    var t = span.x;
+    var lit_start = -1.0;
+    var lit_end = -1.0;
+    var sum = lit_interval(li, ray, full_span.x, span.x) + lit_interval(li, ray, span.y, full_span.y);
+    let last_clip = origin + direction * span.y;
+    let last_uv = vec2<f32>(last_clip.x, -last_clip.y) / max(last_clip.w, 1e-6) * 0.5 + 0.5;
+    let last_cell = clamp(vec2<i32>(floor(last_uv * vec2<f32>(dims))), vec2<i32>(0), dims - 1);
+    let difference = vec2<u32>(cell ^ last_cell);
+    let max_level = max(i32(firstLeadingBit(difference.x | difference.y)), 0);
+    var next_level = max_level;
+    // Each accepted block crosses at least one monotone texel coordinate.
+    // A clipped projected line cannot visit more than width + height cells.
+    for (var iteration = 0; iteration < dims.x + dims.y + 2; iteration += 1) {
+        if t >= span.y { break; }
+        if any(cell < vec2<i32>(0)) || any(cell >= dims) {
+            // Only boundary roundoff can leave the already-clipped map span.
+            sum += lit_interval(li, ray, t, span.y);
+            t = span.y;
+            break;
+        }
+        var end = span.y;
+        var next_x = 1e9;
+        var next_y = 1e9;
+        var block_base = cell;
+        var block = 1;
+        var visible_a = t;
+        var visible_b = t;
+        let start_clip = origin + direction * t;
+        let start_ref = shadow_compare_reference(start_clip.z / max(start_clip.w, 1e-6), planes.x, planes.y, 0.02);
+        var level = next_level;
+        for (var descent = 0u; descent < textureNumLevels(shadow_ranges) + 1u; descent += 1u) {
+            block = 1 << u32(level + 1);
+            block_base = (cell / block) * block;
+            let boundary_cell = block_base + select(vec2<i32>(0), vec2<i32>(block), step > vec2<i32>(0));
+            let boundary = vec2<f32>(boundary_cell) / vec2<f32>(dims);
+            let ndc = vec2<f32>(boundary.x * 2.0 - 1.0, 1.0 - boundary.y * 2.0);
+            next_x = 1e9;
+            next_y = 1e9;
+            if step.x != 0 { next_x = (ndc.x * origin.w - origin.x) / (direction.x - ndc.x * direction.w); }
+            if step.y != 0 { next_y = (ndc.y * origin.w - origin.y) / (direction.y - ndc.y * direction.w); }
+            end = min(span.y, max(t, min(next_x, next_y)));
+            var depth_range = vec2<f32>(0.0);
+            if all(cell >= vec2<i32>(0)) && all(cell < dims) {
+                if level >= 0 {
+                    if layer < 256 { depth_range = textureLoad(shadow_ranges, cell / block, layer, level).rg; }
+                    else { depth_range = textureLoad(shadow_ranges_extra, cell / block, layer - 256, level).rg; }
+                } else {
+                    if layer < 256 { depth_range = vec2<f32>(textureLoad(fixture_shadow_map, cell, layer, 0)); }
+                    else { depth_range = vec2<f32>(textureLoad(fixture_shadow_map_extra, cell, layer - 256, 0)); }
+                }
+            }
+            let end_clip = origin + direction * end;
+            let end_ref = shadow_compare_reference(end_clip.z / max(end_clip.w, 1e-6), planes.x, planes.y, 0.02);
+            if min(start_ref, end_ref) >= depth_range.y {
+                visible_a = t; visible_b = end; break;
+            }
+            if max(start_ref, end_ref) < depth_range.x { break; }
+            if level == -1 {
+                let caster = planes.x * planes.y / max(planes.x + depth_range.x * (planes.y - planes.x), 1e-5) + 0.02;
+                visible_a = t;
+                visible_b = end;
+                if abs(direction.w) > 1e-8 {
+                    let crossing = (caster - origin.w) / direction.w;
+                    if direction.w > 0.0 { visible_b = min(end, crossing); }
+                    else { visible_a = max(t, crossing); }
+                } else if origin.w > caster { visible_b = t; }
+            }
+            if level == -1 { break; }
+            level -= 1;
+        }
+        next_level = min(level + 1, max_level);
+        if visible_b > visible_a {
+            if lit_start >= 0.0 && visible_a > lit_end + 1e-5 {
+                sum += lit_interval(li, ray, lit_start, lit_end);
+                lit_start = -1.0;
+            }
+            if lit_start < 0.0 { lit_start = visible_a; }
+            lit_end = visible_b;
+        }
+        t = end;
+        let next_clip = origin + direction * t;
+        let next_uv = vec2<f32>(next_clip.x, -next_clip.y) / max(next_clip.w, 1e-6) * 0.5 + 0.5;
+        let projected_cell = vec2<i32>(floor(next_uv * vec2<f32>(dims)));
+        // Projective roundoff at a crossed boundary must never move either
+        // DDA coordinate backwards: both coordinates are monotone on this ray.
+        cell = select(min(cell, projected_cell), max(cell, projected_cell), step >= vec2<i32>(0));
+        if next_x <= next_y { cell.x = select(block_base.x - 1, block_base.x + block, step.x > 0); }
+        if next_y <= next_x { cell.y = select(block_base.y - 1, block_base.y + block, step.y > 0); }
+
+    }
+    if lit_start >= 0.0 { sum += lit_interval(li, ray, lit_start, lit_end); }
+    return sum;
 }

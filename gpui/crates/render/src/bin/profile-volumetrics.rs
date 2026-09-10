@@ -849,6 +849,9 @@ fn profile_case(
         // `gpu_total_ms` — covered by the wall-clocked encode span instead.
         gpu_index_ms: _,
         gpu_fog_grid_ms: _,
+        gpu_fog_prepare_ms: _,
+        gpu_fog_light_ms: _,
+        gpu_fog_integrate_ms: _,
         cpu_encode_submit_ms,
         cpu_cluster_ms,
     } in &samples

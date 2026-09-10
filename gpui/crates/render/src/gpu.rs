@@ -48,7 +48,7 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// Timestamp query layout:
 /// 0 first render pass start, 1 scene pass end, 2 haze region end (zero when
 /// haze did not run), 3 composite pass end, 4/5 light-index build compute
-/// pass.
+/// pass; 6/7 shared-volume span, 8 column preparation end, 9 volume lighting end.
 ///
 /// Every sample is a *stage* boundary: a render pass's begin is its vertex
 /// stage starting, its end is its fragment stage finishing. On Apple TBDR the
@@ -64,7 +64,7 @@ pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth3
 /// Sample indices themselves are unrestricted
 /// (`tests/timestamp_query_contract.rs`), but *when* the set is resolved is
 /// not — see the resolve in `submit_readback`.
-const QUERY_COUNT: u32 = 8;
+const QUERY_COUNT: u32 = 10;
 const MSAA_SAMPLES: u32 = 4;
 const CAMERA_NEAR: f32 = 0.1;
 const CAMERA_FAR: f32 = 2000.0;
@@ -83,6 +83,8 @@ struct Globals {
     dir_to_light: [f32; 4],
     dir_color: [f32; 4],
     params: [f32; 4],
+    medium: crate::medium::Uniform,
+    outdoor_sun: [f32; 4],
 }
 
 #[repr(C)]
@@ -155,6 +157,7 @@ struct CompositeUniform {
     background: [f32; 4],
     medium: crate::medium::Uniform,
     camera_pos: [f32; 4],
+    outdoor_sun: [f32; 4],
 }
 
 #[repr(C)]
@@ -309,6 +312,12 @@ pub struct FrameTimings {
     pub gpu_index_ms: f64,
     /// First shared lighting and prefix-integration span, including dependency waits.
     pub gpu_fog_grid_ms: f64,
+    /// Conservative camera-column preparation; part of `gpu_fog_grid_ms`.
+    pub gpu_fog_prepare_ms: f64,
+    /// Shared volume lighting after column preparation.
+    pub gpu_fog_light_ms: f64,
+    /// Density quadrature and prefix integration after shared lighting.
+    pub gpu_fog_integrate_ms: f64,
     /// CPU time for scene preparation, command encoding and queue submission.
     pub cpu_encode_submit_ms: f64,
     /// CPU time spent rebuilding the deterministic surface-light cluster CSR.
@@ -458,6 +467,7 @@ pub struct Renderer {
     haze_history_index: usize,
     haze_history_key: Option<HazeHistoryKey>,
     medium_cache: crate::medium::Cache,
+    shadow_hierarchy: crate::shadow_hierarchy::Targets,
     last_live_time: Option<f32>,
     live_noise_frame: u32,
     /// Measured-frame counter for the profiler's fragment-count pass cadence;
@@ -867,6 +877,7 @@ pub struct Gpu {
     haze_layout: wgpu::BindGroupLayout,
     medium_cache_layout: wgpu::BindGroupLayout,
     medium_cache_pipeline: wgpu::ComputePipeline,
+    shadow_hierarchy_pipelines: crate::shadow_hierarchy::Pipelines,
     /// The baked volumetric density field. Belongs here rather than on the
     /// renderer because no frame mutates it — it is a function of the device
     /// and nothing else.
@@ -883,6 +894,10 @@ pub struct Gpu {
     haze_pipeline: wgpu::RenderPipeline,
     haze_grid_pipeline: wgpu::RenderPipeline,
     fog_grid_pipeline: wgpu::ComputePipeline,
+    fog_prepare_pipeline: wgpu::ComputePipeline,
+    fog_prepare_layout: wgpu::BindGroupLayout,
+    fog_classify_layout: wgpu::BindGroupLayout,
+    fog_classify_pipeline: wgpu::ComputePipeline,
     fog_integrate_pipeline: wgpu::ComputePipeline,
     fog_integrate_layout: wgpu::BindGroupLayout,
     fog_grid_write_layout: wgpu::BindGroupLayout,
@@ -1017,29 +1032,47 @@ impl Gpu {
     ) -> anyhow::Result<Self> {
         let environment = EnvironmentPipelines::new(&device, &queue);
         let atmosphere = AtmospherePipelines::new(&device, &queue);
+        let mut scene_entries = vec![
+            uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            storage_entry(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            storage_entry(2, wgpu::ShaderStages::FRAGMENT),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+        ];
+        scene_entries.extend(crate::atmosphere::AerialTextures::layout_entries());
+        scene_entries.extend([
+            wgpu::BindGroupLayoutEntry {
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    multisampled: false,
+                },
+                ..texture_entry(10)
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 11,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ]);
         let scene_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
-            entries: &[
-                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-                storage_entry(1, wgpu::ShaderStages::VERTEX_FRAGMENT),
-                storage_entry(2, wgpu::ShaderStages::FRAGMENT),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-            ],
+            entries: &scene_entries,
         });
         // Bindings 2 and 3 held the CSR cluster lists before the unified
         // light index (8–10) replaced them; the numbers stay reserved so the
@@ -1146,10 +1179,36 @@ impl Gpu {
                     9,
                     wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ),
-                storage_entry(
-                    10,
-                    wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
-                ),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1212,7 +1271,16 @@ impl Gpu {
 
         // Both scene-geometry shaders open with the shared bind-group
         // declarations; see `scene_bindings.wgsl`.
-        let bindings = include_str!("shaders/scene_bindings.wgsl");
+        let bindings = format!(
+            "{}{}{}{}{}{}{}",
+            crate::haze_field::prelude(),
+            include_str!("shaders/medium.wgsl"),
+            include_str!("shaders/scene_bindings.wgsl"),
+            crate::atmosphere::surface_prelude(),
+            include_str!("shaders/horizon.wgsl"),
+            include_str!("shaders/haze_daylight.wgsl"),
+            include_str!("shaders/outdoor_surface.wgsl"),
+        );
         let fixture_light = include_str!("shaders/fixture_light.wgsl");
         let visibility = include_str!("shaders/visibility.wgsl");
         let haze_visibility = visibility.replace("@group(3) @binding(11)", "@group(0) @binding(8)");
@@ -1276,10 +1344,10 @@ impl Gpu {
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            view_dimension: wgpu::TextureViewDimension::D3,
                         },
                         count: None,
                     },
@@ -1319,10 +1387,11 @@ impl Gpu {
             &device,
             "composite",
             &format!(
-                "{}{}{}{}",
+                "{}{}{}{}{}",
                 crate::haze_field::prelude(),
                 include_str!("shaders/medium.wgsl"),
                 crate::atmosphere::composite_prelude(),
+                include_str!("shaders/haze_daylight.wgsl"),
                 include_str!("shaders/composite.wgsl")
             ),
         );
@@ -1474,19 +1543,120 @@ impl Gpu {
             cache: None,
         });
 
-        let fog_grid_write_layout =
+        let fog_column_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let fog_prepare_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("fog-grid-write"),
+                label: Some("fog-prepare"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: SCENE_FORMAT,
-                        view_dimension: wgpu::TextureViewDimension::D3,
+                        format: wgpu::TextureFormat::Rgba32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     count: None,
                 }],
+            });
+        let fog_prepare_module = shader(&device, "fog-prepare", &format!(
+            "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
+            include_str!("shaders/haze_prepare.wgsl")
+        ));
+        let fog_prepare_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("fog-prepare"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("fog-prepare"),
+                        bind_group_layouts: &[
+                            Some(&haze_layout),
+                            Some(light_index_pipelines.layout()),
+                            Some(&fog_prepare_layout),
+                        ],
+                        immediate_size: 0,
+                    }),
+                ),
+                module: &fog_prepare_module,
+                entry_point: Some("prepare_columns"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[(
+                        "DEPTH_CULL",
+                        if std::env::var_os("LUMA_FOG_DEPTH_CULL").is_some_and(|v| v == "0") {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    )],
+                    ..Default::default()
+                },
+                cache: None,
+            });
+        let fog_classify_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fog-classify"),
+                entries: &[
+                    fog_column_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let fog_classify_module = shader(&device, "fog-classify", &format!(
+            "{haze_field_prelude}{fixture_light}{light_index_prelude}{haze_visibility}{beam_transport}{}",
+            include_str!("shaders/haze_classify.wgsl")
+        ));
+        let fog_classify_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("fog-classify"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("fog-classify"),
+                        bind_group_layouts: &[
+                            Some(&haze_layout),
+                            Some(light_index_pipelines.layout()),
+                            Some(&fog_classify_layout),
+                        ],
+                        immediate_size: 0,
+                    }),
+                ),
+                module: &fog_classify_module,
+                entry_point: Some("classify_blocks"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+        let fog_grid_write_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("fog-grid-write"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: SCENE_FORMAT,
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                        },
+                        count: None,
+                    },
+                    fog_column_entry(1),
+                    storage_entry(2, wgpu::ShaderStages::COMPUTE),
+                ],
             });
         let fog_integrate_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1512,6 +1682,7 @@ impl Gpu {
                         },
                         count: None,
                     },
+                    fog_column_entry(2),
                 ],
             });
         let fog_integrate_module = shader(&device, "fog-integrate", &format!(
@@ -1570,7 +1741,17 @@ impl Gpu {
             ),
             module: &fog_grid_module,
             entry_point: Some("light_grid"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[(
+                    "BLOCK_VISIBILITY",
+                    if std::env::var_os("LUMA_FOG_BLOCKS").is_some_and(|v| v == "0") {
+                        0.0
+                    } else {
+                        1.0
+                    },
+                )],
+                ..Default::default()
+            },
             cache: None,
         });
 
@@ -1583,6 +1764,7 @@ impl Gpu {
                         bind_group_layouts: &[
                             Some(&haze_layout),
                             Some(light_index_pipelines.layout()),
+                            Some(&fog_grid_read_layout),
                             Some(&fog_grid_read_layout),
                         ],
                         immediate_size: 0,
@@ -1927,6 +2109,7 @@ impl Gpu {
             &material_defaults.emissive,
         );
 
+        let shadow_hierarchy_pipelines = crate::shadow_hierarchy::Pipelines::new(&device);
         Ok(Self {
             device,
             queue,
@@ -1939,6 +2122,7 @@ impl Gpu {
             haze_layout,
             medium_cache_layout,
             medium_cache_pipeline,
+            shadow_hierarchy_pipelines,
             haze_field,
             light_index_pipelines,
             temporal_layout,
@@ -1952,6 +2136,10 @@ impl Gpu {
             haze_pipeline,
             haze_grid_pipeline,
             fog_grid_pipeline,
+            fog_prepare_pipeline,
+            fog_prepare_layout,
+            fog_classify_layout,
+            fog_classify_pipeline,
             fog_integrate_pipeline,
             fog_integrate_layout,
             fog_grid_write_layout,
@@ -2078,6 +2266,11 @@ impl Renderer {
         let visibility = crate::visibility::Visibility::new(device);
 
         let medium_cache = crate::medium::Cache::new(&gpu.device);
+        let shadow_hierarchy = crate::shadow_hierarchy::Targets::new(
+            &gpu.device,
+            FIXTURE_SHADOW_SIZE,
+            MAX_FIXTURE_SHADOWS,
+        );
         Self {
             gpu,
             environment: EnvironmentCache::default(),
@@ -2118,6 +2311,7 @@ impl Renderer {
             haze_history_index: 0,
             haze_history_key: None,
             medium_cache,
+            shadow_hierarchy,
             last_live_time: None,
             live_noise_frame: 0,
             fragment_count_frame: 0,
@@ -2293,23 +2487,35 @@ impl Renderer {
         Ok(out)
     }
 
+    /// Exhaustive per-ray reference capture, with no light selection, shared
+    /// volume interpolation, or spatial denoising. The caller controls pixel
+    /// resolution and sample count through `frame` and `subframes`.
+    /// This converges the renderer's transport model, not an independent tracer.
+    ///
+    /// # Errors
+    /// Fails if the readback buffer cannot be mapped.
+    pub fn render_reference(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        subframes: u32,
+    ) -> anyhow::Result<Vec<u8>> {
+        let group = std::mem::replace(&mut self.wide_light_group, 1);
+        let result = self.render(frame, width, height, subframes);
+        self.wide_light_group = group;
+        result
+    }
+
     /// Render the *next* frame of a sequence and read it back as
     /// sRGB-encoded RGBA8, row-major, no padding.
     ///
-    /// The haze march is progressive. Where [`Renderer::render`] pays for a
-    /// clean volumetric in `subframes` jittered marches of one moment, this
-    /// blends each march into the history the last call left behind — the
-    /// live viewport's own path, which is how it gets a usable image out of
-    /// [`crate::LIVE_SUBFRAMES`]. The history is discarded whenever this
-    /// frame is not plausibly the successor of the last one drawn through
-    /// this renderer: a different size, camera, medium, or cone geometry, a
-    /// clock that jumped, or an intervening [`Renderer::render`].
-    ///
-    /// So a caller sweeping a time axis calls this in order and warms up over
-    /// the frames it can afford to throw away, and any caller that wants one
-    /// moment on its own calls [`Renderer::render`] instead — there is no
-    /// ordering rule to remember, only which of the two questions is being
-    /// asked.
+    /// Deterministic lighting is evaluated once at the current scene time.
+    /// Stochastic transport accumulates the requested subframes and, when
+    /// valid, temporal history. Changes to camera, medium, lighting, geometry,
+    /// or time continuity reject that history. [`Self::render`] captures an
+    /// isolated moment without history; [`Self::render_reference`] additionally
+    /// disables shared volume interpolation and light selection.
     ///
     /// # Errors
     /// Fails if the readback buffer cannot be mapped.
@@ -2577,13 +2783,18 @@ impl Renderer {
                 profile.timestamp_period_ns,
             )
         });
+        let camera_far = if frame.sky.is_some() {
+            crate::atmosphere::MAX_DISTANCE_M
+        } else {
+            CAMERA_FAR
+        };
         let aspect = width as f32 / height as f32;
         // Passing the bounds in reverse order produces a finite reverse-Z
         // projection: near maps to one and the bounded far plane maps to zero.
         let proj = Mat4::perspective_rh(
             frame.camera.fov_y_deg.to_radians(),
             aspect,
-            CAMERA_FAR,
+            camera_far,
             CAMERA_NEAR,
         );
         let view = Mat4::look_at_rh(frame.camera.eye, frame.camera.target, Vec3::Z);
@@ -2640,6 +2851,11 @@ impl Renderer {
             if extra_count > 0 {
                 layers.extend(extra);
             }
+            self.shadow_hierarchy = crate::shadow_hierarchy::Targets::new(
+                &self.gpu.device,
+                FIXTURE_SHADOW_SIZE,
+                shadow_capacity,
+            );
             self.fixture_shadow_map = first;
             self.fixture_shadow_map_extra = second;
             self.fixture_shadow_layers = layers;
@@ -2680,22 +2896,28 @@ impl Renderer {
         let rests: Vec<LightRest> = fixture_cones
             .iter()
             .enumerate()
-            .map(|(index, light)| LightRest {
-                direction: light
-                    .direction
-                    .try_normalize()
-                    .unwrap_or(Vec3::NEG_Y)
-                    .to_array(),
-                cos_beam: light.cos_beam.clamp(-1.0, 1.0),
-                color: light.color.to_array(),
-                intensity: light.intensity.clamp(0.0, 100.0),
-                cos_field: light.cos_field.clamp(-1.0, 1.0),
-                wash: light.wash.clamp(0.0, 1.0),
-                gobo: light.gobo.min(2) as f32,
-                gobo_rotation: light.gobo_rotation.rem_euclid(std::f32::consts::TAU),
-                shadow_slot: slot_of[index],
-                haze_gain: light.haze_gain.clamp(0.0, 1.0),
-                _pad: [0.0; 2],
+            .map(|(index, light)| {
+                let direction = light.direction.try_normalize().unwrap_or(Vec3::NEG_Y);
+                let helper = if direction.z.abs() > 0.98 {
+                    Vec3::Y
+                } else {
+                    Vec3::Z
+                };
+                let field = light.cos_field.clamp(-1.0, 1.0);
+                LightRest {
+                    direction: direction.to_array(),
+                    cos_beam: light.cos_beam.clamp(-1.0, 1.0),
+                    color: light.color.to_array(),
+                    intensity: light.intensity.clamp(0.0, 100.0),
+                    cos_field: light.cos_field.clamp(-1.0, 1.0),
+                    wash: light.wash.clamp(0.0, 1.0),
+                    gobo: light.gobo.min(2) as f32,
+                    gobo_rotation: light.gobo_rotation.rem_euclid(std::f32::consts::TAU),
+                    shadow_slot: slot_of[index],
+                    haze_gain: light.haze_gain.clamp(0.0, 1.0),
+                    inverse_right_length: direction.cross(helper).length().recip(),
+                    field_tangent: (1.0 - field * field).max(0.0).sqrt() / field.max(0.05),
+                }
             })
             .collect();
         let fixture_shadow_matrices: Vec<FixtureShadowMatrix> = shadow_slots
@@ -2733,7 +2955,7 @@ impl Renderer {
                     camera: frame.camera,
                     viewport: [width, height],
                     near: CAMERA_NEAR,
-                    far: CAMERA_FAR,
+                    far: camera_far,
                 },
                 &cores,
                 &rests,
@@ -2749,7 +2971,22 @@ impl Renderer {
         let clusters_done = Instant::now();
         let cpu_cluster = clusters_done - cluster_started;
 
+        let haze_density = frame
+            .haze_density
+            .is_finite()
+            .then_some(frame.haze_density.clamp(0.0, 4.0))
+            .unwrap_or(0.0);
+        let haze_time = frame.time.is_finite().then_some(frame.time).unwrap_or(0.0);
+        let medium =
+            crate::medium::Uniform::new(frame, haze_density * Transport::EXTINCTION, haze_time);
+        let outdoor_sun = frame
+            .sky
+            .map_or(Vec3::ZERO, |sky| sky.sun_radiance)
+            .extend(Transport::PHASE_G)
+            .to_array();
         let globals = Globals {
+            medium,
+            outdoor_sun,
             view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.map(|matrix| matrix.to_cols_array_2d()),
             camera_pos: frame.camera.eye.extend(1.0).to_array(),
@@ -2807,6 +3044,13 @@ impl Renderer {
             &self.gpu.device,
             &mut encoder,
             frame.sky.as_ref(),
+        );
+        let aerial = self.atmosphere.prepare_aerial(
+            &self.gpu.atmosphere,
+            &self.gpu.device,
+            &mut encoder,
+            frame.sky.as_ref(),
+            frame.camera.eye.z,
         );
         if let Some(probe) = &sky_probe {
             environment_bg = self.gpu.environment.sky_bind_group(&self.gpu.device, probe);
@@ -3039,9 +3283,22 @@ impl Renderer {
         let hard_shadows = frame
             .directional
             .is_some_and(|light| light.shadow_softness == 0.0);
-        let lit_bg =
-            self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, true, hard_shadows);
-        let unlit_bg = self.scene_bind_group(&globals_buf, &instance_buf, &point_buf, false, false);
+        let lit_bg = self.scene_bind_group(
+            &globals_buf,
+            &instance_buf,
+            &point_buf,
+            true,
+            hard_shadows,
+            &aerial,
+        );
+        let unlit_bg = self.scene_bind_group(
+            &globals_buf,
+            &instance_buf,
+            &point_buf,
+            false,
+            false,
+            &aerial,
+        );
         let shadow_bgs: Vec<_> = light_view_proj
             .iter()
             .enumerate()
@@ -3057,7 +3314,14 @@ impl Renderer {
                 );
                 (
                     buffer.clone(),
-                    self.scene_bind_group(&buffer, &instance_buf, &point_buf, false, false),
+                    self.scene_bind_group(
+                        &buffer,
+                        &instance_buf,
+                        &point_buf,
+                        false,
+                        false,
+                        &aerial,
+                    ),
                 )
             })
             .collect();
@@ -3107,11 +3371,6 @@ impl Renderer {
             ((width as f32 * scale).round() as u32).max(1),
             ((height as f32 * scale).round() as u32).max(1),
         );
-        let haze_density = frame
-            .haze_density
-            .is_finite()
-            .then_some(frame.haze_density.clamp(0.0, 4.0))
-            .unwrap_or(0.0);
         // Transport quality is a render setting, independent of how many
         // emitters a dimmer cue happens to leave active.
         let sampled_haze = cached_shadows && self.wide_light_group > 1;
@@ -3128,6 +3387,8 @@ impl Renderer {
             haze_sampled,
             fog_grid,
             fog_integral,
+            fog_columns,
+            fog_candidates,
             haze_history,
             output_view,
             finish,
@@ -3150,6 +3411,8 @@ impl Renderer {
                 t.haze_sampled.clone(),
                 t.fog.incident.clone(),
                 t.fog.integral.clone(),
+                t.fog.columns.clone(),
+                t.fog.candidates.clone(),
                 t.haze_history.clone(),
                 presentation.view().clone(),
                 finish,
@@ -3157,7 +3420,6 @@ impl Renderer {
             )
         };
         let targets_done = Instant::now();
-        let haze_time = frame.time.is_finite().then_some(frame.time).unwrap_or(0.0);
         let history_key =
             haze_history_key(frame, width, height, haze_size, haze_density, caster_hash);
         let time_continuous = self
@@ -3385,6 +3647,13 @@ impl Renderer {
                         pass.draw_indexed(first_index..last_index, base, first..first + count);
                     }
                 }
+                self.shadow_hierarchy.record(
+                    &self.gpu.shadow_hierarchy_pipelines,
+                    &self.gpu.device,
+                    &mut encoder,
+                    [&self.fixture_shadow_map, &self.fixture_shadow_map_extra],
+                    &fixture_shadow_dirty,
+                );
                 for (index, key) in fixture_shadow_keys.into_iter().enumerate() {
                     if shadow_slots[index].is_some() {
                         self.fixture_shadow_cache[index] = Some(key);
@@ -3444,22 +3713,11 @@ impl Renderer {
                         view: &msaa_color,
                         resolve_target: Some(&scene_view),
                         depth_slice: None,
-                        // Alpha clears to *zero* while rgb clears to the
-                        // frame's colour: the target's alpha is then the
-                        // coverage every draw accumulated, and the composite
-                        // uses it to swap the clear colour for the real
-                        // background one pixel at a time — including under a
-                        // cable or a grid line, which is what the transparent
-                        // tail needs and what the depth buffer cannot say.
-                        // `composite.wgsl` subtracts exactly this rgb, so the
-                        // two must stay the same value.
+                        // Premultiplied radiance and coverage, including each
+                        // surface's horizon fade. Transparent draws blend over
+                        // them before the composite supplies the background.
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: f64::from(frame.clear_color.x),
-                                g: f64::from(frame.clear_color.y),
-                                b: f64::from(frame.clear_color.z),
-                                a: 0.0,
-                            }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -3503,7 +3761,7 @@ impl Renderer {
                 &mut encoder,
                 &depth_view,
                 CAMERA_NEAR,
-                CAMERA_FAR,
+                camera_far,
                 [width, height],
             );
         }
@@ -3516,7 +3774,26 @@ impl Renderer {
             .iter()
             .map(|c| frame.camera.eye.distance(c.position) + c.range)
             .fold(1.0_f32, f32::max)
-            .min(CAMERA_FAR);
+            .min(camera_far);
+        let grid_prepare = self
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fog-prepare"),
+                layout: &self.gpu.fog_prepare_layout,
+                entries: &[binding(0, wgpu::BindingResource::TextureView(&fog_columns))],
+            });
+        let grid_classify = self
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("fog-classify"),
+                layout: &self.gpu.fog_classify_layout,
+                entries: &[
+                    binding(0, wgpu::BindingResource::TextureView(&fog_columns)),
+                    binding(1, fog_candidates.as_entire_binding()),
+                ],
+            });
         let grid_read = self
             .gpu
             .device
@@ -3537,6 +3814,7 @@ impl Renderer {
                 entries: &[
                     binding(0, wgpu::BindingResource::TextureView(&fog_integral)),
                     binding(1, wgpu::BindingResource::TextureView(&fog_grid)),
+                    binding(2, wgpu::BindingResource::TextureView(&fog_columns)),
                 ],
             });
         let grid_write = self
@@ -3545,10 +3823,12 @@ impl Renderer {
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("fog-grid-write"),
                 layout: &self.gpu.fog_grid_write_layout,
-                entries: &[binding(0, wgpu::BindingResource::TextureView(&fog_grid))],
+                entries: &[
+                    binding(0, wgpu::BindingResource::TextureView(&fog_grid)),
+                    binding(1, wgpu::BindingResource::TextureView(&fog_columns)),
+                    binding(2, fog_candidates.as_entire_binding()),
+                ],
             });
-        let medium =
-            crate::medium::Uniform::new(frame, haze_density * Transport::EXTINCTION, haze_time);
         self.medium_cache
             .ensure(&self.gpu.device, fixture_cones.len());
         if haze_density > 0.0 && !fixture_cones.is_empty() {
@@ -3580,7 +3860,10 @@ impl Renderer {
                             4,
                             wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
                         ),
-                        binding(5, self.medium_cache.buffer.as_entire_binding()),
+                        binding(
+                            5,
+                            wgpu::BindingResource::TextureView(&self.medium_cache.view),
+                        ),
                     ],
                 });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -3595,7 +3878,14 @@ impl Renderer {
                 fixture_cones.len() as u32,
             );
         }
-        for k in 0..subframes {
+        let stochastic_lights = fixture_cones.iter().any(|c| c.gobo != 0);
+        let haze_passes = if grid_fog && !stochastic_lights {
+            1
+        } else {
+            subframes
+        };
+        let resolve_haze = (temporal || sampled_haze) && (!grid_fog || stochastic_lights);
+        for k in 0..haze_passes {
             let uniform = HazeUniform {
                 medium,
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
@@ -3625,12 +3915,12 @@ impl Renderer {
                 tiles: [
                     width as f32 / haze_size.0 as f32,
                     height as f32 / haze_size.1 as f32,
-                    0.0,
+                    if grid_fog && k == 0 { 2.0 } else { 1.0 },
                     0.0,
                 ],
                 depth: [
                     CAMERA_NEAR,
-                    CAMERA_FAR,
+                    camera_far,
                     haze_density * Transport::EXTINCTION,
                     if sampled_haze {
                         self.wide_light_group as f32
@@ -3669,7 +3959,18 @@ impl Renderer {
                     layout: &self.gpu.haze_layout,
                     entries: &[
                         binding(0, haze_buf.as_entire_binding()),
-                        binding(10, self.medium_cache.buffer.as_entire_binding()),
+                        binding(
+                            10,
+                            wgpu::BindingResource::TextureView(&self.medium_cache.view),
+                        ),
+                        binding(
+                            11,
+                            wgpu::BindingResource::TextureView(&self.shadow_hierarchy.views[0]),
+                        ),
+                        binding(
+                            12,
+                            wgpu::BindingResource::TextureView(&self.shadow_hierarchy.views[1]),
+                        ),
                         binding(1, index_bindings.core.as_entire_binding()),
                         binding(2, index_bindings.rest.as_entire_binding()),
                         binding(3, wgpu::BindingResource::TextureView(&depth_view)),
@@ -3693,15 +3994,53 @@ impl Renderer {
                         ),
                     ],
                 });
-            if grid_fog {
+            if grid_fog && k == 0 {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("fog-grid"),
                     timestamp_writes: profile_resources.as_ref().and_then(|(queries, ..)| {
                         (k == 0).then_some(wgpu::ComputePassTimestampWrites {
                             query_set: queries,
                             beginning_of_pass_write_index: Some(6),
-                            end_of_pass_write_index: None,
+                            end_of_pass_write_index: Some(8),
                         })
+                    }),
+                });
+                pass.set_pipeline(&self.gpu.fog_prepare_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_bind_group(1, &light_index_bg, &[]);
+                pass.set_bind_group(2, &grid_prepare, &[]);
+                pass.dispatch_workgroups(
+                    width.div_ceil(crate::fog_grid::tile_size()).div_ceil(8),
+                    height.div_ceil(crate::fog_grid::tile_size()).div_ceil(8),
+                    1,
+                );
+                drop(pass);
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fog-classify"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.gpu.fog_classify_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_bind_group(1, &light_index_bg, &[]);
+                pass.set_bind_group(2, &grid_classify, &[]);
+                pass.dispatch_workgroups(
+                    width
+                        .div_ceil(crate::fog_grid::tile_size())
+                        .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                    height
+                        .div_ceil(crate::fog_grid::tile_size())
+                        .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                    crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
+                );
+                drop(pass);
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("fog-grid"),
+                    timestamp_writes: profile_resources.as_ref().map(|(queries, ..)| {
+                        wgpu::ComputePassTimestampWrites {
+                            query_set: queries,
+                            beginning_of_pass_write_index: None,
+                            end_of_pass_write_index: Some(9),
+                        }
                     }),
                 });
                 pass.set_pipeline(&self.gpu.fog_grid_pipeline);
@@ -3709,9 +4048,13 @@ impl Renderer {
                 pass.set_bind_group(1, &light_index_bg, &[]);
                 pass.set_bind_group(2, &grid_write, &[]);
                 pass.dispatch_workgroups(
-                    width.div_ceil(crate::fog_grid::TILE_SIZE),
-                    height.div_ceil(crate::fog_grid::TILE_SIZE),
-                    crate::fog_grid::SLICES,
+                    width
+                        .div_ceil(crate::fog_grid::tile_size())
+                        .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                    height
+                        .div_ceil(crate::fog_grid::tile_size())
+                        .div_ceil(crate::fog_grid::BLOCK_SIDE),
+                    crate::fog_grid::SLICES.div_ceil(crate::fog_grid::BLOCK_SIDE),
                 );
                 drop(pass);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -3729,8 +4072,8 @@ impl Renderer {
                 pass.set_bind_group(1, &light_index_bg, &[]);
                 pass.set_bind_group(2, &grid_integrate, &[]);
                 pass.dispatch_workgroups(
-                    width.div_ceil(crate::fog_grid::TILE_SIZE),
-                    height.div_ceil(crate::fog_grid::TILE_SIZE),
+                    width.div_ceil(crate::fog_grid::tile_size()),
+                    height.div_ceil(crate::fog_grid::tile_size()),
                     1,
                 );
             }
@@ -3755,7 +4098,7 @@ impl Renderer {
                 // The haze region's end lands on the temporal resolve when one
                 // runs, else on the last accumulation pass.
                 timestamp_writes: profile_resources.as_ref().and_then(|(queries, ..)| {
-                    (!temporal && !sampled_haze && k + 1 == subframes).then_some(
+                    (!resolve_haze && k + 1 == haze_passes).then_some(
                         wgpu::RenderPassTimestampWrites {
                             query_set: queries,
                             beginning_of_pass_write_index: None,
@@ -3773,10 +4116,11 @@ impl Renderer {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.set_bind_group(1, &light_index_bg, &[]);
             pass.set_bind_group(2, &grid_read, &[]);
+            pass.set_bind_group(3, &grid_read, &[]);
             pass.draw(0..3, 0..1);
         }
 
-        let composite_haze = if temporal || sampled_haze {
+        let composite_haze = if resolve_haze {
             let read = self.haze_history_index;
             let write = 1 - read;
             let temporal_uniform = TemporalUniform {
@@ -3786,7 +4130,7 @@ impl Renderer {
                     0.82,
                     f32::from(u8::from(history_valid)),
                     0.25,
-                    f32::from(u8::from(sampled_haze)),
+                    f32::from(u8::from(sampled_haze && !grid_fog)),
                 ],
             };
             let uniform_buf = self.storage(
@@ -3837,12 +4181,14 @@ impl Renderer {
             self.haze_history_valid = temporal;
             haze_history[write].clone()
         } else {
+            self.haze_history_valid = false;
             haze_view.clone()
         };
 
         // --- composite + readback --------------------------------------------
         let composite_uniform = CompositeUniform {
             medium,
+            outdoor_sun,
             camera_pos: frame.camera.eye.extend(1.0).to_array(),
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             params: [
@@ -3854,9 +4200,9 @@ impl Renderer {
             ],
             depth: [
                 CAMERA_NEAR,
-                CAMERA_FAR,
+                camera_far,
                 haze_density * Transport::EXTINCTION,
-                0.0,
+                Transport::PHASE_G,
             ],
             background: frame.clear_color.extend(1.0).to_array(),
         };
@@ -4070,6 +4416,7 @@ impl Renderer {
         point_lights: &wgpu::Buffer,
         shadows: bool,
         hard_shadows: bool,
+        aerial: &crate::atmosphere::AerialTextures,
     ) -> wgpu::BindGroup {
         // The shadow map is a render target during the shadow pass, so the
         // passes that write depth bind a 1x1 placeholder instead.
@@ -4078,25 +4425,37 @@ impl Renderer {
         } else {
             &self.gpu.dummy_shadow
         };
+        let mut entries = vec![
+            binding(0, globals.as_entire_binding()),
+            binding(1, instances.as_entire_binding()),
+            binding(2, point_lights.as_entire_binding()),
+            binding(3, wgpu::BindingResource::TextureView(map)),
+            binding(
+                4,
+                wgpu::BindingResource::Sampler(if hard_shadows {
+                    &self.gpu.hard_shadow_sampler
+                } else {
+                    &self.gpu.shadow_sampler
+                }),
+            ),
+        ];
+        entries.extend(aerial.entries());
+        entries.extend([
+            binding(
+                10,
+                wgpu::BindingResource::TextureView(&self.gpu.haze_field.view),
+            ),
+            binding(
+                11,
+                wgpu::BindingResource::Sampler(&self.gpu.haze_field.sampler),
+            ),
+        ]);
         self.gpu
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("scene"),
                 layout: &self.gpu.scene_layout,
-                entries: &[
-                    binding(0, globals.as_entire_binding()),
-                    binding(1, instances.as_entire_binding()),
-                    binding(2, point_lights.as_entire_binding()),
-                    binding(3, wgpu::BindingResource::TextureView(map)),
-                    binding(
-                        4,
-                        wgpu::BindingResource::Sampler(if hard_shadows {
-                            &self.gpu.hard_shadow_sampler
-                        } else {
-                            &self.gpu.shadow_sampler
-                        }),
-                    ),
-                ],
+                entries: &entries,
             })
     }
 
@@ -4322,10 +4681,79 @@ mod tests {
     };
 
     #[test]
+    fn haze_jitter_advances_beyond_eight_frames() {
+        // Execute the renderer's actual WGSL, not a CPU reimplementation.
+        // The old toroidal tile walk repeated exactly every eight frames and
+        // prevented both temporal history and offline references converging.
+        let transport = include_str!("shaders/beam_transport.wgsl");
+        let start = transport.find("const BLUE_NOISE_RANK =").unwrap();
+        let end = transport.find("/// One fragment's camera ray").unwrap();
+        let source = format!(
+            "{}\n{}",
+            &transport[start..end],
+            r"
+            @group(0) @binding(0) var<storage, read_write> samples: array<vec2<f32>>;
+            @compute @workgroup_size(64)
+            fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
+                let pixel = vec2<f32>(23.5, 45.5);
+                samples[id.x] = vec2<f32>(blue_noise(pixel, id.x), blue_noise(pixel, id.x + 8u));
+            }"
+        );
+        let gpu = super::Gpu::shared().unwrap();
+        let device = &gpu.device;
+        let module = super::shader(device, "haze-jitter-probe", &source);
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("haze-jitter-probe"),
+            layout: None,
+            module: &module,
+            entry_point: Some("probe"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let buffer = |usage| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("haze-jitter-samples"),
+                size: 64 * 8,
+                usage,
+                mapped_at_creation: false,
+            })
+        };
+        let samples = buffer(wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC);
+        let readback = buffer(wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("haze-jitter-probe"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[super::binding(0, samples.as_entire_binding())],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&samples, 0, &readback, 0, 64 * 8);
+        gpu.queue.submit([encoder.finish()]);
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |result| result.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let view = readback.slice(..).get_mapped_range().unwrap();
+        let values: &[[f32; 2]] = bytemuck::cast_slice(&view);
+        assert!(values
+            .iter()
+            .all(|v| v.iter().all(|x| (0.0..1.0).contains(x))));
+        assert!(
+            values.iter().all(|v| (v[0] - v[1]).abs() > 0.01),
+            "the shadow integration repeats its samples after eight frames"
+        );
+    }
+
+    #[test]
     fn volumetric_cpu_layouts_match_wgsl_storage_and_uniform_strides() {
-        assert_eq!(std::mem::size_of::<Globals>(), 400);
+        assert_eq!(std::mem::size_of::<Globals>(), 480);
         assert_eq!(std::mem::size_of::<HazeUniform>(), 240);
-        assert_eq!(std::mem::size_of::<CompositeUniform>(), 192);
+        assert_eq!(std::mem::size_of::<CompositeUniform>(), 208);
         assert_eq!(std::mem::size_of::<LightCore>(), 16);
         assert_eq!(std::mem::size_of::<LightRest>(), 64);
         assert_eq!(std::mem::size_of::<FixtureShadowMatrix>(), 80);
@@ -5255,7 +5683,7 @@ impl PendingFrame {
             // Consecutive end samples partition the frame, per `QUERY_COUNT`.
             // A zero haze end means haze did not run; a whole-frame zero means
             // the driver dropped the samples.
-            let [start, scene_end, haze_end, composite_end, index0, index1, grid0, grid1] =
+            let [start, scene_end, haze_end, composite_end, index0, index1, grid0, grid1, prepared, lit] =
                 timestamps;
             let haze_ran = haze_end > 0;
             // The composite pass samples both of its predecessors' outputs, so
@@ -5291,6 +5719,21 @@ impl PendingFrame {
                     gpu_index_ms: span(index0, index1),
                     gpu_fog_grid_ms: if profile.grid_fog {
                         span(grid0, grid1)
+                    } else {
+                        0.0
+                    },
+                    gpu_fog_prepare_ms: if profile.grid_fog {
+                        span(grid0, prepared)
+                    } else {
+                        0.0
+                    },
+                    gpu_fog_light_ms: if profile.grid_fog {
+                        span(prepared, lit)
+                    } else {
+                        0.0
+                    },
+                    gpu_fog_integrate_ms: if profile.grid_fog {
+                        span(lit, grid1)
                     } else {
                         0.0
                     },

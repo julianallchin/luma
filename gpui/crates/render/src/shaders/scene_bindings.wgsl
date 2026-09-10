@@ -25,6 +25,8 @@ struct Globals {
     // x: point-light count, y: shadow-map texel size, z: shadows enabled,
     // w: material debug-view code.
     params: vec4<f32>,
+    medium: ProceduralMedium,
+    outdoor_sun: vec4<f32>,
 };
 
 struct Instance {
@@ -52,6 +54,8 @@ struct PointLightData {
 @group(0) @binding(2) var<storage, read> point_lights: array<PointLightData>;
 @group(0) @binding(3) var shadow_map: texture_depth_2d_array;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
+@group(0) @binding(10) var haze_noise_field: texture_3d<f32>;
+@group(0) @binding(11) var haze_noise_sampler: sampler;
 // Fixture-shadow pass only: draw indices bucketed by mesh, so one instanced
 // draw covers every caster sharing a mesh. Other pipelines never reference
 // it, so their layouts carry no entry for it.
@@ -92,8 +96,8 @@ struct FixtureLightRest {
     // Two scalars, not a `vec3`: a `vec3` member would take its own 16-byte
     // alignment and push the struct to 80 bytes, disagreeing with the Rust
     // stride. Scalars keep it at 64.
-    _pad1: f32,
-    _pad2: f32,
+    inverse_right_length: f32,
+    field_tangent: f32,
 };
 
 struct SurfaceClusterParams {

@@ -7,38 +7,15 @@ struct Composite {
     inv_view_proj: mat4x4<f32>,
     // xy: haze buffer size, z: bilateral depth sigma, w: debug-view code.
     params: vec4<f32>,
-    // xy: camera near/far planes, z: mean extinction sigma in 1/metres.
+    // xy: camera near/far planes, z: mean extinction sigma in 1/metres, w: haze phase g.
     depth: vec4<f32>,
     // rgb: the frame's clear colour, i.e. what a pixel with no geometry and no
     // visible environment shows.
     background: vec4<f32>,
     medium: ProceduralMedium,
     camera_pos: vec4<f32>,
+    outdoor_sun: vec4<f32>,
 };
-
-// The horizon dissolve. Surfaces wash into the background across this band of
-// view depth, so the ground quad has no rim to see: nothing in a venue stands
-// this far out, and the quad's own extent (`FLOOR_EXTENT_M`, frame.rs) is
-// past the far end.
-const HORIZON_NEAR_M: f32 = 100.0;
-const HORIZON_FAR_M: f32 = 700.0;
-// Weight toward the far end, so the band opens gently and a far truss is
-// still a truss where the ground under it has begun to go.
-const HORIZON_BIAS: f32 = 1.5;
-
-/// How much of the background has taken over at this depth.
-///
-/// The ramp is written in *inverse* depth. A ground plane's height above the
-/// horizon line falls as 1/depth, so a band in 1/depth is a band of fixed
-/// height in pixels — the same ramp seen from a standing eye and from a camera
-/// thirty metres up. Written in metres it is not: perspective packs the whole
-/// of it into the last few rows of a standing view, and the horizon comes back
-/// as the hard line this exists to remove.
-fn horizon_dissolve(depth: f32) -> f32 {
-    let span = 1.0 - HORIZON_NEAR_M / HORIZON_FAR_M;
-    let t = saturate((1.0 - HORIZON_NEAR_M / max(depth, 1e-3)) / span);
-    return pow(t, HORIZON_BIAS);
-}
 
 @group(0) @binding(0) var<uniform> cfg: Composite;
 @group(0) @binding(1) var scene_tex: texture_2d<f32>;
@@ -156,8 +133,7 @@ fn agx(color_in: vec3<f32>) -> vec3<f32> {
 
 /// What stands behind the geometry along this pixel's ray: the environment
 /// probe when one is meant to be seen, otherwise the frame's clear colour.
-/// The horizon dissolve and the empty-pixel sky are the same question asked
-/// twice, so they read it from here rather than each resolving it.
+/// Also fills the coverage relinquished by distant surfaces at the horizon.
 fn background_radiance(uv: vec2<f32>) -> vec3<f32> {
     if environment_params.visible < 0.5 && sky.sun.w < 0.5 {
         return cfg.background.rgb;
@@ -202,26 +178,11 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // Subframe weights sum to 1, so the accumulated target is already a mean —
     // nothing here rescales it.
     let raw_depth = textureLoad(depth_tex, coord, 0);
-    let background = background_radiance(uv);
-    // Swap the clear colour for the real background, by exactly the fraction
-    // of this pixel the scene did not cover.
-    //
-    // The scene target was cleared to the clear colour with alpha zero, and
-    // every draw blended over it, so it holds `a·src + (1−a)·clear` with the
-    // accumulated coverage in `a`. Adding `(1−a)·(background − clear)` turns
-    // that into `a·src + (1−a)·background` — the same pixel composited over
-    // the background instead of over the clear colour, with no second guess at
-    // what `a` was.
-    //
-    // Written as a correction rather than a replacement for two reasons. It
-    // reaches the *partly* covered pixels — an MSAA silhouette edge, and a
-    // cable or a grid line over open sky, which the transparent tail draws
-    // without ever touching the opaque depth buffer this used to interrogate:
-    // asking "is the depth empty here" painted the sky straight over the
-    // rigging, so a flown truss outdoors hung on nothing. And where there is
-    // no background to swap in, `background` *is* `clear`, the correction is
-    // an exact zero, and every pixel is the byte it was before.
-    scene = scene + (1.0 - texel.a) * (background - cfg.background.rgb);
+    var background = background_radiance(uv);
+    // Scene radiance is premultiplied by coverage, including each object's
+    // distance fade and the MSAA resolve. Fill only the uncovered fraction:
+    // the floor's horizon fade has already happened underneath the cables.
+    scene = scene + (1.0 - texel.a) * background;
     let depth = linear_view_depth(raw_depth);
     let debug = u32(cfg.params.w + 0.5);
     if debug >= 1u && debug <= 5u {
@@ -234,30 +195,32 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         // haze bilateral pass consumes, not a camera-specific beauty view.
         return vec4<f32>(vec3<f32>(1.0 - raw_depth), 1.0);
     }
-    let haze = upsample_haze(uv, depth);
-    if debug == 7u {
-        return vec4<f32>(agx(haze), 1.0);
-    }
-    // Applied before the medium, so a dissolving surface and the background it
-    // dissolves into are attenuated by the same fog. Surfaces only: an empty
-    // pixel is already the background, and mixing it again would discard the
-    // partial coverage a silhouette resolved into it.
-    if raw_depth > 0.0 {
-        scene = mix(scene, background, horizon_dissolve(depth));
-    }
+    var haze = upsample_haze(uv, depth);
     var medium = 1.0;
-    // Extinction cannot change black. Dark-stage sky pixels have no scene
-    // radiance, so skip their full-resolution optical-depth march entirely.
-    if any(scene != vec3<f32>(0.0)) && cfg.medium.min.w > 0.0 {
+    let outdoor = sky.sun.w > 0.5;
+    // Outdoor surfaces already include their own fog. Only uncovered sky
+    // needs background transport here; indoor compositing keeps its path.
+    let needs_medium = select(any(scene != vec3<f32>(0.0)), texel.a < 1.0 || debug == 7u, outdoor);
+    if needs_medium && cfg.medium.min.w > 0.0 {
         let clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0);
         let far = cfg.inv_view_proj * clip;
         let ray_dir = normalize(far.xyz / far.w - cfg.camera_pos.xyz);
-        // Convert view depth to metric ray distance before integrating density.
-        let hit_clip = cfg.inv_view_proj * vec4<f32>(clip.xy, raw_depth, 1.0);
+        // Uncovered samples see the sky, even on an opaque MSAA silhouette.
+        // The diagnostic instead asks for scattering up to the opaque depth.
+        let end_depth = select(raw_depth, 0.0, outdoor && debug != 7u);
+        let hit_clip = cfg.inv_view_proj * vec4<f32>(clip.xy, end_depth, 1.0);
         let distance = length(hit_clip.xyz / hit_clip.w - cfg.camera_pos.xyz);
-        let optical = medium_ray(cfg.medium, cfg.camera_pos.xyz, ray_dir, distance);
-        medium = exp(-optical.optical[32]);
+        let transmission = exp(-medium_optical_depth(cfg.medium, cfg.camera_pos.xyz, ray_dir, distance));
+        if outdoor {
+            let scattering = outdoor_haze_light(ray_dir, sky.sun.xyz, cfg.outdoor_sun) * (1.0 - transmission);
+            if debug == 7u { haze += scattering; }
+            background = background * transmission + scattering;
+        } else {
+            medium = transmission;
+        }
     }
+    if debug == 7u { return vec4<f32>(agx(haze), 1.0); }
+    if outdoor { scene = texel.rgb + (1.0 - texel.a) * background; }
     let display = agx(scene * medium + haze);
     return vec4<f32>(display + sky_dither(display, frag.xy), 1.0);
 }

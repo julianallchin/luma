@@ -5,6 +5,119 @@ use gpui_agent::Mode;
 use std::time::Duration;
 
 #[test]
+fn inspector_slides_with_selection_and_gives_its_space_back_to_the_stage() {
+    let mut harness = Fixture::new(
+        "score-inspector-motion",
+        20,
+        vec![Clip::new("pat-glow", "Glow", 2., 5.).lit()],
+    )
+    .with_rig()
+    .window(1400., 900.)
+    .with_motion()
+    .with_motion_scale(4.)
+    .open(Mode::Headless);
+    let result = harness.exec(
+        &support::script(
+            r#"
+        const node = (role,label) => app.snapshot().find({role,label});
+        const width = () => node("card","Clip inputs")?.bounds.width ?? 0;
+        const read = () => {
+            const shot = app.snapshot();
+            return {
+                width: shot.find({role:"card",label:"Clip inputs"})?.bounds.width ?? 0,
+                stage: shot.find({role:"card",label:"Stage"}).bounds,
+                waveform: shot.find({role:"card",label:"Waveform"}).bounds,
+                controls: !!shot.find({role:"button",label:"Pick fixtures"}),
+            };
+        };
+        const sample = () => {
+            const frames = [];
+            for (let i = 0; i < 5; i++) {
+                app.frames(1,{waitMs:20});
+                frames.push(read());
+            }
+            return frames;
+        };
+        nav.trackEditor("Test Venue","Aurora");
+        nav.expand();
+        until("expanded stage", () => node("card","Stage")?.bounds.width >= 1142.5);
+        until("clip", () => node("card","Glow"));
+        const empty = read();
+        app.click(node("card","Glow"));
+        const opening = sample();
+        until("open inspector", () => width() >= 319.9);
+        until("controls", () => node("button","Pick fixtures"));
+        const opened = read();
+        app.click(node("card","Waveform"));
+        const closing = sample();
+        until("closed inspector", () => !node("card","Clip inputs"));
+        const closed = read();
+        app.click(node("card","Glow"));
+        until("reopened inspector", () => width() >= 319.9);
+        const reopened = read();
+        ({empty,opening,opened,closing,closed,reopened})
+    "#,
+        ),
+        Duration::from_secs(60),
+    );
+    assert_eq!(result.error, None, "{}", result.stdout);
+    let out = result.result;
+    assert_eq!(out["empty"]["width"], 0, "{out:#}");
+    assert_eq!(out["closed"]["width"], 0, "{out:#}");
+    let stage_width = out["empty"]["stage"]["width"].as_f64().unwrap();
+    for phase in ["opening", "closing"] {
+        let frames = out[phase].as_array().unwrap();
+        assert!(
+            frames.iter().any(|frame| {
+                let width = frame["width"].as_f64().unwrap();
+                width > 1. && width < 319.
+            }),
+            "the inspector snapped during {phase}: {out:#}"
+        );
+        let widths: Vec<_> = frames
+            .iter()
+            .map(|frame| frame["width"].as_f64().unwrap())
+            .collect();
+        assert!(
+            widths.windows(2).all(|pair| if phase == "opening" {
+                pair[1] >= pair[0]
+            } else {
+                pair[1] <= pair[0]
+            }),
+            "the inspector reversed during {phase}: {out:#}"
+        );
+        for frame in frames {
+            let occupied =
+                frame["width"].as_f64().unwrap() + frame["stage"]["width"].as_f64().unwrap();
+            assert!((occupied - stage_width).abs() < 1., "{out:#}");
+        }
+    }
+    assert!(
+        out["closing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|frame| frame["controls"] == true),
+        "controls disappeared before the inspector slid away: {out:#}"
+    );
+    for state in ["opened", "reopened"] {
+        assert!(
+            (out[state]["width"].as_f64().unwrap() - 320.).abs() < 1.,
+            "{out:#}"
+        );
+        assert_eq!(out[state]["controls"], true, "{out:#}");
+    }
+    assert!(
+        (out["closed"]["stage"]["width"].as_f64().unwrap() - stage_width).abs() < 1.,
+        "{out:#}"
+    );
+    assert_eq!(
+        out["opened"]["waveform"], out["closed"]["waveform"],
+        "{out:#}"
+    );
+}
+
+#[test]
 fn inspector_stays_above_timeline_and_pickers_accept_keyboard_input() {
     let mut harness = Fixture::new(
         "score-edit-focus",

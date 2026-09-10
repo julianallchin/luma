@@ -44,6 +44,7 @@ pub mod metrics;
 pub mod overlay;
 pub mod scene_desc;
 mod shadow;
+mod shadow_hierarchy;
 mod share;
 pub mod truss;
 pub mod venue_tiles;
